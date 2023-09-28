@@ -61,7 +61,7 @@ pub struct ReplicaConfig {
 }
 
 /// Configures the resource allocation for a cluster replica.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ReplicaAllocation {
     /// The memory limit for each process in the replica.
     pub memory_limit: Option<MemoryLimit>,
@@ -76,12 +76,17 @@ pub struct ReplicaAllocation {
     /// The number of credits per hour that the replica consumes.
     #[serde(deserialize_with = "mz_repr::adt::numeric::str_serde::deserialize")]
     pub credits_per_hour: Numeric,
+    /// Whether instances of this type can be created
+    #[serde(default)]
+    pub disabled: bool,
 }
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)]
 // We test this particularly because we deserialize values from strings.
 fn test_replica_allocation_deserialization() {
+    use bytesize::ByteSize;
+
     let data = r#"
         {
             "cpu_limit": 1.0,
@@ -92,8 +97,48 @@ fn test_replica_allocation_deserialization() {
             "credits_per_hour": "16"
         }"#;
 
-    let _: ReplicaAllocation = serde_json::from_str(data)
+    let replica_allocation: ReplicaAllocation = serde_json::from_str(data)
         .expect("deserialization from JSON succeeds for ReplicaAllocation");
+
+    assert_eq!(
+        replica_allocation,
+        ReplicaAllocation {
+            credits_per_hour: 16.into(),
+            disk_limit: Some(DiskLimit(ByteSize::mib(100))),
+            disabled: false,
+            memory_limit: Some(MemoryLimit(ByteSize::gib(10))),
+            cpu_limit: Some(CpuLimit::from_millicpus(1000)),
+            scale: 16,
+            workers: 1
+        }
+    );
+
+    let data = r#"
+        {
+            "cpu_limit": 0,
+            "memory_limit": "0GiB",
+            "disk_limit": "0MiB",
+            "scale": 0,
+            "workers": 0,
+            "credits_per_hour": "0",
+            "disabled": true
+        }"#;
+
+    let replica_allocation: ReplicaAllocation = serde_json::from_str(data)
+        .expect("deserialization from JSON succeeds for ReplicaAllocation");
+
+    assert_eq!(
+        replica_allocation,
+        ReplicaAllocation {
+            credits_per_hour: 0.into(),
+            disk_limit: Some(DiskLimit(ByteSize::mib(0))),
+            disabled: true,
+            memory_limit: Some(MemoryLimit(ByteSize::gib(0))),
+            cpu_limit: Some(CpuLimit::from_millicpus(0)),
+            scale: 0,
+            workers: 0
+        }
+    );
 }
 
 /// Configures the location of a cluster replica.
@@ -115,6 +160,22 @@ impl ReplicaLocation {
             ReplicaLocation::Managed(ManagedReplicaLocation { allocation, .. }) => {
                 allocation.scale.into()
             }
+        }
+    }
+
+    pub fn billed_as(&self) -> Option<&str> {
+        match self {
+            ReplicaLocation::Managed(ManagedReplicaLocation { billed_as, .. }) => {
+                billed_as.as_deref()
+            }
+            _ => None,
+        }
+    }
+
+    pub fn internal(&self) -> bool {
+        match self {
+            ReplicaLocation::Managed(ManagedReplicaLocation { internal, .. }) => *internal,
+            ReplicaLocation::Unmanaged(_) => false,
         }
     }
 }
@@ -172,6 +233,10 @@ pub struct ManagedReplicaLocation {
     pub allocation: ReplicaAllocation,
     /// SQL size parameter used for allocation
     pub size: String,
+    /// If `true`, Materialize support owns this replica.
+    pub internal: bool,
+    /// Optional SQL size parameter used for billing.
+    pub billed_as: Option<String>,
     /// The replica's availability zones, if specified.
     ///
     /// This is either the replica's specific `AVAILABILITY ZONE`,
@@ -189,6 +254,13 @@ pub struct ManagedReplicaLocation {
     pub availability_zones: ManagedReplicaAvailabilityZones,
     /// Whether the replica needs scratch disk space.
     pub disk: bool,
+}
+
+impl ManagedReplicaLocation {
+    /// Return the size which should be used to determine billing-related information.
+    pub fn size_for_billing(&self) -> &str {
+        self.billed_as.as_deref().unwrap_or(&self.size)
+    }
 }
 
 /// Configures logging for a cluster replica.

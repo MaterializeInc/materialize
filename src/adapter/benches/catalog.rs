@@ -112,7 +112,7 @@ fn bench_transact(c: &mut Criterion) {
                 .await
                 .unwrap();
 
-            Catalog::open_debug_postgres(postgres_url, Some(schema.into()), SYSTEM_TIME.clone())
+            Catalog::open_debug_stash_catalog_url(postgres_url, schema.into(), SYSTEM_TIME.clone())
                 .await
                 .unwrap()
         });

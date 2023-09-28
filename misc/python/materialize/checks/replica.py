@@ -10,6 +10,7 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
+from materialize.checks.executors import Executor
 from materialize.util import MzVersion
 
 
@@ -132,5 +133,74 @@ class DropReplica(Check):
                 > SELECT * FROM drop_replica_view;
                 6
            """
+            )
+        )
+
+
+class ReplicaAnnotations(Check):
+    def _can_run(self, e: Executor) -> bool:
+        return self.base_version >= MzVersion.parse("0.70.0-dev")
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                """
+                > CREATE CLUSTER replica_annotations REPLICAS ()
+                """
+            )
+        )
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(
+                dedent(
+                    """
+                    $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                    CREATE CLUSTER REPLICA replica_annotations.internal_r1 SIZE '1', INTERNAL, BILLED AS 'free';
+                    """
+                )
+            ),
+            Testdrive(
+                dedent(
+                    """
+                    $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                    CREATE CLUSTER REPLICA replica_annotations.internal_r2 SIZE '1', INTERNAL;
+                    """
+                )
+            ),
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                """
+                > SELECT name
+                  FROM mz_internal.mz_internal_cluster_replicas
+                  JOIN mz_cluster_replicas USING (id);
+                internal_r1
+                internal_r2
+
+                > SELECT details->>'replica_name', details->>'billed_as', details->>'internal'
+                  FROM mz_audit_events
+                  WHERE event_type = 'create'
+                  AND object_type = 'cluster-replica'
+                  AND details->'cluster_name' = '"replica_annotations"';
+                internal_r1 free true
+                internal_r2 <null> true
+
+                > SET cluster=replica_annotations
+
+                > CREATE MATERIALIZED VIEW replica_annotations_mv AS SELECT name FROM mz_tables LIMIT 1;
+                > CREATE DEFAULT INDEX ON replica_annotations_mv;
+
+                > SELECT COUNT(*) > 0 FROM replica_annotations_mv;
+                true
+
+                > ALTER CLUSTER replica_annotations SET (MANAGED, SIZE '2');
+
+                > DROP MATERIALIZED VIEW replica_annotations_mv;
+
+                > ALTER CLUSTER replica_annotations SET (MANAGED false);
+                """
             )
         )

@@ -478,9 +478,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
         if let Some(compute_state) = &mut self.compute_state {
             // Reduce the installed commands.
             // Importantly, act as if all peeks may have been retired (as we cannot know otherwise).
-            compute_state
-                .command_history
-                .retain_peeks(&BTreeMap::<_, ()>::default());
+            compute_state.command_history.discard_peeks();
             compute_state.command_history.reduce();
 
             // At this point, we need to sort out which of the *certainly installed* dataflows are
@@ -691,7 +689,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
             let mut command_history =
                 ComputeCommandHistory::new(self.metrics.for_history(worker_id));
             for command in new_commands.iter() {
-                command_history.push(command.clone(), &compute_state.pending_peeks);
+                command_history.push(command.clone());
             }
             compute_state.command_history = command_history;
         }

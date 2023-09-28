@@ -50,12 +50,12 @@ use mz_catalog::builtin::{
     MZ_CLUSTERS, MZ_CLUSTER_LINKS, MZ_CLUSTER_REPLICAS, MZ_CLUSTER_REPLICA_HEARTBEATS,
     MZ_CLUSTER_REPLICA_METRICS, MZ_CLUSTER_REPLICA_SIZES, MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS,
     MZ_COMMENTS, MZ_COMPUTE_DEPENDENCIES, MZ_CONNECTIONS, MZ_DATABASES, MZ_DEFAULT_PRIVILEGES,
-    MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS,
-    MZ_KAFKA_SINKS, MZ_KAFKA_SOURCES, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS,
-    MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS, MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_ROLES,
-    MZ_ROLE_MEMBERS, MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCES,
-    MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES,
-    MZ_TABLES, MZ_TYPES, MZ_TYPE_PG_METADATA, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
+    MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_INTERNAL_CLUSTER_REPLICAS,
+    MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS, MZ_KAFKA_SOURCES, MZ_LIST_TYPES, MZ_MAP_TYPES,
+    MZ_MATERIALIZED_VIEWS, MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS, MZ_POSTGRES_SOURCES,
+    MZ_PSEUDO_TYPES, MZ_ROLES, MZ_ROLE_MEMBERS, MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS,
+    MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS,
+    MZ_SYSTEM_PRIVILEGES, MZ_TABLES, MZ_TYPES, MZ_TYPE_PG_METADATA, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
 };
 
 /// An update to a built-in table.
@@ -226,12 +226,12 @@ impl CatalogState {
         cluster_id: ClusterId,
         name: &str,
         diff: Diff,
-    ) -> BuiltinTableUpdate {
+    ) -> Vec<BuiltinTableUpdate> {
         let cluster = &self.clusters_by_id[&cluster_id];
-        let id = cluster.replica_id_by_name[name];
-        let replica = &cluster.replicas_by_id[&id];
+        let id = cluster.replica_id(name).expect("Must exist");
+        let replica = cluster.replica(id).expect("Must exist");
 
-        let (size, disk, az) = match &replica.config.location {
+        let (size, disk, az, internal) = match &replica.config.location {
             // TODO(guswynn): The column should be `availability_zones`, not
             // `availability_zone`.
             ReplicaLocation::Managed(ManagedReplicaLocation {
@@ -239,17 +239,21 @@ impl CatalogState {
                 availability_zones: ManagedReplicaAvailabilityZones::FromReplica(Some(az)),
                 allocation: _,
                 disk,
-            }) => (Some(&**size), Some(*disk), Some(az.as_str())),
+                billed_as: _,
+                internal,
+            }) => (Some(&**size), Some(*disk), Some(az.as_str()), *internal),
             ReplicaLocation::Managed(ManagedReplicaLocation {
                 size,
                 availability_zones: _,
                 allocation: _,
                 disk,
-            }) => (Some(&**size), Some(*disk), None),
-            _ => (None, None, None),
+                billed_as: _,
+                internal,
+            }) => (Some(&**size), Some(*disk), None, *internal),
+            _ => (None, None, None, false),
         };
 
-        BuiltinTableUpdate {
+        let cluster_replica_update = BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICAS),
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
@@ -261,7 +265,20 @@ impl CatalogState {
                 Datum::from(disk),
             ]),
             diff,
+        };
+
+        let mut updates = vec![cluster_replica_update];
+
+        if internal {
+            let update = BuiltinTableUpdate {
+                id: self.resolve_builtin_table(&MZ_INTERNAL_CLUSTER_REPLICAS),
+                row: Row::pack_slice(&[Datum::String(&id.to_string())]),
+                diff,
+            };
+            updates.push(update);
         }
+
+        updates
     }
 
     pub(super) fn pack_cluster_link_update(
@@ -1207,6 +1224,7 @@ impl CatalogState {
             .cluster_replica_sizes
             .0
             .iter()
+            .filter(|(_, a)| !a.disabled)
             .map(
                 |(
                     size,
@@ -1217,6 +1235,7 @@ impl CatalogState {
                         scale,
                         workers,
                         credits_per_hour,
+                        disabled: _,
                     },
                 )| {
                     // Just invent something when the limits are `None`,

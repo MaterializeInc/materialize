@@ -36,7 +36,10 @@ use mz_catalog::builtin::{
     MZ_SYSTEM_CLUSTER,
 };
 use mz_catalog::objects::{SystemObjectDescription, SystemObjectUniqueIdentifier};
-use mz_catalog::{BootstrapArgs, SystemObjectMapping, Transaction};
+use mz_catalog::{
+    BootstrapArgs, DurableCatalogState, OpenableDurableCatalogState, StashConfig,
+    SystemObjectMapping, Transaction,
+};
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_compute_client::logging::LogVariant;
 use mz_compute_types::dataflows::DataflowDescription;
@@ -91,7 +94,7 @@ use mz_sql_parser::ast::{
     CreateSinkOption, CreateSourceOption, QualifiedReplica, Statement, WithOptionValue,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
-use mz_stash::{Stash, StashFactory};
+use mz_stash::{DebugStashFactory, StashFactory};
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::connections::inline::{
     ConnectionResolver, InlinedConnection, ReferencedConnection,
@@ -430,9 +433,9 @@ pub struct Cluster {
     /// Objects bound to this cluster. Does not include introspection source
     /// indexes.
     pub bound_objects: BTreeSet<GlobalId>,
-    pub replica_id_by_name: BTreeMap<String, ReplicaId>,
+    replica_id_by_name_: BTreeMap<String, ReplicaId>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
-    pub replicas_by_id: BTreeMap<ReplicaId, ClusterReplica>,
+    replicas_by_id_: BTreeMap<ReplicaId, ClusterReplica>,
     pub owner_id: RoleId,
     pub privileges: PrivilegeMap,
 }
@@ -451,8 +454,78 @@ impl Cluster {
         }
     }
 
+    /// Returns `true` if the cluster is a managed cluster.
     pub fn is_managed(&self) -> bool {
         matches!(self.config.variant, ClusterVariant::Managed { .. })
+    }
+
+    /// Lists the user replicas, which are those that do not have the internal flag set.
+    pub fn user_replicas(&self) -> impl Iterator<Item = &ClusterReplica> {
+        self.replicas().filter(|r| !r.config.location.internal())
+    }
+
+    /// Lists all replicas in the cluster
+    pub fn replicas(&self) -> impl Iterator<Item = &ClusterReplica> {
+        self.replicas_by_id_.values()
+    }
+
+    /// Lookup a replica by ID.
+    pub fn replica(&self, replica_id: ReplicaId) -> Option<&ClusterReplica> {
+        self.replicas_by_id_.get(&replica_id)
+    }
+
+    /// Lookup a replica by ID and return a mutable reference.
+    fn replica_mut(&mut self, replica_id: ReplicaId) -> Option<&mut ClusterReplica> {
+        self.replicas_by_id_.get_mut(&replica_id)
+    }
+
+    /// Lookup a replica ID by name.
+    pub fn replica_id(&self, name: &str) -> Option<ReplicaId> {
+        self.replica_id_by_name_.get(name).copied()
+    }
+
+    /// Insert a new replica into the cluster.
+    ///
+    /// Panics if the name or ID are reused.
+    fn insert_replica(&mut self, replica: ClusterReplica) {
+        assert!(self
+            .replica_id_by_name_
+            .insert(replica.name.clone(), replica.replica_id)
+            .is_none());
+        assert!(self
+            .replicas_by_id_
+            .insert(replica.replica_id, replica)
+            .is_none());
+    }
+
+    /// Remove a replica from this cluster.
+    ///
+    /// Panics if the replica ID does not exist, or if the internal state is inconsistent.
+    fn remove_replica(&mut self, replica_id: ReplicaId) {
+        let replica = self
+            .replicas_by_id_
+            .remove(&replica_id)
+            .expect("catalog out of sync");
+        self.replica_id_by_name_
+            .remove(&replica.name)
+            .expect("catalog out of sync");
+        assert_eq!(self.replica_id_by_name_.len(), self.replicas_by_id_.len());
+    }
+
+    /// Renames a replica to a new name.
+    ///
+    /// Panics if the replica ID is unknown, or new name is not unique, or the internal state is
+    /// inconsistent.
+    fn rename_replica(&mut self, replica_id: ReplicaId, to_name: String) {
+        let replica = self.replica_mut(replica_id).expect("Must exist");
+        let old_name = std::mem::take(&mut replica.name);
+        replica.name = to_name.clone();
+
+        assert!(self.replica_id_by_name_.remove(&old_name).is_some());
+        assert!(self
+            .replica_id_by_name_
+            .insert(to_name, replica_id)
+            .is_none());
     }
 }
 
@@ -2639,17 +2712,17 @@ impl Catalog {
                     1,
                 ));
             }
-            for (replica_name, replica_id) in &cluster.replica_id_by_name {
-                builtin_table_updates.push(catalog.state.pack_cluster_replica_update(
+            for (replica_name, replica_id) in cluster.replicas().map(|r| (&r.name, r.replica_id)) {
+                builtin_table_updates.extend(catalog.state.pack_cluster_replica_update(
                     *id,
                     replica_name,
                     1,
                 ));
-                let replica = catalog.state.get_cluster_replica(*id, *replica_id);
+                let replica = catalog.state.get_cluster_replica(*id, replica_id);
                 for process_id in 0..replica.config.location.num_processes() {
                     let update = catalog.state.pack_cluster_replica_status_update(
                         *id,
-                        *replica_id,
+                        replica_id,
                         u64::cast_from(process_id),
                         1,
                     );
@@ -3427,47 +3500,72 @@ impl Catalog {
         F: FnOnce(Catalog) -> Fut,
         Fut: Future<Output = T>,
     {
-        Stash::with_debug_stash(move |stash| async move {
-            let catalog = Self::open_debug_stash(stash, now)
-                .await
-                .expect("unable to open debug stash");
-            f(catalog).await
-        })
-        .await
-        .expect("unable to open debug stash")
+        let debug_stash_factory = DebugStashFactory::new().await;
+        let catalog = Self::open_debug_stash_catalog_factory(&debug_stash_factory, now)
+            .await
+            .expect("unable to open debug stash");
+        f(catalog).await
     }
 
-    /// Opens a debug postgres catalog at `url`.
-    ///
-    /// If specified, `schema` will set the connection's `search_path` to `schema`.
+    /// Opens a debug stash backed catalog using `debug_stash_factory`.
     ///
     /// See [`Catalog::with_debug`].
-    pub async fn open_debug_postgres(
+    pub async fn open_debug_stash_catalog_factory(
+        debug_stash_factory: &DebugStashFactory,
+        now: NowFn,
+    ) -> Result<Catalog, anyhow::Error> {
+        let mut openable_storage =
+            mz_catalog::debug_stash_backed_catalog_state(debug_stash_factory);
+        let storage = openable_storage
+            .open(now.clone(), &Self::debug_bootstrap_args(), None)
+            .await?;
+        Self::open_debug_stash_catalog(storage, now).await
+    }
+
+    /// Opens a debug stash backed catalog at `url`, using `schema` as the connection's search_path.
+    ///
+    /// See [`Catalog::with_debug`].
+    pub async fn open_debug_stash_catalog_url(
         url: String,
-        schema: Option<String>,
+        schema: String,
         now: NowFn,
     ) -> Result<Catalog, anyhow::Error> {
         let tls = mz_postgres_util::make_tls(&tokio_postgres::Config::new())
             .expect("unable to create TLS connector");
         let factory = StashFactory::new(&MetricsRegistry::new());
-        let stash = factory.open(url, schema, tls).await?;
-        Self::open_debug_stash(stash, now).await
+        let stash_config = StashConfig {
+            stash_factory: factory,
+            stash_url: url,
+            schema: Some(schema),
+            tls,
+        };
+        let mut openable_storage = mz_catalog::stash_backed_catalog_state(stash_config);
+        let storage = openable_storage
+            .open(now.clone(), &Self::debug_bootstrap_args(), None)
+            .await?;
+        Self::open_debug_stash_catalog(storage, now).await
     }
 
-    /// Opens a debug catalog from a stash.
-    pub async fn open_debug_stash(stash: Stash, now: NowFn) -> Result<Catalog, anyhow::Error> {
+    /// Opens a read only debug stash backed catalog defined by `stash_config`.
+    ///
+    /// See [`Catalog::with_debug`].
+    pub async fn open_debug_read_only_stash_catalog_config(
+        stash_config: StashConfig,
+        now: NowFn,
+    ) -> Result<Catalog, anyhow::Error> {
+        let mut openable_storage = mz_catalog::stash_backed_catalog_state(stash_config);
+        let storage = openable_storage
+            .open_read_only(now.clone(), &Self::debug_bootstrap_args())
+            .await?;
+        Self::open_debug_stash_catalog(storage, now).await
+    }
+
+    async fn open_debug_stash_catalog(
+        storage: impl DurableCatalogState + 'static,
+        now: NowFn,
+    ) -> Result<Catalog, anyhow::Error> {
         let metrics_registry = &MetricsRegistry::new();
-        let storage = mz_catalog::Connection::open(
-            stash,
-            now.clone(),
-            &BootstrapArgs {
-                default_cluster_replica_size: "1".into(),
-                builtin_cluster_replica_size: "1".into(),
-                bootstrap_role: None,
-            },
-            None,
-        )
-        .await?;
+        let storage = Box::new(storage);
         let active_connection_count = Arc::new(std::sync::Mutex::new(ConnectionCounter::new(0)));
         let secrets_reader = Arc::new(InMemorySecretsController::new());
         let variable_length_row_encoding =
@@ -3477,7 +3575,7 @@ impl Catalog {
                 "false"
             };
         let (catalog, _, _, _) = Catalog::open(Config {
-            storage: Box::new(storage),
+            storage,
             unsafe_mode: true,
             all_features: false,
             build_info: &DUMMY_BUILD_INFO,
@@ -3507,6 +3605,14 @@ impl Catalog {
         })
         .await?;
         Ok(catalog)
+    }
+
+    fn debug_bootstrap_args() -> BootstrapArgs {
+        BootstrapArgs {
+            default_cluster_replica_size: "1".into(),
+            builtin_cluster_replica_size: "1".into(),
+            bootstrap_role: None,
+        }
     }
 
     pub fn for_session<'a>(&'a self, session: &'a Session) -> ConnCatalog<'a> {
@@ -3816,17 +3922,24 @@ impl Catalog {
             );
         }
         let cluster = self.resolve_cluster(session.vars().cluster())?;
-        // Disallow queries on storage clusters. There's no technical reason for
-        // this restriction, just a philosophical one: we want all crashes in
-        // a storage cluster to be the result of sources and sinks, not user
-        // queries.
-        if cluster.bound_objects.iter().any(|id| {
-            matches!(
-                self.get_entry(id).item_type(),
-                CatalogItemType::Source | CatalogItemType::Sink
-            )
-        }) {
-            coord_bail!("cannot execute queries on cluster containing sources or sinks");
+
+        if !self
+            .for_session(session)
+            .system_vars()
+            .enable_unified_clusters()
+        {
+            // Disallow queries on storage clusters. There's no technical reason for
+            // this restriction, just a philosophical one: we want all crashes in
+            // a storage cluster to be the result of sources and sinks, not user
+            // queries.
+            if cluster.bound_objects.iter().any(|id| {
+                matches!(
+                    self.get_entry(id).item_type(),
+                    CatalogItemType::Source | CatalogItemType::Sink
+                )
+            }) {
+                coord_bail!("cannot execute queries on cluster containing sources or sinks");
+            }
         }
         Ok(cluster)
     }
@@ -4101,6 +4214,8 @@ impl Catalog {
                 size,
                 availability_zone,
                 disk,
+                billed_as,
+                internal,
             } => {
                 if allowed_availability_zones.is_some() && availability_zone.is_some() {
                     coord_bail!(
@@ -4129,6 +4244,8 @@ impl Catalog {
                     },
                     size,
                     disk,
+                    billed_as,
+                    internal,
                 })
             }
         };
@@ -4144,8 +4261,11 @@ impl Catalog {
 
         if !cluster_replica_sizes.0.contains_key(size)
             || (!allowed_sizes.is_empty() && !allowed_sizes.contains(size))
+            || cluster_replica_sizes.0[size].disabled
         {
-            let mut entries = cluster_replica_sizes.0.iter().collect::<Vec<_>>();
+            let mut entries = cluster_replica_sizes
+                .enabled_allocations()
+                .collect::<Vec<_>>();
 
             if !allowed_sizes.is_empty() {
                 let allowed_sizes = BTreeSet::<&String>::from_iter(allowed_sizes.iter());
@@ -4904,8 +5024,13 @@ impl Catalog {
                         &config.clone().into(),
                         owner_id,
                     )?;
-                    if let ReplicaLocation::Managed(ManagedReplicaLocation { size, disk, .. }) =
-                        &config.location
+                    if let ReplicaLocation::Managed(ManagedReplicaLocation {
+                        size,
+                        disk,
+                        billed_as,
+                        internal,
+                        ..
+                    }) = &config.location
                     {
                         let details = EventDetails::CreateClusterReplicaV1(
                             mz_audit_log::CreateClusterReplicaV1 {
@@ -4915,6 +5040,8 @@ impl Catalog {
                                 replica_name: name.clone(),
                                 logical_size: size.clone(),
                                 disk: *disk,
+                                billed_as: billed_as.clone(),
+                                internal: *internal,
                             },
                         );
                         state.add_to_audit_log(
@@ -4931,7 +5058,7 @@ impl Catalog {
                     let num_processes = config.location.num_processes();
                     state.insert_cluster_replica(cluster_id, name.clone(), id, config, owner_id);
                     builtin_table_updates
-                        .push(state.pack_cluster_replica_update(cluster_id, &name, 1));
+                        .extend(state.pack_cluster_replica_update(cluster_id, &name, 1));
                     for process_id in 0..num_processes {
                         let update = state.pack_cluster_replica_status_update(
                             cluster_id,
@@ -5272,13 +5399,13 @@ impl Catalog {
 
                             assert!(
                                 cluster.bound_objects.is_empty()
-                                    && cluster.replicas_by_id.is_empty(),
+                                    && cluster.replicas().next().is_none(),
                                 "not all items dropped before cluster"
                             );
                         }
                         ObjectId::ClusterReplica((cluster_id, replica_id)) => {
                             let cluster = state.get_cluster(cluster_id);
-                            let replica = &cluster.replicas_by_id[&replica_id];
+                            let replica = cluster.replica(replica_id).expect("Must exist");
                             if is_reserved_name(&replica.name) {
                                 return Err(AdapterError::Catalog(Error::new(
                                     ErrorKind::ReservedReplicaName(replica.name.clone()),
@@ -5305,7 +5432,7 @@ impl Catalog {
                                 builtin_table_updates.push(update);
                             }
 
-                            builtin_table_updates.push(state.pack_cluster_replica_update(
+                            builtin_table_updates.extend(state.pack_cluster_replica_update(
                                 cluster_id,
                                 &replica.name,
                                 -1,
@@ -5334,18 +5461,7 @@ impl Catalog {
                                 .clusters_by_id
                                 .get_mut(&cluster_id)
                                 .expect("can only drop replicas from known instances");
-                            let replica = cluster
-                                .replicas_by_id
-                                .remove(&replica_id)
-                                .expect("catalog out of sync");
-                            cluster
-                                .replica_id_by_name
-                                .remove(&replica.name)
-                                .expect("catalog out of sync");
-                            assert_eq!(
-                                cluster.replica_id_by_name.len(),
-                                cluster.replicas_by_id.len()
-                            );
+                            cluster.remove_replica(replica_id);
                         }
                         ObjectId::Item(id) => {
                             let entry = state.get_entry(&id);
@@ -5698,14 +5814,14 @@ impl Catalog {
                         )));
                     }
                     tx.rename_cluster_replica(replica_id, &name, &to_name)?;
-                    builtin_table_updates.push(state.pack_cluster_replica_update(
+                    builtin_table_updates.extend(state.pack_cluster_replica_update(
                         cluster_id,
                         name.replica.as_str(),
                         -1,
                     ));
                     state.rename_cluster_replica(cluster_id, replica_id, to_name.clone());
                     builtin_table_updates
-                        .push(state.pack_cluster_replica_update(cluster_id, &to_name, 1));
+                        .extend(state.pack_cluster_replica_update(cluster_id, &to_name, 1));
                     state.add_to_audit_log(
                         oracle_write_ts,
                         session,
@@ -5880,8 +5996,7 @@ impl Catalog {
                                 )));
                             }
                             let replica_name = cluster
-                                .replicas_by_id
-                                .get(replica_id)
+                                .replica(*replica_id)
                                 .expect("catalog out of sync")
                                 .name
                                 .clone();
@@ -5890,15 +6005,14 @@ impl Catalog {
                                     ErrorKind::ReservedReplicaName(replica_name),
                                 )));
                             }
-                            builtin_table_updates.push(state.pack_cluster_replica_update(
+                            builtin_table_updates.extend(state.pack_cluster_replica_update(
                                 *cluster_id,
                                 &replica_name,
                                 -1,
                             ));
                             let cluster = state.get_cluster_mut(*cluster_id);
                             let replica = cluster
-                                .replicas_by_id
-                                .get_mut(replica_id)
+                                .replica_mut(*replica_id)
                                 .expect("catalog out of sync");
                             replica.owner_id = new_owner;
                             tx.update_cluster_replica(
@@ -5906,7 +6020,7 @@ impl Catalog {
                                 *replica_id,
                                 replica.clone().into(),
                             )?;
-                            builtin_table_updates.push(state.pack_cluster_replica_update(
+                            builtin_table_updates.extend(state.pack_cluster_replica_update(
                                 *cluster_id,
                                 &replica_name,
                                 1,
@@ -6587,8 +6701,7 @@ impl Catalog {
     }
 
     pub fn user_cluster_replicas(&self) -> impl Iterator<Item = &ClusterReplica> {
-        self.user_clusters()
-            .flat_map(|cluster| cluster.replicas_by_id.values())
+        self.user_clusters().flat_map(|cluster| cluster.replicas())
     }
 
     pub fn databases(&self) -> impl Iterator<Item = &Database> {
@@ -7617,20 +7730,19 @@ impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
     }
 
     fn replica_ids(&self) -> &BTreeMap<String, ReplicaId> {
-        &self.replica_id_by_name
+        &self.replica_id_by_name_
     }
 
     // `as` is ok to use to cast to a trait object.
     #[allow(clippy::as_conversions)]
     fn replicas(&self) -> Vec<&dyn CatalogClusterReplica> {
-        self.replicas_by_id
-            .values()
+        self.replicas()
             .map(|replica| replica as &dyn CatalogClusterReplica)
             .collect()
     }
 
     fn replica(&self, id: ReplicaId) -> &dyn CatalogClusterReplica {
-        self.replicas_by_id.get(&id).expect("catalog out of sync")
+        self.replica(id).expect("catalog out of sync")
     }
 
     fn owner_id(&self) -> RoleId {
@@ -7901,10 +8013,10 @@ mod tests {
     async fn test_catalog_revision() {
         let debug_stash_factory = DebugStashFactory::new().await;
         {
-            let stash = debug_stash_factory.open().await;
-            let mut catalog = Catalog::open_debug_stash(stash, NOW_ZERO.clone())
-                .await
-                .expect("unable to open debug catalog");
+            let mut catalog =
+                Catalog::open_debug_stash_catalog_factory(&debug_stash_factory, NOW_ZERO.clone())
+                    .await
+                    .expect("unable to open debug catalog");
             assert_eq!(catalog.transient_revision(), 1);
             catalog
                 .transact(
@@ -7923,10 +8035,10 @@ mod tests {
             assert_eq!(catalog.transient_revision(), 2);
         }
         {
-            let stash = debug_stash_factory.open().await;
-            let catalog = Catalog::open_debug_stash(stash, NOW_ZERO.clone())
-                .await
-                .expect("unable to open debug catalog");
+            let catalog =
+                Catalog::open_debug_stash_catalog_factory(&debug_stash_factory, NOW_ZERO.clone())
+                    .await
+                    .expect("unable to open debug catalog");
             // Re-opening the same stash resets the transient_revision to 1.
             assert_eq!(catalog.transient_revision(), 1);
         }
@@ -8736,7 +8848,7 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_normalized_create() {
-        Catalog::with_debug(NOW_ZERO.clone(), |catalog| {
+        Catalog::with_debug(NOW_ZERO.clone(), |catalog| async move {
             let catalog = catalog.for_system_session();
             let scx = &mut StatementContext::new(None, &catalog);
 
@@ -8754,8 +8866,6 @@ mod tests {
                 r#"CREATE VIEW "materialize"."public"."foo" AS SELECT 1 AS "bar""#,
                 mz_sql::normalize::create_statement(scx, stmt).expect(""),
             );
-
-            async {}
         })
         .await;
     }
@@ -8779,10 +8889,12 @@ mod tests {
         let debug_stash_factory = DebugStashFactory::new().await;
         let id = GlobalId::User(1);
         {
-            let stash = debug_stash_factory.open().await;
-            let mut catalog = Catalog::open_debug_stash(stash, SYSTEM_TIME.clone())
-                .await
-                .expect("unable to open debug catalog");
+            let mut catalog = Catalog::open_debug_stash_catalog_factory(
+                &debug_stash_factory,
+                SYSTEM_TIME.clone(),
+            )
+            .await
+            .expect("unable to open debug catalog");
             let item = catalog
                 .state()
                 .parse_view_item(create_sql)
@@ -8810,10 +8922,12 @@ mod tests {
                 .expect("failed to transact");
         }
         {
-            let stash = debug_stash_factory.open().await;
-            let catalog = Catalog::open_debug_stash(stash, SYSTEM_TIME.clone())
-                .await
-                .expect("unable to open debug catalog");
+            let catalog = Catalog::open_debug_stash_catalog_factory(
+                &debug_stash_factory,
+                SYSTEM_TIME.clone(),
+            )
+            .await
+            .expect("unable to open debug catalog");
             let view = catalog.get_entry(&id);
             assert_eq!("v", view.name.item);
             match &view.item {
@@ -8905,47 +9019,43 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_object_type() {
-        let debug_stash_factory = DebugStashFactory::new().await;
-        let stash = debug_stash_factory.open().await;
-        let catalog = Catalog::open_debug_stash(stash, SYSTEM_TIME.clone())
-            .await
-            .expect("unable to open debug catalog");
-        let catalog = catalog.for_system_session();
+        Catalog::with_debug(SYSTEM_TIME.clone(), |catalog| async move {
+            let catalog = catalog.for_system_session();
 
-        assert_eq!(
-            mz_sql::catalog::ObjectType::ClusterReplica,
-            catalog.get_object_type(&ObjectId::ClusterReplica((
-                ClusterId::User(1),
-                ReplicaId::User(1)
-            )))
-        );
-        assert_eq!(
-            mz_sql::catalog::ObjectType::Role,
-            catalog.get_object_type(&ObjectId::Role(RoleId::User(1)))
-        );
+            assert_eq!(
+                mz_sql::catalog::ObjectType::ClusterReplica,
+                catalog.get_object_type(&ObjectId::ClusterReplica((
+                    ClusterId::User(1),
+                    ReplicaId::User(1)
+                )))
+            );
+            assert_eq!(
+                mz_sql::catalog::ObjectType::Role,
+                catalog.get_object_type(&ObjectId::Role(RoleId::User(1)))
+            );
+        })
+        .await;
     }
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_get_privileges() {
-        let debug_stash_factory = DebugStashFactory::new().await;
-        let stash = debug_stash_factory.open().await;
-        let catalog = Catalog::open_debug_stash(stash, SYSTEM_TIME.clone())
-            .await
-            .expect("unable to open debug catalog");
-        let catalog = catalog.for_system_session();
+        Catalog::with_debug(SYSTEM_TIME.clone(), |catalog| async move {
+            let catalog = catalog.for_system_session();
 
-        assert_eq!(
-            None,
-            catalog.get_privileges(&SystemObjectId::Object(ObjectId::ClusterReplica((
-                ClusterId::User(1),
-                ReplicaId::User(1),
-            ))))
-        );
-        assert_eq!(
-            None,
-            catalog.get_privileges(&SystemObjectId::Object(ObjectId::Role(RoleId::User(1))))
-        );
+            assert_eq!(
+                None,
+                catalog.get_privileges(&SystemObjectId::Object(ObjectId::ClusterReplica((
+                    ClusterId::User(1),
+                    ReplicaId::User(1),
+                ))))
+            );
+            assert_eq!(
+                None,
+                catalog.get_privileges(&SystemObjectId::Object(ObjectId::Role(RoleId::User(1))))
+            );
+        })
+        .await;
     }
 
     // Connect to a running Postgres server and verify that our builtin

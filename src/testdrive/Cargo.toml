@@ -33,6 +33,7 @@ md-5 = "0.10.5"
 mysql_async = { version = "0.32.2",  default-features = false, features = ["minimal"] }
 mz-avro = { path = "../avro", features = ["snappy"] }
 mz-aws-s3-util = { path = "../aws-s3-util" }
+mz-catalog = { path = "../catalog" }
 mz-ccsr = { path = "../ccsr" }
 mz-adapter = { path = "../adapter" }
 mz-expr = { path = "../expr" }

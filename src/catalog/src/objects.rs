@@ -203,6 +203,8 @@ pub enum ReplicaLocation {
         /// `Some(az)` if the AZ was specified by the user and must be respected;
         availability_zone: Option<String>,
         disk: bool,
+        internal: bool,
+        billed_as: Option<String>,
     },
 }
 
@@ -230,6 +232,8 @@ impl From<mz_controller::clusters::ReplicaLocation> for ReplicaLocation {
                     size,
                     availability_zones,
                     disk,
+                    billed_as,
+                    internal,
                 },
             ) => ReplicaLocation::Managed {
                 size,
@@ -243,6 +247,8 @@ impl From<mz_controller::clusters::ReplicaLocation> for ReplicaLocation {
                         None
                     },
                 disk,
+                internal,
+                billed_as,
             },
         }
     }
@@ -270,10 +276,14 @@ impl RustType<proto::replica_config::Location> for ReplicaLocation {
                 size,
                 availability_zone,
                 disk,
+                billed_as,
+                internal,
             } => proto::replica_config::Location::Managed(proto::replica_config::ManagedLocation {
                 size: size.to_string(),
                 availability_zone: availability_zone.clone(),
                 disk: *disk,
+                billed_as: billed_as.clone(),
+                internal: *internal,
             }),
         }
     }
@@ -290,9 +300,11 @@ impl RustType<proto::replica_config::Location> for ReplicaLocation {
                 })
             }
             proto::replica_config::Location::Managed(location) => Ok(ReplicaLocation::Managed {
-                size: location.size,
                 availability_zone: location.availability_zone,
+                billed_as: location.billed_as,
                 disk: location.disk,
+                internal: location.internal,
+                size: location.size,
             }),
         }
     }
