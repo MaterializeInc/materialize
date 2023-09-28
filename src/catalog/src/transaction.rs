@@ -139,8 +139,7 @@ fn default_logging_config() -> ReplicaLogging {
     }
 }
 
-/// A [`Transaction`] batches multiple [`crate::stash::Connection`] operations together and commits
-/// them atomically.
+/// A [`Transaction`] batches multiple catalog operations together and commits them atomically.
 pub struct Transaction<'a> {
     durable_catalog: &'a mut dyn DurableCatalogState,
     databases: TableTransaction<DatabaseKey, DatabaseValue>,

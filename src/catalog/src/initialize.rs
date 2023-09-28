@@ -114,6 +114,7 @@ const INFORMATION_SCHEMA_ID: u64 = 5;
 ///
 /// Note: We should only use the latest types here from the `super::objects` module, we should
 /// __not__ use any versioned protos, e.g. `objects_v15`.
+// TODO(jkosh44) This should not use stash implementation details.
 #[tracing::instrument(level = "info", skip_all)]
 pub async fn initialize(
     tx: &mut Transaction<'_>,
@@ -854,19 +855,6 @@ pub async fn initialize(
         .await?;
 
     Ok(())
-}
-
-pub async fn deploy_generation(tx: &Transaction<'_>) -> Result<Option<u64>, StashError> {
-    let config = CONFIG_COLLECTION.from_tx(tx).await?;
-    let value = tx
-        .peek_key_one(
-            config,
-            &proto::ConfigKey {
-                key: DEPLOY_GENERATION.into(),
-            },
-        )
-        .await?;
-    Ok(value.map(|v| v.value))
 }
 
 /// Defines the default config for a Cluster.

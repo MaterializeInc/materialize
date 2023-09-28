@@ -22,6 +22,7 @@ use futures::future::FutureExt;
 use itertools::Itertools;
 use mz_adapter::catalog::{Catalog, ConnCatalog};
 use mz_adapter::session::Session;
+use mz_catalog::StashConfig;
 use mz_kafka_util::client::{create_new_client_config_simple, MzClientContext};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
@@ -277,11 +278,16 @@ impl State {
     {
         if let Some(url) = &self.materialize_catalog_postgres_stash {
             let tls = mz_postgres_util::make_tls(&tokio_postgres::Config::new()).unwrap();
-            let stash = self
-                .postgres_factory
-                .open_readonly(url.clone(), None, tls)
-                .await?;
-            let catalog = Catalog::open_debug_stash(stash, SYSTEM_TIME.clone()).await?;
+            let catalog = Catalog::open_debug_read_only_stash_catalog_config(
+                StashConfig {
+                    stash_factory: self.postgres_factory.clone(),
+                    stash_url: url.clone(),
+                    schema: None,
+                    tls,
+                },
+                SYSTEM_TIME.clone(),
+            )
+            .await?;
             let res = f(catalog.for_session(&Session::dummy()));
             Ok(Some(res))
         } else {
