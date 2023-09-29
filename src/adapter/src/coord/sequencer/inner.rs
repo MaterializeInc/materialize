@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::iter;
 use std::num::{NonZeroI64, NonZeroUsize};
 use std::panic::AssertUnwindSafe;
@@ -4701,7 +4701,76 @@ impl Coordinator {
 
         self.catalog_transact(Some(session), ops).await?;
 
-        // todo: restart ingestions
+        match connection.connection {
+            mz_storage_types::connections::Connection::AwsPrivatelink(ref privatelink) => {
+                let spec = VpcEndpointConfig {
+                    aws_service_name: privatelink.service_name.to_owned(),
+                    availability_zone_ids: privatelink.availability_zones.to_owned(),
+                };
+                self.cloud_resource_controller
+                    .as_ref()
+                    .ok_or(AdapterError::Unsupported("AWS PrivateLink connections"))?
+                    .ensure_vpc_endpoint(id, spec)
+                    .await?;
+            }
+            _ => {}
+        };
+
+        let entry = self.catalog().get_entry(&id);
+
+        let mut connections = VecDeque::new();
+        connections.push_front(entry.id());
+
+        let mut sources = BTreeMap::new();
+        let mut sinks = BTreeMap::new();
+
+        while let Some(id) = connections.pop_front() {
+            for id in self.catalog.get_entry(&id).used_by() {
+                let entry = self.catalog.get_entry(id);
+                match entry.item_type() {
+                    CatalogItemType::Connection => connections.push_back(*id),
+                    CatalogItemType::Source => {
+                        let ingestion =
+                            match &entry.source().expect("known to be source").data_source {
+                                DataSourceDesc::Ingestion(ingestion) => ingestion
+                                    .clone()
+                                    .into_inline_connection(self.catalog().state()),
+                                _ => unreachable!("only ingestions reference connections"),
+                            };
+
+                        sources.insert(*id, ingestion);
+                    }
+                    CatalogItemType::Sink => {
+                        let export = entry.sink().expect("known to be sink");
+                        sinks.insert(
+                            *id,
+                            export
+                                .connection
+                                .clone()
+                                .into_inline_connection(self.catalog().state()),
+                        );
+                    }
+                    t => unreachable!("connection dependency not expected on {}", t),
+                }
+            }
+        }
+
+        if !sources.is_empty() {
+            self.controller
+                .storage
+                .alter_collection(sources)
+                .await
+                .expect("altering collection after txn must succeed");
+        }
+
+        if !sinks.is_empty() {
+            self.controller
+                .storage
+                .update_export_connection(sinks)
+                .await
+                .expect("altering exports after txn must succeed")
+        }
+
         Ok(ExecuteResponse::AlteredObject(ObjectType::Connection))
     }
 
