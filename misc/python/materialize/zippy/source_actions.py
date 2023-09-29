@@ -40,6 +40,7 @@ class CreateSourceParameterized(ActionFactory):
                     source=SourceExists(
                         name=new_source_name,
                         topic=random.choice(capabilities.get(TopicExists)),
+                        cluster_name=random.choice(["storage", "default"]),
                     ),
                 )
             ]
@@ -64,7 +65,7 @@ class CreateSource(Action):
                   TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
 
                 > CREATE SOURCE {self.source.name}
-                  IN CLUSTER storaged
+                  IN CLUSTER {self.source.cluster_name}
                   FROM KAFKA CONNECTION {self.source.name}_kafka_conn
                   (TOPIC 'testdrive-{self.source.topic.name}-${{testdrive.seed}}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {self.source.name}_csr_conn
