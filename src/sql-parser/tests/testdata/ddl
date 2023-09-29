@@ -537,6 +537,41 @@ CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT BYTE
 CreateSink(CreateSinkStatement { name: UnresolvedItemName([Ident("foo")]), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: None }, format: Some(Bytes), envelope: None, with_options: [CreateSinkOption { name: Size, value: Some(Value(String("xlarge"))) }, CreateSinkOption { name: Snapshot, value: Some(Value(Boolean(true))) }] })
 
 parse-statement
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (NULL DEFAULTS = TRUE) ENVELOPE UPSERT
+----
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (NULL DEFAULTS = true) ENVELOPE UPSERT
+=>
+CreateSink(CreateSinkStatement { name: UnresolvedItemName([Ident("foo")]), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: None }, format: Some(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("conn2")])), options: [CsrConfigOption { name: NullDefaults, value: Some(Value(Boolean(true))) }] }, key_strategy: None, value_strategy: None, seed: None } })), envelope: Some(Upsert), with_options: [] })
+
+parse-statement
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (NULL DEFAULTS TRUE) ENVELOPE UPSERT
+----
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (NULL DEFAULTS = true) ENVELOPE UPSERT
+=>
+CreateSink(CreateSinkStatement { name: UnresolvedItemName([Ident("foo")]), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: None }, format: Some(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("conn2")])), options: [CsrConfigOption { name: NullDefaults, value: Some(Value(Boolean(true))) }] }, key_strategy: None, value_strategy: None, seed: None } })), envelope: Some(Upsert), with_options: [] })
+
+parse-statement
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (NULL DEFAULTS) ENVELOPE UPSERT
+----
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (NULL DEFAULTS) ENVELOPE UPSERT
+=>
+CreateSink(CreateSinkStatement { name: UnresolvedItemName([Ident("foo")]), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: None }, format: Some(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("conn2")])), options: [CsrConfigOption { name: NullDefaults, value: None }] }, key_strategy: None, value_strategy: None, seed: None } })), envelope: Some(Upsert), with_options: [] })
+
+parse-statement
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (NULL VALUES) ENVELOPE UPSERT
+----
+error: Expected DEFAULTS, found VALUES
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (NULL VALUES) ENVELOPE UPSERT
+                                                                                                                                      ^
+
+parse-statement
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (NULL DEFAULTS = FALSE) ENVELOPE UPSERT
+----
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (NULL DEFAULTS = false) ENVELOPE UPSERT
+=>
+CreateSink(CreateSinkStatement { name: UnresolvedItemName([Ident("foo")]), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: None }, format: Some(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("conn2")])), options: [CsrConfigOption { name: NullDefaults, value: Some(Value(Boolean(false))) }] }, key_strategy: None, value_strategy: None, seed: None } })), envelope: Some(Upsert), with_options: [] })
+
+parse-statement
 CREATE INDEX foo ON myschema.bar (a, b)
 ----
 CREATE INDEX foo ON myschema.bar (a, b)
@@ -1590,6 +1625,34 @@ CREATE CLUSTER REPLICA default.replica SIZE 'small'
 CREATE CLUSTER REPLICA default.replica SIZE = 'small'
 =>
 CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }] } })
+
+parse-statement
+CREATE CLUSTER REPLICA default.replica SIZE 'small', INTERNAL, BILLED AS 'free'
+----
+CREATE CLUSTER REPLICA default.replica SIZE = 'small', INTERNAL, BILLED AS = 'free'
+=>
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }, ReplicaOption { name: Internal, value: None }, ReplicaOption { name: BilledAs, value: Some(Value(String("free"))) }] } })
+
+parse-statement
+CREATE CLUSTER REPLICA default.replica SIZE 'small', INTERNAL = true, BILLED AS 'free'
+----
+CREATE CLUSTER REPLICA default.replica SIZE = 'small', INTERNAL = true, BILLED AS = 'free'
+=>
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }, ReplicaOption { name: Internal, value: Some(Value(Boolean(true))) }, ReplicaOption { name: BilledAs, value: Some(Value(String("free"))) }] } })
+
+parse-statement
+CREATE CLUSTER REPLICA default.replica SIZE 'small', INTERNAL = false, BILLED AS 'free'
+----
+CREATE CLUSTER REPLICA default.replica SIZE = 'small', INTERNAL = false, BILLED AS = 'free'
+=>
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }, ReplicaOption { name: Internal, value: Some(Value(Boolean(false))) }, ReplicaOption { name: BilledAs, value: Some(Value(String("free"))) }] } })
+
+parse-statement
+CREATE CLUSTER REPLICA default.replica SIZE 'small', BILLED AS 'free'
+----
+CREATE CLUSTER REPLICA default.replica SIZE = 'small', BILLED AS = 'free'
+=>
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }, ReplicaOption { name: BilledAs, value: Some(Value(String("free"))) }] } })
 
 parse-statement
 CREATE CLUSTER REPLICA default.replica SIZE 'small', AVAILABILITY ZONE 'a'

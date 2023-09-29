@@ -92,6 +92,7 @@ pub static MZ_STATEMENT_EXECUTION_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|
         .with_column("id", ScalarType::Uuid.nullable(false))
         .with_column("prepared_statement_id", ScalarType::Uuid.nullable(false))
         .with_column("sample_rate", ScalarType::Float64.nullable(false))
+        .with_column("cluster_id", ScalarType::String.nullable(true))
         .with_column(
             "params",
             ScalarType::Array(Box::new(ScalarType::String)).nullable(false),

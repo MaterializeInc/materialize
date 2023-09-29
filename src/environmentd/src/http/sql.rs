@@ -26,7 +26,7 @@ use mz_adapter::client::RecordFirstRowStream;
 use mz_adapter::session::{EndTransactionAction, TransactionStatus};
 use mz_adapter::{
     AdapterError, AdapterNotice, ExecuteResponse, ExecuteResponseKind, PeekResponseUnary,
-    SessionClient, Severity,
+    SessionClient,
 };
 use mz_interchange::encode::TypedDatum;
 use mz_interchange::json::{JsonNumberPolicy, ToJson};
@@ -253,9 +253,7 @@ async fn forward_notices(
     let ws_notices = notices.into_iter().map(|notice| {
         WebSocketResponse::Notice(Notice {
             message: notice.to_string(),
-            severity: Severity::for_adapter_notice(&notice)
-                .as_str()
-                .to_lowercase(),
+            severity: notice.severity().as_str().to_lowercase(),
             detail: notice.detail(),
             hint: notice.hint(),
         })
@@ -923,7 +921,7 @@ async fn execute_stmt<S: ResultSender>(
             None => Datum::Null,
             Some(raw_param) => {
                 match mz_pgrepr::Value::decode(
-                    mz_pgrepr::Format::Text,
+                    mz_pgwire_common::Format::Text,
                     &pg_typ,
                     raw_param.as_bytes(),
                 ) {
@@ -939,7 +937,7 @@ async fn execute_stmt<S: ResultSender>(
     }
 
     let result_formats = vec![
-        mz_pgrepr::Format::Text;
+        mz_pgwire_common::Format::Text;
         prep_stmt
             .desc()
             .relation_desc
@@ -1114,9 +1112,7 @@ fn make_notices(client: &mut SessionClient) -> Vec<Notice> {
         .into_iter()
         .map(|notice| Notice {
             message: notice.to_string(),
-            severity: Severity::for_adapter_notice(&notice)
-                .as_str()
-                .to_lowercase(),
+            severity: notice.severity().as_str().to_lowercase(),
             detail: notice.detail(),
             hint: notice.hint(),
         })

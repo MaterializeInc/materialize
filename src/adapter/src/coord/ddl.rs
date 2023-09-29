@@ -124,6 +124,7 @@ impl Coordinator {
         let mut update_metrics_retention = false;
         let mut update_secrets_caching_config = false;
         let mut update_cluster_scheduling_config = false;
+        let mut log_indexes_to_drop = Vec::new();
 
         for op in &ops {
             match op {
@@ -198,6 +199,13 @@ impl Coordinator {
                 }
                 catalog::Op::DropObject(ObjectId::Cluster(id)) => {
                     clusters_to_drop.push(*id);
+                    log_indexes_to_drop.extend(
+                        self.catalog()
+                            .get_cluster(*id)
+                            .log_indexes
+                            .values()
+                            .cloned(),
+                    );
                 }
                 catalog::Op::DropObject(ObjectId::ClusterReplica((cluster_id, replica_id))) => {
                     // Drop the cluster replica itself.
@@ -440,6 +448,11 @@ impl Coordinator {
                     self.drop_replica(cluster_id, replica_id).await;
                 }
             }
+            if !log_indexes_to_drop.is_empty() {
+                for id in log_indexes_to_drop {
+                    self.drop_compute_read_policy(&id);
+                }
+            }
             if !clusters_to_drop.is_empty() {
                 for cluster_id in clusters_to_drop {
                     self.controller.drop_cluster(cluster_id);
@@ -517,7 +530,7 @@ impl Coordinator {
 
         // Note: It's important that we keep the function call inside macro, this way we only run
         // the consistency checks if sort assertions are enabled.
-        mz_ore::soft_assert_eq!(self.catalog().check_consistency(), Ok(()));
+        mz_ore::soft_assert_eq!(self.check_consistency(), Ok(()));
 
         Ok(result)
     }
@@ -936,7 +949,7 @@ impl Coordinator {
                             .catalog()
                             .cluster_replica_sizes()
                             .0
-                            .get(&location.size)
+                            .get(location.size_for_billing())
                             .expect("location size is validated against the cluster replica sizes");
                         new_credit_consumption_rate += replica_allocation.credits_per_hour
                     }
@@ -992,7 +1005,7 @@ impl Coordinator {
                                 .catalog()
                                 .cluster_replica_sizes()
                                 .0
-                                .get(&location.size)
+                                .get(location.size_for_billing())
                                 .expect(
                                     "location size is validated against the cluster replica sizes",
                                 );
@@ -1166,7 +1179,7 @@ impl Coordinator {
             let current_amount = self
                 .catalog()
                 .try_get_cluster(cluster_id)
-                .map(|instance| instance.replicas_by_id.len())
+                .map(|instance| instance.replicas().count())
                 .unwrap_or(0);
             self.validate_resource_limit(
                 current_amount,
@@ -1180,7 +1193,7 @@ impl Coordinator {
             .catalog()
             .user_cluster_replicas()
             .filter_map(|replica| match &replica.config.location {
-                ReplicaLocation::Managed(location) => Some(&location.size),
+                ReplicaLocation::Managed(location) => Some(location.size_for_billing()),
                 ReplicaLocation::Unmanaged(_) => None,
             })
             .map(|size| {

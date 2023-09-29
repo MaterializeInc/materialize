@@ -33,6 +33,7 @@ md-5 = "0.10.5"
 mysql_async = { version = "0.32.2",  default-features = false, features = ["minimal"] }
 mz-avro = { path = "../avro", features = ["snappy"] }
 mz-aws-s3-util = { path = "../aws-s3-util" }
+mz-catalog = { path = "../catalog" }
 mz-ccsr = { path = "../ccsr" }
 mz-adapter = { path = "../adapter" }
 mz-expr = { path = "../expr" }
@@ -62,7 +63,7 @@ tiberius = { version = "0.11.3", default-features = false }
 time = "0.3.17"
 tracing = "0.1.37"
 tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
-tokio = { version = "1.24.2", features = ["process"] }
+tokio = { version = "1.32.0", features = ["process"] }
 tokio-postgres = { version = "0.7.8", features = ["with-chrono-0_4", "with-serde_json-1"] }
 tokio-stream = "0.1.11"
 tokio-util = { version = "0.7.4", features = ["compat"] }

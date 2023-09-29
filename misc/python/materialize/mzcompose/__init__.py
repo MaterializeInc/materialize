@@ -59,7 +59,6 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_ld_rbac_checks": "true",
     "enable_rbac_checks": "true",
     "enable_monotonic_oneshot_selects": "true",
-    "enable_with_mutually_recursive": "true",
     "enable_try_parse_monotonic_iso8601_timestamp": "true",
     "enable_dangerous_functions": "true",
     "enable_disk_cluster_replicas": "true",
@@ -75,6 +74,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     # Advance coverage on some Persist internals changes
     "persist_streaming_compaction_enabled": "true",
     "persist_streaming_snapshot_and_fetch_enabled": "true",
+    "enable_unified_clusters": "true",
 }
 
 DEFAULT_CRDB_ENVIRONMENT = [

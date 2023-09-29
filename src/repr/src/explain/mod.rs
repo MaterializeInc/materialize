@@ -459,6 +459,79 @@ pub trait ExprHumanizer: fmt::Debug {
     fn id_exists(&self, id: GlobalId) -> bool;
 }
 
+/// An [`ExprHumanizer`] that extends the `inner` instance with shadow items
+/// that are reported as present, even though they might not exist in `inner`.
+#[derive(Debug)]
+pub struct ExprHumanizerExt<'a> {
+    /// A map of custom items that might not exist in the backing `inner`
+    /// humanizer, but are reported as present by this humanizer instance.
+    items: BTreeMap<GlobalId, TransientItem>,
+    /// The inner humanizer used to resolve queries for [GlobalId] values not
+    /// present in the `items` map.
+    inner: &'a dyn ExprHumanizer,
+}
+
+impl<'a> ExprHumanizerExt<'a> {
+    pub fn new(items: BTreeMap<GlobalId, TransientItem>, inner: &'a dyn ExprHumanizer) -> Self {
+        Self { items, inner }
+    }
+}
+
+impl<'a> ExprHumanizer for ExprHumanizerExt<'a> {
+    fn humanize_id(&self, id: GlobalId) -> Option<String> {
+        match self.items.get(&id) {
+            Some(item) => item.humanized_id.clone(),
+            None => self.inner.humanize_id(id),
+        }
+    }
+
+    fn humanize_id_unqualified(&self, id: GlobalId) -> Option<String> {
+        match self.items.get(&id) {
+            Some(item) => item.humanized_id_unqualified.clone(),
+            None => self.inner.humanize_id_unqualified(id),
+        }
+    }
+
+    fn humanize_scalar_type(&self, ty: &ScalarType) -> String {
+        self.inner.humanize_scalar_type(ty)
+    }
+
+    fn column_names_for_id(&self, id: GlobalId) -> Option<Vec<String>> {
+        match self.items.get(&id) {
+            Some(item) => item.column_names.clone(),
+            None => self.inner.column_names_for_id(id),
+        }
+    }
+
+    fn id_exists(&self, id: GlobalId) -> bool {
+        self.items.contains_key(&id) || self.inner.id_exists(id)
+    }
+}
+
+/// A description of a catalog item that does not exist, but can be reported as
+/// present in the catalog by a [`ExprHumanizerExt`] instance that has it in its
+/// `items` list.
+#[derive(Debug)]
+pub struct TransientItem {
+    humanized_id: Option<String>,
+    humanized_id_unqualified: Option<String>,
+    column_names: Option<Vec<String>>,
+}
+
+impl TransientItem {
+    pub fn new(
+        humanized_id: Option<String>,
+        humanized_id_unqualified: Option<String>,
+        column_names: Option<Vec<String>>,
+    ) -> Self {
+        Self {
+            humanized_id,
+            humanized_id_unqualified,
+            column_names,
+        }
+    }
+}
+
 /// A bare-minimum implementation of [`ExprHumanizer`].
 ///
 /// The `DummyHumanizer` does a poor job of humanizing expressions. It is

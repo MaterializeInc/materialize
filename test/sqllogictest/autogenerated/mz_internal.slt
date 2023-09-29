@@ -91,6 +91,11 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 7  credits_per_hour  numeric
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_internal_cluster_replicas' ORDER BY position
+----
+1  id           text
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_comments' ORDER BY position
 ----
 1  id  text
@@ -635,6 +640,7 @@ mz_dataflows_per_worker
 mz_expected_group_size_advice
 mz_frontiers
 mz_global_frontiers
+mz_internal_cluster_replicas
 mz_kafka_sources
 mz_message_batch_counts_received_raw
 mz_message_batch_counts_sent_raw

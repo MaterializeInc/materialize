@@ -14,6 +14,7 @@ use std::num::NonZeroI64;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::future::{self, BoxFuture, FutureExt, TryFutureExt};
 use futures::{Future, StreamExt};
@@ -28,7 +29,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::Interval;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::{Client, Config, Statement};
-use tracing::{error, event, info, warn, Level};
+use tracing::{debug, event, info, warn, Level};
 
 use crate::upgrade;
 use crate::{
@@ -303,9 +304,10 @@ impl StashFactory {
     pub async fn open_savepoint(
         &self,
         url: String,
+        schema: Option<String>,
         tls: MakeTlsConnector,
     ) -> Result<Stash, StashError> {
-        self.open_inner(TransactionMode::Savepoint, url, None, tls)
+        self.open_inner(TransactionMode::Savepoint, url, schema, tls)
             .await
     }
 
@@ -331,7 +333,7 @@ impl StashFactory {
         let mut conn = Stash {
             txn_mode,
             config: Arc::clone(&config),
-            schema,
+            schema: schema.clone(),
             tls: tls.clone(),
             client: None,
             reconnect: tokio::time::interval(RECONNECT_INTERVAL),
@@ -372,7 +374,7 @@ impl StashFactory {
                 while let Some(_) = sinces_rx.recv().await {}
             });
         } else {
-            Consolidator::start(config, tls, sinces_rx);
+            Consolidator::start(config, schema, tls, sinces_rx);
         }
 
         Ok(conn)
@@ -485,7 +487,7 @@ impl Stash {
         Fut: Future<Output = T>,
     {
         let factory = DebugStashFactory::try_new().await?;
-        let stash = factory.try_open_debug().await?;
+        let stash = factory.try_open().await?;
         Ok(f(stash).await)
     }
 
@@ -526,6 +528,11 @@ impl Stash {
                 tracing::error!("postgres stash connection error: {}", e);
             }
         });
+        // The Config is shared with the Consolidator, so we update the application name in the
+        // session instead of the Config.
+        client
+            .batch_execute("SET application_name = 'stash'")
+            .await?;
         client
             .batch_execute("SET default_transaction_isolation = serializable")
             .await?;
@@ -921,6 +928,8 @@ impl Stash {
                             35 => upgrade::v35_to_v36::upgrade(&mut tx).await?,
                             36 => upgrade::v36_to_v37::upgrade(),
                             37 => upgrade::v37_to_v38::upgrade(&mut tx).await?,
+                            38 => upgrade::v38_to_v39::upgrade(&mut tx).await?,
+                            39 => upgrade::v39_to_v40::upgrade(&mut tx).await?,
 
                             // Up-to-date, no migration needed!
                             STASH_VERSION => return Ok(STASH_VERSION),
@@ -1071,8 +1080,16 @@ impl Stash {
         self.with_transaction(|_| Box::pin(async { Ok(()) })).await
     }
 
+    pub fn is_writeable(&self) -> bool {
+        matches!(self.txn_mode, TransactionMode::Writeable)
+    }
+
     pub fn is_readonly(&self) -> bool {
         matches!(self.txn_mode, TransactionMode::Readonly)
+    }
+
+    pub fn is_savepoint(&self) -> bool {
+        matches!(self.txn_mode, TransactionMode::Savepoint)
     }
 
     pub fn epoch(&self) -> Option<NonZeroI64> {
@@ -1097,6 +1114,7 @@ impl From<tokio_postgres::Error> for StashError {
 struct Consolidator {
     config: Arc<tokio::sync::Mutex<Config>>,
     tls: MakeTlsConnector,
+    schema: Option<String>,
     sinces_rx: mpsc::UnboundedReceiver<ConsolidateRequest>,
     consolidations: BTreeMap<Id, (Antichain<Timestamp>, Vec<oneshot::Sender<()>>)>,
 
@@ -1110,11 +1128,13 @@ struct Consolidator {
 impl Consolidator {
     fn start(
         config: Arc<tokio::sync::Mutex<Config>>,
+        schema: Option<String>,
         tls: MakeTlsConnector,
         sinces_rx: mpsc::UnboundedReceiver<ConsolidateRequest>,
     ) {
         let cons = Self {
             config,
+            schema,
             tls,
             sinces_rx,
             client: None,
@@ -1165,7 +1185,7 @@ impl Consolidator {
                             Ok(()) => break,
                             Err(e) => {
                                 attempt += 1;
-                                error!("tokio-postgres stash consolidation error, retry attempt {attempt}: {e}");
+                                debug!("tokio-postgres stash consolidation error, retry attempt {attempt}: {e}");
                                 self.client = None;
                                 retry.next().await;
                             }
@@ -1264,6 +1284,16 @@ impl Consolidator {
                 }
             },
         );
+        // The Config is shared with the Stash, so we update the application name in the
+        // session instead of the Config.
+        client
+            .execute("SET application_name = 'stash-consolidator'", &[])
+            .await?;
+        if let Some(schema) = &self.schema {
+            client
+                .execute(format!("SET search_path TO {schema}").as_str(), &[])
+                .await?;
+        }
         self.stmt_candidates = Some(
             client
                 .prepare(
@@ -1299,9 +1329,12 @@ impl Consolidator {
 
 /// Stash factory to use for tests that uses a random schema for a stash, which is re-used on all
 /// stash openings. The schema is dropped when this factory is dropped.
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct DebugStashFactory {
     url: String,
     schema: String,
+    #[derivative(Debug = "ignore")]
     tls: MakeTlsConnector,
     stash_factory: StashFactory,
 }
@@ -1322,6 +1355,17 @@ impl DebugStashFactory {
                 tracing::error!("postgres stash connection error: {e}");
             }
         });
+        // Running tests in parallel has been causing some deadlock/starvation issue that we haven't
+        // been able to figure out. For some reason, uncommitted transactions are being left open
+        // which causes the schema cleanup in the Drop impl to block for an enormous amount of time
+        // (many minutes). Setting a small idle transaction timeout globally seems to resolve the
+        // issue somehow. This is a gross hack and we don't really understand what's going on, but
+        // for now it resolves issues in CI while we debug further.
+        client
+            .batch_execute(
+                "SET CLUSTER SETTING sql.defaults.idle_in_transaction_session_timeout TO '1s'",
+            )
+            .await?;
         client
             .batch_execute(&format!("CREATE SCHEMA {schema}"))
             .await?;
@@ -1347,10 +1391,11 @@ impl DebugStashFactory {
             .expect("unable to create debug stash factory")
     }
 
-    /// Returns a new Stash.
-    pub async fn try_open_debug(&self) -> Result<Stash, StashError> {
+    async fn try_open_inner(&self, mode: TransactionMode) -> Result<Stash, StashError> {
+        debug!("debug stash open: {mode:?}, {}", self.schema);
         self.stash_factory
-            .open(
+            .open_inner(
+                mode,
                 self.url.clone(),
                 Some(self.schema.clone()),
                 self.tls.clone(),
@@ -1359,13 +1404,49 @@ impl DebugStashFactory {
     }
 
     /// Returns a new Stash.
+    pub async fn try_open(&self) -> Result<Stash, StashError> {
+        self.try_open_inner(TransactionMode::Writeable).await
+    }
+
+    /// Returns the factory's Stash.
     ///
     /// # Panics
     /// Panics if it is unable to create a new stash.
-    pub async fn open_debug(&self) -> Stash {
-        self.try_open_debug()
+    pub async fn open(&self) -> Stash {
+        self.try_open().await.expect("unable to open debug stash")
+    }
+
+    /// Returns the factory's Stash in readonly mode.
+    ///
+    /// # Panics
+    /// Panics if it is unable to create a new stash.
+    pub async fn open_readonly(&self) -> Stash {
+        self.try_open_inner(TransactionMode::Readonly)
             .await
             .expect("unable to open debug stash")
+    }
+
+    /// Returns the factory's Stash in savepoint mode.
+    ///
+    /// # Panics
+    /// Panics if it is unable to create a new stash.
+    pub async fn open_savepoint(&self) -> Stash {
+        self.try_open_inner(TransactionMode::Savepoint)
+            .await
+            .expect("unable to open debug stash")
+    }
+
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+    pub fn schema(&self) -> &str {
+        &self.schema
+    }
+    pub fn tls(&self) -> &MakeTlsConnector {
+        &self.tls
+    }
+    pub fn stash_factory(&self) -> &StashFactory {
+        &self.stash_factory
     }
 }
 

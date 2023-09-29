@@ -26,8 +26,8 @@ if os.getenv("BUILDKITE_AGENT_META_DATA_AWS_INSTANCE_TYPE") == "c5.2xlarge":
     TOTAL_MEMORY = 12
     NUM_SERVERS = 2
 else:
-    TOTAL_MEMORY = 48
-    NUM_SERVERS = 2
+    TOTAL_MEMORY = 96
+    NUM_SERVERS = 1
 
 MZ_SERVERS = [f"mz_{i + 1}" for i in range(NUM_SERVERS)]
 
@@ -141,6 +141,7 @@ known_errors = [
     "uint2 out of range",
     "interval out of range",
     "timezone interval must not contain months or years",
+    "not supported for type date",
     "not supported for type time",
     "coalesce types text and text list cannot be matched",  # Bad typing for ||
     "coalesce types text list and text cannot be matched",  # Bad typing for ||
@@ -156,6 +157,8 @@ known_errors = [
     "out of valid range",
     '" does not exist',  # role does not exist
     "csv_extract number of columns too large",
+    "target replica failed or was dropped",  # expected on replica OoMs with #21587
+    "cannot materialize call to",  # create materialized view on some internal views
 ]
 
 

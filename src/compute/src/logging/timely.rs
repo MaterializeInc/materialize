@@ -24,7 +24,7 @@ use mz_timely_util::buffer::ConsolidateBuffer;
 use mz_timely_util::replay::MzReplay;
 use serde::{Deserialize, Serialize};
 use timely::communication::Allocate;
-use timely::container::columnation::{CloneRegion, Columnation};
+use timely::container::columnation::{Columnation, CopyRegion};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
@@ -426,7 +426,7 @@ struct DemuxOutput<'a, 'b> {
     schedules_histogram: OutputBuffer<'a, 'b, (ScheduleHistogramDatum, ())>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 struct ChannelDatum {
     id: usize,
     source: (usize, usize),
@@ -434,17 +434,17 @@ struct ChannelDatum {
 }
 
 impl Columnation for ChannelDatum {
-    type InnerRegion = CloneRegion<Self>;
+    type InnerRegion = CopyRegion<Self>;
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 struct ParkDatum {
     duration_pow: u128,
     requested_pow: Option<u128>,
 }
 
 impl Columnation for ParkDatum {
-    type InnerRegion = CloneRegion<Self>;
+    type InnerRegion = CopyRegion<Self>;
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -454,17 +454,17 @@ struct MessageDatum {
 }
 
 impl Columnation for MessageDatum {
-    type InnerRegion = CloneRegion<Self>;
+    type InnerRegion = CopyRegion<Self>;
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 struct ScheduleHistogramDatum {
     operator: usize,
     duration_pow: u128,
 }
 
 impl Columnation for ScheduleHistogramDatum {
-    type InnerRegion = CloneRegion<Self>;
+    type InnerRegion = CopyRegion<Self>;
 }
 
 /// Event handler of the demux operator.

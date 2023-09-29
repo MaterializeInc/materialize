@@ -131,7 +131,7 @@ def workflow_default(c: Composition) -> None:
 
 def run_disruption(c: Composition, d: CrdbDisruption) -> None:
     print(f"--- Running Disruption {d.name} ...")
-    c.down(destroy_volumes=True)
+    c.down(destroy_volumes=True, sanity_restart_mz=False)
 
     for id in range(CRDB_NODE_COUNT):
         c.up(f"cockroach{id}")

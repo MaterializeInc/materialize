@@ -134,7 +134,7 @@ Field             | Type   | Description
 `app-password`    | string | *Secret.* The app password to use for this profile.
 `region`          | string | The default region to use for this profile.
 `vault`           | string | The vault to use for this profile. See [Global parameters](#global-parameters) above.
-`api-endpoint`    | string | *Internal use only.* The Materialize API endpoint to use.
+`cloud-endpoint`  | string | *Internal use only.* The Materialize API endpoint to use.
 `admin-endpoint`  | string | *Internal use only.* The Materialize administration endpoint to use.
 
 

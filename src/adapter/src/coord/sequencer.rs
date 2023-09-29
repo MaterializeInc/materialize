@@ -73,6 +73,21 @@ impl Coordinator {
         responses.push(ExecuteResponseKind::Canceled);
         ctx.tx_mut().set_allowed(responses);
 
+        // If our query only depends on system tables, a LaunchDarkly flag is enabled, and a
+        // session var is set, then we automatically run the query on the mz_introspection cluster.
+        let target_cluster =
+            introspection::auto_run_on_introspection(&self.catalog, ctx.session(), &plan);
+        let target_cluster_id = self
+            .catalog()
+            .resolve_target_cluster(target_cluster, ctx.session())
+            .ok()
+            .map(|cluster| cluster.id());
+
+        if let (Some(cluster_id), Some(statement_id)) = (target_cluster_id, ctx.extra().contents())
+        {
+            self.set_statement_execution_cluster(statement_id, cluster_id);
+        }
+
         let session_catalog = self.catalog.for_session(ctx.session());
 
         if let Err(e) = introspection::user_privilege_hack(
@@ -86,16 +101,6 @@ impl Coordinator {
         if let Err(e) = introspection::check_cluster_restrictions(&session_catalog, &plan) {
             return ctx.retire(Err(e));
         }
-
-        // If our query only depends on system tables, a LaunchDarkly flag is enabled, and a
-        // session var is set, then we automatically run the query on the mz_introspection cluster.
-        let target_cluster =
-            introspection::auto_run_on_introspection(&self.catalog, ctx.session(), &plan);
-        let target_cluster_id = self
-            .catalog()
-            .resolve_target_cluster(target_cluster, ctx.session())
-            .ok()
-            .map(|cluster| cluster.id());
 
         if let Err(e) = rbac::check_plan(
             &session_catalog,
@@ -338,6 +343,11 @@ impl Coordinator {
                     .await;
                 ctx.retire(result);
             }
+            Plan::AlterClusterSwap(_plan) => {
+                // Note: we should never reach this point because we return an unsupported error in
+                // planning.
+                ctx.retire(Err(AdapterError::Unsupported("ALTER ... SWAP ...")));
+            }
             Plan::AlterClusterReplicaRename(plan) => {
                 let result = self
                     .sequence_alter_cluster_replica_rename(ctx.session(), plan)
@@ -352,6 +362,11 @@ impl Coordinator {
                 let result = self.sequence_alter_item_rename(ctx.session(), plan).await;
                 ctx.retire(result);
             }
+            Plan::AlterItemSwap(_plan) => {
+                // Note: we should never reach this point because we return an unsupported error in
+                // planning.
+                ctx.retire(Err(AdapterError::Unsupported("ALTER ... SWAP ...")));
+            }
             Plan::AlterIndexSetOptions(plan) => {
                 let result = self.sequence_alter_index_set_options(plan);
                 ctx.retire(result);
@@ -361,7 +376,7 @@ impl Coordinator {
                 ctx.retire(result);
             }
             Plan::AlterRole(plan) => {
-                let result = self.sequence_alter_role(ctx.session(), plan).await;
+                let result = self.sequence_alter_role(ctx.session_mut(), plan).await;
                 if result.is_ok() {
                     self.maybe_send_rbac_notice(ctx.session());
                 }

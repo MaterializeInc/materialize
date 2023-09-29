@@ -76,9 +76,9 @@ for target in "${targets[@]}"; do
         deps > "$resources/$target-default"
         deps --no-default-features > "$resources/$target-no-default-features"
     else
-        ci_try diff "$resources/$target-default" <(deps)
-        ci_try diff "$resources/$target-no-default-features" <(deps --no-default-features)
+        try diff "$resources/$target-default" <(deps)
+        try diff "$resources/$target-no-default-features" <(deps --no-default-features)
     fi
 done
 
-ci_status_report
+try_status_report

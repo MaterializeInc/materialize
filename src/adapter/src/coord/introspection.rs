@@ -22,7 +22,9 @@ use mz_expr::CollectionPlan;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{ErrorMessageObjectDescription, SessionCatalog};
 use mz_sql::names::{ResolvedIds, SystemObjectId};
-use mz_sql::plan::{ExplainPlanPlan, ExplainTimestampPlan, Explainee, Plan, SubscribeFrom};
+use mz_sql::plan::{
+    ExplainPlanPlan, ExplainTimestampPlan, Explainee, ExplaineeStatement, Plan, SubscribeFrom,
+};
 use mz_sql::rbac;
 use smallvec::SmallVec;
 
@@ -53,7 +55,7 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
             },
         ),
         Plan::ExplainPlan(ExplainPlanPlan {
-            explainee: Explainee::Query { raw_plan, .. },
+            explainee: Explainee::Statement(ExplaineeStatement::Query { raw_plan, .. }),
             ..
         }) => (
             raw_plan.depends_on(),
@@ -100,6 +102,7 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::Insert(_)
         | Plan::AlterNoop(_)
         | Plan::AlterClusterRename(_)
+        | Plan::AlterClusterSwap(_)
         | Plan::AlterClusterReplicaRename(_)
         | Plan::AlterCluster(_)
         | Plan::AlterIndexSetOptions(_)
@@ -109,6 +112,7 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::PurifiedAlterSource { .. }
         | Plan::AlterSetCluster(_)
         | Plan::AlterItemRename(_)
+        | Plan::AlterItemSwap(_)
         | Plan::AlterSecret(_)
         | Plan::AlterSystemSet(_)
         | Plan::AlterSystemReset(_)
@@ -314,6 +318,7 @@ pub fn user_privilege_hack(
         | Plan::Insert(_)
         | Plan::AlterNoop(_)
         | Plan::AlterClusterRename(_)
+        | Plan::AlterClusterSwap(_)
         | Plan::AlterClusterReplicaRename(_)
         | Plan::AlterCluster(_)
         | Plan::AlterIndexSetOptions(_)
@@ -324,6 +329,7 @@ pub fn user_privilege_hack(
         | Plan::AlterSource(_)
         | Plan::PurifiedAlterSource { .. }
         | Plan::AlterItemRename(_)
+        | Plan::AlterItemSwap(_)
         | Plan::AlterSecret(_)
         | Plan::AlterSystemSet(_)
         | Plan::AlterSystemReset(_)

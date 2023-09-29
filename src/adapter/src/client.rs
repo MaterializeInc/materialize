@@ -31,7 +31,6 @@ use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{EnvironmentId, SessionCatalog};
 use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::user::{User, SUPPORT_USER};
-use mz_sql::session::vars::VarInput;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
 use mz_transform::Optimizer;
@@ -204,8 +203,9 @@ impl Client {
 
         let StartupResponse {
             role_id,
-            set_vars,
             write_notify,
+            session_vars,
+            role_vars,
             catalog,
         } = response;
 
@@ -215,12 +215,18 @@ impl Client {
         write_notify.await;
 
         client.session().initialize_role_metadata(role_id);
-        for (name, val) in set_vars {
-            client
-                .session()
-                .vars_mut()
-                .set(None, &name, VarInput::Flat(&val), false)
+        let vars_mut = client.session().vars_mut();
+        for (name, val) in session_vars {
+            vars_mut
+                .set(None, &name, val.borrow(), false)
                 .expect("constrained to be valid");
+        }
+        for (name, val) in role_vars {
+            if let Err(err) = vars_mut.set_role_default(&name, val.borrow()) {
+                // Note: erroring here is unexpected, but we don't want to panic if somehow our
+                // assumptions are wrong.
+                tracing::error!("failed to set peristed role default, {err:?}");
+            }
         }
         client
             .session()
@@ -470,7 +476,7 @@ impl SessionClient {
         let desc =
             Coordinator::describe(&catalog, self.session(), Some(stmt.clone()), param_types)?;
         let params = vec![];
-        let result_formats = vec![mz_pgrepr::Format::Text; desc.arity()];
+        let result_formats = vec![mz_pgwire_common::Format::Text; desc.arity()];
         let now = self.now();
         let redacted_sql = stmt.to_ast_string_redacted();
         let logging = self.session().mint_logging(sql, redacted_sql, now);
@@ -582,6 +588,21 @@ impl SessionClient {
     pub async fn check_catalog(&mut self) -> Result<(), serde_json::Value> {
         let catalog = self.catalog_snapshot().await;
         catalog.check_consistency()
+    }
+
+    /// Checks the coordinator for internal consistency, returning a JSON object describing the
+    /// inconsistencies, if there are any. This is a superset of checks that check_catalog performs,
+    ///
+    /// No authorization is performed, so access to this function must be limited to internal
+    /// servers or superusers.
+    pub async fn check_coordinator(&mut self) -> Result<(), serde_json::Value> {
+        self.send_without_session(|tx| Command::CheckConsistency { tx })
+            .await
+            .map_err(|inconsistencies| {
+                serde_json::to_value(inconsistencies).unwrap_or_else(|_| {
+                    serde_json::Value::String("failed to serialize inconsistencies".to_string())
+                })
+            })
     }
 
     /// Tells the coordinator a statement has finished execution, in the cases
@@ -721,7 +742,8 @@ impl SessionClient {
                 | Command::GetSystemVars { .. }
                 | Command::SetSystemVars { .. }
                 | Command::Terminate { .. }
-                | Command::RetireExecute { .. } => {}
+                | Command::RetireExecute { .. }
+                | Command::CheckConsistency { .. } => {}
             };
             cmd
         });

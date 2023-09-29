@@ -31,11 +31,14 @@ regex = "1.7.0"
 serde = { version = "1.0.152", features = ["derive"] }
 serde_json = "1.0.89"
 timely = { version = "0.12.0", default-features = false, features = ["bincode"] }
-tokio = "1.24.2"
+tokio = "1.32.0"
 tokio-stream = "0.1.11"
 tracing = "0.1.37"
 uuid = { version = "1.2.2" }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+
+[dev-dependencies]
+bytesize = "1.1.0"
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

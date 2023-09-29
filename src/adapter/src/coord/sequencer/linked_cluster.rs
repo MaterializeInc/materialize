@@ -82,6 +82,8 @@ impl Coordinator {
             size: size.to_string(),
             availability_zone: None,
             disk,
+            billed_as: None,
+            internal: false,
         };
         let location = self.catalog().concretize_replica_location(
             location,
@@ -128,10 +130,10 @@ impl Coordinator {
                 coord_bail!("cannot change the size of a source or sink created with IN CLUSTER");
             }
             Some(linked_cluster) => {
-                for id in linked_cluster.replicas_by_id.keys() {
+                for replica in linked_cluster.replicas() {
                     ops.extend(
                         self.catalog()
-                            .cluster_replica_dependents(linked_cluster.id(), *id)
+                            .cluster_replica_dependents(linked_cluster.id(), replica.replica_id)
                             .into_iter()
                             .map(catalog::Op::DropObject),
                     );
@@ -165,8 +167,7 @@ impl Coordinator {
             let mut entries = self
                 .catalog()
                 .cluster_replica_sizes()
-                .0
-                .iter()
+                .enabled_allocations()
                 .collect::<Vec<_>>();
             entries.sort_by_key(
                 |(
@@ -201,12 +202,9 @@ impl Coordinator {
             // `catalog_transact`, both from the catalog state and from the
             // controller. The new replicas will be in the catalog state, and
             // need to be recreated in the controller.
-            let cluster_id = cluster.id;
             let replicas: Vec<_> = cluster
-                .replicas_by_id
-                .keys()
-                .copied()
-                .map(|r| (cluster_id, r))
+                .replicas()
+                .map(|r| (r.cluster_id, r.replica_id))
                 .collect();
             self.create_cluster_replicas(&replicas).await;
         }

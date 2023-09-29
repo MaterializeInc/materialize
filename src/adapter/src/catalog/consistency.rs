@@ -23,7 +23,7 @@ use serde::Serialize;
 
 use super::CatalogState;
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, PartialEq)]
 pub struct CatalogInconsistencies {
     /// Inconsistencies found with internal fields, if any.
     internal_fields: Vec<InternalFieldsInconsistency>,
@@ -138,11 +138,11 @@ impl CatalogState {
             if self.roles_by_id.get(&cluster.owner_id).is_none() {
                 inconsistencies.push(RoleInconsistency::Cluster(*cluster_id, cluster.owner_id));
             }
-            for (replica_id, replica) in &cluster.replicas_by_id {
+            for replica in cluster.replicas() {
                 if self.roles_by_id.get(&replica.owner_id).is_none() {
                     inconsistencies.push(RoleInconsistency::ClusterReplica(
                         *cluster_id,
-                        *replica_id,
+                        replica.replica_id,
                         cluster.owner_id,
                     ));
                 }
@@ -275,7 +275,7 @@ impl CatalogState {
                     let replica = self
                         .clusters_by_id
                         .get(&cluster_id)
-                        .and_then(|cluster| cluster.replicas_by_id.get(&replica_id));
+                        .and_then(|cluster| cluster.replica(replica_id));
                     if replica.is_none() {
                         comment_inconsistencies
                             .push(CommentInconsistency::Dangling(comment_object_id));
@@ -347,7 +347,7 @@ impl CatalogState {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone, PartialEq)]
 enum InternalFieldsInconsistency {
     Database(String, DatabaseId),
     AmbientSchema(String, SchemaId),
@@ -356,7 +356,7 @@ enum InternalFieldsInconsistency {
     Role(String, RoleId),
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone, PartialEq)]
 enum RoleInconsistency {
     Database(DatabaseId, RoleId),
     Schema(SchemaId, RoleId),
@@ -374,7 +374,7 @@ enum RoleInconsistency {
     },
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone, PartialEq)]
 enum CommentInconsistency {
     /// A comment was found for an object that no longer exists.
     Dangling(CommentObjectId),
@@ -382,7 +382,7 @@ enum CommentInconsistency {
     NonRelation(CommentObjectId, usize),
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone, PartialEq)]
 enum ObjectDependencyInconsistency {
     /// Object A uses Object B, but Object B does not exist.
     MissingUses {

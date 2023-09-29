@@ -30,9 +30,10 @@ class Environment:
         self.auth = auth
         self.env_kubectl = env_kubectl
         self.sys_kubectl = sys_kubectl
-        self.region_api_requests = WebRequests(self.auth, region_api_server_base_url)
+        self.region_api_requests = WebRequests(
+            self.auth, region_api_server_base_url, default_timeout_in_sec=45
+        )
         self.create_env_assignment_get_retries = 120
-        self.envd_waiting_region_api_timeout = 45
         self.envd_waiting_get_env_retries = 900
 
     def create_environment_assignment(
@@ -66,7 +67,6 @@ class Environment:
         def get_environment() -> Response:
             response = self.region_api_requests.get(
                 "/api/region",
-                self.envd_waiting_region_api_timeout,
             )
             region_info = response.json().get("regionInfo")
             assert region_info
@@ -92,7 +92,7 @@ class Environment:
                 # we have a 60 second timeout in the region api's load balancer
                 # for this call and a 5 minute timeout in the region api (which
                 # is relevant when running in kind)
-                timeout=305,
+                timeout_in_sec=305,
             )
 
         retry(delete_environment, 20, [requests.exceptions.HTTPError])

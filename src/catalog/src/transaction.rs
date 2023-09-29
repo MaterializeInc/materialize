@@ -33,7 +33,7 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Diff, GlobalId};
 use mz_sql::catalog::{
-    CatalogError as SqlCatalogError, ObjectType, RoleAttributes, RoleMembership,
+    CatalogError as SqlCatalogError, ObjectType, RoleAttributes, RoleMembership, RoleVars,
 };
 use mz_sql::names::{
     CommentObjectId, DatabaseId, ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier,
@@ -123,9 +123,11 @@ pub(crate) fn add_new_builtin_cluster_replicas_migration(
 pub(crate) fn builtin_cluster_replica_config(bootstrap_args: &BootstrapArgs) -> ReplicaConfig {
     ReplicaConfig {
         location: ReplicaLocation::Managed {
-            size: bootstrap_args.builtin_cluster_replica_size.clone(),
             availability_zone: None,
+            billed_as: None,
             disk: false,
+            internal: false,
+            size: bootstrap_args.builtin_cluster_replica_size.clone(),
         },
         logging: default_logging_config(),
         idle_arrangement_merge_effort: None,
@@ -139,8 +141,7 @@ fn default_logging_config() -> ReplicaLogging {
     }
 }
 
-/// A [`Transaction`] batches multiple [`crate::stash::Connection`] operations together and commits
-/// them atomically.
+/// A [`Transaction`] batches multiple catalog operations together and commits them atomically.
 pub struct Transaction<'a> {
     durable_catalog: &'a mut dyn DurableCatalogState,
     databases: TableTransaction<DatabaseKey, DatabaseValue>,
@@ -332,6 +333,7 @@ impl<'a> Transaction<'a> {
         name: String,
         attributes: RoleAttributes,
         membership: RoleMembership,
+        vars: RoleVars,
     ) -> Result<RoleId, Error> {
         let id = self.get_and_increment_id(USER_ROLE_ID_ALLOC_KEY.to_string())?;
         let id = RoleId::User(id);
@@ -341,6 +343,7 @@ impl<'a> Transaction<'a> {
                 name: name.clone(),
                 attributes,
                 membership,
+                vars,
             },
         ) {
             Ok(_) => Ok(id),

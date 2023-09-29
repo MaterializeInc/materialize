@@ -12,13 +12,16 @@ import time
 from typing import TYPE_CHECKING
 
 import pg8000
+import requests
 
 from materialize.mzcompose.composition import Composition
+from materialize.parallel_workload.data_type import Text, TextTextMap
 from materialize.parallel_workload.database import (
     MAX_CLUSTER_REPLICAS,
     MAX_CLUSTERS,
     MAX_ROLES,
     MAX_ROWS,
+    MAX_SOURCES,
     MAX_TABLES,
     MAX_VIEWS,
     Cluster,
@@ -28,6 +31,7 @@ from materialize.parallel_workload.database import (
     Role,
     Table,
     View,
+    WebhookSource,
 )
 from materialize.parallel_workload.executor import Executor, QueryError
 from materialize.parallel_workload.settings import Complexity, Scenario
@@ -67,6 +71,7 @@ class Action:
                     "unknown catalog item",  # Expected, see #20381
                     "was concurrently dropped",  # role was dropped
                     "unknown cluster",  # cluster was dropped
+                    "the transaction's active cluster has been dropped",  # cluster was dropped
                 ]
             )
         if self.db.scenario == Scenario.Cancel:
@@ -98,11 +103,11 @@ class FetchAction(Action):
         return result
 
     def run(self, exe: Executor) -> None:
-        tables_views: list[DBObject] = [*self.db.tables, *self.db.views]
-        table = self.rng.choice(tables_views)
+        objects: list[DBObject] = [*self.db.tables, *self.db.views, *self.db.sources]
+        obj = self.rng.choice(objects)
         # See https://github.com/MaterializeInc/materialize/issues/20474
         exe.rollback() if self.rng.choice([True, False]) else exe.commit()
-        query = f"DECLARE c CURSOR FOR SUBSCRIBE {table}"
+        query = f"DECLARE c CURSOR FOR SUBSCRIBE {obj}"
         exe.execute(query)
         while True:
             rows = self.rng.choice(["ALL", self.rng.randrange(1000)])
@@ -133,16 +138,21 @@ class SelectAction(Action):
         return result
 
     def run(self, exe: Executor) -> None:
-        tables_views: list[DBObject] = [*self.db.tables, *self.db.views]
-        table = self.rng.choice(tables_views)
-        column = self.rng.choice(table.columns)
-        table2 = self.rng.choice(tables_views)
-        table_name = str(table)
-        table2_name = str(table2)
-        columns = [c for c in table2.columns if c.data_type == column.data_type]
-        if table_name != table2_name and columns:
+        objects: list[DBObject] = [*self.db.tables, *self.db.views, *self.db.sources]
+        obj = self.rng.choice(objects)
+        column = self.rng.choice(obj.columns)
+        obj2 = self.rng.choice(objects)
+        obj_name = str(obj)
+        obj2_name = str(obj2)
+        columns = [c for c in obj2.columns if c.data_type == column.data_type]
+        if obj_name != obj2_name and columns:
             column2 = self.rng.choice(columns)
-            query = f"SELECT * FROM {table_name} JOIN {table2_name} ON {column} = {column2} LIMIT 1"
+            query = f"SELECT * FROM {obj_name} JOIN {obj2_name} ON "
+            if column.data_type == TextTextMap:
+                query += f"map_length({column}) = map_length({column2})"
+            else:
+                query += f"{column} = {column2}"
+            query += " LIMIT 1"
             exe.execute(query, explainable=True)
             exe.cur.fetchall()
         else:
@@ -150,12 +160,12 @@ class SelectAction(Action):
                 expressions = ", ".join(
                     str(column)
                     for column in random.sample(
-                        table.columns, k=random.randint(1, len(table.columns))
+                        obj.columns, k=random.randint(1, len(obj.columns))
                     )
                 )
             else:
                 expressions = "*"
-            query = f"SELECT {expressions} FROM {table} LIMIT 1"
+            query = f"SELECT {expressions} FROM {obj} LIMIT 1"
             exe.execute(query, explainable=True)
             exe.cur.fetchall()
 
@@ -173,8 +183,10 @@ class InsertAction(Action):
         if not table:
             table = self.rng.choice(self.db.tables)
 
-        column_names = ", ".join(column.name() for column in table.columns)
-        column_values = ", ".join(column.value(self.rng) for column in table.columns)
+        column_names = ", ".join(column.name(True) for column in table.columns)
+        column_values = ", ".join(
+            column.value(self.rng, True) for column in table.columns
+        )
         query = f"INSERT INTO {table} ({column_names}) VALUES ({column_values})"
         if table.num_rows > MAX_ROWS:
             return
@@ -202,7 +214,11 @@ class UpdateAction(Action):
 
         column1 = table.columns[0]
         column2 = self.rng.choice(table.columns)
-        query = f"UPDATE {table} SET {column2.name()} = {column2.value(self.rng, True)} WHERE {column1.name()} = {column1.value(self.rng, True)}"
+        query = f"UPDATE {table} SET {column2.name(True)} = {column2.value(self.rng, True)} WHERE "
+        if column1.data_type == TextTextMap:
+            query += f"map_length({column1.name(True)}) = map_length({column1.value(self.rng, True)})"
+        else:
+            query += f"{column1.name(True)} = {column1.value(self.rng, True)}"
         exe.execute(query)
         exe.insert_table = table.table_id
 
@@ -218,7 +234,12 @@ class DeleteAction(Action):
         query = f"DELETE FROM {table}"
         if self.rng.random() < 0.95:
             column = self.rng.choice(table.columns)
-            query += f" WHERE {column.name()} = {column.value(self.rng, True)}"
+            query += " WHERE "
+            # TODO: Generic expression generator
+            if column.data_type == TextTextMap:
+                query += f"map_length({column.name(True)}) = map_length({column.value(self.rng, True)})"
+            else:
+                query += f"{column.name(True)} = {column.value(self.rng, True)}"
             exe.execute(query)
         else:
             exe.execute(query)
@@ -246,7 +267,7 @@ class CreateIndexAction(Action):
         index_elems = []
         for i, column in enumerate(columns):
             order = self.rng.choice(["ASC", "DESC"])
-            index_elems.append(f"{column.name()} {order}")
+            index_elems.append(f"{column.name(True)} {order}")
         index_str = ", ".join(index_elems)
         query = f"CREATE INDEX {index_name} ON {table} ({index_str})"
         exe.execute(query)
@@ -329,10 +350,12 @@ class CreateViewAction(Action):
                 return
             view_id = self.db.view_id
             self.db.view_id += 1
-            # Only use tables for now since LIMIT 1 and statement_timeout are
+            # Don't use views for now since LIMIT 1 and statement_timeout are
             # not effective yet at preventing long-running queries and OoMs.
-            base_object = self.rng.choice(self.db.tables)
-            base_object2: Table | None = self.rng.choice(self.db.tables)
+            base_object = self.rng.choice(self.db.tables + self.db.sources)
+            base_object2: DBObject | None = self.rng.choice(
+                self.db.tables + self.db.sources
+            )
             if self.rng.choice([True, False]) or base_object2 == base_object:
                 base_object2 = None
             view = View(self.rng, view_id, base_object, base_object2)
@@ -416,9 +439,10 @@ class DropClusterAction(Action):
 
     def run(self, exe: Executor) -> None:
         with self.db.lock:
-            if not self.db.clusters:
+            if len(self.db.clusters) <= 1:
                 return
-            cluster_id = self.rng.randrange(len(self.db.clusters))
+            # Keep cluster 0 with 1 replica for sources/sinks
+            cluster_id = self.rng.randrange(1, len(self.db.clusters))
             cluster = self.db.clusters[cluster_id]
             query = f"DROP CLUSTER {cluster}"
             exe.execute(query)
@@ -426,6 +450,11 @@ class DropClusterAction(Action):
 
 
 class SetClusterAction(Action):
+    def errors_to_ignore(self) -> list[str]:
+        return [
+            "SET cluster cannot be called in an active transaction",
+        ] + super().errors_to_ignore()
+
     def run(self, exe: Executor) -> None:
         with self.db.lock:
             if not self.db.clusters:
@@ -436,9 +465,15 @@ class SetClusterAction(Action):
 
 
 class CreateClusterReplicaAction(Action):
+    def errors_to_ignore(self) -> list[str]:
+        return [
+            "cannot create more than one replica of a cluster containing sources or sinks"
+        ] + super().errors_to_ignore()
+
     def run(self, exe: Executor) -> None:
         with self.db.lock:
-            unmanaged_clusters = [c for c in self.db.clusters if not c.managed]
+            # Keep cluster 0 with 1 replica for sources/sinks
+            unmanaged_clusters = [c for c in self.db.clusters[1:] if not c.managed]
             if not unmanaged_clusters:
                 return
             cluster = self.rng.choice(unmanaged_clusters)
@@ -457,7 +492,8 @@ class CreateClusterReplicaAction(Action):
 class DropClusterReplicaAction(Action):
     def run(self, exe: Executor) -> None:
         with self.db.lock:
-            unmanaged_clusters = [c for c in self.db.clusters if not c.managed]
+            # Keep cluster 0 with 1 replica for sources/sinks
+            unmanaged_clusters = [c for c in self.db.clusters[1:] if not c.managed]
             if not unmanaged_clusters:
                 return
             cluster = self.rng.choice(unmanaged_clusters)
@@ -573,7 +609,7 @@ class CancelAction(Action):
 
     def run(self, exe: Executor) -> None:
         pid = self.rng.choice(
-            [worker.exe.pg_pid for worker in self.workers if worker.exe.pg_pid != -1]  # type: ignore
+            [worker.exe.pg_pid for worker in self.workers if worker.exe and worker.exe.pg_pid != -1]  # type: ignore
         )
         worker = None
         for i in range(len(self.workers)):
@@ -608,6 +644,66 @@ class KillAction(Action):
         time.sleep(self.rng.uniform(20, 60))
 
 
+class CreateWebhookSourceAction(Action):
+    def run(self, exe: Executor) -> None:
+        with self.db.lock:
+            if len(self.db.sources) > MAX_SOURCES:
+                return
+            source_id = self.db.source_id
+            self.db.source_id += 1
+            potential_clusters = [c for c in self.db.clusters if len(c.replicas) == 1]
+            cluster = self.rng.choice(potential_clusters)
+            source = WebhookSource(source_id, cluster, self.rng)
+            source.create(exe)
+            self.db.sources.append(source)
+
+
+class DropWebhookSourceAction(Action):
+    def errors_to_ignore(self) -> list[str]:
+        return [
+            "still depended upon by",
+        ] + super().errors_to_ignore()
+
+    def run(self, exe: Executor) -> None:
+        with self.db.lock:
+            if not self.db.sources:
+                return
+            source_id = self.rng.randrange(len(self.db.sources))
+            source = self.db.sources[source_id]
+            query = f"DROP SOURCE {source}"
+            exe.execute(query)
+            del self.db.sources[source_id]
+
+
+class HttpPostAction(Action):
+    def run(self, exe: Executor) -> None:
+        with self.db.lock:
+            if not self.db.sources:
+                return
+
+            source = self.rng.choice(self.db.sources)
+            url = f"http://{self.db.host}:{self.db.http_port}/api/webhook/{self.db}/public/{source}"
+
+            payload = source.body_format.to_data_type().value(self.rng)
+
+            header_fields = source.explicit_include_headers
+            if source.include_headers:
+                header_fields.extend(
+                    ["timestamp", "x-event-type", "signature", "x-mz-api-key"]
+                )
+
+            headers = {
+                header: f'"{Text.value(self.rng)}"'.encode()
+                for header in self.rng.sample(header_fields, len(header_fields))
+            }
+
+            headers_strs = [f"{key}: {value}" for key, value in enumerate(headers)]
+            exe.log(
+                f"POST Headers: {', '.join(headers_strs)} Body: {payload.encode('utf-8')}"
+            )
+            requests.post(url, data=payload.encode("utf-8"), headers=headers)
+
+
 class ActionList:
     action_classes: list[type[Action]]
     weights: list[float]
@@ -624,7 +720,7 @@ class ActionList:
 read_action_list = ActionList(
     [
         (SelectAction, 100),
-        (SetClusterAction, 50),
+        (SetClusterAction, 1),
         (CommitRollbackAction, 1),
         (ReconnectAction, 1),
     ],
@@ -634,7 +730,7 @@ read_action_list = ActionList(
 fetch_action_list = ActionList(
     [
         (FetchAction, 30),
-        (SetClusterAction, 50),
+        (SetClusterAction, 1),
         (ReconnectAction, 1),
     ],
     autocommit=False,
@@ -643,7 +739,8 @@ fetch_action_list = ActionList(
 write_action_list = ActionList(
     [
         (InsertAction, 100),
-        (SetClusterAction, 50),
+        (SetClusterAction, 1),
+        (HttpPostAction, 50),
         (CommitRollbackAction, 1),
         (ReconnectAction, 1),
     ],
@@ -654,7 +751,7 @@ dml_nontrans_action_list = ActionList(
     [
         (DeleteAction, 10),
         (UpdateAction, 10),
-        (SetClusterAction, 5),
+        (SetClusterAction, 1),
         (ReconnectAction, 1),
         # (TransactionIsolationAction, 1),
     ],
@@ -675,9 +772,11 @@ ddl_action_list = ActionList(
         (DropClusterAction, 1),
         (CreateClusterReplicaAction, 8),
         (DropClusterReplicaAction, 4),
-        (SetClusterAction, 4),
+        (SetClusterAction, 1),
+        (CreateWebhookSourceAction, 2),
+        (DropWebhookSourceAction, 1),
         (GrantPrivilegesAction, 2),
-        (RevokePrivilegesAction, 2),
+        (RevokePrivilegesAction, 1),
         (ReconnectAction, 1),
         # (RenameTableAction, 1),  # TODO(def-) enable
         # (TransactionIsolationAction, 1),

@@ -32,7 +32,7 @@ use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_sql_lexer::keywords::*;
 use mz_sql_lexer::lexer::{self, LexerError, PosToken, Token};
 use serde::{Deserialize, Serialize};
-use tracing::warn;
+use tracing::{debug, warn};
 use IsLateral::*;
 use IsOptional::*;
 
@@ -118,6 +118,7 @@ pub fn parse_statements_with_limit(
 /// Parses a SQL string containing zero or more SQL statements.
 #[tracing::instrument(target = "compiler", level = "trace", name = "sql_to_ast")]
 pub fn parse_statements(sql: &str) -> Result<Vec<StatementParseResult>, ParserStatementError> {
+    debug!("parsing statements: {sql}");
     let tokens = lexer::lex(sql).map_err(|error| ParserStatementError {
         error: error.into(),
         statement: None,
@@ -2034,7 +2035,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_csr_config_option(&mut self) -> Result<CsrConfigOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[AVRO])? {
+        let name = match self.expect_one_of_keywords(&[AVRO, NULL])? {
             AVRO => {
                 let name = match self.expect_one_of_keywords(&[KEY, VALUE])? {
                     KEY => CsrConfigOptionName::AvroKeyFullname,
@@ -2043,6 +2044,10 @@ impl<'a> Parser<'a> {
                 };
                 self.expect_keyword(FULLNAME)?;
                 name
+            }
+            NULL => {
+                self.expect_keyword(DEFAULTS)?;
+                CsrConfigOptionName::NullDefaults
             }
             _ => unreachable!(),
         };
@@ -3560,10 +3565,12 @@ impl<'a> Parser<'a> {
     fn parse_replica_option(&mut self) -> Result<ReplicaOption<Raw>, ParserError> {
         let name = match self.expect_one_of_keywords(&[
             AVAILABILITY,
+            BILLED,
             COMPUTE,
             COMPUTECTL,
             DISK,
             IDLE,
+            INTERNAL,
             INTROSPECTION,
             SIZE,
             STORAGE,
@@ -3573,6 +3580,10 @@ impl<'a> Parser<'a> {
             AVAILABILITY => {
                 self.expect_keyword(ZONE)?;
                 ReplicaOptionName::AvailabilityZone
+            }
+            BILLED => {
+                self.expect_keyword(AS)?;
+                ReplicaOptionName::BilledAs
             }
             COMPUTE => {
                 self.expect_keyword(ADDRESSES)?;
@@ -3587,6 +3598,7 @@ impl<'a> Parser<'a> {
                 self.expect_keywords(&[ARRANGEMENT, MERGE, EFFORT])?;
                 ReplicaOptionName::IdleArrangementMergeEffort
             }
+            INTERNAL => ReplicaOptionName::Internal,
             INTROSPECTION => match self.expect_one_of_keywords(&[DEBUGGING, INTERVAL])? {
                 DEBUGGING => ReplicaOptionName::IntrospectionDebugging,
                 INTERVAL => ReplicaOptionName::IntrospectionInterval,
@@ -4093,6 +4105,13 @@ impl<'a> Parser<'a> {
 
     fn parse_alter_object(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
         let object_type = self.expect_object_type().map_no_statement_parser_err()?;
+
+        // ALTER ... SWAP works the same for all items, hence this separate branch.
+        if self.parse_keyword(SWAP) {
+            return self
+                .parse_alter_swap(object_type)
+                .map_parser_err(StatementKind::AlterObjectSwap);
+        }
 
         match object_type {
             ObjectType::Role => self
@@ -4736,9 +4755,29 @@ impl<'a> Parser<'a> {
 
     fn parse_alter_role(&mut self) -> Result<Statement<Raw>, ParserError> {
         let name = self.parse_identifier()?;
-        let _ = self.parse_keyword(WITH);
-        let options = self.parse_role_attributes();
-        Ok(Statement::AlterRole(AlterRoleStatement { name, options }))
+
+        let option = match self.parse_one_of_keywords(&[SET, RESET, WITH]) {
+            Some(SET) => {
+                let name = self.parse_identifier()?;
+                self.expect_keyword_or_token(TO, &Token::Eq)?;
+                let value = self.parse_set_variable_to()?;
+                let var = SetRoleVar::Set { name, value };
+                AlterRoleOption::Variable(var)
+            }
+            Some(RESET) => {
+                let name = self.parse_identifier()?;
+                let var = SetRoleVar::Reset { name };
+                AlterRoleOption::Variable(var)
+            }
+            Some(WITH) | None => {
+                let _ = self.parse_keyword(WITH);
+                let attrs = self.parse_role_attributes();
+                AlterRoleOption::Attributes(attrs)
+            }
+            Some(k) => unreachable!("unmatched keyword: {k}"),
+        };
+
+        Ok(Statement::AlterRole(AlterRoleStatement { name, option }))
     }
 
     fn parse_alter_default_privileges(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -4844,6 +4883,85 @@ impl<'a> Parser<'a> {
                 }))
             }
             _ => unreachable!(),
+        }
+    }
+
+    fn parse_alter_swap(&mut self, object_type: ObjectType) -> Result<Statement<Raw>, ParserError> {
+        match object_type {
+            ObjectType::Table
+            | ObjectType::View
+            | ObjectType::MaterializedView
+            | ObjectType::Source
+            | ObjectType::Sink
+            | ObjectType::Index
+            | ObjectType::Type
+            | ObjectType::Secret
+            | ObjectType::Connection
+            | ObjectType::Func => {
+                let name_a = self.parse_item_name()?;
+                let name_b = self.parse_item_name()?;
+
+                Ok(Statement::AlterObjectSwap(AlterObjectSwapStatement {
+                    object_type,
+                    name_a: UnresolvedObjectName::Item(name_a),
+                    name_b: UnresolvedObjectName::Item(name_b),
+                }))
+            }
+            ObjectType::Cluster => {
+                let name_a = self.parse_identifier()?;
+                let name_b = self.parse_identifier()?;
+
+                Ok(Statement::AlterObjectSwap(AlterObjectSwapStatement {
+                    object_type,
+                    name_a: UnresolvedObjectName::Cluster(name_a),
+                    name_b: UnresolvedObjectName::Cluster(name_b),
+                }))
+            }
+            ObjectType::ClusterReplica => {
+                let name_a = self.parse_cluster_replica_name()?;
+                let name_b = self.parse_cluster_replica_name()?;
+
+                Ok(Statement::AlterObjectSwap(AlterObjectSwapStatement {
+                    object_type,
+                    name_a: UnresolvedObjectName::ClusterReplica(name_a),
+                    name_b: UnresolvedObjectName::ClusterReplica(name_b),
+                }))
+            }
+            ObjectType::Database => {
+                let name_a = self.parse_database_name()?;
+                let name_b = self.parse_database_name()?;
+
+                Ok(Statement::AlterObjectSwap(AlterObjectSwapStatement {
+                    object_type,
+                    name_a: UnresolvedObjectName::Database(name_a),
+                    name_b: UnresolvedObjectName::Database(name_b),
+                }))
+            }
+            ObjectType::Schema => {
+                let name_a = self.parse_schema_name()?;
+                let name_b = self.parse_schema_name()?;
+
+                Ok(Statement::AlterObjectSwap(AlterObjectSwapStatement {
+                    object_type,
+                    name_a: UnresolvedObjectName::Schema(name_a),
+                    name_b: UnresolvedObjectName::Schema(name_b),
+                }))
+            }
+            ObjectType::Role => {
+                let name_a = self.parse_identifier()?;
+                let name_b = self.parse_identifier()?;
+
+                Ok(Statement::AlterObjectSwap(AlterObjectSwapStatement {
+                    object_type,
+                    name_a: UnresolvedObjectName::Role(name_a),
+                    name_b: UnresolvedObjectName::Role(name_b),
+                }))
+            }
+            ObjectType::Subsource => parser_err!(
+                self,
+                self.peek_prev_pos(),
+                "Unexpected object type 'SUBSOURCE'"
+            ),
         }
     }
 
@@ -6860,16 +6978,30 @@ impl<'a> Parser<'a> {
             self.expect_keyword(FOR)?;
         }
 
-        // VIEW name | MATERIALIZED VIEW name | INDEX name | query
         let explainee = if self.parse_keyword(VIEW) {
+            // Parse: `VIEW name`
             Explainee::View(self.parse_raw_name()?)
         } else if self.parse_keywords(&[MATERIALIZED, VIEW]) {
+            // Parse: `MATERIALIZED VIEW name`
             Explainee::MaterializedView(self.parse_raw_name()?)
         } else if self.parse_keyword(INDEX) {
+            // Parse: `INDEX name`
             Explainee::Index(self.parse_raw_name()?)
         } else {
             let broken = self.parse_keyword(BROKEN);
-            Explainee::Query(self.parse_query()?, broken)
+            if self.peek_keywords(&[CREATE, MATERIALIZED, VIEW]) {
+                // Parse: `BROKEN? CREATE MATERIALIZED VIEW ...`
+                let _ = self.parse_keyword(CREATE); // consume CREATE token
+                let stmt = match self.parse_create_materialized_view()? {
+                    Statement::CreateMaterializedView(stmt) => stmt,
+                    _ => panic!("Unexpected statement type return after parsing"),
+                };
+                Explainee::CreateMaterializedView(Box::new(stmt), broken)
+            } else {
+                // Parse: `BROKEN? query`
+                let query = self.parse_query()?;
+                Explainee::Query(Box::new(query), broken)
+            }
         };
 
         Ok(Statement::ExplainPlan(ExplainPlanStatement {

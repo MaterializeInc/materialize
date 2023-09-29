@@ -14,6 +14,7 @@ from materialize.checks.array_type import *  # noqa: F401 F403
 from materialize.checks.boolean_type import *  # noqa: F401 F403
 from materialize.checks.cast import *  # noqa: F401 F403
 from materialize.checks.cluster import *  # noqa: F401 F403
+from materialize.checks.cluster_unification import *  #  noqa: F401 F403
 from materialize.checks.commit import *  # noqa: F401 F403
 from materialize.checks.constant_plan import *  # noqa: F401 F403
 from materialize.checks.create_index import *  # noqa: F401 F403
@@ -74,3 +75,4 @@ from materialize.checks.upsert_shrink_grow import *  # noqa: F401 F403
 from materialize.checks.uuid import *  # noqa: F401 F403
 from materialize.checks.webhook import *  # noqa: F401 F403
 from materialize.checks.window_functions import *  # noqa: F401 F403
+from materialize.checks.with_mutually_recursive import *  # noqa: F401 F403

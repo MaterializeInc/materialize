@@ -167,9 +167,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     pub fn handle_compute_command(&mut self, cmd: ComputeCommand) {
         use ComputeCommand::*;
 
-        self.compute_state
-            .command_history
-            .push(cmd.clone(), &self.compute_state.pending_peeks);
+        self.compute_state.command_history.push(cmd.clone());
 
         match cmd {
             CreateTimely { .. } => panic!("CreateTimely must be captured before"),

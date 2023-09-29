@@ -15,8 +15,9 @@ use std::fmt::{Debug, Display};
 use std::ops::DerefMut;
 use std::sync::Mutex;
 
-use tracing::{span, subscriber, Level};
-use tracing_subscriber::{field, layer};
+use tracing::{span, subscriber, Dispatch, Level};
+use tracing_core::{Event, Interest, Metadata};
+use tracing_subscriber::{field, layer, Registry};
 
 /// A tracing layer used to accumulate a sequence of explainable plans.
 #[allow(missing_debug_implementations)]
@@ -116,7 +117,7 @@ pub fn trace_plan<T: Clone + 'static>(plan: &T) {
 ///
 /// [^example]: <https://github.com/MaterializeInc/materialize/commit/2ce93229>
 pub fn dbg_plan<S: Display, T: Clone + 'static>(segment: S, plan: &T) {
-    span!(Level::DEBUG, "segment", path.segment = segment.to_string()).in_scope(|| {
+    span!(target: "optimizer", Level::TRACE, "segment", path.segment = %segment).in_scope(|| {
         trace_plan(plan);
     });
 }
@@ -128,7 +129,7 @@ pub fn dbg_plan<S: Display, T: Clone + 'static>(segment: S, plan: &T) {
 ///
 /// [^example]: <https://github.com/MaterializeInc/materialize/commit/2ce93229>
 pub fn dbg_misc<S: Display, T: Display>(segment: S, misc: T) {
-    span!(Level::DEBUG, "segment", path.segment = segment.to_string()).in_scope(|| {
+    span!(target: "optimizer", Level::TRACE, "segment", path.segment = %segment).in_scope(|| {
         trace_plan(&misc.to_string());
     });
 }
@@ -165,16 +166,20 @@ impl Display for ContextHash {
 /// extensions map.
 impl<S, T> layer::Layer<S> for PlanTrace<T>
 where
-    S: subscriber::Subscriber + for<'span> tracing_subscriber::registry::LookupSpan<'span>,
+    S: subscriber::Subscriber,
     T: 'static,
 {
-    fn on_new_span(&self, attrs: &span::Attributes<'_>, id: &span::Id, ctx: layer::Context<'_, S>) {
+    fn on_new_span(
+        &self,
+        attrs: &span::Attributes<'_>,
+        _id: &span::Id,
+        _ctx: layer::Context<'_, S>,
+    ) {
         // add segment to path
         let mut path = self.path.lock().expect("path shouldn't be poisoned");
         let path = path.deref_mut();
-        let segment = attrs
-            .get_str("path.segment")
-            .unwrap_or_else(|| ctx.span(id).expect("span").name().to_string());
+        let segment = attrs.get_str("path.segment");
+        let segment = segment.unwrap_or_else(|| attrs.metadata().name().to_string());
         if !path.is_empty() {
             path.push('/');
         }
@@ -198,26 +203,40 @@ where
     }
 }
 
-impl<T: Clone + 'static> PlanTrace<T> {
-    /// Create a new trace for plans of type `T`.
-    pub fn new() -> Self {
+impl<S, T> layer::Filter<S> for PlanTrace<T>
+where
+    S: subscriber::Subscriber,
+    T: 'static,
+{
+    fn enabled(&self, meta: &Metadata<'_>, _cx: &layer::Context<'_, S>) -> bool {
+        self.is_enabled(meta)
+    }
+
+    fn callsite_enabled(&self, meta: &'static Metadata<'static>) -> Interest {
+        if self.is_enabled(meta) {
+            Interest::always()
+        } else {
+            Interest::never()
+        }
+    }
+}
+
+impl<T: 'static> PlanTrace<T> {
+    /// Create a new trace for plans of type `T` that will only accumulate
+    /// [`TraceEntry`] instances along the prefix of the given `path`.
+    pub fn new(path: Option<&'static str>) -> Self {
         Self {
-            find: None,
+            find: path,
             path: Mutex::new(String::with_capacity(256)),
             times: Mutex::new(vec![]),
             entries: Mutex::new(vec![]),
         }
     }
 
-    /// Create a new trace for plans of type `T` that will only accumulate
-    /// [`TraceEntry`] instances along the prefix of the given `path`.
-    pub fn find(path: &'static str) -> Self {
-        Self {
-            find: Some(path),
-            path: Mutex::new(String::with_capacity(256)),
-            times: Mutex::new(vec![]),
-            entries: Mutex::new(vec![]),
-        }
+    /// Check if a subscriber layer of this kind will be interested in tracing
+    /// spans and events with the given metadata.
+    fn is_enabled(&self, meta: &Metadata<'_>) -> bool {
+        meta.is_span() && meta.target() == "optimizer"
     }
 
     /// Drain the trace data collected so far.
@@ -238,7 +257,10 @@ impl<T: Clone + 'static> PlanTrace<T> {
     /// This is a noop if
     /// 1. the call is within a context without an enclosing span, or if
     /// 2. [`PlanTrace::find`] is set not equal to [`PlanTrace::current_path`].
-    fn push(&self, plan: &T) {
+    fn push(&self, plan: &T)
+    where
+        T: Clone,
+    {
         if let Some(current_path) = self.current_path() {
             let times = self.times.lock().expect("times shouldn't be poisoned");
             if let (Some(full_start), Some(span_start)) = (times.first(), times.last()) {
@@ -315,6 +337,62 @@ impl field::Visit for ExtractStr {
     fn record_debug(&mut self, _field: &tracing::field::Field, _value: &dyn std::fmt::Debug) {}
 }
 
+/// A [`subscriber::Subscriber`] implementation that delegates to the default
+/// [`Dispatch`] instance.
+#[allow(missing_debug_implementations)]
+
+pub struct DelegateSubscriber {
+    inner: Dispatch,
+}
+
+impl Default for DelegateSubscriber {
+    fn default() -> Self {
+        let default = tracing::dispatcher::get_default(Clone::clone);
+
+        let inner = if default.downcast_ref::<Registry>().is_none() {
+            Registry::default().into() // we need at least a simple registry
+        } else {
+            default
+        };
+
+        Self { inner }
+    }
+}
+
+impl subscriber::Subscriber for DelegateSubscriber {
+    fn enabled(&self, metadata: &Metadata<'_>) -> bool {
+        metadata.target() == "optimizer" || self.inner.enabled(metadata)
+    }
+
+    fn new_span(&self, span: &span::Attributes<'_>) -> span::Id {
+        self.inner.new_span(span)
+    }
+
+    fn record(&self, span: &span::Id, values: &span::Record<'_>) {
+        self.inner.record(span, values)
+    }
+
+    fn record_follows_from(&self, span: &span::Id, follows: &span::Id) {
+        self.inner.record_follows_from(span, follows)
+    }
+
+    fn event(&self, event: &Event<'_>) {
+        self.inner.event(event)
+    }
+
+    fn enter(&self, span: &span::Id) {
+        self.inner.enter(span)
+    }
+
+    fn exit(&self, span: &span::Id) {
+        self.inner.exit(span)
+    }
+
+    fn current_span(&self) -> tracing_core::span::Current {
+        self.inner.current_span()
+    }
+}
+
 #[cfg(test)]
 mod test {
     use tracing::{dispatcher, instrument};
@@ -324,7 +402,7 @@ mod test {
 
     #[mz_ore::test]
     fn test_optimizer_trace() {
-        let subscriber = tracing_subscriber::registry().with(Some(PlanTrace::<String>::new()));
+        let subscriber = tracing_subscriber::registry().with(Some(PlanTrace::<String>::new(None)));
         let dispatch = dispatcher::Dispatch::new(subscriber);
 
         dispatcher::with_default(&dispatch, || {

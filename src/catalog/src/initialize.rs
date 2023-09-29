@@ -16,7 +16,7 @@ use mz_ore::now::EpochMillis;
 use mz_proto::ProtoType;
 use mz_repr::adt::mz_acl_item::AclMode;
 use mz_repr::role_id::RoleId;
-use mz_sql::catalog::{ObjectType, RoleAttributes, RoleMembership, SystemObjectType};
+use mz_sql::catalog::{ObjectType, RoleAttributes, RoleMembership, RoleVars, SystemObjectType};
 use mz_sql::names::{
     DatabaseId, ObjectId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier, PUBLIC_ROLE_NAME,
 };
@@ -114,6 +114,7 @@ const INFORMATION_SCHEMA_ID: u64 = 5;
 ///
 /// Note: We should only use the latest types here from the `super::objects` module, we should
 /// __not__ use any versioned protos, e.g. `objects_v15`.
+// TODO(jkosh44) This should not use stash implementation details.
 #[tracing::instrument(level = "info", skip_all)]
 pub async fn initialize(
     tx: &mut Transaction<'_>,
@@ -152,6 +153,7 @@ pub async fn initialize(
             name: role.to_string(),
             attributes: Some(RoleAttributes::new().into_proto()),
             membership: Some(RoleMembership::new().into_proto()),
+            vars: Some(RoleVars::default().into_proto()),
         };
 
         audit_events.push((
@@ -180,6 +182,7 @@ pub async fn initialize(
                     name: role.name.to_string(),
                     attributes: Some(role.attributes.clone().into_proto()),
                     membership: Some(RoleMembership::new().into_proto()),
+                    vars: Some(RoleVars::default().into_proto()),
                 },
             )
         })
@@ -191,6 +194,7 @@ pub async fn initialize(
                 name: PUBLIC_ROLE_NAME.as_str().to_lowercase(),
                 attributes: Some(RoleAttributes::new().into_proto()),
                 membership: Some(RoleMembership::new().into_proto()),
+                vars: Some(RoleVars::default().into_proto()),
             },
         )))
         // Optionally insert a privilege for the bootstrap role.
@@ -630,6 +634,8 @@ pub async fn initialize(
                 replica_id: Some(DEFAULT_USER_REPLICA_ID.to_string().into()),
                 logical_size: options.default_cluster_replica_size.to_string(),
                 disk: false,
+                billed_as: None,
+                internal: false,
             },
         ),
     ));
@@ -853,19 +859,6 @@ pub async fn initialize(
     Ok(())
 }
 
-pub async fn deploy_generation(tx: &Transaction<'_>) -> Result<Option<u64>, StashError> {
-    let config = CONFIG_COLLECTION.from_tx(tx).await?;
-    let value = tx
-        .peek_key_one(
-            config,
-            &proto::ConfigKey {
-                key: DEPLOY_GENERATION.into(),
-            },
-        )
-        .await?;
-    Ok(value.map(|v| v.value))
-}
-
 /// Defines the default config for a Cluster.
 fn default_cluster_config(args: &BootstrapArgs) -> proto::ClusterConfig {
     proto::ClusterConfig {
@@ -891,6 +884,8 @@ fn default_replica_config(args: &BootstrapArgs) -> proto::ReplicaConfig {
                 size: args.default_cluster_replica_size.to_string(),
                 availability_zone: None,
                 disk: false,
+                internal: false,
+                billed_as: None,
             },
         )),
         logging: Some(proto::ReplicaLogging {
