@@ -363,6 +363,8 @@ pub struct ComputeParameters {
     pub enable_mz_join_core: Option<bool>,
     /// Enable arrangement size logging
     pub enable_arrangement_size_logging: Option<bool>,
+    /// Whether to activate jemalloc heap profiling.
+    pub enable_jemalloc_profiling: Option<bool>,
     /// Persist client configuration.
     pub persist: PersistParameters,
     /// Tracing configuration.
@@ -379,6 +381,7 @@ impl ComputeParameters {
             dataflow_max_inflight_bytes,
             enable_mz_join_core,
             enable_arrangement_size_logging,
+            enable_jemalloc_profiling,
             persist,
             tracing,
             grpc_client,
@@ -393,9 +396,11 @@ impl ComputeParameters {
         if enable_mz_join_core.is_some() {
             self.enable_mz_join_core = enable_mz_join_core;
         }
-
         if enable_arrangement_size_logging.is_some() {
             self.enable_arrangement_size_logging = enable_arrangement_size_logging;
+        }
+        if enable_jemalloc_profiling.is_some() {
+            self.enable_jemalloc_profiling = enable_jemalloc_profiling;
         }
 
         self.persist.update(persist);
@@ -416,6 +421,7 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
             dataflow_max_inflight_bytes: self.dataflow_max_inflight_bytes.into_proto(),
             enable_arrangement_size_logging: self.enable_arrangement_size_logging.into_proto(),
             enable_mz_join_core: self.enable_mz_join_core.into_proto(),
+            enable_jemalloc_profiling: self.enable_jemalloc_profiling.into_proto(),
             persist: Some(self.persist.into_proto()),
             tracing: Some(self.tracing.into_proto()),
             grpc_client: Some(self.grpc_client.into_proto()),
@@ -428,6 +434,7 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
             dataflow_max_inflight_bytes: proto.dataflow_max_inflight_bytes.into_rust()?,
             enable_arrangement_size_logging: proto.enable_arrangement_size_logging.into_rust()?,
             enable_mz_join_core: proto.enable_mz_join_core.into_rust()?,
+            enable_jemalloc_profiling: proto.enable_jemalloc_profiling.into_rust()?,
             persist: proto
                 .persist
                 .into_rust_if_some("ProtoComputeParameters::persist")?,

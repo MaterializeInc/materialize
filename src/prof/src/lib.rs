@@ -398,3 +398,46 @@ pub fn symbolicate(profile: &StackProfile) -> BTreeMap<usize, Vec<String>> {
         })
         .collect()
 }
+
+#[cfg(feature = "jemalloc")]
+pub async fn activate_jemalloc_profiling() {
+    let Some(ctl) = jemalloc::PROF_CTL.as_ref() else {
+        tracing::warn!("jemalloc profiling is disabled and cannot be activated");
+        return;
+    };
+
+    let mut ctl = ctl.lock().await;
+    if ctl.get_md().start_time.is_some() {
+        return; // profiling already activated
+    }
+
+    match ctl.activate() {
+        Ok(()) => tracing::info!("jemalloc profiling activated"),
+        Err(err) => tracing::warn!("could not activate jemalloc profiling: {err}"),
+    }
+}
+
+#[cfg(feature = "jemalloc")]
+pub async fn deactivate_jemalloc_profiling() {
+    let Some(ctl) = jemalloc::PROF_CTL.as_ref() else {
+        return; // jemalloc not enabled
+    };
+
+    let mut ctl = ctl.lock().await;
+    if ctl.get_md().start_time.is_none() {
+        return; // profiling already deactivated
+    }
+
+    match ctl.deactivate() {
+        Ok(()) => tracing::info!("jemalloc profiling deactivated"),
+        Err(err) => tracing::warn!("could not deactivate jemalloc profiling: {err}"),
+    }
+}
+
+#[cfg(not(feature = "jemalloc"))]
+#[allow(clippy::unused_async)]
+pub async fn activate_jemalloc_profiling() {}
+
+#[cfg(not(feature = "jemalloc"))]
+#[allow(clippy::unused_async)]
+pub async fn deactivate_jemalloc_profiling() {}
