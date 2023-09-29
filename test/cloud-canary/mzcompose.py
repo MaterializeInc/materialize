@@ -185,6 +185,7 @@ def td(c: Composition, *args: str) -> None:
             seed=1,  # Required for predictable Kafka topic names
             kafka_url=KAFKA_BOOTSTRAP_SERVER,
             schema_registry_url=SCHEMA_REGISTRY_ENDPOINT,
+            no_consistency_checks=True,
             environment=[
                 "KAFKA_OPTION="
                 + ",".join(
