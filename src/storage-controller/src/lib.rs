@@ -2873,7 +2873,7 @@ where
                     // Whenever a collection is being initialized, this state is
                     // acceptable.
                     || *collection.write_frontier == [T::minimum()],
-                "{id}:  implied_capability {:?}, write_frontier {:?}, state: {:?}",
+                "{id}:  the implied capability {:?} should be less than the write_frontier {:?}. Collection state dump: {:#?}",
                 collection.implied_capability,
                 collection.write_frontier,
                 collection
