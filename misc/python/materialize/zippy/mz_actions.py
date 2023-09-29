@@ -41,7 +41,12 @@ class MzStart(Action):
             )
 
         c.sql(
-            "ALTER CLUSTER default SET (MANAGED = false)", user="mz_system", port=6877
+            """
+            ALTER CLUSTER default SET (MANAGED = false);
+            ALTER SYSTEM SET enable_unified_clusters = true;
+            """,
+            user="mz_system",
+            port=6877,
         )
 
     def provides(self) -> list[Capability]:

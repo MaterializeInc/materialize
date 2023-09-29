@@ -157,10 +157,12 @@ class ClusterReplicas(Scenario):
             CreateReplica: 30,
             DropReplica: 10,
             CreateTopicParameterized(): 10,
-            CreateSourceParameterized(): 10,
+            # The default cluster may aquire additional replicas, so can not be used for sources
+            CreateSourceParameterized(clusters=["storage"]): 10,
             CreateTableParameterized(): 10,
             CreateViewParameterized(): 20,
-            CreateSinkParameterized(): 10,
+            # The default cluster may aquire additional replicas, so can not be used for sinks
+            CreateSinkParameterized(clusters=["storage"]): 10,
             ValidateView: 20,
             Ingest: 50,
             DML: 50,
@@ -266,7 +268,8 @@ class DataflowsLarge(Scenario):
             CreateTopicParameterized(
                 max_topics=2, envelopes_with_weights={Envelope.UPSERT: 100}
             ): 10,
-            CreateSourceParameterized(max_sources=10): 10,
+            # The default cluster may aquire additional replicas, so can not be used for sources
+            CreateSourceParameterized(max_sources=10, clusters=["storage"]): 10,
             CreateViewParameterized(
                 max_views=5, expensive_aggregates=True, max_inputs=5
             ): 10,

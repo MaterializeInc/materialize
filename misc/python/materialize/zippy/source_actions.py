@@ -25,8 +25,11 @@ class CreateSourceParameterized(ActionFactory):
     def requires(cls) -> set[type[Capability]]:
         return {MzIsRunning, StoragedRunning, KafkaRunning, TopicExists}
 
-    def __init__(self, max_sources: int = 10) -> None:
+    def __init__(
+        self, max_sources: int = 10, clusters: list[str] = ["storage", "default"]
+    ) -> None:
         self.max_sources = max_sources
+        self.clusters = clusters
 
     def new(self, capabilities: Capabilities) -> list[Action]:
         new_source_name = capabilities.get_free_capability_name(
@@ -41,6 +44,7 @@ class CreateSourceParameterized(ActionFactory):
                         name=new_source_name,
                         topic=random.choice(capabilities.get(TopicExists)),
                     ),
+                    cluster=random.choice(self.clusters),
                 )
             ]
         else:
@@ -48,8 +52,11 @@ class CreateSourceParameterized(ActionFactory):
 
 
 class CreateSource(Action):
-    def __init__(self, capabilities: Capabilities, source: SourceExists) -> None:
+    def __init__(
+        self, capabilities: Capabilities, source: SourceExists, cluster: str
+    ) -> None:
         self.source = source
+        self.cluster = cluster
         super().__init__(capabilities)
 
     def run(self, c: Composition) -> None:
@@ -64,7 +71,7 @@ class CreateSource(Action):
                   TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
 
                 > CREATE SOURCE {self.source.name}
-                  IN CLUSTER storaged
+                  IN CLUSTER {self.cluster}
                   FROM KAFKA CONNECTION {self.source.name}_kafka_conn
                   (TOPIC 'testdrive-{self.source.topic.name}-${{testdrive.seed}}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {self.source.name}_csr_conn

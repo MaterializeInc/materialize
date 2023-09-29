@@ -26,10 +26,13 @@ class CreatePostgresCdcTable(Action):
     def requires(cls) -> set[type[Capability]]:
         return {MzIsRunning, StoragedRunning, PostgresRunning, PostgresTableExists}
 
-    def __init__(self, capabilities: Capabilities) -> None:
+    def __init__(
+        self, capabilities: Capabilities, clusters: list[str] = ["storage", "default"]
+    ) -> None:
         postgres_table = random.choice(capabilities.get(PostgresTableExists))
         postgres_pg_cdc_name = f"postgres_{postgres_table.name}"
         this_postgres_cdc_table = PostgresCdcTableExists(name=postgres_pg_cdc_name)
+        cluster = random.choice(clusters)
 
         existing_postgres_cdc_tables = [
             s
@@ -42,6 +45,7 @@ class CreatePostgresCdcTable(Action):
 
             self.postgres_cdc_table = this_postgres_cdc_table
             self.postgres_cdc_table.postgres_table = postgres_table
+            self.cluster = cluster
         elif len(existing_postgres_cdc_tables) == 1:
             self.new_postgres_cdc_table = False
 
@@ -73,7 +77,7 @@ class CreatePostgresCdcTable(Action):
                       );
 
                     > CREATE SOURCE {name}_source
-                      IN CLUSTER storaged
+                      IN CLUSTER {self.cluster}
                       FROM POSTGRES CONNECTION {name}_connection (PUBLICATION '{name}_publication')
                       FOR TABLES ({self.postgres_cdc_table.postgres_table.name} AS {name})
                     """
