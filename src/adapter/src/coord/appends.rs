@@ -231,6 +231,8 @@ impl Coordinator {
         write_lock_guard: Option<tokio::sync::OwnedMutexGuard<()>>,
         permit: Option<GroupCommitPermit>,
     ) {
+        drop(permit);
+
         let (write_lock_guard, pending_writes): (_, Vec<_>) = if let Some(guard) = write_lock_guard
         {
             // If the caller passed in the write lock, then we can execute a group commit.
@@ -371,8 +373,14 @@ impl Coordinator {
                 .await
                 .expect("One-shot dropped while waiting synchronously")
                 .unwrap_or_terminate("cannot fail to apply appends");
-            self.group_commit_apply(timestamp, responses, write_lock_guard, notifies, permit)
-                .await;
+            self.group_commit_apply(
+                timestamp,
+                responses,
+                write_lock_guard,
+                notifies,
+                None, /* no permit */
+            )
+            .await;
         } else {
             debug!("async group_commit_apply");
             let internal_cmd_tx = self.internal_cmd_tx.clone();
@@ -386,7 +394,7 @@ impl Coordinator {
                             responses,
                             write_lock_guard,
                             notifies,
-                            permit,
+                            None, /* no permit */
                             Span::current(),
                         )) {
                             warn!("Server closed with non-responded writes, {e}");

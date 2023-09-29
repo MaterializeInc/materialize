@@ -1958,17 +1958,17 @@ impl Coordinator {
                 () = self.controller.ready() => {
                     Message::ControllerReady
                 }
-                // See [`appends::GroupCommitWaiter`] for notes on why this is cancel safe.
-                permit = group_commit_rx.ready() => {
-                    let span = info_span!(parent: None, "group_commit_notify");
-                    span.follows_from(Span::current());
-                    Message::GroupCommitInitiate(span, Some(permit))
-                },
                 // `recv()` on `UnboundedReceiver` is cancellation safe:
                 // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
                 m = cmd_rx.recv() => match m {
                     None => break,
                     Some(m) => Message::Command(m),
+                },
+                // See [`appends::GroupCommitWaiter`] for notes on why this is cancel safe.
+                permit = group_commit_rx.ready() => {
+                    let span = info_span!(parent: None, "group_commit_notify");
+                    span.follows_from(Span::current());
+                    Message::GroupCommitInitiate(span, Some(permit))
                 },
                 // `recv()` on `UnboundedReceiver` is cancellation safe:
                 // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
