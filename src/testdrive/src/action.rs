@@ -833,7 +833,7 @@ pub async fn create_state(
         max_tries: config.default_max_tries,
         initial_backoff: config.initial_backoff,
         backoff_factor: config.backoff_factor,
-        no_consistency_checks: config.no_consistency_check,
+        no_consistency_checks: config.no_consistency_checks,
         regex: None,
         regex_replacement: set::DEFAULT_REGEX_REPLACEMENT.into(),
         postgres_factory: StashFactory::new(&MetricsRegistry::new()),
