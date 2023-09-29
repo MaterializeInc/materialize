@@ -13,7 +13,7 @@ mz-adapter = { path = "../adapter" }
 mz-catalog = { path = "../catalog" }
 mz-build-info = { path = "../build-info" }
 mz-ore = { path = "../ore" }
-mz-postgres-util = { path = "../postgres-util" }
+mz-tls-util = { path = "../tls-util" }
 mz-secrets = { path = "../secrets" }
 mz-sql = { path = "../sql" }
 mz-stash = { path = "../stash" }

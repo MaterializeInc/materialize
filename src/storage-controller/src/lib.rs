@@ -1823,7 +1823,7 @@ where
     ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
-        let tls = mz_postgres_util::make_tls(
+        let tls = mz_tls_util::make_tls(
             &tokio_postgres::config::Config::from_str(&postgres_url)
                 .expect("invalid postgres url for storage stash"),
         )

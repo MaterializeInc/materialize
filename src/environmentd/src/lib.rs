@@ -300,7 +300,7 @@ impl Listeners {
             internal_http: (internal_http_listener, internal_http_conns),
         } = self;
 
-        let tls = mz_postgres_util::make_tls(&tokio_postgres::config::Config::from_str(
+        let tls = mz_tls_util::make_tls(&tokio_postgres::config::Config::from_str(
             &config.adapter_stash_url,
         )?)?;
 

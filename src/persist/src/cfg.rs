@@ -14,13 +14,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::anyhow;
+use mz_postgres_client::metrics::PostgresClientMetrics;
+use mz_postgres_client::PostgresClientKnobs;
 use tracing::warn;
 use url::Url;
 
 use crate::file::{FileBlob, FileBlobConfig};
 use crate::location::{Blob, Consensus, ExternalError};
 use crate::mem::{MemBlob, MemBlobConfig, MemConsensus};
-use crate::metrics::{PostgresConsensusMetrics, S3BlobMetrics};
+use crate::metrics::S3BlobMetrics;
 use crate::postgres::{PostgresConsensus, PostgresConsensusConfig};
 use crate::s3::{S3Blob, S3BlobConfig};
 
@@ -145,22 +147,6 @@ pub enum ConsensusConfig {
     Mem,
 }
 
-/// Configuration knobs for [Consensus].
-pub trait ConsensusKnobs: std::fmt::Debug + Send + Sync {
-    /// Maximum number of connections allowed in a pool.
-    fn connection_pool_max_size(&self) -> usize;
-    /// Minimum TTL of a connection. It is expected that connections are
-    /// routinely culled to balance load to the backing store of [Consensus].
-    fn connection_pool_ttl(&self) -> Duration;
-    /// Minimum time between TTLing connections. Helps stagger reconnections
-    /// to avoid stampeding the backing store of [Consensus].
-    fn connection_pool_ttl_stagger(&self) -> Duration;
-    /// Time to wait for a connection to be made before trying.
-    fn connect_timeout(&self) -> Duration;
-    /// TCP user timeout for connection to [Consensus].
-    fn tcp_user_timeout(&self) -> Duration;
-}
-
 impl ConsensusConfig {
     /// Opens the associated implementation of [Consensus].
     pub async fn open(self) -> Result<Arc<dyn Consensus + Send + Sync>, ExternalError> {
@@ -175,8 +161,8 @@ impl ConsensusConfig {
     /// Parses a [Consensus] config from a uri string.
     pub fn try_from(
         value: &str,
-        knobs: Box<dyn ConsensusKnobs>,
-        metrics: PostgresConsensusMetrics,
+        knobs: Box<dyn PostgresClientKnobs>,
+        metrics: PostgresClientMetrics,
     ) -> Result<Self, ExternalError> {
         let url = Url::parse(value).map_err(|err| {
             anyhow!(

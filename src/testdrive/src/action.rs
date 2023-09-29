@@ -29,8 +29,8 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::retry::Retry;
 use mz_ore::task;
-use mz_postgres_util::make_tls;
 use mz_stash::StashFactory;
+use mz_tls_util::make_tls;
 use once_cell::sync::Lazy;
 use rand::Rng;
 use rdkafka::producer::Producer;
@@ -277,7 +277,7 @@ impl State {
         F: FnOnce(ConnCatalog) -> T,
     {
         if let Some(url) = &self.materialize_catalog_postgres_stash {
-            let tls = mz_postgres_util::make_tls(&tokio_postgres::Config::new()).unwrap();
+            let tls = mz_tls_util::make_tls(&tokio_postgres::Config::new()).unwrap();
             let catalog = Catalog::open_debug_read_only_stash_catalog_config(
                 StashConfig {
                     stash_factory: self.postgres_factory.clone(),

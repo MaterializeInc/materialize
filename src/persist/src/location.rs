@@ -18,6 +18,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::u64_to_usize;
+use mz_postgres_client::error::PostgresError;
 use mz_proto::RustType;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -196,6 +197,15 @@ impl std::error::Error for ExternalError {}
 impl PartialEq for ExternalError {
     fn eq(&self, other: &Self) -> bool {
         self.to_string() == other.to_string()
+    }
+}
+
+impl From<PostgresError> for ExternalError {
+    fn from(x: PostgresError) -> Self {
+        match x {
+            PostgresError::Determinate(e) => ExternalError::Determinate(Determinate::new(e)),
+            PostgresError::Indeterminate(e) => ExternalError::Indeterminate(Indeterminate::new(e)),
+        }
     }
 }
 

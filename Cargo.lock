@@ -3442,6 +3442,7 @@ dependencies = [
  "mz-stash",
  "mz-storage-client",
  "mz-storage-types",
+ "mz-tls-util",
  "mz-tracing",
  "mz-transform",
  "once_cell",
@@ -3985,7 +3986,6 @@ dependencies = [
  "mz-pgtest",
  "mz-pgwire",
  "mz-pgwire-common",
- "mz-postgres-util",
  "mz-prof",
  "mz-repr",
  "mz-secrets",
@@ -3996,6 +3996,7 @@ dependencies = [
  "mz-stash",
  "mz-storage-client",
  "mz-storage-types",
+ "mz-tls-util",
  "nix",
  "num_cpus",
  "once_cell",
@@ -4471,6 +4472,7 @@ dependencies = [
  "mz-aws-s3-util",
  "mz-ore",
  "mz-persist-types",
+ "mz-postgres-client",
  "mz-proto",
  "once_cell",
  "openssl",
@@ -4516,6 +4518,7 @@ dependencies = [
  "mz-ore",
  "mz-persist",
  "mz-persist-types",
+ "mz-postgres-client",
  "mz-proto",
  "mz-timely-util",
  "num_cpus",
@@ -4692,6 +4695,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-postgres-client"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "deadpool-postgres",
+ "mz-ore",
+ "mz-tls-util",
+ "tokio",
+ "tracing",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-postgres-util"
 version = "0.0.0"
 dependencies = [
@@ -4701,6 +4717,7 @@ dependencies = [
  "mz-proto",
  "mz-repr",
  "mz-ssh-util",
+ "mz-tls-util",
  "openssh",
  "openssl",
  "postgres-openssl",
@@ -5162,6 +5179,7 @@ dependencies = [
  "mz-postgres-util",
  "mz-proto",
  "mz-repr",
+ "mz-tls-util",
  "once_cell",
  "paste",
  "postgres-openssl",
@@ -5194,11 +5212,11 @@ dependencies = [
  "mz-build-info",
  "mz-catalog",
  "mz-ore",
- "mz-postgres-util",
  "mz-secrets",
  "mz-sql",
  "mz-stash",
  "mz-storage-controller",
+ "mz-tls-util",
  "once_cell",
  "prost",
  "serde_json",
@@ -5346,13 +5364,13 @@ dependencies = [
  "mz-ore",
  "mz-persist-client",
  "mz-persist-types",
- "mz-postgres-util",
  "mz-proto",
  "mz-repr",
  "mz-service",
  "mz-stash",
  "mz-storage-client",
  "mz-storage-types",
+ "mz-tls-util",
  "proptest",
  "prost",
  "serde",
@@ -5500,11 +5518,11 @@ dependencies = [
  "mz-kafka-util",
  "mz-ore",
  "mz-pgrepr",
- "mz-postgres-util",
  "mz-repr",
  "mz-sql",
  "mz-sql-parser",
  "mz-stash",
+ "mz-tls-util",
  "once_cell",
  "postgres_array",
  "prost",
@@ -5547,6 +5565,21 @@ dependencies = [
  "serde",
  "timely",
  "tokio",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-tls-util"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "openssl",
+ "openssl-sys",
+ "postgres-openssl",
+ "thiserror",
+ "tokio",
+ "tokio-postgres",
+ "tracing",
  "workspace-hack",
 ]
 

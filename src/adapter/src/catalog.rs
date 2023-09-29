@@ -3530,7 +3530,7 @@ impl Catalog {
         schema: String,
         now: NowFn,
     ) -> Result<Catalog, anyhow::Error> {
-        let tls = mz_postgres_util::make_tls(&tokio_postgres::Config::new())
+        let tls = mz_tls_util::make_tls(&tokio_postgres::Config::new())
             .expect("unable to create TLS connector");
         let factory = StashFactory::new(&MetricsRegistry::new());
         let stash_config = StashConfig {

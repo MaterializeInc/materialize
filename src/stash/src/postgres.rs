@@ -1347,7 +1347,7 @@ impl DebugStashFactory {
             std::env::var("COCKROACH_URL").expect("COCKROACH_URL environment variable is not set");
         let rng: usize = rand::thread_rng().gen();
         let schema = format!("schema_{rng}");
-        let tls = mz_postgres_util::make_tls(&tokio_postgres::Config::new()).unwrap();
+        let tls = mz_tls_util::make_tls(&tokio_postgres::Config::new()).unwrap();
 
         let (client, connection) = tokio_postgres::connect(&url, tls.clone()).await?;
         mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {

@@ -89,7 +89,7 @@ fn bench_transact(c: &mut Criterion) {
         let runtime = Runtime::new().unwrap();
 
         let postgres_url = std::env::var("CATALOG_POSTGRES_BENCH").unwrap();
-        let tls = mz_postgres_util::make_tls(
+        let tls = mz_tls_util::make_tls(
             &tokio_postgres::config::Config::from_str(&postgres_url)
                 .expect("invalid postgres url for storage stash"),
         )

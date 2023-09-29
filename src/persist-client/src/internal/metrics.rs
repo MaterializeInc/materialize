@@ -26,9 +26,10 @@ use mz_ore::stats::histogram_seconds_buckets;
 use mz_persist::location::{
     Atomicity, Blob, BlobMetadata, CaSResult, Consensus, ExternalError, SeqNo, VersionedData,
 };
-use mz_persist::metrics::{PostgresConsensusMetrics, S3BlobMetrics};
+use mz_persist::metrics::S3BlobMetrics;
 use mz_persist::retry::RetryStream;
 use mz_persist_types::Codec64;
+use mz_postgres_client::metrics::PostgresClientMetrics;
 use prometheus::core::{AtomicI64, AtomicU64, Collector, Desc, GenericGauge};
 use prometheus::proto::MetricFamily;
 use prometheus::{CounterVec, Gauge, GaugeVec, Histogram, HistogramVec, IntCounterVec};
@@ -93,7 +94,7 @@ pub struct Metrics {
     /// Metrics for S3-backed blob implementation
     pub s3_blob: S3BlobMetrics,
     /// Metrics for Postgres-backed consensus implementation
-    pub postgres_consensus: PostgresConsensusMetrics,
+    pub postgres_consensus: PostgresClientMetrics,
 }
 
 impl std::fmt::Debug for Metrics {
@@ -140,7 +141,7 @@ impl Metrics {
             tasks: TasksMetrics::new(registry),
             sink: SinkMetrics::new(registry),
             s3_blob: S3BlobMetrics::new(registry),
-            postgres_consensus: PostgresConsensusMetrics::new(registry),
+            postgres_consensus: PostgresClientMetrics::new(registry, "mz_persist"),
             _vecs: vecs,
             _uptime: uptime,
         }

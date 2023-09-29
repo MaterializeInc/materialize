@@ -55,7 +55,6 @@ mz-persist-client = { path = "../persist-client" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-pgwire = { path = "../pgwire" }
 mz-pgwire-common = { path = "../pgwire-common" }
-mz-postgres-util = { path = "../postgres-util" }
 mz-prof = { path = "../prof" }
 mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
@@ -65,6 +64,7 @@ mz-sql = { path = "../sql" }
 mz-stash = { path = "../stash" }
 mz-storage-client = { path = "../storage-client" }
 mz-storage-types = { path = "../storage-types" }
+mz-tls-util = { path = "../tls-util" }
 nix = "0.26.1"
 num_cpus = "1.14.0"
 openssl = { version = "0.10.48", features = ["vendored"] }
