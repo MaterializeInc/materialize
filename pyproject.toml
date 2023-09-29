@@ -48,3 +48,9 @@ ignore = [
   # Rust build artifacts are not subject to our static analysis.
   "target/",
 ]
+
+[tool.pytest.ini_options]
+log_cli = true
+log_cli_level = "INFO"
+# do not include the timestamp which is already provided by Buildkite
+log_cli_format = "[%(levelname)8s] %(message)s (%(filename)s:%(lineno)s)"
