@@ -117,7 +117,7 @@ class Testdrive(Service):
             entrypoint.append(f"--seed={seed}")
 
         if no_consistency_checks:
-            entrypoint.append("--no-consistency-check")
+            entrypoint.append("--no-consistency-checks")
 
         entrypoint.extend(entrypoint_extra)
 

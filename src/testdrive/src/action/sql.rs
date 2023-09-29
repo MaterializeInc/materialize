@@ -122,7 +122,7 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
         return Err(e);
     }
 
-    if !state.no_consistency_check {
+    if !state.no_consistency_checks {
         run_extra_checks(state, &stmt).await?;
     }
 

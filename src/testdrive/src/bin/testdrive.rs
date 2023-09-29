@@ -392,7 +392,7 @@ async fn main() {
         default_max_tries: args.default_max_tries,
         initial_backoff: args.initial_backoff,
         backoff_factor: args.backoff_factor,
-        no_consistency_check: args.no_consistency_checks,
+        no_consistency_checks: args.no_consistency_checks,
 
         // === Materialize options. ===
         materialize_pgconfig: args.materialize_url,
