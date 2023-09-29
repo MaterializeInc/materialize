@@ -57,6 +57,7 @@ class CreateDebeziumSource(Action):
     def __init__(self, capabilities: Capabilities) -> None:
         # To avoid conflicts, we make sure the postgres table and the debezium source have matching names
         postgres_table = random.choice(capabilities.get(PostgresTableExists))
+        cluster_name = random.choice(["storage", "default"])
         debezium_source_name = f"debezium_source_{postgres_table.name}"
         this_debezium_source = DebeziumSourceExists(name=debezium_source_name)
 
@@ -72,6 +73,7 @@ class CreateDebeziumSource(Action):
             self.debezium_source = this_debezium_source
             self.postgres_table = postgres_table
             self.debezium_source.postgres_table = self.postgres_table
+            self.cluster_name = cluster_name
         elif len(existing_debezium_sources) == 1:
             self.new_debezium_source = False
 
@@ -119,7 +121,7 @@ class CreateDebeziumSource(Action):
                     > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
 
                     > CREATE SOURCE {self.debezium_source.name}
-                      IN CLUSTER storaged
+                      IN CLUSTER {self.cluster_name}
                       FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.{self.postgres_table.name}')
                       FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                       ENVELOPE DEBEZIUM
