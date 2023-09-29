@@ -341,9 +341,18 @@ pub fn plan_explain_plan(
             })
         }
         Explainee::CreateMaterializedView(mut stmt, broken) => {
-            // If we don't force this parameter to Skip planning fails for names
-            // that already exist in the catalog.
-            stmt.if_exists = IfExistsBehavior::Skip;
+            if stmt.if_exists != IfExistsBehavior::Skip {
+                // If we don't force this parameter to Skip planning will
+                // fail for names that already exist in the catalog. This
+                // can happen even in `Replace` mode if the existing item
+                // has dependencies.
+                stmt.if_exists = IfExistsBehavior::Skip;
+            } else {
+                sql_bail!(
+                    "Cannot EXPLAIN a CREATE MATERIALIZED VIEW that explictly sets IF NOT EXISTS \
+                     (the behavior is implied within the scope of an enclosing EXPLAIN)"
+                );
+            }
 
             let Plan::CreateMaterializedView(plan::CreateMaterializedViewPlan {
                 name,
@@ -365,6 +374,30 @@ pub fn plan_explain_plan(
                 raw_plan,
                 column_names,
                 cluster_id,
+                broken,
+            })
+        }
+        Explainee::CreateIndex(mut stmt, broken) => {
+            if !stmt.if_not_exists {
+                // If we don't force this parameter to true planning will
+                // fail for index items that already exist in the catalog.
+                stmt.if_not_exists = true;
+            } else {
+                sql_bail!(
+                    "Cannot EXPLAIN a CREATE INDEX that explictly sets IF NOT EXISTS \
+                     (the behavior is implied within the scope of an enclosing EXPLAIN)"
+                );
+            }
+
+            let Plan::CreateIndex(plan::CreateIndexPlan { name, index, .. }) =
+                ddl::plan_create_index(scx, *stmt)?
+            else {
+                sql_bail!("expected CreateIndexPlan plan");
+            };
+
+            crate::plan::Explainee::Statement(ExplaineeStatement::CreateIndex {
+                name,
+                index,
                 broken,
             })
         }

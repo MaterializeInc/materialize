@@ -5011,6 +5011,7 @@ dependencies = [
  "hex",
  "http",
  "itertools",
+ "maplit",
  "mz-build-info",
  "mz-ccsr",
  "mz-cloud-resources",
