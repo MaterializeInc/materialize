@@ -31,6 +31,12 @@ ENVIRONMENT = os.getenv("ENVIRONMENT", "production")
 USERNAME = os.getenv("NIGHTLY_MZ_USERNAME", "infra+bot@materialize.com")
 APP_PASSWORD = os.environ["MZ_CLI_APP_PASSWORD"]
 
+# The DevEx account in the Confluent Cloud is used to provide Kafka services
+KAFKA_BOOTSTRAP_SERVER = "pkc-n00kk.us-east-1.aws.confluent.cloud:9092"
+# The actual values are stored in the i2 repository
+CONFLUENT_API_KEY = os.environ["CONFLUENT_CLOUD_DEVEX_KAFKA_USERNAME"]
+CONFLUENT_API_SECRET = os.environ["CONFLUENT_CLOUD_DEVEX_KAFKA_PASSWORD"]
+
 SERVICES = [
     Mz(
         region=REGION,
@@ -110,6 +116,53 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
         assert output.returncode == 0
 
+        output = c.run(
+            "mz",
+            "secret",
+            "create",
+            "confluent_username",
+            stdin=CONFLUENT_API_KEY,
+            capture=True,
+        )
+        assert output.returncode == 0
+
+        output = c.run(
+            "mz",
+            "secret",
+            "create",
+            "confluent_password",
+            stdin=CONFLUENT_API_SECRET,
+            capture=True,
+        )
+        assert output.returncode == 0
+
+        output = c.run(
+            "mz",
+            "sql",
+            "--",
+            "-q",
+            "-c",
+            f"""
+            CREATE CONNECTION confluent_cloud TO KAFKA (
+                BROKER '{KAFKA_BOOTSTRAP_SERVER}',
+                SASL MECHANISMS = 'PLAIN',
+                SASL USERNAME = SECRET confluent_username,
+                SASL PASSWORD = SECRET confluent_password
+            );""",
+            capture=True,
+        )
+
+        output = c.run(
+            "mz",
+            "sql",
+            "--",
+            "-q",
+            "-c",
+            """VALIDATE CONNECTION confluent_cloud;""",
+            capture=True,
+        )
+        assert output.returncode == 0
+
         output = c.run("mz", "sql", "--", "-q", "-c", "SHOW SECRETS;", capture=True)
         assert "ci_secret" in output.stdout
 
@@ -124,7 +177,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         # Try to remove the username if it exist before trying to create one.
         try:
-            output = c.run("mz", "user", "remove", user_email, capture=True)
+            output = c.run("mz", "user", "remove", user_email)
             print("Warning: Email was present.")
         except:
             # It is ok if the command fails.

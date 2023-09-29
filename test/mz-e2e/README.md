@@ -19,7 +19,14 @@ To run the mz-e2e test manually, a set of environment variables need to be made 
 ```
 export MZ_CLI_APP_PASSWORD=...
 export NIGHTLY_MZ_USERNAME=...
+export NIGHTLY_CANARY_CONFLUENT_CLOUD_API_SECRET=...
+export NIGHTLY_CANARY_CONFLUENT_CLOUD_API_KEY=...
 ```
+
+- `NIGHTLY_CANARY_CONFLUENT_CLOUD_API_SECRET` is stored as a Pulumi secret in the i2 repository.
+
+- `NIGHTLY_CANARY_CONFLUENT_CLOUD_API_KEY` is available from the i2/buildkite.py file
+in the i2 repository.
 
 - `MZ_CLI_APP_PASSWORD` is stored as Pulumi secrets in the i2 repository.
 
