@@ -163,6 +163,7 @@ impl<P: Eq, T: PartialOrder> PartialOrder for Partitioned<P, T>
 where
     Interval<P>: PartialOrder,
 {
+    #[inline]
     fn less_equal(&self, other: &Self) -> bool {
         self.0.less_equal(&other.0)
     }
@@ -183,16 +184,19 @@ impl<P: Partition, T: Timestamp> Default for PartitionedSummary<P, T> {
 }
 
 impl<P: Partition, T: Timestamp> PartialOrder for PartitionedSummary<P, T> {
+    #[inline]
     fn less_equal(&self, other: &Self) -> bool {
         self.0.less_equal(&other.0)
     }
 }
 
 impl<P: Partition, T: Timestamp> PathSummary<Partitioned<P, T>> for PartitionedSummary<P, T> {
+    #[inline]
     fn results_in(&self, src: &Partitioned<P, T>) -> Option<Partitioned<P, T>> {
         self.0.results_in(&src.0).map(Partitioned)
     }
 
+    #[inline]
     fn followed_by(&self, other: &Self) -> Option<Self> {
         PathSummary::<Product<Interval<P>, T>>::followed_by(&self.0, &other.0)
             .map(PartitionedSummary)
@@ -224,6 +228,7 @@ pub enum Interval<P> {
 }
 
 impl<P: Ord + Eq> PartialOrder for Interval<P> {
+    #[inline]
     fn less_equal(&self, other: &Self) -> bool {
         use Interval::*;
         match (self, other) {
@@ -239,6 +244,7 @@ impl<P: Ord + Eq> PartialOrder for Interval<P> {
 }
 
 impl<P: Partition> PathSummary<Interval<P>> for Interval<P> {
+    #[inline]
     fn results_in(&self, src: &Interval<P>) -> Option<Interval<P>> {
         use std::cmp::{max, min};
 
@@ -274,6 +280,7 @@ impl<P: Partition> PathSummary<Interval<P>> for Interval<P> {
         }
     }
 
+    #[inline]
     fn followed_by(&self, other: &Self) -> Option<Self> {
         self.results_in(other)
     }
@@ -282,12 +289,14 @@ impl<P: Partition> PathSummary<Interval<P>> for Interval<P> {
 impl<P: Partition> Timestamp for Interval<P> {
     type Summary = Interval<P>;
 
+    #[inline]
     fn minimum() -> Self {
         Self::default()
     }
 }
 
 impl<P> Default for Interval<P> {
+    #[inline]
     fn default() -> Self {
         Self::Range(RangeBound::Bottom, RangeBound::Top)
     }
@@ -305,6 +314,7 @@ pub enum RangeBound<P> {
 }
 
 impl<P: PartialEq> PartialEq<P> for RangeBound<P> {
+    #[inline]
     fn eq(&self, other: &P) -> bool {
         match self {
             RangeBound::Bottom => false,
@@ -315,6 +325,7 @@ impl<P: PartialEq> PartialEq<P> for RangeBound<P> {
 }
 
 impl<P: PartialOrd> PartialOrd<P> for RangeBound<P> {
+    #[inline]
     fn partial_cmp(&self, other: &P) -> Option<Ordering> {
         match self {
             RangeBound::Bottom => Some(Ordering::Less),
@@ -359,17 +370,20 @@ impl<P> Partition for P where
 pub struct Reverse<T>(pub T);
 
 impl<T: PartialOrder> PartialOrder for Reverse<T> {
+    #[inline]
     fn less_equal(&self, other: &Self) -> bool {
         PartialOrder::less_equal(&other.0, &self.0)
     }
 }
 impl<T: PartialOrd> PartialOrd for Reverse<T> {
+    #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         other.0.partial_cmp(&self.0)
     }
 }
 
 impl<T: Ord> Ord for Reverse<T> {
+    #[inline]
     fn cmp(&self, other: &Self) -> Ordering {
         other.0.cmp(&self.0)
     }
