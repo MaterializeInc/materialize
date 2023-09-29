@@ -9,6 +9,7 @@
 
 
 from math import ceil, floor
+from textwrap import dedent
 
 from parameterized import parameterized_class  # type: ignore
 
@@ -164,6 +165,33 @@ true
   /* B */
 """
             + "\n".join([str(x) for x in range(self.n() - 1000, self.n())])
+        )
+
+
+class FastPathLimit(FastPath):
+    """Benchmark the case SELECT * FROM source LIMIT <i> , optimized by #21615"""
+
+    def init(self) -> list[Action]:
+        return [
+            TdAction(
+                f"""
+                > CREATE MATERIALIZED VIEW v1 AS SELECT * FROM generate_series(1, {self.n()})
+                """
+            ),
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        return Td(
+            dedent(
+                """
+                > SELECT 1;
+                  /* A */
+                1
+                > SELECT * FROM v1 LIMIT 100
+                  /* B */
+                """
+            )
+            + "\n".join([str(x) for x in range(1, 101)])
         )
 
 

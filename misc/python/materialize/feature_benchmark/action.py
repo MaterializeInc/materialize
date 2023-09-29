@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import textwrap
 from collections.abc import Callable, Iterator
 
 from materialize.feature_benchmark.executor import Executor
@@ -65,8 +66,8 @@ class Kgen(Action):
 class TdAction(Action):
     """Use testdrive to run some queries without measuring"""
 
-    def __init__(self, td_str: str) -> None:
-        self._td_str = td_str
+    def __init__(self, td_str: str, dedent: bool = True) -> None:
+        self._td_str = textwrap.dedent(td_str) if dedent else td_str
         self._executor: Executor | None = None
 
     def run(
