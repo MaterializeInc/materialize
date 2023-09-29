@@ -693,7 +693,7 @@ class ResolvedImage:
                         time.sleep(1)
                         continue
                     else:
-                        raise
+                        break
         return self.acquired
 
     def is_published_if_necessary(self) -> bool:
