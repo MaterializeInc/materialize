@@ -58,7 +58,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     psql_config_path = os.path.join(home_dir, ".psqlrc-mz")
 
     if args.cleanup:
-        workflow_disable_region(c)
+        # workflow_disable_region(c)
         if os.path.exists(psql_config_path):
             os.remove(psql_config_path)
 
