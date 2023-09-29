@@ -609,7 +609,7 @@ class CancelAction(Action):
 
     def run(self, exe: Executor) -> None:
         pid = self.rng.choice(
-            [worker.exe.pg_pid for worker in self.workers if worker.exe.pg_pid != -1]  # type: ignore
+            [worker.exe.pg_pid for worker in self.workers if worker.exe and worker.exe.pg_pid != -1]  # type: ignore
         )
         worker = None
         for i in range(len(self.workers)):
