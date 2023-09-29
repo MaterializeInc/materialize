@@ -13,7 +13,7 @@ import re
 import time
 from collections.abc import Callable
 from copy import copy
-from datetime import datetime
+from datetime import datetime, timedelta
 from statistics import quantiles
 from textwrap import dedent
 from threading import Thread
@@ -28,6 +28,7 @@ from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.localstack import Localstack
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
@@ -2644,3 +2645,86 @@ def workflow_test_profile_fetch(c: Composition) -> None:
     )
     code = requests.get(envd_url + "heap").status_code
     assert code == 403, f"expected 403, got {code}"
+
+
+def workflow_test_incident_70(c: Composition) -> None:
+    """
+    Test incident-70.
+    """
+    num_conns = 1
+    mv_count = 50
+    persist_reader_lease_duration_in_sec = 10
+    data_scale_factor = 10
+
+    with c.override(
+        Materialized(
+            external_cockroach=True,
+            external_minio=True,
+            sanity_restart=False,
+        ),
+        Minio(setup_materialize=True),
+    ):
+        c.down(destroy_volumes=True)
+        c.up("minio", "materialized")
+
+        c.sql(
+            f"ALTER SYSTEM SET max_connections = {num_conns + 5};",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.sql(
+            f"ALTER SYSTEM SET persist_reader_lease_duration = '{persist_reader_lease_duration_in_sec}s';",
+            port=6877,
+            user="mz_system",
+        )
+
+        mz_view_create_statements = []
+
+        for i in range(mv_count):
+            mz_view_create_statements.append(
+                f"CREATE MATERIALIZED VIEW mv_lineitem_count_{i + 1} AS SELECT count(*) FROM lineitem;"
+            )
+
+        mz_view_create_statements_sql = "\n".join(mz_view_create_statements)
+
+        c.sql(
+            dedent(
+                f"""
+                CREATE SOURCE gen FROM LOAD GENERATOR TPCH (SCALE FACTOR {data_scale_factor}) FOR ALL TABLES;
+
+                {mz_view_create_statements_sql}
+                """
+            )
+        )
+
+        start_time = datetime.now()
+        end_time = start_time + timedelta(seconds=600)
+
+        def worker(c: Composition, worker_index: int) -> None:
+            print(f"Thread {worker_index} tries to acquire a cursor")
+            cursor = c.sql_cursor()
+            print(f"Thread {worker_index} got a cursor")
+
+            iteration = 1
+            while datetime.now() < end_time:
+                if iteration % 20 == 0:
+                    print(f"Thread {worker_index}, iteration {iteration}")
+                cursor.execute("SELECT * FROM mv_lineitem_count_1;")
+                iteration += 1
+            print(f"Thread {worker_index} terminates before iteration {iteration}")
+
+        threads = []
+        for worker_index in range(num_conns):
+            thread = Thread(
+                name=f"worker_{worker_index}", target=worker, args=(c, worker_index)
+            )
+            threads.append(thread)
+
+        for thread in threads:
+            thread.start()
+            # this is because of #22038
+            time.sleep(0.2)
+
+        for thread in threads:
+            thread.join()
