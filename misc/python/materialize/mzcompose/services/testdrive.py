@@ -44,6 +44,7 @@ class Testdrive(Service):
         forward_buildkite_shard: bool = False,
         aws_region: str | None = None,
         aws_endpoint: str | None = "http://localstack:4566",
+        no_consistency_checks: bool = False,
     ) -> None:
         if environment is None:
             environment = [
@@ -114,6 +115,9 @@ class Testdrive(Service):
             entrypoint.append(f"--seed={random.getrandbits(32)}")
         elif seed is not None:
             entrypoint.append(f"--seed={seed}")
+
+        if no_consistency_checks:
+            entrypoint.append("--no-consistency-check")
 
         entrypoint.extend(entrypoint_extra)
 
