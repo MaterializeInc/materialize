@@ -18,7 +18,7 @@ from materialize.mzcompose.composition import Composition
 from materialize.parallel_workload.data_type import Text, TextTextMap
 from materialize.parallel_workload.database import (
     MAX_CLUSTER_REPLICAS,
-    MAX_COMPUTE_CLUSTERS,
+    MAX_CLUSTERS,
     MAX_ROLES,
     MAX_ROWS,
     MAX_SOURCES,
@@ -26,7 +26,6 @@ from materialize.parallel_workload.database import (
     MAX_VIEWS,
     Cluster,
     ClusterReplica,
-    ClusterType,
     Database,
     DBObject,
     Role,
@@ -414,15 +413,14 @@ class DropRoleAction(Action):
             del self.db.roles[role_id]
 
 
-class CreateComputeClusterAction(Action):
+class CreateClusterAction(Action):
     def run(self, exe: Executor) -> None:
         with self.db.lock:
-            if len(self.db.compute_clusters) > MAX_COMPUTE_CLUSTERS:
+            if len(self.db.clusters) > MAX_CLUSTERS:
                 return
-            cluster_id = self.db.compute_cluster_id
-            self.db.compute_cluster_id += 1
+            cluster_id = self.db.cluster_id
+            self.db.cluster_id += 1
             cluster = Cluster(
-                ClusterType.COMPUTE,
                 cluster_id,
                 managed=self.rng.choice([True, False]),
                 size=self.rng.choice(["1", "2", "4"]),
@@ -430,10 +428,10 @@ class CreateComputeClusterAction(Action):
                 introspection_interval=self.rng.choice(["0", "1s", "10s"]),
             )
             cluster.create(exe)
-            self.db.compute_clusters.append(cluster)
+            self.db.clusters.append(cluster)
 
 
-class DropComputeClusterAction(Action):
+class DropClusterAction(Action):
     def errors_to_ignore(self) -> list[str]:
         return [
             "cannot drop cluster with active objects",
@@ -441,16 +439,17 @@ class DropComputeClusterAction(Action):
 
     def run(self, exe: Executor) -> None:
         with self.db.lock:
-            if not self.db.compute_clusters:
+            if len(self.db.clusters) <= 1:
                 return
-            cluster_id = self.rng.randrange(len(self.db.compute_clusters))
-            cluster = self.db.compute_clusters[cluster_id]
+            # Keep cluster 0 with 1 replica for sources/sinks
+            cluster_id = self.rng.randrange(1, len(self.db.clusters))
+            cluster = self.db.clusters[cluster_id]
             query = f"DROP CLUSTER {cluster}"
             exe.execute(query)
-            del self.db.compute_clusters[cluster_id]
+            del self.db.clusters[cluster_id]
 
 
-class SetComputeClusterAction(Action):
+class SetClusterAction(Action):
     def errors_to_ignore(self) -> list[str]:
         return [
             "SET cluster cannot be called in an active transaction",
@@ -458,17 +457,23 @@ class SetComputeClusterAction(Action):
 
     def run(self, exe: Executor) -> None:
         with self.db.lock:
-            if not self.db.compute_clusters:
+            if not self.db.clusters:
                 return
-            cluster = self.rng.choice(self.db.compute_clusters)
+            cluster = self.rng.choice(self.db.clusters)
             query = f"SET CLUSTER = {cluster}"
             exe.execute(query)
 
 
-class CreateComputeClusterReplicaAction(Action):
+class CreateClusterReplicaAction(Action):
+    def errors_to_ignore(self) -> list[str]:
+        return [
+            "cannot create more than one replica of a cluster containing sources or sinks"
+        ] + super().errors_to_ignore()
+
     def run(self, exe: Executor) -> None:
         with self.db.lock:
-            unmanaged_clusters = [c for c in self.db.compute_clusters if not c.managed]
+            # Keep cluster 0 with 1 replica for sources/sinks
+            unmanaged_clusters = [c for c in self.db.clusters[1:] if not c.managed]
             if not unmanaged_clusters:
                 return
             cluster = self.rng.choice(unmanaged_clusters)
@@ -484,10 +489,11 @@ class CreateComputeClusterReplicaAction(Action):
             cluster.replica_id += 1
 
 
-class DropComputeClusterReplicaAction(Action):
+class DropClusterReplicaAction(Action):
     def run(self, exe: Executor) -> None:
         with self.db.lock:
-            unmanaged_clusters = [c for c in self.db.compute_clusters if not c.managed]
+            # Keep cluster 0 with 1 replica for sources/sinks
+            unmanaged_clusters = [c for c in self.db.clusters[1:] if not c.managed]
             if not unmanaged_clusters:
                 return
             cluster = self.rng.choice(unmanaged_clusters)
@@ -645,7 +651,8 @@ class CreateWebhookSourceAction(Action):
                 return
             source_id = self.db.source_id
             self.db.source_id += 1
-            cluster = self.rng.choice(self.db.storage_clusters)
+            potential_clusters = [c for c in self.db.clusters if len(c.replicas) == 1]
+            cluster = self.rng.choice(potential_clusters)
             source = WebhookSource(source_id, cluster, self.rng)
             source.create(exe)
             self.db.sources.append(source)
@@ -713,7 +720,7 @@ class ActionList:
 read_action_list = ActionList(
     [
         (SelectAction, 100),
-        (SetComputeClusterAction, 1),
+        (SetClusterAction, 1),
         (CommitRollbackAction, 1),
         (ReconnectAction, 1),
     ],
@@ -723,7 +730,7 @@ read_action_list = ActionList(
 fetch_action_list = ActionList(
     [
         (FetchAction, 30),
-        (SetComputeClusterAction, 1),
+        (SetClusterAction, 1),
         (ReconnectAction, 1),
     ],
     autocommit=False,
@@ -732,7 +739,7 @@ fetch_action_list = ActionList(
 write_action_list = ActionList(
     [
         (InsertAction, 100),
-        (SetComputeClusterAction, 1),
+        (SetClusterAction, 1),
         (HttpPostAction, 50),
         (CommitRollbackAction, 1),
         (ReconnectAction, 1),
@@ -744,7 +751,7 @@ dml_nontrans_action_list = ActionList(
     [
         (DeleteAction, 10),
         (UpdateAction, 10),
-        (SetComputeClusterAction, 1),
+        (SetClusterAction, 1),
         (ReconnectAction, 1),
         # (TransactionIsolationAction, 1),
     ],
@@ -761,11 +768,11 @@ ddl_action_list = ActionList(
         (DropViewAction, 4),
         (CreateRoleAction, 2),
         (DropRoleAction, 1),
-        (CreateComputeClusterAction, 2),
-        (DropComputeClusterAction, 1),
-        (CreateComputeClusterReplicaAction, 8),
-        (DropComputeClusterReplicaAction, 4),
-        (SetComputeClusterAction, 1),
+        (CreateClusterAction, 2),
+        (DropClusterAction, 1),
+        (CreateClusterReplicaAction, 8),
+        (DropClusterReplicaAction, 4),
+        (SetClusterAction, 1),
         (CreateWebhookSourceAction, 2),
         (DropWebhookSourceAction, 1),
         (GrantPrivilegesAction, 2),
