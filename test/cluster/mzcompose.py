@@ -2431,9 +2431,10 @@ def workflow_test_incident_70(c: Composition) -> None:
     """
     Test incident-70.
     """
-    num_conns = 10
+    num_conns = 1
+    mv_count = 15
     persist_reader_lease_duration_in_sec = 30
-    data_scale_factor = 10
+    data_scale_factor = 80
 
     c.down(destroy_volumes=True)
     c.up("materialized")
@@ -2450,12 +2451,23 @@ def workflow_test_incident_70(c: Composition) -> None:
         user="mz_system",
     )
 
-    c.sql(
-        f"""
-        CREATE SOURCE gen FROM LOAD GENERATOR TPCH (SCALE FACTOR {data_scale_factor}, TICK INTERVAL '100ms') FOR ALL TABLES;
+    mz_view_create_statements = []
 
-        CREATE MATERIALIZED VIEW mv_lineitem_count AS SELECT count(*) FROM lineitem;
+    for i in range(mv_count):
+        mz_view_create_statements.append(
+            f"CREATE MATERIALIZED VIEW mv_lineitem_count_{i + 1} AS SELECT count(*) FROM lineitem;"
+        )
+
+    mz_view_create_statements_sql = "\n".join(mz_view_create_statements)
+
+    c.sql(
+        dedent(
+        f"""
+        CREATE SOURCE gen FROM LOAD GENERATOR TPCH (SCALE FACTOR {data_scale_factor}) FOR ALL TABLES;
+
+        {mz_view_create_statements_sql}
         """
+        )
     )
 
     start_time = datetime.now()
@@ -2472,7 +2484,7 @@ def workflow_test_incident_70(c: Composition) -> None:
         while datetime.now() < end_time:
             if iteration % 20 == 0:
                 print(f"Thread {worker_index}, iteration {iteration}")
-            cursor.execute("SELECT * FROM mv_lineitem_count;")
+            cursor.execute("SELECT * FROM mv_lineitem_count_1;")
             iteration += 1
         print(f"Thread {worker_index} terminates before iteration {iteration}")
 
