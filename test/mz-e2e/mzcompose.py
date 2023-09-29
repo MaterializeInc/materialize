@@ -58,18 +58,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     psql_config_path = os.path.join(home_dir, ".psqlrc-mz")
 
     if args.cleanup:
-        # workflow_disable_region(c)
+        workflow_disable_region(c)
         if os.path.exists(psql_config_path):
             os.remove(psql_config_path)
 
     test_failed = True
     try:
-        output = c.run("mz", "region", "list")
-        print(f"Region list output: {output.stdout}")
-        print(f"Region list output (stderr): {output.stderr}")
-
         print(f"Enabling region using Mz version {VERSION} ...")
-        c.run("mz", "region", "enable", "--version", VERSION)
+        # c.run("mz", "region", "enable", "--version", VERSION)
 
         time.sleep(10)
 
@@ -178,7 +174,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 def workflow_disable_region(c: Composition) -> None:
     print(f"Shutting down region {REGION} ...")
 
-    c.run("mz", "region", "disable")
+    # c.run("mz", "region", "disable")
 
 
 def cloud_hostname(c: Composition) -> str:
