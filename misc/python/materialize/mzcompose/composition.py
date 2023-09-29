@@ -707,6 +707,7 @@ class Composition:
             and "materialize/environmentd"
             not in self.compose["services"]["materialized"]["image"]
         ):
+            ui.header("Sanity Check: Restart Mz, verify source/sink/replica health")
             self.kill("materialized")
             # TODO(def-): Better way to detect when kill has finished
             time.sleep(3)
