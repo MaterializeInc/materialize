@@ -35,7 +35,7 @@ use mz_repr::{Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_storage_types::controller::{CollectionMetadata, StorageError};
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
-use mz_storage_types::sinks::{MetadataUnfilled, StorageSinkDesc};
+use mz_storage_types::sinks::{MetadataUnfilled, StorageSinkConnection, StorageSinkDesc};
 use mz_storage_types::sources::{IngestionDescription, SourceData, SourceEnvelope};
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
@@ -318,6 +318,12 @@ pub trait StorageController: Debug + Send {
     async fn create_exports(
         &mut self,
         exports: Vec<(GlobalId, ExportDescription<Self::Timestamp>)>,
+    ) -> Result<(), StorageError>;
+
+    /// For each identified export, update its `StorageSinkConnection`.
+    async fn update_export_connection(
+        &mut self,
+        exports: BTreeMap<GlobalId, StorageSinkConnection>,
     ) -> Result<(), StorageError>;
 
     /// Drops the read capability for the sources and allows their resources to be reclaimed.
@@ -676,7 +682,7 @@ impl<T: Timestamp> CollectionState<T> {
 }
 
 /// State maintained about individual exports.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ExportState<T> {
     /// Description with which the export was created
     pub description: ExportDescription<T>,
