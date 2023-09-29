@@ -134,9 +134,7 @@ pub unsafe fn all_build_ids(
         // with `data` other than pass it to this callback, so nothing will be mutating
         // the object it points to while we're inside here.
         let state: &mut CallbackState = unsafe {
-            // Justification: `data` is a pointer to a `CallbackState`
-            #[allow(clippy::as_conversions)]
-            (data as *mut CallbackState)
+            data.cast::<CallbackState>()
                 .as_mut()
                 .expect("`data` cannot be null")
         };
@@ -264,13 +262,7 @@ pub unsafe fn all_build_ids(
     // SAFETY: `dl_iterate_phdr` has no documented restrictions on when
     // it can be called.
     unsafe {
-        // Justification: converting a pointer to void* is always
-        // valid
-        #[allow(clippy::as_conversions)]
-        dl_iterate_phdr(
-            Some(iterate_cb),
-            (&mut state) as *mut CallbackState as *mut c_void,
-        );
+        dl_iterate_phdr(Some(iterate_cb), std::ptr::addr_of_mut!(state).cast());
     };
     if let Some(err) = state.fatal_error {
         Err(err)
