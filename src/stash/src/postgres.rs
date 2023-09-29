@@ -190,7 +190,7 @@ impl<'a> CountedStatements<'a> {
         self.inc(name);
         let histogram = self
             .metrics
-            .query_latency_seconds
+            .query_latency_duration_seconds
             .with_label_values(&[name]);
 
         (&self.stmts.fetch_epoch, histogram)
@@ -200,7 +200,7 @@ impl<'a> CountedStatements<'a> {
         self.inc(name);
         let histogram = self
             .metrics
-            .query_latency_seconds
+            .query_latency_duration_seconds
             .with_label_values(&[name]);
 
         (&self.stmts.iter_key, histogram)
@@ -210,7 +210,7 @@ impl<'a> CountedStatements<'a> {
         self.inc(name);
         let histogram = self
             .metrics
-            .query_latency_seconds
+            .query_latency_duration_seconds
             .with_label_values(&[name]);
 
         (&self.stmts.since, histogram)
@@ -220,7 +220,7 @@ impl<'a> CountedStatements<'a> {
         self.inc(name);
         let histogram = self
             .metrics
-            .query_latency_seconds
+            .query_latency_duration_seconds
             .with_label_values(&[name]);
 
         (&self.stmts.upper, histogram)
@@ -230,7 +230,7 @@ impl<'a> CountedStatements<'a> {
         self.inc(name);
         let histogram = self
             .metrics
-            .query_latency_seconds
+            .query_latency_duration_seconds
             .with_label_values(&[name]);
 
         (&self.stmts.collection, histogram)
@@ -240,7 +240,7 @@ impl<'a> CountedStatements<'a> {
         self.inc(name);
         let histogram = self
             .metrics
-            .query_latency_seconds
+            .query_latency_duration_seconds
             .with_label_values(&[name]);
 
         (&self.stmts.iter, histogram)
@@ -250,7 +250,7 @@ impl<'a> CountedStatements<'a> {
         self.inc(name);
         let histogram = self
             .metrics
-            .query_latency_seconds
+            .query_latency_duration_seconds
             .with_label_values(&[name]);
 
         (&self.stmts.seal, histogram)
@@ -260,7 +260,7 @@ impl<'a> CountedStatements<'a> {
         self.inc(name);
         let histogram = self
             .metrics
-            .query_latency_seconds
+            .query_latency_duration_seconds
             .with_label_values(&[name]);
 
         (&self.stmts.compact, histogram)
@@ -436,7 +436,7 @@ impl StashFactory {
 pub(crate) struct Metrics {
     transactions: IntCounter,
     transaction_errors: IntCounterVec,
-    query_latency_seconds: HistogramVec,
+    query_latency_duration_seconds: HistogramVec,
 }
 
 impl Metrics {
@@ -451,7 +451,7 @@ impl Metrics {
                 help: "Total number of transaction errors.",
                 var_labels: ["cause"],
             )),
-            query_latency_seconds: registry.register(metric!(
+            query_latency_duration_seconds: registry.register(metric!(
                 name: "mz_query_latency",
                 help: "Latency for queries to CockroachDB",
                 var_labels: ["query_kind"],

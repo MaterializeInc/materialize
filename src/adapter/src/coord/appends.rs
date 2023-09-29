@@ -352,7 +352,7 @@ impl Coordinator {
         let label = should_block.then_some("true").unwrap_or("false");
         let histogram = self
             .metrics
-            .append_table_seconds
+            .append_table_duration_seconds
             .with_label_values(&[label]);
         let append_fut = self
             .controller

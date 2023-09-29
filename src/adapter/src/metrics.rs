@@ -33,7 +33,7 @@ pub struct Metrics {
     pub statement_logging_actual_bytes: IntCounterVec,
     pub slow_message_handling: HistogramVec,
     pub optimization_notices: IntCounterVec,
-    pub append_table_seconds: HistogramVec,
+    pub append_table_duration_seconds: HistogramVec,
 }
 
 impl Metrics {
@@ -121,8 +121,8 @@ impl Metrics {
                 help: "Number of optimization notices per notice type.",
                 var_labels: ["notice_type"],
             )),
-            append_table_seconds: registry.register(metric!(
-                name: "mz_append_table_seconds",
+            append_table_duration_seconds: registry.register(metric!(
+                name: "mz_append_table_duration_seconds",
                 help: "Latency for appending to any (user or system) table.",
                 var_labels: ["is_blocking"],
                 buckets: histogram_seconds_buckets(0.128, 32.0),
