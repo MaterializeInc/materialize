@@ -15,10 +15,15 @@ use mz_proto::{IntoRustIfSome, ProtoType};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
-use mz_sql::catalog::{CatalogItemType, ObjectType, RoleAttributes, RoleMembership, RoleVars};
+use mz_sql::catalog::{
+    CatalogItemType, DefaultPrivilegeAclItem, DefaultPrivilegeObject, ObjectType, RoleAttributes,
+    RoleMembership, RoleVars,
+};
 use mz_sql::names::{CommentObjectId, DatabaseId, QualifiedItemName, SchemaId};
 use mz_stash::objects::{proto, RustType, TryFromProtoError};
+use mz_storage_types::sources::Timeline;
 use proptest_derive::Arbitrary;
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 // Structs used to pass information to outside modules.
@@ -136,6 +141,13 @@ pub struct ClusterVariantManaged {
     pub idle_arrangement_merge_effort: Option<u32>,
     pub replication_factor: u32,
     pub disk: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct IntrospectionSourceIndex {
+    pub cluster_id: ClusterId,
+    pub name: String,
+    pub index_id: GlobalId,
 }
 
 #[derive(Debug, Clone)]
@@ -351,7 +363,74 @@ pub struct SystemObjectMapping {
     pub unique_identifier: SystemObjectUniqueIdentifier,
 }
 
+#[derive(Debug, Clone)]
+pub struct DefaultPrivilege {
+    pub object: DefaultPrivilegeObject,
+    pub acl_item: DefaultPrivilegeAclItem,
+}
+
+#[derive(Debug, Clone)]
+pub struct Comment {
+    pub object_id: CommentObjectId,
+    pub sub_component: Option<usize>,
+    pub comment: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct IdAlloc {
+    pub name: String,
+    pub next_id: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub key: String,
+    pub value: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct Setting {
+    pub name: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct TimelineTimestamp {
+    pub timeline: Timeline,
+    pub ts: mz_repr::Timestamp,
+}
+
+#[derive(Debug, Clone)]
+pub struct SystemConfiguration {
+    pub name: String,
+    pub value: String,
+}
+
 // Structs used internally to represent on disk-state.
+
+/// A snapshot of the current on-disk state.
+pub struct Snapshot {
+    pub databases: BTreeMap<proto::DatabaseKey, proto::DatabaseValue>,
+    pub schemas: BTreeMap<proto::SchemaKey, proto::SchemaValue>,
+    pub roles: BTreeMap<proto::RoleKey, proto::RoleValue>,
+    pub items: BTreeMap<proto::ItemKey, proto::ItemValue>,
+    pub comments: BTreeMap<proto::CommentKey, proto::CommentValue>,
+    pub clusters: BTreeMap<proto::ClusterKey, proto::ClusterValue>,
+    pub cluster_replicas: BTreeMap<proto::ClusterReplicaKey, proto::ClusterReplicaValue>,
+    pub introspection_sources: BTreeMap<
+        proto::ClusterIntrospectionSourceIndexKey,
+        proto::ClusterIntrospectionSourceIndexValue,
+    >,
+    pub id_allocator: BTreeMap<proto::IdAllocKey, proto::IdAllocValue>,
+    pub configs: BTreeMap<proto::ConfigKey, proto::ConfigValue>,
+    pub settings: BTreeMap<proto::SettingKey, proto::SettingValue>,
+    pub timestamps: BTreeMap<proto::TimestampKey, proto::TimestampValue>,
+    pub system_object_mappings: BTreeMap<proto::GidMappingKey, proto::GidMappingValue>,
+    pub system_configurations:
+        BTreeMap<proto::ServerConfigurationKey, proto::ServerConfigurationValue>,
+    pub default_privileges: BTreeMap<proto::DefaultPrivilegesKey, proto::DefaultPrivilegesValue>,
+    pub system_privileges: BTreeMap<proto::SystemPrivilegesKey, proto::SystemPrivilegesValue>,
+}
 
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct SettingKey {

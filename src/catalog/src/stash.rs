@@ -32,7 +32,6 @@ use mz_repr::{GlobalId, Timestamp};
 use mz_sql::catalog::{
     CatalogError as SqlCatalogError, DefaultPrivilegeAclItem, DefaultPrivilegeObject,
 };
-use mz_sql::names::CommentObjectId;
 use mz_stash::objects::proto;
 use mz_stash::{AppendBatch, DebugStashFactory, Stash, StashError, StashFactory, TypedCollection};
 use mz_storage_types::sources::Timeline;
@@ -40,12 +39,13 @@ use mz_storage_types::sources::Timeline;
 use crate::initialize::DEPLOY_GENERATION;
 use crate::objects::{
     AuditLogKey, Cluster, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
-    ClusterKey, ClusterReplica, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, CommentKey,
-    CommentValue, Database, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
-    DefaultPrivilegesValue, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
-    ReplicaConfig, Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue, StorageUsageKey,
-    SystemObjectDescription, SystemObjectMapping, SystemObjectUniqueIdentifier,
-    SystemPrivilegesKey, SystemPrivilegesValue, TimestampKey, TimestampValue,
+    ClusterKey, ClusterReplica, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, Comment,
+    CommentKey, CommentValue, Database, DatabaseKey, DatabaseValue, DefaultPrivilege,
+    DefaultPrivilegesKey, DefaultPrivilegesValue, GidMappingKey, GidMappingValue, IdAllocKey,
+    IdAllocValue, ReplicaConfig, Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue,
+    Snapshot, StorageUsageKey, SystemConfiguration, SystemObjectDescription, SystemObjectMapping,
+    SystemObjectUniqueIdentifier, SystemPrivilegesKey, SystemPrivilegesValue, TimelineTimestamp,
+    TimestampKey, TimestampValue,
 };
 use crate::transaction::{
     add_new_builtin_cluster_replicas_migration, add_new_builtin_clusters_migration, Transaction,
@@ -528,25 +528,23 @@ impl ReadOnlyDurableCatalogState for Connection {
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    async fn get_default_privileges(
-        &mut self,
-    ) -> Result<Vec<(DefaultPrivilegeObject, DefaultPrivilegeAclItem)>, Error> {
+    async fn get_default_privileges(&mut self) -> Result<Vec<DefaultPrivilege>, Error> {
         Ok(DEFAULT_PRIVILEGES_COLLECTION
             .peek_one(&mut self.stash)
             .await?
             .into_iter()
             .map(RustType::from_proto)
-            .map_ok(|(k, v): (DefaultPrivilegesKey, DefaultPrivilegesValue)| {
-                (
-                    DefaultPrivilegeObject::new(
+            .map_ok(
+                |(k, v): (DefaultPrivilegesKey, DefaultPrivilegesValue)| DefaultPrivilege {
+                    object: DefaultPrivilegeObject::new(
                         k.role_id,
                         k.database_id,
                         k.schema_id,
                         k.object_type,
                     ),
-                    DefaultPrivilegeAclItem::new(k.grantee, v.privileges),
-                )
-            })
+                    acl_item: DefaultPrivilegeAclItem::new(k.grantee, v.privileges),
+                },
+            )
             .collect::<Result<_, _>>()?)
     }
 
@@ -568,38 +566,46 @@ impl ReadOnlyDurableCatalogState for Connection {
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    async fn get_system_configurations(&mut self) -> Result<BTreeMap<String, String>, Error> {
+    async fn get_system_configurations(&mut self) -> Result<Vec<SystemConfiguration>, Error> {
         SYSTEM_CONFIGURATION_COLLECTION
             .peek_one(&mut self.stash)
             .await?
             .into_iter()
-            .map(|(k, v)| Ok((k.name, v.value)))
+            .map(|(k, v)| {
+                Ok(SystemConfiguration {
+                    name: k.name,
+                    value: v.value,
+                })
+            })
             .collect()
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    async fn get_comments(
-        &mut self,
-    ) -> Result<Vec<(CommentObjectId, Option<usize>, String)>, Error> {
+    async fn get_comments(&mut self) -> Result<Vec<Comment>, Error> {
         let comments = COMMENTS_COLLECTION
             .peek_one(&mut self.stash)
             .await?
             .into_iter()
             .map(RustType::from_proto)
-            .map_ok(|(k, v): (CommentKey, CommentValue)| (k.object_id, k.sub_component, v.comment))
+            .map_ok(|(k, v): (CommentKey, CommentValue)| Comment {
+                object_id: k.object_id,
+                sub_component: k.sub_component,
+                comment: v.comment,
+            })
             .collect::<Result<_, _>>()?;
 
         Ok(comments)
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    async fn get_timestamps(&mut self) -> Result<BTreeMap<Timeline, Timestamp>, Error> {
+    async fn get_timestamps(&mut self) -> Result<Vec<TimelineTimestamp>, Error> {
         let entries = TIMESTAMP_COLLECTION.peek_one(&mut self.stash).await?;
         let timestamps = entries
             .into_iter()
             .map(RustType::from_proto)
-            .map_ok(|(k, v): (TimestampKey, TimestampValue)| {
-                (k.id.parse().expect("invalid timeline persisted"), v.ts)
+            .map_ok(|(k, v): (TimestampKey, TimestampValue)| TimelineTimestamp {
+                timeline: k.id.parse().expect("invalid timeline persisted"),
+                ts: v.ts,
             })
             .collect::<Result<_, _>>()?;
 
@@ -646,16 +652,9 @@ impl ReadOnlyDurableCatalogState for Connection {
             .map(|x| x.expect("must exist").next_id)
             .map_err(Into::into)
     }
-}
 
-#[async_trait]
-impl DurableCatalogState for Connection {
-    fn is_read_only(&self) -> bool {
-        self.stash.is_readonly()
-    }
-
-    #[tracing::instrument(name = "storage::transaction", level = "debug", skip_all)]
-    async fn transaction(&mut self) -> Result<Transaction, Error> {
+    #[tracing::instrument(level = "debug", skip(self))]
+    async fn snapshot(&mut self) -> Result<Snapshot, Error> {
         let (
             databases,
             schemas,
@@ -673,6 +672,26 @@ impl DurableCatalogState for Connection {
             system_configurations,
             default_privileges,
             system_privileges,
+        ): (
+            BTreeMap<proto::DatabaseKey, proto::DatabaseValue>,
+            BTreeMap<proto::SchemaKey, proto::SchemaValue>,
+            BTreeMap<proto::RoleKey, proto::RoleValue>,
+            BTreeMap<proto::ItemKey, proto::ItemValue>,
+            BTreeMap<proto::CommentKey, proto::CommentValue>,
+            BTreeMap<proto::ClusterKey, proto::ClusterValue>,
+            BTreeMap<proto::ClusterReplicaKey, proto::ClusterReplicaValue>,
+            BTreeMap<
+                proto::ClusterIntrospectionSourceIndexKey,
+                proto::ClusterIntrospectionSourceIndexValue,
+            >,
+            BTreeMap<proto::IdAllocKey, proto::IdAllocValue>,
+            BTreeMap<proto::ConfigKey, proto::ConfigValue>,
+            BTreeMap<proto::SettingKey, proto::SettingValue>,
+            BTreeMap<proto::TimestampKey, proto::TimestampValue>,
+            BTreeMap<proto::GidMappingKey, proto::GidMappingValue>,
+            BTreeMap<proto::ServerConfigurationKey, proto::ServerConfigurationValue>,
+            BTreeMap<proto::DefaultPrivilegesKey, proto::DefaultPrivilegesValue>,
+            BTreeMap<proto::SystemPrivilegesKey, proto::SystemPrivilegesValue>,
         ) = self
             .stash
             .with_transaction(|tx| {
@@ -706,8 +725,7 @@ impl DurableCatalogState for Connection {
             })
             .await?;
 
-        Transaction::new(
-            self,
+        Ok(Snapshot {
             databases,
             schemas,
             roles,
@@ -720,11 +738,24 @@ impl DurableCatalogState for Connection {
             configs,
             settings,
             timestamps,
-            system_gid_mapping,
+            system_object_mappings: system_gid_mapping,
             system_configurations,
             default_privileges,
             system_privileges,
-        )
+        })
+    }
+}
+
+#[async_trait]
+impl DurableCatalogState for Connection {
+    fn is_read_only(&self) -> bool {
+        self.stash.is_readonly()
+    }
+
+    #[tracing::instrument(name = "storage::transaction", level = "debug", skip_all)]
+    async fn transaction(&mut self) -> Result<Transaction, Error> {
+        let snapshot = self.snapshot().await?;
+        Transaction::new(self, snapshot)
     }
 
     #[tracing::instrument(name = "storage::transaction", level = "debug", skip_all)]
