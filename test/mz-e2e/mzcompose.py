@@ -78,11 +78,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         output = c.run(
             "mz", "app-password", "create", new_app_password_name, capture=True
         )
-        assert "mzp_" in output.stdout
+        new_app_password = output.stdout.strip()
+        assert "mzp_" in new_app_password
+
         pg8000.connect(
             host=cloud_hostname(c),
             user=USERNAME,
-            password=output.stdout,
+            password=new_app_password,
             port=6875,
             ssl_context=ssl.SSLContext(),
         )
@@ -92,6 +94,17 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         assert new_app_password_name in output.stdout
 
         # // Test - `mz secrets`
+        # Drop secret if exists
+        output = c.run(
+            "mz",
+            "sql",
+            "--",
+            "-q",
+            "-c",
+            "DROP SECRET IF EXISTS CI_SECRET;",
+            capture=True,
+        )
+
         secret = "decode('c2VjcmV0Cg==', 'base64')"
         output = c.run(
             "mz", "secret", "create", "CI_SECRET", stdin=secret, capture=True
@@ -112,7 +125,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         # Try to remove the username if it exist before trying to create one.
         try:
-            output = c.run("mz", "user", "remove", user_email, capture_stderr=False)
+            output = c.run("mz", "user", "remove", user_email, capture=True)
             print("Warning: Email was present.")
         except:
             # It is ok if the command fails.
@@ -151,12 +164,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         assert "enabled" == us_region["status"]
 
         # Verify the content is ok
+        print(f"Path: {psql_config_path}")
         if os.path.exists(psql_config_path):
             with open(psql_config_path) as file:
                 content = file.read()
 
-            if content != "\\timing\n\\include ~/.psqlrc":
-                raise ValueError("Incorrect content in the '.psqlrc-mz' file.")
+                if content != "\\timing\n\\include ~/.psqlrc":
+                    raise ValueError("Incorrect content in the '.psqlrc-mz' file.")
         else:
             raise FileNotFoundError(
                 "The configuration file '.psqlrc-mz' does not exist."
