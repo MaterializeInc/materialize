@@ -95,8 +95,8 @@ pub struct Config {
     ///
     /// Set to 1 to retry at a steady pace.
     pub backoff_factor: f64,
-    /// Are we benchmarking
-    pub benchmarking: bool,
+    /// Should we skip coordinator and catalog consistency checks.
+    pub no_consistency_check: bool,
 
     // === Materialize options. ===
     /// The pgwire connection parameters for the Materialize instance that
@@ -159,7 +159,7 @@ pub struct State {
     max_tries: usize,
     initial_backoff: Duration,
     backoff_factor: f64,
-    benchmarking: bool,
+    no_consistency_check: bool,
     regex: Option<Regex>,
     regex_replacement: String,
     postgres_factory: StashFactory,
@@ -833,7 +833,7 @@ pub async fn create_state(
         max_tries: config.default_max_tries,
         initial_backoff: config.initial_backoff,
         backoff_factor: config.backoff_factor,
-        benchmarking: config.benchmarking,
+        no_consistency_check: config.no_consistency_check,
         regex: None,
         regex_replacement: set::DEFAULT_REGEX_REPLACEMENT.into(),
         postgres_factory: StashFactory::new(&MetricsRegistry::new()),

@@ -67,7 +67,7 @@ class Docker(Executor):
             f"--seed={self._seed}",
             "--initial-backoff=10ms",  # Retry every 10ms until success
             "--backoff-factor=0",
-            "--benchmarking",
+            "--no-consistency-check",
             stdin=input,
             capture=True,
         ).stdout
@@ -171,7 +171,7 @@ class MzCloud(Executor):
             *self._testdrive_args,
             "--initial-backoff=10ms",
             "--backoff-factor=0",
-            "--benchmarking",
+            "--no-consistency-check",
             stdin=input,
             capture=True,
         ).stdout

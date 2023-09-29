@@ -1,0 +1,76 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 183c4d72f5..c5e2c04c32 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -5163,6 +5163,7 @@ dependencies = [
+  "mz-repr",
+  "once_cell",
+  "paste",
++ "postgres",
+  "postgres-openssl",
+  "prometheus",
+  "proptest",
+diff --git a/src/stash/Cargo.toml b/src/stash/Cargo.toml
+index 0d3d38dce2..56ae052442 100644
+--- a/src/stash/Cargo.toml
++++ b/src/stash/Cargo.toml
+@@ -24,6 +24,7 @@ mz-postgres-util = { path = "../postgres-util" }
+ mz-proto = { path = "../proto" }
+ mz-repr = { path = "../repr" }
+ paste = "1.0.11"
++postgres = { version = "0.19.5" }
+ postgres-openssl = { version = "0.5.0" }
+ prometheus = { version = "0.13.3", default-features = false }
+ proptest = { version = "1.0.0", default-features = false, features = ["std"] }
+diff --git a/src/stash/src/postgres.rs b/src/stash/src/postgres.rs
+index 6b5d4c0db0..a80c333769 100644
+--- a/src/stash/src/postgres.rs
++++ b/src/stash/src/postgres.rs
+@@ -1449,38 +1449,16 @@ impl Drop for DebugStashFactory {
+         let url = self.url.clone();
+         let schema = self.schema.clone();
+         let tls = self.tls.clone();
+-        let result = std::thread::spawn(move || {
+-            let async_runtime = tokio::runtime::Builder::new_current_thread()
+-                .enable_all()
+-                .build()?;
+-            async_runtime.block_on(async {
+-                let (client, connection) = tokio_postgres::connect(&url, tls).await?;
+-                mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
+-                    if let Err(e) = connection.await {
+-                        std::panic::resume_unwind(Box::new(e));
+-                    }
+-                });
+-                client
+-                    .batch_execute(&format!("SET statement_timeout TO '10s'"))
+-                    .await?;
+-                client
+-                    .batch_execute(&format!("DROP SCHEMA {} CASCADE", &schema))
+-                    .await?;
+-                Ok::<_, StashError>(())
+-            })
+-        })
+-        // Note that we are joining on a tokio task here, which blocks the current runtime from making other progress on the current worker thread.
+-        // Because this only happens on shutdown and is only used in tests, we have determined that its okay
+-        .join();
+-
+-        match result {
+-            Ok(result) => {
+-                if let Err(e) = result {
+-                    std::panic::resume_unwind(Box::new(e));
+-                }
++        let mut client = match postgres::Client::connect(&url, tls) {
++            Ok(client) => client,
++            Err(e) => {
++                println!("Failed to connect: {e:?}");
++                return;
+             }
+-
+-            Err(e) => std::panic::resume_unwind(e),
++        };
++        if let Err(e) = client.batch_execute(&format!("DROP SCHEMA {} CASCADE", &schema)) {
++            println!("Failed to drop: {e:?}");
++            return;
+         }
+     }
+ }
