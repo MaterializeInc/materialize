@@ -2872,7 +2872,11 @@ where
                 PartialOrder::less_than(&collection.implied_capability, &collection.write_frontier)
                     // Whenever a collection is being initialized, this state is
                     // acceptable.
-                    || *collection.write_frontier == [T::minimum()]
+                    || *collection.write_frontier == [T::minimum()],
+                "{id}:  implied_capability {:?}, write_frontier {:?}, state: {:?}",
+                collection.implied_capability,
+                collection.write_frontier,
+                collection
             );
 
             collection
