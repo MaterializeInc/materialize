@@ -20,6 +20,7 @@ from fixtures import (
     expected_indexes,
     test_materialized_view,
     test_materialized_view_index,
+    test_materialized_view_grant,
     test_relation_name_length,
     test_sink,
     test_source,
@@ -27,6 +28,7 @@ from fixtures import (
     test_subsources,
     test_table_index,
     test_view_index,
+    test_view_grant,
 )
 
 
@@ -47,6 +49,7 @@ class TestCustomMaterializations:
             "actual_indexes.sql": actual_indexes,
             "test_materialized_view.sql": test_materialized_view,
             "test_materialized_view_index.sql": test_materialized_view_index,
+            "test_materialized_view_grant.sql": test_materialized_view_grant,
             "test_relation_name_loooooooooooooooooonger_than_postgres_63_limit.sql": test_relation_name_length,
             "test_source.sql": test_source,
             "test_source_index.sql": test_source_index,
@@ -54,9 +57,13 @@ class TestCustomMaterializations:
             "test_sink.sql": test_sink,
             "test_table_index.sql": test_table_index,
             "test_view_index.sql": test_view_index,
+            "test_view_grant.sql": test_view_grant,
         }
 
     def test_custom_materializations(self, project):
+        project.run_sql("CREATE ROLE bi")
+        project.run_sql("CREATE ROLE reporter")
+
         # seed seeds
         results = run_dbt(["seed"])
         # seed result length
@@ -64,12 +71,12 @@ class TestCustomMaterializations:
         # run models
         results = run_dbt(["run"])
         # run result length
-        assert len(results) == 10
+        assert len(results) == 12
         # re-run models to ensure there are no lingering errors in recreating
         # the materializations
         results = run_dbt(["run"])
         # re-run result length
-        assert len(results) == 10
+        assert len(results) == 12
         # relations_equal
         check_relations_equal(
             project.adapter,

@@ -30,10 +30,28 @@ test_materialized_view_index = """
     SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse')) _ (a, b)
 """
 
+test_materialized_view_grant = """
+{{ config(
+    materialized='materializedview',
+    grants={'select': ['bi', 'reporter']}
+) }}
+
+    SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse')) _ (a, b)
+"""
+
 test_view_index = """
 {{ config(
     materialized='view',
     indexes=[{'default': True}]
+) }}
+
+    SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse'), (NULL, NULL)) _ (a, b)
+"""
+
+test_view_grant = """
+{{ config(
+    materialized='view',
+    grants={'select': ['bi', 'reporter']}
 ) }}
 
     SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse'), (NULL, NULL)) _ (a, b)

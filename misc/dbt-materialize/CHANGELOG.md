@@ -13,6 +13,8 @@
 
 * Allow `cluster` configuration for `dbt test`.
 
+* Enable `grants` config for sources, seeds, tables, views and materialized views.
+
 ## 1.5.1 - 2023-07-24
 
 * Enable the `indexes` config for `table` materializations.
