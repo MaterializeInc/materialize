@@ -125,7 +125,9 @@ use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_types::controller::{CollectionMetadata, DurableCollectionMetadata, StorageError};
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
-use mz_storage_types::sinks::{ProtoDurableExportMetadata, SinkAsOf, StorageSinkDesc};
+use mz_storage_types::sinks::{
+    ProtoDurableExportMetadata, SinkAsOf, StorageSinkConnection, StorageSinkDesc,
+};
 use mz_storage_types::sources::{IngestionDescription, SourceData, SourceExport};
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use prost::Message;
@@ -1068,6 +1070,70 @@ where
                 .get_mut(&description.instance_id)
                 .ok_or_else(|| StorageError::ExportInstanceMissing {
                     storage_instance_id: description.instance_id,
+                    export_id: id,
+                })?;
+
+            self.sink_statistics
+                .lock()
+                .expect("poisoned")
+                .insert(id, statistics::StatsInitState(BTreeMap::new()));
+
+            client.send(StorageCommand::CreateSinks(vec![cmd]));
+        }
+        Ok(())
+    }
+
+    /// Create the sinks described by the `ExportDescription`.
+    async fn update_export_connection(
+        &mut self,
+        exports: BTreeMap<GlobalId, StorageSinkConnection>,
+    ) -> Result<(), StorageError> {
+        for (id, connection) in exports {
+            let export = self.export_mut(id).expect("export exists");
+            export.description.sink.connection = connection;
+
+            let export = self.export(id).expect("export exists").clone();
+
+            let value = MetadataExportFetcher::get_stash_collection()
+                .peek_key_one(&mut self.stash, id.into_proto())
+                .await?
+                .expect("known to exist");
+
+            let durable_export_data = DurableExportMetadata::from_proto(value)
+                .map_err(|e| StorageError::IOError(e.into()))?;
+
+            let from_collection = self.collection(export.description.sink.from)?;
+            let from_storage_metadata = from_collection.collection_metadata.clone();
+
+            let status_id = if let Some(status_collection_id) = export.description.sink.status_id {
+                Some(
+                    self.collection(status_collection_id)?
+                        .collection_metadata
+                        .data_shard,
+                )
+            } else {
+                None
+            };
+
+            let cmd = CreateSinkCommand {
+                id,
+                description: StorageSinkDesc {
+                    from: export.description.sink.from,
+                    from_desc: export.description.sink.from_desc.clone(),
+                    connection: export.description.sink.connection.clone(),
+                    envelope: export.description.sink.envelope,
+                    as_of: durable_export_data.initial_as_of,
+                    status_id,
+                    from_storage_metadata,
+                },
+            };
+
+            // Fetch the client for this exports's cluster.
+            let client = self
+                .clients
+                .get_mut(&export.description.instance_id)
+                .ok_or_else(|| StorageError::ExportInstanceMissing {
+                    storage_instance_id: export.description.instance_id,
                     export_id: id,
                 })?;
 
