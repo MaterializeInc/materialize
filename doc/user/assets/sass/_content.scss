@@ -1054,6 +1054,15 @@ div.json_widget {
     .sql_output {
         margin: 16px;
     }
+
+    .log-output {
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        padding: 10px;
+        max-height: 150px;
+        overflow-y: auto;
+        margin-top: 10px;
+    }
 }
 
 .notify_button {

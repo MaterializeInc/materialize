@@ -1,179 +1,188 @@
-<noscript>You need to enable JavaScript to run this Webhooks datagen.</noscript>
-<div id="webhooks-datagen"></div>
+<h1 class="widget-title">Webhook Tester</h1>
+<div id="webhooks-datagen" class="json_widget">
+  <div class="input_container">
+    <div class="input_container-text">
+      <input
+        type="text"
+        placeholder="Webhook URL"
+        id="webhookURL"
+        class="text-input"
+      />
+    </div>
+  </div>
+  <div class="input_container">
+    <div class="input_container-text">
+      <input
+        type="password"
+        placeholder="Auth Password"
+        id="authPassword"
+        class="text-input"
+      />
+    </div>
+  </div>
+  <div class="input_container">
+    <div class="input_container-text">
+      <button id="startButton" class="btn">Start Generating</button>
+      <button id="stopButton" class="btn" style="display: none">Stop</button>
+    </div>
+  </div>
+  <div>
+    <div class="json">
+      <textarea
+        placeholder="JSON schema"
+        id="jsonSchema"
+        rows="5"
+        cols="30"
+        class="json-textarea"
+      >
+{
+  "sensor_id": "faker.datatype.number({ max: 100, min: 1})",
+  "timestamp": "faker.date.between('2020-01-01T00:00:00.000Z', '2030-01-01T00:00:00.000Z')",
+  "location": {
+      "latitude": "faker.datatype.number({ max: 90, min: -90})",
+      "longitude": "faker.datatype.number({ max: 180, min: -180})"
+  },
+  "temperature": "faker.datatype.float({ min: 20, max: 95 })"
+}
+      </textarea>
+      <div id="jsonError" class="error" style="display: none"></div>
+    </div>
+    <div class="log-output" id="logOutput" style="display: none"></div>
+  </div>
+</div>
 
 <script type="module">
-  import { faker } from "https://cdn.skypack.dev/@faker-js/faker";
-</script>
+  import { faker } from 'https://cdn.skypack.dev/@faker-js/faker';
 
-<script type="text/babel">
-  // {{% plugins/webhooks-datagen %}}
-  const { useState, useRef } = React;
-  function Datagen() {
-    const [webhookURL, setWebhookURL] = useState("");
-    const [authPassword, setAuthPassword] = useState("");
-    const [jsonSchema, setJsonSchema] = useState("");
-    const [logs, setLogs] = useState([]);
-    const [isGenerating, setIsGenerating] = useState(false);
-    const [jsonError, setJsonError] = useState(null);
+  const webhookURLInput = document.getElementById("webhookURL");
+  const authPasswordInput = document.getElementById("authPassword");
+  const jsonSchemaTextarea = document.getElementById("jsonSchema");
+  const startButton = document.getElementById("startButton");
+  const stopButton = document.getElementById("stopButton");
+  const jsonErrorDiv = document.getElementById("jsonError");
+  const logOutputDiv = document.getElementById("logOutput");
 
-    const generationInterval = useRef(null);
+  let logs = [];
+  let isGenerating = false;
+  let generationInterval;
 
-    const validateJson = (jsonString) => {
-      try {
-        JSON.parse(jsonString);
-        setJsonError(null);
-        return true;
-      } catch (error) {
-        setJsonError("Invalid JSON format");
-        return false;
-      }
-    };
+  document.addEventListener("DOMContentLoaded", function () {
+    formatJSON(); // Format JSON when the page is loaded
+  });
 
-    const isFakerPathValid = (path) => {
-      return path
-        .split(".")
-        .reduce((acc, curr) => (acc && acc[curr] ? acc[curr] : null), faker);
-    };
-
-    const generateDataAndSend = () => {
-      const generatedData = JSON.parse(
-        jsonSchema.replace(/"\${(.+?)}"/g, (_, match) => {
-          const fakerValue = isFakerPathValid(match)
-            ? faker.helpers.fake(`${match}`)
-            : faker.random.word(); // Fallback to a random word if the path is invalid.
-          return JSON.stringify(fakerValue);
-        })
-      );
-      setLogs((prevLogs) => [
-        ...prevLogs,
-        `Sent: ${JSON.stringify(generatedData)}`,
-      ]);
-
-      console.log("URL:", webhookURL);
-      console.log("Headers:", {
-        "Content-Type": "application/json",
-        Authorization: `${authPassword}`,
-      });
-      console.log("Body:", JSON.stringify(generatedData));
-
-      fetch(webhookURL, {
-        method: "POST",
-        // mode: "no-cors",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `${authPassword}`,
-        },
-        body: JSON.stringify(generatedData),
-      })
-        .then((response) => {
-          if (!response.ok) {
-            throw new Error(`HTTP error! Status: ${response.status}`);
-          }
-          return response;
-        })
-        .then((data) => {
-          // Handle response data if needed
-        })
-        .catch((error) => {
-          console.error("There was a problem with the fetch operation:", error);
-          setLogs((prevLogs) => [...prevLogs, `Error: ${error.message}`]);
-        });
-    };
-
-    const startGeneration = () => {
-      if (!webhookURL || !authPassword) {
-        alert("Webhook URL and Auth Password cannot be empty!");
-        return;
-      }
-      if (validateJson(jsonSchema)) {
-        setIsGenerating(true);
-        generationInterval.current = setInterval(generateDataAndSend, 1000);
-      }
-    };
-
-    const stopGeneration = () => {
-      setIsGenerating(false);
-      clearInterval(generationInterval.current);
-      generationInterval.current = null;
-    };
-
-    function onSetWebhookURLChange(e){
-      return setWebhookURL(e.target.value);
+  function validateJson(jsonString) {
+    try {
+      JSON.parse(jsonString);
+      jsonErrorDiv.style.display = "none";
+      return true;
+    } catch (error) {
+      jsonErrorDiv.style.display = "block";
+      jsonErrorDiv.textContent = "Invalid JSON format";
+      return false;
     }
-
-    function onSetAuthPasswordChange(e){
-      return setAuthPassword(e.target.value);
-    }
-
-    function onJsonSchemaChange(e){
-      setJsonSchema(e.target.value);
-      validateJson(e.target.value);
-    }
-
-    return (
-      <div className="min-h-screen bg-gray-100 p-10">
-        <div className="max-w-4xl mx-auto bg-white p-6 rounded shadow-lg">
-          <div className="mb-6">
-            <h1 className="text-2xl font-bold mb-4">Webhook Tester</h1>
-            <div className="flex space-x-4 mb-4">
-              <input
-                className="border p-2 flex-1 mr-2"
-                placeholder="Webhook URL"
-                value={webhookURL}
-                onChange={onSetWebhookURLChange}
-              />
-              <input
-                className="border p-2 flex-1"
-                type="password"
-                placeholder="Auth Password"
-                value={authPassword}
-                onChange={onSetAuthPasswordChange}
-              />
-            </div>
-            {!isGenerating ? (
-              <button
-                className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded"
-                onClick={startGeneration}
-              >
-                Start Generating
-              </button>
-            ) : (
-              <button
-                className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded"
-                onClick={stopGeneration}
-              >
-                Stop
-              </button>
-            )}
-          </div>
-
-          <div className="flex space-x-4">
-            <div className="flex-1">
-              <input type="text"
-                className="border p-2 w-full h-64 resize-none"
-                placeholder='Enter JSON schema with faker.js values e.g.'
-                value={jsonSchema}
-                onChange={onJsonSchemaChange}
-              />
-              {jsonError && <p className="text-red-500 mt-2">{jsonError}</p>}
-            </div>
-            <div className="flex-1 p-4 border rounded overflow-y-scroll">
-              <p className="font-bold mb-4">Logs:</p>
-              <div className="h-64 overflow-y-scroll">
-                {logs.map((log, index) => (
-                  <p key={index} className="border-b border-gray-200 py-1">
-                    {log}
-                  </p>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
   }
 
-  const container = document.getElementById("webhooks-datagen");
-  const root = ReactDOM.createRoot(container);
-  root.render(<Datagen />);
+  function isFakerPathValid(path) {
+    return path
+      .split(".")
+      .reduce((acc, curr) => (acc && acc[curr] ? acc[curr] : null), faker);
+  }
+
+  function generateDataAndSend() {
+    const generatedData = JSON.parse(
+        jsonSchemaTextarea.value.replace(/"faker\.(.+?)"/g, (_, match) => {
+            try {
+                const fakerValue = eval(`faker.${match}`);
+                return JSON.stringify(fakerValue);
+            } catch (error) {
+                console.error("Error while generating faker data:", error);
+                return '"Error"';
+            }
+        })
+    );
+    logs.unshift(`Sent: ${JSON.stringify(generatedData)}`); // Prepend log messages
+    logOutputDiv.innerHTML = logs
+      .map((log, index) => `<p key="${index}">${log}</p>`)
+      .join("");
+
+    // Update the log display here
+    updateLogDisplay();
+
+    console.log("URL:", webhookURLInput.value);
+    console.log("Headers:", {
+      "Content-Type": "application/json",
+      Authorization: authPasswordInput.value,
+    });
+    console.log("Body:", JSON.stringify(generatedData));
+
+    fetch(webhookURLInput.value, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: authPasswordInput.value,
+      },
+      body: JSON.stringify(generatedData),
+    })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`HTTP error! Status: ${response.status}`);
+        }
+        return response;
+      })
+      .then((data) => {
+        // Handle response data if needed
+      })
+      .catch((error) => {
+        console.error("There was a problem with the fetch operation:", error);
+        logs.unshift(`Error: ${error.message}`); // Prepend error messages
+        logOutputDiv.innerHTML = logs
+          .map((log, index) => `<p key="${index}">${log}</p>`)
+          .join("");
+        // Update the log display when an error occurs
+        updateLogDisplay();
+      });
+  }
+
+  function startGeneration() {
+    if (!webhookURLInput.value || !authPasswordInput.value) {
+      alert("Webhook URL and Auth Password cannot be empty!");
+      return;
+    }
+    if (validateJson(jsonSchemaTextarea.value)) {
+      isGenerating = true;
+      generationInterval = setInterval(generateDataAndSend, 1000);
+      startButton.style.display = "none";
+      stopButton.style.display = "inline-block";
+    }
+  }
+
+  function stopGeneration() {
+    isGenerating = false;
+    clearInterval(generationInterval);
+    startButton.style.display = "inline-block";
+    stopButton.style.display = "none";
+    generationInterval = null;
+  }
+
+  // Hide logOutputDiv if there are no logs
+  function updateLogDisplay() {
+    logOutputDiv.style.display = logs.length > 0 ? "block" : "none";
+  }
+
+  startButton.addEventListener("click", startGeneration);
+  stopButton.addEventListener("click", stopGeneration);
+  updateLogDisplay();
+
+  // Added code for JSON formatting when the textarea loses focus
+  jsonSchemaTextarea.addEventListener("blur", formatJSON);
+
+  function formatJSON() {
+    const jsonString = jsonSchemaTextarea.value.trim();
+    try {
+      const formattedJSON = JSON.stringify(JSON.parse(jsonString), null, 2);
+      jsonSchemaTextarea.value = formattedJSON;
+    } catch (error) {
+      // Handle the error if the JSON is not valid
+    }
+  }
 </script>
