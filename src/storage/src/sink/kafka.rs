@@ -857,7 +857,7 @@ impl KafkaSinkState {
                 )
                 .await;
 
-                info!(
+                debug!(
                     "{}: sending progress for gate ts: {:?}",
                     &self.name, min_frontier
                 );
@@ -877,7 +877,7 @@ impl KafkaSinkState {
             let mut write_frontier = self.write_frontier.borrow_mut();
 
             // make sure we don't regress
-            info!(
+            debug!(
                 "{}: downgrading write frontier to: {:?}",
                 &self.name, min_frontier
             );
