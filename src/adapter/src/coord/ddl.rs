@@ -124,6 +124,7 @@ impl Coordinator {
         let mut update_metrics_retention = false;
         let mut update_secrets_caching_config = false;
         let mut update_cluster_scheduling_config = false;
+        let mut update_jemalloc_profiling_config = false;
         let mut log_indexes_to_drop = Vec::new();
 
         for op in &ops {
@@ -219,6 +220,8 @@ impl Coordinator {
                     update_metrics_retention |= name == vars::METRICS_RETENTION.name();
                     update_secrets_caching_config |= vars::is_secrets_caching_var(name);
                     update_cluster_scheduling_config |= vars::is_cluster_scheduling_var(name);
+                    update_jemalloc_profiling_config |=
+                        name == vars::ENABLE_JEMALLOC_PROFILING.name();
                 }
                 catalog::Op::ResetAllSystemConfiguration => {
                     // Assume they all need to be updated.
@@ -230,6 +233,7 @@ impl Coordinator {
                     update_metrics_retention = true;
                     update_secrets_caching_config = true;
                     update_cluster_scheduling_config = true;
+                    update_jemalloc_profiling_config = true;
                 }
                 _ => (),
             }
@@ -500,6 +504,9 @@ impl Coordinator {
             }
             if update_cluster_scheduling_config {
                 self.update_cluster_scheduling_config();
+            }
+            if update_jemalloc_profiling_config {
+                self.update_jemalloc_profiling_config().await;
             }
         }
         .await;
@@ -772,6 +779,14 @@ impl Coordinator {
             .collect::<Vec<_>>();
         self.update_storage_base_read_policies(storage_policies);
         self.update_compute_base_read_policies(compute_policies);
+    }
+
+    async fn update_jemalloc_profiling_config(&mut self) {
+        if self.catalog().system_config().enable_jemalloc_profiling() {
+            mz_prof::activate_jemalloc_profiling().await
+        } else {
+            mz_prof::deactivate_jemalloc_profiling().await
+        }
     }
 
     async fn create_storage_export(
