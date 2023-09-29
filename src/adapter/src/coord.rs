@@ -168,26 +168,6 @@ mod read_policy;
 mod sequencer;
 mod sql;
 
-// TODO: We can have only two consts here, instead of three, once there exists a `const` way to
-// convert between a `Timestamp` and a `Duration`, and unwrap a result in const contexts. Currently
-// unstable compiler features that would allow this are:
-// * `const_option`: https://github.com/rust-lang/rust/issues/67441
-// * `const_result`: https://github.com/rust-lang/rust/issues/82814
-// * `const_num_from_num`: https://github.com/rust-lang/rust/issues/87852
-// * `const_precise_live_drops`: https://github.com/rust-lang/rust/issues/73255
-
-/// `DEFAULT_LOGICAL_COMPACTION_WINDOW`, in milliseconds.
-/// The default is set to a second to track the default timestamp frequency for sources.
-const DEFAULT_LOGICAL_COMPACTION_WINDOW_MILLIS: u64 = 1000;
-
-/// The default logical compaction window for new objects
-pub const DEFAULT_LOGICAL_COMPACTION_WINDOW: Duration =
-    Duration::from_millis(DEFAULT_LOGICAL_COMPACTION_WINDOW_MILLIS);
-
-/// `DEFAULT_LOGICAL_COMPACTION_WINDOW` as an `EpochMillis` timestamp
-pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_TS: mz_repr::Timestamp =
-    Timestamp::new(DEFAULT_LOGICAL_COMPACTION_WINDOW_MILLIS);
-
 #[derive(Debug)]
 pub enum Message<T = mz_repr::Timestamp> {
     Command(Command),
@@ -1087,7 +1067,6 @@ impl Coordinator {
         // Ultimately, it doesn't concretely matter today, because the type ends up just being
         // u64 anyway.
         let mut policies_to_set: BTreeMap<Timestamp, CollectionIdBundle> = Default::default();
-        policies_to_set.insert(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS, Default::default());
 
         debug!("coordinator init: creating compute replicas");
         let mut replicas_to_start = vec![];
@@ -1359,7 +1338,9 @@ impl Coordinator {
             );
             let policy = entry
                 .item()
-                .initial_logical_compaction_window()
+                .initial_logical_compaction_window(
+                    self.catalog().system_config().default_retention(),
+                )
                 .map(|duration| {
                     let ts = Timestamp::from(
                         u64::try_from(duration.as_millis())
@@ -1787,21 +1768,21 @@ impl Coordinator {
         }
 
         // Advancing the `as_of` to the write frontier means that we lose some historical data.
-        // That might be acceptable for the default 1-second index compaction window, but not for
+        // That might be acceptable for the default index compaction window, but not for
         // retained-metrics indexes. So we need to regress the write frontier by the retention
         // duration of the index.
         //
         // NOTE: If we ever allow custom index compaction windows, we'll need to apply those here
         // as well.
-        let lag = if is_retained_metrics_index {
-            let retention = self.catalog().state().system_config().metrics_retention();
-            Timestamp::new(u64::try_from(retention.as_millis()).unwrap_or_else(|_| {
-                tracing::error!("absurd metrics retention duration: {retention:?}");
-                u64::MAX
-            }))
+        let retention = if is_retained_metrics_index {
+            self.catalog().state().system_config().metrics_retention()
         } else {
-            DEFAULT_LOGICAL_COMPACTION_WINDOW_TS
+            self.catalog().state().system_config().default_retention()
         };
+        let lag = Timestamp::new(u64::try_from(retention.as_millis()).unwrap_or_else(|_| {
+            tracing::error!("absurd retention duration: {retention:?}");
+            u64::MAX
+        }));
 
         let time = write_frontier.into_option().expect("checked above");
         let time = time.saturating_sub(lag);

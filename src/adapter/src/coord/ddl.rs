@@ -122,6 +122,7 @@ impl Coordinator {
         let mut update_compute_config = false;
         let mut update_storage_config = false;
         let mut update_metrics_retention = false;
+        let mut update_default_retention = false;
         let mut update_secrets_caching_config = false;
         let mut update_cluster_scheduling_config = false;
         let mut log_indexes_to_drop = Vec::new();
@@ -217,6 +218,7 @@ impl Coordinator {
                     update_compute_config |= vars::is_compute_config_var(name);
                     update_storage_config |= vars::is_storage_config_var(name);
                     update_metrics_retention |= name == vars::METRICS_RETENTION.name();
+                    update_default_retention |= name == vars::DEFAULT_RETENTION.name();
                     update_secrets_caching_config |= vars::is_secrets_caching_var(name);
                     update_cluster_scheduling_config |= vars::is_cluster_scheduling_var(name);
                 }
@@ -228,6 +230,7 @@ impl Coordinator {
                     update_compute_config = true;
                     update_storage_config = true;
                     update_metrics_retention = true;
+                    update_default_retention = true;
                     update_secrets_caching_config = true;
                     update_cluster_scheduling_config = true;
                 }
@@ -492,6 +495,9 @@ impl Coordinator {
             if update_metrics_retention {
                 self.update_metrics_retention();
             }
+            if update_default_retention {
+                self.update_default_retention();
+            }
             if update_tracing_config {
                 self.update_tracing_config();
             }
@@ -747,29 +753,40 @@ impl Coordinator {
             })),
             SINCE_GRANULARITY,
         );
+        self.update_retention(policy, |item| item.is_retained_metrics_object())
+    }
+
+    fn update_default_retention(&mut self) {
+        let lag = self.catalog().system_config().default_retention_timestamp();
+        let policy = ReadPolicy::lag_writes_by(lag, SINCE_GRANULARITY);
+        self.update_retention(policy, |item| item.uses_default_retention())
+    }
+
+    fn update_retention(
+        &mut self,
+        policy: ReadPolicy<Timestamp>,
+        update_item: impl Fn(&CatalogItem) -> bool,
+    ) {
         let storage_policies = self
-            .catalog()
-            .entries()
-            .filter(|entry| {
-                entry.item().is_retained_metrics_object()
-                    && entry.item().is_compute_object_on_cluster().is_none()
+            .storage_read_capabilities
+            .iter()
+            .filter_map(|(id, _cap)| {
+                update_item(self.catalog().get_entry(id).item()).then(|| (*id, policy.clone()))
             })
-            .map(|entry| (entry.id(), policy.clone()))
             .collect::<Vec<_>>();
+
         let compute_policies = self
-            .catalog()
-            .entries()
-            .filter_map(|entry| {
-                if let (true, Some(cluster_id)) = (
-                    entry.item().is_retained_metrics_object(),
-                    entry.item().is_compute_object_on_cluster(),
-                ) {
-                    Some((cluster_id, entry.id(), policy.clone()))
-                } else {
-                    None
-                }
+            .compute_read_capabilities
+            .iter()
+            .filter(|(id, _)| !id.is_transient())
+            .filter_map(|(id, _cap)| {
+                let item = self.catalog().get_entry(id).item();
+                item.cluster_id().and_then(|cluster_id| {
+                    update_item(item).then(|| (cluster_id, *id, policy.clone()))
+                })
             })
             .collect::<Vec<_>>();
+
         self.update_storage_base_read_policies(storage_policies);
         self.update_compute_base_read_policies(compute_policies);
     }
