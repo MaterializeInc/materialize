@@ -7,14 +7,15 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-
+import logging
 import subprocess
 
 from materialize import ui
 from materialize.cloudtest import DEFAULT_K8S_CONTEXT_NAME
-from materialize.cloudtest.util.common import log_subprocess_error
 from materialize.cloudtest.util.print_pods import print_pods
 from materialize.ui import UIError
+
+LOGGER = logging.getLogger(__name__)
 
 
 def wait(
@@ -59,7 +60,8 @@ def wait(
                 ui.progress("success!", finish=True)
                 return
         except subprocess.CalledProcessError as e:
-            log_subprocess_error(e)
+            # use a less verbose output than log_subprocess_error here
+            LOGGER.info(f"{e} {e.output.decode('ascii')}")
             error = e
 
     ui.progress(finish=True)
