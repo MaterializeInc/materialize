@@ -90,7 +90,7 @@
 #![warn(missing_debug_implementations)]
 
 use std::error::Error;
-use std::rc::Rc;
+use std::sync::Arc;
 use std::{fmt, iter};
 
 use mz_expr::visit::Visit;
@@ -459,7 +459,7 @@ impl Optimizer {
     /// Builds a logical optimizer that only performs logical transformations.
     pub fn logical_optimizer(ctx: &crate::typecheck::SharedContext) -> Self {
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
-            Box::new(crate::typecheck::Typecheck::new(Rc::clone(ctx)).strict_join_equivalences()),
+            Box::new(crate::typecheck::Typecheck::new(Arc::clone(ctx)).strict_join_equivalences()),
             // 1. Structure-agnostic cleanup
             Box::new(normalize()),
             Box::new(crate::non_null_requirements::NonNullRequirements::default()),
@@ -514,7 +514,7 @@ impl Optimizer {
                 ],
             }),
             Box::new(
-                crate::typecheck::Typecheck::new(Rc::clone(ctx))
+                crate::typecheck::Typecheck::new(Arc::clone(ctx))
                     .disallow_new_globals()
                     .strict_join_equivalences(),
             ),
@@ -535,7 +535,7 @@ impl Optimizer {
         // Implementation transformations
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
             Box::new(
-                crate::typecheck::Typecheck::new(Rc::clone(ctx))
+                crate::typecheck::Typecheck::new(Arc::clone(ctx))
                     .disallow_new_globals()
                     .strict_join_equivalences(),
             ),
@@ -599,7 +599,7 @@ impl Optimizer {
             // (For example, `FoldConstants` can break the normalized form by removing all
             // references to a Let, see https://github.com/MaterializeInc/materialize/issues/21175)
             Box::new(crate::normalize_lets::NormalizeLets::new(false)),
-            Box::new(crate::typecheck::Typecheck::new(Rc::clone(ctx)).disallow_new_globals()),
+            Box::new(crate::typecheck::Typecheck::new(Arc::clone(ctx)).disallow_new_globals()),
         ];
         Self {
             name: "physical",
@@ -618,7 +618,7 @@ impl Optimizer {
         allow_new_globals: bool,
     ) -> Self {
         let mut typechecker =
-            crate::typecheck::Typecheck::new(Rc::clone(ctx)).strict_join_equivalences();
+            crate::typecheck::Typecheck::new(Arc::clone(ctx)).strict_join_equivalences();
 
         if !allow_new_globals {
             typechecker = typechecker.disallow_new_globals();
@@ -651,7 +651,7 @@ impl Optimizer {
                 ],
             }),
             Box::new(
-                crate::typecheck::Typecheck::new(Rc::clone(ctx))
+                crate::typecheck::Typecheck::new(Arc::clone(ctx))
                     .disallow_new_globals()
                     .strict_join_equivalences(),
             ),
