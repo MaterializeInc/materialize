@@ -625,6 +625,7 @@ class Composition:
             persistent: Replace the container's entrypoint and command with
                 `sleep infinity` so that additional commands can be scheduled
                 on the container with `Composition.exec`.
+            max_retries: Number of retries on failure.
         """
         if persistent:
             old_compose = copy.deepcopy(self.compose)
