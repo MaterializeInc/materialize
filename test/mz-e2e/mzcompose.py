@@ -64,6 +64,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     test_failed = True
     try:
+        output = c.run("mz", "region", "list")
+        print(f"Region list output: {output.stdout}")
+        print(f"Region list output (stderr): {output.stderr}")
+
         print(f"Enabling region using Mz version {VERSION} ...")
         c.run("mz", "region", "enable", "--version", VERSION)
 
