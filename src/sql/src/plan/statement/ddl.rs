@@ -89,8 +89,8 @@ use crate::ast::{
     UnresolvedDatabaseName, ViewDefinition,
 };
 use crate::catalog::{
-    CatalogCluster, CatalogDatabase, CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails,
-    ObjectType, SystemObjectType,
+    CatalogCluster, CatalogDatabase, CatalogItem, CatalogItemType, CatalogRecordField, CatalogType,
+    CatalogTypeDetails, ObjectType, SystemObjectType,
 };
 use crate::kafka_util::{self, KafkaConfigOptionExtracted, KafkaStartOffsetType};
 use crate::names::{
@@ -101,7 +101,7 @@ use crate::names::{
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
 use crate::plan::expr::ColumnRef;
-use crate::plan::query::{ExprContext, QueryLifetime};
+use crate::plan::query::{scalar_type_from_catalog, ExprContext, QueryLifetime};
 use crate::plan::scope::Scope;
 use crate::plan::statement::{scl, StatementContext, StatementDesc};
 use crate::plan::typeconv::{plan_cast, CastContext};
@@ -2690,28 +2690,12 @@ pub fn plan_create_type(
 
     fn validate_data_type(
         scx: &StatementContext,
-        data_type: &ResolvedDataType,
+        data_type: ResolvedDataType,
         as_type: &str,
         key: &str,
-    ) -> Result<GlobalId, PlanError> {
-        let item = match data_type {
-            ResolvedDataType::Named {
-                id,
-                full_name,
-                modifiers,
-                ..
-            } => {
-                if !modifiers.is_empty() {
-                    sql_bail!(
-                        "CREATE TYPE ... AS {}option {} cannot accept type modifier on \
-                                {}, you must use the default type",
-                        as_type,
-                        key,
-                        full_name
-                    );
-                }
-                scx.catalog.get_item(id)
-            }
+    ) -> Result<(GlobalId, Vec<i64>), PlanError> {
+        let (id, modifiers) = match data_type {
+            ResolvedDataType::Named { id, modifiers, .. } => (id, modifiers),
             _ => sql_bail!(
                 "CREATE TYPE ... AS {}option {} can only use named data types, but \
                         found unnamed data type {}. Use CREATE TYPE to create a named type first",
@@ -2721,7 +2705,8 @@ pub fn plan_create_type(
             ),
         };
 
-        match scx.catalog.get_item(&item.id()).type_details() {
+        let item = scx.catalog.get_item(&id);
+        match item.type_details() {
             None => sql_bail!(
                 "{} must be of class type, but received {} which is of class {}",
                 key,
@@ -2734,7 +2719,12 @@ pub fn plan_create_type(
             }) => {
                 bail_unsupported!("embedding char type in a list or map")
             }
-            _ => Ok(item.id()),
+            _ => {
+                // Validate that the modifiers are actually valid.
+                scalar_type_from_catalog(scx, id, &modifiers)?;
+
+                Ok((id, modifiers))
+            }
         }
     }
 
@@ -2746,8 +2736,10 @@ pub fn plan_create_type(
             } = CreateTypeListOptionExtracted::try_from(options)?;
             let element_type =
                 element_type.ok_or_else(|| sql_err!("ELEMENT TYPE option is required"))?;
+            let (id, modifiers) = validate_data_type(scx, element_type, "LIST ", "ELEMENT TYPE")?;
             CatalogType::List {
-                element_reference: validate_data_type(scx, &element_type, "LIST ", "ELEMENT TYPE")?,
+                element_reference: id,
+                element_modifiers: modifiers,
             }
         }
         CreateTypeAs::Map { options } => {
@@ -2758,18 +2750,27 @@ pub fn plan_create_type(
             } = CreateTypeMapOptionExtracted::try_from(options)?;
             let key_type = key_type.ok_or_else(|| sql_err!("KEY TYPE option is required"))?;
             let value_type = value_type.ok_or_else(|| sql_err!("VALUE TYPE option is required"))?;
+            let (key_id, key_modifiers) = validate_data_type(scx, key_type, "MAP ", "KEY TYPE")?;
+            let (value_id, value_modifiers) =
+                validate_data_type(scx, value_type, "MAP ", "VALUE TYPE")?;
             CatalogType::Map {
-                key_reference: validate_data_type(scx, &key_type, "MAP ", "KEY TYPE")?,
-                value_reference: validate_data_type(scx, &value_type, "MAP ", "VALUE TYPE")?,
+                key_reference: key_id,
+                key_modifiers,
+                value_reference: value_id,
+                value_modifiers,
             }
         }
-        CreateTypeAs::Record { ref column_defs } => {
+        CreateTypeAs::Record { column_defs } => {
             let mut fields = vec![];
             for column_def in column_defs {
-                let data_type = &column_def.data_type;
+                let data_type = column_def.data_type;
                 let key = ident(column_def.name.clone());
-                let id = validate_data_type(scx, data_type, "", &key)?;
-                fields.push((ColumnName::from(key.clone()), id));
+                let (id, modifiers) = validate_data_type(scx, data_type, "", &key)?;
+                fields.push(CatalogRecordField {
+                    name: ColumnName::from(key.clone()),
+                    type_reference: id,
+                    type_modifiers: modifiers,
+                });
             }
             CatalogType::Record { fields }
         }

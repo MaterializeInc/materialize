@@ -1801,7 +1801,15 @@ pub static MZ_LIST_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
-        .with_column("element_id", ScalarType::String.nullable(false)),
+        .with_column("element_id", ScalarType::String.nullable(false))
+        .with_column(
+            "element_modifiers",
+            ScalarType::List {
+                element_type: Box::new(ScalarType::Int64),
+                custom_id: None,
+            }
+            .nullable(true),
+        ),
     is_retained_metrics_object: false,
 });
 pub static MZ_MAP_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1810,7 +1818,23 @@ pub static MZ_MAP_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("key_id", ScalarType::String.nullable(false))
-        .with_column("value_id", ScalarType::String.nullable(false)),
+        .with_column("value_id", ScalarType::String.nullable(false))
+        .with_column(
+            "key_modifiers",
+            ScalarType::List {
+                element_type: Box::new(ScalarType::Int64),
+                custom_id: None,
+            }
+            .nullable(true),
+        )
+        .with_column(
+            "value_modifiers",
+            ScalarType::List {
+                element_type: Box::new(ScalarType::Int64),
+                custom_id: None,
+            }
+            .nullable(true),
+        ),
     is_retained_metrics_object: false,
 });
 pub static MZ_ROLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {

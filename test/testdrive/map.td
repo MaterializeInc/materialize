@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> SELECT * FROM mz_map_types;
+> SELECT id, key_id, value_id, key_modifiers::text, value_modifiers::text FROM mz_map_types;
 
 > SHOW TYPES
 
