@@ -48,8 +48,7 @@ pub async fn enable(cx: RegionContext, version: Option<String>) -> Result<(), Er
             let _ = cx
                 .cloud_client()
                 .create_region(version.clone(), vec![], cloud_provider.clone())
-                .await;
-
+                .await?;
             Ok(())
         })
         .await

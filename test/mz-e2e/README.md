@@ -19,14 +19,11 @@ To run the mz-e2e test manually, a set of environment variables need to be made 
 ```
 export MZ_CLI_APP_PASSWORD=...
 export NIGHTLY_MZ_USERNAME=...
-export BUILDKITE_COMMIT=...
 ```
 
 - `MZ_CLI_APP_PASSWORD` is stored as Pulumi secrets in the i2 repository.
 
 - `NIGHTLY_MZ_USERNAME` is not defined in the i2 repository. A default is used "infra+bot@materialize.com".
-
-- `BUILDKITE_COMMIT` must be the full Git SHA whose containers are already available on DockerHub.
 
 Please ask in #cloud if you require additional access rights. You can also use an App Password from
 your own cloud account, if you do not mind your region being destroyed by the test.
