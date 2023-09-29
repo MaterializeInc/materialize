@@ -7,15 +7,17 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import sys
+import logging
 from collections.abc import Generator
 from contextlib import contextmanager
+from textwrap import dedent
 from typing import Any
 
 import requests
 
 from materialize.cloudtest.util.authentication import AuthConfig
-from materialize.cloudtest.util.common import eprint
+
+LOGGER = logging.getLogger(__name__)
 
 
 @contextmanager
@@ -23,11 +25,14 @@ def verbose_http_errors() -> Generator[None, None, None]:
     try:
         yield
     except requests.HTTPError as e:
-        print(
-            e.response.status_code,
-            e.response.reason,
-            e.response.content,
-            file=sys.stderr,
+        LOGGER.error(
+            dedent(
+                f"""
+                response status: {e.response.status_code}
+                response reason: {e.response.reason}
+                response content: {e.response.content}
+                """
+            )
         )
         raise
 
@@ -52,7 +57,7 @@ class WebRequests:
         path: str,
         timeout_in_sec: int | None = None,
     ) -> requests.Response:
-        eprint(f"GET {self.base_url}{path}")
+        LOGGER.info(f"GET {self.base_url}{path}")
 
         def try_get() -> requests.Response:
             with verbose_http_errors():
@@ -83,7 +88,7 @@ class WebRequests:
         json: Any,
         timeout_in_sec: int | None = None,
     ) -> requests.Response:
-        eprint(f"POST {self.base_url}{path}")
+        LOGGER.info(f"POST {self.base_url}{path}")
 
         def try_post() -> requests.Response:
             with verbose_http_errors():
@@ -115,7 +120,7 @@ class WebRequests:
         json: Any,
         timeout_in_sec: int | None = None,
     ) -> requests.Response:
-        eprint(f"PATCH {self.base_url}{path}")
+        LOGGER.info(f"PATCH {self.base_url}{path}")
 
         def try_patch() -> requests.Response:
             with verbose_http_errors():
@@ -147,7 +152,7 @@ class WebRequests:
         params: Any = None,
         timeout_in_sec: int | None = None,
     ) -> requests.Response:
-        eprint(f"DELETE {self.base_url}{path}")
+        LOGGER.info(f"DELETE {self.base_url}{path}")
 
         def try_delete() -> requests.Response:
             with verbose_http_errors():
