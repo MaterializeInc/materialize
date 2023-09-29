@@ -2452,7 +2452,7 @@ def workflow_test_incident_70(c: Composition) -> None:
 
     c.sql(
         f"""
-        CREATE SOURCE gen FROM LOAD GENERATOR TPCH (SCALE FACTOR {data_scale_factor}) FOR ALL TABLES;
+        CREATE SOURCE gen FROM LOAD GENERATOR TPCH (SCALE FACTOR {data_scale_factor}, TICK INTERVAL '100ms') FOR ALL TABLES;
 
         CREATE MATERIALIZED VIEW mv_lineitem_count AS SELECT count(*) FROM lineitem;
         """
