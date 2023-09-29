@@ -11,7 +11,7 @@ import json
 import re
 import time
 from copy import copy
-from datetime import datetime
+from datetime import datetime, timedelta
 from statistics import quantiles
 from textwrap import dedent
 from threading import Thread
@@ -87,7 +87,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-compute-controller-metrics",
         "test-metrics-retention-across-restart",
         "test-concurrent-connections",
-    ]:
+    "test-incident-70",]:
         with c.test_case(name):
             c.workflow(name)
 
@@ -2425,3 +2425,68 @@ def workflow_test_concurrent_connections(c: Composition) -> None:
     )
     assert p[49] < 1.0, f"p50 is {p[49]:.2f}s, should be less than 1.0s"
     assert p[98] < 4.0, f"p99 is {p[98]:.2f}s, should be less than 4.0s"
+
+
+def workflow_test_incident_70(c: Composition) -> None:
+    """
+    Test incident-70.
+    """
+    num_conns = 10
+    persist_reader_lease_duration_in_sec = 30
+    data_scale_factor = 10
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    c.sql(
+        f"ALTER SYSTEM SET max_connections = {num_conns + 5};",
+        port=6877,
+        user="mz_system",
+    )
+
+    c.sql(
+        f"ALTER SYSTEM SET persist_reader_lease_duration = '{persist_reader_lease_duration_in_sec}s';",
+        port=6877,
+        user="mz_system",
+    )
+
+    c.sql(
+        f"""
+        CREATE SOURCE gen FROM LOAD GENERATOR TPCH (SCALE FACTOR {data_scale_factor}) FOR ALL TABLES;
+
+        CREATE MATERIALIZED VIEW mv_lineitem_count AS SELECT count(*) FROM lineitem;
+        """
+    )
+
+    start_time = datetime.now()
+    end_time = start_time + timedelta(
+        seconds=persist_reader_lease_duration_in_sec * 3 + 10
+    )
+
+    def worker(c: Composition, worker_index: int) -> None:
+        print(f"Thread {worker_index} tries to acquire a cursor")
+        cursor = c.sql_cursor()
+        print(f"Thread {worker_index} got a cursor")
+
+        iteration = 1
+        while datetime.now() < end_time:
+            if iteration % 20 == 0:
+                print(f"Thread {worker_index}, iteration {iteration}")
+            cursor.execute("SELECT * FROM mv_lineitem_count;")
+            iteration += 1
+        print(f"Thread {worker_index} terminates before iteration {iteration}")
+
+    threads = []
+    for worker_index in range(num_conns):
+        thread = Thread(
+            name=f"worker_{worker_index}", target=worker, args=(c, worker_index)
+        )
+        threads.append(thread)
+
+    for thread in threads:
+        thread.start()
+        # this is because of #22038
+        time.sleep(0.2)
+
+    for thread in threads:
+        thread.join()
