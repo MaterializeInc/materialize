@@ -236,6 +236,8 @@ impl Coordinator {
             params,
             began_at,
             cluster_id,
+            cluster_name,
+            application_name,
         } = record;
 
         let cluster = cluster_id.map(|id| id.to_string());
@@ -247,6 +249,8 @@ impl Coordinator {
                 None => Datum::Null,
                 Some(cluster_id) => Datum::String(cluster_id),
             },
+            Datum::String(&*application_name),
+            cluster_name.as_ref().map(String::as_str).into(),
         ]);
         packer
             .push_array(
@@ -374,6 +378,7 @@ impl Coordinator {
         StatementLoggingId(id): StatementLoggingId,
         cluster_id: ClusterId,
     ) {
+        let cluster_name = self.catalog().get_cluster(cluster_id).name.clone();
         let record = self
             .statement_logging
             .executions_begun
@@ -386,6 +391,7 @@ impl Coordinator {
         self.statement_logging
             .pending_statement_execution_events
             .push((retraction, -1));
+        record.cluster_name = Some(cluster_name);
         record.cluster_id = Some(cluster_id);
         let update = Self::pack_statement_began_execution_update(record);
         self.statement_logging
@@ -460,8 +466,10 @@ impl Coordinator {
             sample_rate,
             params,
             began_at: self.now(),
-            // Cluster ID is not known yet; we'll fill it in later
+            // Cluster is not known yet; we'll fill it in later
             cluster_id: None,
+            cluster_name: None,
+            application_name: session.application_name().to_string(),
         };
         let mseh_update = Self::pack_statement_began_execution_update(&record);
         self.statement_logging
