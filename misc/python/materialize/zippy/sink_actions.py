@@ -35,6 +35,9 @@ class CreateSinkParameterized(ActionFactory):
 
         if new_sink_name:
             source_view = random.choice(capabilities.get(ViewExists))
+            cluster_name_out = random.choice(["storage", "default"])
+            cluster_name_in = random.choice(["storage", "default"])
+
             dest_view = ViewExists(
                 name=f"{new_sink_name}_view",
                 inputs=[source_view],
@@ -47,6 +50,8 @@ class CreateSinkParameterized(ActionFactory):
                         name=new_sink_name,
                         source_view=source_view,
                         dest_view=dest_view,
+                        cluster_name_out=cluster_name_out,
+                        cluster_name_in=cluster_name_in,
                     ),
                     capabilities=capabilities,
                 ),
@@ -97,7 +102,9 @@ class CreateSink(Action):
                 > CREATE CONNECTION IF NOT EXISTS {self.sink.name}_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', PROGRESS TOPIC 'zippy-{self.sink.name}-${{testdrive.seed}}');
                 > CREATE CONNECTION IF NOT EXISTS {self.sink.name}_csr_conn TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
 
-                > CREATE SINK {self.sink.name} FROM {self.sink.source_view.name}
+                > CREATE SINK {self.sink.name}
+                  IN CLUSTER {self.sink.cluster_name_out}
+                  FROM {self.sink.source_view.name}
                   INTO KAFKA CONNECTION {self.sink.name}_kafka_conn (TOPIC 'sink-{self.sink.name}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {self.sink.name}_csr_conn
                   ENVELOPE DEBEZIUM;
@@ -107,7 +114,7 @@ class CreateSink(Action):
                 # Ingest the sink again in order to be able to validate its contents
 
                 > CREATE SOURCE {self.sink.name}_source
-                  IN CLUSTER storaged
+                  IN CLUSTER {self.sink.cluster_name_in}
                   FROM KAFKA CONNECTION {self.sink.name}_kafka_conn (TOPIC 'sink-{self.sink.name}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {self.sink.name}_csr_conn
                   ENVELOPE NONE
