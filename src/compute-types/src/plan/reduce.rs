@@ -92,7 +92,7 @@ pub enum ReductionType {
 }
 
 impl columnation::Columnation for ReductionType {
-    type InnerRegion = columnation::CloneRegion<ReductionType>;
+    type InnerRegion = columnation::CopyRegion<ReductionType>;
 }
 
 impl RustType<ProtoReductionType> for ReductionType {
