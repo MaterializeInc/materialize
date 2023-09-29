@@ -86,9 +86,6 @@
 //!
 //! Currently only works on Linux
 
-// TODO(btv): Document why the `as` conversions in this function are legit
-#![allow(clippy::as_conversions)]
-
 /// Gets the GNU build IDs for all loaded images, including the main
 /// program binary as well as all dynamically loaded libraries.
 /// Intended to be useful for profilers, who can use the supplied IDs
@@ -131,14 +128,14 @@ pub unsafe fn all_build_ids(
         fatal_error: Option<anyhow::Error>,
     }
 
-    // TODO(benesch): rewrite to avoid potentially dangerous usage of `as`.
-    #[allow(clippy::as_conversions)]
     extern "C" fn iterate_cb(info: *mut dl_phdr_info, _size: size_t, data: *mut c_void) -> c_int {
         // SAFETY: `data` is a pointer to a `CallbackState`, and no mutable reference
         // aliases with it in Rust. Furthermore, `dl_iterate_phdr` doesn't do anything
         // with `data` other than pass it to this callback, so nothing will be mutating
         // the object it points to while we're inside here.
         let state: &mut CallbackState = unsafe {
+            // Justification: `data` is a pointer to a `CallbackState`
+            #[allow(clippy::as_conversions)]
             (data as *mut CallbackState)
                 .as_mut()
                 .expect("`data` cannot be null")
@@ -204,19 +201,35 @@ pub unsafe fn all_build_ids(
                         while offset + std::mem::size_of::<NoteHeader>() + GNU_NOTE_NAME.len()
                             <= orig_offset + usize::cast_from(ph.p_memsz)
                         {
-                            let nh = unsafe { (offset as *const NoteHeader).as_ref() }
-                                .expect("the program headers must be well-formed");
+                            // SAFETY: Iterating according to the `Notes (Nhdr)`
+                            // section of `man elf` ensures that this pointer is
+                            // aligned. The offset check above ensures that it
+                            // is in-bounds.
+                            let nh = unsafe {
+                                // Justification: Our logic for walking this header
+                                // follows exactly the code snippet in the
+                                // `Notes (Nhdr)` section of `man elf`,
+                                // so `offset` will always point to a `NoteHeader`
+                                // (called `Elf64_Nhdr` in that document)
+                                #[allow(clippy::as_conversions)]
+                                (offset as *const NoteHeader).as_ref()
+                            }
+                            .expect("the program headers must be well-formed");
                             // from elf.h
                             if nh.n_type == NT_GNU_BUILD_ID
                                 && nh.n_descsz != 0
                                 && usize::cast_from(nh.n_namesz) == GNU_NOTE_NAME.len()
                             {
+                                // Justification: since `n_namesz` is 4, the name is a four-byte value.
+                                #[allow(clippy::as_conversions)]
                                 let p_name =
                                     (offset + std::mem::size_of::<NoteHeader>()) as *const [u8; 4];
                                 // SAFETY: since `n_namesz` is 4, the name is a four-byte value.
                                 let name = unsafe { p_name.as_ref() }.expect("this can't be null");
                                 if name == GNU_NOTE_NAME {
                                     // We found what we're looking for!
+                                    // Justification: simple pointer arithmetic
+                                    #[allow(clippy::as_conversions)]
                                     let p_desc = (p_name as usize + 4) as *const u8;
                                     // SAFETY: This is the documented meaning of `n_descsz`.
                                     let desc = unsafe {
@@ -251,6 +264,9 @@ pub unsafe fn all_build_ids(
     // SAFETY: `dl_iterate_phdr` has no documented restrictions on when
     // it can be called.
     unsafe {
+        // Justification: converting a pointer to void* is always
+        // valid
+        #[allow(clippy::as_conversions)]
         dl_iterate_phdr(
             Some(iterate_cb),
             (&mut state) as *mut CallbackState as *mut c_void,

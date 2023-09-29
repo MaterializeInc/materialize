@@ -832,6 +832,9 @@ where
             retractions.log();
 
             let Some(&time) = frontier.get(0) else { return };
+            if import_id.is_user() {
+                println!("[btv] import frontier for {import_id:?}: {time}");
+            }
             for &export_id in export_ids.iter() {
                 logger.log(ComputeEvent::ImportFrontier {
                     import_id,
