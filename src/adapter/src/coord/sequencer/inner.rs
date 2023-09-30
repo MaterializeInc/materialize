@@ -2789,26 +2789,18 @@ impl Coordinator {
             .timestamp_context
             .timestamp_or_default();
 
-        let make_sink_desc = |coord: &mut Coordinator, session: &mut Session, from, from_desc| {
-            let up_to = up_to
-                .map(|expr| Coordinator::evaluate_when(coord.catalog().state(), expr, session))
-                .transpose()?;
-            if let Some(up_to) = up_to {
-                if as_of == up_to {
-                    session.add_notice(AdapterNotice::EqualSubscribeBounds { bound: up_to });
-                } else if as_of > up_to {
-                    return Err(AdapterError::AbsurdSubscribeBounds { as_of, up_to });
-                }
+        let up_to = up_to
+            .map(|expr| Coordinator::evaluate_when(self.catalog().state(), expr, ctx.session_mut()))
+            .transpose()?;
+        if let Some(up_to) = up_to {
+            if as_of == up_to {
+                ctx.session_mut()
+                    .add_notice(AdapterNotice::EqualSubscribeBounds { bound: up_to });
+            } else if as_of > up_to {
+                return Err(AdapterError::AbsurdSubscribeBounds { as_of, up_to });
             }
-            let up_to = up_to.map(Antichain::from_elem).unwrap_or_default();
-            Ok::<_, AdapterError>(ComputeSinkDesc {
-                from,
-                from_desc,
-                connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection::default()),
-                with_snapshot,
-                up_to,
-            })
-        };
+        }
+        let up_to = up_to.map(Antichain::from_elem).unwrap_or_default();
 
         let (mut dataflow, dataflow_metainfo) = match from {
             SubscribeFrom::Id(from_id) => {
@@ -2822,7 +2814,13 @@ impl Coordinator {
                     .expect("subscribes can only be run on items with descs")
                     .into_owned();
                 let sink_id = self.allocate_transient_id()?;
-                let sink_desc = make_sink_desc(self, ctx.session_mut(), from_id, from_desc)?;
+                let sink_desc = ComputeSinkDesc {
+                    from: from_id,
+                    from_desc,
+                    connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection::default()),
+                    with_snapshot,
+                    up_to,
+                };
                 let sink_name = format!("subscribe-{}", sink_id);
                 self.dataflow_builder(cluster_id)
                     .build_sink_dataflow(sink_name, sink_id, sink_desc)?
@@ -2831,7 +2829,13 @@ impl Coordinator {
                 let id = self.allocate_transient_id()?;
                 let expr = self.view_optimizer.optimize(expr)?;
                 let desc = RelationDesc::new(expr.typ(), desc.iter_names());
-                let sink_desc = make_sink_desc(self, ctx.session_mut(), id, desc)?;
+                let sink_desc = ComputeSinkDesc {
+                    from: id,
+                    from_desc: desc,
+                    connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection::default()),
+                    with_snapshot,
+                    up_to,
+                };
                 let mut dataflow = DataflowDesc::new(format!("subscribe-{}", id));
                 let mut dataflow_builder = self.dataflow_builder(cluster_id);
                 dataflow_builder.import_view_into_dataflow(&id, &expr, &mut dataflow)?;
