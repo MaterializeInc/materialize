@@ -17,5 +17,5 @@ git clone https://github.com/MaterializeInc/materialize.git
 ```
 1. Test the LSP:
 ```bash
-cargo test -p mz-lsp
+cargo test -p mz-mz-lsp-server
 ```

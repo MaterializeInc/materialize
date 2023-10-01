@@ -75,7 +75,7 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use mz_lsp::backend::Backend;
+use mz_lsp_server::backend::Backend;
 use tower_lsp::{LspService, Server};
 
 #[tokio::main]

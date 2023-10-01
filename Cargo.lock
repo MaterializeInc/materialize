@@ -4307,7 +4307,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mz-lsp"
+name = "mz-lsp-server"
 version = "0.1.0"
 dependencies = [
  "assert_cmd",
