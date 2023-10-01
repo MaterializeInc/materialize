@@ -175,13 +175,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         # Test - `mz user`
         user_email = "mz_ci_e2e_test_nightlies@materialize.com"
 
-        # Try to remove the username if it exist before trying to create one.
-        try:
-            output = c.run("mz", "user", "remove", user_email, check=False)
-            print("Warning: Email was present.")
-        except:
-            # It is ok if the command fails.
-            pass
+        output = c.run("mz", "user", "list", capture=True)
+        if user_email in output.stdout:
+            # Try to remove the username if it exist before trying to create one.
+            c.run("mz", "user", "remove", user_email, check=False)
 
         output = c.run("mz", "user", "create", user_email, "MZ_CI", capture=True)
         assert output.returncode == 0
