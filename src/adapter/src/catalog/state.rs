@@ -11,6 +11,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::Ipv4Addr;
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use anyhow::bail;
@@ -710,7 +711,7 @@ impl CatalogState {
                 let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
                 CatalogItem::View(View {
                     create_sql: view.create_sql,
-                    optimized_expr,
+                    optimized_expr: Arc::new(OnceLock::from(optimized_expr)),
                     desc,
                     conn_id: None,
                     resolved_ids,

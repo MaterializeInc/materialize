@@ -702,7 +702,7 @@ impl Coordinator {
                     CatalogItem::View(view) => {
                         visit_view_expr(
                             id,
-                            &view.optimized_expr,
+                            view.optimized_expr(),
                             &mut ids,
                             &mut timelines,
                             &mut contains_temporal,
