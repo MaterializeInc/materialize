@@ -58,5 +58,4 @@ protobuf-src = "1.1.0"
 tonic-build = "0.9.2"
 
 [package.metadata.cargo-udeps.ignore]
-# only used on linux
-normal = ["inotify", "workspace-hack"]
+normal = ["workspace-hack"]

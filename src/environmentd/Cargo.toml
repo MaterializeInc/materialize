@@ -86,7 +86,6 @@ sentry-tracing = "0.29.1"
 serde = { version = "1.0.152", features = ["derive"] }
 serde_json = "1.0.89"
 shell-words = "1.1.0"
-sysctl = "0.5.4"
 tempfile = "3.2.0"
 thiserror = "1.0.37"
 tokio = { version = "1.32.0", features = ["sync"] }
@@ -103,6 +102,9 @@ tungstenite = { version = "0.20.0", features = ["native-tls"] }
 url = "2.3.1"
 uuid = "1.2.2"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+sysctl = "0.5.4"
 
 [dev-dependencies]
 assert_cmd = "2.0.5"
@@ -152,5 +154,4 @@ tokio-console = [
 ]
 
 [package.metadata.cargo-udeps.ignore]
-# sysctl is only used on macOS.
-normal = ["sysctl", "workspace-hack"]
+normal = ["workspace-hack"]

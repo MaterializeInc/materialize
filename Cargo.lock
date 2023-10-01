@@ -3697,7 +3697,6 @@ dependencies = [
  "once_cell",
  "prometheus",
  "regex",
- "rocksdb",
  "scopeguard",
  "serde",
  "smallvec",
@@ -4442,7 +4441,6 @@ dependencies = [
  "tokio-native-tls",
  "tokio-openssl",
  "tokio-stream",
- "tokio-test",
  "tonic",
  "tracing",
  "tracing-opentelemetry",
@@ -5004,7 +5002,6 @@ dependencies = [
  "aws-sdk-sts",
  "bitflags 1.3.2",
  "chrono",
- "datadriven",
  "enum-kinds",
  "fail",
  "globset",
@@ -5017,7 +5014,6 @@ dependencies = [
  "mz-cloud-resources",
  "mz-controller-types",
  "mz-expr",
- "mz-expr-test-util",
  "mz-interchange",
  "mz-kafka-util",
  "mz-lowertest",
@@ -5177,7 +5173,6 @@ dependencies = [
  "itertools",
  "md-5",
  "mz-ore",
- "mz-postgres-util",
  "mz-proto",
  "mz-repr",
  "mz-tls-util",
@@ -5462,7 +5457,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.107",
- "tokio",
  "workspace-hack",
 ]
 
@@ -8329,19 +8323,6 @@ dependencies = [
  "pin-project-lite",
  "tokio",
  "tokio-util",
-]
-
-[[package]]
-name = "tokio-test"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53474327ae5e166530d17f2d956afcb4f8a004de581b3cae10f12006bc8163e3"
-dependencies = [
- "async-stream",
- "bytes",
- "futures-core",
- "tokio",
- "tokio-stream",
 ]
 
 [[package]]
