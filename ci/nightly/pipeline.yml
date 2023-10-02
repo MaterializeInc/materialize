@@ -91,6 +91,7 @@ steps:
     branches: "!v*.*"
     agents:
       queue: builder-linux-x86_64
+    retry: {manual: {permit_on_passed: true}}
 
   - wait: ~
 
@@ -98,6 +99,7 @@ steps:
     if: build.source == "ui"
     agents:
       queue: linux
+    retry: {manual: {permit_on_passed: true}}
 
   - wait: ~
 
@@ -112,6 +114,7 @@ steps:
           args: [--miri-full]
     agents:
       queue: builder-linux-x86_64
+    retry: {manual: {permit_on_passed: true}}
 
   - id: feature-benchmark
     label: "Feature benchmark against 'latest'"
@@ -125,6 +128,7 @@ steps:
           args:
              - --other-tag
              - latest
+    retry: {manual: {permit_on_passed: true}}
 
   - id: kafka-matrix
     label: Kafka smoke test against previous Kafka versions
@@ -134,6 +138,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: kafka-matrix
+    retry: {manual: {permit_on_passed: true}}
 
   - id: kafka-multi-broker
     label: Kafka multi-broker test
@@ -143,6 +148,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: kafka-multi-broker
+    retry: {manual: {permit_on_passed: true}}
 
   - id: redpanda-testdrive
     label: ":panda_face: :racing_car: testdrive"
@@ -155,6 +161,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: testdrive
           args: [--redpanda, --aws-region=us-east-1]
+    retry: {manual: {permit_on_passed: true}}
 
 # Disabled due to taking too long for the value provided
 #  - id: redpanda-testdrive-aarch64
@@ -168,6 +175,7 @@ steps:
 #      - ./ci/plugins/mzcompose:
 #          composition: testdrive
 #          args: [--redpanda, --aws-region=us-east-1]
+#    retry: {manual: {permit_on_passed: true}}
 
   - id: limits
     label: "Product limits"
@@ -178,6 +186,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: limits
     timeout_in_minutes: 50
+    retry: {manual: {permit_on_passed: true}}
 
   - id: limits-instance-size
     label: "Instance size limits"
@@ -191,6 +200,7 @@ steps:
           composition: limits
           run: instance-size
     timeout_in_minutes: 50
+    retry: {manual: {permit_on_passed: true}}
 
   - id: testdrive-partitions-5
     label: ":racing_car: testdrive with --kafka-default-partitions 5"
@@ -203,6 +213,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: testdrive
           args: [--aws-region=us-east-1, --kafka-default-partitions=5]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: testdrive-replicas-4
     label: ":racing_car: testdrive 4 replicas"
@@ -215,6 +226,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: testdrive
           args: [--aws-region=us-east-1, --replicas=4]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: testdrive-size-1
     label: ":racing_car: testdrive with SIZE 1"
@@ -227,6 +239,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: testdrive
           args: [--aws-region=us-east-1, --default-size=1]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: testdrive-size-8
     label: ":racing_car: testdrive with SIZE 8"
@@ -239,6 +252,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: testdrive
           args: [--aws-region=us-east-1, --default-size=8]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: testdrive-in-cloudtest
     label: Full Testdrive in Cloudtest (K8s)
@@ -250,6 +264,7 @@ steps:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/cloudtest:
           args: [-m=long, --aws-region=us-east-1, test/cloudtest/test_full_testdrive.py]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: persistence-testdrive
     label: ":racing_car: testdrive with --persistent-user-tables"
@@ -262,6 +277,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: testdrive
           args: [--aws-region=us-east-1, --persistent-user-tables]
+    retry: {manual: {permit_on_passed: true}}
     skip: Persistence tests disabled
 
   - id: upsert-compaction-enabled
@@ -273,6 +289,7 @@ steps:
           composition: upsert
     agents:
       queue: linux-x86_64
+    retry: {manual: {permit_on_passed: true}}
 
   - id: zippy-kafka-sources
     label: "Zippy Kafka Sources"
@@ -286,6 +303,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: zippy
           args: [--scenario=KafkaSources, --actions=10000, --max-execution-time=55m]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: zippy-kafka-parallel-insert
     label: "Zippy Kafka Parallel Insert"
@@ -297,6 +315,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: zippy
           args: [--scenario=KafkaParallelInsert, --transaction-isolation=serializable, --actions=10000, --max-execution-time=55m]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: zippy-user-tables
     label: "Zippy User Tables"
@@ -308,6 +327,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: zippy
           args: [--scenario=UserTables, --actions=1000]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: zippy-postgres-cdc
     label: "Zippy Postgres CDC"
@@ -319,6 +339,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: zippy
           args: [--scenario=PostgresCdc, --actions=10000, --max-execution-time=55m]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: zippy-debezium-postgres
     label: "Zippy Debezium Postgres"
@@ -330,6 +351,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: zippy
           args: [--scenario=DebeziumPostgres, --actions=10000, --max-execution-time=55m]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: zippy-cluster-replicas
     label: "Zippy Cluster Replicas"
@@ -341,6 +363,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: zippy
           args: [--scenario=ClusterReplicas, --actions=10000, --max-execution-time=30m]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: zippy-crdb-latest
     label: "Zippy w/ latest CRDB"
@@ -354,6 +377,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: zippy
           args: [--scenario=KafkaSources, --actions=10000, --cockroach-tag=latest, --max-execution-time=55m]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: secrets-aws-secrets-manager
     label: "Secrets AWS"
@@ -364,6 +388,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: secrets-aws-secrets-manager
+    retry: {manual: {permit_on_passed: true}}
 
   - id: secrets-local-file
     label: "Secrets Local File"
@@ -374,6 +399,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: secrets-local-file
+    retry: {manual: {permit_on_passed: true}}
 
   - id: checks-restart-cockroach
     label: "Checks + restart Cockroach"
@@ -386,6 +412,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=RestartCockroach, "--seed=$BUILDKITE_JOB_ID"]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: checks-restart-entire-mz
     label: "Checks + restart of the entire Mz"
@@ -398,6 +425,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=RestartEntireMz, "--seed=$BUILDKITE_JOB_ID"]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: checks-parallel-drop-create-default-replica
     label: "Checks parallel + DROP/CREATE replica"
@@ -410,6 +438,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=DropCreateDefaultReplica, --execution-mode=parallel]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: checks-parallel-restart-clusterd-compute
     label: "Checks parallel + restart compute clusterd"
@@ -422,6 +451,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=RestartClusterdCompute, --execution-mode=parallel]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: checks-parallel-restart-entire-mz
     label: "Checks parallel + restart of the entire Mz"
@@ -434,6 +464,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=RestartEntireMz, --execution-mode=parallel]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: checks-parallel-restart-environmentd-clusterd-storage
     label: "Checks parallel + restart of environmentd & storage clusterd"
@@ -446,6 +477,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=RestartEnvironmentdClusterdStorage, --execution-mode=parallel]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: checks-parallel-kill-clusterd-storage
     label: "Checks parallel + kill storage clusterd"
@@ -458,6 +490,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=KillClusterdStorage, --execution-mode=parallel]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: checks-parallel-restart-redpanda
     label: "Checks parallel + restart Redpanda & Debezium"
@@ -470,6 +503,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=RestartRedpandaDebezium, --execution-mode=parallel]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: checks-upgrade-entire-mz
     label: "Checks upgrade, whole-Mz restart"
@@ -481,6 +515,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=UpgradeEntireMz]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: checks-upgrade-entire-mz-previous-version
     label: "Checks upgrade from previous version, whole-Mz restart"
@@ -492,6 +527,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=UpgradeEntireMzPreviousVersion]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: checks-upgrade-entire-mz-two-versions
     label: "Checks upgrade across two versions"
@@ -503,6 +539,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=UpgradeEntireMzTwoVersions]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: checks-upgrade-entire-mz-skip-version
     label: "Checks upgrade from X-2 directly to HEAD"
@@ -514,6 +551,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=UpgradeEntireMzSkipVersion]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: checks-upgrade-entire-mz-four-versions
     label: "Checks upgrade across four versions"
@@ -525,6 +563,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=UpgradeEntireMzFourVersions]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: checks-upgrade-clusterd-compute-first
     label: "Platform checks upgrade, restarting compute clusterd first"
@@ -536,6 +575,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=UpgradeClusterdComputeFirst]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: checks-upgrade-clusterd-compute-last
     label: "Platform checks upgrade, restarting compute clusterd last"
@@ -547,6 +587,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=UpgradeClusterdComputeLast]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: checks-upgrade-matrix
     label: "Random upgrades over the entire matrix"
@@ -558,6 +599,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: upgrade-matrix
           args: ["--seed=$BUILDKITE_JOB_ID"]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: cloudtest-upgrade
     label: "Platform checks upgrade in Cloudtest/K8s"
@@ -569,6 +611,7 @@ steps:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/cloudtest:
           args: [-m=long,  --aws-region=us-east-1, test/cloudtest/test_upgrade.py]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: persist-maelstrom-single-node
     label: Long single-node Maelstrom coverage of persist
@@ -580,6 +623,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: persist
           args: [--node-count=1, --consensus=mem, --blob=mem, --time-limit=600, --concurrency=4, --rate=500, --max-txn-length=16, --unreliability=0.1]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: persist-maelstrom-multi-node
     label: Long multi-node Maelstrom coverage of persist with postgres consensus
@@ -591,6 +635,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: persist
           args: [--node-count=4, --consensus=cockroach, --blob=maelstrom, --time-limit=300, --concurrency=4, --rate=500, --max-txn-length=16, --unreliability=0.1]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: persist-txn-maelstrom
     label: Maelstrom coverage of persist-txn
@@ -602,6 +647,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: persist
           args: [--consensus=mem, --blob=mem, --persist-txn]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: persistence-failpoints
     label: Persistence failpoints
@@ -613,6 +659,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: persistence
           run: failpoints
+    retry: {manual: {permit_on_passed: true}}
     skip: Persistence tests disabled
 
   - id: unused-deps
@@ -625,6 +672,7 @@ steps:
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
+    retry: {manual: {permit_on_passed: true}}
 
   - id: sql-feature-flags
     label: "SQL-level feature flags"
@@ -635,6 +683,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sql-feature-flags
+    retry: {manual: {permit_on_passed: true}}
 
   - id: launchdarkly
     label: "LaunchDarkly"
@@ -645,6 +694,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: launchdarkly
+    retry: {manual: {permit_on_passed: true}}
 
   - id: bounded-memory
     label: "Bounded Memory"
@@ -655,6 +705,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: bounded-memory
+    retry: {manual: {permit_on_passed: true}}
 
   - id: cloud-canary
     label: "Canary Deploy in Staging Cloud"
@@ -668,6 +719,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: cloud-canary
     branches: "main v*.*"
+    retry: {manual: {permit_on_passed: true}}
 
   - id: output-consistency-test
     label: "Output consistency test"
@@ -679,6 +731,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: output-consistency
           args: ["--seed=$BUILDKITE_JOB_ID", "--max-runtime-in-sec=1200"]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: sqlsmith
     label: "SQLsmith"
@@ -692,10 +745,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: sqlsmith
           args: [--max-joins=1, --runtime=3000]
-    # Allow retrying generally flaky tests even when they are green
-    retry:
-      manual:
-        permit_on_passed: true
+    retry: {manual: {permit_on_passed: true}}
 
   - id: sqlsmith-explain
     label: "SQLsmith explain"
@@ -707,10 +757,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: sqlsmith
           args: [--max-joins=15, --explain-only, --runtime=3000]
-    # Allow retrying generally flaky tests even when they are green
-    retry:
-      manual:
-        permit_on_passed: true
+    retry: {manual: {permit_on_passed: true}}
 
   - id: sqlancer-pqs
     label: "SQLancer PQS"
@@ -722,10 +769,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: sqlancer
           args: [--runtime=3000, --oracle=PQS, --no-qpg]
-    # Allow retrying generally flaky tests even when they are green
-    retry:
-      manual:
-        permit_on_passed: true
+    retry: {manual: {permit_on_passed: true}}
 
   - id: sqlancer-norec
     label: "SQLancer NoREC"
@@ -737,10 +781,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: sqlancer
           args: [--runtime=3000, --oracle=NOREC]
-    # Allow retrying generally flaky tests even when they are green
-    retry:
-      manual:
-        permit_on_passed: true
+    retry: {manual: {permit_on_passed: true}}
 
   - id: sqlancer-query-partitioning
     label: "SQLancer QueryPartitioning"
@@ -752,10 +793,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: sqlancer
           args: [--runtime=3000, --oracle=QUERY_PARTITIONING]
-    # Allow retrying generally flaky tests even when they are green
-    retry:
-      manual:
-        permit_on_passed: true
+    retry: {manual: {permit_on_passed: true}}
 
   - id: sqlancer-having
     label: "SQLancer Having"
@@ -767,10 +805,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: sqlancer
           args: [--runtime=3000, --oracle=HAVING]
-    # Allow retrying generally flaky tests even when they are green
-    retry:
-      manual:
-        permit_on_passed: true
+    retry: {manual: {permit_on_passed: true}}
 
   - id: crdb-restarts
     label: "CRDB rolling restarts"
@@ -780,6 +815,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: crdb-restarts
+    retry: {manual: {permit_on_passed: true}}
 
   - id: pubsub-disruption
     label: "PubSub disruption"
@@ -789,6 +825,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: pubsub-disruption
+    retry: {manual: {permit_on_passed: true}}
 
   - id: data-ingest
     label: "Data Ingest"
@@ -799,10 +836,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: data-ingest
-    # Allow retrying generally flaky tests even when they are green
-    retry:
-      manual:
-        permit_on_passed: true
+    retry: {manual: {permit_on_passed: true}}
 
   - id: parallel-workload-dml
     label: "Parallel Workload (DML)"
@@ -814,10 +848,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: parallel-workload
           args: [--runtime=3000, --complexity=dml, --threads=8]
-    # Allow retrying generally flaky tests even when they are green
-    retry:
-      manual:
-        permit_on_passed: true
+    retry: {manual: {permit_on_passed: true}}
 
   - id: parallel-workload
     label: "Parallel Workload"
@@ -829,10 +860,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: parallel-workload
           args: [--runtime=3000]
-    # Allow retrying generally flaky tests even when they are green
-    retry:
-      manual:
-        permit_on_passed: true
+    retry: {manual: {permit_on_passed: true}}
 
   # TODO: Reenable when #21954 is fixed
   #- id: parallel-workload-100-threads
@@ -845,10 +873,7 @@ steps:
   #    - ./ci/plugins/mzcompose:
   #        composition: parallel-workload
   #        args: [--runtime=3000, --threads=100]
-  #  # Allow retrying generally flaky tests even when they are green
-  #  retry:
-  #    manual:
-  #      permit_on_passed: true
+  #  retry: {manual: {permit_on_passed: true}}
 
   - id: parallel-workload-cancel
     label: "Parallel Workload (cancel)"
@@ -860,10 +885,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: parallel-workload
           args: [--runtime=3000, --scenario=cancel]
-    # Allow retrying generally flaky tests even when they are green
-    retry:
-      manual:
-        permit_on_passed: true
+    retry: {manual: {permit_on_passed: true}}
 
   # TODO(def-) Enable after figuring out restoring catalog
   #- id: parallel-workload-kill
@@ -876,10 +898,7 @@ steps:
   #    - ./ci/plugins/mzcompose:
   #        composition: parallel-workload
   #        args: [--runtime=3000, --scenario=kill]
-  #  # Allow retrying generally flaky tests even when they are green
-  #  retry:
-  #    manual:
-  #      permit_on_passed: true
+  #  retry: {manual: {permit_on_passed: true}}
 
   - wait: ~
     continue_on_failure: true
@@ -893,3 +912,4 @@ steps:
     priority: 1
     agents:
       queue: linux-x86_64
+    retry: {manual: {permit_on_passed: true}}

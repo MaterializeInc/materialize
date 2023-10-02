@@ -20,8 +20,10 @@ steps:
       - us-east-1
     plugins:
        - ./ci/plugins/scratch-aws-access
+    retry: {manual: {permit_on_passed: true}}
 
   - command: bin/ci-builder run stable bin/pyactivate -m ci.cleanup.launchdarkly
     timeout_in_minutes: 10
     agents:
       queue: linux-x86_64
+    retry: {manual: {permit_on_passed: true}}

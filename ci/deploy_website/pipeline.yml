@@ -15,6 +15,4 @@ steps:
       queue: builder-linux-x86_64
     concurrency: 1
     concurrency_group: deploy/website
-    retry:
-      manual:
-        permit_on_passed: true
+    retry: {manual: {permit_on_passed: true}}

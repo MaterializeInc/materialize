@@ -14,3 +14,4 @@ steps:
     timeout_in_minutes: 5
     agents:
       queue: linux
+    retry: {manual: {permit_on_passed: true}}

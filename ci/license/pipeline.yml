@@ -13,3 +13,4 @@ steps:
     command: ci/license/bump-change-date.sh
     agents:
       queue: linux
+    retry: {manual: {permit_on_passed: true}}
