@@ -54,7 +54,7 @@ def target(arch: Arch) -> str:
 
 
 def cargo(
-    arch: Arch, subcommand: str, rustflags: list[str], channel: str | None = None
+    arch: Arch, subcommand: str, rustflags: list[str], cargo_incremental: int | None = None, channel: str | None = None
 ) -> list[str]:
     """Construct a Cargo invocation for cross compiling.
 
@@ -107,6 +107,9 @@ def cargo(
         **extra_env,
         "RUSTFLAGS": " ".join(rustflags),
     }
+
+    if cargo_incremental is not None:
+        env["CARGO_INCREMENTAL"] = cargo_incremental
 
     return [
         *_enter_builder(arch, channel),

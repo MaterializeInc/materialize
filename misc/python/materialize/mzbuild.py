@@ -84,11 +84,11 @@ class RepositoryDetails:
         self.stable = stable
 
     def cargo(
-        self, subcommand: str, rustflags: list[str], channel: str | None = None
+        self, subcommand: str, rustflags: list[str], cargo_incremental: int | None, channel: str | None = None
     ) -> list[str]:
         """Start a cargo invocation for the configured architecture."""
         return xcompile.cargo(
-            arch=self.arch, channel=channel, subcommand=subcommand, rustflags=rustflags
+            arch=self.arch, channel=channel, subcommand=subcommand, rustflags=rustflags, cargo_incremental=cargo_incremental
         )
 
     def tool(self, name: str) -> list[str]:
@@ -346,6 +346,10 @@ class CargoBuild(CargoPreImage):
             raise ValueError("mzbuild config is missing pre-build target")
 
     @staticmethod
+    def generate_cargo_ramdisk_command(method: str) -> list[str]:
+        return ["cargo", "ramdisk", method, "--target", "/mnt/build/release"]
+
+    @staticmethod
     def generate_cargo_build_command(
         rd: RepositoryDetails,
         bins: list[str],
@@ -353,7 +357,7 @@ class CargoBuild(CargoPreImage):
     ) -> list[str]:
         rustflags = rustc_flags.coverage if rd.coverage else ["--cfg=tokio_unstable"]
 
-        cargo_build = [*rd.cargo("build", channel=None, rustflags=rustflags)]
+        cargo_build = [*rd.cargo("build", channel=None, rustflags=rustflags, cargo_incremental=0)]
 
         for bin in bins:
             cargo_build.extend(["--bin", bin])
@@ -387,9 +391,11 @@ class CargoBuild(CargoPreImage):
             examples.update(build.examples)
         assert rd
 
+        spawn.runv(cls.generate_cargo_ramdisk_command("mount"), cwd=rd.root)
         ui.say(f"Common cargo build for: {', '.join(bins | examples)}")
         cargo_build = cls.generate_cargo_build_command(rd, list(bins), list(examples))
         spawn.runv(cargo_build, cwd=rd.root)
+        spawn.runv(cls.generate_cargo_ramdisk_command("unmount"), cwd=rd.root)
 
     def build(self) -> None:
         cargo_profile = "release" if self.rd.release_mode else "debug"
