@@ -115,7 +115,7 @@ pub unsafe fn all_build_ids(
     use std::collections::BTreeMap;
     use std::ffi::{c_int, CStr, OsStr};
     use std::os::unix::ffi::OsStrExt;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
 
     use anyhow::Context;
     use libc::{c_void, dl_iterate_phdr, dl_phdr_info, size_t, Elf64_Word, PT_NOTE};
@@ -129,18 +129,20 @@ pub unsafe fn all_build_ids(
     }
 
     extern "C" fn iterate_cb(info: *mut dl_phdr_info, _size: size_t, data: *mut c_void) -> c_int {
+        let state: *mut CallbackState = data.cast();
+
         // SAFETY: `data` is a pointer to a `CallbackState`, and no mutable reference
         // aliases with it in Rust. Furthermore, `dl_iterate_phdr` doesn't do anything
         // with `data` other than pass it to this callback, so nothing will be mutating
         // the object it points to while we're inside here.
-        let state: &mut CallbackState = unsafe {
-            data.cast::<CallbackState>()
-                .as_mut()
-                .expect("`data` cannot be null")
-        };
+        assert_pointer_valid(state);
+        let state = unsafe { state.as_mut() }.expect("pointer is valid");
+
         // SAFETY: similarly, `dl_iterate_phdr` isn't mutating `info`
         // while we're here.
-        let info = unsafe { info.as_ref() }.expect("`dl_phdr_info` cannot be null");
+        assert_pointer_valid(info);
+        let info = unsafe { info.as_ref() }.expect("pointer is valid");
+
         let fname = if state.is_first {
             // From `man dl_iterate_phdr`:
             // "The first object visited by callback is the main program.  For the main
@@ -161,8 +163,10 @@ pub unsafe fn all_build_ids(
             None
         } else {
             // SAFETY: `dl_iterate_phdr` documents this as being a null-terminated string.
+            assert_pointer_valid(info.dlpi_name);
             let fname = unsafe { CStr::from_ptr(info.dlpi_name) };
-            Some(Path::new(OsStr::from_bytes(fname.to_bytes())).to_path_buf())
+
+            Some(OsStr::from_bytes(fname.to_bytes()).into())
         };
         state.is_first = false;
         if let Some(fname) = fname {
@@ -171,8 +175,10 @@ pub unsafe fn all_build_ids(
 
                 // SAFETY: `dl_iterate_phdr` is documented as setting `dlpi_phnum` to the
                 // length of the array pointed to by `dlpi_phdr`.
+                assert_pointer_valid(info.dlpi_phdr);
                 let program_headers =
                     unsafe { std::slice::from_raw_parts(info.dlpi_phdr, info.dlpi_phnum.into()) };
+
                 let mut found_build_id = None;
                 'outer: for ph in program_headers {
                     if ph.p_type == PT_NOTE {
@@ -199,20 +205,21 @@ pub unsafe fn all_build_ids(
                         while offset + std::mem::size_of::<NoteHeader>() + GNU_NOTE_NAME.len()
                             <= orig_offset + usize::cast_from(ph.p_memsz)
                         {
+                            // Justification: Our logic for walking this header
+                            // follows exactly the code snippet in the
+                            // `Notes (Nhdr)` section of `man elf`,
+                            // so `offset` will always point to a `NoteHeader`
+                            // (called `Elf64_Nhdr` in that document)
+                            #[allow(clippy::as_conversions)]
+                            let nh_ptr = offset as *const NoteHeader;
+
                             // SAFETY: Iterating according to the `Notes (Nhdr)`
                             // section of `man elf` ensures that this pointer is
                             // aligned. The offset check above ensures that it
                             // is in-bounds.
-                            let nh = unsafe {
-                                // Justification: Our logic for walking this header
-                                // follows exactly the code snippet in the
-                                // `Notes (Nhdr)` section of `man elf`,
-                                // so `offset` will always point to a `NoteHeader`
-                                // (called `Elf64_Nhdr` in that document)
-                                #[allow(clippy::as_conversions)]
-                                (offset as *const NoteHeader).as_ref()
-                            }
-                            .expect("the program headers must be well-formed");
+                            assert_pointer_valid(nh_ptr);
+                            let nh = unsafe { nh_ptr.as_ref() }.expect("pointer is valid");
+
                             // from elf.h
                             if nh.n_type == NT_GNU_BUILD_ID
                                 && nh.n_descsz != 0
@@ -222,20 +229,26 @@ pub unsafe fn all_build_ids(
                                 #[allow(clippy::as_conversions)]
                                 let p_name =
                                     (offset + std::mem::size_of::<NoteHeader>()) as *const [u8; 4];
+
                                 // SAFETY: since `n_namesz` is 4, the name is a four-byte value.
-                                let name = unsafe { p_name.as_ref() }.expect("this can't be null");
+                                assert_pointer_valid(p_name);
+                                let name = unsafe { p_name.as_ref() }.expect("pointer is valid");
+
                                 if name == GNU_NOTE_NAME {
                                     // We found what we're looking for!
                                     // Justification: simple pointer arithmetic
                                     #[allow(clippy::as_conversions)]
                                     let p_desc = (p_name as usize + 4) as *const u8;
+
                                     // SAFETY: This is the documented meaning of `n_descsz`.
+                                    assert_pointer_valid(p_desc);
                                     let desc = unsafe {
                                         std::slice::from_raw_parts(
                                             p_desc,
                                             usize::cast_from(nh.n_descsz),
                                         )
                                     };
+
                                     found_build_id = Some(desc.to_vec());
                                     break 'outer;
                                 }
@@ -269,4 +282,22 @@ pub unsafe fn all_build_ids(
     } else {
         Ok(state.map)
     }
+}
+
+/// Asserts that the given pointer is valid.
+///
+/// # Panics
+///
+/// Panics if the given pointer:
+///  * is a null pointer
+///  * is not properly aligned for `T`
+#[cfg(target_os = "linux")]
+fn assert_pointer_valid<T>(ptr: *const T) {
+    // No other known way to convert a pointer to `usize`.
+    #[allow(clippy::as_conversions)]
+    let address = ptr as usize;
+    let align = std::mem::align_of::<T>();
+
+    assert!(!ptr.is_null());
+    assert!(address % align == 0, "unaligned pointer");
 }
