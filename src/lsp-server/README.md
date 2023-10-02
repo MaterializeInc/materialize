@@ -1,4 +1,4 @@
-# Language Server Protocol (LSP) for Materialize
+# Language Server Protocol (LSP) Server for Materialize
 
 This repository contains an LSP implementation for Materialize. It is written in Rust and is currently under development. Contributions are more than welcome.
 

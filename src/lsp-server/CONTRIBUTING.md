@@ -1,4 +1,4 @@
-# Contributing to the Materialize Language Server Protocol (LSP)
+# Contributing to the Materialize Language Server Protocol (LSP) Server
 
 ## Developing the Extension
 
@@ -15,7 +15,7 @@ If you have questions, please create a GitHub issue.
 ```bash
 git clone https://github.com/MaterializeInc/materialize.git
 ```
-1. Test the LSP:
+1. Test the LSP Server:
 ```bash
 cargo test -p mz-lsp-server
 ```
