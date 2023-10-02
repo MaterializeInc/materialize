@@ -13,7 +13,8 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::ops::{Deref, DerefMut};
 use std::str::FromStr;
-use std::sync::{atomic, Arc};
+use std::sync::{atomic, Arc, OnceLock};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
@@ -955,10 +956,23 @@ pub enum StorageSinkConnectionState {
 #[derive(Debug, Clone, Serialize)]
 pub struct View {
     pub create_sql: String,
-    pub optimized_expr: OptimizedMirRelationExpr,
+    /// The optimized_expr. Except during initialization, this must maintain the invariant that it
+    /// is set.
+    #[serde(skip)]
+    pub optimized_expr: Arc<OnceLock<OptimizedMirRelationExpr>>,
     pub desc: RelationDesc,
     pub conn_id: Option<ConnectionId>,
     pub resolved_ids: ResolvedIds,
+}
+
+impl View {
+    /// Returns the optimized view expr.
+    ///
+    /// # Panic
+    /// Panics if the OnceLock has not been set.
+    pub fn optimized_expr(&self) -> &OptimizedMirRelationExpr {
+        self.optimized_expr.get().expect("must exist")
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2251,6 +2265,9 @@ impl Catalog {
         let (builtin_indexes, builtin_non_indexes): (Vec<_>, Vec<_>) = all_builtins
             .into_iter()
             .partition(|(builtin, _)| matches!(builtin, Builtin::Index(_)));
+        // Allow for some work to be done off thread. This function will join the handles before
+        // returning.
+        let mut handles = Vec::new();
 
         {
             let span = tracing::span!(tracing::Level::DEBUG, "builtin_non_indexes");
@@ -2321,8 +2338,10 @@ impl Catalog {
                         unreachable!("handled later once clusters have been created")
                     }
                     Builtin::View(view) => {
-                        let item = catalog
-                        .parse_item(
+                        // Views can take a while to optimize in debug mode, so do optimization in
+                        // another thread.
+                        let (item, handle) = catalog
+                        .parse_item_handle(
                             id,
                             view.sql.into(),
                             None,
@@ -2339,6 +2358,7 @@ impl Catalog {
                                 view.name, e
                             )
                         });
+                        handles.extend(handle);
                         let oid = catalog.allocate_oid()?;
                         catalog.state.insert_item(
                             id,
@@ -2767,6 +2787,10 @@ impl Catalog {
 
         for ip in &catalog.state.egress_ips {
             builtin_table_updates.push(catalog.state.pack_egress_ip_update(ip)?);
+        }
+
+        for handle in handles {
+            handle.join().expect("must join")?;
         }
 
         Ok((
@@ -6459,6 +6483,31 @@ impl Catalog {
         is_retained_metrics_object: bool,
         custom_logical_compaction_window: Option<Duration>,
     ) -> Result<CatalogItem, AdapterError> {
+        let (item, handle) = self.parse_item_handle(
+            id,
+            create_sql,
+            pcx,
+            is_retained_metrics_object,
+            custom_logical_compaction_window,
+        )?;
+        if let Some(handle) = handle {
+            handle.join().expect("join error")?;
+        }
+        Ok(item)
+    }
+
+    // Like `parse_item`, but returns a possible JoinHandle which is ready once the item is fully
+    // populated. This allows for some work to be done in other threads (view optimization). Before
+    // the handle is joined, a panic will occur if any thread-dependent data is accessed.
+    #[tracing::instrument(level = "info", skip(self, pcx))]
+    fn parse_item_handle(
+        &self,
+        id: GlobalId,
+        create_sql: String,
+        pcx: Option<&PlanContext>,
+        is_retained_metrics_object: bool,
+        custom_logical_compaction_window: Option<Duration>,
+    ) -> Result<(CatalogItem, Option<JoinHandle<Result<(), AdapterError>>>), AdapterError> {
         let mut session_catalog = self.for_system_session();
         // Enable catalog features that might be required during planning in
         // [Catalog::open]. Existing catalog items might have been created while a
@@ -6470,7 +6519,7 @@ impl Catalog {
         let (stmt, resolved_ids) = mz_sql::names::resolve(&session_catalog, stmt)?;
         let plan =
             mz_sql::plan::plan(pcx, &session_catalog, stmt, &Params::empty(), &resolved_ids)?;
-        Ok(match plan {
+        let item = match plan {
             Plan::CreateTable(CreateTablePlan { table, .. }) => CatalogItem::Table(Table {
                 create_sql: table.create_sql,
                 desc: table.desc,
@@ -6524,19 +6573,25 @@ impl Catalog {
                 is_retained_metrics_object,
             }),
             Plan::CreateView(CreateViewPlan { view, .. }) => {
-                let optimizer =
-                    Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
                 let raw_expr = view.expr;
                 let decorrelated_expr = raw_expr.optimize_and_lower(&plan::OptimizerConfig {})?;
-                let optimized_expr = optimizer.optimize(decorrelated_expr)?;
-                let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
-                CatalogItem::View(View {
+                let desc = RelationDesc::new(decorrelated_expr.typ(), view.column_names);
+                let lock = Arc::new(OnceLock::new());
+                let item = CatalogItem::View(View {
                     create_sql: view.create_sql,
-                    optimized_expr,
+                    optimized_expr: Arc::clone(&lock),
                     desc,
                     conn_id: None,
                     resolved_ids,
-                })
+                });
+                let handle = std::thread::spawn(move || {
+                    let optimizer =
+                        Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
+                    let optimized_expr = optimizer.optimize(decorrelated_expr)?;
+                    lock.set(optimized_expr).expect("must set");
+                    Ok(())
+                });
+                return Ok((item, Some(handle)));
             }
             Plan::CreateMaterializedView(CreateMaterializedViewPlan {
                 materialized_view, ..
@@ -6615,7 +6670,8 @@ impl Catalog {
                 })
                 .into())
             }
-        })
+        };
+        Ok((item, None))
     }
 
     pub fn uses_tables(&self, id: GlobalId) -> bool {

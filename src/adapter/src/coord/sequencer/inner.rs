@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::iter;
 use std::num::{NonZeroI64, NonZeroUsize};
 use std::panic::AssertUnwindSafe;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
@@ -922,7 +922,7 @@ impl Coordinator {
         let desc = RelationDesc::new(optimized_expr.typ(), view.column_names.clone());
         let view = catalog::View {
             create_sql: view.create_sql.clone(),
-            optimized_expr,
+            optimized_expr: Arc::new(OnceLock::from(optimized_expr)),
             desc,
             conn_id: if view.temporary {
                 Some(session.conn_id().clone())
