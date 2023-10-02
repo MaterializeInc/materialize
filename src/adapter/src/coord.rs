@@ -1352,6 +1352,12 @@ impl Coordinator {
 
         debug!("coordinator init: installing existing objects in catalog");
         let mut privatelink_connections = BTreeMap::new();
+
+        let enable_unified_optimizer_api = self
+            .catalog()
+            .system_config()
+            .enable_unified_optimizer_api();
+
         for entry in &entries {
             debug!(
                 "coordinator init: installing {} {}",
@@ -1469,41 +1475,79 @@ impl Coordinator {
                         .storage_ids
                         .insert(entry.id());
 
-                    // Re-create the sink on the compute instance.
-                    let internal_view_id = self.allocate_transient_id()?;
-                    let debug_name = self
-                        .catalog()
-                        .resolve_full_name(entry.name(), entry.conn_id())
-                        .to_string();
+                    if enable_unified_optimizer_api {
+                        // Re-create the sink on the compute instance.
+                        let internal_view_id = self.allocate_transient_id()?;
+                        let debug_name = self
+                            .catalog()
+                            .resolve_full_name(entry.name(), entry.conn_id())
+                            .to_string();
 
-                    let mut builder = self.dataflow_builder(mview.cluster_id);
-                    let (mut df, df_metainfo) = builder.build_materialized_view(
-                        entry.id(),
-                        internal_view_id,
-                        debug_name,
-                        &mview.optimized_expr,
-                        &mview.desc,
-                        &mview.non_null_assertions,
-                    )?;
+                        let mut builder = self.dataflow_builder(mview.cluster_id);
+                        let (mut df, df_metainfo) = builder.build_materialized_view(
+                            entry.id(),
+                            internal_view_id,
+                            debug_name,
+                            &mview.optimized_expr,
+                            &mview.desc,
+                            &mview.non_null_assertions,
+                        )?;
 
-                    // Note: ideally, the optimized_plan should be computed and
-                    // set when the CatalogItem is re-constructed (in
-                    // parse_item).
-                    //
-                    // However, it's not clear how exactly to change
-                    // `load_catalog_items` to accommodate for the
-                    // `build_materialized_view` call above.
-                    self.catalog_mut()
-                        .set_optimized_plan(entry.id(), df.clone());
-                    self.catalog_mut()
-                        .set_dataflow_metainfo(entry.id(), df_metainfo);
+                        // Note: ideally, the optimized_plan should be computed and
+                        // set when the CatalogItem is re-constructed (in
+                        // parse_item).
+                        //
+                        // However, it's not clear how exactly to change
+                        // `load_catalog_items` to accommodate for the
+                        // `build_materialized_view` call above.
+                        self.catalog_mut()
+                            .set_optimized_plan(entry.id(), df.clone());
+                        self.catalog_mut()
+                            .set_dataflow_metainfo(entry.id(), df_metainfo);
 
-                    // The 'as_of' field of the dataflow changes after restart
-                    let as_of = self.bootstrap_materialized_view_as_of(&df, mview.cluster_id);
-                    df.set_as_of(as_of);
+                        // The 'as_of' field of the dataflow changes after restart
+                        let as_of = self.bootstrap_materialized_view_as_of(&df, mview.cluster_id);
+                        df.set_as_of(as_of);
 
-                    let df = self.must_ship_dataflow(df, mview.cluster_id).await;
-                    self.catalog_mut().set_physical_plan(entry.id(), df);
+                        let df = self.must_ship_dataflow(df, mview.cluster_id).await;
+                        self.catalog_mut().set_physical_plan(entry.id(), df);
+                    } else {
+                        // Re-create the sink on the compute instance.
+                        let internal_view_id = self.allocate_transient_id()?;
+                        let debug_name = self
+                            .catalog()
+                            .resolve_full_name(entry.name(), entry.conn_id())
+                            .to_string();
+
+                        let mut builder = self.dataflow_builder(mview.cluster_id);
+                        let (mut df, df_metainfo) = builder.build_materialized_view(
+                            entry.id(),
+                            internal_view_id,
+                            debug_name,
+                            &mview.optimized_expr,
+                            &mview.desc,
+                            &mview.non_null_assertions,
+                        )?;
+
+                        // Note: ideally, the optimized_plan should be computed and
+                        // set when the CatalogItem is re-constructed (in
+                        // parse_item).
+                        //
+                        // However, it's not clear how exactly to change
+                        // `load_catalog_items` to accommodate for the
+                        // `build_materialized_view` call above.
+                        self.catalog_mut()
+                            .set_optimized_plan(entry.id(), df.clone());
+                        self.catalog_mut()
+                            .set_dataflow_metainfo(entry.id(), df_metainfo);
+
+                        // The 'as_of' field of the dataflow changes after restart
+                        let as_of = self.bootstrap_materialized_view_as_of(&df, mview.cluster_id);
+                        df.set_as_of(as_of);
+
+                        let df = self.must_ship_dataflow(df, mview.cluster_id).await;
+                        self.catalog_mut().set_physical_plan(entry.id(), df);
+                    }
                 }
                 CatalogItem::Sink(sink) => {
                     // Re-create the sink.

@@ -847,7 +847,7 @@ impl Coordinator {
     ///   object, because there are no system objects in the top level view and
     ///   all sub-views are guaranteed to have no ambiguous column references to
     ///   system objects.
-    fn validate_system_column_references(
+    pub(super) fn validate_system_column_references(
         &self,
         uses_ambiguous_columns: bool,
         depends_on: &BTreeSet<GlobalId>,
@@ -942,6 +942,8 @@ impl Coordinator {
         Ok(ops)
     }
 
+    /// This should mirror the operational semantics of
+    /// `Coordinator::sequence_create_materialized_view1`.
     #[tracing::instrument(level = "debug", skip(self))]
     pub(super) async fn sequence_create_materialized_view(
         &mut self,
@@ -2892,6 +2894,9 @@ impl Coordinator {
         active_subscribe.initialize();
         self.add_active_subscribe(sink_id, active_subscribe).await;
 
+        // Allow while the introduction of the new optimizer API in
+        // #20569 is in progress.
+        #[allow(deprecated)]
         match self.ship_dataflow(dataflow, cluster_id).await {
             Ok(_) => {}
             Err(e) => {
@@ -3119,6 +3124,11 @@ impl Coordinator {
         // we aren't storing this clone in a `Subscriber`, so we should be fine.
         let root_dispatch = tracing::dispatcher::get_default(|d| d.clone());
 
+        let enable_unified_optimizer_api = self
+            .catalog()
+            .system_config()
+            .enable_unified_optimizer_api();
+
         let pipeline_result = match stmt {
             plan::ExplaineeStatement::Query {
                 raw_plan,
@@ -3146,18 +3156,36 @@ impl Coordinator {
                 broken,
                 non_null_assertions,
             } => {
-                // Please see the docs on `explain_query_optimizer_pipeline` above.
-                self.explain_create_materialized_view_optimizer_pipeline(
-                    name,
-                    raw_plan,
-                    column_names,
-                    cluster_id,
-                    broken,
-                    root_dispatch,
-                    &non_null_assertions,
-                )
-                .with_subscriber(&optimizer_trace)
-                .await
+                if enable_unified_optimizer_api {
+                    // Please see the docs on `explain_query_optimizer_pipeline` above.
+                    self.explain_create_materialized_view_optimizer_pipeline(
+                        name,
+                        raw_plan,
+                        column_names,
+                        cluster_id,
+                        broken,
+                        &non_null_assertions,
+                        root_dispatch,
+                    )
+                    .with_subscriber(&optimizer_trace)
+                    .await
+                } else {
+                    // Allow while the introduction of the new optimizer API in
+                    // #20569 is in progress.
+                    #[allow(deprecated)]
+                    // Please see the docs on `explain_query_optimizer_pipeline` above.
+                    self.explain_create_materialized_view_optimizer_pipeline_deprecated(
+                        name,
+                        raw_plan,
+                        column_names,
+                        cluster_id,
+                        broken,
+                        &non_null_assertions,
+                        root_dispatch,
+                    )
+                    .with_subscriber(&optimizer_trace)
+                    .await
+                }
             }
             plan::ExplaineeStatement::CreateIndex {
                 name,
@@ -3449,14 +3477,17 @@ impl Coordinator {
     /// Run the MV optimization explanation pipeline. This function must be called with
     /// an `OptimizerTrace` `tracing` subscriber, using `.with_subscriber(...)`.
     /// The `root_dispatch` should be the global `tracing::Dispatch`.
-    //
-    // WARNING, ENTERING SPOOKY ZONE 3.0
-    //
-    // Please read the docs on `explain_query_optimizer_pipeline` before changing this function.
-    //
-    // Currently this method does not need to use the global `Dispatch` like
-    // `explain_query_optimizer_pipeline`, but it is passed in case changes to this function
-    // require it.
+    ///
+    /// This should mirror the operational semantics of
+    /// `Coordinator::explain_create_materialized_view_optimizer_pipeline1`.
+    ///
+    /// WARNING, ENTERING SPOOKY ZONE 3.0
+    ///
+    /// Please read the docs on `explain_query_optimizer_pipeline` before changing this function.
+    ///
+    /// Currently this method does not need to use the global `Dispatch` like
+    /// `explain_query_optimizer_pipeline`, but it is passed in case changes to this function
+    /// require it.
     #[tracing::instrument(target = "optimizer", level = "trace", name = "optimize", skip_all)]
     async fn explain_create_materialized_view_optimizer_pipeline(
         &mut self,
@@ -5717,7 +5748,11 @@ fn alter_storage_cluster_config(size: AlterOptionParameter) -> Option<SourceSink
 ///
 /// Used to implement `EXPLAIN BROKEN <statement>` in the `~_optimizer_pipeline`
 /// methods above.
-fn catch_unwind<R, E, F>(guard: bool, stage: &'static str, f: F) -> Result<R, AdapterError>
+pub(crate) fn catch_unwind<R, E, F>(
+    guard: bool,
+    stage: &'static str,
+    f: F,
+) -> Result<R, AdapterError>
 where
     F: FnOnce() -> Result<R, E>,
     E: Into<AdapterError>,
@@ -5738,7 +5773,7 @@ where
 
 impl Coordinator {
     /// Forward notices that we got from the optimizer.
-    fn emit_optimizer_notices(
+    pub(super) fn emit_optimizer_notices(
         &mut self,
         session: &Session,
         optimizer_notices: &Vec<OptimizerNotice>,
