@@ -81,85 +81,19 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-//! Internal utility libraries for Materialize.
-//!
-//! **ore** (_n_): the raw material from which more valuable materials are extracted.
-//! Modules are included in this crate when they are broadly useful but too
-//! small to warrant their own crate.
+use mz_ore::task::{AbortHandleExt, JoinSetExt};
 
-#![warn(missing_docs, missing_debug_implementations)]
-#![cfg_attr(nightly_doc_features, feature(doc_cfg))]
+#[tokio::test] // allow(test-attribute)
+#[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+async fn join_set_exts() {
+    let mut js = tokio::task::JoinSet::new();
+    let abort_handle = js
+        .spawn_named(|| "test".to_string(), async {
+            std::future::pending::<String>().await
+        })
+        .abort_on_drop();
 
-#[cfg_attr(nightly_doc_features, doc(cfg(feature = "test")))]
-#[cfg(feature = "test")]
-pub mod assert;
-pub mod bits;
-#[cfg_attr(nightly_doc_features, doc(cfg(feature = "bytes_")))]
-#[cfg(feature = "bytes_")]
-pub mod bytes;
-pub mod cast;
-#[cfg_attr(nightly_doc_features, doc(cfg(feature = "async")))]
-#[cfg(feature = "async")]
-pub mod channel;
-#[cfg_attr(nightly_doc_features, doc(cfg(feature = "cli")))]
-#[cfg(feature = "cli")]
-pub mod cli;
-pub mod codegen;
-pub mod collections;
-pub mod env;
-pub mod error;
-pub mod fmt;
-#[cfg_attr(nightly_doc_features, doc(cfg(feature = "async")))]
-#[cfg(feature = "async")]
-pub mod future;
-pub mod graph;
-pub mod hash;
-pub mod hint;
-pub mod id_gen;
-pub mod iter;
-pub mod lex;
-#[cfg_attr(nightly_doc_features, doc(cfg(feature = "metrics")))]
-#[cfg(feature = "metrics")]
-pub mod metrics;
-#[cfg_attr(nightly_doc_features, doc(cfg(feature = "network")))]
-#[cfg(feature = "network")]
-pub mod netio;
-pub mod now;
-pub mod option;
-pub mod panic;
-pub mod path;
-pub mod permutations;
-pub mod process;
-#[cfg_attr(nightly_doc_features, doc(cfg(feature = "process")))]
-pub mod result;
-#[cfg_attr(nightly_doc_features, doc(cfg(feature = "async")))]
-#[cfg(feature = "async")]
-pub mod retry;
-#[cfg(feature = "serde")]
-pub mod serde;
-#[cfg(feature = "server")]
-pub mod server;
-#[cfg_attr(nightly_doc_features, doc(cfg(feature = "stack")))]
-#[cfg(feature = "stack")]
-pub mod stack;
-pub mod stats;
-pub mod str;
-#[cfg_attr(nightly_doc_features, doc(cfg(feature = "async")))]
-#[cfg(feature = "async")]
-pub mod task;
-#[cfg_attr(nightly_doc_features, doc(cfg(any(test, feature = "test"))))]
-#[cfg(any(test, feature = "test"))]
-pub mod test;
-pub mod thread;
-#[cfg_attr(nightly_doc_features, doc(cfg(feature = "tracing_")))]
-#[cfg(feature = "tracing_")]
-pub mod tracing;
-pub mod vec;
+    drop(abort_handle);
 
-pub use mz_test_macro::test;
-
-#[doc(hidden)]
-pub mod __private {
-    #[cfg(feature = "tracing_")]
-    pub use tracing;
+    assert!(matches!(js.join_next().await, Some(Err(je)) if je.is_cancelled()));
 }

@@ -130,5 +130,9 @@ metrics = ["prometheus"]
 name = "future"
 required-features = ["async"]
 
+[[test]]
+name = "task"
+required-features = ["async"]
+
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
