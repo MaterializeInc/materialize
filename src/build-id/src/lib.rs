@@ -299,5 +299,5 @@ fn assert_pointer_valid<T>(ptr: *const T) {
     let align = std::mem::align_of::<T>();
 
     assert!(!ptr.is_null());
-    assert!(address & (align - 1) == 0, "unaligned pointer");
+    assert!(address % align == 0, "unaligned pointer");
 }
