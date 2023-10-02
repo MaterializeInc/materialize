@@ -3137,7 +3137,7 @@ impl Coordinator {
                 index,
                 broken,
             } => {
-                self.explain_create_index_optimizer_pipeline(name, index, broken)
+                self.explain_create_index_optimizer_pipeline(name, index, broken, root_dispatch)
                     .with_subscriber(&optimizer_trace)
                     .await
             }
@@ -3557,12 +3557,20 @@ impl Coordinator {
         Ok((used_indexes, None, df_metainfo, transient_items))
     }
 
+    /// WARNING, ENTERING SPOOKY ZONE 3.0
+    ///
+    /// Please read the docs on `explain_query_optimizer_pipeline`.
+    ///
+    /// Currently this method does not need to use the global `Dispatch` like
+    /// `explain_query_optimizer_pipeline`, but it is passed in case changes to this function
+    /// require it.
     #[tracing::instrument(target = "optimizer", level = "trace", name = "optimize", skip_all)]
     async fn explain_create_index_optimizer_pipeline(
         &mut self,
         name: QualifiedItemName,
         index: Index,
         broken: bool,
+        _root_dispatch: tracing::Dispatch,
     ) -> Result<
         (
             UsedIndexes,
