@@ -1823,7 +1823,7 @@ where
     ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
-        let tls = mz_postgres_util::make_tls(
+        let tls = mz_tls_util::make_tls(
             &tokio_postgres::config::Config::from_str(&postgres_url)
                 .expect("invalid postgres url for storage stash"),
         )
@@ -2872,7 +2872,11 @@ where
                 PartialOrder::less_than(&collection.implied_capability, &collection.write_frontier)
                     // Whenever a collection is being initialized, this state is
                     // acceptable.
-                    || *collection.write_frontier == [T::minimum()]
+                    || *collection.write_frontier == [T::minimum()],
+                "{id}:  the implied capability {:?} should be less than the write_frontier {:?}. Collection state dump: {:#?}",
+                collection.implied_capability,
+                collection.write_frontier,
+                collection
             );
 
             collection

@@ -1627,6 +1627,34 @@ CREATE CLUSTER REPLICA default.replica SIZE = 'small'
 CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }] } })
 
 parse-statement
+CREATE CLUSTER REPLICA default.replica SIZE 'small', INTERNAL, BILLED AS 'free'
+----
+CREATE CLUSTER REPLICA default.replica SIZE = 'small', INTERNAL, BILLED AS = 'free'
+=>
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }, ReplicaOption { name: Internal, value: None }, ReplicaOption { name: BilledAs, value: Some(Value(String("free"))) }] } })
+
+parse-statement
+CREATE CLUSTER REPLICA default.replica SIZE 'small', INTERNAL = true, BILLED AS 'free'
+----
+CREATE CLUSTER REPLICA default.replica SIZE = 'small', INTERNAL = true, BILLED AS = 'free'
+=>
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }, ReplicaOption { name: Internal, value: Some(Value(Boolean(true))) }, ReplicaOption { name: BilledAs, value: Some(Value(String("free"))) }] } })
+
+parse-statement
+CREATE CLUSTER REPLICA default.replica SIZE 'small', INTERNAL = false, BILLED AS 'free'
+----
+CREATE CLUSTER REPLICA default.replica SIZE = 'small', INTERNAL = false, BILLED AS = 'free'
+=>
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }, ReplicaOption { name: Internal, value: Some(Value(Boolean(false))) }, ReplicaOption { name: BilledAs, value: Some(Value(String("free"))) }] } })
+
+parse-statement
+CREATE CLUSTER REPLICA default.replica SIZE 'small', BILLED AS 'free'
+----
+CREATE CLUSTER REPLICA default.replica SIZE = 'small', BILLED AS = 'free'
+=>
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }, ReplicaOption { name: BilledAs, value: Some(Value(String("free"))) }] } })
+
+parse-statement
 CREATE CLUSTER REPLICA default.replica SIZE 'small', AVAILABILITY ZONE 'a'
 ----
 CREATE CLUSTER REPLICA default.replica SIZE = 'small', AVAILABILITY ZONE = 'a'

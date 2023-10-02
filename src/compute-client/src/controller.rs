@@ -31,6 +31,7 @@
 
 use std::collections::BTreeMap;
 use std::num::NonZeroI64;
+use std::sync::mpsc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -142,14 +143,21 @@ pub struct ComputeController<T> {
     initialized: bool,
     /// Compute configuration to apply to new instances.
     config: ComputeParameters,
-    /// A response to handle on the next call to `ActiveComputeController::process`.
-    stashed_response: Option<(ComputeInstanceId, ReplicaId, ComputeResponse<T>)>,
+    /// A replica response to be handled by the corresponding `Instance` on a subsequent call to
+    /// `ActiveComputeController::process`.
+    stashed_replica_response: Option<(ComputeInstanceId, ReplicaId, ComputeResponse<T>)>,
     /// Times we have last received responses from replicas.
     replica_heartbeats: BTreeMap<ReplicaId, DateTime<Utc>>,
     /// A number that increases on every `environmentd` restart.
     envd_epoch: NonZeroI64,
     /// The compute controller metrics
     metrics: ComputeControllerMetrics,
+
+    /// Receiver for responses produced by `Instance`s, to be delivered on subsequent calls to
+    /// `ActiveComputeController::process`.
+    response_rx: mpsc::Receiver<ComputeControllerResponse<T>>,
+    /// Response sender that's passed to new `Instance`s.
+    response_tx: mpsc::Sender<ComputeControllerResponse<T>>,
 }
 
 impl<T> ComputeController<T> {
@@ -159,15 +167,19 @@ impl<T> ComputeController<T> {
         envd_epoch: NonZeroI64,
         metrics_registry: MetricsRegistry,
     ) -> Self {
+        let (response_tx, response_rx) = mpsc::channel();
+
         Self {
             instances: BTreeMap::new(),
             build_info,
             initialized: false,
             config: Default::default(),
-            stashed_response: None,
+            stashed_replica_response: None,
             replica_heartbeats: BTreeMap::new(),
             envd_epoch,
             metrics: ComputeControllerMetrics::new(metrics_registry),
+            response_rx,
+            response_tx,
         }
     }
 
@@ -269,6 +281,7 @@ where
                 arranged_logs,
                 self.envd_epoch,
                 self.metrics.for_instance(id),
+                self.response_tx.clone(),
                 variable_length_row_encoding,
             ),
         );
@@ -324,7 +337,7 @@ where
     ///
     /// This method is cancellation safe.
     pub async fn ready(&mut self) {
-        if self.stashed_response.is_some() {
+        if self.stashed_replica_response.is_some() {
             // We still have a response stashed, which we are immediately ready to process.
             return;
         }
@@ -354,7 +367,7 @@ where
         match result {
             Ok((replica_id, resp)) => {
                 self.replica_heartbeats.insert(replica_id, Utc::now());
-                self.stashed_response = Some((instance_id, replica_id, resp));
+                self.stashed_replica_response = Some((instance_id, replica_id, resp));
             }
             Err(_) => {
                 // There is nothing to do here. `recv` has already added the failed replica to
@@ -561,9 +574,13 @@ where
         }
 
         // Process pending ready responses.
-        for instance in self.compute.instances.values_mut() {
-            if let Some(response) = instance.ready_responses.pop_front() {
-                return Some(response);
+        match self.compute.response_rx.try_recv() {
+            Ok(response) => return Some(response),
+            Err(mpsc::TryRecvError::Empty) => (),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                // This should never happen, since the `ComputeController` is always holding on to
+                // a copy of the `response_tx`.
+                panic!("response_tx has disconnected");
             }
         }
 
@@ -575,7 +592,9 @@ where
         }
 
         // Process pending responses from replicas.
-        if let Some((instance_id, replica_id, response)) = self.compute.stashed_response.take() {
+        if let Some((instance_id, replica_id, response)) =
+            self.compute.stashed_replica_response.take()
+        {
             if let Ok(mut instance) = self.instance(instance_id) {
                 return instance.handle_response(response, replica_id);
             } else {

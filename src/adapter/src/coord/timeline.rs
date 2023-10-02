@@ -353,17 +353,6 @@ impl Coordinator {
         to_datetime(self.now())
     }
 
-    pub(crate) fn get_timestamp_oracle_mut(
-        &mut self,
-        timeline: &Timeline,
-    ) -> &mut DurableTimestampOracle<Timestamp> {
-        &mut self
-            .global_timelines
-            .get_mut(timeline)
-            .expect("all timelines have a timestamp oracle")
-            .oracle
-    }
-
     pub(crate) fn get_timestamp_oracle(
         &self,
         timeline: &Timeline,

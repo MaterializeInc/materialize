@@ -95,7 +95,7 @@ static C_SAVEPOINT: TypedCollection<i64, i64> = TypedCollection::new("c_savepoin
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_stash_invalid_url() {
-    let tls = mz_postgres_util::make_tls(&Config::new()).unwrap();
+    let tls = mz_tls_util::make_tls(&Config::new()).unwrap();
     let factory = StashFactory::new(&MetricsRegistry::new());
 
     // Verify invalid URLs fail on connect.

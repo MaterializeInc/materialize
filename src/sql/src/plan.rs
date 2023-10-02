@@ -36,6 +36,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use enum_kinds::EnumKind;
+use maplit::btreeset;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{CollectionPlan, ColumnOrder, MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
@@ -533,6 +534,8 @@ pub enum ReplicaConfig {
         availability_zone: Option<String>,
         compute: ComputeReplicaConfig,
         disk: bool,
+        internal: bool,
+        billed_as: Option<String>,
     },
 }
 
@@ -834,7 +837,8 @@ pub enum Explainee {
 }
 
 /// Explainee types that are statements.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, EnumKind)]
+#[enum_kind(ExplaineeStatementKind)]
 pub enum ExplaineeStatement {
     /// The object to be explained is a SELECT statement.
     Query {
@@ -852,6 +856,13 @@ pub enum ExplaineeStatement {
         /// Broken flag (see [`ExplaineeStatement::broken()`]).
         broken: bool,
     },
+    /// The object to be explained is a CREATE INDEX.
+    CreateIndex {
+        name: QualifiedItemName,
+        index: Index,
+        /// Broken flag (see [`ExplaineeStatement::broken()`]).
+        broken: bool,
+    },
 }
 
 impl ExplaineeStatement {
@@ -859,6 +870,7 @@ impl ExplaineeStatement {
         match self {
             Self::Query { raw_plan, .. } => raw_plan.depends_on(),
             Self::CreateMaterializedView { raw_plan, .. } => raw_plan.depends_on(),
+            Self::CreateIndex { index, .. } => btreeset! {index.on},
         }
     }
 
@@ -876,6 +888,7 @@ impl ExplaineeStatement {
         match self {
             Self::Query { broken, .. } => *broken,
             Self::CreateMaterializedView { broken, .. } => *broken,
+            Self::CreateIndex { broken, .. } => *broken,
         }
     }
 
@@ -883,11 +896,39 @@ impl ExplaineeStatement {
         match self {
             Self::Query {
                 row_set_finishing, ..
-            } => row_set_finishing.clone(),
+            } => {
+                // Use the optional finishing extracted in the plan_query call.
+                row_set_finishing.clone()
+            }
             Self::CreateMaterializedView { .. } => {
                 // Trivial finishing asserted in plan_create_materialized_view.
                 None
             }
+            Self::CreateIndex { .. } => {
+                // Trivial finishing for indexes on views asserted in plan_view.
+                None
+            }
+        }
+    }
+}
+
+impl ExplaineeStatementKind {
+    pub fn supports(&self, stage: &ExplainStage) -> bool {
+        use ExplainStage::*;
+        match self {
+            Self::Query => true,
+            Self::CreateMaterializedView => true,
+            Self::CreateIndex => ![RawPlan, DecorrelatedPlan].contains(stage),
+        }
+    }
+}
+
+impl std::fmt::Display for ExplaineeStatementKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Query => write!(f, "QUERY"),
+            Self::CreateMaterializedView => write!(f, "CREATE MATERIALIZED VIEW"),
+            Self::CreateIndex => write!(f, "CREATE INDEX"),
         }
     }
 }

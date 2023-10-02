@@ -46,6 +46,7 @@ Aws
 Begin
 Between
 Bigint
+Billed
 Body
 Boolean
 Both
@@ -184,6 +185,7 @@ Insert
 Inspect
 Int
 Integer
+Internal
 Intersect
 Interval
 Into

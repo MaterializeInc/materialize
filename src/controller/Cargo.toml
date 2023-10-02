@@ -37,5 +37,8 @@ tracing = "0.1.37"
 uuid = { version = "1.2.2" }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
+[dev-dependencies]
+bytesize = "1.1.0"
+
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

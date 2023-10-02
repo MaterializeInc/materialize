@@ -88,7 +88,7 @@ pub static FACTORY: Lazy<StashFactory> = Lazy::new(|| StashFactory::new(&Metrics
 fn init_bench() -> (Runtime, Stash) {
     let runtime = Runtime::new().unwrap();
     let connstr = std::env::var("POSTGRES_URL").unwrap();
-    let tls = mz_postgres_util::make_tls(
+    let tls = mz_tls_util::make_tls(
         &tokio_postgres::config::Config::from_str(&connstr)
             .expect("invalid postgres url for storage stash"),
     )

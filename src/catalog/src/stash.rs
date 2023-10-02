@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use async_trait::async_trait;
+use derivative::Derivative;
 use std::collections::BTreeMap;
 use std::iter::once;
 use std::num::NonZeroI64;
@@ -17,6 +18,7 @@ use std::time::Duration;
 
 use futures::StreamExt;
 use itertools::Itertools;
+use postgres_openssl::MakeTlsConnector;
 
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -30,34 +32,310 @@ use mz_repr::{GlobalId, Timestamp};
 use mz_sql::catalog::{
     CatalogError as SqlCatalogError, DefaultPrivilegeAclItem, DefaultPrivilegeObject,
 };
-use mz_sql::names::CommentObjectId;
 use mz_stash::objects::proto;
-use mz_stash::{AppendBatch, Stash, StashError, TypedCollection};
+use mz_stash::{AppendBatch, DebugStashFactory, Stash, StashError, StashFactory, TypedCollection};
 use mz_storage_types::sources::Timeline;
 
 use crate::initialize::DEPLOY_GENERATION;
 use crate::objects::{
     AuditLogKey, Cluster, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
-    ClusterKey, ClusterReplica, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, CommentKey,
-    CommentValue, Database, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
-    DefaultPrivilegesValue, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
-    ReplicaConfig, Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue, StorageUsageKey,
-    SystemObjectDescription, SystemObjectMapping, SystemObjectUniqueIdentifier,
-    SystemPrivilegesKey, SystemPrivilegesValue, TimestampKey, TimestampValue,
+    ClusterKey, ClusterReplica, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, Comment,
+    CommentKey, CommentValue, Database, DatabaseKey, DatabaseValue, DefaultPrivilege,
+    DefaultPrivilegesKey, DefaultPrivilegesValue, GidMappingKey, GidMappingValue, IdAllocKey,
+    IdAllocValue, ReplicaConfig, Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue,
+    Snapshot, StorageUsageKey, SystemConfiguration, SystemObjectDescription, SystemObjectMapping,
+    SystemObjectUniqueIdentifier, SystemPrivilegesKey, SystemPrivilegesValue, TimelineTimestamp,
+    TimestampKey, TimestampValue,
 };
 use crate::transaction::{
     add_new_builtin_cluster_replicas_migration, add_new_builtin_clusters_migration, Transaction,
     TransactionBatch,
 };
 use crate::{
-    initialize, BootstrapArgs, DurableCatalogState, Error, ReadOnlyDurableCatalogState,
-    AUDIT_LOG_COLLECTION, CLUSTER_COLLECTION, CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION,
-    CLUSTER_REPLICA_COLLECTION, COMMENTS_COLLECTION, CONFIG_COLLECTION, DATABASES_COLLECTION,
-    DEFAULT_PRIVILEGES_COLLECTION, ID_ALLOCATOR_COLLECTION, ITEM_COLLECTION, ROLES_COLLECTION,
-    SCHEMAS_COLLECTION, SETTING_COLLECTION, STORAGE_USAGE_COLLECTION,
-    SYSTEM_CONFIGURATION_COLLECTION, SYSTEM_GID_MAPPING_COLLECTION, SYSTEM_PRIVILEGES_COLLECTION,
-    TIMESTAMP_COLLECTION,
+    initialize, BootstrapArgs, DurableCatalogState, Error, OpenableDurableCatalogState,
+    ReadOnlyDurableCatalogState, AUDIT_LOG_COLLECTION, CLUSTER_COLLECTION,
+    CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION, CLUSTER_REPLICA_COLLECTION, COMMENTS_COLLECTION,
+    CONFIG_COLLECTION, DATABASES_COLLECTION, DEFAULT_PRIVILEGES_COLLECTION,
+    ID_ALLOCATOR_COLLECTION, ITEM_COLLECTION, ROLES_COLLECTION, SCHEMAS_COLLECTION,
+    SETTING_COLLECTION, STORAGE_USAGE_COLLECTION, SYSTEM_CONFIGURATION_COLLECTION,
+    SYSTEM_GID_MAPPING_COLLECTION, SYSTEM_PRIVILEGES_COLLECTION, TIMESTAMP_COLLECTION,
 };
+
+/// Configuration needed to connect to the stash.
+#[derive(Derivative)]
+#[derivative(Debug)]
+pub struct StashConfig {
+    pub stash_factory: StashFactory,
+    pub stash_url: String,
+    pub schema: Option<String>,
+    #[derivative(Debug = "ignore")]
+    pub tls: MakeTlsConnector,
+}
+
+/// A [`OpenableConnection`] represent a struct capable of opening a connection to the stash.
+#[derive(Debug)]
+pub(crate) struct OpenableConnection {
+    stash: Option<Stash>,
+    config: StashConfig,
+}
+
+impl OpenableConnection {
+    pub(crate) fn new(config: StashConfig) -> OpenableConnection {
+        OpenableConnection {
+            stash: None,
+            config,
+        }
+    }
+
+    /// Opens the inner stash in read-only mode.
+    async fn open_stash_read_only(&mut self) -> Result<&mut Stash, StashError> {
+        if !matches!(&self.stash, Some(stash) if stash.is_readonly()) {
+            self.stash = Some(
+                self.config
+                    .stash_factory
+                    .open_readonly(
+                        self.config.stash_url.clone(),
+                        self.config.schema.clone(),
+                        self.config.tls.clone(),
+                    )
+                    .await?,
+            );
+        }
+        Ok(self.stash.as_mut().expect("opened above"))
+    }
+
+    /// Opens the inner stash in savepoint mode.
+    async fn open_stash_savepoint(&mut self) -> Result<&mut Stash, StashError> {
+        if !matches!(&self.stash, Some(stash) if stash.is_savepoint()) {
+            self.stash = Some(
+                self.config
+                    .stash_factory
+                    .open_savepoint(
+                        self.config.stash_url.clone(),
+                        self.config.schema.clone(),
+                        self.config.tls.clone(),
+                    )
+                    .await?,
+            );
+        }
+        Ok(self.stash.as_mut().expect("opened above"))
+    }
+
+    /// Opens the inner stash in a writeable mode.
+    async fn open_stash(&mut self) -> Result<&mut Stash, StashError> {
+        if !matches!(&self.stash, Some(stash) if stash.is_writeable()) {
+            self.stash = Some(
+                self.config
+                    .stash_factory
+                    .open(
+                        self.config.stash_url.clone(),
+                        self.config.schema.clone(),
+                        self.config.tls.clone(),
+                    )
+                    .await?,
+            );
+        }
+        Ok(self.stash.as_mut().expect("opened above"))
+    }
+}
+
+#[async_trait]
+impl OpenableDurableCatalogState<Connection> for OpenableConnection {
+    #[tracing::instrument(name = "storage::open_check", level = "info", skip_all)]
+    async fn open_savepoint(
+        &mut self,
+        now: NowFn,
+        bootstrap_args: &BootstrapArgs,
+        deploy_generation: Option<u64>,
+    ) -> Result<Connection, Error> {
+        self.open_stash_savepoint().await?;
+        let stash = self.stash.take().expect("opened above");
+        retry_open(stash, now, bootstrap_args, deploy_generation).await
+    }
+
+    #[tracing::instrument(name = "storage::open_read_only", level = "info", skip_all)]
+    async fn open_read_only(
+        &mut self,
+        now: NowFn,
+        bootstrap_args: &BootstrapArgs,
+    ) -> Result<Connection, Error> {
+        self.open_stash_read_only().await?;
+        let stash = self.stash.take().expect("opened above");
+        retry_open(stash, now, bootstrap_args, None).await
+    }
+
+    #[tracing::instrument(name = "storage::open", level = "info", skip_all)]
+    async fn open(
+        &mut self,
+        now: NowFn,
+        bootstrap_args: &BootstrapArgs,
+        deploy_generation: Option<u64>,
+    ) -> Result<Connection, Error> {
+        self.open_stash().await?;
+        let stash = self.stash.take().expect("opened above");
+        retry_open(stash, now, bootstrap_args, deploy_generation).await
+    }
+
+    async fn is_initialized(&mut self) -> Result<bool, Error> {
+        let stash = match &mut self.stash {
+            None => match self.open_stash_read_only().await {
+                Ok(stash) => stash,
+                Err(e) if e.can_recover_with_write_mode() => return Ok(false),
+                Err(e) => return Err(e.into()),
+            },
+            Some(stash) => stash,
+        };
+        stash.is_initialized().await.err_into()
+    }
+
+    async fn get_deployment_generation(&mut self) -> Result<Option<u64>, Error> {
+        let stash = match &mut self.stash {
+            None => match self.open_stash_read_only().await {
+                Ok(stash) => stash,
+                Err(e) if e.can_recover_with_write_mode() => return Ok(None),
+                Err(e) => return Err(e.into()),
+            },
+            Some(stash) => stash,
+        };
+
+        let deployment_generation = CONFIG_COLLECTION
+            .peek_key_one(
+                stash,
+                proto::ConfigKey {
+                    key: DEPLOY_GENERATION.into(),
+                },
+            )
+            .await?
+            .map(|v| v.value);
+
+        Ok(deployment_generation)
+    }
+}
+
+/// Opens a new [`Connection`] to the stash, retrying any retryable errors. Optionally
+/// initialize the stash if it has not been initialized and perform any migrations needed.
+///
+/// # Panics
+/// If the inner stash has not been opened.
+async fn retry_open(
+    mut stash: Stash,
+    now: NowFn,
+    bootstrap_args: &BootstrapArgs,
+    deploy_generation: Option<u64>,
+) -> Result<Connection, Error> {
+    let retry = Retry::default()
+        .clamp_backoff(Duration::from_secs(1))
+        .max_duration(Duration::from_secs(30))
+        .into_retry_stream();
+    let mut retry = pin::pin!(retry);
+
+    loop {
+        match open_inner(stash, now.clone(), bootstrap_args, deploy_generation).await {
+            Ok(conn) => {
+                return Ok(conn);
+            }
+            Err((given_stash, err)) => {
+                stash = given_stash;
+                let should_retry = matches!(&err, Error::Stash(se) if se.should_retry());
+                if !should_retry || retry.next().await.is_none() {
+                    return Err(err);
+                }
+            }
+        }
+    }
+}
+
+#[tracing::instrument(name = "storage::open_inner", level = "info", skip_all)]
+async fn open_inner(
+    mut stash: Stash,
+    now: NowFn,
+    bootstrap_args: &BootstrapArgs,
+    deploy_generation: Option<u64>,
+) -> Result<Connection, (Stash, Error)> {
+    // Initialize the Stash if it hasn't been already
+    let is_init = match stash.is_initialized().await {
+        Ok(is_init) => is_init,
+        Err(e) => {
+            return Err((stash, e.into()));
+        }
+    };
+    let mut conn = if !is_init {
+        // Get the current timestamp so we can record when we booted. We don't have to worry
+        // about `boot_ts` being less than a previously used timestamp because the stash is
+        // uninitialized and there are no previous timestamps.
+        let boot_ts = now();
+
+        // Initialize the Stash
+        let args = bootstrap_args.clone();
+        match stash
+            .with_transaction(move |mut tx| {
+                Box::pin(async move {
+                    initialize::initialize(&mut tx, &args, boot_ts, deploy_generation).await
+                })
+            })
+            .await
+        {
+            Ok(()) => {}
+            Err(e) => return Err((stash, e.into())),
+        };
+        Connection { stash }
+    } else {
+        if !stash.is_readonly() {
+            // Before we do anything with the Stash, we need to run any pending upgrades and
+            // initialize new collections.
+            match stash.upgrade().await {
+                Ok(()) => {}
+                Err(e) => {
+                    return Err((stash, e.into()));
+                }
+            };
+        }
+
+        let mut conn = Connection { stash };
+
+        if let Some(deploy_generation) = deploy_generation {
+            match conn.set_deploy_generation(deploy_generation).await {
+                Ok(()) => {}
+                Err(e) => {
+                    return Err((conn.stash, e));
+                }
+            }
+        }
+
+        conn
+    };
+
+    // Add any new builtin Clusters or Cluster Replicas that may be newly defined.
+    if !conn.stash.is_readonly() {
+        let mut txn = match conn.transaction().await {
+            Ok(txn) => txn,
+            Err(e) => {
+                return Err((conn.stash, e));
+            }
+        };
+
+        match add_new_builtin_clusters_migration(&mut txn) {
+            Ok(()) => {}
+            Err(e) => {
+                return Err((conn.stash, e));
+            }
+        }
+        match add_new_builtin_cluster_replicas_migration(&mut txn, bootstrap_args) {
+            Ok(()) => {}
+            Err(e) => {
+                return Err((conn.stash, e));
+            }
+        }
+        match txn.commit().await {
+            Ok(()) => {}
+            Err(e) => {
+                return Err((conn.stash, e));
+            }
+        }
+    }
+
+    Ok(conn)
+}
 
 /// A [`Connection`] represent an open connection to the stash. It exposes optimized methods for
 /// executing a single operation against the stash. If the consumer needs to execute multiple
@@ -68,130 +346,6 @@ pub struct Connection {
 }
 
 impl Connection {
-    /// Opens a new [`Connection`] to the stash. Optionally initialize the stash if it has not
-    /// been initialized and perform any migrations needed.
-    #[tracing::instrument(name = "storage::open", level = "info", skip_all)]
-    pub async fn open(
-        mut stash: Stash,
-        now: NowFn,
-        bootstrap_args: &BootstrapArgs,
-        deploy_generation: Option<u64>,
-    ) -> Result<Connection, Error> {
-        let retry = Retry::default()
-            .clamp_backoff(Duration::from_secs(1))
-            .max_duration(Duration::from_secs(30))
-            .into_retry_stream();
-        let mut retry = pin::pin!(retry);
-        loop {
-            match Self::open_inner(stash, now.clone(), bootstrap_args, deploy_generation).await {
-                Ok(conn) => {
-                    return Ok(conn);
-                }
-                Err((given_stash, err)) => {
-                    stash = given_stash;
-                    let should_retry = matches!(&err, Error::Stash(se) if se.should_retry());
-                    if !should_retry || retry.next().await.is_none() {
-                        return Err(err);
-                    }
-                }
-            }
-        }
-    }
-
-    #[tracing::instrument(name = "storage::open_inner", level = "info", skip_all)]
-    async fn open_inner(
-        mut stash: Stash,
-        now: NowFn,
-        bootstrap_args: &BootstrapArgs,
-        deploy_generation: Option<u64>,
-    ) -> Result<Connection, (Stash, Error)> {
-        // Initialize the Stash if it hasn't been already
-        let mut conn = if !match stash.is_initialized().await {
-            Ok(is_init) => is_init,
-            Err(e) => {
-                return Err((stash, e.into()));
-            }
-        } {
-            // Get the current timestamp so we can record when we booted. We don't have to worry
-            // about `boot_ts` being less than a previously used timestamp because the stash is
-            // uninitialized and there are no previous timestamps.
-            let boot_ts = now();
-
-            // Initialize the Stash
-            let args = bootstrap_args.clone();
-            match stash
-                .with_transaction(move |mut tx| {
-                    Box::pin(async move {
-                        initialize::initialize(&mut tx, &args, boot_ts, deploy_generation).await
-                    })
-                })
-                .await
-            {
-                Ok(()) => {}
-                Err(e) => return Err((stash, e.into())),
-            }
-
-            Connection { stash }
-        } else {
-            // Before we do anything with the Stash, we need to run any pending upgrades and
-            // initialize new collections.
-            if !stash.is_readonly() {
-                match stash.upgrade().await {
-                    Ok(()) => {}
-                    Err(e) => {
-                        return Err((stash, e.into()));
-                    }
-                }
-            }
-
-            let mut conn = Connection { stash };
-
-            if !conn.stash.is_readonly() {
-                if let Some(deploy_generation) = deploy_generation {
-                    match conn.set_deploy_generation(deploy_generation).await {
-                        Ok(()) => {}
-                        Err(e) => {
-                            return Err((conn.stash, e));
-                        }
-                    }
-                }
-            }
-
-            conn
-        };
-
-        // Add any new builtin Clusters or Cluster Replicas that may be newly defined.
-        if !conn.stash.is_readonly() {
-            let mut txn = match conn.transaction().await {
-                Ok(txn) => txn,
-                Err(e) => {
-                    return Err((conn.stash, e));
-                }
-            };
-
-            match add_new_builtin_clusters_migration(&mut txn) {
-                Ok(()) => {}
-                Err(e) => {
-                    return Err((conn.stash, e));
-                }
-            }
-            match add_new_builtin_cluster_replicas_migration(&mut txn, bootstrap_args) {
-                Ok(()) => {}
-                Err(e) => {
-                    return Err((conn.stash, e));
-                }
-            }
-            match txn.commit().await {
-                Ok(()) => {}
-                Err(e) => {
-                    return Err((conn.stash, e));
-                }
-            }
-        }
-
-        Ok(conn)
-    }
-
     async fn get_setting(&mut self, key: &str) -> Result<Option<String>, Error> {
         let v = SETTING_COLLECTION
             .peek_key_one(
@@ -220,11 +374,6 @@ impl Connection {
 
 #[async_trait]
 impl ReadOnlyDurableCatalogState for Connection {
-    #[tracing::instrument(level = "debug", skip(self))]
-    async fn is_initialized(&mut self) -> Result<bool, Error> {
-        self.stash.is_initialized().await.err_into()
-    }
-
     fn epoch(&mut self) -> Option<NonZeroI64> {
         self.stash.epoch()
     }
@@ -379,25 +528,23 @@ impl ReadOnlyDurableCatalogState for Connection {
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    async fn get_default_privileges(
-        &mut self,
-    ) -> Result<Vec<(DefaultPrivilegeObject, DefaultPrivilegeAclItem)>, Error> {
+    async fn get_default_privileges(&mut self) -> Result<Vec<DefaultPrivilege>, Error> {
         Ok(DEFAULT_PRIVILEGES_COLLECTION
             .peek_one(&mut self.stash)
             .await?
             .into_iter()
             .map(RustType::from_proto)
-            .map_ok(|(k, v): (DefaultPrivilegesKey, DefaultPrivilegesValue)| {
-                (
-                    DefaultPrivilegeObject::new(
+            .map_ok(
+                |(k, v): (DefaultPrivilegesKey, DefaultPrivilegesValue)| DefaultPrivilege {
+                    object: DefaultPrivilegeObject::new(
                         k.role_id,
                         k.database_id,
                         k.schema_id,
                         k.object_type,
                     ),
-                    DefaultPrivilegeAclItem::new(k.grantee, v.privileges),
-                )
-            })
+                    acl_item: DefaultPrivilegeAclItem::new(k.grantee, v.privileges),
+                },
+            )
             .collect::<Result<_, _>>()?)
     }
 
@@ -419,38 +566,46 @@ impl ReadOnlyDurableCatalogState for Connection {
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    async fn get_system_configurations(&mut self) -> Result<BTreeMap<String, String>, Error> {
+    async fn get_system_configurations(&mut self) -> Result<Vec<SystemConfiguration>, Error> {
         SYSTEM_CONFIGURATION_COLLECTION
             .peek_one(&mut self.stash)
             .await?
             .into_iter()
-            .map(|(k, v)| Ok((k.name, v.value)))
+            .map(|(k, v)| {
+                Ok(SystemConfiguration {
+                    name: k.name,
+                    value: v.value,
+                })
+            })
             .collect()
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    async fn get_comments(
-        &mut self,
-    ) -> Result<Vec<(CommentObjectId, Option<usize>, String)>, Error> {
+    async fn get_comments(&mut self) -> Result<Vec<Comment>, Error> {
         let comments = COMMENTS_COLLECTION
             .peek_one(&mut self.stash)
             .await?
             .into_iter()
             .map(RustType::from_proto)
-            .map_ok(|(k, v): (CommentKey, CommentValue)| (k.object_id, k.sub_component, v.comment))
+            .map_ok(|(k, v): (CommentKey, CommentValue)| Comment {
+                object_id: k.object_id,
+                sub_component: k.sub_component,
+                comment: v.comment,
+            })
             .collect::<Result<_, _>>()?;
 
         Ok(comments)
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    async fn get_timestamps(&mut self) -> Result<BTreeMap<Timeline, Timestamp>, Error> {
+    async fn get_timestamps(&mut self) -> Result<Vec<TimelineTimestamp>, Error> {
         let entries = TIMESTAMP_COLLECTION.peek_one(&mut self.stash).await?;
         let timestamps = entries
             .into_iter()
             .map(RustType::from_proto)
-            .map_ok(|(k, v): (TimestampKey, TimestampValue)| {
-                (k.id.parse().expect("invalid timeline persisted"), v.ts)
+            .map_ok(|(k, v): (TimestampKey, TimestampValue)| TimelineTimestamp {
+                timeline: k.id.parse().expect("invalid timeline persisted"),
+                ts: v.ts,
             })
             .collect::<Result<_, _>>()?;
 
@@ -497,16 +652,9 @@ impl ReadOnlyDurableCatalogState for Connection {
             .map(|x| x.expect("must exist").next_id)
             .map_err(Into::into)
     }
-}
 
-#[async_trait]
-impl DurableCatalogState for Connection {
-    fn is_read_only(&self) -> bool {
-        self.stash.is_readonly()
-    }
-
-    #[tracing::instrument(name = "storage::transaction", level = "debug", skip_all)]
-    async fn transaction(&mut self) -> Result<Transaction, Error> {
+    #[tracing::instrument(level = "debug", skip(self))]
+    async fn snapshot(&mut self) -> Result<Snapshot, Error> {
         let (
             databases,
             schemas,
@@ -524,6 +672,26 @@ impl DurableCatalogState for Connection {
             system_configurations,
             default_privileges,
             system_privileges,
+        ): (
+            BTreeMap<proto::DatabaseKey, proto::DatabaseValue>,
+            BTreeMap<proto::SchemaKey, proto::SchemaValue>,
+            BTreeMap<proto::RoleKey, proto::RoleValue>,
+            BTreeMap<proto::ItemKey, proto::ItemValue>,
+            BTreeMap<proto::CommentKey, proto::CommentValue>,
+            BTreeMap<proto::ClusterKey, proto::ClusterValue>,
+            BTreeMap<proto::ClusterReplicaKey, proto::ClusterReplicaValue>,
+            BTreeMap<
+                proto::ClusterIntrospectionSourceIndexKey,
+                proto::ClusterIntrospectionSourceIndexValue,
+            >,
+            BTreeMap<proto::IdAllocKey, proto::IdAllocValue>,
+            BTreeMap<proto::ConfigKey, proto::ConfigValue>,
+            BTreeMap<proto::SettingKey, proto::SettingValue>,
+            BTreeMap<proto::TimestampKey, proto::TimestampValue>,
+            BTreeMap<proto::GidMappingKey, proto::GidMappingValue>,
+            BTreeMap<proto::ServerConfigurationKey, proto::ServerConfigurationValue>,
+            BTreeMap<proto::DefaultPrivilegesKey, proto::DefaultPrivilegesValue>,
+            BTreeMap<proto::SystemPrivilegesKey, proto::SystemPrivilegesValue>,
         ) = self
             .stash
             .with_transaction(|tx| {
@@ -557,8 +725,7 @@ impl DurableCatalogState for Connection {
             })
             .await?;
 
-        Transaction::new(
-            self,
+        Ok(Snapshot {
             databases,
             schemas,
             roles,
@@ -571,11 +738,24 @@ impl DurableCatalogState for Connection {
             configs,
             settings,
             timestamps,
-            system_gid_mapping,
+            system_object_mappings: system_gid_mapping,
             system_configurations,
             default_privileges,
             system_privileges,
-        )
+        })
+    }
+}
+
+#[async_trait]
+impl DurableCatalogState for Connection {
+    fn is_read_only(&self) -> bool {
+        self.stash.is_readonly()
+    }
+
+    #[tracing::instrument(name = "storage::transaction", level = "debug", skip_all)]
+    async fn transaction(&mut self) -> Result<Transaction, Error> {
+        let snapshot = self.snapshot().await?;
+        Transaction::new(self, snapshot)
     }
 
     #[tracing::instrument(name = "storage::transaction", level = "debug", skip_all)]
@@ -933,3 +1113,71 @@ pub const ALL_COLLECTIONS: &[&str] = &[
     SYSTEM_PRIVILEGES_COLLECTION.name(),
     TIMESTAMP_COLLECTION.name(),
 ];
+
+/// A [`DebugOpenableConnection`] represent a struct capable of opening a debug connection to the
+/// stash for usage in tests.
+#[derive(Debug)]
+pub struct DebugOpenableConnection<'a> {
+    _debug_stash_factory: &'a DebugStashFactory,
+    openable_connection: OpenableConnection,
+}
+
+impl DebugOpenableConnection<'_> {
+    pub(crate) fn new(debug_stash_factory: &DebugStashFactory) -> DebugOpenableConnection {
+        DebugOpenableConnection {
+            _debug_stash_factory: debug_stash_factory,
+            openable_connection: OpenableConnection {
+                stash: None,
+                config: StashConfig {
+                    stash_factory: debug_stash_factory.stash_factory().clone(),
+                    stash_url: debug_stash_factory.url().to_string(),
+                    schema: Some(debug_stash_factory.schema().to_string()),
+                    tls: debug_stash_factory.tls().clone(),
+                },
+            },
+        }
+    }
+}
+
+#[async_trait]
+impl OpenableDurableCatalogState<Connection> for DebugOpenableConnection<'_> {
+    async fn open_savepoint(
+        &mut self,
+        now: NowFn,
+        bootstrap_args: &BootstrapArgs,
+        deploy_generation: Option<u64>,
+    ) -> Result<Connection, Error> {
+        self.openable_connection
+            .open_savepoint(now, bootstrap_args, deploy_generation)
+            .await
+    }
+
+    async fn open_read_only(
+        &mut self,
+        now: NowFn,
+        bootstrap_args: &BootstrapArgs,
+    ) -> Result<Connection, Error> {
+        self.openable_connection
+            .open_read_only(now, bootstrap_args)
+            .await
+    }
+
+    async fn open(
+        &mut self,
+        now: NowFn,
+        bootstrap_args: &BootstrapArgs,
+        deploy_generation: Option<u64>,
+    ) -> Result<Connection, Error> {
+        self.openable_connection
+            .open(now, bootstrap_args, deploy_generation)
+            .await
+    }
+
+    async fn is_initialized(&mut self) -> Result<bool, Error> {
+        self.openable_connection.is_initialized().await
+    }
+
+    async fn get_deployment_generation(&mut self) -> Result<Option<u64>, Error> {
+        self.openable_connection.get_deployment_generation().await
+    }
+}

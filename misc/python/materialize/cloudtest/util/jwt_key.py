@@ -8,14 +8,16 @@
 # by the Apache License, Version 2.0.
 
 import datetime
+import logging
 import uuid
+from textwrap import dedent
 
 import jwt
 import requests
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from materialize.cloudtest.util.common import eprint
+LOGGER = logging.getLogger(__name__)
 
 
 def _generate_jwt_keys() -> tuple[rsa.RSAPrivateKey, bytes]:
@@ -72,7 +74,15 @@ def fetch_jwt(email: str, password: str, host: str) -> str:
     try:
         res.raise_for_status()
     except Exception as e:
-        eprint(e, res, res.text)
+        LOGGER.error(
+            dedent(
+                f"""
+                e: {e}
+                res: {res}
+                res.text: {res.text}
+                """
+            )
+        )
         raise
 
     access_token: str = res.json()["accessToken"]

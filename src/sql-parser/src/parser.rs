@@ -32,7 +32,7 @@ use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_sql_lexer::keywords::*;
 use mz_sql_lexer::lexer::{self, LexerError, PosToken, Token};
 use serde::{Deserialize, Serialize};
-use tracing::warn;
+use tracing::{debug, warn};
 use IsLateral::*;
 use IsOptional::*;
 
@@ -118,6 +118,7 @@ pub fn parse_statements_with_limit(
 /// Parses a SQL string containing zero or more SQL statements.
 #[tracing::instrument(target = "compiler", level = "trace", name = "sql_to_ast")]
 pub fn parse_statements(sql: &str) -> Result<Vec<StatementParseResult>, ParserStatementError> {
+    debug!("parsing statements: {sql}");
     let tokens = lexer::lex(sql).map_err(|error| ParserStatementError {
         error: error.into(),
         statement: None,
@@ -3564,10 +3565,12 @@ impl<'a> Parser<'a> {
     fn parse_replica_option(&mut self) -> Result<ReplicaOption<Raw>, ParserError> {
         let name = match self.expect_one_of_keywords(&[
             AVAILABILITY,
+            BILLED,
             COMPUTE,
             COMPUTECTL,
             DISK,
             IDLE,
+            INTERNAL,
             INTROSPECTION,
             SIZE,
             STORAGE,
@@ -3577,6 +3580,10 @@ impl<'a> Parser<'a> {
             AVAILABILITY => {
                 self.expect_keyword(ZONE)?;
                 ReplicaOptionName::AvailabilityZone
+            }
+            BILLED => {
+                self.expect_keyword(AS)?;
+                ReplicaOptionName::BilledAs
             }
             COMPUTE => {
                 self.expect_keyword(ADDRESSES)?;
@@ -3591,6 +3598,7 @@ impl<'a> Parser<'a> {
                 self.expect_keywords(&[ARRANGEMENT, MERGE, EFFORT])?;
                 ReplicaOptionName::IdleArrangementMergeEffort
             }
+            INTERNAL => ReplicaOptionName::Internal,
             INTROSPECTION => match self.expect_one_of_keywords(&[DEBUGGING, INTERVAL])? {
                 DEBUGGING => ReplicaOptionName::IntrospectionDebugging,
                 INTERVAL => ReplicaOptionName::IntrospectionInterval,
@@ -6981,14 +6989,29 @@ impl<'a> Parser<'a> {
             Explainee::Index(self.parse_raw_name()?)
         } else {
             let broken = self.parse_keyword(BROKEN);
-            if self.peek_keywords(&[CREATE, MATERIALIZED, VIEW]) {
-                // Parse: `BROKEN? CREATE MATERIALIZED VIEW ...`
+
+            if self.peek_keywords(&[CREATE, MATERIALIZED, VIEW])
+                || self.peek_keywords(&[CREATE, OR, REPLACE, MATERIALIZED, VIEW])
+            {
+                // Parse: `BROKEN? CREATE [OR REPLACE] MATERIALIZED VIEW ...`
                 let _ = self.parse_keyword(CREATE); // consume CREATE token
                 let stmt = match self.parse_create_materialized_view()? {
                     Statement::CreateMaterializedView(stmt) => stmt,
                     _ => panic!("Unexpected statement type return after parsing"),
                 };
+
                 Explainee::CreateMaterializedView(Box::new(stmt), broken)
+            } else if self.peek_keywords(&[CREATE, INDEX])
+                || self.peek_keywords(&[CREATE, DEFAULT, INDEX])
+            {
+                // Parse: `BROKEN? CREATE INDEX ...`
+                let _ = self.parse_keyword(CREATE); // consume CREATE token
+                let stmt = match self.parse_create_index()? {
+                    Statement::CreateIndex(stmt) => stmt,
+                    _ => panic!("Unexpected statement type return after parsing"),
+                };
+
+                Explainee::CreateIndex(Box::new(stmt), broken)
             } else {
                 // Parse: `BROKEN? query`
                 let query = self.parse_query()?;

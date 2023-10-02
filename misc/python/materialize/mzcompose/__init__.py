@@ -74,6 +74,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     # Advance coverage on some Persist internals changes
     "persist_streaming_compaction_enabled": "true",
     "persist_streaming_snapshot_and_fetch_enabled": "true",
+    "enable_unified_clusters": "true",
 }
 
 DEFAULT_CRDB_ENVIRONMENT = [

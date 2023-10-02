@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 async-trait = "0.1.68"
+derivative = "2.2.0"
 futures = "0.3.25"
 itertools = "0.10.5"
 once_cell = "1.16.0"
@@ -31,6 +32,12 @@ serde = "1.0.152"
 serde_json = "1.0.89"
 tracing = "0.1.37"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+
+[dev-dependencies]
+mz-postgres-util = { path = "../postgres-util" }
+rand = "0.8.5"
+tokio = { version = "1.32.0" }
+tokio-postgres = { version = "0.7.8" }
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

@@ -14,14 +14,16 @@ use std::num::NonZeroI64;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::future::{self, BoxFuture, FutureExt, TryFutureExt};
 use futures::{Future, StreamExt};
 use mz_ore::metric;
-use mz_ore::metrics::MetricsRegistry;
+use mz_ore::metrics::{MetricsFutureExt, MetricsRegistry};
 use mz_ore::retry::Retry;
+use mz_ore::stats::histogram_seconds_buckets;
 use postgres_openssl::MakeTlsConnector;
-use prometheus::{IntCounter, IntCounterVec};
+use prometheus::{Histogram, HistogramVec, IntCounter, IntCounterVec};
 use rand::Rng;
 use timely::progress::Antichain;
 use tokio::sync::{mpsc, oneshot};
@@ -155,6 +157,7 @@ impl PreparedStatements {
 // Track statement execution counts.
 pub(crate) struct CountedStatements<'a> {
     stmts: &'a PreparedStatements,
+    metrics: &'a Arc<Metrics>,
     // Due to our use of try_join and futures, this needs to be an Arc Mutex.
     // Use a BTreeMap for deterministic debug printing. Use an Option to avoid
     // allocating an Arc when unused.
@@ -162,9 +165,10 @@ pub(crate) struct CountedStatements<'a> {
 }
 
 impl<'a> CountedStatements<'a> {
-    fn from(stmts: &'a PreparedStatements) -> Self {
+    fn from(stmts: &'a PreparedStatements, metrics: &'a Arc<Metrics>) -> Self {
         Self {
             stmts,
+            metrics,
             counts: if tracing::enabled!(Level::DEBUG) {
                 Some(Arc::new(Mutex::new(BTreeMap::new())))
             } else {
@@ -181,37 +185,85 @@ impl<'a> CountedStatements<'a> {
         }
     }
 
-    fn fetch_epoch(&self) -> &Statement {
-        self.inc("fetch_epoch");
-        &self.stmts.fetch_epoch
+    fn fetch_epoch(&self) -> (&Statement, Histogram) {
+        let name = "fetch_epoch";
+        self.inc(name);
+        let histogram = self
+            .metrics
+            .query_latency_duration_seconds
+            .with_label_values(&[name]);
+
+        (&self.stmts.fetch_epoch, histogram)
     }
-    pub(crate) fn iter_key(&self) -> &Statement {
-        self.inc("iter_key");
-        &self.stmts.iter_key
+    pub(crate) fn iter_key(&self) -> (&Statement, Histogram) {
+        let name = "iter_key";
+        self.inc(name);
+        let histogram = self
+            .metrics
+            .query_latency_duration_seconds
+            .with_label_values(&[name]);
+
+        (&self.stmts.iter_key, histogram)
     }
-    pub(crate) fn since(&self) -> &Statement {
-        self.inc("since");
-        &self.stmts.since
+    pub(crate) fn since(&self) -> (&Statement, Histogram) {
+        let name = "since";
+        self.inc(name);
+        let histogram = self
+            .metrics
+            .query_latency_duration_seconds
+            .with_label_values(&[name]);
+
+        (&self.stmts.since, histogram)
     }
-    pub(crate) fn upper(&self) -> &Statement {
-        self.inc("upper");
-        &self.stmts.upper
+    pub(crate) fn upper(&self) -> (&Statement, Histogram) {
+        let name = "upper";
+        self.inc(name);
+        let histogram = self
+            .metrics
+            .query_latency_duration_seconds
+            .with_label_values(&[name]);
+
+        (&self.stmts.upper, histogram)
     }
-    pub(crate) fn collection(&self) -> &Statement {
-        self.inc("collection");
-        &self.stmts.collection
+    pub(crate) fn collection(&self) -> (&Statement, Histogram) {
+        let name = "collection";
+        self.inc(name);
+        let histogram = self
+            .metrics
+            .query_latency_duration_seconds
+            .with_label_values(&[name]);
+
+        (&self.stmts.collection, histogram)
     }
-    pub(crate) fn iter(&self) -> &Statement {
-        self.inc("iter");
-        &self.stmts.iter
+    pub(crate) fn iter(&self) -> (&Statement, Histogram) {
+        let name = "iter";
+        self.inc(name);
+        let histogram = self
+            .metrics
+            .query_latency_duration_seconds
+            .with_label_values(&[name]);
+
+        (&self.stmts.iter, histogram)
     }
-    pub(crate) fn seal(&self) -> &Statement {
-        self.inc("seal");
-        &self.stmts.seal
+    pub(crate) fn seal(&self) -> (&Statement, Histogram) {
+        let name = "seal";
+        self.inc(name);
+        let histogram = self
+            .metrics
+            .query_latency_duration_seconds
+            .with_label_values(&[name]);
+
+        (&self.stmts.seal, histogram)
     }
-    pub(crate) fn compact(&self) -> &Statement {
-        self.inc("compact");
-        &self.stmts.compact
+    pub(crate) fn compact(&self) -> (&Statement, Histogram) {
+        let name = "compact";
+        self.inc(name);
+        let histogram = self
+            .metrics
+            .query_latency_duration_seconds
+            .with_label_values(&[name]);
+
+        (&self.stmts.compact, histogram)
     }
     /// Returns a ToStatement to INSERT a specified number of rows. First
     /// statement parameter is collection_id. Then key, value, time, diff as
@@ -381,9 +433,10 @@ impl StashFactory {
 }
 
 #[derive(Debug, Clone)]
-struct Metrics {
+pub(crate) struct Metrics {
     transactions: IntCounter,
     transaction_errors: IntCounterVec,
+    query_latency_duration_seconds: HistogramVec,
 }
 
 impl Metrics {
@@ -397,6 +450,12 @@ impl Metrics {
                 name: "mz_stash_transaction_errors",
                 help: "Total number of transaction errors.",
                 var_labels: ["cause"],
+            )),
+            query_latency_duration_seconds: registry.register(metric!(
+                name: "mz_query_latency",
+                help: "Latency for queries to CockroachDB",
+                var_labels: ["query_kind"],
+                buckets: histogram_seconds_buckets(0.000_128, 32.0),
             )),
         };
         // Initialize error codes to 0 so we can observe their increase.
@@ -527,6 +586,11 @@ impl Stash {
                 tracing::error!("postgres stash connection error: {}", e);
             }
         });
+        // The Config is shared with the Consolidator, so we update the application name in the
+        // session instead of the Config.
+        client
+            .batch_execute("SET application_name = 'stash'")
+            .await?;
         client
             .batch_execute("SET default_transaction_isolation = serializable")
             .await?;
@@ -766,7 +830,7 @@ impl Stash {
         // client is guaranteed to be Some here.
         let client = self.client.as_mut().unwrap();
         let stmts = self.statements.as_ref().unwrap();
-        let stmts = CountedStatements::from(stmts);
+        let stmts = CountedStatements::from(stmts, &self.metrics);
         // Generate statements to execute depending on our mode.
         let (tx_start, tx_end) = match self.txn_mode {
             TransactionMode::Writeable => ("BEGIN", "COMMIT"),
@@ -777,9 +841,12 @@ impl Stash {
             .await
             .map_err(|err| TransactionError::Txn(err.into()))?;
         // Pipeline the epoch query and closure.
+        let (query, histogram) = stmts.fetch_epoch();
         let epoch_fut = client
-            .query_one(stmts.fetch_epoch(), &[])
-            .map_err(|err| err.into());
+            .query_one(query, &[])
+            .map_err(|err| err.into())
+            .wall_time()
+            .observe(histogram);
         let f_fut = f(&stmts, client, &self.collections);
         let (epoch_row, res) = future::try_join(epoch_fut, f_fut)
             .await
@@ -923,6 +990,7 @@ impl Stash {
                             36 => upgrade::v36_to_v37::upgrade(),
                             37 => upgrade::v37_to_v38::upgrade(&mut tx).await?,
                             38 => upgrade::v38_to_v39::upgrade(&mut tx).await?,
+                            39 => upgrade::v39_to_v40::upgrade(&mut tx).await?,
 
                             // Up-to-date, no migration needed!
                             STASH_VERSION => return Ok(STASH_VERSION),
@@ -1073,8 +1141,16 @@ impl Stash {
         self.with_transaction(|_| Box::pin(async { Ok(()) })).await
     }
 
+    pub fn is_writeable(&self) -> bool {
+        matches!(self.txn_mode, TransactionMode::Writeable)
+    }
+
     pub fn is_readonly(&self) -> bool {
         matches!(self.txn_mode, TransactionMode::Readonly)
+    }
+
+    pub fn is_savepoint(&self) -> bool {
+        matches!(self.txn_mode, TransactionMode::Savepoint)
     }
 
     pub fn epoch(&self) -> Option<NonZeroI64> {
@@ -1269,6 +1345,11 @@ impl Consolidator {
                 }
             },
         );
+        // The Config is shared with the Stash, so we update the application name in the
+        // session instead of the Config.
+        client
+            .execute("SET application_name = 'stash-consolidator'", &[])
+            .await?;
         if let Some(schema) = &self.schema {
             client
                 .execute(format!("SET search_path TO {schema}").as_str(), &[])
@@ -1309,9 +1390,12 @@ impl Consolidator {
 
 /// Stash factory to use for tests that uses a random schema for a stash, which is re-used on all
 /// stash openings. The schema is dropped when this factory is dropped.
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct DebugStashFactory {
     url: String,
     schema: String,
+    #[derivative(Debug = "ignore")]
     tls: MakeTlsConnector,
     stash_factory: StashFactory,
 }
@@ -1324,7 +1408,7 @@ impl DebugStashFactory {
             std::env::var("COCKROACH_URL").expect("COCKROACH_URL environment variable is not set");
         let rng: usize = rand::thread_rng().gen();
         let schema = format!("schema_{rng}");
-        let tls = mz_postgres_util::make_tls(&tokio_postgres::Config::new()).unwrap();
+        let tls = mz_tls_util::make_tls(&tokio_postgres::Config::new()).unwrap();
 
         let (client, connection) = tokio_postgres::connect(&url, tls.clone()).await?;
         mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
@@ -1332,6 +1416,17 @@ impl DebugStashFactory {
                 tracing::error!("postgres stash connection error: {e}");
             }
         });
+        // Running tests in parallel has been causing some deadlock/starvation issue that we haven't
+        // been able to figure out. For some reason, uncommitted transactions are being left open
+        // which causes the schema cleanup in the Drop impl to block for an enormous amount of time
+        // (many minutes). Setting a small idle transaction timeout globally seems to resolve the
+        // issue somehow. This is a gross hack and we don't really understand what's going on, but
+        // for now it resolves issues in CI while we debug further.
+        client
+            .batch_execute(
+                "SET CLUSTER SETTING sql.defaults.idle_in_transaction_session_timeout TO '1s'",
+            )
+            .await?;
         client
             .batch_execute(&format!("CREATE SCHEMA {schema}"))
             .await?;
@@ -1400,6 +1495,19 @@ impl DebugStashFactory {
         self.try_open_inner(TransactionMode::Savepoint)
             .await
             .expect("unable to open debug stash")
+    }
+
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+    pub fn schema(&self) -> &str {
+        &self.schema
+    }
+    pub fn tls(&self) -> &MakeTlsConnector {
+        &self.tls
+    }
+    pub fn stash_factory(&self) -> &StashFactory {
+        &self.stash_factory
     }
 }
 

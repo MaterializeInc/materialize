@@ -625,6 +625,7 @@ class Composition:
             persistent: Replace the container's entrypoint and command with
                 `sleep infinity` so that additional commands can be scheduled
                 on the container with `Composition.exec`.
+            max_retries: Number of retries on failure.
         """
         if persistent:
             old_compose = copy.deepcopy(self.compose)
@@ -700,7 +701,13 @@ class Composition:
     def sanity_restart_mz(self) -> None:
         """Restart Materialized if it is part of the composition to find
         problems with persisted objects, functions as a sanity check."""
-        if "materialized" in self.compose["services"]:
+        # Exclude environmentd image, which is used in cloud-canary, and doesn't start up fully without clusterd images
+        if (
+            "materialized" in self.compose["services"]
+            and "materialize/environmentd"
+            not in self.compose["services"]["materialized"]["image"]
+        ):
+            ui.header("Sanity Check: Restart Mz, verify source/sink/replica health")
             self.kill("materialized")
             # TODO(def-): Better way to detect when kill has finished
             time.sleep(3)

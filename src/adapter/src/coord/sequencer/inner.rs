@@ -31,7 +31,7 @@ use mz_expr::{
 use mz_ore::collections::CollectionExt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::vec::VecExt;
-use mz_ore::{soft_assert, task};
+use mz_ore::{soft_assert, soft_panic_or_log, task};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::explain::{
@@ -53,9 +53,9 @@ use mz_sql::names::{
 };
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_sql::plan::{
-    AlterOptionParameter, Explainee, IndexOption, MaterializedView, MutationKind, OptimizerConfig,
-    Params, Plan, PlannedAlterRoleOption, PlannedRoleVariable, QueryWhen, SideEffectingFunc,
-    SourceSinkClusterConfig, SubscribeFrom, UpdatePrivilege, VariableValue,
+    AlterOptionParameter, Explainee, Index, IndexOption, MaterializedView, MutationKind,
+    OptimizerConfig, Params, Plan, PlannedAlterRoleOption, PlannedRoleVariable, QueryWhen,
+    SideEffectingFunc, SourceSinkClusterConfig, SubscribeFrom, UpdatePrivilege, VariableValue,
 };
 use mz_sql::session::vars::{
     IsolationLevel, OwnedVarInput, SessionVars, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
@@ -964,15 +964,7 @@ impl Coordinator {
             ambiguous_columns,
         } = plan;
 
-        if !self
-            .catalog()
-            .state()
-            .is_system_schema_specifier(&name.qualifiers.schema_spec)
-            && !self.is_compute_cluster(cluster_id)
-        {
-            let cluster_name = self.catalog().get_cluster(cluster_id).name.clone();
-            return Err(AdapterError::BadItemInStorageCluster { cluster_name });
-        }
+        self.ensure_cluster_can_host_compute_item(&name, cluster_id)?;
 
         // Validate any references in the materialized view's expression. We do
         // this on the unoptimized plan to better reflect what the user typed.
@@ -1122,15 +1114,7 @@ impl Coordinator {
         // An index must be created on a specific cluster.
         let cluster_id = index.cluster_id;
 
-        if !self
-            .catalog()
-            .state()
-            .is_system_schema_specifier(&name.qualifiers.schema_spec)
-            && !self.is_compute_cluster(cluster_id)
-        {
-            let cluster_name = self.catalog().get_cluster(cluster_id).name.clone();
-            return Err(AdapterError::BadItemInStorageCluster { cluster_name });
-        }
+        self.ensure_cluster_can_host_compute_item(&name, cluster_id)?;
 
         let empty_key = index.keys.is_empty();
 
@@ -1390,7 +1374,7 @@ impl Coordinator {
                 &cluster_id,
                 &catalog,
             );
-            for replica in cluster.replicas_by_id.values() {
+            for replica in cluster.replicas() {
                 if let Some(role_name) = dropped_roles.get(&replica.owner_id) {
                     let replica_id =
                         SystemObjectId::Object((replica.cluster_id(), replica.replica_id()).into());
@@ -1537,6 +1521,9 @@ impl Coordinator {
         // database or schema.
         let mut default_privilege_revokes = BTreeSet::new();
 
+        // Clusters we're dropping
+        let mut clusters_to_drop = BTreeSet::new();
+
         let ids_set = ids.iter().collect::<BTreeSet<_>>();
         for id in &ids {
             match id {
@@ -1553,6 +1540,7 @@ impl Coordinator {
                     }
                 }
                 ObjectId::Cluster(id) => {
+                    clusters_to_drop.insert(*id);
                     if let Some(active_id) = self
                         .catalog()
                         .active_cluster(session)
@@ -1606,6 +1594,27 @@ impl Coordinator {
                                 index_name: humanizer.humanize_id(*id).unwrap_or(id.to_string()),
                                 dependant_objects: dependants,
                             });
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        for id in &ids {
+            match id {
+                // Validate that `ClusterReplica` drops do not drop replicas of managed clusters,
+                // unless they are internal replicas, which exist outside the scope
+                // of managed clusters.
+                ObjectId::ClusterReplica((cluster_id, replica_id)) => {
+                    if !clusters_to_drop.contains(cluster_id) {
+                        let cluster = self.catalog.get_cluster(*cluster_id);
+                        if cluster.is_managed() {
+                            let replica =
+                                cluster.replica(*replica_id).expect("Catalog out of sync");
+                            if !replica.config.location.internal() {
+                                coord_bail!("cannot drop replica of managed cluster");
+                            }
                         }
                     }
                 }
@@ -2137,16 +2146,16 @@ impl Coordinator {
         let target_replica_name = session.vars().cluster_replica();
         let mut target_replica = target_replica_name
             .map(|name| {
-                cluster.replica_id_by_name.get(name).copied().ok_or(
-                    AdapterError::UnknownClusterReplica {
+                cluster
+                    .replica_id(name)
+                    .ok_or(AdapterError::UnknownClusterReplica {
                         cluster_name: cluster.name.clone(),
                         replica_name: name.to_string(),
-                    },
-                )
+                    })
             })
             .transpose()?;
 
-        if cluster.replicas_by_id.is_empty() {
+        if cluster.replicas().next().is_none() {
             return Err(AdapterError::NoClusterReplicasAvailable(
                 cluster.name.clone(),
             ));
@@ -2729,12 +2738,12 @@ impl Coordinator {
         let target_replica_name = ctx.session().vars().cluster_replica();
         let mut target_replica = target_replica_name
             .map(|name| {
-                cluster.replica_id_by_name.get(name).copied().ok_or(
-                    AdapterError::UnknownClusterReplica {
+                cluster
+                    .replica_id(name)
+                    .ok_or(AdapterError::UnknownClusterReplica {
                         cluster_name: cluster.name.clone(),
                         replica_name: name.to_string(),
-                    },
-                )
+                    })
             })
             .transpose()?;
 
@@ -3072,6 +3081,7 @@ impl Coordinator {
             unreachable!()
         };
 
+        let stmt_kind = plan::ExplaineeStatementKind::from(&stmt);
         let broken = stmt.broken();
         let row_set_finishing = stmt.row_set_finishing();
 
@@ -3079,18 +3089,26 @@ impl Coordinator {
         // executing the optimizer pipeline.
         let optimizer_trace = OptimizerTrace::new(broken, stage.path());
 
+        // It's easy to leak `Dispatch`'s (see
+        // <https://docs.rs/tracing/latest/tracing/struct.Dispatch.html#method.downgrade>), but
+        // we aren't storing this clone in a `Subscriber`, so we should be fine.
+        let root_dispatch = tracing::dispatcher::get_default(|d| d.clone());
+
         let pipeline_result = match stmt {
             plan::ExplaineeStatement::Query {
                 raw_plan,
                 row_set_finishing,
                 broken,
             } => {
+                // Please see the doc comment on `explain_query_optimizer_pipeline` for more
+                // information regarding its subtleties.
                 self.explain_query_optimizer_pipeline(
                     raw_plan,
                     broken,
                     target_cluster,
                     ctx.session_mut(),
                     &row_set_finishing,
+                    root_dispatch,
                 )
                 .with_subscriber(&optimizer_trace)
                 .await
@@ -3102,15 +3120,26 @@ impl Coordinator {
                 cluster_id,
                 broken,
             } => {
+                // Please see the docs on `explain_query_optimizer_pipeline` above.
                 self.explain_create_materialized_view_optimizer_pipeline(
                     name,
                     raw_plan,
                     column_names,
                     cluster_id,
                     broken,
+                    root_dispatch,
                 )
                 .with_subscriber(&optimizer_trace)
                 .await
+            }
+            plan::ExplaineeStatement::CreateIndex {
+                name,
+                index,
+                broken,
+            } => {
+                self.explain_create_index_optimizer_pipeline(name, index, broken)
+                    .with_subscriber(&optimizer_trace)
+                    .await
             }
         };
 
@@ -3166,9 +3195,17 @@ impl Coordinator {
                     .find(|entry| entry.path == path)
                     .map(|entry| Row::pack_slice(&[Datum::from(entry.plan.as_str())]))
                     .ok_or_else(|| {
-                        AdapterError::Internal(format!(
-                            "stage `{path}` not present in the collected optimizer trace",
-                        ))
+                        if !stmt_kind.supports(&stage) {
+                            // Print a nicer error for unsupported stages.
+                            AdapterError::Unstructured(anyhow!(format!(
+                                "cannot EXPLAIN {stage} FOR {stmt_kind}"
+                            )))
+                        } else {
+                            // We don't expect this stage to be missing.
+                            AdapterError::Internal(format!(
+                                "stage `{path}` not present in the collected optimizer trace",
+                            ))
+                        }
                     })?;
                 vec![row]
             }
@@ -3181,6 +3218,30 @@ impl Coordinator {
         Ok(Self::send_immediate_rows(rows))
     }
 
+    /// WARNING, ENTERING SPOOKY ZONE 3.0
+    ///
+    /// This method is ALWAYS called within the context of a specialized `tracing` `Subscriber` (set as
+    /// the thread-local default `Dispatch` using `.with_subscriber` at call-sites.
+    ///
+    /// In general, this should be considered safe, but `tracing` has limitations that mean that
+    /// any `Span` created under the specialized `Subscriber` that _leaves_ this function will
+    /// almost assuredly cause a panic inside `tracing`. This is because `Span`s track the
+    /// `Subscriber` they were created under, but certain actions (like an ordinary `Span` exit)
+    /// will call a method on the _thread-local_ `Subscriber`, which may be backed with a different
+    /// `Registry`.
+    ///
+    /// At first glance, there is no obvious way this method leaks `Span`s, but ANY tokio
+    /// resource (like `oneshot` channels) create `Span`s if tokio is built with `tokio_unstable`
+    /// and the `tracing` feature. This method has been audited to make sure ALL such
+    /// cases are dispatched inside the global `root_dispatch`, and **any change to this method
+    /// needs to ensure this invariant is upheld.**
+    ///
+    /// It is a bit wonky to have this method under a specialized `Dispatch`, but ensuring
+    /// all `.await` points inside it use the passed `root_dispatch`, but splitting the method
+    /// into pieces to allow us to control the `Dispatch` for various pieces at a higher-level
+    /// would be very hard to read. Additionally, once the issues with `broken` are resolved
+    /// (as discussed in <https://github.com/MaterializeInc/materialize/pull/21809>), this
+    /// can be simplified, as only a _singular_ `Registry` will be in use.
     #[tracing::instrument(target = "optimizer", level = "trace", name = "optimize", skip_all)]
     async fn explain_query_optimizer_pipeline(
         &mut self,
@@ -3189,6 +3250,7 @@ impl Coordinator {
         target_cluster: TargetCluster,
         session: &mut Session,
         finishing: &Option<RowSetFinishing>,
+        root_dispatch: tracing::Dispatch,
     ) -> Result<
         (
             UsedIndexes,
@@ -3202,27 +3264,6 @@ impl Coordinator {
 
         if broken {
             tracing::warn!("EXPLAIN ... BROKEN <query> is known to leak memory, use with caution");
-        }
-
-        /// Like [`mz_ore::panic::catch_unwind`], with an extra guard that must be true
-        /// in order to wrap the function call in a [`mz_ore::panic::catch_unwind`] call.
-        fn catch_unwind<R, E, F>(guard: bool, stage: &'static str, f: F) -> Result<R, AdapterError>
-        where
-            F: FnOnce() -> Result<R, E>,
-            E: Into<AdapterError>,
-        {
-            if guard {
-                let r: Result<Result<R, E>, _> = mz_ore::panic::catch_unwind(AssertUnwindSafe(f));
-                match r {
-                    Ok(result) => result.map_err(Into::into),
-                    Err(_) => {
-                        let msg = format!("panic at the `{}` optimization stage", stage);
-                        Err(AdapterError::Internal(msg))
-                    }
-                }
-            } else {
-                f().map_err(Into::into)
-            }
         }
 
         let catalog = self.catalog();
@@ -3262,13 +3303,10 @@ impl Coordinator {
 
         // Execute the `optimize/local` stage.
         let optimized_plan = catch_unwind(broken, "local", || {
-            tracing::span!(target: "optimizer", Level::TRACE, "local").in_scope(|| {
-                let optimized_plan = self.view_optimizer.optimize(decorrelated_plan);
-                if let Ok(ref optimized_plan) = optimized_plan {
-                    trace_plan(optimized_plan.as_inner());
-                }
-                optimized_plan.map_err(AdapterError::from)
-            })
+            let _span = tracing::span!(target: "optimizer", Level::TRACE, "local").entered();
+            let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
+            trace_plan(optimized_plan.as_inner());
+            Ok::<_, AdapterError>(optimized_plan)
         })?;
 
         let mut dataflow = DataflowDesc::new("explanation".to_string());
@@ -3304,6 +3342,7 @@ impl Coordinator {
         // Load cardinality statistics.
         let stats = self
             .statistics_oracle(session, &source_ids, query_as_of.clone(), is_oneshot)
+            .with_subscriber(root_dispatch)
             .await?;
 
         // Execute the `optimize/global` stage.
@@ -3373,6 +3412,13 @@ impl Coordinator {
         ))
     }
 
+    /// WARNING, ENTERING SPOOKY ZONE 3.0
+    ///
+    /// Please read the docs on `explain_query_optimizer_pipeline`.
+    ///
+    /// Currently this method does not need to use the global `Dispatch` like
+    /// `explain_query_optimizer_pipeline`, but it is passed in case changes to this function
+    /// require it.
     #[tracing::instrument(target = "optimizer", level = "trace", name = "optimize", skip_all)]
     async fn explain_create_materialized_view_optimizer_pipeline(
         &mut self,
@@ -3381,6 +3427,7 @@ impl Coordinator {
         column_names: Vec<ColumnName>,
         target_cluster_id: ClusterId,
         broken: bool,
+        _root_dispatch: tracing::Dispatch,
     ) -> Result<
         (
             UsedIndexes,
@@ -3394,30 +3441,6 @@ impl Coordinator {
 
         if broken {
             tracing::warn!("EXPLAIN ... BROKEN <query> is known to leak memory, use with caution");
-        }
-
-        // Initialize helper context
-        // -------------------------
-
-        /// Like [`mz_ore::panic::catch_unwind`], with an extra guard that must be true
-        /// in order to wrap the function call in a [`mz_ore::panic::catch_unwind`] call.
-        fn catch_unwind<R, E, F>(guard: bool, stage: &'static str, f: F) -> Result<R, AdapterError>
-        where
-            F: FnOnce() -> Result<R, E>,
-            E: Into<AdapterError>,
-        {
-            if guard {
-                let r: Result<Result<R, E>, _> = mz_ore::panic::catch_unwind(AssertUnwindSafe(f));
-                match r {
-                    Ok(result) => result.map_err(Into::into),
-                    Err(_) => {
-                        let msg = format!("panic at the `{}` optimization stage", stage);
-                        Err(AdapterError::Internal(msg))
-                    }
-                }
-            } else {
-                f().map_err(Into::into)
-            }
         }
 
         let full_name = self.catalog().resolve_full_name(&name, None);
@@ -3465,13 +3488,10 @@ impl Coordinator {
 
         // Execute the `optimize/local` stage.
         let optimized_plan = catch_unwind(broken, "local", || {
-            tracing::span!(target: "optimizer", Level::TRACE, "local").in_scope(|| {
-                let optimized_plan = self.view_optimizer.optimize(decorrelated_plan);
-                if let Ok(ref optimized_plan) = optimized_plan {
-                    trace_plan(optimized_plan.as_inner());
-                }
-                optimized_plan.map_err(AdapterError::from)
-            })
+            let _span = tracing::span!(target: "optimizer", Level::TRACE, "local").entered();
+            let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
+            trace_plan(optimized_plan.as_inner());
+            Ok::<_, AdapterError>(optimized_plan)
         })?;
 
         // Execute the `optimize/global` stage.
@@ -3513,6 +3533,140 @@ impl Coordinator {
         // TODO: This should always be the case here so we can demote
         // the outer index to a soft assert.
         if df.index_exports.is_empty() {
+            df.until = Antichain::from_elem(Timestamp::MIN);
+            for (_, sink) in &df.sink_exports {
+                df.until.join_assign(&sink.up_to);
+            }
+        }
+
+        // Execute the `optimize/finalize_dataflow` stage.
+        let df = catch_unwind(broken, "finalize_dataflow", || {
+            self.finalize_dataflow(df, target_cluster_id)
+        })?;
+
+        // Trace the resulting plan for the top-level `optimize` path.
+        trace_plan(&df);
+
+        // Return objects that need to be passed to the `ExplainContext`
+        // when rendering explanations for the various trace entries.
+        Ok((used_indexes, None, df_metainfo, transient_items))
+    }
+
+    #[tracing::instrument(target = "optimizer", level = "trace", name = "optimize", skip_all)]
+    async fn explain_create_index_optimizer_pipeline(
+        &mut self,
+        name: QualifiedItemName,
+        index: Index,
+        broken: bool,
+    ) -> Result<
+        (
+            UsedIndexes,
+            Option<FastPathPlan>,
+            DataflowMetainfo,
+            BTreeMap<GlobalId, TransientItem>,
+        ),
+        AdapterError,
+    > {
+        use mz_repr::explain::trace_plan;
+
+        if broken {
+            tracing::warn!("EXPLAIN ... BROKEN <query> is known to leak memory, use with caution");
+        }
+
+        // Initialize helper context
+        // -------------------------
+
+        let target_cluster_id = index.cluster_id;
+        let compute_instance = self
+            .instance_snapshot(target_cluster_id)
+            .expect("compute instance does not exist");
+        let exported_index_id = self.allocate_transient_id()?;
+        let state = self.catalog().state();
+        let on_entry = self.catalog.get_entry(&index.on);
+        let full_name = self.catalog.resolve_full_name(&name, on_entry.conn_id());
+        let on_desc = on_entry
+            .desc(&full_name)
+            .expect("can only create indexes on items with a valid description");
+
+        // Create a transient catalog item
+        // -------------------------------
+
+        let mut transient_items = BTreeMap::new();
+        transient_items.insert(exported_index_id, {
+            TransientItem::new(
+                Some(full_name.to_string()),
+                Some(full_name.item.to_string()),
+                Some(on_desc.iter_names().map(|c| c.to_string()).collect()),
+            )
+        });
+
+        // Global optimization
+        // -------------------
+        let (mut df, df_metainfo) = catch_unwind(broken, "global", || {
+            // This code should mirror the sequence of steps performed in
+            // `build_index_dataflow`. We cannot call `build_index_dataflow`
+            // here directly because it assumes that the index is present in the
+            // catalog as an `IndexEntry`. However, in the condtext of `EXPLAIN
+            // CREATE` we don't want to do actually modify the catalog state.
+
+            let mut df_builder = DataflowBuilder::new(self.catalog().state(), compute_instance);
+            let mut df = DataflowDesc::new(full_name.to_string());
+
+            df_builder.import_into_dataflow(&index.on, &mut df)?;
+
+            for desc in df.objects_to_build.iter_mut() {
+                prep_relation_expr(state, &mut desc.plan, ExprPrepStyle::Index)?;
+            }
+
+            let mut index_description = IndexDesc {
+                on_id: index.on,
+                key: index.keys.clone(),
+            };
+
+            for key in index_description.key.iter_mut() {
+                prep_scalar_expr(state, key, ExprPrepStyle::Index)?;
+            }
+
+            df.export_index(exported_index_id, index_description, on_desc.typ().clone());
+
+            // Optimize the dataflow across views, and any other ways that appeal.
+            let df_metainfo = mz_transform::optimize_dataflow(
+                &mut df,
+                &df_builder,
+                &mz_transform::EmptyStatisticsOracle,
+            )?;
+
+            Ok::<_, AdapterError>((df, df_metainfo))
+        })?;
+
+        // Collect the list of indexes used by the dataflow at this point
+        let used_indexes = UsedIndexes::new(
+            df
+                .index_imports
+                .iter()
+                .map(|(id, _index_import)| {
+                    (*id, df_metainfo.index_usage_types.get(id).expect("prune_and_annotate_dataflow_index_imports should have been called already").clone())
+                })
+                .collect(),
+        );
+
+        // Finalization
+        // ------------
+
+        // In the actual sequencing of `CREATE INDEX` statements, the following
+        // DataflowDescription manipulations happen in the `ship_dataflow` call.
+        // However, since we don't want to ship, we have temporary duplicated
+        // the code below. This will be resolved once we implement the proposal
+        // from #20569.
+
+        // If the only outputs of the dataflow are sinks, we might be able to
+        // turn off the computation early, if they all have non-trivial
+        // `up_to`s.
+        //
+        // TODO: This should never be the case here so we can probably remove
+        // the entire thing.
+        if df.index_exports.is_empty() {
+            soft_panic_or_log!("unexpectedly setting df.until for an index");
             df.until = Antichain::from_elem(Timestamp::MIN);
             for (_, sink) in &df.sink_exports {
                 df.until.join_assign(&sink.up_to);
@@ -5286,13 +5440,10 @@ impl Coordinator {
                 // Alter owner cascades down to linked clusters and replicas.
                 if let Some(cluster) = self.catalog().get_linked_cluster(*global_id) {
                     let linked_cluster_replica_ops =
-                        cluster
-                            .replicas_by_id
-                            .keys()
-                            .map(|id| catalog::Op::UpdateOwner {
-                                id: ObjectId::ClusterReplica((cluster.id(), *id)),
-                                new_owner,
-                            });
+                        cluster.replicas().map(|r| catalog::Op::UpdateOwner {
+                            id: ObjectId::ClusterReplica((cluster.id(), r.replica_id)),
+                            new_owner,
+                        });
                     ops.extend(linked_cluster_replica_ops);
                     ops.push(catalog::Op::UpdateOwner {
                         id: ObjectId::Cluster(cluster.id()),
@@ -5315,13 +5466,10 @@ impl Coordinator {
                 let cluster = self.catalog().get_cluster(*cluster_id);
                 // Alter owner cascades down to cluster replicas.
                 let managed_cluster_replica_ops =
-                    cluster
-                        .replicas_by_id
-                        .keys()
-                        .map(|replica_id| catalog::Op::UpdateOwner {
-                            id: ObjectId::ClusterReplica((cluster.id(), *replica_id)),
-                            new_owner,
-                        });
+                    cluster.replicas().map(|replica| catalog::Op::UpdateOwner {
+                        id: ObjectId::ClusterReplica((cluster.id(), replica.replica_id())),
+                        new_owner,
+                    });
                 ops.extend(managed_cluster_replica_ops);
             }
             _ => {}
@@ -5476,10 +5624,10 @@ where
     // Reading from log sources on replicated clusters is only allowed if a
     // target replica is selected. Otherwise, we have no way of knowing which
     // replica we read the introspection data from.
-    let num_replicas = cluster.replicas_by_id.len();
+    let num_replicas = cluster.replicas().count();
     if target_replica.is_none() {
         if num_replicas == 1 {
-            *target_replica = cluster.replicas_by_id.keys().next().copied();
+            *target_replica = cluster.replicas().map(|r| r.replica_id).next();
         } else {
             return Err(AdapterError::UntargetedLogRead { log_names });
         }
@@ -5488,7 +5636,7 @@ where
     // Ensure that logging is initialized for the target replica, lest
     // we try to read from a non-existing arrangement.
     let replica_id = target_replica.expect("set to `Some` above");
-    let replica = &cluster.replicas_by_id[&replica_id];
+    let replica = &cluster.replica(replica_id).expect("Replica must exist");
     if !replica.config.compute.logging.enabled() {
         return Err(AdapterError::IntrospectionDisabled { log_names });
     }
@@ -5505,6 +5653,31 @@ fn alter_storage_cluster_config(size: AlterOptionParameter) -> Option<SourceSink
         AlterOptionParameter::Set(size) => Some(SourceSinkClusterConfig::Linked { size }),
         AlterOptionParameter::Reset => Some(SourceSinkClusterConfig::Undefined),
         AlterOptionParameter::Unchanged => None,
+    }
+}
+
+/// Like [`mz_ore::panic::catch_unwind`], with an extra guard that must be true
+/// in order to wrap the function call in a [`mz_ore::panic::catch_unwind`]
+/// call.
+///
+/// Used to implement `EXPLAIN BROKEN <statement>` in the `~_optimizer_pipeline`
+/// methods above.
+fn catch_unwind<R, E, F>(guard: bool, stage: &'static str, f: F) -> Result<R, AdapterError>
+where
+    F: FnOnce() -> Result<R, E>,
+    E: Into<AdapterError>,
+{
+    if guard {
+        let r: Result<Result<R, E>, _> = mz_ore::panic::catch_unwind(AssertUnwindSafe(f));
+        match r {
+            Ok(result) => result.map_err(Into::into),
+            Err(_) => {
+                let msg = format!("panic at the `{}` optimization stage", stage);
+                Err(AdapterError::Internal(msg))
+            }
+        }
+    } else {
+        f().map_err(Into::into)
     }
 }
 

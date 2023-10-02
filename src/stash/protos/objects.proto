@@ -360,6 +360,8 @@ message ReplicaConfig {
         string size = 1;
         optional string availability_zone = 2;
         bool disk = 4;
+        bool internal = 5;
+        optional string billed_as = 6;
     }
 
     oneof location {
@@ -534,6 +536,8 @@ message AuditLogEventV1 {
         string replica_name = 4;
         string logical_size = 5;
         bool disk = 6;
+        optional string billed_as = 7;
+        bool internal = 8;
     }
 
     message DropClusterReplicaV1 {

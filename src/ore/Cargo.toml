@@ -87,7 +87,7 @@ tokio = { version = "1.32.0", features = ["macros", "rt-multi-thread"] }
 tokio-test = "0.4.2"
 
 [features]
-default = ["workspace-hack"]
+default = ["tokio-console", "workspace-hack"]
 async = [
   "async-trait",
   "futures",
@@ -120,7 +120,7 @@ tracing_ = [
   "sentry-tracing",
   "yansi",
 ]
-tokio-console = ["console-subscriber", "tokio", "tokio/tracing"]
+tokio-console = ["console-subscriber", "tokio", "tokio/tracing", "network"]
 cli = ["clap"]
 stack = ["stacker"]
 test = ["anyhow", "ctor", "tracing-subscriber"]

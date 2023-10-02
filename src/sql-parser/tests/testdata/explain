@@ -153,3 +153,17 @@ EXPLAIN BROKEN CREATE MATERIALIZED VIEW mv AS SELECT 665
 EXPLAIN OPTIMIZED PLAN AS TEXT FOR BROKEN CREATE MATERIALIZED VIEW mv AS SELECT 665
 =>
 ExplainPlan(ExplainPlanStatement { stage: OptimizedPlan, config_flags: [], format: Text, explainee: CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("mv")]), columns: [], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } }, true) })
+
+parse-statement
+EXPLAIN BROKEN CREATE DEFAULT INDEX ON q1
+----
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR BROKEN CREATE DEFAULT INDEX ON q1
+=>
+ExplainPlan(ExplainPlanStatement { stage: OptimizedPlan, config_flags: [], format: Text, explainee: CreateIndex(CreateIndexStatement { name: None, in_cluster: None, on_name: Name(UnresolvedItemName([Ident("q1")])), key_parts: None, with_options: [], if_not_exists: false }, true) })
+
+parse-statement
+EXPLAIN OPTIMIZED PLAN FOR CREATE INDEX ON v(auction_id)
+----
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR CREATE INDEX ON v (auction_id)
+=>
+ExplainPlan(ExplainPlanStatement { stage: OptimizedPlan, config_flags: [], format: Text, explainee: CreateIndex(CreateIndexStatement { name: None, in_cluster: None, on_name: Name(UnresolvedItemName([Ident("v")])), key_parts: Some([Identifier([Ident("auction_id")])]), with_options: [], if_not_exists: false }, false) })

@@ -39,6 +39,11 @@ statement error cannot EXPLAIN RAW PLAN FOR INDEX
 EXPLAIN RAW PLAN AS TEXT FOR
 INDEX v_a_idx
 
+# EXPLAIN CREATE INDEX is not supported for raw plans
+statement error cannot EXPLAIN RAW PLAN FOR CREATE INDEX
+EXPLAIN RAW PLAN AS TEXT FOR
+CREATE INDEX v_a_idx ON v(a)
+
 # Test basic linear chains.
 query T multiline
 EXPLAIN RAW PLAN AS TEXT FOR

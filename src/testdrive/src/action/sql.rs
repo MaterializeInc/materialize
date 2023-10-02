@@ -122,6 +122,14 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
         return Err(e);
     }
 
+    if !state.no_consistency_checks {
+        run_extra_checks(state, &stmt).await?;
+    }
+
+    Ok(ControlFlow::Continue)
+}
+
+async fn run_extra_checks(state: &State, stmt: &Statement<Raw>) -> Result<(), anyhow::Error> {
     match stmt {
         Statement::AlterDefaultPrivileges { .. }
         | Statement::AlterOwner { .. }
@@ -207,8 +215,7 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
         }
         _ => {}
     }
-
-    Ok(ControlFlow::Continue)
+    Ok(())
 }
 
 async fn try_run_sql(
