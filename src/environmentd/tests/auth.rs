@@ -308,34 +308,35 @@ enum Assert<E, D = ()> {
 
 enum TestCase<'a> {
     Pgwire {
-        user_to_auth_as: &'a str,
-        user_reported_by_system: &'a str,
-        password: Option<&'a str>,
+        user_to_auth_as: String,
+        user_reported_by_system: String,
+        password: Option<String>,
         ssl_mode: SslMode,
-        configure: Box<dyn Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack> + 'a>,
+        configure: Box<dyn Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack> + Send + 'a>,
         assert: Assert<
             // A non-retrying, raw error.
-            Box<dyn Fn(&tokio_postgres::error::Error) + 'a>,
+            Box<dyn Fn(&tokio_postgres::error::Error) + Send + 'a>,
             // A check that retries until it gets a DbError.
-            Box<dyn Fn(&tokio_postgres::error::DbError) + 'a>,
+            Box<dyn Fn(&tokio_postgres::error::DbError) + Send + Sync + 'a>,
         >,
     },
     Http {
-        user_to_auth_as: &'a str,
-        user_reported_by_system: &'a str,
+        user_to_auth_as: String,
+        user_reported_by_system: String,
         scheme: Scheme,
-        headers: &'a HeaderMap,
-        configure: Box<dyn Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack> + 'a>,
-        assert: Assert<Box<dyn Fn(Option<StatusCode>, String) + 'a>>,
+        headers: HeaderMap,
+        configure:
+            Box<dyn Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack> + Send + Sync + 'a>,
+        assert: Assert<Box<dyn Fn(Option<StatusCode>, String) + Send + 'a>>,
     },
     Ws {
-        auth: &'a WebSocketAuth,
-        configure: Box<dyn Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack> + 'a>,
-        assert: Assert<Box<dyn Fn(CloseCode, String) + 'a>>,
+        auth: WebSocketAuth,
+        configure: Box<dyn Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack> + Send + 'a>,
+        assert: Assert<Box<dyn Fn(CloseCode, String) + Send + 'a>>,
     },
 }
 
-fn assert_http_rejected() -> Assert<Box<dyn Fn(Option<StatusCode>, String)>> {
+fn assert_http_rejected() -> Assert<Box<dyn Fn(Option<StatusCode>, String) + Send>> {
     Assert::Err(Box::new(|code, message| {
         const ALLOWED_MESSAGES: [&str; 2] = [
             "Connection reset by peer",
@@ -351,273 +352,291 @@ fn assert_http_rejected() -> Assert<Box<dyn Fn(Option<StatusCode>, String)>> {
     }))
 }
 
-fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
+fn run_tests<const N: usize>(header: &str, server: util::Server, tests: [TestCase<'static>; N]) {
     println!("==> {}", header);
     let runtime = Runtime::new().unwrap();
+    let mut handles = Vec::with_capacity(tests.len());
     for test in tests {
-        match test {
-            TestCase::Pgwire {
-                user_to_auth_as,
-                user_reported_by_system,
-                password,
-                ssl_mode,
-                configure,
-                assert,
-            } => {
-                println!(
-                    "pgwire user={} password={:?} ssl_mode={:?}",
-                    user_to_auth_as, password, ssl_mode
-                );
+        let config = server.pg_config_async();
+        let http_port = server.inner.http_local_addr().port();
+        let handle = runtime.spawn(async move { run_test(config, http_port, test).await });
+        handles.push(handle);
+    }
+    for handle in handles {
+        runtime.block_on(handle).unwrap();
+    }
+}
 
-                let tls = make_pg_tls(configure);
-                let mut pg_client = server.pg_config();
-                pg_client
-                    .ssl_mode(*ssl_mode)
-                    .user(user_to_auth_as)
-                    .password(password.unwrap_or(""));
+async fn run_test<'a>(mut pg_client: tokio_postgres::Config, http_port: u16, test: TestCase<'a>) {
+    match test {
+        TestCase::Pgwire {
+            user_to_auth_as,
+            user_reported_by_system,
+            password,
+            ssl_mode,
+            configure,
+            assert,
+        } => {
+            println!(
+                "pgwire user={} password={:?} ssl_mode={:?}",
+                user_to_auth_as, password, ssl_mode
+            );
 
-                match assert {
-                    Assert::Success => {
-                        let mut pg_client = pg_client.connect(tls).unwrap();
-                        let row = pg_client.query_one("SELECT current_user", &[]).unwrap();
-                        assert_eq!(row.get::<_, String>(0), *user_reported_by_system);
-                    }
-                    Assert::SuccessSuperuserCheck(is_superuser) => {
-                        let mut pg_client = pg_client.connect(tls.clone()).unwrap();
-                        let row = pg_client.query_one("SELECT current_user", &[]).unwrap();
-                        assert_eq!(row.get::<_, String>(0), *user_reported_by_system);
-                        let row = pg_client.query_one("SHOW is_superuser", &[]).unwrap();
-                        let expected = if *is_superuser { "on" } else { "off" };
-                        assert_eq!(row.get::<_, String>(0), *expected);
-                    }
-                    Assert::DbErr(check) => {
-                        // This sometimes returns a network error, so retry until we get a db error.
-                        Retry::default()
-                            .max_duration(Duration::from_secs(10))
-                            .retry(|_| {
-                                // Due to delayed startup, we must attempt a query to
-                                // check if there was a login error.
-                                let err = match pg_client.connect(tls.clone()) {
-                                    Ok(mut pg_client) => {
-                                        pg_client.query_one("SELECT 1", &[]).unwrap_err()
-                                    }
-                                    Err(err) => err,
-                                };
-                                let Some(err) = err.as_db_error() else {
-                                    return Err(());
-                                };
-                                check(err);
-                                Ok(())
-                            })
-                            .unwrap();
-                    }
-                    Assert::Err(check) => {
-                        // Due to delayed startup, we must attempt a query to
-                        // check if there was a login error.
-                        let err = match pg_client.connect(tls.clone()) {
-                            Ok(mut pg_client) => pg_client.query_one("SELECT 1", &[]).unwrap_err(),
-                            Err(err) => err,
-                        };
-                        check(&err);
-                    }
-                }
-            }
-            TestCase::Http {
-                user_to_auth_as,
-                user_reported_by_system,
-                scheme,
-                headers,
-                configure,
-                assert,
-            } => {
-                fn query_http_api<'a>(
-                    query: &str,
-                    uri: &Uri,
-                    headers: &'a HeaderMap,
-                    configure: &Box<
-                        dyn Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack> + 'a,
-                    >,
-                    runtime: &Runtime,
-                ) -> hyper::Result<Response<Body>> {
-                    runtime.block_on(
-                        hyper::Client::builder()
-                            .build::<_, Body>(make_http_tls(configure))
-                            .request({
-                                let mut req = Request::post(uri);
-                                for (k, v) in headers.iter() {
-                                    req.headers_mut().unwrap().insert(k, v.clone());
-                                }
-                                req.headers_mut().unwrap().insert(
-                                    "Content-Type",
-                                    HeaderValue::from_static("application/json"),
-                                );
-                                req.body(Body::from(json!({ "query": query }).to_string()))
-                                    .unwrap()
-                            }),
-                    )
-                }
+            let tls = make_pg_tls(configure);
+            pg_client
+                .ssl_mode(ssl_mode)
+                .user(&user_to_auth_as)
+                .password(password.unwrap_or("".to_string()));
 
-                fn assert_success_response(
-                    res: hyper::Result<Response<Body>>,
-                    expected_rows: Vec<Vec<String>>,
-                    runtime: &Runtime,
-                ) {
-                    #[derive(Deserialize)]
-                    struct Result {
-                        rows: Vec<Vec<String>>,
-                    }
-                    #[derive(Deserialize)]
-                    struct Response {
-                        results: Vec<Result>,
-                    }
-                    let body = runtime
-                        .block_on(body::to_bytes(res.unwrap().into_body()))
+            match assert {
+                Assert::Success => {
+                    let (pg_client, connection) = pg_client.connect(tls).await.unwrap();
+                    mz_ore::task::spawn(|| "tokio-postgres auth test connection", async move {
+                        connection.await.unwrap();
+                    });
+                    let row = pg_client
+                        .query_one("SELECT current_user", &[])
+                        .await
                         .unwrap();
-                    let res: Response = serde_json::from_slice(&body).unwrap();
-                    assert_eq!(res.results[0].rows, expected_rows)
+                    assert_eq!(row.get::<_, String>(0), *user_reported_by_system);
                 }
-
-                println!("http user={} scheme={}", user_to_auth_as, scheme);
-
-                let uri = Uri::builder()
-                    .scheme(scheme.clone())
-                    .authority(&*format!(
-                        "{}:{}",
-                        Ipv4Addr::LOCALHOST,
-                        server.inner.http_local_addr().port()
-                    ))
-                    .path_and_query("/api/sql")
-                    .build()
-                    .unwrap();
-                let res = query_http_api(
-                    "SELECT pg_catalog.current_user()",
-                    &uri,
-                    headers,
-                    configure,
-                    &runtime,
-                );
-
-                match assert {
-                    Assert::Success => {
-                        assert_success_response(
-                            res,
-                            vec![vec![user_reported_by_system.to_string()]],
-                            &runtime,
-                        );
-                    }
-                    Assert::SuccessSuperuserCheck(is_superuser) => {
-                        assert_success_response(
-                            res,
-                            vec![vec![user_reported_by_system.to_string()]],
-                            &runtime,
-                        );
-                        let res =
-                            query_http_api("SHOW is_superuser", &uri, headers, configure, &runtime);
-                        let expected = if *is_superuser { "on" } else { "off" };
-                        assert_success_response(res, vec![vec![expected.to_string()]], &runtime);
-                    }
-                    Assert::Err(check) => {
-                        let (code, message) = match res {
-                            Ok(mut res) => {
-                                let body = String::from_utf8_lossy(
-                                    &runtime.block_on(body::to_bytes(res.body_mut())).unwrap(),
-                                )
-                                .into_owned();
-                                (Some(res.status()), body)
-                            }
-                            Err(e) => (None, e.to_string()),
-                        };
-                        check(code, message)
-                    }
-                    Assert::DbErr(_) => unreachable!(),
+                Assert::SuccessSuperuserCheck(is_superuser) => {
+                    let (pg_client, connection) = pg_client.connect(tls.clone()).await.unwrap();
+                    mz_ore::task::spawn(|| "tokio-postgres auth test connection", async move {
+                        connection.await.unwrap();
+                    });
+                    let row = pg_client
+                        .query_one("SELECT current_user", &[])
+                        .await
+                        .unwrap();
+                    assert_eq!(row.get::<_, String>(0), *user_reported_by_system);
+                    let row = pg_client.query_one("SHOW is_superuser", &[]).await.unwrap();
+                    let expected = if is_superuser { "on" } else { "off" };
+                    assert_eq!(row.get::<_, String>(0), *expected);
+                }
+                Assert::DbErr(check) => {
+                    let pg_client = pg_client.clone();
+                    let tls = tls.clone();
+                    // This sometimes returns a network error, so retry until we get a db error.
+                    Retry::default()
+                        .max_duration(Duration::from_secs(10))
+                        .retry_async(|_| async {
+                            // Due to delayed startup, we must attempt a query to
+                            // check if there was a login error.
+                            let err = match pg_client.clone().connect(tls.clone()).await {
+                                Ok((pg_client, connection)) => {
+                                    mz_ore::task::spawn(
+                                        || "tokio-postgres auth test connection",
+                                        async move {
+                                            connection.await.unwrap();
+                                        },
+                                    );
+                                    pg_client.query_one("SELECT 1", &[]).await.unwrap_err()
+                                }
+                                Err(err) => err,
+                            };
+                            let Some(err) = err.as_db_error() else {
+                                return Err(());
+                            };
+                            check(err);
+                            Ok(())
+                        })
+                        .await
+                        .unwrap();
+                }
+                Assert::Err(check) => {
+                    // Due to delayed startup, we must attempt a query to
+                    // check if there was a login error.
+                    let err = match pg_client.connect(tls.clone()).await {
+                        Ok((pg_client, connection)) => {
+                            mz_ore::task::spawn(
+                                || "tokio-postgres auth test connection",
+                                async move {
+                                    connection.await.unwrap();
+                                },
+                            );
+                            pg_client.query_one("SELECT 1", &[]).await.unwrap_err()
+                        }
+                        Err(err) => err,
+                    };
+                    check(&err);
                 }
             }
-            TestCase::Ws {
-                auth,
-                configure,
-                assert,
-            } => {
-                println!("ws auth={:?}", auth);
+        }
+        TestCase::Http {
+            user_to_auth_as,
+            user_reported_by_system,
+            scheme,
+            headers,
+            configure,
+            assert,
+        } => {
+            async fn query_http_api<'a>(
+                query: &str,
+                uri: &Uri,
+                headers: &'a HeaderMap,
+                configure: &Box<
+                    dyn Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack> + Send + Sync + 'a,
+                >,
+            ) -> hyper::Result<Response<Body>> {
+                hyper::Client::builder()
+                    .build::<_, Body>(make_http_tls(configure))
+                    .request({
+                        let mut req = Request::post(uri);
+                        for (k, v) in headers.iter() {
+                            req.headers_mut().unwrap().insert(k, v.clone());
+                        }
+                        req.headers_mut()
+                            .unwrap()
+                            .insert("Content-Type", HeaderValue::from_static("application/json"));
+                        req.body(Body::from(json!({ "query": query }).to_string()))
+                            .unwrap()
+                    })
+                    .await
+            }
 
-                let uri = Uri::builder()
-                    .scheme("wss")
-                    .authority(&*format!(
-                        "{}:{}",
-                        Ipv4Addr::LOCALHOST,
-                        server.inner.http_local_addr().port()
-                    ))
-                    .path_and_query("/api/experimental/sql")
-                    .build()
-                    .unwrap();
-                let stream = make_ws_tls(&uri, configure);
-                let (mut ws, _resp) = tungstenite::client(uri, stream).unwrap();
-                //  let (mut ws, _resp) = tungstenite::connect(uri).unwrap();
-                ws.send(Message::Text(serde_json::to_string(&auth).unwrap()))
-                    .unwrap();
+            async fn assert_success_response(
+                res: hyper::Result<Response<Body>>,
+                expected_rows: Vec<Vec<String>>,
+            ) {
+                #[derive(Deserialize)]
+                struct Result {
+                    rows: Vec<Vec<String>>,
+                }
+                #[derive(Deserialize)]
+                struct Response {
+                    results: Vec<Result>,
+                }
+                let body = body::to_bytes(res.unwrap().into_body()).await.unwrap();
+                let res: Response = serde_json::from_slice(&body).unwrap();
+                assert_eq!(res.results[0].rows, expected_rows)
+            }
 
-                ws.send(Message::Text(
-                    r#"{"query": "SELECT pg_catalog.current_user()"}"#.into(),
-                ))
+            println!("http user={} scheme={}", user_to_auth_as, scheme);
+
+            let uri = Uri::builder()
+                .scheme(scheme.clone())
+                .authority(&*format!("{}:{}", Ipv4Addr::LOCALHOST, http_port))
+                .path_and_query("/api/sql")
+                .build()
+                .unwrap();
+            let res = query_http_api(
+                "SELECT pg_catalog.current_user()",
+                &uri,
+                &headers,
+                &configure,
+            )
+            .await;
+
+            match assert {
+                Assert::Success => {
+                    assert_success_response(res, vec![vec![user_reported_by_system.to_string()]])
+                        .await;
+                }
+                Assert::SuccessSuperuserCheck(is_superuser) => {
+                    assert_success_response(res, vec![vec![user_reported_by_system.to_string()]])
+                        .await;
+                    let res = query_http_api("SHOW is_superuser", &uri, &headers, &configure).await;
+                    let expected = if is_superuser { "on" } else { "off" };
+                    assert_success_response(res, vec![vec![expected.to_string()]]).await;
+                }
+                Assert::Err(check) => {
+                    let (code, message) = match res {
+                        Ok(mut res) => {
+                            let body = String::from_utf8_lossy(
+                                &body::to_bytes(res.body_mut()).await.unwrap(),
+                            )
+                            .into_owned();
+                            (Some(res.status()), body)
+                        }
+                        Err(e) => (None, e.to_string()),
+                    };
+                    check(code, message)
+                }
+                Assert::DbErr(_) => unreachable!(),
+            }
+        }
+        TestCase::Ws {
+            auth,
+            configure,
+            assert,
+        } => {
+            println!("ws auth={:?}", auth);
+
+            let uri = Uri::builder()
+                .scheme("wss")
+                .authority(&*format!("{}:{}", Ipv4Addr::LOCALHOST, http_port))
+                .path_and_query("/api/experimental/sql")
+                .build()
+                .unwrap();
+            let stream = make_ws_tls(&uri, configure);
+            let (mut ws, _resp) = tungstenite::client(uri, stream).unwrap();
+            //  let (mut ws, _resp) = tungstenite::connect(uri).unwrap();
+            ws.send(Message::Text(serde_json::to_string(&auth).unwrap()))
                 .unwrap();
 
-                // Only supports reading a single row.
-                fn assert_success_response(
-                    ws: &mut tungstenite::WebSocket<impl Read + Write>,
-                    mut expected_row_opt: Option<Vec<&str>>,
-                    mut expected_tag_opt: Option<&str>,
-                ) {
-                    while expected_tag_opt.is_some() || expected_row_opt.is_some() {
-                        let resp = ws.read().unwrap();
-                        if let Message::Text(msg) = resp {
-                            let msg: WebSocketResponse = serde_json::from_str(&msg).unwrap();
-                            match (msg, &expected_row_opt, expected_tag_opt) {
-                                (WebSocketResponse::Row(actual_row), Some(expected_row), _) => {
-                                    assert_eq!(actual_row.len(), expected_row.len());
-                                    for (actual_col, expected_col) in
-                                        actual_row.into_iter().zip(expected_row.iter())
-                                    {
-                                        assert_eq!(&actual_col.to_string(), expected_col);
-                                    }
-                                    expected_row_opt = None;
-                                }
-                                (
-                                    WebSocketResponse::CommandComplete(actual_tag),
-                                    _,
-                                    Some(expected_tag),
-                                ) => {
-                                    assert_eq!(actual_tag, expected_tag);
-                                    expected_tag_opt = None;
-                                }
-                                (_, _, _) => {}
-                            }
-                        } else {
-                            panic!("unexpected: {resp}");
-                        }
-                    }
-                }
+            ws.send(Message::Text(
+                r#"{"query": "SELECT pg_catalog.current_user()"}"#.into(),
+            ))
+            .unwrap();
 
-                match assert {
-                    Assert::Success => assert_success_response(&mut ws, None, Some("SELECT 1")),
-                    Assert::SuccessSuperuserCheck(is_superuser) => {
-                        assert_success_response(&mut ws, None, Some("SELECT 1"));
-                        ws.send(Message::Text(r#"{"query": "SHOW is_superuser"}"#.into()))
-                            .unwrap();
-                        let expected = if *is_superuser { "\"on\"" } else { "\"off\"" };
-                        assert_success_response(&mut ws, Some(vec![expected]), Some("SELECT 1"));
-                    }
-                    Assert::Err(check) => {
-                        let resp = ws.read().unwrap();
-                        let (code, message) = match resp {
-                            Message::Close(frame) => {
-                                let frame = frame.unwrap();
-                                (frame.code, frame.reason)
+            // Only supports reading a single row.
+            fn assert_success_response(
+                ws: &mut tungstenite::WebSocket<impl Read + Write>,
+                mut expected_row_opt: Option<Vec<&str>>,
+                mut expected_tag_opt: Option<&str>,
+            ) {
+                while expected_tag_opt.is_some() || expected_row_opt.is_some() {
+                    let resp = ws.read().unwrap();
+                    if let Message::Text(msg) = resp {
+                        let msg: WebSocketResponse = serde_json::from_str(&msg).unwrap();
+                        match (msg, &expected_row_opt, expected_tag_opt) {
+                            (WebSocketResponse::Row(actual_row), Some(expected_row), _) => {
+                                assert_eq!(actual_row.len(), expected_row.len());
+                                for (actual_col, expected_col) in
+                                    actual_row.into_iter().zip(expected_row.iter())
+                                {
+                                    assert_eq!(&actual_col.to_string(), expected_col);
+                                }
+                                expected_row_opt = None;
                             }
-                            _ => panic!("unexpected: {resp}"),
-                        };
-                        check(code, message.to_string())
+                            (
+                                WebSocketResponse::CommandComplete(actual_tag),
+                                _,
+                                Some(expected_tag),
+                            ) => {
+                                assert_eq!(actual_tag, expected_tag);
+                                expected_tag_opt = None;
+                            }
+                            (_, _, _) => {}
+                        }
+                    } else {
+                        panic!("unexpected: {resp}");
                     }
-                    Assert::DbErr(_) => unreachable!(),
                 }
+            }
+
+            match assert {
+                Assert::Success => assert_success_response(&mut ws, None, Some("SELECT 1")),
+                Assert::SuccessSuperuserCheck(is_superuser) => {
+                    assert_success_response(&mut ws, None, Some("SELECT 1"));
+                    ws.send(Message::Text(r#"{"query": "SHOW is_superuser"}"#.into()))
+                        .unwrap();
+                    let expected = if is_superuser { "\"on\"" } else { "\"off\"" };
+                    assert_success_response(&mut ws, Some(vec![expected]), Some("SELECT 1"));
+                }
+                Assert::Err(check) => {
+                    let resp = ws.read().unwrap();
+                    let (code, message) = match resp {
+                        Message::Close(frame) => {
+                            let frame = frame.unwrap();
+                            (frame.code, frame.reason)
+                        }
+                        _ => panic!("unexpected: {resp}"),
+                    };
+                    check(code, message.to_string())
+                }
+                Assert::DbErr(_) => unreachable!(),
             }
         }
     }
@@ -999,10 +1018,10 @@ fn test_auth_base() {
     let server = util::start_server(config).unwrap();
     run_tests(
         "TlsMode::Require, MzCloud",
-        &server,
-        &[
+        server,
+        [
             TestCase::Ws {
-                auth: &WebSocketAuth::Basic {
+                auth: WebSocketAuth::Basic {
                     user: frontegg_user.to_string(),
                     password: frontegg_password.to_string(),
                     options: BTreeMap::default(),
@@ -1011,7 +1030,7 @@ fn test_auth_base() {
                 assert: Assert::Success,
             },
             TestCase::Ws {
-                auth: &WebSocketAuth::Bearer {
+                auth: WebSocketAuth::Bearer {
                     token: frontegg_jwt.clone(),
                     options: BTreeMap::default(),
                 },
@@ -1019,7 +1038,7 @@ fn test_auth_base() {
                 assert: Assert::Success,
             },
             TestCase::Ws {
-                auth: &WebSocketAuth::Basic {
+                auth: WebSocketAuth::Basic {
                     user: "bad user".to_string(),
                     password: frontegg_password.to_string(),
                     options: BTreeMap::default(),
@@ -1032,40 +1051,40 @@ fn test_auth_base() {
             },
             // TLS with a password should succeed.
             TestCase::Pgwire {
-                user_to_auth_as: frontegg_user,
-                user_reported_by_system: frontegg_user,
-                password: Some(frontegg_password),
+                user_to_auth_as: frontegg_user.to_string(),
+                user_reported_by_system: frontegg_user.to_string(),
+                password: Some(frontegg_password.to_string()),
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
             TestCase::Http {
-                user_to_auth_as: frontegg_user,
-                user_reported_by_system: frontegg_user,
+                user_to_auth_as: frontegg_user.to_string(),
+                user_reported_by_system: frontegg_user.to_string(),
                 scheme: Scheme::HTTPS,
-                headers: &frontegg_header_basic,
+                headers: frontegg_header_basic.clone(),
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
             // Email comparisons should be case insensitive.
             TestCase::Pgwire {
-                user_to_auth_as: &frontegg_user_lowercase,
-                user_reported_by_system: frontegg_user,
-                password: Some(frontegg_password),
+                user_to_auth_as: frontegg_user_lowercase.to_string(),
+                user_reported_by_system: frontegg_user.to_string(),
+                password: Some(frontegg_password.to_string()),
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
             TestCase::Http {
-                user_to_auth_as: &frontegg_user_lowercase,
-                user_reported_by_system: frontegg_user,
+                user_to_auth_as: frontegg_user_lowercase.to_string(),
+                user_reported_by_system: frontegg_user.to_string(),
                 scheme: Scheme::HTTPS,
-                headers: &frontegg_header_basic_lowercase,
+                headers: frontegg_header_basic_lowercase.clone(),
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
             TestCase::Ws {
-                auth: &WebSocketAuth::Basic {
+                auth: WebSocketAuth::Basic {
                     user: frontegg_user_lowercase.to_string(),
                     password: frontegg_password.to_string(),
                     options: BTreeMap::default(),
@@ -1075,13 +1094,13 @@ fn test_auth_base() {
             },
             // Password can be base64 encoded UUID bytes.
             TestCase::Pgwire {
-                user_to_auth_as: frontegg_user,
-                user_reported_by_system: frontegg_user,
+                user_to_auth_as: frontegg_user.to_string(),
+                user_reported_by_system: frontegg_user.to_string(),
                 password: {
                     let mut buf = vec![];
                     buf.extend(client_id.as_bytes());
                     buf.extend(secret.as_bytes());
-                    Some(&format!(
+                    Some(format!(
                         "mzp_{}",
                         base64::encode_config(buf, base64::URL_SAFE)
                     ))
@@ -1092,13 +1111,13 @@ fn test_auth_base() {
             },
             // Password can be base64 encoded UUID bytes without padding.
             TestCase::Pgwire {
-                user_to_auth_as: frontegg_user,
-                user_reported_by_system: frontegg_user,
+                user_to_auth_as: frontegg_user.to_string(),
+                user_reported_by_system: frontegg_user.to_string(),
                 password: {
                     let mut buf = vec![];
                     buf.extend(client_id.as_bytes());
                     buf.extend(secret.as_bytes());
-                    Some(&format!(
+                    Some(format!(
                         "mzp_{}",
                         base64::encode_config(buf, base64::URL_SAFE_NO_PAD)
                     ))
@@ -1109,13 +1128,13 @@ fn test_auth_base() {
             },
             // Password can include arbitrary special characters.
             TestCase::Pgwire {
-                user_to_auth_as: frontegg_user,
-                user_reported_by_system: frontegg_user,
+                user_to_auth_as: frontegg_user.to_string(),
+                user_reported_by_system: frontegg_user.to_string(),
                 password: {
                     let mut password = frontegg_password.clone();
                     password.insert(10, '-');
                     password.insert_str(15, "@#!");
-                    Some(&password.clone())
+                    Some(password.clone())
                 },
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1123,18 +1142,18 @@ fn test_auth_base() {
             },
             // Bearer auth doesn't need the clientid or secret.
             TestCase::Http {
-                user_to_auth_as: frontegg_user,
-                user_reported_by_system: frontegg_user,
+                user_to_auth_as: frontegg_user.to_string(),
+                user_reported_by_system: frontegg_user.to_string(),
                 scheme: Scheme::HTTPS,
-                headers: &make_header(Authorization::bearer(&frontegg_jwt).unwrap()),
+                headers: make_header(Authorization::bearer(&frontegg_jwt).unwrap()),
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
             // No TLS fails.
             TestCase::Pgwire {
-                user_to_auth_as: frontegg_user,
-                user_reported_by_system: frontegg_user,
-                password: Some(frontegg_password),
+                user_to_auth_as: frontegg_user.to_string(),
+                user_reported_by_system: frontegg_user.to_string(),
+                password: Some(frontegg_password.to_string()),
                 ssl_mode: SslMode::Disable,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
@@ -1146,18 +1165,18 @@ fn test_auth_base() {
                 })),
             },
             TestCase::Http {
-                user_to_auth_as: frontegg_user,
-                user_reported_by_system: frontegg_user,
+                user_to_auth_as: frontegg_user.to_string(),
+                user_reported_by_system: frontegg_user.to_string(),
                 scheme: Scheme::HTTP,
-                headers: &frontegg_header_basic,
+                headers: frontegg_header_basic.clone(),
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: assert_http_rejected(),
             },
             // Wrong, but existing, username.
             TestCase::Pgwire {
-                user_to_auth_as: "materialize",
-                user_reported_by_system: "materialize",
-                password: Some(frontegg_password),
+                user_to_auth_as: "materialize".to_string(),
+                user_reported_by_system: "materialize".to_string(),
+                password: Some(frontegg_password.to_string()),
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
@@ -1166,10 +1185,10 @@ fn test_auth_base() {
                 })),
             },
             TestCase::Http {
-                user_to_auth_as: "materialize",
-                user_reported_by_system: "materialize",
+                user_to_auth_as: "materialize".to_string(),
+                user_reported_by_system: "materialize".to_string(),
                 scheme: Scheme::HTTPS,
-                headers: &make_header(Authorization::basic("materialize", frontegg_password)),
+                headers: make_header(Authorization::basic("materialize", frontegg_password)),
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
@@ -1178,9 +1197,9 @@ fn test_auth_base() {
             },
             // Wrong password.
             TestCase::Pgwire {
-                user_to_auth_as: frontegg_user,
-                user_reported_by_system: frontegg_user,
-                password: Some("bad password"),
+                user_to_auth_as: frontegg_user.to_string(),
+                user_reported_by_system: frontegg_user.to_string(),
+                password: Some("bad password".to_string()),
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
@@ -1189,10 +1208,10 @@ fn test_auth_base() {
                 })),
             },
             TestCase::Http {
-                user_to_auth_as: frontegg_user,
-                user_reported_by_system: frontegg_user,
+                user_to_auth_as: frontegg_user.to_string(),
+                user_reported_by_system: frontegg_user.to_string(),
                 scheme: Scheme::HTTPS,
-                headers: &make_header(Authorization::basic(frontegg_user, "bad password")),
+                headers: make_header(Authorization::basic(frontegg_user, "bad password")),
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
@@ -1201,9 +1220,9 @@ fn test_auth_base() {
             },
             // Bad password prefix.
             TestCase::Pgwire {
-                user_to_auth_as: frontegg_user,
-                user_reported_by_system: frontegg_user,
-                password: Some(&format!("mznope_{client_id}{secret}")),
+                user_to_auth_as: frontegg_user.to_string(),
+                user_reported_by_system: frontegg_user.to_string(),
+                password: Some(format!("mznope_{client_id}{secret}")),
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
@@ -1212,10 +1231,10 @@ fn test_auth_base() {
                 })),
             },
             TestCase::Http {
-                user_to_auth_as: frontegg_user,
-                user_reported_by_system: frontegg_user,
+                user_to_auth_as: frontegg_user.to_string(),
+                user_reported_by_system: frontegg_user.to_string(),
                 scheme: Scheme::HTTPS,
-                headers: &make_header(Authorization::basic(
+                headers: make_header(Authorization::basic(
                     frontegg_user,
                     &format!("mznope_{client_id}{secret}"),
                 )),
@@ -1227,8 +1246,8 @@ fn test_auth_base() {
             },
             // No password.
             TestCase::Pgwire {
-                user_to_auth_as: frontegg_user,
-                user_reported_by_system: frontegg_user,
+                user_to_auth_as: frontegg_user.to_string(),
+                user_reported_by_system: frontegg_user.to_string(),
                 password: None,
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1238,10 +1257,10 @@ fn test_auth_base() {
                 })),
             },
             TestCase::Http {
-                user_to_auth_as: frontegg_user,
-                user_reported_by_system: frontegg_user,
+                user_to_auth_as: frontegg_user.to_string(),
+                user_reported_by_system: frontegg_user.to_string(),
                 scheme: Scheme::HTTPS,
-                headers: &no_headers,
+                headers: no_headers.clone(),
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
@@ -1250,10 +1269,10 @@ fn test_auth_base() {
             },
             // Bad auth scheme
             TestCase::Http {
-                user_to_auth_as: frontegg_user,
-                user_reported_by_system: frontegg_user,
+                user_to_auth_as: frontegg_user.to_string(),
+                user_reported_by_system: frontegg_user.to_string(),
                 scheme: Scheme::HTTPS,
-                headers: &HeaderMap::from_iter(vec![(
+                headers: HeaderMap::from_iter(vec![(
                     AUTHORIZATION,
                     HeaderValue::from_static("Digest username=materialize"),
                 )]),
@@ -1265,10 +1284,10 @@ fn test_auth_base() {
             },
             // Bad tenant.
             TestCase::Http {
-                user_to_auth_as: frontegg_user,
-                user_reported_by_system: frontegg_user,
+                user_to_auth_as: frontegg_user.to_string(),
+                user_reported_by_system: frontegg_user.to_string(),
                 scheme: Scheme::HTTPS,
-                headers: &make_header(Authorization::bearer(&bad_tenant_jwt).unwrap()),
+                headers: make_header(Authorization::bearer(&bad_tenant_jwt).unwrap()),
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
@@ -1277,10 +1296,10 @@ fn test_auth_base() {
             },
             // Expired.
             TestCase::Http {
-                user_to_auth_as: frontegg_user,
-                user_reported_by_system: frontegg_user,
+                user_to_auth_as: frontegg_user.to_string(),
+                user_reported_by_system: frontegg_user.to_string(),
                 scheme: Scheme::HTTPS,
-                headers: &make_header(Authorization::bearer(&expired_jwt).unwrap()),
+                headers: make_header(Authorization::bearer(&expired_jwt).unwrap()),
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
@@ -1289,9 +1308,9 @@ fn test_auth_base() {
             },
             // System user cannot login via external ports.
             TestCase::Pgwire {
-                user_to_auth_as: &*SYSTEM_USER.name,
-                user_reported_by_system: &*SYSTEM_USER.name,
-                password: Some(frontegg_system_password),
+                user_to_auth_as: (*SYSTEM_USER.name).to_string(),
+                user_reported_by_system: (*SYSTEM_USER.name).to_string(),
+                password: Some(frontegg_system_password.to_string()),
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|err| {
@@ -1299,10 +1318,10 @@ fn test_auth_base() {
                 })),
             },
             TestCase::Http {
-                user_to_auth_as: &*SYSTEM_USER.name,
-                user_reported_by_system: &*SYSTEM_USER.name,
+                user_to_auth_as: (*SYSTEM_USER.name).to_string(),
+                user_reported_by_system: (*SYSTEM_USER.name).to_string(),
                 scheme: Scheme::HTTPS,
-                headers: &frontegg_system_header_basic,
+                headers: frontegg_system_header_basic.clone(),
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
@@ -1310,7 +1329,7 @@ fn test_auth_base() {
                 })),
             },
             TestCase::Ws {
-                auth: &WebSocketAuth::Basic {
+                auth: WebSocketAuth::Basic {
                     user: (&*SYSTEM_USER.name).into(),
                     password: frontegg_system_password.to_string(),
                     options: BTreeMap::default(),
@@ -1323,9 +1342,9 @@ fn test_auth_base() {
             },
             // Public role cannot login.
             TestCase::Pgwire {
-                user_to_auth_as: PUBLIC_ROLE_NAME.as_str(),
-                user_reported_by_system: PUBLIC_ROLE_NAME.as_str(),
-                password: Some(frontegg_system_password),
+                user_to_auth_as: (*PUBLIC_ROLE_NAME).to_string(),
+                user_reported_by_system: (*PUBLIC_ROLE_NAME).to_string(),
+                password: Some(frontegg_system_password.to_string()),
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|err| {
@@ -1333,10 +1352,10 @@ fn test_auth_base() {
                 })),
             },
             TestCase::Http {
-                user_to_auth_as: PUBLIC_ROLE_NAME.as_str(),
-                user_reported_by_system: PUBLIC_ROLE_NAME.as_str(),
+                user_to_auth_as: PUBLIC_ROLE_NAME.to_string(),
+                user_reported_by_system: PUBLIC_ROLE_NAME.to_string(),
                 scheme: Scheme::HTTPS,
-                headers: &frontegg_system_header_basic,
+                headers: frontegg_system_header_basic,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
@@ -1344,7 +1363,7 @@ fn test_auth_base() {
                 })),
             },
             TestCase::Ws {
-                auth: &WebSocketAuth::Basic {
+                auth: WebSocketAuth::Basic {
                     user: (PUBLIC_ROLE_NAME.as_str()).into(),
                     password: frontegg_system_password.to_string(),
                     options: BTreeMap::default(),
@@ -1357,35 +1376,34 @@ fn test_auth_base() {
             },
         ],
     );
-    drop(server);
 
     // Test TLS modes with a server that does not support TLS.
     let server = util::start_server(util::Config::default()).unwrap();
     run_tests(
         "TlsMode::Disable",
-        &server,
-        &[
+        server,
+        [
             // Explicitly disabling TLS should succeed.
             TestCase::Pgwire {
-                user_to_auth_as: "materialize",
-                user_reported_by_system: "materialize",
+                user_to_auth_as: "materialize".to_string(),
+                user_reported_by_system: "materialize".to_string(),
                 password: None,
                 ssl_mode: SslMode::Disable,
                 configure: Box::new(|_| Ok(())),
                 assert: Assert::Success,
             },
             TestCase::Http {
-                user_to_auth_as: &*HTTP_DEFAULT_USER.name,
-                user_reported_by_system: &*HTTP_DEFAULT_USER.name,
+                user_to_auth_as: (*HTTP_DEFAULT_USER.name).to_string(),
+                user_reported_by_system: (*HTTP_DEFAULT_USER.name).to_string(),
                 scheme: Scheme::HTTP,
-                headers: &no_headers,
+                headers: no_headers.clone(),
                 configure: Box::new(|_| Ok(())),
                 assert: Assert::Success,
             },
             // Preferring TLS should fall back to no TLS.
             TestCase::Pgwire {
-                user_to_auth_as: "materialize",
-                user_reported_by_system: "materialize",
+                user_to_auth_as: "materialize".to_string(),
+                user_reported_by_system: "materialize".to_string(),
                 password: None,
                 ssl_mode: SslMode::Prefer,
                 configure: Box::new(|_| Ok(())),
@@ -1393,8 +1411,8 @@ fn test_auth_base() {
             },
             // Requiring TLS should fail.
             TestCase::Pgwire {
-                user_to_auth_as: "materialize",
-                user_reported_by_system: "materialize",
+                user_to_auth_as: "materialize".to_string(),
+                user_reported_by_system: "materialize".to_string(),
                 password: None,
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|_| Ok(())),
@@ -1406,10 +1424,10 @@ fn test_auth_base() {
                 })),
             },
             TestCase::Http {
-                user_to_auth_as: &*HTTP_DEFAULT_USER.name,
-                user_reported_by_system: &*HTTP_DEFAULT_USER.name,
+                user_to_auth_as: (*HTTP_DEFAULT_USER.name).to_string(),
+                user_reported_by_system: (*HTTP_DEFAULT_USER.name).to_string(),
                 scheme: Scheme::HTTPS,
-                headers: &no_headers,
+                headers: no_headers.clone(),
                 configure: Box::new(|_| Ok(())),
                 assert: Assert::Err(Box::new(|code, message| {
                     // Connecting to an HTTP server via HTTPS does not yield
@@ -1421,8 +1439,8 @@ fn test_auth_base() {
             },
             // System user cannot login via external ports.
             TestCase::Pgwire {
-                user_to_auth_as: &*SYSTEM_USER.name,
-                user_reported_by_system: &*SYSTEM_USER.name,
+                user_to_auth_as: (*SYSTEM_USER.name).to_string(),
+                user_reported_by_system: (*SYSTEM_USER.name).to_string(),
                 password: None,
                 ssl_mode: SslMode::Disable,
                 configure: Box::new(|_| Ok(())),
@@ -1432,20 +1450,19 @@ fn test_auth_base() {
             },
         ],
     );
-    drop(server);
 
     // Test TLS modes with a server that requires TLS.
     let config = util::Config::default().with_tls(&server_cert, &server_key);
     let server = util::start_server(config).unwrap();
     run_tests(
         "TlsMode::Require",
-        &server,
-        &[
+        server,
+        [
             // Non-existent role will be created.
             TestCase::Pgwire {
-                user_to_auth_as: frontegg_user,
-                user_reported_by_system: frontegg_user,
-                password: Some(frontegg_password),
+                user_to_auth_as: frontegg_user.to_string(),
+                user_reported_by_system: frontegg_user.to_string(),
+                password: Some(frontegg_password.to_string()),
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
@@ -1453,17 +1470,17 @@ fn test_auth_base() {
             // Test that specifying an mzcloud header does nothing and uses the default
             // user.
             TestCase::Http {
-                user_to_auth_as: &*HTTP_DEFAULT_USER.name,
-                user_reported_by_system: &*HTTP_DEFAULT_USER.name,
+                user_to_auth_as: (*HTTP_DEFAULT_USER.name).to_string(),
+                user_reported_by_system: (*HTTP_DEFAULT_USER.name).to_string(),
                 scheme: Scheme::HTTPS,
-                headers: &frontegg_header_basic,
+                headers: frontegg_header_basic.clone(),
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
             // Disabling TLS should fail.
             TestCase::Pgwire {
-                user_to_auth_as: "materialize",
-                user_reported_by_system: "materialize",
+                user_to_auth_as: "materialize".to_string(),
+                user_reported_by_system: "materialize".to_string(),
                 password: None,
                 ssl_mode: SslMode::Disable,
                 configure: Box::new(|_| Ok(())),
@@ -1476,17 +1493,17 @@ fn test_auth_base() {
                 })),
             },
             TestCase::Http {
-                user_to_auth_as: &*HTTP_DEFAULT_USER.name,
-                user_reported_by_system: &*HTTP_DEFAULT_USER.name,
+                user_to_auth_as: (*HTTP_DEFAULT_USER.name).to_string(),
+                user_reported_by_system: (*HTTP_DEFAULT_USER.name).to_string(),
                 scheme: Scheme::HTTP,
-                headers: &no_headers,
+                headers: no_headers.clone(),
                 configure: Box::new(|_| Ok(())),
                 assert: assert_http_rejected(),
             },
             // Preferring TLS should succeed.
             TestCase::Pgwire {
-                user_to_auth_as: "materialize",
-                user_reported_by_system: "materialize",
+                user_to_auth_as: "materialize".to_string(),
+                user_reported_by_system: "materialize".to_string(),
                 password: None,
                 ssl_mode: SslMode::Prefer,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1494,25 +1511,25 @@ fn test_auth_base() {
             },
             // Requiring TLS should succeed.
             TestCase::Pgwire {
-                user_to_auth_as: "materialize",
-                user_reported_by_system: "materialize",
+                user_to_auth_as: "materialize".to_string(),
+                user_reported_by_system: "materialize".to_string(),
                 password: None,
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
             TestCase::Http {
-                user_to_auth_as: &*HTTP_DEFAULT_USER.name,
-                user_reported_by_system: &*HTTP_DEFAULT_USER.name,
+                user_to_auth_as: (*HTTP_DEFAULT_USER.name).to_string(),
+                user_reported_by_system: (*HTTP_DEFAULT_USER.name).to_string(),
                 scheme: Scheme::HTTPS,
-                headers: &no_headers,
+                headers: no_headers.clone(),
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
             // System user cannot login via external ports.
             TestCase::Pgwire {
-                user_to_auth_as: &*SYSTEM_USER.name,
-                user_reported_by_system: &*SYSTEM_USER.name,
+                user_to_auth_as: (*SYSTEM_USER.name).to_string(),
+                user_reported_by_system: (*SYSTEM_USER.name).to_string(),
                 password: None,
                 ssl_mode: SslMode::Prefer,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -1522,7 +1539,6 @@ fn test_auth_base() {
             },
         ],
     );
-    drop(server);
 }
 
 #[mz_ore::test]
@@ -1557,26 +1573,28 @@ fn test_auth_intermediate_ca() {
     // intermediary, the client should fail to verify the chain.
     let config = util::Config::default().with_tls(&server_cert, &server_key);
     let server = util::start_server(config).unwrap();
+    let ca_cert_path1 = ca.ca_cert_path();
+    let ca_cert_path2 = ca.ca_cert_path();
     run_tests(
         "TlsMode::Require",
-        &server,
-        &[
+        server,
+        [
             TestCase::Pgwire {
-                user_to_auth_as: "materialize",
-                user_reported_by_system: "materialize",
+                user_to_auth_as: "materialize".to_string(),
+                user_reported_by_system: "materialize".to_string(),
                 password: None,
                 ssl_mode: SslMode::Require,
-                configure: Box::new(|b| b.set_ca_file(ca.ca_cert_path())),
+                configure: Box::new(move |b| b.set_ca_file(&ca_cert_path1)),
                 assert: Assert::Err(Box::new(|err| {
                     assert_contains!(err.to_string(), "unable to get local issuer certificate");
                 })),
             },
             TestCase::Http {
-                user_to_auth_as: &*HTTP_DEFAULT_USER.name,
-                user_reported_by_system: &*HTTP_DEFAULT_USER.name,
+                user_to_auth_as: (*HTTP_DEFAULT_USER.name).to_string(),
+                user_reported_by_system: (*HTTP_DEFAULT_USER.name).to_string(),
                 scheme: Scheme::HTTPS,
-                headers: &HeaderMap::new(),
-                configure: Box::new(|b| b.set_ca_file(ca.ca_cert_path())),
+                headers: HeaderMap::new(),
+                configure: Box::new(move |b| b.set_ca_file(&ca_cert_path2)),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert!(code.is_none());
                     assert_contains!(message, "unable to get local issuer certificate");
@@ -1584,36 +1602,36 @@ fn test_auth_intermediate_ca() {
             },
         ],
     );
-    drop(server);
 
     // When the server is configured to present the entire certificate chain,
     // the client should be able to verify the chain even though it only knows
     // about the root CA.
     let config = util::Config::default().with_tls(server_cert_chain, &server_key);
     let server = util::start_server(config).unwrap();
+    let ca_cert_path1 = ca.ca_cert_path();
+    let ca_cert_path2 = ca.ca_cert_path();
     run_tests(
         "TlsMode::Require",
-        &server,
-        &[
+        server,
+        [
             TestCase::Pgwire {
-                user_to_auth_as: "materialize",
-                user_reported_by_system: "materialize",
+                user_to_auth_as: "materialize".to_string(),
+                user_reported_by_system: "materialize".to_string(),
                 password: None,
                 ssl_mode: SslMode::Require,
-                configure: Box::new(|b| b.set_ca_file(ca.ca_cert_path())),
+                configure: Box::new(move |b| b.set_ca_file(&ca_cert_path1)),
                 assert: Assert::Success,
             },
             TestCase::Http {
-                user_to_auth_as: &*HTTP_DEFAULT_USER.name,
-                user_reported_by_system: &*HTTP_DEFAULT_USER.name,
+                user_to_auth_as: (*HTTP_DEFAULT_USER.name).to_string(),
+                user_reported_by_system: (*HTTP_DEFAULT_USER.name).to_string(),
                 scheme: Scheme::HTTPS,
-                headers: &HeaderMap::new(),
-                configure: Box::new(|b| b.set_ca_file(ca.ca_cert_path())),
+                headers: HeaderMap::new(),
+                configure: Box::new(move |b| b.set_ca_file(&ca_cert_path2)),
                 assert: Assert::Success,
             },
         ],
     );
-    drop(server);
 }
 
 #[mz_ore::test]
@@ -1698,26 +1716,26 @@ fn test_auth_admin() {
 
         run_tests(
             "Non-superuser",
-            &server,
-            &[
+            server,
+            [
                 TestCase::Pgwire {
-                    user_to_auth_as: frontegg_user,
-                    user_reported_by_system: frontegg_user,
-                    password: Some(frontegg_password),
+                    user_to_auth_as: frontegg_user.to_string(),
+                    user_reported_by_system: frontegg_user.to_string(),
+                    password: Some(frontegg_password.to_string()),
                     ssl_mode: SslMode::Require,
                     configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                     assert: Assert::SuccessSuperuserCheck(false),
                 },
                 TestCase::Http {
-                    user_to_auth_as: frontegg_user,
-                    user_reported_by_system: frontegg_user,
+                    user_to_auth_as: frontegg_user.to_string(),
+                    user_reported_by_system: frontegg_user.to_string(),
                     scheme: Scheme::HTTPS,
-                    headers: &frontegg_header_basic,
+                    headers: frontegg_header_basic.clone(),
                     configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                     assert: Assert::SuccessSuperuserCheck(false),
                 },
                 TestCase::Ws {
-                    auth: &WebSocketAuth::Basic {
+                    auth: WebSocketAuth::Basic {
                         user: frontegg_user.to_string(),
                         password: frontegg_password.to_string(),
                         options: BTreeMap::default(),
@@ -1737,26 +1755,26 @@ fn test_auth_admin() {
 
         run_tests(
             "Superuser",
-            &server,
-            &[
+            server,
+            [
                 TestCase::Pgwire {
-                    user_to_auth_as: admin_frontegg_user,
-                    user_reported_by_system: admin_frontegg_user,
-                    password: Some(admin_frontegg_password),
+                    user_to_auth_as: admin_frontegg_user.to_string(),
+                    user_reported_by_system: admin_frontegg_user.to_string(),
+                    password: Some(admin_frontegg_password.to_string()),
                     ssl_mode: SslMode::Require,
                     configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                     assert: Assert::SuccessSuperuserCheck(true),
                 },
                 TestCase::Http {
-                    user_to_auth_as: admin_frontegg_user,
-                    user_reported_by_system: admin_frontegg_user,
+                    user_to_auth_as: admin_frontegg_user.to_string(),
+                    user_reported_by_system: admin_frontegg_user.to_string(),
                     scheme: Scheme::HTTPS,
-                    headers: &admin_frontegg_header_basic,
+                    headers: admin_frontegg_header_basic.clone(),
                     configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                     assert: Assert::SuccessSuperuserCheck(true),
                 },
                 TestCase::Ws {
-                    auth: &WebSocketAuth::Basic {
+                    auth: WebSocketAuth::Basic {
                         user: admin_frontegg_user.to_string(),
                         password: admin_frontegg_password.to_string(),
                         options: BTreeMap::default(),
