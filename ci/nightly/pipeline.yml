@@ -669,6 +669,18 @@ steps:
           composition: cloud-canary
     branches: "main v*.*"
 
+  - id: mz-e2e
+    label: "Mz E2E Test"
+    artifact_paths: junit_*.xml
+    timeout_in_minutes: 1200
+    concurrency: 1
+    concurrency_group: 'mz-e2e'
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: mz-e2e
+
   - id: output-consistency-test
     label: "Output consistency test"
     timeout_in_minutes: 58
