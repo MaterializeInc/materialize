@@ -7,12 +7,15 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import logging
 import subprocess
 import time
 from textwrap import dedent
 
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
 from materialize.cloudtest.util.cluster import cluster_pod_name
+
+LOGGER = logging.getLogger(__name__)
 
 CLUSTER_SIZE = 8
 
@@ -97,7 +100,7 @@ def kill_clusterd(
 
     pod_name = cluster_pod_name(cluster_id, replica_id, compute_id)
 
-    print(f"sending signal {signal} to pod {pod_name}...")
+    LOGGER.info(f"sending signal {signal} to pod {pod_name}...")
 
     try:
         mz.kubectl(

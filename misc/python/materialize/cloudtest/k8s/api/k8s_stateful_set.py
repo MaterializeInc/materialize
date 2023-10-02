@@ -8,10 +8,14 @@
 # by the Apache License, Version 2.0.
 
 
+import logging
+
 from kubernetes.client import V1StatefulSet
 
 from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
+
+LOGGER = logging.getLogger(__name__)
 
 
 class K8sStatefulSet(K8sResource):
@@ -41,7 +45,7 @@ class K8sStatefulSet(K8sResource):
     def replace(self) -> None:
         apps_v1_api = self.apps_api()
         name = self.name()
-        print(f"Replacing stateful set {name}...")
+        LOGGER.info(f"Replacing stateful set {name}...")
         self.stateful_set = self.generate_stateful_set()
         apps_v1_api.replace_namespaced_stateful_set(
             name=name, body=self.stateful_set, namespace=self.namespace()

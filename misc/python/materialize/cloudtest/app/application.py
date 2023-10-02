@@ -8,11 +8,11 @@
 # by the Apache License, Version 2.0.
 
 import subprocess
-from textwrap import dedent
 
 from materialize import ui
 from materialize.cloudtest import DEFAULT_K8S_CLUSTER_NAME, DEFAULT_K8S_CONTEXT_NAME
 from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
+from materialize.cloudtest.util.common import log_subprocess_error
 
 
 class Application:
@@ -44,16 +44,7 @@ class Application:
 
             return subprocess.check_output(cmd, text=True)
         except subprocess.CalledProcessError as e:
-            print(
-                dedent(
-                    f"""
-                    cmd: {e.cmd}
-                    returncode: {e.returncode}
-                    stdout: {e.stdout}
-                    stderr: {e.stderr}
-                    """
-                )
-            )
+            log_subprocess_error(e)
             raise e
 
     def context(self) -> str:

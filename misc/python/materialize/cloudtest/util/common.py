@@ -7,15 +7,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import logging
 import subprocess
-import sys
 from collections.abc import Callable
-from functools import partial
 from textwrap import dedent
 from time import sleep
 from typing import Any, cast
 
-eprint = partial(print, file=sys.stderr)
+LOGGER = logging.getLogger(__name__)
 
 
 def retry(
@@ -33,9 +32,9 @@ def retry(
         except tuple(exception_types) as e:
             if attempt == max_attempts:
                 if message:
-                    eprint(message)
+                    LOGGER.info(message)
                 else:
-                    eprint(f"Exception in attempt {attempt}: ", e)
+                    LOGGER.error(f"Exception in attempt {attempt}: ", exc_info=e)
                 raise
             sleep(sleep_secs)
     return result
@@ -53,7 +52,7 @@ def is_subdict(
         # but if they are dicts, they are allowed to be subdicts,
         # rather than exact matches.
         if len(larger_list) < len(smaller_list):
-            eprint(f"{key_path}: smaller_list is larger than larger_list")
+            LOGGER.warning(f"{key_path}: smaller_list is larger than larger_list")
             return False
         for i, value in enumerate(smaller_list):
             current_key = f"{key_path}.{i}"
@@ -73,7 +72,7 @@ def is_subdict(
                     return False
             else:
                 if value != larger_list[i]:
-                    eprint(
+                    LOGGER.warning(
                         f"{key_path}.{i}: scalar value does not match: {value} != {larger_list[i]}",
                     )
                     return False
@@ -82,7 +81,7 @@ def is_subdict(
     for key, value in smaller_dict.items():
         current_key = f"{key_path}.{key}"
         if key not in larger_dict:
-            eprint(f"{key_path}.{key}: key not found in larger_dict")
+            LOGGER.warning(f"{key_path}.{key}: key not found in larger_dict")
             return False
         if isinstance(value, dict):
             if not is_subdict(
@@ -100,7 +99,7 @@ def is_subdict(
                 return False
         else:
             if value != larger_dict[key]:
-                eprint(
+                LOGGER.warning(
                     f"{current_key}: scalar value does not match: {value} != {larger_dict[key]}",
                 )
                 return False
@@ -113,14 +112,18 @@ def run_process_with_error_information(
     try:
         subprocess.run(cmd, text=True, input=input, check=True)
     except subprocess.CalledProcessError as e:
-        print(
-            dedent(
-                f"""
+        log_subprocess_error(e)
+        raise e
+
+
+def log_subprocess_error(e: subprocess.CalledProcessError) -> None:
+    LOGGER.error(
+        dedent(
+            f"""
                 cmd: {e.cmd}
                 returncode: {e.returncode}
                 stdout: {e.stdout}
                 stderr: {e.stderr}
                 """
-            )
         )
-        raise e
+    )

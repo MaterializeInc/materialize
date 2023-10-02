@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import logging
 from textwrap import dedent
 
 import pytest
@@ -16,6 +17,8 @@ from materialize.cloudtest.app.materialize_application import MaterializeApplica
 from materialize.cloudtest.util.cluster import cluster_pod_name, cluster_service_name
 from materialize.cloudtest.util.exists import exists, not_exists
 from materialize.cloudtest.util.wait import wait
+
+LOGGER = logging.getLogger(__name__)
 
 
 def get_value_from_label(
@@ -158,7 +161,7 @@ def test_source_resizing(mz: MaterializeApplication) -> None:
 @pytest.mark.parametrize("failpoint", [False, True])
 @pytest.mark.skip(reason="Failpoints mess up the Mz instance #18000")
 def test_source_shutdown(mz: MaterializeApplication, failpoint: bool) -> None:
-    print("Starting test_source_shutdown")
+    LOGGER.info("Starting test_source_shutdown")
     if failpoint:
         mz.set_environmentd_failpoints("kubernetes_drop_service=return(error)")
 
@@ -204,7 +207,7 @@ def test_source_shutdown(mz: MaterializeApplication, failpoint: bool) -> None:
     try:
         mz.environmentd.sql("DROP SOURCE source1")
     except InterfaceError as e:
-        print(f"Expected SQL error: {e}")
+        LOGGER.error(f"Expected SQL error: {e}")
 
     if failpoint:
         # Disable failpoint here, this should end the crash loop of environmentd
