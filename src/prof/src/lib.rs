@@ -407,8 +407,8 @@ pub async fn activate_jemalloc_profiling() {
     };
 
     let mut ctl = ctl.lock().await;
-    if ctl.get_md().start_time.is_some() {
-        return; // profiling already activated
+    if ctl.activated() {
+        return;
     }
 
     match ctl.activate() {
@@ -424,8 +424,8 @@ pub async fn deactivate_jemalloc_profiling() {
     };
 
     let mut ctl = ctl.lock().await;
-    if ctl.get_md().start_time.is_none() {
-        return; // profiling already deactivated
+    if !ctl.activated() {
+        return;
     }
 
     match ctl.deactivate() {

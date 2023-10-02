@@ -261,6 +261,10 @@ impl JemallocProfCtl {
         self.md
     }
 
+    pub fn activated(&self) -> bool {
+        self.md.start_time.is_some()
+    }
+
     pub fn activate(&mut self) -> Result<(), tikv_jemalloc_ctl::Error> {
         // SAFETY: "prof.active" is documented as being writable and taking a bool:
         // http://jemalloc.net/jemalloc.3.html#prof.active
