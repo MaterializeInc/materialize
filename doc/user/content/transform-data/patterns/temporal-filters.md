@@ -238,8 +238,6 @@ This is often referred to as a **grace period**.
 
 ## Temporal filter pushdown
 
-{{< private-preview />}}
-
 All of the queries in the previous examples only return results based on recently-added events.
 Materialize can "push down" filters that match this pattern all the way down to its storage layer, skipping over old data that’s not relevant to the query.
 Here are the key benefits of this optimization:
