@@ -160,9 +160,13 @@ impl ClientContext for MzClientContext {
         match level {
             Emerg | Alert | Critical | Error => {
                 self.record_error(log_message);
-                error!(target: "librdkafka", "{} {}", fac, log_message);
+                // We downgrade error messages to `warn!` level to avoid
+                // sending the errors to Sentry. Most errors are customer
+                // configuration problems that are not appropriate to send to
+                // Sentry.
+                warn!(target: "librdkafka", "error: {} {}", fac, log_message);
             }
-            Warning => warn!(target: "librdkafka", "{} {}", fac, log_message),
+            Warning => warn!(target: "librdkafka", "warning: {} {}", fac, log_message),
             Notice => info!(target: "librdkafka", "{} {}", fac, log_message),
             Info => info!(target: "librdkafka", "{} {}", fac, log_message),
             Debug => debug!(target: "librdkafka", "{} {}", fac, log_message),
@@ -172,7 +176,7 @@ impl ClientContext for MzClientContext {
     fn error(&self, error: KafkaError, reason: &str) {
         self.record_error(reason);
         // Refer to the comment in the `log` callback.
-        error!(target: "librdkafka", "{}: {}", error, reason);
+        warn!(target: "librdkafka", "error: {}: {}", error, reason);
     }
 }
 
