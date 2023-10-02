@@ -315,7 +315,8 @@ mod tests {
         let (req_client, req_server) = tokio::io::duplex(1024);
         let (resp_server, resp_client) = tokio::io::duplex(1024);
 
-        let (service, socket) = LspService::new(|client| mz_lsp_server::backend::Backend { client });
+        let (service, socket) =
+            LspService::new(|client| mz_lsp_server::backend::Backend { client });
 
         mz_ore::task::spawn(
             || format!("taskname:{}", "lsp_server"),

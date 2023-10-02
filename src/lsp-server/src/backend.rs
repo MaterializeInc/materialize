@@ -1,4 +1,5 @@
-// Copyright Materialize, Inc. and contributors. All rights reserved.
+// Copyright (c) 2023 Eyal Kalderon
+// Copyright Materialize, Inc. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -6,12 +7,18 @@
 // As of the Change Date specified in that file, in accordance with
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
+//
+// Portions of this file are derived from the tower-lsp project. The original source
+// code was retrieved on 10/02/2023 from:
+//
+//     https://github.com/ebkalderon/tower-lsp/blob/cc4c858/examples/stdio.rs
+//
+// The original source code is subject to the terms of the <APACHE|MIT> license, a copy
+// of which can be found in the LICENSE file at the root of this repository.
 
 use ropey::Rope;
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tower_lsp::jsonrpc::Result;
-use tower_lsp::lsp_types::notification::Notification;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
 
@@ -25,12 +32,11 @@ use crate::snippets::SNIPPETS;
 /// - `did_save`, `did_close`: log messages indicating file actions.
 /// - `completion`: Provides completion suggestions. WIP.
 /// - `code_lens`: Offers in-editor commands. WIP.
-/// - `execute_command`: Executes commands and logs their results.
 ///
 /// Most of the `did_` methods re-route the request to the private method `on_change`
 /// within the `Backend` struct. This method is triggered whenever there's a change
 /// in the file, and it parses the content using `mz_sql_parser`.
-// Depending on the parse result, it either sneds the logs the results or any encountered errors.
+/// Depending on the parse result, it either sneds the logs the results or any encountered errors.
 #[derive(Debug)]
 pub struct Backend {
     /// Handles the communication to the client.
@@ -70,6 +76,7 @@ impl LanguageServer for Backend {
             },
         })
     }
+
     async fn initialized(&self, _: InitializedParams) {
         self.client
             .log_message(MessageType::INFO, "initialized!")
@@ -80,22 +87,59 @@ impl LanguageServer for Backend {
         Ok(())
     }
 
+    async fn did_change_workspace_folders(&self, _: DidChangeWorkspaceFoldersParams) {
+        self.client
+            .log_message(MessageType::INFO, "workspace folders changed!")
+            .await;
+    }
+
+    async fn did_change_configuration(&self, _: DidChangeConfigurationParams) {
+        self.client
+            .log_message(MessageType::INFO, "configuration changed!")
+            .await;
+    }
+
+    async fn did_change_watched_files(&self, _: DidChangeWatchedFilesParams) {
+        self.client
+            .log_message(MessageType::INFO, "watched files have changed!")
+            .await;
+    }
+
+    async fn execute_command(&self, _: ExecuteCommandParams) -> Result<Option<Value>> {
+        self.client
+            .log_message(MessageType::INFO, "command executed!")
+            .await;
+
+        match self.client.apply_edit(WorkspaceEdit::default()).await {
+            Ok(res) if res.applied => self.client.log_message(MessageType::INFO, "applied").await,
+            Ok(_) => self.client.log_message(MessageType::INFO, "rejected").await,
+            Err(err) => self.client.log_message(MessageType::ERROR, err).await,
+        }
+
+        Ok(None)
+    }
+
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         self.client
             .log_message(MessageType::INFO, "file opened!")
             .await;
-        self.on_change(TextDocumentItem {
+
+        self.parse(TextDocumentItem {
             uri: params.text_document.uri,
             text: params.text_document.text,
             version: params.text_document.version,
         })
-        .await;
+        .await
     }
 
-    async fn did_change(&self, mut params: DidChangeTextDocumentParams) {
-        self.on_change(TextDocumentItem {
+    async fn did_change(&self, params: DidChangeTextDocumentParams) {
+        self.client
+            .log_message(MessageType::INFO, "file changed!")
+            .await;
+
+        self.parse(TextDocumentItem {
             uri: params.text_document.uri,
-            text: std::mem::take(&mut params.content_changes[0].text),
+            text: params.content_changes[0].text.clone(),
             version: params.text_document.version,
         })
         .await
@@ -106,6 +150,7 @@ impl LanguageServer for Backend {
             .log_message(MessageType::INFO, "file saved!")
             .await;
     }
+
     async fn did_close(&self, _: DidCloseTextDocumentParams) {
         self.client
             .log_message(MessageType::INFO, "file closed!")
@@ -143,48 +188,6 @@ impl LanguageServer for Backend {
         // Ok(Some(lenses))
         Ok(None)
     }
-
-    async fn did_change_configuration(&self, _: DidChangeConfigurationParams) {
-        self.client
-            .log_message(MessageType::INFO, "configuration changed!")
-            .await;
-    }
-
-    async fn did_change_workspace_folders(&self, _: DidChangeWorkspaceFoldersParams) {
-        self.client
-            .log_message(MessageType::INFO, "workspace folders changed!")
-            .await;
-    }
-
-    async fn did_change_watched_files(&self, _: DidChangeWatchedFilesParams) {
-        self.client
-            .log_message(MessageType::INFO, "watched files have changed!")
-            .await;
-    }
-
-    async fn execute_command(&self, _: ExecuteCommandParams) -> Result<Option<Value>> {
-        self.client
-            .log_message(MessageType::INFO, "command executed!")
-            .await;
-
-        match self.client.apply_edit(WorkspaceEdit::default()).await {
-            Ok(res) if res.applied => self.client.log_message(MessageType::INFO, "applied").await,
-            Ok(_) => self.client.log_message(MessageType::INFO, "rejected").await,
-            Err(err) => self.client.log_message(MessageType::ERROR, err).await,
-        }
-
-        Ok(None)
-    }
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct InlayHintParams {
-    path: String,
-}
-enum CustomNotification {}
-impl Notification for CustomNotification {
-    type Params = InlayHintParams;
-    const METHOD: &'static str = "custom/notification";
 }
 
 struct TextDocumentItem {
@@ -194,7 +197,7 @@ struct TextDocumentItem {
 }
 
 impl Backend {
-    async fn on_change(&self, params: TextDocumentItem) {
+    async fn parse(&self, params: TextDocumentItem) {
         self.client
             .log_message(MessageType::INFO, format!("on_change {:?}", params.uri))
             .await;
