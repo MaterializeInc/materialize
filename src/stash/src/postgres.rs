@@ -1416,17 +1416,6 @@ impl DebugStashFactory {
                 tracing::error!("postgres stash connection error: {e}");
             }
         });
-        // Running tests in parallel has been causing some deadlock/starvation issue that we haven't
-        // been able to figure out. For some reason, uncommitted transactions are being left open
-        // which causes the schema cleanup in the Drop impl to block for an enormous amount of time
-        // (many minutes). Setting a small idle transaction timeout globally seems to resolve the
-        // issue somehow. This is a gross hack and we don't really understand what's going on, but
-        // for now it resolves issues in CI while we debug further.
-        client
-            .batch_execute(
-                "SET CLUSTER SETTING sql.defaults.idle_in_transaction_session_timeout TO '1s'",
-            )
-            .await?;
         client
             .batch_execute(&format!("CREATE SCHEMA {schema}"))
             .await?;
@@ -1527,8 +1516,19 @@ impl Drop for DebugStashFactory {
                         std::panic::resume_unwind(Box::new(e));
                     }
                 });
+                // This task blocks the entire runtime since it's called within
+                // `async_runtime.block_on`. If there are other tasks that have active transactions
+                // in CRDB, that conflict with the drop statement, then we will cause a deadlock.
+                // To avoid the deadlock, we forcibly disconnect all other sessions, aborting their
+                // transactions, and force them to reconnect.
+                let cancel_sessions = "CANCEL SESSIONS (
+                    WITH all_s AS (SHOW CLUSTER SESSIONS), 
+                    my_s AS (SHOW session_id) 
+                    SELECT session_id FROM all_s 
+                        WHERE session_id NOT IN (SELECT session_id FROM my_s)
+                );";
                 client
-                    .batch_execute(&format!("DROP SCHEMA {} CASCADE", &schema))
+                    .batch_execute(&format!("{cancel_sessions}; DROP SCHEMA {schema} CASCADE;",))
                     .await?;
                 Ok::<_, StashError>(())
             })
