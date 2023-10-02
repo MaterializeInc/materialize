@@ -3643,6 +3643,7 @@ dependencies = [
  "bytesize",
  "clap",
  "futures",
+ "hyper-openssl",
  "jsonwebtoken",
  "mz-build-info",
  "mz-frontegg-auth",

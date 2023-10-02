@@ -104,14 +104,14 @@ use mz_pgwire_common::{
     decode_startup, Conn, ErrorResponse, FrontendMessage, FrontendStartupMessage,
     ACCEPT_SSL_ENCRYPTION, REJECT_ENCRYPTION, VERSION_3,
 };
-use openssl::ssl::Ssl;
+use openssl::ssl::{NameType, Ssl, SslContext};
 use semver::Version;
 use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::task::JoinSet;
 use tokio_openssl::SslStream;
 use tokio_postgres::error::SqlState;
-use tracing::{error, warn};
+use tracing::{debug, error, warn};
 
 use crate::codec::{BackendMessage, FramedConn};
 
@@ -123,10 +123,11 @@ pub struct BalancerConfig {
     build_version: Version,
     /// Listen address for pgwire connections.
     pgwire_listen_addr: SocketAddr,
-    /// Listen address for HTTP connections.
-    http_listen_addr: SocketAddr,
+    /// Listen address for HTTPS connections.
+    https_listen_addr: SocketAddr,
     /// DNS resolver.
     resolver: Resolver,
+    https_addr_template: String,
     tls: Option<TlsCertConfig>,
 }
 
@@ -134,15 +135,17 @@ impl BalancerConfig {
     pub fn new(
         build_info: &BuildInfo,
         pgwire_listen_addr: SocketAddr,
-        http_listen_addr: SocketAddr,
+        https_listen_addr: SocketAddr,
         resolver: Resolver,
+        https_addr_template: String,
         tls: Option<TlsCertConfig>,
     ) -> Self {
         Self {
             build_version: build_info.semver_version(),
             pgwire_listen_addr,
-            http_listen_addr,
+            https_listen_addr,
             resolver,
+            https_addr_template,
             tls,
         }
     }
@@ -188,33 +191,47 @@ impl BalancerService {
 
     pub async fn serve(self) -> Result<(), anyhow::Error> {
         let (_pgwire_listen_handle, pgwire_stream) = listen(self.cfg.pgwire_listen_addr).await?;
-        let (_http_listen_handle, http_stream) = listen(self.cfg.http_listen_addr).await?;
+        let (_https_listen_handle, https_stream) = listen(self.cfg.https_listen_addr).await?;
 
-        let pgwire_tls = match self.cfg.tls {
-            Some(tls) => Some(TlsConfig {
-                context: tls.context()?,
-                mode: TlsMode::Require,
-            }),
-            None => None,
-        };
-
-        let resolver = Arc::new(self.cfg.resolver);
-
-        let pgwire = PgwireBalancer {
-            resolver: Arc::clone(&resolver),
-            tls: pgwire_tls,
-        };
-        let http = HttpBalancer {
-            _resolver: Arc::clone(&resolver),
+        let (pgwire_tls, https_tls) = match &self.cfg.tls {
+            Some(tls) => {
+                let context = tls.context()?;
+                (
+                    Some(TlsConfig {
+                        context: context.clone(),
+                        mode: TlsMode::Require,
+                    }),
+                    Some(context),
+                )
+            }
+            None => (None, None),
         };
 
         let mut set = JoinSet::new();
-        set.spawn_named(|| "pgwire_stream", async move {
-            mz_ore::server::serve(pgwire_stream, pgwire).await;
-        });
-        set.spawn_named(|| "http_stream", async move {
-            mz_ore::server::serve(http_stream, http).await;
-        });
+        {
+            let pgwire = PgwireBalancer {
+                resolver: Arc::new(self.cfg.resolver),
+                tls: pgwire_tls,
+            };
+            set.spawn_named(|| "pgwire_stream", async move {
+                mz_ore::server::serve(pgwire_stream, pgwire).await;
+            });
+        }
+        {
+            let https = HttpsBalancer {
+                tls: Arc::new(https_tls),
+                resolve_template: Arc::from(self.cfg.https_addr_template),
+            };
+            set.spawn_named(|| "https_stream", async move {
+                mz_ore::server::serve(https_stream, https).await;
+            });
+        }
+
+        println!("balancerd {} listening...", BUILD_INFO.human_version());
+        println!(" TLS enabled: {}", self.cfg.tls.is_some());
+        println!(" pgwire address: {}", self.cfg.pgwire_listen_addr);
+        println!(" HTTPS address: {}", self.cfg.https_listen_addr);
+
         // The tasks should never exit, so complain if they do.
         while let Some(res) = set.join_next().await {
             let _ = res?;
@@ -395,18 +412,67 @@ impl mz_ore::server::Server for PgwireBalancer {
     }
 }
 
-struct HttpBalancer {
-    _resolver: Arc<Resolver>,
+struct HttpsBalancer {
+    tls: Arc<Option<SslContext>>,
+    resolve_template: Arc<str>,
     // todo: metrics
 }
 
-impl mz_ore::server::Server for HttpBalancer {
-    const NAME: &'static str = "http_balancer";
+impl mz_ore::server::Server for HttpsBalancer {
+    const NAME: &'static str = "https_balancer";
 
-    fn handle_connection(&self, _conn: TcpStream) -> mz_ore::server::ConnectionHandler {
-        Box::pin(async { Ok(()) })
+    fn handle_connection(&self, conn: TcpStream) -> mz_ore::server::ConnectionHandler {
+        let tls_context = Arc::clone(&self.tls);
+        let resolve_template = Arc::clone(&self.resolve_template);
+        Box::pin(async move {
+            let (mut client_stream, servername): (Box<dyn ClientStream>, Option<String>) =
+                match &*tls_context {
+                    Some(tls_context) => {
+                        let mut ssl_stream = SslStream::new(Ssl::new(tls_context)?, conn)?;
+                        if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
+                            let _ = ssl_stream.get_mut().shutdown().await;
+                            return Err(e.into());
+                        }
+                        let servername: Option<String> =
+                            ssl_stream.ssl().servername(NameType::HOST_NAME).map(|sn| {
+                                debug!("full servername: {sn}");
+                                match sn.split_once('.') {
+                                    Some((left, _right)) => left,
+                                    None => sn,
+                                }
+                                .into()
+                            });
+                        debug!("servername: {servername:?}");
+                        (Box::new(ssl_stream), servername)
+                    }
+                    _ => (Box::new(conn), None),
+                };
+
+            let addr: String = match servername {
+                Some(servername) => resolve_template.replace("{}", &servername),
+                None => resolve_template.to_string(),
+            };
+            debug!("https address: {addr}");
+
+            let mut addrs = tokio::net::lookup_host(&*addr).await?;
+            let Some(envd_addr) = addrs.next() else {
+                error!("{addr} did not resolve to any addresses");
+                anyhow::bail!("internal error");
+            };
+
+            let mut mz_stream = TcpStream::connect(envd_addr).await?;
+
+            // Now blindly shuffle bytes back and forth until closed.
+            // TODO: Limit total memory use.
+            tokio::io::copy_bidirectional(&mut client_stream, &mut mz_stream).await?;
+
+            Ok(())
+        })
     }
 }
+
+trait ClientStream: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> ClientStream for T {}
 
 pub enum Resolver {
     Static(SocketAddr),
