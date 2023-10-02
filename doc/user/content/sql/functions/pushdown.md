@@ -40,7 +40,7 @@ Specifically, the accepted format is `YYYY-MM-DDThh:mm:ss.sssZ`:
 - A literal `Z`, indicating the UTC time zone.
 
 Ordinary `text`-to-`timestamp` casts will prevent a filter from being pushed down.
-Replacing those casts `try_parse_monotonic_iso8601_timestamp` can unblock that
+Replacing those casts with `try_parse_monotonic_iso8601_timestamp` can unblock that
 optimization for your query.
 
 ## Examples
