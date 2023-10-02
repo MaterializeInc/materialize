@@ -132,7 +132,7 @@ CREATE VIEW json_parsed AS
 This `json_parsed` view parses the incoming data, transforming the nested JSON structure into discernible columns, such as `nodeVersion`, `channel`, `event`, and `userId`.
 
 Furthermore, with the vast amount of data processed and potential network issues, it's not uncommon to receive duplicate records. You can use the
-`DISTINCT` clause to remove duplicates, for more details, refer to the webhook source [documentation](/sql/create-source/webhook/#duplicated-and-partial-events).
+`DISTINCT` clause to remove duplicates, for more details, refer to the webhook source [documentation](/sql/create-source/webhook/#handling-duplicated-and-partial-events).
 
 {{< note >}} For comprehensive details regarding RudderStack's Webhook Destination, refer to their [official documentation](https://rudderstack.com/docs/). {{< /note >}}
 

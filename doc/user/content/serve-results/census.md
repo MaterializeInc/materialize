@@ -1,9 +1,13 @@
 ---
 title: "Census"
 description: "How to use Census to export data out of Materialize."
+aliases:
+   - /manage/reverse-etl/census/
 menu:
   main:
-    parent: "reverse-etl"
+    parent: sink
+    name: "Census"
+    weight: 5
 ---
 
 This guide walks you through the steps required to create a [Census](https://www.getcensus.com/) sync using Materialize.
