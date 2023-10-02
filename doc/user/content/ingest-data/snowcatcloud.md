@@ -65,7 +65,7 @@ This enables a simple and rudimentary way to grant authorization to your webhook
 
 To configure a Materialize Webhook as a destination in SnowcatCloud, follow the steps outlined below:
 
-1.  **Select Your SnowcatCloud Pipe**: Identify the pipeline you wish to add Materialize destination to. 
+1.  **Select Your SnowcatCloud Pipe**: Identify the pipeline you wish to add Materialize destination to.
 
 1.  **Select Materialize as a Destination**:
     1. Navigate to the destinations section.
