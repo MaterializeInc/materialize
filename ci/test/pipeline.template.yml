@@ -31,6 +31,7 @@ steps:
     priority: 1
     agents:
       queue: builder-linux-x86_64
+    retry: {manual: {permit_on_passed: true}}
 
   - id: build-aarch64
     label: Build aarch64
@@ -43,6 +44,7 @@ steps:
     agents:
       queue: builder-linux-aarch64
     coverage: skip
+    retry: {manual: {permit_on_passed: true}}
 
   - id: build-wasm
     label: Build WASM
@@ -53,6 +55,7 @@ steps:
     agents:
       queue: linux-x86_64
     coverage: skip
+    retry: {manual: {permit_on_passed: true}}
 
   - id: check-merge-with-target
     label: Merge skew cargo check
@@ -66,6 +69,7 @@ steps:
       queue: linux-x86_64
     if: "build.pull_request.id != null"
     coverage: skip
+    retry: {manual: {permit_on_passed: true}}
 
   - id: devel-docker-tags
     label: Tag development docker images
@@ -79,6 +83,7 @@ steps:
     agents:
       queue: linux-x86_64
     coverage: skip
+    retry: {manual: {permit_on_passed: true}}
 
   - id: lint-fast
     label: Lint and rustfmt
@@ -89,6 +94,7 @@ steps:
     agents:
       queue: linux-x86_64
     coverage: skip
+    retry: {manual: {permit_on_passed: true}}
 
   - id: lint-slow
     label: Clippy and doctests
@@ -101,6 +107,7 @@ steps:
     agents:
       queue: builder-linux-x86_64
     coverage: skip
+    retry: {manual: {permit_on_passed: true}}
 
   - id: lint-macos
     label: macOS Clippy
@@ -116,6 +123,7 @@ steps:
     agents:
       queue: mac
     coverage: skip
+    retry: {manual: {permit_on_passed: true}}
 
   - id: lint-deps
     label: Lint dependencies
@@ -128,6 +136,7 @@ steps:
     agents:
       queue: linux-x86_64
     coverage: skip
+    retry: {manual: {permit_on_passed: true}}
 
   - id: lint-docs
     label: Lint docs
@@ -140,6 +149,7 @@ steps:
     agents:
       queue: linux-x86_64
     coverage: skip
+    retry: {manual: {permit_on_passed: true}}
 
   - id: preview-docs
     label: Preview docs
@@ -149,6 +159,7 @@ steps:
     agents:
       queue: linux-x86_64
     coverage: skip
+    retry: {manual: {permit_on_passed: true}}
 
   - id: cargo-test
     label: Cargo test
@@ -170,6 +181,7 @@ steps:
           composition: cargo-test
     agents:
       queue: builder-linux-x86_64
+    retry: {manual: {permit_on_passed: true}}
 
   - id: miri-test
     label: Miri test (fast) %n
@@ -185,6 +197,7 @@ steps:
     agents:
       queue: builder-linux-x86_64
     coverage: skip
+    retry: {manual: {permit_on_passed: true}}
 
   - id: testdrive
     label: Testdrive %n
@@ -201,6 +214,7 @@ steps:
           args: [--aws-region=us-east-1]
     agents:
       queue: linux-x86_64
+    retry: {manual: {permit_on_passed: true}}
 
   - id: upsert-compaction-disabled
     label: Upsert (compaction disabled)
@@ -214,6 +228,7 @@ steps:
           args: [--compaction-disabled]
     agents:
       queue: linux-x86_64
+    retry: {manual: {permit_on_passed: true}}
 
   - id: persistence
     label: Persistence tests
@@ -225,6 +240,7 @@ steps:
           composition: persistence
     agents:
       queue: linux-x86_64
+    retry: {manual: {permit_on_passed: true}}
 
   - id: cluster-tests
     label: Cluster tests %n
@@ -238,6 +254,7 @@ steps:
           composition: cluster
     agents:
       queue: linux-x86_64
+    retry: {manual: {permit_on_passed: true}}
 
   - id: cluster-isolation
     label: Cluster isolation test
@@ -250,6 +267,7 @@ steps:
           composition: cluster-isolation
     agents:
       queue: linux-x86_64
+    retry: {manual: {permit_on_passed: true}}
 
   - id: replica-isolation
     label: Replica isolation
@@ -262,6 +280,7 @@ steps:
           composition: replica-isolation
     agents:
       queue: linux-x86_64
+    retry: {manual: {permit_on_passed: true}}
 
   - id: kafka-ssl
     label: Kafka SSL smoke test
@@ -274,6 +293,7 @@ steps:
           composition: kafka-ssl
     agents:
       queue: linux-x86_64
+    retry: {manual: {permit_on_passed: true}}
 
   - id: kafka-sasl-plain
     label: Kafka SASL PLAIN smoke test
@@ -286,6 +306,7 @@ steps:
           composition: kafka-sasl-plain
     agents:
       queue: linux-x86_64
+    retry: {manual: {permit_on_passed: true}}
 
   - id: sqllogictest-fast
     label: Fast SQL logic tests %n
@@ -299,6 +320,7 @@ steps:
           composition: sqllogictest
     agents:
       queue: linux-x86_64
+    retry: {manual: {permit_on_passed: true}}
 
   - id: chbench-demo
     label: chbench smoke test
@@ -311,6 +333,7 @@ steps:
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
+    retry: {manual: {permit_on_passed: true}}
 
   - id: restarts
     label: Restart test
@@ -322,6 +345,7 @@ steps:
           composition: restart
     agents:
       queue: linux-x86_64
+    retry: {manual: {permit_on_passed: true}}
 
   - id: legacy-upgrade
     label: Legacy upgrade tests
@@ -334,6 +358,7 @@ steps:
           composition: legacy-upgrade
     agents:
       queue: linux-x86_64
+    retry: {manual: {permit_on_passed: true}}
 
   - id: metabase-demo
     label: Metabase smoke test
@@ -345,6 +370,7 @@ steps:
           composition: metabase
     agents:
       queue: linux-x86_64
+    retry: {manual: {permit_on_passed: true}}
 
   - id: dbt-materialize
     label: dbt-materialize tests
@@ -356,6 +382,7 @@ steps:
           composition: dbt-materialize
     agents:
       queue: linux-x86_64
+    retry: {manual: {permit_on_passed: true}}
 
   - id: debezium-postgres
     label: Debezium Postgres tests
@@ -369,6 +396,7 @@ steps:
           run: postgres
     agents:
       queue: linux-x86_64
+    retry: {manual: {permit_on_passed: true}}
 
   - id: debezium-sql-server
     label: Debezium SQL Server tests
@@ -382,6 +410,7 @@ steps:
           run: sql-server
     agents:
       queue: linux-x86_64
+    retry: {manual: {permit_on_passed: true}}
 
   - id: debezium-mysql
     label: Debezium MySQL tests
@@ -395,6 +424,7 @@ steps:
           run: mysql
     agents:
       queue: linux-x86_64
+    retry: {manual: {permit_on_passed: true}}
 
   - id: pg-cdc
     label: Postgres CDC tests
@@ -407,6 +437,7 @@ steps:
           composition: pg-cdc
     agents:
       queue: linux-x86_64
+    retry: {manual: {permit_on_passed: true}}
 
   - id: pg-cdc-resumption
     label: Postgres CDC resumption tests
@@ -419,6 +450,7 @@ steps:
           composition: pg-cdc-resumption
     agents:
       queue: linux-x86_64
+    retry: {manual: {permit_on_passed: true}}
 
   - id: ssh-connection
     label: SSH connection tests
@@ -431,6 +463,7 @@ steps:
           composition: ssh-connection
     agents:
       queue: linux-x86_64
+    retry: {manual: {permit_on_passed: true}}
 
   - id: kafka-resumption
     label: Kafka resumption tests
@@ -442,6 +475,7 @@ steps:
           composition: kafka-resumption
     agents:
       queue: linux-x86_64
+    retry: {manual: {permit_on_passed: true}}
 
   - id: zippy-kafka-sources-short
     label: "Short Zippy"
@@ -455,6 +489,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: zippy
           args: [--scenario=KafkaSources, --actions=200]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: kafka-exactly-once
     label: Kafka exactly-once tests
@@ -466,6 +501,7 @@ steps:
           composition: kafka-exactly-once
     agents:
       queue: linux-x86_64
+    retry: {manual: {permit_on_passed: true}}
 
   - id: persist-maelstrom
     label: Maelstrom coverage of persist
@@ -480,6 +516,7 @@ steps:
     agents:
       queue: linux-x86_64
     coverage: skip # Randomized, shouldn't count for coverage
+    retry: {manual: {permit_on_passed: true}}
 
   - id: checks-drop-create-default-replica
     label: "Checks + DROP/CREATE replica"
@@ -493,6 +530,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=DropCreateDefaultReplica, "--seed=$BUILDKITE_JOB_ID"]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: checks-no-restart-no-upgrade
     label: "Checks without restart or upgrade"
@@ -506,6 +544,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=NoRestartNoUpgrade, "--seed=$BUILDKITE_JOB_ID"]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: checks-restart-clusterd-compute
     label: "Checks + restart clusterd compute"
@@ -519,6 +558,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=RestartClusterdCompute, "--seed=$BUILDKITE_JOB_ID"]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: checks-restart-environmentd-clusterd-storage
     label: "Checks + restart of environmentd & storage clusterd"
@@ -532,6 +572,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=RestartEnvironmentdClusterdStorage, "--seed=$BUILDKITE_JOB_ID"]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: checks-kill-clusterd-storage
     label: "Checks + kill storage clusterd"
@@ -545,6 +586,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=KillClusterdStorage, "--seed=$BUILDKITE_JOB_ID"]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: checks-restart-source-postgres
     label: "Checks + restart source Postgres"
@@ -558,6 +600,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=RestartSourcePostgres, --check=PgCdc]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: cloudtest
     label: Cloudtest %n
@@ -573,6 +616,7 @@ steps:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/cloudtest:
           args: [--exitfirst, -m, "not long", --aws-region=us-east-1, test/cloudtest/]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: source-sink-errors
     label: "Source/Sink Error Reporting"
@@ -584,6 +628,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: source-sink-errors
+    retry: {manual: {permit_on_passed: true}}
 
   - id: storage-usage
     label: "Storage Usage Table Test"
@@ -595,6 +640,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: storage-usage
+    retry: {manual: {permit_on_passed: true}}
 
   - id: tracing
     label: "Tracing Fast Path"
@@ -607,6 +653,7 @@ steps:
           composition: tracing
     agents:
       queue: linux-x86_64
+    retry: {manual: {permit_on_passed: true}}
 
   - id: lang-csharp
     label: ":csharp: tests"
@@ -619,6 +666,7 @@ steps:
           composition: csharp
     agents:
       queue: linux-x86_64
+    retry: {manual: {permit_on_passed: true}}
 
   - id: lang-js
     label: ":js: tests"
@@ -631,6 +679,7 @@ steps:
           composition: js
     agents:
       queue: linux-x86_64
+    retry: {manual: {permit_on_passed: true}}
 
   - id: lang-java
     label: ":java: tests"
@@ -643,6 +692,7 @@ steps:
           composition: java
     agents:
       queue: linux-x86_64
+    retry: {manual: {permit_on_passed: true}}
 
   - id: lang-python
     label: ":python: tests"
@@ -655,6 +705,7 @@ steps:
           composition: python
     agents:
       queue: linux-x86_64
+    retry: {manual: {permit_on_passed: true}}
 
   - id: feature-benchmark-kafka-only
     label: "Feature benchmark (Kafka only)"
@@ -666,6 +717,7 @@ steps:
           composition: feature-benchmark
           args: [--scenario=KafkaUpsertUnique]
     coverage: skip
+    retry: {manual: {permit_on_passed: true}}
 
   - id: deploy-website
     label: Deploy website
@@ -761,10 +813,8 @@ steps:
     priority: 1
     agents:
       queue: builder-linux-x86_64
-    retry:
-      manual:
-        permit_on_passed: true
     coverage: only
+    retry: {manual: {permit_on_passed: true}}
 
   - wait: ~
     continue_on_failure: true
@@ -779,6 +829,7 @@ steps:
     priority: 1
     agents:
       queue: linux-x86_64
+    retry: {manual: {permit_on_passed: true}}
 
   - wait: ~
 

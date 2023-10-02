@@ -39,6 +39,7 @@ steps:
     # sure we use the exact same version for testing here as was tagged and
     # will be released, and don't build our own version just for the tests.
     if: build.source == "ui" || build.source == "schedule"
+    retry: {manual: {permit_on_passed: true}}
 
   - wait: ~
 
@@ -46,6 +47,7 @@ steps:
     if: build.source == "ui"
     agents:
       queue: linux
+    retry: {manual: {permit_on_passed: true}}
 
   - wait: ~
 
@@ -60,6 +62,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: zippy
           args: [--scenario=KafkaSourcesLarge, --actions=100000]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: zippy-dataflows-large
     label: "Large Zippy w/ complex dataflows"
@@ -72,6 +75,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: zippy
           args: [--scenario=DataflowsLarge, --actions=35000]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: zippy-pg-cdc-large
     label: "Longer Zippy PogresCdc"
@@ -83,6 +87,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: zippy
           args: [--scenario=PostgresCdcLarge, --actions=200000]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: zippy-cluster-replicas-large
     label: "Longer Zippy ClusterReplicas"
@@ -95,6 +100,7 @@ steps:
           composition: zippy
           # Execution times longer than 4h are apparently not feasible at this time due to #17845
           args: [--scenario=ClusterReplicas, --actions=10000, --max-execution-time=4h]
+    retry: {manual: {permit_on_passed: true}}
 
   - id: zippy-user-tables-large
     label: "Long Zippy w/ user tables"
@@ -106,6 +112,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: zippy
           args: [--scenario=UserTablesLarge, --actions=200000]
+    retry: {manual: {permit_on_passed: true}}
 
 
   - id: feature-benchmark-scale-plus-one
@@ -117,6 +124,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: feature-benchmark
           args: [--other-tag=latest, --scale=+1]
+    retry: {manual: {permit_on_passed: true}}
 
   - wait: ~
     continue_on_failure: true
@@ -130,3 +138,4 @@ steps:
     priority: 1
     agents:
       queue: linux-x86_64
+    retry: {manual: {permit_on_passed: true}}

@@ -15,9 +15,7 @@ steps:
       queue: builder-linux-x86_64
     concurrency: 1
     concurrency_group: deploy/devsite
-    retry:
-      manual:
-        permit_on_passed: true
+    retry: {manual: {permit_on_passed: true}}
 
   - command: bin/ci-builder run stable bin/pyactivate -m ci.deploy.docker
     timeout_in_minutes: 30
@@ -25,9 +23,7 @@ steps:
       queue: linux-x86_64
     concurrency: 1
     concurrency_group: deploy/linux
-    retry:
-      manual:
-        permit_on_passed: true
+    retry: {manual: {permit_on_passed: true}}
 
   - command: bin/ci-builder run stable bin/pyactivate -m ci.deploy.pypi
     timeout_in_minutes: 30
@@ -35,9 +31,7 @@ steps:
     concurrency_group: deploy/pypi
     agents:
       queue: linux-x86_64
-    retry:
-      manual:
-        permit_on_passed: true
+    retry: {manual: {permit_on_passed: true}}
 
   - command: bin/ci-builder run stable bin/pyactivate -m ci.deploy.npm
     timeout_in_minutes: 30
@@ -45,9 +39,7 @@ steps:
     concurrency_group: deploy/npm
     agents:
       queue: linux-x86_64
-    retry:
-      manual:
-        permit_on_passed: true
+    retry: {manual: {permit_on_passed: true}}
 
   - label: ":bulb: Full SQL Logic Tests"
     trigger: sql-logic-tests
