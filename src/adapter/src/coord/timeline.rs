@@ -290,6 +290,9 @@ impl<T: TimestampManipulation> DurableTimestampOracle<T> {
     }
 
     /// Peek current write timestamp.
+    // We make this function async to prepare for future changes, but it's not
+    // used right now.
+    #[allow(clippy::unused_async)]
     async fn peek_write_ts(&self) -> T {
         self.timestamp_oracle.peek_write_ts()
     }
@@ -298,6 +301,9 @@ impl<T: TimestampManipulation> DurableTimestampOracle<T> {
     /// persisted to disk.
     ///
     /// See [`TimestampOracle::read_ts`] for more details.
+    // We make this function async to prepare for future changes, but it's not
+    // used right now.
+    #[allow(clippy::unused_async)]
     pub async fn read_ts(&self) -> T {
         let ts = self.timestamp_oracle.read_ts();
         assert!(
