@@ -21,6 +21,10 @@ statement_logging_sample_rate
 ----
 1.0
 
+# Verify that we can get application names
+# that are set after session initialization 
+> SET application_name TO my_app
+
 # Later, we need to ignore everything
 # that happened before the real test started. Sleep here,
 # so we can be sure that their `began_at` is different.
@@ -72,6 +76,16 @@ contains: column "f_nonexistent" does not exist
 
 > COMMIT
 
+# Create a cluster, run a query on it, and drop it to ensure that we retain the cluster name
+> CREATE CLUSTER c REPLICAS (r1 (size '1'))
+
+> SET cluster TO c
+
+> SELECT count(*) FROM t
+1
+
+> DROP CLUSTER c
+
 # This will be executed on mz_introspection, due to auto-routing of introspection queries.
 > SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics
 true
@@ -94,22 +108,25 @@ true
 
 > WITH all_stmts AS (SELECT * FROM mz_internal.mz_statement_execution_history mseh RIGHT JOIN mz_internal.mz_prepared_statement_history mpsh ON mseh.prepared_statement_id = mpsh.id),
        test_begin AS (SELECT began_at FROM all_stmts WHERE sql = 'SELECT ''beginning real test!''' ORDER BY began_at DESC LIMIT 1)
-  SELECT c.name, all_stmts.sample_rate, all_stmts.params, all_stmts.finished_status, all_stmts.error_message, all_stmts.rows_returned, all_stmts.execution_strategy, all_stmts.name LIKE 's%', all_stmts.sql
-  FROM all_stmts, test_begin, mz_clusters c WHERE all_stmts.began_at >= test_begin.began_at AND all_stmts.sql NOT LIKE '%sduiahsdfuoiahsdf%'
-  AND c.id = all_stmts.cluster_id
-default 1 {} error "Evaluation error: division by zero" <null> <null> true "SELECT f/0 FROM t"
-default 1 {} success <null> 1 constant true "EXECUTE p('hello world')"
-mz_introspection 1 {} success <null> 1 constant true "SELECT 'beginning real test!'"
-default 1 {} success <null> 1 fast-path true "SELECT * FROM t"
-mz_introspection 1 {} success <null> 1 standard true "SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics"
-default 1 {} success <null> 1 standard true "SELECT count(*) FROM t"
-default 1 {} success <null> 2 constant true "FETCH c"
-default 1 {} success <null> <null> <null> true BEGIN
-default 1 {} success <null> <null> <null> true COMMIT
-default 1 {} success <null> <null> <null> true "CREATE DEFAULT INDEX i ON t"
-default 1 {} success <null> <null> <null> true "CREATE TABLE t(f int)"
-default 1 {} success <null> <null> <null> true "DECLARE c CURSOR FOR VALUES (1), (2)"
-default 1 {} success <null> <null> <null> true "FETCH c"
-default 1 {} success <null> <null> <null> true "FETCH c"
-default 1 {} success <null> <null> <null> true "INSERT INTO t VALUES (1)"
-default 1 {} success <null> <null> <null> true "PREPARE p AS values ($1)"
+  SELECT c.name, all_stmts.cluster_name, all_stmts.application_name, all_stmts.sample_rate, all_stmts.params, all_stmts.finished_status, all_stmts.error_message, all_stmts.rows_returned, all_stmts.execution_strategy, all_stmts.name LIKE 's%', all_stmts.sql
+  FROM all_stmts, test_begin LEFT JOIN mz_clusters c ON c.id = all_stmts.cluster_id WHERE all_stmts.began_at >= test_begin.began_at AND all_stmts.sql NOT LIKE '%sduiahsdfuoiahsdf%'
+<null> c my_app 1 {} success <null> 1 standard true "SELECT count(*) FROM t"
+<null> c my_app 1 {} success <null> <null> <null> true "DROP CLUSTER c"
+default default my_app 1 {} error "Evaluation error: division by zero" <null> <null> true "SELECT f/0 FROM t"
+default default my_app 1 {} success <null> 1 constant true "EXECUTE p('hello world')"
+default default my_app 1 {} success <null> 1 fast-path true "SELECT * FROM t"
+default default my_app 1 {} success <null> 1 standard true "SELECT count(*) FROM t"
+default default my_app 1 {} success <null> 2 constant true "FETCH c"
+default default my_app 1 {} success <null> <null> <null> true BEGIN
+default default my_app 1 {} success <null> <null> <null> true COMMIT
+default default my_app 1 {} success <null> <null> <null> true "CREATE CLUSTER c REPLICAS (r1 (size '1'))"
+default default my_app 1 {} success <null> <null> <null> true "CREATE DEFAULT INDEX i ON t"
+default default my_app 1 {} success <null> <null> <null> true "CREATE TABLE t(f int)"
+default default my_app 1 {} success <null> <null> <null> true "DECLARE c CURSOR FOR VALUES (1), (2)"
+default default my_app 1 {} success <null> <null> <null> true "FETCH c"
+default default my_app 1 {} success <null> <null> <null> true "FETCH c"
+default default my_app 1 {} success <null> <null> <null> true "INSERT INTO t VALUES (1)"
+default default my_app 1 {} success <null> <null> <null> true "PREPARE p AS values ($1)"
+default default my_app 1 {} success <null> <null> <null> true "SET cluster TO c"
+mz_introspection mz_introspection my_app 1 {} success <null> 1 constant true "SELECT 'beginning real test!'"
+mz_introspection mz_introspection my_app 1 {} success <null> 1 standard true "SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics"
