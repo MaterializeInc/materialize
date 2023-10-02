@@ -37,6 +37,7 @@ md-5 = "0.10.5"
 mz-aws-s3-util = { path = "../aws-s3-util" }
 mz-ore = { path = "../ore", default-features = false, features = ["metrics", "async", "bytes_"] }
 mz-persist-types = { path = "../persist-types" }
+mz-postgres-client = { path = "../postgres-client" }
 mz-proto = { path = "../proto" }
 openssl = { version = "0.10.48", features = ["vendored"] }
 openssl-sys = { version = "0.9.80", features = ["vendored"] }

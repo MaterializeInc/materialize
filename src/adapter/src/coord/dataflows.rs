@@ -310,7 +310,7 @@ impl<'a> DataflowBuilder<'a> {
 
     /// Imports the view, source, or table with `id` into the provided
     /// dataflow description.
-    fn import_into_dataflow(
+    pub fn import_into_dataflow(
         &mut self,
         id: &GlobalId,
         dataflow: &mut DataflowDesc,

@@ -3478,6 +3478,7 @@ dependencies = [
  "mz-stash",
  "mz-storage-client",
  "mz-storage-types",
+ "mz-tls-util",
  "mz-tracing",
  "mz-transform",
  "once_cell",
@@ -3778,7 +3779,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "0.71.0-dev"
+version = "0.72.0-dev"
 dependencies = [
  "anyhow",
  "axum",
@@ -3971,7 +3972,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.71.0-dev"
+version = "0.72.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -4021,7 +4022,6 @@ dependencies = [
  "mz-pgtest",
  "mz-pgwire",
  "mz-pgwire-common",
- "mz-postgres-util",
  "mz-prof",
  "mz-repr",
  "mz-secrets",
@@ -4032,6 +4032,7 @@ dependencies = [
  "mz-stash",
  "mz-storage-client",
  "mz-storage-types",
+ "mz-tls-util",
  "nix",
  "num_cpus",
  "once_cell",
@@ -4525,6 +4526,7 @@ dependencies = [
  "mz-aws-s3-util",
  "mz-ore",
  "mz-persist-types",
+ "mz-postgres-client",
  "mz-proto",
  "once_cell",
  "openssl",
@@ -4551,7 +4553,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.71.0-dev"
+version = "0.72.0-dev"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4570,6 +4572,7 @@ dependencies = [
  "mz-ore",
  "mz-persist",
  "mz-persist-types",
+ "mz-postgres-client",
  "mz-proto",
  "mz-timely-util",
  "num_cpus",
@@ -4746,6 +4749,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-postgres-client"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "deadpool-postgres",
+ "mz-ore",
+ "mz-tls-util",
+ "tokio",
+ "tracing",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-postgres-util"
 version = "0.0.0"
 dependencies = [
@@ -4755,6 +4771,7 @@ dependencies = [
  "mz-proto",
  "mz-repr",
  "mz-ssh-util",
+ "mz-tls-util",
  "openssh",
  "openssl",
  "postgres-openssl",
@@ -5048,6 +5065,7 @@ dependencies = [
  "hex",
  "http",
  "itertools",
+ "maplit",
  "mz-build-info",
  "mz-ccsr",
  "mz-cloud-resources",
@@ -5216,6 +5234,7 @@ dependencies = [
  "mz-postgres-util",
  "mz-proto",
  "mz-repr",
+ "mz-tls-util",
  "once_cell",
  "paste",
  "postgres-openssl",
@@ -5248,11 +5267,11 @@ dependencies = [
  "mz-build-info",
  "mz-catalog",
  "mz-ore",
- "mz-postgres-util",
  "mz-secrets",
  "mz-sql",
  "mz-stash",
  "mz-storage-controller",
+ "mz-tls-util",
  "once_cell",
  "prost",
  "serde_json",
@@ -5400,13 +5419,13 @@ dependencies = [
  "mz-ore",
  "mz-persist-client",
  "mz-persist-types",
- "mz-postgres-util",
  "mz-proto",
  "mz-repr",
  "mz-service",
  "mz-stash",
  "mz-storage-client",
  "mz-storage-types",
+ "mz-tls-util",
  "proptest",
  "prost",
  "serde",
@@ -5554,11 +5573,11 @@ dependencies = [
  "mz-kafka-util",
  "mz-ore",
  "mz-pgrepr",
- "mz-postgres-util",
  "mz-repr",
  "mz-sql",
  "mz-sql-parser",
  "mz-stash",
+ "mz-tls-util",
  "once_cell",
  "postgres_array",
  "prost",
@@ -5601,6 +5620,21 @@ dependencies = [
  "serde",
  "timely",
  "tokio",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-tls-util"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "openssl",
+ "openssl-sys",
+ "postgres-openssl",
+ "thiserror",
+ "tokio",
+ "tokio-postgres",
+ "tracing",
  "workspace-hack",
 ]
 
@@ -8696,9 +8730,9 @@ checksum = "e604eb7b43c06650e854be16a2a03155743d3752dd1c943f6829e26b7a36e382"
 
 [[package]]
 name = "tungstenite"
-version = "0.20.0"
+version = "0.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e862a1c4128df0112ab625f55cd5c934bcb4312ba80b39ae4b4835a3fd58e649"
+checksum = "9e3dac10fd62eaf6617d3a904ae222845979aec67c615d1c842b4002c7666fb9"
 dependencies = [
  "byteorder",
  "bytes",

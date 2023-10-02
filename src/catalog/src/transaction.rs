@@ -20,7 +20,7 @@ use crate::objects::{
 };
 use crate::objects::{ClusterConfig, ClusterVariant};
 use crate::{
-    BootstrapArgs, DurableCatalogState, Error, ReplicaLocation, DATABASE_ID_ALLOC_KEY,
+    BootstrapArgs, DurableCatalogState, Error, ReplicaLocation, Snapshot, DATABASE_ID_ALLOC_KEY,
     SCHEMA_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY,
     USER_ROLE_ID_ALLOC_KEY,
 };
@@ -170,28 +170,24 @@ pub struct Transaction<'a> {
 impl<'a> Transaction<'a> {
     pub fn new(
         durable_catalog: &'a mut dyn DurableCatalogState,
-        databases: BTreeMap<proto::DatabaseKey, proto::DatabaseValue>,
-        schemas: BTreeMap<proto::SchemaKey, proto::SchemaValue>,
-        roles: BTreeMap<proto::RoleKey, proto::RoleValue>,
-        items: BTreeMap<proto::ItemKey, proto::ItemValue>,
-        comments: BTreeMap<proto::CommentKey, proto::CommentValue>,
-        clusters: BTreeMap<proto::ClusterKey, proto::ClusterValue>,
-        cluster_replicas: BTreeMap<proto::ClusterReplicaKey, proto::ClusterReplicaValue>,
-        introspection_sources: BTreeMap<
-            proto::ClusterIntrospectionSourceIndexKey,
-            proto::ClusterIntrospectionSourceIndexValue,
-        >,
-        id_allocator: BTreeMap<proto::IdAllocKey, proto::IdAllocValue>,
-        configs: BTreeMap<proto::ConfigKey, proto::ConfigValue>,
-        settings: BTreeMap<proto::SettingKey, proto::SettingValue>,
-        timestamps: BTreeMap<proto::TimestampKey, proto::TimestampValue>,
-        system_gid_mapping: BTreeMap<proto::GidMappingKey, proto::GidMappingValue>,
-        system_configurations: BTreeMap<
-            proto::ServerConfigurationKey,
-            proto::ServerConfigurationValue,
-        >,
-        default_privileges: BTreeMap<proto::DefaultPrivilegesKey, proto::DefaultPrivilegesValue>,
-        system_privileges: BTreeMap<proto::SystemPrivilegesKey, proto::SystemPrivilegesValue>,
+        Snapshot {
+            databases,
+            schemas,
+            roles,
+            items,
+            comments,
+            clusters,
+            cluster_replicas,
+            introspection_sources,
+            id_allocator,
+            configs,
+            settings,
+            timestamps,
+            system_object_mappings,
+            system_configurations,
+            default_privileges,
+            system_privileges,
+        }: Snapshot,
     ) -> Result<Transaction, Error> {
         Ok(Transaction {
             durable_catalog,
@@ -214,7 +210,7 @@ impl<'a> Transaction<'a> {
             configs: TableTransaction::new(configs, |_a, _b| false)?,
             settings: TableTransaction::new(settings, |_a, _b| false)?,
             timestamps: TableTransaction::new(timestamps, |_a, _b| false)?,
-            system_gid_mapping: TableTransaction::new(system_gid_mapping, |_a, _b| false)?,
+            system_gid_mapping: TableTransaction::new(system_object_mappings, |_a, _b| false)?,
             system_configurations: TableTransaction::new(system_configurations, |_a, _b| false)?,
             default_privileges: TableTransaction::new(default_privileges, |_a, _b| false)?,
             system_privileges: TableTransaction::new(system_privileges, |_a, _b| false)?,

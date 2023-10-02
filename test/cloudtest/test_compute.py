@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import logging
+
 import pytest
 from pg8000.exceptions import InterfaceError
 
@@ -14,6 +16,8 @@ from materialize.cloudtest.app.materialize_application import MaterializeApplica
 from materialize.cloudtest.util.cluster import cluster_pod_name, cluster_service_name
 from materialize.cloudtest.util.exists import exists, not_exists
 from materialize.cloudtest.util.wait import wait
+
+LOGGER = logging.getLogger(__name__)
 
 
 def test_cluster_sizing(mz: MaterializeApplication) -> None:
@@ -48,7 +52,7 @@ def test_cluster_sizing(mz: MaterializeApplication) -> None:
 def test_cluster_shutdown(mz: MaterializeApplication, failpoint: str) -> None:
     """Test that dropping a cluster or replica causes the associated clusterds to shut down."""
 
-    print(f"Testing cluster shutdown with failpoint={failpoint}")
+    LOGGER.info(f"Testing cluster shutdown with failpoint={failpoint}")
 
     mz.set_environmentd_failpoints(failpoint)
 
@@ -59,7 +63,7 @@ def test_cluster_shutdown(mz: MaterializeApplication, failpoint: str) -> None:
         try:
             mz.environmentd.sql(sql)
         except InterfaceError as e:
-            print(f"Expected SQL error: {e}")
+            LOGGER.error(f"Expected SQL error: {e}")
 
     mz.environmentd.sql(
         "CREATE CLUSTER shutdown1 REPLICAS (shutdown_replica1 (SIZE '1'), shutdown_replica2 (SIZE '1'))"

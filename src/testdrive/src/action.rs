@@ -29,8 +29,8 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::retry::Retry;
 use mz_ore::task;
-use mz_postgres_util::make_tls;
 use mz_stash::StashFactory;
+use mz_tls_util::make_tls;
 use once_cell::sync::Lazy;
 use rand::Rng;
 use rdkafka::producer::Producer;
@@ -95,6 +95,8 @@ pub struct Config {
     ///
     /// Set to 1 to retry at a steady pace.
     pub backoff_factor: f64,
+    /// Should we skip coordinator and catalog consistency checks.
+    pub no_consistency_checks: bool,
 
     // === Materialize options. ===
     /// The pgwire connection parameters for the Materialize instance that
@@ -157,6 +159,7 @@ pub struct State {
     max_tries: usize,
     initial_backoff: Duration,
     backoff_factor: f64,
+    no_consistency_checks: bool,
     regex: Option<Regex>,
     regex_replacement: String,
     postgres_factory: StashFactory,
@@ -277,7 +280,7 @@ impl State {
         F: FnOnce(ConnCatalog) -> T,
     {
         if let Some(url) = &self.materialize_catalog_postgres_stash {
-            let tls = mz_postgres_util::make_tls(&tokio_postgres::Config::new()).unwrap();
+            let tls = mz_tls_util::make_tls(&tokio_postgres::Config::new()).unwrap();
             let catalog = Catalog::open_debug_read_only_stash_catalog_config(
                 StashConfig {
                     stash_factory: self.postgres_factory.clone(),
@@ -830,6 +833,7 @@ pub async fn create_state(
         max_tries: config.default_max_tries,
         initial_backoff: config.initial_backoff,
         backoff_factor: config.backoff_factor,
+        no_consistency_checks: config.no_consistency_checks,
         regex: None,
         regex_replacement: set::DEFAULT_REGEX_REPLACEMENT.into(),
         postgres_factory: StashFactory::new(&MetricsRegistry::new()),

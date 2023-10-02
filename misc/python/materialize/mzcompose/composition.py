@@ -625,6 +625,7 @@ class Composition:
             persistent: Replace the container's entrypoint and command with
                 `sleep infinity` so that additional commands can be scheduled
                 on the container with `Composition.exec`.
+            max_retries: Number of retries on failure.
         """
         if persistent:
             old_compose = copy.deepcopy(self.compose)
@@ -706,6 +707,7 @@ class Composition:
             and "materialize/environmentd"
             not in self.compose["services"]["materialized"]["image"]
         ):
+            ui.header("Sanity Check: Restart Mz, verify source/sink/replica health")
             self.kill("materialized")
             # TODO(def-): Better way to detect when kill has finished
             time.sleep(3)

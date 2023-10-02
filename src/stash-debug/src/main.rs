@@ -163,7 +163,7 @@ async fn main() {
 }
 
 async fn run(args: Args) -> Result<(), anyhow::Error> {
-    let tls = mz_postgres_util::make_tls(&tokio_postgres::config::Config::from_str(
+    let tls = mz_tls_util::make_tls(&tokio_postgres::config::Config::from_str(
         &args.postgres_url,
     )?)?;
     let factory = StashFactory::new(&MetricsRegistry::new());
