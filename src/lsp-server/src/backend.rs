@@ -22,6 +22,8 @@ use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
 
+use crate::{PKG_NAME, PKG_VERSION};
+
 /// The [Backend] struct implements the [LanguageServer] trait, and thus must provide implementations for its methods.
 /// Most imporant methods includes:
 /// - `initialize`: sets up the server.
@@ -46,22 +48,15 @@ pub struct Backend {
 impl LanguageServer for Backend {
     async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
         Ok(InitializeResult {
-            server_info: None,
+            server_info: Some(ServerInfo {
+                name: PKG_NAME.clone(),
+                version: Some(PKG_VERSION.clone()),
+            }),
             offset_encoding: None,
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
                     TextDocumentSyncKind::FULL,
                 )),
-                code_lens_provider: Some(CodeLensOptions {
-                    resolve_provider: Some(true),
-                }),
-                completion_provider: Some(CompletionOptions {
-                    resolve_provider: Some(false),
-                    trigger_characters: Some(vec![".".to_string()]),
-                    work_done_progress_options: Default::default(),
-                    all_commit_characters: None,
-                    completion_item: None,
-                }),
                 workspace: Some(WorkspaceServerCapabilities {
                     workspace_folders: Some(WorkspaceFoldersServerCapabilities {
                         supported: Some(true),
@@ -197,9 +192,9 @@ impl Backend {
         let rope = ropey::Rope::from_str(&params.text);
 
         // Parse the text
-        let mz_sql_parser = mz_sql_parser::parser::parse_statements(&params.text);
+        let parse_result = mz_sql_parser::parser::parse_statements(&params.text);
 
-        match mz_sql_parser {
+        match parse_result {
             // The parser will return Ok when everything is well written.
             Ok(results) => {
                 self.client
@@ -244,11 +239,10 @@ fn offset_to_position(offset: usize, rope: &Rope) -> Option<Position> {
     let line = rope.try_char_to_line(offset).ok()?;
     let first_char_of_line = rope.try_line_to_char(line).ok()?;
     let column = offset - first_char_of_line;
-    Some(Position::new(
-        line.try_into()
-            .expect("Unexpected u32 overflow in offset_to_position"),
-        column
-            .try_into()
-            .expect("Unexpected u32 overflow in offset_to_position"),
-    ))
+
+    // Convert to u32.
+    let line_u32 = line.try_into().ok()?;
+    let column_u32 = column.try_into().ok()?;
+
+    Some(Position::new(line_u32, column_u32))
 }

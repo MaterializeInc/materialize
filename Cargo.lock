@@ -4313,6 +4313,7 @@ version = "0.1.0"
 dependencies = [
  "assert_cmd",
  "httparse",
+ "mz-build-info",
  "mz-ore",
  "mz-sql-lexer",
  "mz-sql-parser",

@@ -78,6 +78,7 @@
 #[cfg(test)]
 mod tests {
 
+    use mz_lsp_server::{PKG_NAME, PKG_VERSION};
     use serde::{Deserialize, Serialize};
     use serde_json::json;
     use std::fmt::Debug;
@@ -205,22 +206,15 @@ mod tests {
             method: None,
             params: None,
             result: Some(InitializeResult {
-                server_info: None,
+                server_info: Some(ServerInfo {
+                    name: PKG_NAME.clone(),
+                    version: Some(PKG_VERSION.clone()),
+                }),
                 offset_encoding: None,
                 capabilities: ServerCapabilities {
                     text_document_sync: Some(TextDocumentSyncCapability::Kind(
                         TextDocumentSyncKind::FULL,
                     )),
-                    code_lens_provider: Some(CodeLensOptions {
-                        resolve_provider: Some(true),
-                    }),
-                    completion_provider: Some(CompletionOptions {
-                        resolve_provider: Some(false),
-                        trigger_characters: Some(vec![".".to_string()]),
-                        work_done_progress_options: Default::default(),
-                        all_commit_characters: None,
-                        completion_item: None,
-                    }),
                     workspace: Some(WorkspaceServerCapabilities {
                         workspace_folders: Some(WorkspaceFoldersServerCapabilities {
                             supported: Some(true),
