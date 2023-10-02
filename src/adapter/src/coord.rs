@@ -137,9 +137,8 @@ use crate::coord::dataflows::dataflow_import_id_bundle;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
 use crate::coord::read_policy::ReadCapability;
-use crate::coord::timeline::{
-    CatalogTimestampPersistence, TimelineContext, TimelineState, WriteTimestamp,
-};
+use crate::coord::timeline::{TimelineContext, TimelineState, WriteTimestamp};
+use crate::coord::timestamp_oracle::catalog_oracle::CatalogTimestampPersistence;
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
@@ -157,6 +156,7 @@ pub(crate) mod id_bundle;
 pub(crate) mod peek;
 pub(crate) mod statement_logging;
 pub(crate) mod timeline;
+pub(crate) mod timestamp_oracle;
 pub(crate) mod timestamp_selection;
 
 mod appends;

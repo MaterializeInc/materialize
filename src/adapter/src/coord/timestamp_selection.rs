@@ -31,6 +31,7 @@ use crate::catalog::{Catalog, CatalogState};
 use crate::coord::dataflows::{prep_scalar_expr, ExprPrepStyle};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timeline::TimelineContext;
+use crate::coord::timestamp_oracle::TimestampOracle;
 use crate::coord::Coordinator;
 use crate::session::Session;
 use crate::AdapterError;

@@ -49,6 +49,7 @@ use crate::catalog::{
 use crate::client::ConnectionId;
 use crate::coord::read_policy::SINCE_GRANULARITY;
 use crate::coord::timeline::{TimelineContext, TimelineState};
+use crate::coord::timestamp_oracle::TimestampOracle;
 use crate::coord::{Coordinator, ReplicaMetadata};
 use crate::session::Session;
 use crate::statement_logging::StatementEndedExecutionReason;
