@@ -19,16 +19,16 @@ from fixtures import (
     actual_indexes,
     expected_indexes,
     test_materialized_view,
-    test_materialized_view_index,
     test_materialized_view_grant,
+    test_materialized_view_index,
     test_relation_name_length,
     test_sink,
     test_source,
     test_source_index,
     test_subsources,
     test_table_index,
-    test_view_index,
     test_view_grant,
+    test_view_index,
 )
 
 
@@ -48,16 +48,16 @@ class TestCustomMaterializations:
         return {
             "actual_indexes.sql": actual_indexes,
             "test_materialized_view.sql": test_materialized_view,
-            "test_materialized_view_index.sql": test_materialized_view_index,
             "test_materialized_view_grant.sql": test_materialized_view_grant,
+            "test_materialized_view_index.sql": test_materialized_view_index,
             "test_relation_name_loooooooooooooooooonger_than_postgres_63_limit.sql": test_relation_name_length,
             "test_source.sql": test_source,
             "test_source_index.sql": test_source_index,
             "test_subsources.sql": test_subsources,
             "test_sink.sql": test_sink,
             "test_table_index.sql": test_table_index,
-            "test_view_index.sql": test_view_index,
             "test_view_grant.sql": test_view_grant,
+            "test_view_index.sql": test_view_index,
         }
 
     def test_custom_materializations(self, project):
