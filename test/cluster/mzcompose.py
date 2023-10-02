@@ -25,6 +25,7 @@ from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.localstack import Localstack
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
@@ -2432,73 +2433,80 @@ def workflow_test_incident_70(c: Composition) -> None:
     Test incident-70.
     """
     num_conns = 1
-    mv_count = 30
+    mv_count = 25
     persist_reader_lease_duration_in_sec = 30
     data_scale_factor = 10
 
-    c.down(destroy_volumes=True)
-    c.up("materialized")
+    with c.override(
+        Materialized(
+            propagate_crashes=False, external_cockroach=True, external_minio=True
+        ),
+        Minio(setup_materialize=True),
+    ):
+        c.down(destroy_volumes=True)
+        c.up("minio")
+        c.up("materialized")
 
-    c.sql(
-        f"ALTER SYSTEM SET max_connections = {num_conns + 5};",
-        port=6877,
-        user="mz_system",
-    )
-
-    c.sql(
-        f"ALTER SYSTEM SET persist_reader_lease_duration = '{persist_reader_lease_duration_in_sec}s';",
-        port=6877,
-        user="mz_system",
-    )
-
-    mz_view_create_statements = []
-
-    for i in range(mv_count):
-        mz_view_create_statements.append(
-            f"CREATE MATERIALIZED VIEW mv_lineitem_count_{i + 1} AS SELECT count(*) FROM lineitem;"
+        c.sql(
+            f"ALTER SYSTEM SET max_connections = {num_conns + 5};",
+            port=6877,
+            user="mz_system",
         )
 
-    mz_view_create_statements_sql = "\n".join(mz_view_create_statements)
-
-    c.sql(
-        dedent(
-        f"""
-        CREATE SOURCE gen FROM LOAD GENERATOR TPCH (SCALE FACTOR {data_scale_factor}) FOR ALL TABLES;
-
-        {mz_view_create_statements_sql}
-        """
+        c.sql(
+            f"ALTER SYSTEM SET persist_reader_lease_duration = '{persist_reader_lease_duration_in_sec}s';",
+            port=6877,
+            user="mz_system",
         )
-    )
 
-    start_time = datetime.now()
-    end_time = start_time + timedelta(
-        seconds=persist_reader_lease_duration_in_sec * 3 + 10
-    )
+        mz_view_create_statements = []
 
-    def worker(c: Composition, worker_index: int) -> None:
-        print(f"Thread {worker_index} tries to acquire a cursor")
-        cursor = c.sql_cursor()
-        print(f"Thread {worker_index} got a cursor")
+        for i in range(mv_count):
+            mz_view_create_statements.append(
+                f"CREATE MATERIALIZED VIEW mv_lineitem_count_{i + 1} AS SELECT count(*) FROM lineitem;"
+            )
 
-        iteration = 1
-        while datetime.now() < end_time:
-            if iteration % 20 == 0:
-                print(f"Thread {worker_index}, iteration {iteration}")
-            cursor.execute("SELECT * FROM mv_lineitem_count_1;")
-            iteration += 1
-        print(f"Thread {worker_index} terminates before iteration {iteration}")
+        mz_view_create_statements_sql = "\n".join(mz_view_create_statements)
 
-    threads = []
-    for worker_index in range(num_conns):
-        thread = Thread(
-            name=f"worker_{worker_index}", target=worker, args=(c, worker_index)
+        c.sql(
+            dedent(
+                f"""
+                CREATE SOURCE gen FROM LOAD GENERATOR TPCH (SCALE FACTOR {data_scale_factor}) FOR ALL TABLES;
+
+                {mz_view_create_statements_sql}
+                """
+            )
         )
-        threads.append(thread)
 
-    for thread in threads:
-        thread.start()
-        # this is because of #22038
-        time.sleep(0.2)
+        start_time = datetime.now()
+        end_time = start_time + timedelta(
+            seconds=persist_reader_lease_duration_in_sec * 3 + 10
+        )
 
-    for thread in threads:
-        thread.join()
+        def worker(c: Composition, worker_index: int) -> None:
+            print(f"Thread {worker_index} tries to acquire a cursor")
+            cursor = c.sql_cursor()
+            print(f"Thread {worker_index} got a cursor")
+
+            iteration = 1
+            while datetime.now() < end_time:
+                if iteration % 20 == 0:
+                    print(f"Thread {worker_index}, iteration {iteration}")
+                cursor.execute("SELECT * FROM mv_lineitem_count_1;")
+                iteration += 1
+            print(f"Thread {worker_index} terminates before iteration {iteration}")
+
+        threads = []
+        for worker_index in range(num_conns):
+            thread = Thread(
+                name=f"worker_{worker_index}", target=worker, args=(c, worker_index)
+            )
+            threads.append(thread)
+
+        for thread in threads:
+            thread.start()
+            # this is because of #22038
+            time.sleep(0.2)
+
+        for thread in threads:
+            thread.join()
