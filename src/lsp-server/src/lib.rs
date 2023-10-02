@@ -79,7 +79,5 @@
 
 /// Contains the structure and implementation of the Language Server Protocol.
 pub mod backend;
-/// Provides functions available in Materialize and their description.
-pub mod functions;
 /// Provides SQL snippets for Materialize.
 pub mod snippets;

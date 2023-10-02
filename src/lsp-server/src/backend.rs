@@ -22,9 +22,6 @@ use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
 
-use crate::functions::FUNCTIONS;
-use crate::snippets::SNIPPETS;
-
 /// The [Backend] struct implements the [LanguageServer] trait, and thus must provide implementations for its methods.
 /// Most imporant methods includes:
 /// - `initialize`: sets up the server.
@@ -161,11 +158,7 @@ impl LanguageServer for Backend {
         let _uri = params.text_document_position.text_document.uri;
         let _position = params.text_document_position.position;
 
-        let mut function_m = FUNCTIONS.clone();
-        function_m.extend(SNIPPETS.clone());
-        let _completions = Some(function_m);
-
-        // TODO: Add keywords and enable when ranges are correct.
+        // TODO: Re enable when position is correct.
         // Ok(completions.map(CompletionResponse::Array))
         Ok(None)
     }
