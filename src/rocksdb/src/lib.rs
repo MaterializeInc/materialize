@@ -579,6 +579,7 @@ fn rocksdb_core_loop<K, V, M, O, IM>(
             Command::Shutdown { done_sender } => {
                 db.cancel_all_background_work(true);
                 drop(db);
+                drop(write_buffer_handle);
                 let _ = done_sender.send(());
                 return;
             }
