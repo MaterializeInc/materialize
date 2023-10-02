@@ -546,7 +546,9 @@ impl Stash {
     {
         let factory = DebugStashFactory::try_new().await?;
         let stash = factory.try_open().await?;
-        Ok(f(stash).await)
+        let res = Ok(f(stash).await);
+        factory.drop().await;
+        res
     }
 
     /// Verifies stash invariants. Should only be called by tests.
@@ -1398,11 +1400,14 @@ pub struct DebugStashFactory {
     #[derivative(Debug = "ignore")]
     tls: MakeTlsConnector,
     stash_factory: StashFactory,
+    dropped: bool,
 }
 
 impl DebugStashFactory {
     /// Returns a new factory that will generate a random schema one time, then use it on any
     /// opened Stash.
+    ///
+    /// IMPORTANT: Call [`Self::drop`] when you are done to clean up leftover state in CRDB.
     pub async fn try_new() -> Result<DebugStashFactory, StashError> {
         let url =
             std::env::var("COCKROACH_URL").expect("COCKROACH_URL environment variable is not set");
@@ -1416,17 +1421,6 @@ impl DebugStashFactory {
                 tracing::error!("postgres stash connection error: {e}");
             }
         });
-        // Running tests in parallel has been causing some deadlock/starvation issue that we haven't
-        // been able to figure out. For some reason, uncommitted transactions are being left open
-        // which causes the schema cleanup in the Drop impl to block for an enormous amount of time
-        // (many minutes). Setting a small idle transaction timeout globally seems to resolve the
-        // issue somehow. This is a gross hack and we don't really understand what's going on, but
-        // for now it resolves issues in CI while we debug further.
-        client
-            .batch_execute(
-                "SET CLUSTER SETTING sql.defaults.idle_in_transaction_session_timeout TO '1s'",
-            )
-            .await?;
         client
             .batch_execute(&format!("CREATE SCHEMA {schema}"))
             .await?;
@@ -1438,11 +1432,14 @@ impl DebugStashFactory {
             schema,
             tls,
             stash_factory,
+            dropped: false,
         })
     }
 
     /// Returns a new factory that will generate a random schema one time, then use it on any
     /// opened Stash.
+    ///
+    /// IMPORTANT: Call [`Self::drop`] when you are done to clean up leftover state in CRDB.
     ///
     /// # Panics
     /// Panics if it is unable to create a new factory.
@@ -1497,6 +1494,21 @@ impl DebugStashFactory {
             .expect("unable to open debug stash")
     }
 
+    /// Best effort clean up of testing state in CRDB, any error is ignored.
+    pub async fn drop(mut self) {
+        let Ok((client, connection)) = tokio_postgres::connect(&self.url, self.tls.clone()).await
+        else {
+            return;
+        };
+        mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
+            let _ = connection.await;
+        });
+        let _ = client
+            .batch_execute(&format!("DROP SCHEMA {} CASCADE", &self.schema))
+            .await;
+        self.dropped = true;
+    }
+
     pub fn url(&self) -> &str {
         &self.url
     }
@@ -1513,38 +1525,10 @@ impl DebugStashFactory {
 
 impl Drop for DebugStashFactory {
     fn drop(&mut self) {
-        let url = self.url.clone();
-        let schema = self.schema.clone();
-        let tls = self.tls.clone();
-        let result = std::thread::spawn(move || {
-            let async_runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()?;
-            async_runtime.block_on(async {
-                let (client, connection) = tokio_postgres::connect(&url, tls).await?;
-                mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
-                    if let Err(e) = connection.await {
-                        std::panic::resume_unwind(Box::new(e));
-                    }
-                });
-                client
-                    .batch_execute(&format!("DROP SCHEMA {} CASCADE", &schema))
-                    .await?;
-                Ok::<_, StashError>(())
-            })
-        })
-        // Note that we are joining on a tokio task here, which blocks the current runtime from making other progress on the current worker thread.
-        // Because this only happens on shutdown and is only used in tests, we have determined that its okay
-        .join();
-
-        match result {
-            Ok(result) => {
-                if let Err(e) = result {
-                    std::panic::resume_unwind(Box::new(e));
-                }
-            }
-
-            Err(e) => std::panic::resume_unwind(e),
-        }
+        assert!(
+            self.dropped,
+            "You forgot to call `drop()` on a `DebugStashFactory` before dropping it! You may also \
+            see this if a test panicked before calling `drop()`."
+        );
     }
 }

@@ -49,7 +49,7 @@ pub async fn upgrade(tx: &mut Transaction<'_>) -> Result<(), StashError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::DebugStashFactory;
+    use crate::Stash;
 
     const ROLES_COLLECTION_V39: TypedCollection<v39::RoleKey, v39::RoleValue> =
         TypedCollection::new("role");
@@ -57,74 +57,72 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn smoke_test_role_vars_added() {
-        let factory = DebugStashFactory::new().await;
-        let mut stash = factory.open().await;
+        Stash::with_debug_stash(|mut stash| async move {
+            ROLES_COLLECTION
+                .insert_without_overwrite(
+                    &mut stash,
+                    vec![
+                        (
+                            v38::RoleKey {
+                                id: Some(v38::RoleId {
+                                    value: Some(v38::role_id::Value::System(1)),
+                                }),
+                            },
+                            v38::RoleValue {
+                                name: "mz_system".to_string(),
+                                attributes: Some(v38::RoleAttributes { inherit: true }),
+                                membership: None,
+                            },
+                        ),
+                        (
+                            v38::RoleKey {
+                                id: Some(v38::RoleId {
+                                    value: Some(v38::role_id::Value::User(42)),
+                                }),
+                            },
+                            v38::RoleValue {
+                                name: "parker".to_string(),
+                                attributes: None,
+                                membership: Some(v38::RoleMembership {
+                                    map: Default::default(),
+                                }),
+                            },
+                        ),
+                        (
+                            v38::RoleKey {
+                                id: Some(v38::RoleId {
+                                    value: Some(v38::role_id::Value::Public(Default::default())),
+                                }),
+                            },
+                            v38::RoleValue {
+                                name: "public".to_string(),
+                                attributes: Some(v38::RoleAttributes { inherit: false }),
+                                membership: Some(v38::RoleMembership {
+                                    map: Default::default(),
+                                }),
+                            },
+                        ),
+                    ],
+                )
+                .await
+                .expect("insert success");
 
-        ROLES_COLLECTION
-            .insert_without_overwrite(
-                &mut stash,
-                vec![
-                    (
-                        v38::RoleKey {
-                            id: Some(v38::RoleId {
-                                value: Some(v38::role_id::Value::System(1)),
-                            }),
-                        },
-                        v38::RoleValue {
-                            name: "mz_system".to_string(),
-                            attributes: Some(v38::RoleAttributes { inherit: true }),
-                            membership: None,
-                        },
-                    ),
-                    (
-                        v38::RoleKey {
-                            id: Some(v38::RoleId {
-                                value: Some(v38::role_id::Value::User(42)),
-                            }),
-                        },
-                        v38::RoleValue {
-                            name: "parker".to_string(),
-                            attributes: None,
-                            membership: Some(v38::RoleMembership {
-                                map: Default::default(),
-                            }),
-                        },
-                    ),
-                    (
-                        v38::RoleKey {
-                            id: Some(v38::RoleId {
-                                value: Some(v38::role_id::Value::Public(Default::default())),
-                            }),
-                        },
-                        v38::RoleValue {
-                            name: "public".to_string(),
-                            attributes: Some(v38::RoleAttributes { inherit: false }),
-                            membership: Some(v38::RoleMembership {
-                                map: Default::default(),
-                            }),
-                        },
-                    ),
-                ],
-            )
-            .await
-            .expect("insert success");
-
-        // Run the migration.
-        stash
-            .with_transaction(|mut tx| {
-                Box::pin(async move {
-                    upgrade(&mut tx).await?;
-                    Ok(())
+            // Run the migration.
+            stash
+                .with_transaction(|mut tx| {
+                    Box::pin(async move {
+                        upgrade(&mut tx).await?;
+                        Ok(())
+                    })
                 })
-            })
-            .await
-            .unwrap();
+                .await
+                .unwrap();
 
-        let roles = ROLES_COLLECTION_V39
-            .peek_one(&mut stash)
-            .await
-            .expect("read v39");
-        insta::assert_debug_snapshot!(roles, @r###"
+            let roles = ROLES_COLLECTION_V39
+                .peek_one(&mut stash)
+                .await
+                .expect("read v39");
+            insta::assert_debug_snapshot!(roles, @r###"
         {
             RoleKey {
                 id: Some(
@@ -204,5 +202,8 @@ mod tests {
             },
         }
         "###);
+        })
+        .await
+        .unwrap();
     }
 }

@@ -131,7 +131,7 @@ async fn migrate_audit_log(tx: &mut Transaction<'_>) -> Result<(), StashError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::DebugStashFactory;
+    use crate::Stash;
 
     const AUDIT_LOG_COLLECTION_V40: TypedCollection<v40::AuditLogKey, ()> =
         TypedCollection::new("audit_log");
@@ -144,104 +144,104 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn smoke_test_cluster_replica_migration() {
-        let factory = DebugStashFactory::new().await;
-        let mut stash = factory.open().await;
-
-        CLUSTER_REPLICA_COLLECTION
-            .insert_without_overwrite(
-                &mut stash,
-                [
-                    (
-                        v39::ClusterReplicaKey {
-                            id: Some(v39::ReplicaId {
-                                value: Some(v39::replica_id::Value::User(123)),
-                            }),
-                        },
-                        v39::ClusterReplicaValue {
-                            cluster_id: Some(v39::ClusterId {
-                                value: Some(v39::cluster_id::Value::User(456)),
-                            }),
-                            config: Some(v39::ReplicaConfig {
-                                idle_arrangement_merge_effort: Some(v39::ReplicaMergeEffort {
-                                    effort: 321,
+        Stash::with_debug_stash(|mut stash| async move {
+            CLUSTER_REPLICA_COLLECTION
+                .insert_without_overwrite(
+                    &mut stash,
+                    [
+                        (
+                            v39::ClusterReplicaKey {
+                                id: Some(v39::ReplicaId {
+                                    value: Some(v39::replica_id::Value::User(123)),
                                 }),
-                                location: Some(v39::replica_config::Location::Managed(
-                                    v39::replica_config::ManagedLocation {
-                                        availability_zone: Some("unavailability_zone".to_owned()),
-                                        disk: false,
-                                        size: "huge".to_owned(),
-                                    },
-                                )),
-                                logging: Some(v39::ReplicaLogging {
-                                    interval: Some(v39::Duration {
-                                        nanos: 1234,
-                                        secs: 13,
+                            },
+                            v39::ClusterReplicaValue {
+                                cluster_id: Some(v39::ClusterId {
+                                    value: Some(v39::cluster_id::Value::User(456)),
+                                }),
+                                config: Some(v39::ReplicaConfig {
+                                    idle_arrangement_merge_effort: Some(v39::ReplicaMergeEffort {
+                                        effort: 321,
                                     }),
-                                    log_logging: true,
-                                }),
-                            }),
-                            name: "moritz".to_owned(),
-                            owner_id: Some(v39::RoleId {
-                                value: Some(v39::role_id::Value::User(987)),
-                            }),
-                        },
-                    ),
-                    (
-                        v39::ClusterReplicaKey {
-                            id: Some(v39::ReplicaId {
-                                value: Some(v39::replica_id::Value::User(234)),
-                            }),
-                        },
-                        v39::ClusterReplicaValue {
-                            cluster_id: Some(v39::ClusterId {
-                                value: Some(v39::cluster_id::Value::User(345)),
-                            }),
-                            config: Some(v39::ReplicaConfig {
-                                idle_arrangement_merge_effort: Some(v39::ReplicaMergeEffort {
-                                    effort: 432,
-                                }),
-                                location: Some(v39::replica_config::Location::Managed(
-                                    v39::replica_config::ManagedLocation {
-                                        availability_zone: Some("Verfügbar".to_owned()),
-                                        disk: false,
-                                        size: "groß".to_owned(),
-                                    },
-                                )),
-                                logging: Some(v39::ReplicaLogging {
-                                    interval: Some(v39::Duration {
-                                        nanos: 4312,
-                                        secs: 11,
+                                    location: Some(v39::replica_config::Location::Managed(
+                                        v39::replica_config::ManagedLocation {
+                                            availability_zone: Some(
+                                                "unavailability_zone".to_owned(),
+                                            ),
+                                            disk: false,
+                                            size: "huge".to_owned(),
+                                        },
+                                    )),
+                                    logging: Some(v39::ReplicaLogging {
+                                        interval: Some(v39::Duration {
+                                            nanos: 1234,
+                                            secs: 13,
+                                        }),
+                                        log_logging: true,
                                     }),
-                                    log_logging: true,
                                 }),
-                            }),
-                            name: "someone".to_owned(),
-                            owner_id: Some(v39::RoleId {
-                                value: Some(v39::role_id::Value::User(876)),
-                            }),
-                        },
-                    ),
-                ],
-            )
-            .await
-            .expect("insert success");
+                                name: "moritz".to_owned(),
+                                owner_id: Some(v39::RoleId {
+                                    value: Some(v39::role_id::Value::User(987)),
+                                }),
+                            },
+                        ),
+                        (
+                            v39::ClusterReplicaKey {
+                                id: Some(v39::ReplicaId {
+                                    value: Some(v39::replica_id::Value::User(234)),
+                                }),
+                            },
+                            v39::ClusterReplicaValue {
+                                cluster_id: Some(v39::ClusterId {
+                                    value: Some(v39::cluster_id::Value::User(345)),
+                                }),
+                                config: Some(v39::ReplicaConfig {
+                                    idle_arrangement_merge_effort: Some(v39::ReplicaMergeEffort {
+                                        effort: 432,
+                                    }),
+                                    location: Some(v39::replica_config::Location::Managed(
+                                        v39::replica_config::ManagedLocation {
+                                            availability_zone: Some("Verfügbar".to_owned()),
+                                            disk: false,
+                                            size: "groß".to_owned(),
+                                        },
+                                    )),
+                                    logging: Some(v39::ReplicaLogging {
+                                        interval: Some(v39::Duration {
+                                            nanos: 4312,
+                                            secs: 11,
+                                        }),
+                                        log_logging: true,
+                                    }),
+                                }),
+                                name: "someone".to_owned(),
+                                owner_id: Some(v39::RoleId {
+                                    value: Some(v39::role_id::Value::User(876)),
+                                }),
+                            },
+                        ),
+                    ],
+                )
+                .await
+                .expect("insert success");
 
-        // Run the migration.
-        stash
-            .with_transaction(|mut tx| {
-                Box::pin(async move {
-                    upgrade(&mut tx).await?;
-                    Ok(())
+            // Run the migration.
+            stash
+                .with_transaction(|mut tx| {
+                    Box::pin(async move {
+                        upgrade(&mut tx).await?;
+                        Ok(())
+                    })
                 })
-            })
-            .await
-            .unwrap();
+                .await
+                .unwrap();
 
-        let roles = CLUSTER_REPLICA_COLLECTION_V40
-            .peek_one(&mut stash)
-            .await
-            .expect("read v40");
-        insta::assert_debug_snapshot!(roles, @r###"
+            let roles = CLUSTER_REPLICA_COLLECTION_V40
+                .peek_one(&mut stash)
+                .await
+                .expect("read v40");
+            insta::assert_debug_snapshot!(roles, @r###"
         {
             ClusterReplicaKey {
                 id: Some(
@@ -373,65 +373,66 @@ mod tests {
             },
         }
         "###);
+        })
+        .await
+        .unwrap();
     }
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn smoke_test_audit_log_migration() {
-        let factory = DebugStashFactory::new().await;
-        let mut stash = factory.open().await;
-
-        AUDIT_LOG_COLLECTION
-            .insert_without_overwrite(
-                &mut stash,
-                [(
-                    v39::AuditLogKey {
-                        event: Some(v39::audit_log_key::Event::V1(v39::AuditLogEventV1 {
-                            id: 1234,
-                            user: Some(v39::StringWrapper {
-                                inner: "name".to_owned(),
-                            }),
-                            event_type: 2,
-                            object_type: 3,
-                            details: Some(
-                                v39::audit_log_event_v1::Details::CreateClusterReplicaV1(
-                                    v39::audit_log_event_v1::CreateClusterReplicaV1 {
-                                        cluster_id: "u23".to_owned(),
-                                        cluster_name: "my_cluster".to_owned(),
-                                        disk: false,
-                                        replica_id: Some(v39::StringWrapper {
-                                            inner: "u123".to_owned(),
-                                        }),
-                                        logical_size: "too small".to_owned(),
-                                        replica_name: "my_replica".to_owned(),
-                                    },
+        Stash::with_debug_stash(|mut stash| async move {
+            AUDIT_LOG_COLLECTION
+                .insert_without_overwrite(
+                    &mut stash,
+                    [(
+                        v39::AuditLogKey {
+                            event: Some(v39::audit_log_key::Event::V1(v39::AuditLogEventV1 {
+                                id: 1234,
+                                user: Some(v39::StringWrapper {
+                                    inner: "name".to_owned(),
+                                }),
+                                event_type: 2,
+                                object_type: 3,
+                                details: Some(
+                                    v39::audit_log_event_v1::Details::CreateClusterReplicaV1(
+                                        v39::audit_log_event_v1::CreateClusterReplicaV1 {
+                                            cluster_id: "u23".to_owned(),
+                                            cluster_name: "my_cluster".to_owned(),
+                                            disk: false,
+                                            replica_id: Some(v39::StringWrapper {
+                                                inner: "u123".to_owned(),
+                                            }),
+                                            logical_size: "too small".to_owned(),
+                                            replica_name: "my_replica".to_owned(),
+                                        },
+                                    ),
                                 ),
-                            ),
-                            occurred_at: Some(v39::EpochMillis { millis: 1600000 }),
-                        })),
-                    },
-                    (),
-                )],
-            )
-            .await
-            .expect("insert success");
+                                occurred_at: Some(v39::EpochMillis { millis: 1600000 }),
+                            })),
+                        },
+                        (),
+                    )],
+                )
+                .await
+                .expect("insert success");
 
-        // Run the migration.
-        stash
-            .with_transaction(|mut tx| {
-                Box::pin(async move {
-                    upgrade(&mut tx).await?;
-                    Ok(())
+            // Run the migration.
+            stash
+                .with_transaction(|mut tx| {
+                    Box::pin(async move {
+                        upgrade(&mut tx).await?;
+                        Ok(())
+                    })
                 })
-            })
-            .await
-            .unwrap();
+                .await
+                .unwrap();
 
-        let roles = AUDIT_LOG_COLLECTION_V40
-            .peek_one(&mut stash)
-            .await
-            .expect("read v40");
-        insta::assert_debug_snapshot!(roles, @r###"
+            let roles = AUDIT_LOG_COLLECTION_V40
+                .peek_one(&mut stash)
+                .await
+                .expect("read v40");
+            insta::assert_debug_snapshot!(roles, @r###"
         {
             AuditLogKey {
                 event: Some(
@@ -474,5 +475,8 @@ mod tests {
             }: (),
         }
         "###);
+        })
+        .await
+        .unwrap();
     }
 }

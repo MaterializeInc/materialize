@@ -77,7 +77,7 @@ pub async fn upgrade(tx: &mut Transaction<'_>) -> Result<(), StashError> {
 
 #[cfg(test)]
 mod tests {
-    use crate::DebugStashFactory;
+    use crate::Stash;
 
     use super::*;
 
@@ -89,100 +89,102 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn smoke_test_existing_flags() {
-        let factory = DebugStashFactory::new().await;
-        let mut stash = factory.open().await;
+        Stash::with_debug_stash(|mut stash| async move {
+            SYSTEM_CONFIGURATION_COLLECTION
+                .insert_without_overwrite(
+                    &mut stash,
+                    vec![
+                        (
+                            v35::ServerConfigurationKey {
+                                name: ENABLE_LD_RBAC_CHECKS_NAME.to_string(),
+                            },
+                            v35::ServerConfigurationValue {
+                                value: true.to_string(),
+                            },
+                        ),
+                        (
+                            v35::ServerConfigurationKey {
+                                name: ENABLE_RBAC_CHECKS_NAME.to_string(),
+                            },
+                            v35::ServerConfigurationValue {
+                                value: true.to_string(),
+                            },
+                        ),
+                    ],
+                )
+                .await
+                .unwrap();
 
-        SYSTEM_CONFIGURATION_COLLECTION
-            .insert_without_overwrite(
-                &mut stash,
-                vec![
-                    (
-                        v35::ServerConfigurationKey {
-                            name: ENABLE_LD_RBAC_CHECKS_NAME.to_string(),
-                        },
-                        v35::ServerConfigurationValue {
-                            value: true.to_string(),
-                        },
-                    ),
-                    (
-                        v35::ServerConfigurationKey {
-                            name: ENABLE_RBAC_CHECKS_NAME.to_string(),
-                        },
-                        v35::ServerConfigurationValue {
-                            value: true.to_string(),
-                        },
-                    ),
-                ],
-            )
-            .await
-            .unwrap();
-
-        // Run the migration.
-        stash
-            .with_transaction(|mut tx| {
-                Box::pin(async move {
-                    upgrade(&mut tx).await?;
-                    Ok(())
+            // Run the migration.
+            stash
+                .with_transaction(|mut tx| {
+                    Box::pin(async move {
+                        upgrade(&mut tx).await?;
+                        Ok(())
+                    })
                 })
-            })
-            .await
-            .unwrap();
+                .await
+                .unwrap();
 
-        let mut system_configs: Vec<_> = SYSTEM_CONFIGURATION_COLLECTION_V36
-            .peek_one(&mut stash)
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|(key, value)| (key.name, value.value))
-            .collect();
-        system_configs.sort();
+            let mut system_configs: Vec<_> = SYSTEM_CONFIGURATION_COLLECTION_V36
+                .peek_one(&mut stash)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|(key, value)| (key.name, value.value))
+                .collect();
+            system_configs.sort();
 
-        assert_eq!(
-            system_configs,
-            vec![
-                (ENABLE_LD_RBAC_CHECKS_NAME.to_string(), true.to_string()),
-                (ENABLE_RBAC_CHECKS_NAME.to_string(), true.to_string()),
-            ]
-        );
+            assert_eq!(
+                system_configs,
+                vec![
+                    (ENABLE_LD_RBAC_CHECKS_NAME.to_string(), true.to_string()),
+                    (ENABLE_RBAC_CHECKS_NAME.to_string(), true.to_string()),
+                ]
+            );
+        })
+        .await
+        .unwrap();
     }
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn smoke_test_empty_flags() {
-        let factory = DebugStashFactory::new().await;
-        let mut stash = factory.open().await;
+        Stash::with_debug_stash(|mut stash| async move {
+            SYSTEM_CONFIGURATION_COLLECTION
+                .insert_without_overwrite(&mut stash, vec![])
+                .await
+                .unwrap();
 
-        SYSTEM_CONFIGURATION_COLLECTION
-            .insert_without_overwrite(&mut stash, vec![])
-            .await
-            .unwrap();
-
-        // Run the migration.
-        stash
-            .with_transaction(|mut tx| {
-                Box::pin(async move {
-                    upgrade(&mut tx).await?;
-                    Ok(())
+            // Run the migration.
+            stash
+                .with_transaction(|mut tx| {
+                    Box::pin(async move {
+                        upgrade(&mut tx).await?;
+                        Ok(())
+                    })
                 })
-            })
-            .await
-            .unwrap();
+                .await
+                .unwrap();
 
-        let mut system_configs: Vec<_> = SYSTEM_CONFIGURATION_COLLECTION_V36
-            .peek_one(&mut stash)
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|(key, value)| (key.name, value.value))
-            .collect();
-        system_configs.sort();
+            let mut system_configs: Vec<_> = SYSTEM_CONFIGURATION_COLLECTION_V36
+                .peek_one(&mut stash)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|(key, value)| (key.name, value.value))
+                .collect();
+            system_configs.sort();
 
-        assert_eq!(
-            system_configs,
-            vec![
-                (ENABLE_LD_RBAC_CHECKS_NAME.to_string(), false.to_string()),
-                (ENABLE_RBAC_CHECKS_NAME.to_string(), false.to_string()),
-            ]
-        );
+            assert_eq!(
+                system_configs,
+                vec![
+                    (ENABLE_LD_RBAC_CHECKS_NAME.to_string(), false.to_string()),
+                    (ENABLE_RBAC_CHECKS_NAME.to_string(), false.to_string()),
+                ]
+            );
+        })
+        .await
+        .unwrap();
     }
 }
