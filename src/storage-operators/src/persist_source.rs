@@ -192,8 +192,13 @@ where
     let (fetched, token) = shard_source(
         &mut scope.clone(),
         &name,
-        persist_clients,
-        metadata.persist_location,
+        move || {
+            let (c, l) = (
+                Arc::clone(&persist_clients),
+                metadata.persist_location.clone(),
+            );
+            async move { c.open(l).await.unwrap() }
+        },
         metadata.data_shard,
         as_of,
         until.clone(),
