@@ -27,12 +27,16 @@ Coverage = dict[str, OrderedDict[int, int | None]]
 SOURCE_RE = re.compile(
     "^/var/lib/buildkite-agent/builds/buildkite-.*/materialize/coverage/(.*$)"
 )
-# Deriving generates more code, but we don't expect to cover this in most
-# cases, so ignore such lines. Same for mz_ore::test
+# * Deriving generates more code, but we don't expect to cover this in most
+# cases, so ignore such lines.
+# * Same for mz_ore::test
+# * The await keyword is not properly supported
+# (https://github.com/rust-lang/rust/issues/98712).
 IGNORE_RE = re.compile(
     r"""
     ( \#\[derive\(.*\)\]
     | \#\[mz_ore::test.*\]
+    | \.await
     )
     """,
     re.VERBOSE,
