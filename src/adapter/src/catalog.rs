@@ -8361,6 +8361,106 @@ mod tests {
                 .collect()
         }
 
+        async fn execute_test_case(test_case: BuiltinMigrationTestCase) {
+            Catalog::with_debug(NOW_ZERO.clone(), |mut catalog| async move {
+                let mut id_mapping = BTreeMap::new();
+                let mut name_mapping = BTreeMap::new();
+                for entry in test_case.initial_state {
+                    let (name, namespace, item) = entry.to_catalog_item(&id_mapping);
+                    let id = add_item(&mut catalog, name.clone(), item, namespace).await;
+                    id_mapping.insert(name.clone(), id);
+                    name_mapping.insert(id, name);
+                }
+
+                let migrated_ids = test_case
+                    .migrated_names
+                    .into_iter()
+                    .map(|name| id_mapping[&name])
+                    .collect();
+                let id_fingerprint_map: BTreeMap<GlobalId, String> = id_mapping
+                    .iter()
+                    .filter(|(_name, id)| id.is_system())
+                    // We don't use the new fingerprint in this test, so we can just hard code it
+                    .map(|(_name, id)| (*id, "".to_string()))
+                    .collect();
+                let migration_metadata = catalog
+                    .generate_builtin_migration_metadata(migrated_ids, id_fingerprint_map)
+                    .await
+                    .expect("failed to generate builtin migration metadata");
+
+                assert_eq!(
+                    convert_id_vec_to_name_vec(migration_metadata.previous_sink_ids, &name_mapping),
+                    test_case.expected_previous_sink_names,
+                    "{} test failed with wrong previous sink ids",
+                    test_case.test_name
+                );
+                assert_eq!(
+                    convert_id_vec_to_name_vec(
+                        migration_metadata.previous_materialized_view_ids,
+                        &name_mapping
+                    ),
+                    test_case.expected_previous_materialized_view_names,
+                    "{} test failed with wrong previous materialized view ids",
+                    test_case.test_name
+                );
+                assert_eq!(
+                    convert_id_vec_to_name_vec(
+                        migration_metadata.previous_source_ids,
+                        &name_mapping
+                    ),
+                    test_case.expected_previous_source_names,
+                    "{} test failed with wrong previous source ids",
+                    test_case.test_name
+                );
+                assert_eq!(
+                    convert_id_vec_to_name_vec(migration_metadata.all_drop_ops, &name_mapping),
+                    test_case.expected_all_drop_ops,
+                    "{} test failed with wrong all drop ops",
+                    test_case.test_name
+                );
+                assert_eq!(
+                    convert_id_vec_to_name_vec(migration_metadata.user_drop_ops, &name_mapping),
+                    test_case.expected_user_drop_ops,
+                    "{} test failed with wrong user drop ops",
+                    test_case.test_name
+                );
+                assert_eq!(
+                    migration_metadata
+                        .all_create_ops
+                        .into_iter()
+                        .map(|(_, _, name, _, _, _)| name.item)
+                        .collect::<Vec<_>>(),
+                    test_case.expected_all_create_ops,
+                    "{} test failed with wrong all create ops",
+                    test_case.test_name
+                );
+                assert_eq!(
+                    migration_metadata
+                        .user_create_ops
+                        .into_iter()
+                        .map(|(_, _, name)| name)
+                        .collect::<Vec<_>>(),
+                    test_case.expected_user_create_ops,
+                    "{} test failed with wrong user create ops",
+                    test_case.test_name
+                );
+                assert_eq!(
+                    migration_metadata
+                        .migrated_system_object_mappings
+                        .values()
+                        .map(|mapping| mapping.description.object_name.clone())
+                        .collect::<BTreeSet<_>>(),
+                    test_case
+                        .expected_migrated_system_object_mappings
+                        .into_iter()
+                        .collect::<BTreeSet<_>>(),
+                    "{} test failed with wrong migrated system object mappings",
+                    test_case.test_name
+                );
+            })
+            .await;
+        }
+
         let test_cases = vec![
             BuiltinMigrationTestCase {
                 test_name: "no_migrations",
@@ -8753,104 +8853,15 @@ mod tests {
             },
         ];
 
-        for test_case in test_cases {
-            Catalog::with_debug(NOW_ZERO.clone(), |mut catalog| async move {
-                let mut id_mapping = BTreeMap::new();
-                let mut name_mapping = BTreeMap::new();
-                for entry in test_case.initial_state {
-                    let (name, namespace, item) = entry.to_catalog_item(&id_mapping);
-                    let id = add_item(&mut catalog, name.clone(), item, namespace).await;
-                    id_mapping.insert(name.clone(), id);
-                    name_mapping.insert(id, name);
-                }
-
-                let migrated_ids = test_case
-                    .migrated_names
-                    .into_iter()
-                    .map(|name| id_mapping[&name])
-                    .collect();
-                let id_fingerprint_map: BTreeMap<GlobalId, String> = id_mapping
-                    .iter()
-                    .filter(|(_name, id)| id.is_system())
-                    // We don't use the new fingerprint in this test, so we can just hard code it
-                    .map(|(_name, id)| (*id, "".to_string()))
-                    .collect();
-                let migration_metadata = catalog
-                    .generate_builtin_migration_metadata(migrated_ids, id_fingerprint_map)
-                    .await
-                    .expect("failed to generate builtin migration metadata");
-
-                assert_eq!(
-                    convert_id_vec_to_name_vec(migration_metadata.previous_sink_ids, &name_mapping),
-                    test_case.expected_previous_sink_names,
-                    "{} test failed with wrong previous sink ids",
-                    test_case.test_name
-                );
-                assert_eq!(
-                    convert_id_vec_to_name_vec(
-                        migration_metadata.previous_materialized_view_ids,
-                        &name_mapping
-                    ),
-                    test_case.expected_previous_materialized_view_names,
-                    "{} test failed with wrong previous materialized view ids",
-                    test_case.test_name
-                );
-                assert_eq!(
-                    convert_id_vec_to_name_vec(
-                        migration_metadata.previous_source_ids,
-                        &name_mapping
-                    ),
-                    test_case.expected_previous_source_names,
-                    "{} test failed with wrong previous source ids",
-                    test_case.test_name
-                );
-                assert_eq!(
-                    convert_id_vec_to_name_vec(migration_metadata.all_drop_ops, &name_mapping),
-                    test_case.expected_all_drop_ops,
-                    "{} test failed with wrong all drop ops",
-                    test_case.test_name
-                );
-                assert_eq!(
-                    convert_id_vec_to_name_vec(migration_metadata.user_drop_ops, &name_mapping),
-                    test_case.expected_user_drop_ops,
-                    "{} test failed with wrong user drop ops",
-                    test_case.test_name
-                );
-                assert_eq!(
-                    migration_metadata
-                        .all_create_ops
-                        .into_iter()
-                        .map(|(_, _, name, _, _, _)| name.item)
-                        .collect::<Vec<_>>(),
-                    test_case.expected_all_create_ops,
-                    "{} test failed with wrong all create ops",
-                    test_case.test_name
-                );
-                assert_eq!(
-                    migration_metadata
-                        .user_create_ops
-                        .into_iter()
-                        .map(|(_, _, name)| name)
-                        .collect::<Vec<_>>(),
-                    test_case.expected_user_create_ops,
-                    "{} test failed with wrong user create ops",
-                    test_case.test_name
-                );
-                assert_eq!(
-                    migration_metadata
-                        .migrated_system_object_mappings
-                        .values()
-                        .map(|mapping| mapping.description.object_name.clone())
-                        .collect::<BTreeSet<_>>(),
-                    test_case
-                        .expected_migrated_system_object_mappings
-                        .into_iter()
-                        .collect::<BTreeSet<_>>(),
-                    "{} test failed with wrong migrated system object mappings",
-                    test_case.test_name
-                );
-            })
-            .await
+        let mut handles = Vec::with_capacity(test_cases.len());
+        for (i, test_case) in test_cases.into_iter().enumerate() {
+            let handle = task::spawn(|| format!("test_{i}"), async move {
+                execute_test_case(test_case).await;
+            });
+            handles.push(handle);
+        }
+        for handle in handles {
+            handle.await.expect("must succeed");
         }
     }
 
