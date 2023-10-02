@@ -38,7 +38,6 @@ dec = { version = "0.4.8", default-features = false, features = ["serde"] }
 digest = { version = "0.10.6", features = ["mac", "std"] }
 either = { version = "1.8.0", features = ["serde"] }
 flate2 = { version = "1.0.24", features = ["zlib"] }
-futures = { version = "0.3.25" }
 futures-channel = { version = "0.3.28", features = ["sink"] }
 futures-core = { version = "0.3.28" }
 futures-executor = { version = "0.3.25" }
@@ -68,7 +67,6 @@ num-bigint = { version = "0.4.3" }
 num-integer = { version = "0.1.44", features = ["i128"] }
 num-traits = { version = "0.2.15", features = ["i128"] }
 openssl = { version = "0.10.55", features = ["vendored"] }
-openssl-sys = { version = "0.9.90", default-features = false, features = ["vendored"] }
 ordered-float = { version = "3.4.0", features = ["serde"] }
 parking_lot = { version = "0.12.1", features = ["send_guard"] }
 phf = { version = "0.11.1", features = ["uncased"] }
@@ -111,7 +109,7 @@ tower-http = { version = "0.4.3", features = ["auth", "cors", "map-response-body
 tracing = { version = "0.1.37", features = ["log"] }
 tracing-core = { version = "0.1.30" }
 tracing-subscriber = { version = "0.3.16", features = ["env-filter", "json"] }
-tungstenite = { version = "0.20.0", features = ["native-tls"] }
+tungstenite = { version = "0.20.1", features = ["native-tls"] }
 uncased = { version = "0.9.7" }
 url = { version = "2.3.1", features = ["serde"] }
 uuid = { version = "1.2.2", features = ["serde", "v4", "v5"] }
@@ -143,7 +141,6 @@ dec = { version = "0.4.8", default-features = false, features = ["serde"] }
 digest = { version = "0.10.6", features = ["mac", "std"] }
 either = { version = "1.8.0", features = ["serde"] }
 flate2 = { version = "1.0.24", features = ["zlib"] }
-futures = { version = "0.3.25" }
 futures-channel = { version = "0.3.28", features = ["sink"] }
 futures-core = { version = "0.3.28" }
 futures-executor = { version = "0.3.25" }
@@ -173,7 +170,6 @@ num-bigint = { version = "0.4.3" }
 num-integer = { version = "0.1.44", features = ["i128"] }
 num-traits = { version = "0.2.15", features = ["i128"] }
 openssl = { version = "0.10.55", features = ["vendored"] }
-openssl-sys = { version = "0.9.90", default-features = false, features = ["vendored"] }
 ordered-float = { version = "3.4.0", features = ["serde"] }
 parking_lot = { version = "0.12.1", features = ["send_guard"] }
 phf = { version = "0.11.1", features = ["uncased"] }
@@ -217,7 +213,7 @@ tower-http = { version = "0.4.3", features = ["auth", "cors", "map-response-body
 tracing = { version = "0.1.37", features = ["log"] }
 tracing-core = { version = "0.1.30" }
 tracing-subscriber = { version = "0.3.16", features = ["env-filter", "json"] }
-tungstenite = { version = "0.20.0", features = ["native-tls"] }
+tungstenite = { version = "0.20.1", features = ["native-tls"] }
 uncased = { version = "0.9.7" }
 url = { version = "2.3.1", features = ["serde"] }
 uuid = { version = "1.2.2", features = ["serde", "v4", "v5"] }
@@ -226,12 +222,14 @@ zeroize = { version = "1.5.7", features = ["serde"] }
 [target.x86_64-unknown-linux-gnu.dependencies]
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 once_cell = { version = "1.16.0", features = ["unstable"] }
+openssl-sys = { version = "0.9.90", default-features = false, features = ["vendored"] }
 rustix = { version = "0.37.15", features = ["fs", "termios"] }
 tikv-jemalloc-sys = { version = "0.5.2", features = ["background_threads", "profiling", "stats", "unprefixed_malloc_on_supported_platforms"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 once_cell = { version = "1.16.0", features = ["unstable"] }
+openssl-sys = { version = "0.9.90", default-features = false, features = ["vendored"] }
 rustix = { version = "0.37.15", features = ["fs", "termios"] }
 tikv-jemalloc-sys = { version = "0.5.2", features = ["background_threads", "profiling", "stats", "unprefixed_malloc_on_supported_platforms"] }
 

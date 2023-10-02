@@ -9312,7 +9312,6 @@ dependencies = [
  "digest",
  "either",
  "flate2",
- "futures",
  "futures-channel",
  "futures-core",
  "futures-executor",
