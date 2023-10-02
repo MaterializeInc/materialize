@@ -9,6 +9,9 @@
 
 mode cockroach
 
+# This is to make the id in the EXPLAIN SHOW VIEWS test stable.
+reset-server
+
 statement ok
 CREATE TABLE t (i INT);
 
@@ -209,11 +212,11 @@ EXPLAIN SHOW VIEWS
 ----
 Explained Query:
   Project (#3)
-    Filter (#2 = "u6")
+    Filter (#2 = "u3")
       ReadStorage mz_catalog.mz_views
 
 Source mz_catalog.mz_views
-  filter=((#2 = "u6"))
+  filter=((#2 = "u3"))
 
 EOF
 
