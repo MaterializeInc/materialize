@@ -109,7 +109,7 @@ WITH (SIZE = '3xsmall');"
                     .to_string(),
             ),
             kind: Some(CompletionItemKind::SNIPPET),
-            detail: Some("Code snippet to create a cluster..".to_string()),
+            detail: Some("Code snippet to create a cluster.".to_string()),
             deprecated: Some(false),
             documentation: Some(Documentation::String(
                 "https://materialize.com/docs/sql/create-cluster".to_string(),
