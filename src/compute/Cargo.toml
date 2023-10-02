@@ -44,5 +44,4 @@ uuid = { version = "1.2.2", features = ["serde", "v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [package.metadata.cargo-udeps.ignore]
-# only used on linux
-normal = ["inotify", "workspace-hack"]
+normal = ["workspace-hack"]

@@ -12,11 +12,12 @@ authors = [
 repository = "https://github.com/MaterializeInc/materialize"
 
 [dependencies]
+workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
 anyhow = "1.0.66"
 libc = "0.2.138"
 mz-ore = { path = "../ore", features = ["async"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [package.metadata.cargo-udeps.ignore]
-# "anyhow" and "mz-ore" only used on linux
-normal = ["anyhow", "mz-ore", "workspace-hack"]
+normal = ["workspace-hack"]

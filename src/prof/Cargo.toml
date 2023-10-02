@@ -11,7 +11,6 @@ askama = { version = "0.11.1", default-features = false, features = ["config", "
 anyhow = "1.0.66"
 axum = { version = "0.6.20", features = ["headers"] }
 backtrace = "0.3.66"
-bytesize = "1.1.0"
 cfg-if = "1.0.0"
 headers = "0.3.8"
 http = "0.2.8"
@@ -30,6 +29,9 @@ tracing = "0.1.37"
 tokio = { version = "1.32.0", features = ["time"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+bytesize = "1.1.0"
+
 [build-dependencies]
 anyhow = "1.0.66"
 mz-npm = { path = "../npm", default-features = false }
@@ -47,5 +49,4 @@ dev-web = []
 jemalloc = ["tikv-jemalloc-ctl"]
 
 [package.metadata.cargo-udeps.ignore]
-# "bytesize" not used on linux
-normal = ["bytesize", "workspace-hack"]
+normal = ["workspace-hack"]
