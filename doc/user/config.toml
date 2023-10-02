@@ -65,13 +65,6 @@ weight = 5
 url = "/sql/create-source/webhook/#connecting-with-amazon-eventbridge"
 
 [[menu.main]]
-identifier = "segment"
-name = "Segment"
-parent = 'webhooks'
-weight = 15
-url = "/sql/create-source/webhook/#connecting-with-segment"
-
-[[menu.main]]
 identifier = "network-security"
 name = "Network security"
 parent = 'ingest-data'
@@ -126,7 +119,7 @@ url = "/sql/select/"
 weight= 5
 
 [[menu.main]]
-name = "Query using BI tools"
+name = "Query using external tools"
 identifier = "bi-tools"
 parent = "serve"
 weight= 10
@@ -138,10 +131,22 @@ url = "/sql/subscribe/"
 weight= 15
 
 [[menu.main]]
-name = "Sink results to Kafka"
+name = "Sink results to external tools"
+identifier = "sink"
 parent = "serve"
+weight= 20
+
+[[menu.main]]
+name = "Kafka"
+parent = "sink"
 url = "/sql/create-sink"
 weight= 20
+
+[[menu.main]]
+name = "Redpanda"
+parent = "sink"
+url = "/sql/create-sink"
+weight= 25
 
 #
 # Manage Materialize

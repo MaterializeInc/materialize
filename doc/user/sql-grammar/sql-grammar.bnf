@@ -176,8 +176,10 @@ create_source_webhook ::=
     ('INCLUDE HEADERS' ( '(' ('NOT')? header_name ( ',' ('NOT')? header_name )* ')' )?)?
   )*
   ('CHECK'
-    ('WITH' '(' ( (webhook_check_option) ( ( ',' webhook_check_option ) )* )? ')' )?
-    check_expression
+    '('
+      ('WITH' '(' ( (webhook_check_option) ( ( ',' webhook_check_option ) )* )? ')' )?
+      check_expression
+    ')'
   )?
 webhook_body_format ::= 'TEXT' | 'JSON' | 'BYTES'
 webhook_check_option ::=
