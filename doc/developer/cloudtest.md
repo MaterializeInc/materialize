@@ -136,7 +136,7 @@ cluster to become ready:
 
 See the examples in `test/clustertest/test_smoke.py`.
 
-The tests folow pytest conventions:
+The tests follow pytest conventions:
 
 ```python
 from materialize.cloudtest.app.materialize_application import MaterializeApplication

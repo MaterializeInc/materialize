@@ -140,7 +140,7 @@ impl PostgresConsensusConfig {
             }
 
             fn connection_pool_max_wait(&self) -> Option<Duration> {
-                None
+                Some(Duration::from_secs(1))
             }
 
             fn connection_pool_ttl(&self) -> Duration {
@@ -412,6 +412,33 @@ mod tests {
         consensus.drop_and_recreate().await?;
 
         assert_eq!(consensus.head(&key).await, Ok(None));
+
+        Ok(())
+    }
+
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn postgres_consensus_blocking() -> Result<(), ExternalError> {
+        let config = match PostgresConsensusConfig::new_for_test()? {
+            Some(config) => config,
+            None => {
+                info!(
+                    "{} env not set: skipping test that uses external service",
+                    PostgresConsensusConfig::EXTERNAL_TESTS_POSTGRES_URL
+                );
+                return Ok(());
+            }
+        };
+
+        let consensus: PostgresConsensus = PostgresConsensus::open(config.clone()).await?;
+        // Max size in test is 2... let's saturate the pool.
+        let _conn1 = consensus.get_connection().await?;
+        let _conn2 = consensus.get_connection().await?;
+
+        // And finally, we should see the next connect time out.
+        let conn3 = consensus.get_connection().await;
+
+        assert!(conn3.is_err());
 
         Ok(())
     }
