@@ -2432,9 +2432,9 @@ def workflow_test_incident_70(c: Composition) -> None:
     Test incident-70.
     """
     num_conns = 1
-    mv_count = 15
+    mv_count = 30
     persist_reader_lease_duration_in_sec = 30
-    data_scale_factor = 80
+    data_scale_factor = 10
 
     c.down(destroy_volumes=True)
     c.up("materialized")
