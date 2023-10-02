@@ -670,6 +670,7 @@ async fn test_stash_readonly() {
     // The previous stash should still be the leader.
     assert!(stash_rw.confirm_leadership().await.is_ok());
     stash_rw.verify().await.unwrap();
+    factory.drop().await;
 }
 
 #[mz_ore::test(tokio::test)]
@@ -726,6 +727,7 @@ async fn test_stash_savepoint() {
         BTreeMap::from([(1, 2)])
     );
     stash_rw.verify().await.unwrap();
+    factory.drop().await;
 }
 
 #[mz_ore::test(tokio::test)]
@@ -739,6 +741,7 @@ async fn test_stash_fence() {
         _ => panic!("expected error"),
     });
     let _: StashCollection<String, String> = collection(&mut conn2, "c").await.unwrap();
+    factory.drop().await;
 }
 
 #[mz_ore::test(tokio::test)]
@@ -747,6 +750,7 @@ async fn test_stash_append() {
     let factory = DebugStashFactory::try_new().await.expect("must succeed");
     test_append(|| async { factory.open().await }).await;
     factory.open().await.verify().await.unwrap();
+    factory.drop().await;
 }
 
 #[mz_ore::test(tokio::test)]
@@ -755,6 +759,7 @@ async fn test_stash_stash() {
     let factory = DebugStashFactory::try_new().await.expect("must succeed");
     test_stash(|| async { factory.open().await }).await;
     factory.open().await.verify().await.unwrap();
+    factory.drop().await;
 }
 
 async fn make_batch<K, V>(

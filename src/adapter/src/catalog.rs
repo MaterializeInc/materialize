@@ -3506,7 +3506,9 @@ impl Catalog {
         let catalog = Self::open_debug_stash_catalog_factory(&debug_stash_factory, now)
             .await
             .expect("unable to open debug stash");
-        f(catalog).await
+        let res = f(catalog).await;
+        debug_stash_factory.drop().await;
+        res
     }
 
     /// Opens a debug stash backed catalog using `debug_stash_factory`.
@@ -8051,6 +8053,7 @@ mod tests {
             // Re-opening the same stash resets the transient_revision to 1.
             assert_eq!(catalog.transient_revision(), 1);
         }
+        debug_stash_factory.drop().await;
     }
 
     #[mz_ore::test(tokio::test)]
@@ -8944,6 +8947,7 @@ mod tests {
                 item => panic!("expected view, got {}", item.typ()),
             }
         }
+        debug_stash_factory.drop().await;
     }
 
     #[mz_ore::test]

@@ -172,176 +172,176 @@ mod tests {
     use super::upgrade;
 
     use crate::upgrade::v31_to_v32::{objects_v31, objects_v32};
-    use crate::{DebugStashFactory, TypedCollection};
+    use crate::{Stash, TypedCollection};
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn smoke_test() {
-        // Connect to the Stash.
-        let factory = DebugStashFactory::new().await;
-        let mut stash = factory.open().await;
+        Stash::with_debug_stash(|mut stash| async move {
+            // Insert a cluster.
+            let cluster_replica_v31: TypedCollection<
+                objects_v31::ClusterReplicaKey,
+                objects_v31::ClusterReplicaValue,
+            > = TypedCollection::new("compute_replicas");
 
-        // Insert a cluster.
-        let cluster_replica_v31: TypedCollection<
-            objects_v31::ClusterReplicaKey,
-            objects_v31::ClusterReplicaValue,
-        > = TypedCollection::new("compute_replicas");
-
-        // Test that we can correctly migrate unmanaged, and both cases of managed replicas.
-        for (key, location) in [
-            (
-                10,
-                objects_v31::replica_config::Location::Managed(
-                    objects_v31::replica_config::ManagedLocation {
-                        size: "s".to_string(),
-                        availability_zone: "z".to_string(),
-                        az_user_specified: true,
-                        disk: true,
-                    },
-                ),
-            ),
-            (
-                11,
-                objects_v31::replica_config::Location::Managed(
-                    objects_v31::replica_config::ManagedLocation {
-                        size: "s".to_string(),
-                        availability_zone: "z".to_string(),
-                        az_user_specified: false,
-                        disk: true,
-                    },
-                ),
-            ),
-            (
-                12,
-                objects_v31::replica_config::Location::Unmanaged(
-                    objects_v31::replica_config::UnmanagedLocation {
-                        storagectl_addrs: vec!["one".to_string()],
-                        storage_addrs: vec!["two".to_string()],
-                        computectl_addrs: vec!["three".to_string()],
-                        compute_addrs: vec!["four".to_string()],
-                        workers: 50,
-                    },
-                ),
-            ),
-        ] {
-            cluster_replica_v31
-                .insert_without_overwrite(
-                    &mut stash,
-                    vec![(
-                        objects_v31::ClusterReplicaKey {
-                            id: Some(objects_v31::ReplicaId { value: key }),
+            // Test that we can correctly migrate unmanaged, and both cases of managed replicas.
+            for (key, location) in [
+                (
+                    10,
+                    objects_v31::replica_config::Location::Managed(
+                        objects_v31::replica_config::ManagedLocation {
+                            size: "s".to_string(),
+                            availability_zone: "z".to_string(),
+                            az_user_specified: true,
+                            disk: true,
                         },
-                        objects_v31::ClusterReplicaValue {
-                            cluster_id: Some(objects_v31::ClusterId {
-                                value: Some(objects_v31::cluster_id::Value::User(1)),
-                            }),
-                            name: "gus".to_string(),
-                            config: Some(objects_v31::ReplicaConfig {
-                                location: Some(location),
-                                idle_arrangement_merge_effort: Some(
-                                    objects_v31::ReplicaMergeEffort { effort: 1 },
-                                ),
-                                logging: Some(objects_v31::ReplicaLogging {
-                                    log_logging: true,
-                                    interval: Some(objects_v31::Duration {
-                                        secs: 1,
-                                        nanos: 100,
+                    ),
+                ),
+                (
+                    11,
+                    objects_v31::replica_config::Location::Managed(
+                        objects_v31::replica_config::ManagedLocation {
+                            size: "s".to_string(),
+                            availability_zone: "z".to_string(),
+                            az_user_specified: false,
+                            disk: true,
+                        },
+                    ),
+                ),
+                (
+                    12,
+                    objects_v31::replica_config::Location::Unmanaged(
+                        objects_v31::replica_config::UnmanagedLocation {
+                            storagectl_addrs: vec!["one".to_string()],
+                            storage_addrs: vec!["two".to_string()],
+                            computectl_addrs: vec!["three".to_string()],
+                            compute_addrs: vec!["four".to_string()],
+                            workers: 50,
+                        },
+                    ),
+                ),
+            ] {
+                cluster_replica_v31
+                    .insert_without_overwrite(
+                        &mut stash,
+                        vec![(
+                            objects_v31::ClusterReplicaKey {
+                                id: Some(objects_v31::ReplicaId { value: key }),
+                            },
+                            objects_v31::ClusterReplicaValue {
+                                cluster_id: Some(objects_v31::ClusterId {
+                                    value: Some(objects_v31::cluster_id::Value::User(1)),
+                                }),
+                                name: "gus".to_string(),
+                                config: Some(objects_v31::ReplicaConfig {
+                                    location: Some(location),
+                                    idle_arrangement_merge_effort: Some(
+                                        objects_v31::ReplicaMergeEffort { effort: 1 },
+                                    ),
+                                    logging: Some(objects_v31::ReplicaLogging {
+                                        log_logging: true,
+                                        interval: Some(objects_v31::Duration {
+                                            secs: 1,
+                                            nanos: 100,
+                                        }),
                                     }),
                                 }),
-                            }),
-                            owner_id: Some(objects_v31::RoleId {
-                                value: Some(objects_v31::role_id::Value::User(100)),
-                            }),
-                        },
-                    )],
-                )
-                .await
-                .unwrap();
-        }
+                                owner_id: Some(objects_v31::RoleId {
+                                    value: Some(objects_v31::role_id::Value::User(100)),
+                                }),
+                            },
+                        )],
+                    )
+                    .await
+                    .unwrap();
+            }
 
-        // Run our migration.
-        stash
-            .with_transaction(|mut tx| {
-                Box::pin(async move {
-                    upgrade(&mut tx).await?;
-                    Ok(())
+            // Run our migration.
+            stash
+                .with_transaction(|mut tx| {
+                    Box::pin(async move {
+                        upgrade(&mut tx).await?;
+                        Ok(())
+                    })
                 })
-            })
-            .await
-            .expect("migration failed");
+                .await
+                .expect("migration failed");
 
-        let cluster_replica_v32: TypedCollection<
-            objects_v32::ClusterReplicaKey,
-            objects_v32::ClusterReplicaValue,
-        > = TypedCollection::new("compute_replicas");
-        let cluster_replicas = cluster_replica_v32.iter(&mut stash).await.unwrap();
+            let cluster_replica_v32: TypedCollection<
+                objects_v32::ClusterReplicaKey,
+                objects_v32::ClusterReplicaValue,
+            > = TypedCollection::new("compute_replicas");
+            let cluster_replicas = cluster_replica_v32.iter(&mut stash).await.unwrap();
 
-        let cluster_replicas: BTreeMap<_, _> = cluster_replicas
-            .into_iter()
-            .map(|((key, value), _timestamp, _diff)| (key, value))
-            .collect();
+            let cluster_replicas: BTreeMap<_, _> = cluster_replicas
+                .into_iter()
+                .map(|((key, value), _timestamp, _diff)| (key, value))
+                .collect();
 
-        for (key, location) in [
-            (
-                10,
-                objects_v32::replica_config::Location::Managed(
-                    objects_v32::replica_config::ManagedLocation {
-                        size: "s".to_string(),
-                        availability_zone: Some("z".to_string()),
-                        disk: true,
-                    },
+            for (key, location) in [
+                (
+                    10,
+                    objects_v32::replica_config::Location::Managed(
+                        objects_v32::replica_config::ManagedLocation {
+                            size: "s".to_string(),
+                            availability_zone: Some("z".to_string()),
+                            disk: true,
+                        },
+                    ),
                 ),
-            ),
-            (
-                11,
-                objects_v32::replica_config::Location::Managed(
-                    objects_v32::replica_config::ManagedLocation {
-                        size: "s".to_string(),
-                        availability_zone: None,
-                        disk: true,
-                    },
+                (
+                    11,
+                    objects_v32::replica_config::Location::Managed(
+                        objects_v32::replica_config::ManagedLocation {
+                            size: "s".to_string(),
+                            availability_zone: None,
+                            disk: true,
+                        },
+                    ),
                 ),
-            ),
-            (
-                12,
-                objects_v32::replica_config::Location::Unmanaged(
-                    objects_v32::replica_config::UnmanagedLocation {
-                        storagectl_addrs: vec!["one".to_string()],
-                        storage_addrs: vec!["two".to_string()],
-                        computectl_addrs: vec!["three".to_string()],
-                        compute_addrs: vec!["four".to_string()],
-                        workers: 50,
-                    },
+                (
+                    12,
+                    objects_v32::replica_config::Location::Unmanaged(
+                        objects_v32::replica_config::UnmanagedLocation {
+                            storagectl_addrs: vec!["one".to_string()],
+                            storage_addrs: vec!["two".to_string()],
+                            computectl_addrs: vec!["three".to_string()],
+                            compute_addrs: vec!["four".to_string()],
+                            workers: 50,
+                        },
+                    ),
                 ),
-            ),
-        ] {
-            assert_eq!(
-                cluster_replicas[&objects_v32::ClusterReplicaKey {
-                    id: Some(objects_v32::ReplicaId { value: key })
-                }],
-                objects_v32::ClusterReplicaValue {
-                    cluster_id: Some(objects_v32::ClusterId {
-                        value: Some(objects_v32::cluster_id::Value::User(1)),
-                    }),
-                    name: "gus".to_string(),
-                    config: Some(objects_v32::ReplicaConfig {
-                        location: Some(location),
-                        idle_arrangement_merge_effort: Some(objects_v32::ReplicaMergeEffort {
-                            effort: 1
-                        },),
-                        logging: Some(objects_v32::ReplicaLogging {
-                            log_logging: true,
-                            interval: Some(objects_v32::Duration {
-                                secs: 1,
-                                nanos: 100,
+            ] {
+                assert_eq!(
+                    cluster_replicas[&objects_v32::ClusterReplicaKey {
+                        id: Some(objects_v32::ReplicaId { value: key })
+                    }],
+                    objects_v32::ClusterReplicaValue {
+                        cluster_id: Some(objects_v32::ClusterId {
+                            value: Some(objects_v32::cluster_id::Value::User(1)),
+                        }),
+                        name: "gus".to_string(),
+                        config: Some(objects_v32::ReplicaConfig {
+                            location: Some(location),
+                            idle_arrangement_merge_effort: Some(objects_v32::ReplicaMergeEffort {
+                                effort: 1
+                            },),
+                            logging: Some(objects_v32::ReplicaLogging {
+                                log_logging: true,
+                                interval: Some(objects_v32::Duration {
+                                    secs: 1,
+                                    nanos: 100,
+                                }),
                             }),
                         }),
-                    }),
-                    owner_id: Some(objects_v32::RoleId {
-                        value: Some(objects_v32::role_id::Value::User(100)),
-                    }),
-                }
-            )
-        }
+                        owner_id: Some(objects_v32::RoleId {
+                            value: Some(objects_v32::role_id::Value::User(100)),
+                        }),
+                    }
+                )
+            }
+        })
+        .await
+        .unwrap();
     }
 }

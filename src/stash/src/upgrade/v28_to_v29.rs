@@ -225,7 +225,7 @@ mod tests {
     use super::upgrade;
 
     use crate::upgrade::v28_to_v29::{objects_v28, objects_v29};
-    use crate::{DebugStashFactory, TypedCollection};
+    use crate::{Stash, TypedCollection};
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
@@ -271,139 +271,141 @@ mod tests {
             value: Some(objects_v29::role_id::Value::User(1)),
         };
 
-        // Connect to the Stash.
-        let factory = DebugStashFactory::new().await;
-        let mut stash = factory.open().await;
+        Stash::with_debug_stash(|mut stash| async move {
+            // Insert a database.
+            let databases_v28: TypedCollection<
+                objects_v28::DatabaseKey,
+                objects_v28::DatabaseValue,
+            > = TypedCollection::new("database");
+            databases_v28
+                .insert_without_overwrite(
+                    &mut stash,
+                    vec![(
+                        DATABASE_ID_V28,
+                        objects_v28::DatabaseValue {
+                            name: "db".into(),
+                            owner_id: Some(ROLE_ID_V28),
+                            privileges: vec![],
+                        },
+                    )],
+                )
+                .await
+                .unwrap();
 
-        // Insert a database.
-        let databases_v28: TypedCollection<objects_v28::DatabaseKey, objects_v28::DatabaseValue> =
-            TypedCollection::new("database");
-        databases_v28
-            .insert_without_overwrite(
-                &mut stash,
-                vec![(
-                    DATABASE_ID_V28,
-                    objects_v28::DatabaseValue {
-                        name: "db".into(),
-                        owner_id: Some(ROLE_ID_V28),
-                        privileges: vec![],
-                    },
-                )],
-            )
-            .await
-            .unwrap();
+            // Insert a schema.
+            let schemas_v28: TypedCollection<objects_v28::SchemaKey, objects_v28::SchemaValue> =
+                TypedCollection::new("schema");
+            schemas_v28
+                .insert_without_overwrite(
+                    &mut stash,
+                    vec![(
+                        SCHEMA_ID_V28,
+                        objects_v28::SchemaValue {
+                            database_id: Some(objects_v28::DatabaseId {
+                                value: Some(objects_v28::database_id::Value::User(42)),
+                            }),
+                            name: "sch".into(),
+                            owner_id: Some(ROLE_ID_V28),
+                            privileges: vec![],
+                        },
+                    )],
+                )
+                .await
+                .unwrap();
 
-        // Insert a schema.
-        let schemas_v28: TypedCollection<objects_v28::SchemaKey, objects_v28::SchemaValue> =
-            TypedCollection::new("schema");
-        schemas_v28
-            .insert_without_overwrite(
-                &mut stash,
-                vec![(
-                    SCHEMA_ID_V28,
-                    objects_v28::SchemaValue {
-                        database_id: Some(objects_v28::DatabaseId {
-                            value: Some(objects_v28::database_id::Value::User(42)),
-                        }),
-                        name: "sch".into(),
-                        owner_id: Some(ROLE_ID_V28),
-                        privileges: vec![],
-                    },
-                )],
-            )
-            .await
-            .unwrap();
+            // Insert default privileges.
+            let default_privileges_v28: TypedCollection<
+                objects_v28::DefaultPrivilegesKey,
+                objects_v28::DefaultPrivilegesValue,
+            > = TypedCollection::new("default_privileges");
+            default_privileges_v28
+                .insert_without_overwrite(
+                    &mut stash,
+                    vec![
+                        // Valid references
+                        (
+                            objects_v28::DefaultPrivilegesKey {
+                                role_id: Some(ROLE_ID_V28),
+                                database_id: DATABASE_ID_V28.id,
+                                schema_id: SCHEMA_ID_V28.id,
+                                object_type: objects_v28::ObjectType::Table.into(),
+                                grantee: Some(ROLE_ID_V28),
+                            },
+                            objects_v28::DefaultPrivilegesValue {
+                                privileges: Some(ACL_MODE_USAGE_V28),
+                            },
+                        ),
+                        // Dangling database.
+                        (
+                            objects_v28::DefaultPrivilegesKey {
+                                role_id: Some(ROLE_ID_V28),
+                                database_id: DANGLING_DATABASE_ID_V28.id,
+                                schema_id: SCHEMA_ID_V28.id,
+                                object_type: objects_v28::ObjectType::Table.into(),
+                                grantee: Some(ROLE_ID_V28),
+                            },
+                            objects_v28::DefaultPrivilegesValue {
+                                privileges: Some(ACL_MODE_USAGE_V28),
+                            },
+                        ),
+                        // Dangling schema.
+                        (
+                            objects_v28::DefaultPrivilegesKey {
+                                role_id: Some(ROLE_ID_V28),
+                                database_id: DATABASE_ID_V28.id,
+                                schema_id: DANGLING_SCHEMA_ID_V28.id,
+                                object_type: objects_v28::ObjectType::Table.into(),
+                                grantee: Some(ROLE_ID_V28),
+                            },
+                            objects_v28::DefaultPrivilegesValue {
+                                privileges: Some(ACL_MODE_USAGE_V28),
+                            },
+                        ),
+                    ],
+                )
+                .await
+                .unwrap();
 
-        // Insert default privileges.
-        let default_privileges_v28: TypedCollection<
-            objects_v28::DefaultPrivilegesKey,
-            objects_v28::DefaultPrivilegesValue,
-        > = TypedCollection::new("default_privileges");
-        default_privileges_v28
-            .insert_without_overwrite(
-                &mut stash,
-                vec![
-                    // Valid references
-                    (
-                        objects_v28::DefaultPrivilegesKey {
-                            role_id: Some(ROLE_ID_V28),
-                            database_id: DATABASE_ID_V28.id,
-                            schema_id: SCHEMA_ID_V28.id,
-                            object_type: objects_v28::ObjectType::Table.into(),
-                            grantee: Some(ROLE_ID_V28),
-                        },
-                        objects_v28::DefaultPrivilegesValue {
-                            privileges: Some(ACL_MODE_USAGE_V28),
-                        },
-                    ),
-                    // Dangling database.
-                    (
-                        objects_v28::DefaultPrivilegesKey {
-                            role_id: Some(ROLE_ID_V28),
-                            database_id: DANGLING_DATABASE_ID_V28.id,
-                            schema_id: SCHEMA_ID_V28.id,
-                            object_type: objects_v28::ObjectType::Table.into(),
-                            grantee: Some(ROLE_ID_V28),
-                        },
-                        objects_v28::DefaultPrivilegesValue {
-                            privileges: Some(ACL_MODE_USAGE_V28),
-                        },
-                    ),
-                    // Dangling schema.
-                    (
-                        objects_v28::DefaultPrivilegesKey {
-                            role_id: Some(ROLE_ID_V28),
-                            database_id: DATABASE_ID_V28.id,
-                            schema_id: DANGLING_SCHEMA_ID_V28.id,
-                            object_type: objects_v28::ObjectType::Table.into(),
-                            grantee: Some(ROLE_ID_V28),
-                        },
-                        objects_v28::DefaultPrivilegesValue {
-                            privileges: Some(ACL_MODE_USAGE_V28),
-                        },
-                    ),
-                ],
-            )
-            .await
-            .unwrap();
-
-        // Run our migration.
-        stash
-            .with_transaction(|mut tx| {
-                Box::pin(async move {
-                    upgrade(&mut tx).await?;
-                    Ok(())
+            // Run our migration.
+            stash
+                .with_transaction(|mut tx| {
+                    Box::pin(async move {
+                        upgrade(&mut tx).await?;
+                        Ok(())
+                    })
                 })
-            })
-            .await
-            .expect("migration failed");
+                .await
+                .expect("migration failed");
 
-        // Read back the default privileges.
-        let default_privileges: TypedCollection<
-            objects_v29::DefaultPrivilegesKey,
-            objects_v29::DefaultPrivilegesValue,
-        > = TypedCollection::new("default_privileges");
-        let privileges = default_privileges.iter(&mut stash).await.unwrap();
-        // Filter down to just the keys and values to make comparisons easier.
-        let privileges: Vec<_> = privileges
-            .into_iter()
-            .map(|((key, value), _timestamp, _diff)| (key, value))
-            .collect();
+            // Read back the default privileges.
+            let default_privileges: TypedCollection<
+                objects_v29::DefaultPrivilegesKey,
+                objects_v29::DefaultPrivilegesValue,
+            > = TypedCollection::new("default_privileges");
+            let privileges = default_privileges.iter(&mut stash).await.unwrap();
+            // Filter down to just the keys and values to make comparisons easier.
+            let privileges: Vec<_> = privileges
+                .into_iter()
+                .map(|((key, value), _timestamp, _diff)| (key, value))
+                .collect();
 
-        assert_eq!(
-            privileges,
-            vec![(
-                objects_v29::DefaultPrivilegesKey {
-                    role_id: Some(ROLE_ID_V29),
-                    database_id: DATABASE_ID_V29.id,
-                    schema_id: SCHEMA_ID_V29.id,
-                    object_type: objects_v29::ObjectType::Table.into(),
-                    grantee: Some(ROLE_ID_V29),
-                },
-                objects_v29::DefaultPrivilegesValue {
-                    privileges: Some(ACL_MODE_USAGE_V29),
-                }
-            )]
-        );
+            assert_eq!(
+                privileges,
+                vec![(
+                    objects_v29::DefaultPrivilegesKey {
+                        role_id: Some(ROLE_ID_V29),
+                        database_id: DATABASE_ID_V29.id,
+                        schema_id: SCHEMA_ID_V29.id,
+                        object_type: objects_v29::ObjectType::Table.into(),
+                        grantee: Some(ROLE_ID_V29),
+                    },
+                    objects_v29::DefaultPrivilegesValue {
+                        privileges: Some(ACL_MODE_USAGE_V29),
+                    }
+                )]
+            );
+        })
+        .await
+        .unwrap();
     }
 }
