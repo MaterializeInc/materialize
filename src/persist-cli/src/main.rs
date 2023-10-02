@@ -87,11 +87,11 @@ use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
-use tracing::{info_span, Instrument};
 
 pub mod maelstrom;
 pub mod open_loop;
 pub mod service;
+pub mod txns;
 
 #[derive(Debug, clap::Parser)]
 #[clap(about = "Persist command-line utilities", long_about = None)]
@@ -111,6 +111,7 @@ enum Command {
     Inspect(mz_persist_client::cli::inspect::InspectArgs),
     Admin(mz_persist_client::cli::admin::AdminArgs),
     Service(crate::service::Args),
+    Txns(crate::txns::Args),
 }
 
 fn main() {
@@ -134,30 +135,20 @@ fn main() {
         ))
         .expect("failed to init tracing");
 
-    let root_span = info_span!("persistcli");
     let res = match args.command {
-        Command::Maelstrom(args) => runtime.block_on(
-            crate::maelstrom::run::<crate::maelstrom::txn_list_append_single::TransactorService>(
-                args,
-            )
-            .instrument(root_span),
-        ),
-        Command::MaelstromTxn(args) => runtime.block_on(
-            crate::maelstrom::run::<crate::maelstrom::txn_list_append_multi::TransactorService>(
-                args,
-            )
-            .instrument(root_span),
-        ),
-        Command::OpenLoop(args) => {
-            runtime.block_on(crate::open_loop::run(args).instrument(root_span))
-        }
+        Command::Maelstrom(args) => runtime.block_on(crate::maelstrom::run::<
+            crate::maelstrom::txn_list_append_single::TransactorService,
+        >(args)),
+        Command::MaelstromTxn(args) => runtime.block_on(crate::maelstrom::run::<
+            crate::maelstrom::txn_list_append_multi::TransactorService,
+        >(args)),
+        Command::OpenLoop(args) => runtime.block_on(crate::open_loop::run(args)),
         Command::Inspect(command) => {
-            runtime.block_on(mz_persist_client::cli::inspect::run(command).instrument(root_span))
+            runtime.block_on(mz_persist_client::cli::inspect::run(command))
         }
-        Command::Admin(command) => {
-            runtime.block_on(mz_persist_client::cli::admin::run(command).instrument(root_span))
-        }
-        Command::Service(args) => runtime.block_on(crate::service::run(args).instrument(root_span)),
+        Command::Admin(command) => runtime.block_on(mz_persist_client::cli::admin::run(command)),
+        Command::Service(args) => runtime.block_on(crate::service::run(args)),
+        Command::Txns(args) => runtime.block_on(crate::txns::run(args)),
     };
 
     if let Err(err) = res {

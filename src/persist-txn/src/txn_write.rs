@@ -15,15 +15,17 @@ use std::fmt::Debug;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
+use futures::stream::FuturesUnordered;
+use futures::StreamExt;
 use mz_persist_client::ShardId;
-use mz_persist_types::{Codec, Codec64};
+use mz_persist_types::{Codec, Codec64, StepForward};
 use prost::Message;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
-use tracing::debug;
+use tracing::{debug, instrument};
 
 use crate::txns::{Tidy, TxnsHandle};
-use crate::{StepForward, TxnsCodec, TxnsEntry};
+use crate::{TxnsCodec, TxnsEntry};
 
 /// An in-progress transaction.
 #[derive(Debug)]
@@ -72,6 +74,7 @@ where
     /// correctness nor liveness require this followup be done.
     ///
     /// Panics if any involved data shards were not registered before commit ts.
+    #[instrument(level = "debug", skip_all, fields(ts = ?commit_ts))]
     pub async fn commit_at<T, C>(
         &self,
         handle: &mut TxnsHandle<K, V, T, D, C>,
@@ -81,13 +84,11 @@ where
         T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
         C: TxnsCodec,
     {
-        // TODO(txn): Use ownership to disallow a double commit.
         let mut txns_upper = handle
             .txns_write
-            .upper()
-            .as_option()
-            .expect("txns shard should not be closed")
-            .clone();
+            .shared_upper()
+            .into_option()
+            .expect("txns shard should not be closed");
 
         // Validate that the involved data shards are all registered. txns_upper
         // only advances in the loop below, so we only have to check
@@ -124,35 +125,36 @@ where
                 commit_ts.step_forward(),
             );
 
-            let mut txn_batches = Vec::new();
-            let mut txns_updates = Vec::new();
+            let txn_batches_updates = FuturesUnordered::new();
             for (data_id, updates) in self.writes.iter() {
-                let data_write = handle.datas.get_write(data_id).await;
-                // TODO(txn): Tighter lower bound?
-                let mut batch = data_write.builder(Antichain::from_elem(T::minimum()));
-                for (k, v, d) in updates.iter() {
-                    batch.add(k, v, &commit_ts, d).await.expect("valid usage");
-                }
-                let batch = batch
-                    .finish(Antichain::from_elem(commit_ts.step_forward()))
-                    .await
-                    .expect("valid usage");
-                let batch = batch.into_transmittable_batch();
-                let batch_raw = batch.encode_to_vec();
-                let batch = data_write.batch_from_transmittable_batch(batch);
-                txn_batches.push(batch);
-                debug!(
-                    "wrote {:.9} batch {} len={}",
-                    data_id.to_string(),
-                    batch_raw.hashed(),
-                    updates.len()
-                );
-                txns_updates.push(C::encode(TxnsEntry::Append(*data_id, batch_raw)));
+                let mut data_write = handle.datas.take_write(data_id).await;
+                let commit_ts = commit_ts.clone();
+                txn_batches_updates.push(async move {
+                    let mut batch = data_write.builder(Antichain::from_elem(T::minimum()));
+                    for (k, v, d) in updates.iter() {
+                        batch.add(k, v, &commit_ts, d).await.expect("valid usage");
+                    }
+                    let batch = batch
+                        .finish(Antichain::from_elem(commit_ts.step_forward()))
+                        .await
+                        .expect("valid usage");
+                    let batch = batch.into_transmittable_batch();
+                    let batch_raw = batch.encode_to_vec();
+                    debug!(
+                        "wrote {:.9} batch {} len={}",
+                        data_id.to_string(),
+                        batch_raw.hashed(),
+                        updates.len()
+                    );
+                    let update = C::encode(TxnsEntry::Append(*data_id, batch_raw));
+                    (data_write, batch, update)
+                })
             }
+            let txn_batches_updates = txn_batches_updates.collect::<Vec<_>>().await;
 
-            let mut txns_updates = txns_updates
+            let mut txns_updates = txn_batches_updates
                 .iter()
-                .map(|(key, val)| ((key, val), &commit_ts, 1))
+                .map(|(_, _, (key, val))| ((key, val), &commit_ts, 1))
                 .collect::<Vec<_>>();
             let apply_is_empty = txns_updates.is_empty();
 
@@ -192,8 +194,11 @@ where
                     );
                     // The batch we wrote at commit_ts did commit. Mark it as
                     // such to avoid a WARN in the logs.
-                    for batch in txn_batches {
-                        let _ = batch.into_hollow_batch();
+                    for (data_write, batch, _) in txn_batches_updates {
+                        let _ = data_write
+                            .batch_from_transmittable_batch(batch)
+                            .into_hollow_batch();
+                        handle.datas.put_write(data_write);
                     }
                     return Ok(TxnApply {
                         is_empty: apply_is_empty,
@@ -208,8 +213,12 @@ where
                     // commit_ts on the next loop around, so we're free to go
                     // ahead and delete this one. When we do the TODO to
                     // efficiently re-timestamp batches, this must be removed.
-                    for batch in txn_batches {
-                        let () = batch.delete().await;
+                    for (data_write, batch, _) in txn_batches_updates {
+                        let () = data_write
+                            .batch_from_transmittable_batch(batch)
+                            .delete()
+                            .await;
+                        handle.datas.put_write(data_write);
                     }
                     let () = handle.txns_cache.update_ge(&txns_upper).await;
                     continue;
@@ -418,7 +427,7 @@ mod tests {
             let task = async move {
                 let data_write = writer(&client, d0).await;
                 let mut txns = TxnsHandle::expect_open_id(client.clone(), txns_id).await;
-                let register_ts = txns.register(1, data_write).await.unwrap();
+                let register_ts = txns.register(1, [data_write]).await.unwrap();
                 debug!("{} registered at {}", idx, register_ts);
 
                 // Add some jitter to the commit timestamps (to create gaps) and

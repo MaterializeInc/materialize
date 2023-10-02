@@ -199,8 +199,8 @@
 //! # let d1_write = c.open_writer(
 //! #    d1, VecU8Schema.into(), UnitSchema.into(), Diagnostics::for_tests()
 //! # ).await.unwrap();
-//! txns.register(1u64, d0_write).await.expect("not previously initialized");
-//! txns.register(2u64, d1_write).await.expect("not previously initialized");
+//! txns.register(1u64, [d0_write]).await.expect("not previously initialized");
+//! txns.register(2u64, [d1_write]).await.expect("not previously initialized");
 //!
 //! // Commit a txn. This is durable if/when the `commit_at` succeeds, but reads
 //! // at the commit ts will _block_ until after the txn is applied. Users are
@@ -275,7 +275,7 @@ use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{ShardId, ShardIdSchema};
 use mz_persist_types::codec_impls::VecU8Schema;
-use mz_persist_types::{Codec, Codec64};
+use mz_persist_types::{Codec, Codec64, StepForward};
 use prost::Message;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
@@ -287,21 +287,10 @@ pub mod txn_write;
 pub mod txns;
 
 // TODO(txn):
-// - Figure out the mod and struct naming.
 // - Add frontier advancement operator.
 // - Closing/deleting data shards.
 // - Hold a critical since capability for each registered shard?
 // - Figure out the compaction story for both txn and data shard.
-
-/// Advance a timestamp by the least amount possible such that
-/// `ts.less_than(ts.step_forward())` is true.
-///
-/// TODO(txn): Unify this with repr's TimestampManipulation.
-pub trait StepForward {
-    /// Advance a timestamp by the least amount possible such that
-    /// `ts.less_than(ts.step_forward())` is true. Panic if unable to do so.
-    fn step_forward(&self) -> Self;
-}
 
 /// The in-mem representation of an update in the txns shard.
 #[derive(Debug)]
@@ -440,10 +429,9 @@ pub(crate) async fn empty_caa<S, F, K, V, T, D>(
     let name = name();
     let empty: &[((&K, &V), &T, D)] = &[];
     let mut upper = txns_or_data_write
-        .upper()
-        .as_option()
-        .expect("shard should not be closed")
-        .clone();
+        .shared_upper()
+        .into_option()
+        .expect("shard should not be closed");
     loop {
         if init_ts < upper {
             return;
@@ -486,10 +474,9 @@ async fn apply_caa<K, V, T, D>(
     let batch = ProtoBatch::decode(batch_raw).expect("valid batch");
     let mut batch = data_write.batch_from_transmittable_batch(batch);
     let mut upper = data_write
-        .upper()
-        .as_option()
-        .expect("data shard should not be closed")
-        .clone();
+        .shared_upper()
+        .into_option()
+        .expect("data shard should not be closed");
     loop {
         if commit_ts < upper {
             debug!(
@@ -544,12 +531,6 @@ async fn apply_caa<K, V, T, D>(
                 continue;
             }
         }
-    }
-}
-
-impl StepForward for u64 {
-    fn step_forward(&self) -> Self {
-        self.checked_add(1).unwrap()
     }
 }
 

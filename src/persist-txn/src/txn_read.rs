@@ -18,13 +18,13 @@ use mz_ore::collections::HashMap;
 use mz_persist_client::read::{ListenEvent, ReadHandle, Subscribe};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::ShardId;
-use mz_persist_types::Codec64;
+use mz_persist_types::{Codec64, StepForward};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tracing::debug;
 
 use crate::error::NotRegistered;
-use crate::{StepForward, TxnsCodec, TxnsCodecDefault, TxnsEntry};
+use crate::{TxnsCodec, TxnsCodecDefault, TxnsEntry};
 
 /// A cache of the txn shard contents, optimized for various in-memory
 /// operations.
@@ -313,22 +313,47 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
     }
 
     pub(crate) fn validate(&self) -> Result<(), String> {
-        // TODO(txn): Replace asserts with return Err.
-        assert_eq!(self.unapplied_batches.len(), self.batch_idx.len());
+        if self.batch_idx.len() != self.unapplied_batches.len() {
+            return Err(format!(
+                "expected index len {} to match what it's indexing {}",
+                self.batch_idx.len(),
+                self.unapplied_batches.len()
+            ));
+        }
 
         let mut prev_ts = T::minimum();
         for (idx, (_, batch, ts)) in self.unapplied_batches.iter() {
-            assert_eq!(batch.is_empty(), false);
-            assert_eq!(self.batch_idx.get(batch), Some(idx));
-            assert!(ts >= &prev_ts);
+            if self.batch_idx.get(batch) != Some(idx) {
+                return Err(format!(
+                    "expected batch to be indexed at {} got {:?}",
+                    idx,
+                    self.batch_idx.get(batch)
+                ));
+            }
+            if ts < &prev_ts {
+                return Err(format!(
+                    "unapplied timestamp {:?} out of order after {:?}",
+                    ts, prev_ts
+                ));
+            }
             prev_ts = ts.clone();
         }
 
-        for (_, times) in self.datas.iter() {
-            assert_eq!(times.is_empty(), false);
+        for (data_id, times) in self.datas.iter() {
+            if times.is_empty() {
+                return Err(format!(
+                    "expected at least a registration time for {}",
+                    data_id
+                ));
+            }
             let mut prev_ts = T::minimum();
             for ts in times.iter() {
-                assert!(prev_ts < *ts);
+                if ts < &prev_ts {
+                    return Err(format!(
+                        "write timestamp {:?} out of order after {:?}",
+                        ts, prev_ts
+                    ));
+                }
                 prev_ts = ts.clone();
             }
         }
