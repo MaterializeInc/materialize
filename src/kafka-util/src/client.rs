@@ -12,11 +12,11 @@
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::str::FromStr;
-use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::bail;
+use crossbeam::channel::{unbounded, Receiver, Sender};
 use mz_ore::collections::CollectionExt;
 use rdkafka::client::{BrokerAddr, Client, NativeClient, OAuthToken};
 use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
@@ -52,8 +52,10 @@ impl Default for MzClientContext {
 impl MzClientContext {
     /// Constructs a new client context and returns an mpsc `Receiver` that can be used to learn
     /// about librdkafka errors.
+    // `crossbeam` channel receivers can be cloned, but this is intended to be used as a mpsc,
+    // until we upgrade to `1.72` and the std mpsc sender is `Sync`.
     pub fn with_errors() -> (Self, Receiver<MzKafkaError>) {
-        let (error_tx, error_rx) = mpsc::channel();
+        let (error_tx, error_rx) = unbounded();
         (Self { error_tx }, error_rx)
     }
 
