@@ -136,7 +136,7 @@ pub mod util;
 const EXPIRES_IN_SECS: u64 = 20;
 // Always start the refresh 5 seconds after getting a new claim. This helps reduce test
 // flakes where the refresh takes too long and the claim expires, while also limiting the amount of
-// time we sit around doing nothing.
+// time we sit around doing nothing waiting for a refresh.
 const REFRESH_BEFORE_SECS: u64 = EXPIRES_IN_SECS - 5;
 
 /// A certificate authority for use in tests.
