@@ -309,10 +309,10 @@ FROM mz_internal.mz_dataflow_arrangement_sizes
 ORDER BY size DESC
 ```
 ```
-  id   |     name     | records | size_mb
--------+--------------+---------+---------
- 19157 | num_bids     | 1612747 |  113.82
- 19158 | num_bids_idx |      13 |       0
+  id   |                  name                  | records | size_mb
+-------+----------------------------------------+---------+---------
+ 19157 | Dataflow: materialize.qck.num_bids     | 1612747 |  113.82
+ 19158 | Dataflow: materialize.qck.num_bids_idx |      13 |       0
 ```
 
 If you need to drill down into individual operators, you can query `mz_arrangement_sizes` instead.
