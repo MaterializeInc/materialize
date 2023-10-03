@@ -33,6 +33,7 @@ members = [
     "src/lowertest-derive",
     "src/metabase",
     "src/mz",
+    "src/lsp-server",
     "src/npm",
     "src/orchestrator",
     "src/orchestrator-kubernetes",
