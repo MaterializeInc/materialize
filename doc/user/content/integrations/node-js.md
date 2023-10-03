@@ -127,17 +127,6 @@ main();
 
 For more details, see the [`node-postgres` query](https://node-postgres.com/features/queries) and [pg.Result](https://node-postgres.com/api/result) documentation.
 
-## Push data to a source
-
-Materialize processes live streams of data and maintains query results up-to-date as new data arrives, relying on external systems (like PostgreSQL, or Kafka) to serve as "systems of record" for the data. Instead of updating Materialize directly, **Node.js should send data to an intermediary system**. Materialize connects to the intermediary system as a [source](/sql/create-source/) and reads streaming updates from it.
-
-The table below lists the intermediary systems a Node.js application can use to feed data into Materialize:
-
-Intermediary System | Notes
--------------|-------------
-**Kafka** | Produce messages from [Node.js to Kafka](https://kafka.js.org/docs/getting-started), and create a [Kafka source](/sql/create-source/json-kafka/) to consume them. This is recommended for scenarios where low-latency and high-throughput are important.
-**PostgreSQL** | Send data from Node.js to PostgreSQL, and create a [PostgreSQL source](/sql/create-source/postgres/) that consumes a replication stream from the database based on its write-ahead log. This is recommended for Node.js apps that already use PostgreSQL and fast-changing transactional data to the stream.
-
 ## Manage sources, views, and indexes
 
 Typically, you create sources, views, and indexes when deploying Materialize, but it's also possible to use a Node.js app to execute common DDL statements.
