@@ -883,7 +883,7 @@ operators under each dataflow.
 | Field         | Type        | Meaning                                                                      |
 |---------------|-------------|------------------------------------------------------------------------------|
 | `id`          | [`uint8`]   | The ID of the [dataflow]. Corresponds to [`mz_dataflows.id`](#mz_dataflows). |
-| `name`        | [`text`]    | The name of the object (e.g., index) maintained by the dataflow.             |
+| `name`        | [`text`]    | The name of the [dataflow].                                                  |
 | `records`     | [`numeric`] | The number of records in all arrangements in the dataflow.                   |
 | `batches`     | [`numeric`] | The number of batches in all arrangements in the dataflow.                   |
 | `size`        | [`numeric`] | The utilized size in bytes of the arrangements.                              |
