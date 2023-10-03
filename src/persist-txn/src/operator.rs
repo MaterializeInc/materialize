@@ -412,6 +412,11 @@ mod tests {
         subs.push(txns.read_cache().expect_subscribe(&client, d0, 5));
         step(&mut subs);
 
+        // Verify that the dataflows have all progressed to the expected point.
+        for sub in subs.iter() {
+            assert_eq!(sub.progress(), 8);
+        }
+
         // Now verify that we read the right thing no matter when the dataflow
         // started.
         for mut sub in subs {

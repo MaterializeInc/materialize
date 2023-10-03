@@ -487,10 +487,9 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
         // set of tradeoffs than the original plan of trying to translate read
         // timestamps to the most recent write and reading that.
         let mut data_upper = data_write
-            .upper()
-            .as_option()
-            .expect("data shard should not be closed")
-            .clone();
+            .shared_upper()
+            .into_option()
+            .expect("data shard should not be closed");
         while data_upper <= self.as_of {
             // It would be very bad if we accidentally filled any times <=
             // latest_write with empty updates, so defensively assert on each
