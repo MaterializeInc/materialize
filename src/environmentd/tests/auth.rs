@@ -884,7 +884,7 @@ fn test_auth_expiry() {
 #[allow(clippy::unit_arg)]
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
-fn test_auth_base() {
+fn test_auth_base_require_tls_frontegg() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
@@ -994,7 +994,7 @@ fn test_auth_base() {
     // Test connecting to a server that requires TLS and uses Materialize Cloud for
     // authentication.
     let config = util::Config::default()
-        .with_tls(&server_cert, &server_key)
+        .with_tls(server_cert, server_key)
         .with_frontegg(&frontegg_auth);
     let server = util::start_server(config).unwrap();
     run_tests(
@@ -1357,7 +1357,13 @@ fn test_auth_base() {
             },
         ],
     );
-    drop(server);
+}
+
+#[allow(clippy::unit_arg)]
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+fn test_auth_base_disable_tls() {
+    let no_headers = HeaderMap::new();
 
     // Test TLS modes with a server that does not support TLS.
     let server = util::start_server(util::Config::default()).unwrap();
@@ -1432,10 +1438,28 @@ fn test_auth_base() {
             },
         ],
     );
-    drop(server);
+}
+
+#[allow(clippy::unit_arg)]
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+fn test_auth_base_require_tls() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+
+    let client_id = Uuid::new_v4();
+    let secret = Uuid::new_v4();
+    let frontegg_user = "uSeR@_.com";
+    let frontegg_password = &format!("mzp_{client_id}{secret}");
+    let frontegg_basic = Authorization::basic(frontegg_user, frontegg_password);
+    let frontegg_header_basic = make_header(frontegg_basic);
+
+    let no_headers = HeaderMap::new();
 
     // Test TLS modes with a server that requires TLS.
-    let config = util::Config::default().with_tls(&server_cert, &server_key);
+    let config = util::Config::default().with_tls(server_cert, server_key);
     let server = util::start_server(config).unwrap();
     run_tests(
         "TlsMode::Require",
@@ -1527,7 +1551,7 @@ fn test_auth_base() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
-fn test_auth_intermediate_ca() {
+fn test_auth_intermediate_ca_no_intermediary() {
     // Create a CA, an intermediate CA, and a server key pair signed by the
     // intermediate CA.
     let ca = Ca::new_root("test ca").unwrap();
@@ -1536,26 +1560,9 @@ fn test_auth_intermediate_ca() {
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
         .unwrap();
 
-    // Create a certificate chain bundle that contains the server's certificate
-    // and the intermediate CA's certificate.
-    let server_cert_chain = {
-        let path = intermediate_ca.dir.path().join("server.chain.crt");
-        let mut buf = vec![];
-        File::open(&server_cert)
-            .unwrap()
-            .read_to_end(&mut buf)
-            .unwrap();
-        File::open(intermediate_ca.ca_cert_path())
-            .unwrap()
-            .read_to_end(&mut buf)
-            .unwrap();
-        fs::write(&path, buf).unwrap();
-        path
-    };
-
     // When the server presents only its own certificate, without the
     // intermediary, the client should fail to verify the chain.
-    let config = util::Config::default().with_tls(&server_cert, &server_key);
+    let config = util::Config::default().with_tls(server_cert, server_key);
     let server = util::start_server(config).unwrap();
     run_tests(
         "TlsMode::Require",
@@ -1584,12 +1591,40 @@ fn test_auth_intermediate_ca() {
             },
         ],
     );
-    drop(server);
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+fn test_auth_intermediate_ca() {
+    // Create a CA, an intermediate CA, and a server key pair signed by the
+    // intermediate CA.
+    let ca = Ca::new_root("test ca").unwrap();
+    let intermediate_ca = ca.request_ca("intermediary").unwrap();
+    let (server_cert, server_key) = intermediate_ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+
+    // Create a certificate chain bundle that contains the server's certificate
+    // and the intermediate CA's certificate.
+    let server_cert_chain = {
+        let path = intermediate_ca.dir.path().join("server.chain.crt");
+        let mut buf = vec![];
+        File::open(server_cert)
+            .unwrap()
+            .read_to_end(&mut buf)
+            .unwrap();
+        File::open(intermediate_ca.ca_cert_path())
+            .unwrap()
+            .read_to_end(&mut buf)
+            .unwrap();
+        fs::write(&path, buf).unwrap();
+        path
+    };
 
     // When the server is configured to present the entire certificate chain,
     // the client should be able to verify the chain even though it only knows
     // about the root CA.
-    let config = util::Config::default().with_tls(server_cert_chain, &server_key);
+    let config = util::Config::default().with_tls(server_cert_chain, server_key);
     let server = util::start_server(config).unwrap();
     run_tests(
         "TlsMode::Require",
@@ -1613,12 +1648,227 @@ fn test_auth_intermediate_ca() {
             },
         ],
     );
-    drop(server);
 }
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
-fn test_auth_admin() {
+fn test_auth_admin_non_superuser() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+
+    let tenant_id = Uuid::new_v4();
+    let client_id = Uuid::new_v4();
+    let secret = Uuid::new_v4();
+    let admin_client_id = Uuid::new_v4();
+    let admin_secret = Uuid::new_v4();
+
+    let frontegg_user = "user@_.com";
+    let admin_frontegg_user = "admin@_.com";
+
+    let admin_role = "mzadmin";
+
+    let users = BTreeMap::from([
+        (
+            (client_id.to_string(), secret.to_string()),
+            frontegg_user.to_string(),
+        ),
+        (
+            (admin_client_id.to_string(), admin_secret.to_string()),
+            admin_frontegg_user.to_string(),
+        ),
+    ]);
+    let roles = BTreeMap::from([
+        (frontegg_user.to_string(), Vec::new()),
+        (
+            admin_frontegg_user.to_string(),
+            vec![admin_role.to_string()],
+        ),
+    ]);
+    let encoding_key =
+        EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let now = SYSTEM_TIME.clone();
+
+    const EXPIRES_IN_SECS: u64 = 40;
+    const REFRESH_BEFORE_SECS: u64 = 20;
+    let (_role_tx, role_rx) = tokio::sync::mpsc::unbounded_channel();
+    let frontegg_server = start_mzcloud(
+        encoding_key,
+        tenant_id,
+        users,
+        roles,
+        role_rx,
+        now.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+    )
+    .unwrap();
+    let password_prefix = "mzp_";
+    let frontegg_auth = FronteggAuthentication::new(
+        FronteggConfig {
+            admin_api_token_url: frontegg_server.url.clone(),
+            decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
+            tenant_id,
+            now,
+            refresh_before_secs: i64::try_from(REFRESH_BEFORE_SECS).unwrap(),
+            admin_role: admin_role.to_string(),
+        },
+        mz_frontegg_auth::Client::default(),
+    );
+
+    let frontegg_password = &format!("{password_prefix}{client_id}{secret}");
+    let frontegg_basic = Authorization::basic(frontegg_user, frontegg_password);
+    let frontegg_header_basic = make_header(frontegg_basic);
+
+    let config = util::Config::default()
+        .with_tls(server_cert, server_key)
+        .with_frontegg(&frontegg_auth);
+    let server = util::start_server(config).unwrap();
+
+    run_tests(
+        "Non-superuser",
+        &server,
+        &[
+            TestCase::Pgwire {
+                user_to_auth_as: frontegg_user,
+                user_reported_by_system: frontegg_user,
+                password: Some(frontegg_password),
+                ssl_mode: SslMode::Require,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::SuccessSuperuserCheck(false),
+            },
+            TestCase::Http {
+                user_to_auth_as: frontegg_user,
+                user_reported_by_system: frontegg_user,
+                scheme: Scheme::HTTPS,
+                headers: &frontegg_header_basic,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::SuccessSuperuserCheck(false),
+            },
+            TestCase::Ws {
+                auth: &WebSocketAuth::Basic {
+                    user: frontegg_user.to_string(),
+                    password: frontegg_password.to_string(),
+                    options: BTreeMap::default(),
+                },
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::SuccessSuperuserCheck(false),
+            },
+        ],
+    );
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+fn test_auth_admin_superuser() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+
+    let tenant_id = Uuid::new_v4();
+    let client_id = Uuid::new_v4();
+    let secret = Uuid::new_v4();
+    let admin_client_id = Uuid::new_v4();
+    let admin_secret = Uuid::new_v4();
+
+    let frontegg_user = "user@_.com";
+    let admin_frontegg_user = "admin@_.com";
+
+    let admin_role = "mzadmin";
+
+    let users = BTreeMap::from([
+        (
+            (client_id.to_string(), secret.to_string()),
+            frontegg_user.to_string(),
+        ),
+        (
+            (admin_client_id.to_string(), admin_secret.to_string()),
+            admin_frontegg_user.to_string(),
+        ),
+    ]);
+    let roles = BTreeMap::from([
+        (frontegg_user.to_string(), Vec::new()),
+        (
+            admin_frontegg_user.to_string(),
+            vec![admin_role.to_string()],
+        ),
+    ]);
+    let encoding_key =
+        EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let now = SYSTEM_TIME.clone();
+
+    const EXPIRES_IN_SECS: u64 = 40;
+    const REFRESH_BEFORE_SECS: u64 = 20;
+    let (_role_tx, role_rx) = tokio::sync::mpsc::unbounded_channel();
+    let frontegg_server = start_mzcloud(
+        encoding_key,
+        tenant_id,
+        users,
+        roles,
+        role_rx,
+        now.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+    )
+    .unwrap();
+    let password_prefix = "mzp_";
+    let frontegg_auth = FronteggAuthentication::new(
+        FronteggConfig {
+            admin_api_token_url: frontegg_server.url.clone(),
+            decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
+            tenant_id,
+            now,
+            refresh_before_secs: i64::try_from(REFRESH_BEFORE_SECS).unwrap(),
+            admin_role: admin_role.to_string(),
+        },
+        mz_frontegg_auth::Client::default(),
+    );
+
+    let admin_frontegg_password = &format!("{password_prefix}{admin_client_id}{admin_secret}");
+    let admin_frontegg_basic = Authorization::basic(admin_frontegg_user, admin_frontegg_password);
+    let admin_frontegg_header_basic = make_header(admin_frontegg_basic);
+
+    let config = util::Config::default()
+        .with_tls(server_cert, server_key)
+        .with_frontegg(&frontegg_auth);
+    let server = util::start_server(config).unwrap();
+
+    run_tests(
+        "Superuser",
+        &server,
+        &[
+            TestCase::Pgwire {
+                user_to_auth_as: admin_frontegg_user,
+                user_reported_by_system: admin_frontegg_user,
+                password: Some(admin_frontegg_password),
+                ssl_mode: SslMode::Require,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::SuccessSuperuserCheck(true),
+            },
+            TestCase::Http {
+                user_to_auth_as: admin_frontegg_user,
+                user_reported_by_system: admin_frontegg_user,
+                scheme: Scheme::HTTPS,
+                headers: &admin_frontegg_header_basic,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::SuccessSuperuserCheck(true),
+            },
+            TestCase::Ws {
+                auth: &WebSocketAuth::Basic {
+                    user: admin_frontegg_user.to_string(),
+                    password: admin_frontegg_password.to_string(),
+                    options: BTreeMap::default(),
+                },
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::SuccessSuperuserCheck(true),
+            },
+        ],
+    );
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+fn test_auth_admin_show_is_superuser() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
@@ -1683,139 +1933,53 @@ fn test_auth_admin() {
     );
 
     let frontegg_password = &format!("{password_prefix}{client_id}{secret}");
-    let frontegg_basic = Authorization::basic(frontegg_user, frontegg_password);
-    let frontegg_header_basic = make_header(frontegg_basic);
 
-    let admin_frontegg_password = &format!("{password_prefix}{admin_client_id}{admin_secret}");
-    let admin_frontegg_basic = Authorization::basic(admin_frontegg_user, admin_frontegg_password);
-    let admin_frontegg_header_basic = make_header(admin_frontegg_basic);
+    let config = util::Config::default()
+        .with_tls(server_cert, server_key)
+        .with_frontegg(&frontegg_auth);
+    let server = util::start_server(config).unwrap();
 
-    {
-        let config = util::Config::default()
-            .with_tls(&server_cert, &server_key)
-            .with_frontegg(&frontegg_auth);
-        let server = util::start_server(config).unwrap();
+    let mut pg_client = server
+        .pg_config()
+        .ssl_mode(SslMode::Require)
+        .user(frontegg_user)
+        .password(frontegg_password)
+        .connect(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
+            Ok(b.set_verify(SslVerifyMode::NONE))
+        })))
+        .unwrap();
 
-        run_tests(
-            "Non-superuser",
-            &server,
-            &[
-                TestCase::Pgwire {
-                    user_to_auth_as: frontegg_user,
-                    user_reported_by_system: frontegg_user,
-                    password: Some(frontegg_password),
-                    ssl_mode: SslMode::Require,
-                    configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
-                    assert: Assert::SuccessSuperuserCheck(false),
-                },
-                TestCase::Http {
-                    user_to_auth_as: frontegg_user,
-                    user_reported_by_system: frontegg_user,
-                    scheme: Scheme::HTTPS,
-                    headers: &frontegg_header_basic,
-                    configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
-                    assert: Assert::SuccessSuperuserCheck(false),
-                },
-                TestCase::Ws {
-                    auth: &WebSocketAuth::Basic {
-                        user: frontegg_user.to_string(),
-                        password: frontegg_password.to_string(),
-                        options: BTreeMap::default(),
-                    },
-                    configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
-                    assert: Assert::SuccessSuperuserCheck(false),
-                },
-            ],
-        );
-    }
+    assert_eq!(
+        pg_client
+            .query_one("SHOW is_superuser", &[])
+            .unwrap()
+            .get::<_, String>(0),
+        "off"
+    );
 
-    {
-        let config = util::Config::default()
-            .with_tls(&server_cert, &server_key)
-            .with_frontegg(&frontegg_auth);
-        let server = util::start_server(config).unwrap();
+    role_tx
+        .send((frontegg_user.to_string(), vec![admin_role.to_string()]))
+        .unwrap();
+    wait_for_refresh(&frontegg_server, EXPIRES_IN_SECS);
 
-        run_tests(
-            "Superuser",
-            &server,
-            &[
-                TestCase::Pgwire {
-                    user_to_auth_as: admin_frontegg_user,
-                    user_reported_by_system: admin_frontegg_user,
-                    password: Some(admin_frontegg_password),
-                    ssl_mode: SslMode::Require,
-                    configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
-                    assert: Assert::SuccessSuperuserCheck(true),
-                },
-                TestCase::Http {
-                    user_to_auth_as: admin_frontegg_user,
-                    user_reported_by_system: admin_frontegg_user,
-                    scheme: Scheme::HTTPS,
-                    headers: &admin_frontegg_header_basic,
-                    configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
-                    assert: Assert::SuccessSuperuserCheck(true),
-                },
-                TestCase::Ws {
-                    auth: &WebSocketAuth::Basic {
-                        user: admin_frontegg_user.to_string(),
-                        password: admin_frontegg_password.to_string(),
-                        options: BTreeMap::default(),
-                    },
-                    configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
-                    assert: Assert::SuccessSuperuserCheck(true),
-                },
-            ],
-        );
-    }
+    assert_eq!(
+        pg_client
+            .query_one("SHOW is_superuser", &[])
+            .unwrap()
+            .get::<_, String>(0),
+        "on"
+    );
 
-    {
-        let config = util::Config::default()
-            .with_tls(&server_cert, &server_key)
-            .with_frontegg(&frontegg_auth);
-        let server = util::start_server(config).unwrap();
+    role_tx
+        .send((frontegg_user.to_string(), Vec::new()))
+        .unwrap();
+    wait_for_refresh(&frontegg_server, EXPIRES_IN_SECS);
 
-        let mut pg_client = server
-            .pg_config()
-            .ssl_mode(SslMode::Require)
-            .user(frontegg_user)
-            .password(frontegg_password)
-            .connect(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
-                Ok(b.set_verify(SslVerifyMode::NONE))
-            })))
-            .unwrap();
-
-        assert_eq!(
-            pg_client
-                .query_one("SHOW is_superuser", &[])
-                .unwrap()
-                .get::<_, String>(0),
-            "off"
-        );
-
-        role_tx
-            .send((frontegg_user.to_string(), vec![admin_role.to_string()]))
-            .unwrap();
-        wait_for_refresh(&frontegg_server, EXPIRES_IN_SECS);
-
-        assert_eq!(
-            pg_client
-                .query_one("SHOW is_superuser", &[])
-                .unwrap()
-                .get::<_, String>(0),
-            "on"
-        );
-
-        role_tx
-            .send((frontegg_user.to_string(), Vec::new()))
-            .unwrap();
-        wait_for_refresh(&frontegg_server, EXPIRES_IN_SECS);
-
-        assert_eq!(
-            pg_client
-                .query_one("SHOW is_superuser", &[])
-                .unwrap()
-                .get::<_, String>(0),
-            "off"
-        );
-    }
+    assert_eq!(
+        pg_client
+            .query_one("SHOW is_superuser", &[])
+            .unwrap()
+            .get::<_, String>(0),
+        "off"
+    );
 }
