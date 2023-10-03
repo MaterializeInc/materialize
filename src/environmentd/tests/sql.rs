@@ -3428,3 +3428,85 @@ fn test_pg_cancel_dropped_role() {
 
     assert_eq!(err.code().unwrap(), &SqlState::INSUFFICIENT_PRIVILEGE);
 }
+
+#[mz_ore::test]
+fn test_peek_on_dropped_indexed_view() {
+    mz_ore::test::init_logging();
+    let config = util::Config::default();
+    let server = util::start_server(config).unwrap();
+
+    let mut ddl_client = server.connect(postgres::NoTls).unwrap();
+    let mut peek_client = server.connect(postgres::NoTls).unwrap();
+
+    ddl_client.batch_execute("CREATE TABLE t (a INT)").unwrap();
+    ddl_client
+        .batch_execute("CREATE VIEW v AS SELECT (a + 1) AS a FROM t")
+        .unwrap();
+    ddl_client.batch_execute("CREATE INDEX i ON v (a)").unwrap();
+
+    // Asynchronously query an indexed view.
+    let handle = thread::spawn(move || {
+        peek_client.query(
+            &format!("SELECT * FROM v AS OF {}", mz_repr::Timestamp::MAX),
+            &[],
+        )
+    });
+
+    let index_id: String = ddl_client
+        .query_one("SELECT id FROM mz_indexes WHERE name = 'i'", &[])
+        .unwrap()
+        .get(0);
+
+    // Wait for SELECT to start.
+    Retry::default()
+        .max_duration(Duration::from_secs(10))
+        .retry(|_| {
+            let count: i64 = ddl_client
+                .query_one(
+                    &format!(
+                "SELECT COUNT(*) FROM mz_internal.mz_active_peeks WHERE index_id = '{index_id}'"
+            ),
+                    &[],
+                )
+                .unwrap()
+                .get(0);
+            if count <= 0 {
+                Err("Peek not active")
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap();
+
+    // Drop the table, view, and index.
+    ddl_client.batch_execute("DROP TABLE t CASCADE").unwrap();
+
+    // Check that the peek is cancelled an all resources are cleaned up.
+    let select_res = handle.join().unwrap();
+    let select_err = select_res.unwrap_err().to_string();
+    assert!(
+        select_err.contains(
+            "query could not complete because relation \"materialize.public.v\" was dropped"
+        ),
+        "unexpected error: {select_err}"
+    );
+    Retry::default()
+        .max_duration(Duration::from_secs(10))
+        .retry(|_| {
+            let count: i64 = ddl_client
+                .query_one(
+                    &format!(
+                        "SELECT COUNT(*) FROM mz_internal.mz_active_peeks WHERE index_id = '{index_id}'"
+                    ),
+                    &[],
+                )
+                .unwrap()
+                .get(0);
+            if count > 0 {
+                Err("Peek still active")
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap();
+}
