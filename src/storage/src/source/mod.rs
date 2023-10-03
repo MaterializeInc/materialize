@@ -39,7 +39,6 @@ pub mod testscript;
 pub mod types;
 
 pub use kafka::KafkaSourceReader;
-pub(crate) use source_reader_pipeline::health_operator;
 pub use source_reader_pipeline::{
     create_raw_source, RawSourceCreationConfig, SourceCreationParams, SourceStatistics,
 };

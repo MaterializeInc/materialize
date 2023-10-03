@@ -315,7 +315,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 .connect_loop(feedback_handle);
 
             let health_stream = root_scope.concatenate(health_streams);
-            let health_token = crate::source::health_operator(
+            let health_token = crate::healthcheck::health_operator(
                 into_time_scope,
                 storage_state,
                 resume_uppers,
