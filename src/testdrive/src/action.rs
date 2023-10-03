@@ -531,8 +531,14 @@ impl Run for PosCommand {
         };
 
         let r = match self.command {
-            Command::Builtin(mut builtin, version_constraint) => {
-                handle_version!(version_constraint);
+            Command::Builtin(mut builtin, modifiers) => {
+                handle_version!(modifiers.version_constraint);
+                if modifiers.retry {
+                    return Err(PosError::new(
+                        anyhow!("builtin commands are not retryable"),
+                        self.pos,
+                    ));
+                }
                 for val in builtin.args.values_mut() {
                     *val = subst(val, &state.cmd_vars)?;
                 }
@@ -589,8 +595,8 @@ impl Run for PosCommand {
                     }
                 }
             }
-            Command::Sql(mut sql, version_constraint) => {
-                handle_version!(version_constraint);
+            Command::Sql(mut sql, modifiers) => {
+                handle_version!(modifiers.version_constraint);
                 sql.query = subst(&sql.query, &state.cmd_vars)?;
                 if let SqlOutput::Full { expected_rows, .. } = &mut sql.expected_output {
                     for row in expected_rows {
@@ -599,10 +605,10 @@ impl Run for PosCommand {
                         }
                     }
                 }
-                sql::run_sql(sql, state).await
+                sql::run_sql(sql, state, modifiers.retry).await
             }
-            Command::FailSql(mut sql, version_constraint) => {
-                handle_version!(version_constraint);
+            Command::FailSql(mut sql, modifiers) => {
+                handle_version!(modifiers.version_constraint);
                 sql.query = subst(&sql.query, &state.cmd_vars)?;
                 sql.expected_error = match &sql.expected_error {
                     SqlExpectedError::Contains(s) => {
@@ -616,7 +622,7 @@ impl Run for PosCommand {
                     }
                     SqlExpectedError::Timeout => SqlExpectedError::Timeout,
                 };
-                sql::run_fail_sql(sql, state).await
+                sql::run_fail_sql(sql, state, modifiers.retry).await
             }
         };
 
