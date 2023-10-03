@@ -479,20 +479,18 @@ impl Usage {
 
         let metrics_registry = &MetricsRegistry::new();
         let now = SYSTEM_TIME.clone();
-        let openable_storage = mz_catalog::stash_backed_catalog_state(stash_config);
-        let storage = Box::new(
-            openable_storage
-                .open_savepoint(
-                    now.clone(),
-                    &BootstrapArgs {
-                        default_cluster_replica_size: "1".into(),
-                        builtin_cluster_replica_size: "1".into(),
-                        bootstrap_role: None,
-                    },
-                    None,
-                )
-                .await?,
-        );
+        let openable_storage = Box::new(mz_catalog::stash_backed_catalog_state(stash_config));
+        let storage = openable_storage
+            .open_savepoint(
+                now.clone(),
+                &BootstrapArgs {
+                    default_cluster_replica_size: "1".into(),
+                    builtin_cluster_replica_size: "1".into(),
+                    bootstrap_role: None,
+                },
+                None,
+            )
+            .await?;
         let secrets_reader = Arc::new(InMemorySecretsController::new());
 
         let (catalog, _, _, last_catalog_version) = Catalog::open(Config {

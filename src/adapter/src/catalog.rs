@@ -455,7 +455,9 @@ impl Catalog {
         debug_stash_factory: &DebugStashFactory,
         now: NowFn,
     ) -> Result<Catalog, anyhow::Error> {
-        let openable_storage = mz_catalog::debug_stash_backed_catalog_state(debug_stash_factory);
+        let openable_storage = Box::new(mz_catalog::debug_stash_backed_catalog_state(
+            debug_stash_factory,
+        ));
         let storage = openable_storage
             .open(now.clone(), &debug_bootstrap_args(), None)
             .await?;
@@ -479,7 +481,7 @@ impl Catalog {
             schema: Some(schema),
             tls,
         };
-        let openable_storage = mz_catalog::stash_backed_catalog_state(stash_config);
+        let openable_storage = Box::new(mz_catalog::stash_backed_catalog_state(stash_config));
         let storage = openable_storage
             .open(now.clone(), &debug_bootstrap_args(), None)
             .await?;
@@ -493,7 +495,7 @@ impl Catalog {
         stash_config: StashConfig,
         now: NowFn,
     ) -> Result<Catalog, anyhow::Error> {
-        let openable_storage = mz_catalog::stash_backed_catalog_state(stash_config);
+        let openable_storage = Box::new(mz_catalog::stash_backed_catalog_state(stash_config));
         let storage = openable_storage
             .open_read_only(now.clone(), &debug_bootstrap_args())
             .await?;
@@ -501,11 +503,10 @@ impl Catalog {
     }
 
     async fn open_debug_stash_catalog(
-        storage: impl DurableCatalogState + 'static,
+        storage: Box<dyn DurableCatalogState>,
         now: NowFn,
     ) -> Result<Catalog, anyhow::Error> {
         let metrics_registry = &MetricsRegistry::new();
-        let storage = Box::new(storage);
         let active_connection_count = Arc::new(std::sync::Mutex::new(ConnectionCounter::new(0)));
         let secrets_reader = Arc::new(InMemorySecretsController::new());
         let variable_length_row_encoding =

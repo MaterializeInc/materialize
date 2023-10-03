@@ -88,8 +88,7 @@
 
 use mz_catalog::{
     debug_bootstrap_args, debug_stash_backed_catalog_state, persist_backed_catalog_state,
-    stash_backed_catalog_state, CatalogError, DurableCatalogState, Epoch,
-    OpenableDurableCatalogState, StashConfig,
+    stash_backed_catalog_state, CatalogError, Epoch, OpenableDurableCatalogState, StashConfig,
 };
 use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
 use mz_persist_client::PersistClient;
@@ -121,28 +120,28 @@ async fn test_debug_stash_is_initialized() {
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_is_initialized() {
     let persist_client = PersistClient::new_for_tests().await;
-    let environment_id = Uuid::new_v4();
+    let organization_id = Uuid::new_v4();
     let persist_openable_state1 =
-        persist_backed_catalog_state(persist_client.clone(), environment_id).await;
+        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     let persist_openable_state2 =
-        persist_backed_catalog_state(persist_client, environment_id).await;
+        persist_backed_catalog_state(persist_client, organization_id).await;
     test_is_initialized(persist_openable_state1, persist_openable_state2).await;
 }
 
-async fn test_is_initialized<D: DurableCatalogState>(
-    mut openable_state1: impl OpenableDurableCatalogState<D>,
-    mut openable_state2: impl OpenableDurableCatalogState<D>,
+async fn test_is_initialized(
+    mut openable_state1: impl OpenableDurableCatalogState,
+    mut openable_state2: impl OpenableDurableCatalogState,
 ) {
     assert!(
         !openable_state1.is_initialized().await.unwrap(),
         "catalog has not been opened yet"
     );
 
-    let state = openable_state1
+    let state = Box::new(openable_state1)
         .open(SYSTEM_TIME.clone(), &debug_bootstrap_args(), None)
         .await
         .unwrap();
-    Box::new(state).expire().await;
+    state.expire().await;
 
     assert!(
         openable_state2.is_initialized().await.unwrap(),
@@ -179,17 +178,17 @@ async fn test_debug_stash_get_deployment_generation() {
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_get_deployment_generation() {
     let persist_client = PersistClient::new_for_tests().await;
-    let environment_id = Uuid::new_v4();
+    let organization_id = Uuid::new_v4();
     let persist_openable_state1 =
-        persist_backed_catalog_state(persist_client.clone(), environment_id).await;
+        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     let persist_openable_state2 =
-        persist_backed_catalog_state(persist_client, environment_id).await;
+        persist_backed_catalog_state(persist_client, organization_id).await;
     test_get_deployment_generation(persist_openable_state1, persist_openable_state2).await;
 }
 
-async fn test_get_deployment_generation<D: DurableCatalogState>(
-    mut openable_state1: impl OpenableDurableCatalogState<D>,
-    mut openable_state2: impl OpenableDurableCatalogState<D>,
+async fn test_get_deployment_generation(
+    mut openable_state1: impl OpenableDurableCatalogState,
+    mut openable_state2: impl OpenableDurableCatalogState,
 ) {
     assert_eq!(
         openable_state1.get_deployment_generation().await.unwrap(),
@@ -197,11 +196,11 @@ async fn test_get_deployment_generation<D: DurableCatalogState>(
         "deployment generation has not been set"
     );
 
-    let state = openable_state1
+    let state = Box::new(openable_state1)
         .open(SYSTEM_TIME.clone(), &debug_bootstrap_args(), Some(42))
         .await
         .unwrap();
-    Box::new(state).expire().await;
+    state.expire().await;
 
     assert_eq!(
         openable_state2.get_deployment_generation().await.unwrap(),
@@ -256,15 +255,15 @@ async fn test_debug_stash_open_savepoint() {
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_open_savepoint() {
     let persist_client = PersistClient::new_for_tests().await;
-    let environment_id = Uuid::new_v4();
+    let organization_id = Uuid::new_v4();
     let persist_openable_state1 =
-        persist_backed_catalog_state(persist_client.clone(), environment_id).await;
+        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     let persist_openable_state2 =
-        persist_backed_catalog_state(persist_client.clone(), environment_id).await;
+        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     let persist_openable_state3 =
-        persist_backed_catalog_state(persist_client.clone(), environment_id).await;
+        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     let persist_openable_state4 =
-        persist_backed_catalog_state(persist_client, environment_id).await;
+        persist_backed_catalog_state(persist_client, organization_id).await;
     test_open_savepoint(
         persist_openable_state1,
         persist_openable_state2,
@@ -274,15 +273,15 @@ async fn test_persist_open_savepoint() {
     .await;
 }
 
-async fn test_open_savepoint<D: DurableCatalogState>(
-    openable_state1: impl OpenableDurableCatalogState<D>,
-    openable_state2: impl OpenableDurableCatalogState<D>,
-    openable_state3: impl OpenableDurableCatalogState<D>,
-    openable_state4: impl OpenableDurableCatalogState<D>,
+async fn test_open_savepoint(
+    openable_state1: impl OpenableDurableCatalogState,
+    openable_state2: impl OpenableDurableCatalogState,
+    openable_state3: impl OpenableDurableCatalogState,
+    openable_state4: impl OpenableDurableCatalogState,
 ) {
     {
         // Can't open a savepoint catalog until it's been initialized.
-        let err = openable_state1
+        let err = Box::new(openable_state1)
             .open_savepoint(SYSTEM_TIME.clone(), &debug_bootstrap_args(), None)
             .await
             .unwrap_err();
@@ -293,7 +292,7 @@ async fn test_open_savepoint<D: DurableCatalogState>(
 
         // Initialize the stash.
         {
-            let mut state = openable_state2
+            let mut state = Box::new(openable_state2)
                 .open(SYSTEM_TIME.clone(), &debug_bootstrap_args(), None)
                 .await
                 .unwrap();
@@ -302,7 +301,7 @@ async fn test_open_savepoint<D: DurableCatalogState>(
         }
 
         // Open catalog in check mode.
-        let mut state = openable_state3
+        let mut state = Box::new(openable_state3)
             .open_savepoint(SYSTEM_TIME.clone(), &debug_bootstrap_args(), None)
             .await
             .unwrap();
@@ -328,7 +327,7 @@ async fn test_open_savepoint<D: DurableCatalogState>(
 
     {
         // Open catalog normally.
-        let mut state = openable_state4
+        let mut state = Box::new(openable_state4)
             .open(SYSTEM_TIME.clone(), &debug_bootstrap_args(), None)
             .await
             .unwrap();
@@ -375,13 +374,13 @@ async fn test_debug_stash_open_read_only() {
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_open_read_only() {
     let persist_client = PersistClient::new_for_tests().await;
-    let environment_id = Uuid::new_v4();
+    let organization_id = Uuid::new_v4();
     let persist_openable_state1 =
-        persist_backed_catalog_state(persist_client.clone(), environment_id).await;
+        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     let persist_openable_state2 =
-        persist_backed_catalog_state(persist_client.clone(), environment_id).await;
+        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     let persist_openable_state3 =
-        persist_backed_catalog_state(persist_client, environment_id).await;
+        persist_backed_catalog_state(persist_client, organization_id).await;
     test_open_read_only(
         persist_openable_state1,
         persist_openable_state2,
@@ -390,13 +389,13 @@ async fn test_persist_open_read_only() {
     .await;
 }
 
-async fn test_open_read_only<D: DurableCatalogState>(
-    openable_state1: impl OpenableDurableCatalogState<D>,
-    openable_state2: impl OpenableDurableCatalogState<D>,
-    openable_state3: impl OpenableDurableCatalogState<D>,
+async fn test_open_read_only(
+    openable_state1: impl OpenableDurableCatalogState,
+    openable_state2: impl OpenableDurableCatalogState,
+    openable_state3: impl OpenableDurableCatalogState,
 ) {
     // Can't open a read-only stash until it's been initialized.
-    let err = openable_state1
+    let err = Box::new(openable_state1)
         .open_read_only(SYSTEM_TIME.clone(), &debug_bootstrap_args())
         .await
         .unwrap_err();
@@ -407,7 +406,7 @@ async fn test_open_read_only<D: DurableCatalogState>(
 
     // Initialize the stash.
     {
-        let mut state = openable_state2
+        let mut state = Box::new(openable_state2)
             .open(SYSTEM_TIME.clone(), &debug_bootstrap_args(), None)
             .await
             .unwrap();
@@ -415,7 +414,7 @@ async fn test_open_read_only<D: DurableCatalogState>(
         Box::new(state).expire().await;
     }
 
-    let mut state = openable_state3
+    let mut state = Box::new(openable_state3)
         .open_read_only(SYSTEM_TIME.clone(), &debug_bootstrap_args())
         .await
         .unwrap();
@@ -459,20 +458,20 @@ async fn test_debug_stash_open() {
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_open() {
     let persist_client = PersistClient::new_for_tests().await;
-    let environment_id = Uuid::new_v4();
+    let organization_id = Uuid::new_v4();
     let persist_openable_state1 =
-        persist_backed_catalog_state(persist_client.clone(), environment_id).await;
+        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     let persist_openable_state2 =
-        persist_backed_catalog_state(persist_client, environment_id).await;
+        persist_backed_catalog_state(persist_client, organization_id).await;
     test_open(persist_openable_state1, persist_openable_state2).await;
 }
 
-async fn test_open<D: DurableCatalogState>(
-    openable_state1: impl OpenableDurableCatalogState<D>,
-    openable_state2: impl OpenableDurableCatalogState<D>,
+async fn test_open(
+    openable_state1: impl OpenableDurableCatalogState,
+    openable_state2: impl OpenableDurableCatalogState,
 ) {
     let (snapshot, audit_log) = {
-        let mut state = openable_state1
+        let mut state = Box::new(openable_state1)
             // Use `NOW_ZERO` for consistent timestamps in the snapshots.
             .open(NOW_ZERO.clone(), &debug_bootstrap_args(), None)
             .await
@@ -489,7 +488,7 @@ async fn test_open<D: DurableCatalogState>(
     };
     // Reopening the catalog will increment the epoch, but shouldn't change the initial snapshot.
     {
-        let mut state = openable_state2
+        let mut state = Box::new(openable_state2)
             .open(SYSTEM_TIME.clone(), &debug_bootstrap_args(), None)
             .await
             .unwrap();

@@ -95,8 +95,8 @@ pub use crate::objects::{
     SystemConfiguration, SystemObjectMapping, TimelineTimestamp,
 };
 use crate::objects::{IntrospectionSourceIndex, Snapshot};
-use crate::persist::{PersistCatalogState, PersistHandle};
-use crate::stash::{Connection, DebugOpenableConnection, OpenableConnection};
+use crate::persist::PersistHandle;
+use crate::stash::{DebugOpenableConnection, OpenableConnection};
 pub use crate::stash::{
     StashConfig, ALL_COLLECTIONS, AUDIT_LOG_COLLECTION, CLUSTER_COLLECTION,
     CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION, CLUSTER_REPLICA_COLLECTION, COMMENTS_COLLECTION,
@@ -151,7 +151,7 @@ pub type Epoch = NonZeroI64;
 ///
 /// If a catalog is not opened, then resources should be release via [`Self::expire`].
 #[async_trait]
-pub trait OpenableDurableCatalogState<D: DurableCatalogState>: Debug + Send {
+pub trait OpenableDurableCatalogState: Debug + Send {
     /// Opens the catalog in a mode that accepts and buffers all writes,
     /// but never durably commits them. This is used to check and see if
     /// opening the catalog would be successful, without making any durable
@@ -161,11 +161,11 @@ pub trait OpenableDurableCatalogState<D: DurableCatalogState>: Debug + Send {
     ///   - Catalog initialization fails.
     ///   - Catalog migrations fail.
     async fn open_savepoint(
-        mut self,
+        mut self: Box<Self>,
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
-    ) -> Result<D, CatalogError>;
+    ) -> Result<Box<dyn DurableCatalogState>, CatalogError>;
 
     /// Opens the catalog in read only mode. All mutating methods
     /// will return an error.
@@ -173,20 +173,20 @@ pub trait OpenableDurableCatalogState<D: DurableCatalogState>: Debug + Send {
     /// If the catalog is uninitialized or requires a migrations, then
     /// it will fail to open in read only mode.
     async fn open_read_only(
-        mut self,
+        mut self: Box<Self>,
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
-    ) -> Result<D, CatalogError>;
+    ) -> Result<Box<dyn DurableCatalogState>, CatalogError>;
 
     /// Opens the catalog in a writeable mode. Optionally initializes the
     /// catalog, if it has not been initialized, and perform any migrations
     /// needed.
     async fn open(
-        mut self,
+        mut self: Box<Self>,
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
-    ) -> Result<D, CatalogError>;
+    ) -> Result<Box<dyn DurableCatalogState>, CatalogError>;
 
     /// Reports if the catalog state has been initialized.
     async fn is_initialized(&mut self) -> Result<bool, CatalogError>;
@@ -404,9 +404,7 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
 }
 
 /// Creates a openable durable catalog state implemented using the stash.
-pub fn stash_backed_catalog_state(
-    config: StashConfig,
-) -> impl OpenableDurableCatalogState<Connection> {
+pub fn stash_backed_catalog_state(config: StashConfig) -> OpenableConnection {
     OpenableConnection::new(config)
 }
 
@@ -414,16 +412,16 @@ pub fn stash_backed_catalog_state(
 /// used in tests.
 pub fn debug_stash_backed_catalog_state(
     debug_stash_factory: &DebugStashFactory,
-) -> impl OpenableDurableCatalogState<Connection> + '_ {
+) -> DebugOpenableConnection {
     DebugOpenableConnection::new(debug_stash_factory)
 }
 
 /// Creates an openable durable catalog state implemented using persist.
 pub async fn persist_backed_catalog_state(
     persist_client: PersistClient,
-    environment_id: Uuid,
-) -> impl OpenableDurableCatalogState<PersistCatalogState> {
-    PersistHandle::new(persist_client, environment_id).await
+    organization_id: Uuid,
+) -> PersistHandle {
+    PersistHandle::new(persist_client, organization_id).await
 }
 
 pub fn debug_bootstrap_args() -> BootstrapArgs {

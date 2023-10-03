@@ -117,7 +117,7 @@ pub struct StashConfig {
 
 /// A [`OpenableConnection`] represent a struct capable of opening a connection to the stash.
 #[derive(Debug)]
-pub(crate) struct OpenableConnection {
+pub struct OpenableConnection {
     stash: Option<Stash>,
     config: StashConfig,
 }
@@ -183,14 +183,14 @@ impl OpenableConnection {
 }
 
 #[async_trait]
-impl OpenableDurableCatalogState<Connection> for OpenableConnection {
+impl OpenableDurableCatalogState for OpenableConnection {
     #[tracing::instrument(name = "storage::open_check", level = "info", skip_all)]
     async fn open_savepoint(
-        mut self,
+        mut self: Box<Self>,
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
-    ) -> Result<Connection, CatalogError> {
+    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.open_stash_savepoint().await?;
         let stash = self.stash.take().expect("opened above");
         retry_open(stash, now, bootstrap_args, deploy_generation).await
@@ -198,10 +198,10 @@ impl OpenableDurableCatalogState<Connection> for OpenableConnection {
 
     #[tracing::instrument(name = "storage::open_read_only", level = "info", skip_all)]
     async fn open_read_only(
-        mut self,
+        mut self: Box<Self>,
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
-    ) -> Result<Connection, CatalogError> {
+    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.open_stash_read_only().await?;
         let stash = self.stash.take().expect("opened above");
         retry_open(stash, now, bootstrap_args, None).await
@@ -209,11 +209,11 @@ impl OpenableDurableCatalogState<Connection> for OpenableConnection {
 
     #[tracing::instrument(name = "storage::open", level = "info", skip_all)]
     async fn open(
-        mut self,
+        mut self: Box<Self>,
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
-    ) -> Result<Connection, CatalogError> {
+    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.open_stash().await?;
         let stash = self.stash.take().expect("opened above");
         retry_open(stash, now, bootstrap_args, deploy_generation).await
@@ -269,7 +269,7 @@ async fn retry_open(
     now: NowFn,
     bootstrap_args: &BootstrapArgs,
     deploy_generation: Option<u64>,
-) -> Result<Connection, CatalogError> {
+) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
     let retry = Retry::default()
         .clamp_backoff(Duration::from_secs(1))
         .max_duration(Duration::from_secs(30))
@@ -298,7 +298,7 @@ async fn open_inner(
     now: NowFn,
     bootstrap_args: &BootstrapArgs,
     deploy_generation: Option<u64>,
-) -> Result<Connection, (Stash, CatalogError)> {
+) -> Result<Box<Connection>, (Stash, CatalogError)> {
     // Initialize the Stash if it hasn't been already
     let is_init = match stash.is_initialized().await {
         Ok(is_init) => is_init,
@@ -383,7 +383,7 @@ async fn open_inner(
         }
     }
 
-    Ok(conn)
+    Ok(Box::new(conn))
 }
 
 /// A [`Connection`] represent an open connection to the stash. It exposes optimized methods for
@@ -1153,14 +1153,14 @@ pub const ALL_COLLECTIONS: &[&str] = &[
 #[derive(Debug)]
 pub struct DebugOpenableConnection<'a> {
     _debug_stash_factory: &'a DebugStashFactory,
-    openable_connection: OpenableConnection,
+    openable_connection: Box<OpenableConnection>,
 }
 
 impl DebugOpenableConnection<'_> {
     pub(crate) fn new(debug_stash_factory: &DebugStashFactory) -> DebugOpenableConnection {
         DebugOpenableConnection {
             _debug_stash_factory: debug_stash_factory,
-            openable_connection: OpenableConnection {
+            openable_connection: Box::new(OpenableConnection {
                 stash: None,
                 config: StashConfig {
                     stash_factory: debug_stash_factory.stash_factory().clone(),
@@ -1168,40 +1168,40 @@ impl DebugOpenableConnection<'_> {
                     schema: Some(debug_stash_factory.schema().to_string()),
                     tls: debug_stash_factory.tls().clone(),
                 },
-            },
+            }),
         }
     }
 }
 
 #[async_trait]
-impl OpenableDurableCatalogState<Connection> for DebugOpenableConnection<'_> {
+impl OpenableDurableCatalogState for DebugOpenableConnection<'_> {
     async fn open_savepoint(
-        mut self,
+        mut self: Box<Self>,
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
-    ) -> Result<Connection, CatalogError> {
+    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.openable_connection
             .open_savepoint(now, bootstrap_args, deploy_generation)
             .await
     }
 
     async fn open_read_only(
-        mut self,
+        mut self: Box<Self>,
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
-    ) -> Result<Connection, CatalogError> {
+    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.openable_connection
             .open_read_only(now, bootstrap_args)
             .await
     }
 
     async fn open(
-        mut self,
+        mut self: Box<Self>,
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
-    ) -> Result<Connection, CatalogError> {
+    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.openable_connection
             .open(now, bootstrap_args, deploy_generation)
             .await
