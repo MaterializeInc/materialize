@@ -24,6 +24,8 @@ pub struct StatementBeganExecutionRecord {
     pub params: Vec<Option<String>>,
     pub began_at: EpochMillis,
     pub cluster_id: Option<ClusterId>,
+    pub cluster_name: Option<String>,
+    pub application_name: String,
 }
 
 #[derive(Clone, Copy, Debug)]
