@@ -611,6 +611,7 @@ impl Refines<()> for MzOffset {
 }
 
 impl PartialOrder for MzOffset {
+    #[inline]
     fn less_equal(&self, other: &Self) -> bool {
         self.offset.less_equal(&other.offset)
     }
