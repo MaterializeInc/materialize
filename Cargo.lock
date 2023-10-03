@@ -5417,6 +5417,7 @@ dependencies = [
  "bytes",
  "dec",
  "differential-dataflow",
+ "fail",
  "itertools",
  "mz-ccsr",
  "mz-cloud-resources",
