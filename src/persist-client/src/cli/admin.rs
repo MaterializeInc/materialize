@@ -10,6 +10,7 @@
 //! CLI introspection tools for persist
 
 use std::any::Any;
+use std::fmt::Debug;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
@@ -17,6 +18,8 @@ use std::time::Instant;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
+use differential_dataflow::difference::Semigroup;
+use differential_dataflow::lattice::Lattice;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
@@ -25,7 +28,9 @@ use mz_persist::location::{
     Atomicity, Blob, BlobMetadata, CaSResult, Consensus, ExternalError, SeqNo, VersionedData,
 };
 use mz_persist_types::codec_impls::TodoSchema;
+use mz_persist_types::{Codec, Codec64};
 use prometheus::proto::{MetricFamily, MetricType};
+use timely::progress::Timestamp;
 use tracing::{info, warn};
 
 use crate::async_runtime::IsolatedRuntime;
@@ -90,12 +95,14 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
                     .set_compaction_memory_bound_bytes(args.compaction_memory_bound_bytes);
             }
             let metrics_registry = MetricsRegistry::new();
-            let () = force_compaction(
+            let () = force_compaction::<crate::cli::inspect::K, crate::cli::inspect::V, u64, i64>(
                 cfg,
                 &metrics_registry,
                 shard_id,
                 &args.state.consensus_uri,
                 &args.state.blob_uri,
+                Arc::new(TodoSchema::default()),
+                Arc::new(TodoSchema::default()),
                 command.commit,
             )
             .await?;
@@ -156,19 +163,27 @@ pub(crate) fn info_log_non_zero_metrics(metric_families: &[MetricFamily]) {
 }
 
 /// Manually completes all fueled compactions in a shard.
-pub async fn force_compaction(
+pub async fn force_compaction<K, V, T, D>(
     cfg: PersistConfig,
     metrics_registry: &MetricsRegistry,
     shard_id: ShardId,
     consensus_uri: &str,
     blob_uri: &str,
+    key_schema: Arc<K::Schema>,
+    val_schema: Arc<V::Schema>,
     commit: bool,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), anyhow::Error>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
+{
     let metrics = Arc::new(Metrics::new(&cfg, metrics_registry));
     let consensus = make_consensus(&cfg, consensus_uri, commit, Arc::clone(&metrics)).await?;
     let blob = make_blob(&cfg, blob_uri, commit, Arc::clone(&metrics)).await?;
 
-    let mut machine = make_machine(
+    let mut machine = make_typed_machine::<K, V, T, D>(
         &cfg,
         consensus,
         Arc::clone(&blob),
@@ -214,20 +229,20 @@ pub async fn force_compaction(
                 continue;
             }
             let schemas = Schemas {
-                key: Arc::new(TodoSchema::default()),
-                val: Arc::new(TodoSchema::default()),
+                key: Arc::clone(&key_schema),
+                val: Arc::clone(&val_schema),
             };
-            let res =
-                Compactor::<crate::cli::inspect::K, crate::cli::inspect::V, u64, i64>::compact(
-                    CompactConfig::new(&cfg, &writer_id),
-                    Arc::clone(&blob),
-                    Arc::clone(&metrics),
-                    Arc::clone(&machine.applier.shard_metrics),
-                    Arc::new(IsolatedRuntime::new()),
-                    req,
-                    schemas,
-                )
-                .await?;
+
+            let res = Compactor::<K, V, T, D>::compact(
+                CompactConfig::new(&cfg, &writer_id),
+                Arc::clone(&blob),
+                Arc::clone(&metrics),
+                Arc::clone(&machine.applier.shard_metrics),
+                Arc::new(IsolatedRuntime::new()),
+                req,
+                schemas,
+            )
+            .await?;
             info!(
                 "attempt {} req {}: compacted into {} parts {} bytes in {:?}",
                 attempt,
@@ -379,6 +394,26 @@ async fn make_machine(
     shard_id: ShardId,
     commit: bool,
 ) -> anyhow::Result<Machine<crate::cli::inspect::K, crate::cli::inspect::V, u64, i64>> {
+    make_typed_machine::<crate::cli::inspect::K, crate::cli::inspect::V, u64, i64>(
+        cfg, consensus, blob, metrics, shard_id, commit,
+    )
+    .await
+}
+
+async fn make_typed_machine<K, V, T, D>(
+    cfg: &PersistConfig,
+    consensus: Arc<dyn Consensus + Send + Sync>,
+    blob: Arc<dyn Blob + Send + Sync>,
+    metrics: Arc<Metrics>,
+    shard_id: ShardId,
+    commit: bool,
+) -> anyhow::Result<Machine<K, V, T, D>>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64,
+{
     let state_versions = Arc::new(StateVersions::new(
         cfg.clone(),
         consensus,
@@ -420,7 +455,7 @@ async fn make_machine(
         break;
     }
 
-    let machine = Machine::<crate::cli::inspect::K, crate::cli::inspect::V, u64, i64>::new(
+    let machine = Machine::<K, V, T, D>::new(
         cfg.clone(),
         shard_id,
         Arc::clone(&metrics),

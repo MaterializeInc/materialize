@@ -84,6 +84,6 @@ pub mod controller;
 pub mod errors;
 pub mod instances;
 pub mod parameters;
+pub mod shim;
 pub mod sinks;
 pub mod sources;
-pub mod sources_legacy;

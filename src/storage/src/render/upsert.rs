@@ -16,10 +16,12 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
+use differential_dataflow::consolidation;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::{AsCollection, Collection};
 use futures::future::FutureExt;
 use itertools::Itertools;
+use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_storage_operators::metrics::BackpressureMetrics;
@@ -420,7 +422,7 @@ where
         let mut state = UpsertState::new(
             state().await,
             upsert_shared_metrics,
-            upsert_metrics,
+            &upsert_metrics,
             source_config.source_statistics,
             upsert_config.shrink_upsert_unused_buffers_by_ratio
         );
@@ -429,6 +431,7 @@ where
 
         let mut stash = vec![];
         let mut input_upper = Antichain::from_elem(Timestamp::minimum());
+        let mut legacy_errors_to_correct = vec![];
 
         while !PartialOrder::less_equal(&resume_upper, &snapshot_upper)
             || (upsert_config.wait_for_input_resumption && !PartialOrder::less_equal(&resume_upper, &input_upper))
@@ -487,6 +490,20 @@ where
                 }
             }
 
+            for (_, value, diff) in events.iter_mut() {
+                if let Err(UpsertError::Value(ref mut err)) = value {
+                    // If we receive a legacy error in the snapshot we will keep a note of it but
+                    // insert a non-legacy error in our state. This is so that if this error is
+                    // ever retracted we will correctly retract the non-legacy version because by
+                    // that time we will have emitted the error correction, which happens before
+                    // processing any of the new source input.
+                    if err.is_legacy_dont_touch_it {
+                        legacy_errors_to_correct.push((err.clone(), diff.clone()));
+                        err.is_legacy_dont_touch_it = false;
+                    }
+                }
+            }
+
             match state
                 .merge_snapshot_chunk(
                     events.drain(..),
@@ -529,6 +546,22 @@ where
         // After snapshotting, our output frontier is exactly the `resume_upper`
         if let Some(ts) = resume_upper.as_option() {
             output_cap.downgrade(ts);
+        }
+
+        // Now it's time to emit the error corrections. It doesn't matter at what timestamp we emit
+        // them at because all they do is change the representation. The error count at any
+        // timestamp remains constant.
+        upsert_metrics.legacy_value_errors.set(u64::cast_from(legacy_errors_to_correct.len()));
+        consolidation::consolidate(&mut legacy_errors_to_correct);
+        for (mut error, diff) in legacy_errors_to_correct {
+            assert!(error.is_legacy_dont_touch_it, "attempted to correct non-legacy error");
+            tracing::info!("correcting legacy error {error:?} with diff {diff}");
+            let time = output_cap.time().clone();
+            let retraction = Err(UpsertError::Value(error.clone()));
+            error.is_legacy_dont_touch_it = false;
+            let insertion = Err(UpsertError::Value(error));
+            output_handle.give(&output_cap, (retraction, time.clone(), -diff)).await;
+            output_handle.give(&output_cap, (insertion, time, diff)).await;
         }
 
         tracing::info!(

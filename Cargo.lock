@@ -5480,6 +5480,7 @@ dependencies = [
  "bytes",
  "dec",
  "differential-dataflow",
+ "fail",
  "itertools",
  "mz-ccsr",
  "mz-cloud-resources",
@@ -5547,7 +5548,7 @@ dependencies = [
 
 [[package]]
 name = "mz-testdrive"
-version = "0.0.0"
+version = "0.72.0-dev"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -5575,17 +5576,21 @@ dependencies = [
  "mz-adapter",
  "mz-avro",
  "mz-aws-s3-util",
+ "mz-build-info",
  "mz-catalog",
  "mz-ccsr",
  "mz-expr",
  "mz-interchange",
  "mz-kafka-util",
  "mz-ore",
+ "mz-persist-client",
+ "mz-persist-types",
  "mz-pgrepr",
  "mz-repr",
  "mz-sql",
  "mz-sql-parser",
  "mz-stash",
+ "mz-storage-types",
  "mz-tls-util",
  "once_cell",
  "postgres_array",

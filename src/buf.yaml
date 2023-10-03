@@ -18,6 +18,8 @@ breaking:
     - compute-client
     # does currently not require backward-compatibility
     - storage-client
+    # Ignored until #21887 is reverted
+    - storage-types/src/errors.proto
     # does not currently require backward-compatibility
     - stash
     # still under active development

@@ -722,6 +722,7 @@ fn upsert_commands<G: Scope>(
             Some(Err(inner)) => Some(Err(UpsertError::Value(UpsertValueError {
                 for_key: key_row,
                 inner,
+                is_legacy_dont_touch_it: false,
             }))),
             None => None,
         };

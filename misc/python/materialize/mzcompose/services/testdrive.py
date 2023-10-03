@@ -15,6 +15,7 @@ from materialize.mzcompose import (
 )
 from materialize.mzcompose.service import (
     Service,
+    ServiceDependency,
 )
 
 
@@ -45,7 +46,11 @@ class Testdrive(Service):
         aws_region: str | None = None,
         aws_endpoint: str | None = "http://localstack:4566",
         no_consistency_checks: bool = False,
+        external_cockroach: bool = False,
+        external_minio: bool = False,
     ) -> None:
+        depends_graph: dict[str, ServiceDependency] = {}
+
         if environment is None:
             environment = [
                 "TMPDIR=/share/tmp",
@@ -119,11 +124,29 @@ class Testdrive(Service):
         if no_consistency_checks:
             entrypoint.append("--no-consistency-checks")
 
+        if external_minio:
+            depends_graph["minio"] = {"condition": "service_healthy"}
+            persist_blob_url = "s3://minioadmin:minioadmin@persist/persist?endpoint=http://minio:9000/&region=minio"
+            entrypoint.append(f"--persist-blob-url={persist_blob_url}")
+        else:
+            entrypoint.append("--persist-blob-url=file:///mzdata/persist/blob")
+
+        if external_cockroach:
+            depends_graph["cockroach"] = {"condition": "service_healthy"}
+            entrypoint.append(
+                "--persist-consensus-url=postgres://root@cockroach:26257?options=--search_path=consensus"
+            )
+        else:
+            entrypoint.append(
+                "--persist-consensus-url=postgres://root@materialized:26257?options=--search_path=consensus"
+            )
+
         entrypoint.extend(entrypoint_extra)
 
         super().__init__(
             name=name,
             config={
+                "depends_on": depends_graph,
                 "mzbuild": mzbuild,
                 "entrypoint": entrypoint,
                 "environment": environment,
