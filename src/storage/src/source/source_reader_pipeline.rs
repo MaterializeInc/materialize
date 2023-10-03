@@ -762,7 +762,11 @@ where
         while !cap_set.is_empty() {
             // AsyncInputHandle::next is cancel safe
             tokio::select! {
-                _ = ticker.tick() => {
+                // We only take this branch of the source upper frontier is not the minimum
+                // frontier. This makes it so the first binding corresponds to the snapshot of the
+                // source, and because the first binding always maps to the minimum *target*
+                // frontier we guarantee that the source will never appear empty.
+                _ = ticker.tick(), if *source_upper.frontier() != [FromTime::minimum()] => {
                     let mut remap_trace_batch = timestamper.mint(source_upper.frontier()).await;
 
                     trace!(

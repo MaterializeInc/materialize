@@ -159,32 +159,20 @@ pub fn rehydration_finished<G, T>(
     let mut input = builder.new_input(input, Pipeline);
 
     builder.build(move |_capabilities| async move {
-        loop {
-            match input.next().await {
-                Some(AsyncEvent::Progress(frontier)) => {
-                    if PartialOrder::less_equal(&resume_upper, &frontier) {
-                        tracing::info!(
-                        "timely-{} upsert source {} has downgraded past the resume upper ({:?}) across all workers",
-                        worker_id,
-                        id,
-                        resume_upper
-                    );
-                        drop(token);
-                        break;
-                    }
-                }
-                None => {
-                    // Shutdown has been triggered or the shard is closed, so we shutdown.
-                    // Note that we will likely get a `Progress([])` event before this,
-                    // but we cover it for an abundance of caution.
-                    drop(token);
-                    break;
-                }
-                _ => {
-                    // we don't expect data
-                }
+        let mut input_upper = Antichain::from_elem(Timestamp::minimum());
+        // Ensure this operator finishes if the resume upper is `[0]`
+        while !PartialOrder::less_equal(&resume_upper, &input_upper) {
+            let Some(event) = input.next().await else {
+                break;
+            };
+            if let AsyncEvent::Progress(upper) = event {
+                input_upper = upper;
             }
         }
+        tracing::info!(
+            "timely-{worker_id} upsert source {id} has downgraded past the resume upper ({resume_upper:?}) across all workers",
+        );
+        drop(token);
     });
 }
 
