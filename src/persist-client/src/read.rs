@@ -1027,6 +1027,38 @@ where
     }
 }
 
+/// An incremental cursor through a particular shard, returned from [ReadHandle::snapshot_cursor].
+///
+/// To read an entire dataset, the
+/// client should call `next` until it returns `None`, which signals all data has been returned...
+/// but it's also free to abandon the instance at any time if it eg. only needs a few entries.
+#[derive(Debug)]
+pub struct Cursor<K: Codec, V: Codec, T: Timestamp + Codec64, D> {
+    consolidator: Consolidator<T, D>,
+    _schemas: Schemas<K, V>,
+}
+
+impl<K, V, T, D> Cursor<K, V, T, D>
+where
+    K: Debug + Codec + Ord,
+    V: Debug + Codec + Ord,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
+{
+    /// Grab the next batch of consolidated data.
+    pub async fn next(
+        &mut self,
+    ) -> Option<impl Iterator<Item = ((Result<K, String>, Result<V, String>), T, D)> + '_> {
+        let iter = self
+            .consolidator
+            .next()
+            .await
+            .expect("fetching a leased part")?;
+        let iter = iter.map(|(k, v, t, d)| ((K::decode(k), V::decode(v)), t, d));
+        Some(iter)
+    }
+}
+
 impl<K, V, T, D> ReadHandle<K, V, T, D>
 where
     K: Debug + Codec + Ord,
@@ -1109,6 +1141,38 @@ where
         &mut self,
         as_of: Antichain<T>,
     ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, Since<T>> {
+        let mut cursor = self.snapshot_cursor(as_of).await?;
+        let mut contents = Vec::new();
+        while let Some(iter) = cursor.next().await {
+            contents.extend(iter);
+        }
+
+        // We don't currently guarantee that encoding is one-to-one, so we still need to
+        // consolidate the decoded outputs. However, let's report if this isn't a noop.
+        let old_len = contents.len();
+        consolidate_updates(&mut contents);
+        if old_len != contents.len() {
+            // TODO(bkirwi): do we need more / finer-grained metrics for this?
+            self.machine
+                .applier
+                .shard_metrics
+                .unconsolidated_snapshot
+                .inc();
+        }
+
+        Ok(contents)
+    }
+
+    /// Generates a [Self::snapshot], and fetches all of the batches it
+    /// contains.
+    ///
+    /// To keep memory usage down when reading a snapshot that consolidates well, this consolidates
+    /// as it goes. However, note that only the serialized data is consolidated: the deserialized
+    /// data will only be consolidated if your K/V codecs are one-to-one.
+    pub async fn snapshot_cursor(
+        &mut self,
+        as_of: Antichain<T>,
+    ) -> Result<Cursor<K, V, T, D>, Since<T>> {
         let batches = self.machine.snapshot(&as_of).await?;
 
         let mut consolidator = Consolidator::new(
@@ -1141,26 +1205,10 @@ where
             }
         }
 
-        let mut contents = Vec::new();
-
-        while let Some(iter) = consolidator.next().await.expect("fetching a leased part") {
-            contents.extend(iter.map(|(k, v, t, d)| ((K::decode(k), V::decode(v)), t, d)))
-        }
-
-        // We don't currently guarantee that encoding is one-to-one, so we still need to
-        // consolidate the decoded outputs. However, let's report if this isn't a noop.
-        let old_len = contents.len();
-        consolidate_updates(&mut contents);
-        if old_len != contents.len() {
-            // TODO(bkirwi): do we need more / finer-grained metrics for this?
-            self.machine
-                .applier
-                .shard_metrics
-                .unconsolidated_snapshot
-                .inc();
-        }
-
-        Ok(contents)
+        Ok(Cursor {
+            consolidator,
+            _schemas: self.schemas.clone(),
+        })
     }
 
     /// Generates a [Self::snapshot], and streams out all of the updates

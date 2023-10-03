@@ -83,6 +83,8 @@ pub struct Metrics {
     pub pubsub_client: PubSubClientMetrics,
     /// Metrics for mfp/filter pushdown.
     pub pushdown: PushdownMetrics,
+    /// Metrics for consolidation.
+    pub consolidation: ConsolidationMetrics,
     /// Metrics for blob caching.
     pub blob_cache_mem: BlobMemCache,
     /// Metrics for tokio tasks.
@@ -137,6 +139,7 @@ impl Metrics {
             watch: WatchMetrics::new(registry),
             pubsub_client: PubSubClientMetrics::new(registry),
             pushdown: PushdownMetrics::new(registry),
+            consolidation: ConsolidationMetrics::new(registry),
             blob_cache_mem: BlobMemCache::new(registry),
             tasks: TasksMetrics::new(registry),
             sink: SinkMetrics::new(registry),
@@ -1977,6 +1980,32 @@ impl PushdownMetrics {
             parts_stats_trimmed_bytes: registry.register(metric!(
                 name: "mz_persist_pushdown_parts_stats_trimmed_bytes",
                 help: "total bytes trimmed from part stats",
+            )),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ConsolidationMetrics {
+    pub(crate) parts_fetched: IntCounter,
+    pub(crate) parts_skipped: IntCounter,
+    pub(crate) parts_wasted: IntCounter,
+}
+
+impl ConsolidationMetrics {
+    fn new(registry: &MetricsRegistry) -> Self {
+        ConsolidationMetrics {
+            parts_fetched: registry.register(metric!(
+                name: "mz_persist_consolidation_parts_fetched_count",
+                help: "count of parts that were fetched and used during consolidation",
+            )),
+            parts_skipped: registry.register(metric!(
+                name: "mz_persist_consolidation_parts_skipped_count",
+                help: "count of parts that were never needed during consolidation",
+            )),
+            parts_wasted: registry.register(metric!(
+                name: "mz_persist_consolidation_parts_wasted_count",
+                help: "count of parts that were fetched but not needed during consolidation",
             )),
         }
     }

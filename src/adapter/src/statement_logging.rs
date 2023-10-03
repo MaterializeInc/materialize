@@ -33,6 +33,9 @@ pub enum StatementExecutionStrategy {
     /// The statement was executed by reading from an existing
     /// arrangement.
     FastPath,
+    /// Experimental: The statement was executed by reading from an existing
+    /// persist collection.
+    PersistFastPath,
     /// The statement was determined to be constant by
     /// environmentd, and not sent to a cluster.
     Constant,
@@ -43,6 +46,7 @@ impl StatementExecutionStrategy {
         match self {
             Self::Standard => "standard",
             Self::FastPath => "fast-path",
+            Self::PersistFastPath => "persist-fast-path",
             Self::Constant => "constant",
         }
     }

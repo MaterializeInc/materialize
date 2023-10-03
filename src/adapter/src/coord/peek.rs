@@ -12,9 +12,11 @@
 //! This module determines if a dataflow can be short-cut, by returning constant values
 //! or by reading out of existing arrangements, and implements the appropriate plan.
 
+use differential_dataflow::consolidation::consolidate;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
 use std::num::NonZeroUsize;
+use std::time::{Duration, Instant};
+use std::{fmt, mem};
 
 use futures::TryFutureExt;
 use mz_cluster_client::ReplicaId;
@@ -30,15 +32,18 @@ use mz_ore::str::{separated, Indent, StrExt};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::text::{fmt_text_constant_rows, DisplayText};
 use mz_repr::explain::{CompactScalarSeq, ExprHumanizer, IndexUsageType, Indices, UsedIndexes};
-use mz_repr::{Diff, GlobalId, RelationType, Row};
+use mz_repr::{DatumVec, Diff, GlobalId, RelationType, Row, RowArena};
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
 use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::client::ConnectionId;
 
 use crate::coord::timestamp_selection::TimestampDetermination;
+use crate::coord::Message;
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use crate::util::ResultExt;
 use crate::{AdapterError, ExecuteContextExtra, ExecuteResponse};
@@ -86,6 +91,8 @@ pub enum FastPathPlan {
     /// The view can be read out of an existing arrangement.
     /// (coll_id, idx_id, values to look up, mfp to apply)
     PeekExisting(GlobalId, GlobalId, Option<Vec<Row>>, mz_expr::SafeMfpPlan),
+    /// The view can be read directly out of Persist.
+    PeekPersist(GlobalId, mz_expr::SafeMfpPlan),
 }
 
 impl<'a, C> DisplayText<C> for FastPathPlan
@@ -144,6 +151,34 @@ where
                 ctx.as_mut().reset();
                 Ok(())
             }
+            FastPathPlan::PeekPersist(gid, mfp) => {
+                ctx.as_mut().set();
+                let (map, filter, project) = mfp.as_map_filter_project();
+                if project.len() != mfp.input_arity + map.len()
+                    || !project.iter().enumerate().all(|(i, o)| i == *o)
+                {
+                    let outputs = Indices(&project);
+                    writeln!(f, "{}Project ({})", ctx.as_mut(), outputs)?;
+                    *ctx.as_mut() += 1;
+                }
+                if !filter.is_empty() {
+                    let predicates = separated(" AND ", filter);
+                    writeln!(f, "{}Filter {}", ctx.as_mut(), predicates)?;
+                    *ctx.as_mut() += 1;
+                }
+                if !map.is_empty() {
+                    let scalars = CompactScalarSeq(&map);
+                    writeln!(f, "{}Map ({})", ctx.as_mut(), scalars)?;
+                    *ctx.as_mut() += 1;
+                }
+                let human_id = ctx
+                    .as_ref()
+                    .humanize_id(*gid)
+                    .unwrap_or_else(|| gid.to_string());
+                writeln!(f, "{}PeekPersist {human_id}", ctx.as_mut())?;
+                ctx.as_mut().reset();
+                Ok(())
+            }
         }?;
         Ok(())
     }
@@ -166,21 +201,24 @@ pub enum PeekPlan<T = mz_repr::Timestamp> {
     SlowPath(PeekDataflowPlan<T>),
 }
 
-fn permute_oneshot_mfp_around_index(
-    mfp: mz_expr::MapFilterProject,
-    key: &[MirScalarExpr],
-) -> Result<mz_expr::SafeMfpPlan, AdapterError> {
-    // Convert `mfp` to an executable, non-temporal plan.
-    // It should be non-temporal, as OneShot preparation populates `mz_now`.
-    let mut safe_mfp = mfp
-        .clone()
-        .into_plan()
+/// Convert `mfp` to an executable, non-temporal plan.
+/// It should be non-temporal, as OneShot preparation populates `mz_now`.
+fn mfp_to_safe_plan(mfp: mz_expr::MapFilterProject) -> Result<mz_expr::SafeMfpPlan, AdapterError> {
+    mfp.into_plan()
         .map_err(|e| AdapterError::Unstructured(::anyhow::anyhow!(e)))?
         .into_nontemporal()
         .map_err(|_e| {
             AdapterError::Unstructured(::anyhow::anyhow!("OneShot plan has temporal constraints"))
-        })?;
-    let (permute, thinning) = mz_expr::permutation_for_arrangement(key, mfp.input_arity);
+        })
+}
+
+fn permute_oneshot_mfp_around_index(
+    mfp: mz_expr::MapFilterProject,
+    key: &[MirScalarExpr],
+) -> Result<mz_expr::SafeMfpPlan, AdapterError> {
+    let input_arity = mfp.input_arity;
+    let mut safe_mfp = mfp_to_safe_plan(mfp)?;
+    let (permute, thinning) = mz_expr::permutation_for_arrangement(key, input_arity);
     safe_mfp.permute(permute, key.len() + thinning.len());
     Ok(safe_mfp)
 }
@@ -194,6 +232,7 @@ pub fn create_fast_path_plan<T: Timestamp>(
     dataflow_plan: &mut DataflowDescription<OptimizedMirRelationExpr, (), T>,
     view_id: GlobalId,
     finishing: Option<&RowSetFinishing>,
+    persist_fast_path_limit: usize,
 ) -> Result<Option<FastPathPlan>, AdapterError> {
     // At this point, `dataflow_plan` contains our best optimized dataflow.
     // We will check the plan to see if there is a fast path to escape full dataflow construction.
@@ -261,6 +300,24 @@ pub fn create_fast_path_plan<T: Timestamp>(
                             )));
                         }
                     }
+                    // If there is no arrangement, consider peeking the persist shard directly
+                    let safe_mfp = mfp_to_safe_plan(mfp)?;
+                    let (_m, filters, _p) = safe_mfp.as_map_filter_project();
+                    let small_finish = match &finishing {
+                        None => false,
+                        Some(RowSetFinishing {
+                            order_by,
+                            limit,
+                            offset,
+                            ..
+                        }) => {
+                            order_by.is_empty()
+                                && limit.iter().any(|l| *l + *offset < persist_fast_path_limit)
+                        }
+                    };
+                    if filters.is_empty() && small_finish {
+                        return Ok(Some(FastPathPlan::PeekPersist(*get_id, safe_mfp)));
+                    }
                 }
                 MirRelationExpr::Join { implementation, .. } => {
                     if let mz_expr::JoinImplementation::IndexedFilter(coll_id, idx_id, key, vals) =
@@ -301,6 +358,7 @@ impl FastPathPlan {
                     }
                 }
             }
+            FastPathPlan::PeekPersist(..) => UsedIndexes::default(),
         }
     }
 }
@@ -323,7 +381,12 @@ impl crate::coord::Coordinator {
         finishing: &RowSetFinishing,
     ) -> Result<PeekPlan, AdapterError> {
         // try to produce a `FastPathPlan`
-        let fast_path_plan = create_fast_path_plan(&mut dataflow, view_id, Some(finishing))?;
+        let fast_path_plan = create_fast_path_plan(
+            &mut dataflow,
+            view_id,
+            Some(finishing),
+            self.catalog.system_config().persist_fast_path_limit(),
+        )?;
         // derive a PeekPlan from the optional FastPathPlan
         let peek_plan = fast_path_plan.map_or_else(
             // finalize the dataflow and produce a PeekPlan::SlowPath as a default
@@ -375,12 +438,12 @@ impl crate::coord::Coordinator {
 
         // If the dataflow optimizes to a constant expression, we can immediately return the result.
         if let PeekPlan::FastPath(FastPathPlan::Constant(rows, _)) = fast_path {
-            let rows = match rows {
+            let mut rows = match rows {
                 Ok(rows) => rows,
                 Err(e) => return Err(e.into()),
             };
             // Consolidate down the results to get correct totals.
-            let rows = consolidate_constant_updates(rows);
+            consolidate(&mut rows);
 
             let mut results = Vec::new();
             for (row, count) in rows {
@@ -422,6 +485,101 @@ impl crate::coord::Coordinator {
         }
 
         let timestamp = determination.timestamp_context.timestamp_or_default();
+
+        if let PeekPlan::FastPath(FastPathPlan::PeekPersist(id, mfp_plan)) = fast_path {
+            let mut cursor = self
+                .controller
+                .storage
+                .snapshot_cursor(id, timestamp)
+                .await?;
+
+            let metrics = self.metrics.clone();
+            let handle: JoinHandle<Result<PeekResponseUnary, String>> =
+                mz_ore::task::spawn(|| "persist::peek", async move {
+                    let mut limit_remaining = finishing.limit.unwrap_or(usize::MAX);
+
+                    // Re-used state for processing and building rows.
+                    let mut accum = vec![];
+                    let mut datum_vec = DatumVec::new();
+                    let mut row_builder = Row::default();
+                    let arena = RowArena::new();
+
+                    let start = Instant::now();
+                    let mut last_fetch = Duration::ZERO;
+                    while limit_remaining > 0 {
+                        let Some(batch) = cursor.next().await else {
+                            break;
+                        };
+                        last_fetch = start.elapsed();
+                        for ((k, v), _, d) in batch {
+                            let row = k?.0.map_err(|e| e.to_string())?;
+                            let () = v?;
+                            let count: usize = d
+                                .try_into()
+                                .map_err(|_| "Negative count for thing in snapshot".to_owned())?;
+                            let Some(count) = NonZeroUsize::new(count) else {
+                                continue;
+                            };
+                            let mut datum_local = datum_vec.borrow_with(&row);
+                            let eval_result = mfp_plan
+                                .evaluate_into(&mut datum_local, &arena, &mut row_builder)
+                                .map_err(|e| e.to_string())?;
+                            if let Some(row) = eval_result {
+                                accum.push((row, count));
+                                limit_remaining = limit_remaining.saturating_sub(count.get());
+                                if limit_remaining == 0 {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    let res = finishing.finish(accum, max_result_size)?;
+                    let total_duration = start.elapsed();
+                    metrics
+                        .persist_peek_seconds
+                        .observe(total_duration.as_secs_f64());
+                    info!(
+                        collection =? id,
+                        fetch_duration =? last_fetch,
+                        total_duration =? total_duration,
+                        "persist peek success"
+                    );
+                    Ok(PeekResponseUnary::Rows(res))
+                });
+            let internal_cmd_tx = self.internal_cmd_tx.clone();
+            let ctx_extra = mem::take(ctx_extra);
+            return Ok(ExecuteResponse::SendingRows {
+                future: Box::pin(async move {
+                    let res = match handle.await {
+                        Ok(Ok(res)) => res,
+                        Ok(Err(err)) => PeekResponseUnary::Error(err.to_string()),
+                        Err(_join_error) => PeekResponseUnary::Canceled,
+                    };
+
+                    let reason = match &res {
+                        PeekResponseUnary::Rows(rows) => StatementEndedExecutionReason::Success {
+                            rows_returned: Some(u64::cast_from(rows.len())),
+                            execution_strategy: Some(StatementExecutionStrategy::PersistFastPath),
+                        },
+                        PeekResponseUnary::Error(e) => {
+                            StatementEndedExecutionReason::Errored { error: e.clone() }
+                        }
+                        PeekResponseUnary::Canceled => StatementEndedExecutionReason::Canceled,
+                    };
+
+                    if let Err(e) = internal_cmd_tx.send(Message::RetireExecute {
+                        data: ctx_extra,
+                        reason,
+                    }) {
+                        warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+                    }
+
+                    res
+                }),
+                span: tracing::Span::current(),
+            });
+        }
 
         // The remaining cases are a peek into a maintained arrangement, or building a dataflow.
         // In both cases we will want to peek, and the main difference is that we might want to
@@ -470,15 +628,7 @@ impl crate::coord::Coordinator {
                 let mut map_filter_project = mz_expr::MapFilterProject::new(source_arity);
                 map_filter_project
                     .permute(index_permutation, index_key.len() + index_thinned_arity);
-                let map_filter_project = map_filter_project
-                    .into_plan()
-                    .map_err(|e| crate::error::AdapterError::Unstructured(::anyhow::anyhow!(e)))?
-                    .into_nontemporal()
-                    .map_err(|_e| {
-                        crate::error::AdapterError::Unstructured(::anyhow::anyhow!(
-                            "OneShot plan has temporal constraints"
-                        ))
-                    })?;
+                let map_filter_project = mfp_to_safe_plan(map_filter_project)?;
                 (
                     (
                         index_id, // transient identifier produced by `dataflow_plan`.
@@ -672,19 +822,6 @@ impl crate::coord::Coordinator {
             span: tracing::Span::none(),
         }
     }
-}
-
-fn consolidate_constant_updates(rows: Vec<(Row, Diff)>) -> Vec<(Row, Diff)> {
-    // The consolidate API requires timestamps for all rows, so we assigned every row the
-    // same timestamp. The actual value of that timestamp doesn't matter.
-    let mut rows = rows
-        .into_iter()
-        .map(|(row, diff)| (row, mz_repr::Timestamp::minimum(), diff))
-        .collect();
-    differential_dataflow::consolidation::consolidate_updates(&mut rows);
-    rows.into_iter()
-        .map(|(row, _time, diff)| (row, diff))
-        .collect()
 }
 
 #[cfg(test)]
