@@ -649,7 +649,7 @@ impl UpsertStateBackend for AutoSpillBackend {
 
 /// An `UpsertStateBackend` wrapper that supports
 /// snapshot merging, and reports basic metrics about the usage of the `UpsertStateBackend`.
-pub struct UpsertState<S> {
+pub struct UpsertState<'metrics, S> {
     inner: S,
 
     // The status, start time, and stats about calls to `merge_snapshot_chunk`.
@@ -660,7 +660,7 @@ pub struct UpsertState<S> {
     // Metrics shared across all workers running the `upsert` operator.
     metrics: Arc<UpsertSharedMetrics>,
     // Metrics for a specific worker.
-    worker_metrics: UpsertMetrics,
+    worker_metrics: &'metrics UpsertMetrics,
     // User-facing statistics.
     stats: SourceStatistics,
 
@@ -679,11 +679,11 @@ pub struct UpsertState<S> {
     shrink_upsert_unused_buffers_by_ratio: usize,
 }
 
-impl<S> UpsertState<S> {
+impl<'metrics, S> UpsertState<'metrics, S> {
     pub(crate) fn new(
         inner: S,
         metrics: Arc<UpsertSharedMetrics>,
-        worker_metrics: UpsertMetrics,
+        worker_metrics: &'metrics UpsertMetrics,
         stats: SourceStatistics,
         shrink_upsert_unused_buffers_by_ratio: usize,
     ) -> Self {
@@ -705,7 +705,7 @@ impl<S> UpsertState<S> {
     }
 }
 
-impl<S> UpsertState<S>
+impl<S> UpsertState<'_, S>
 where
     S: UpsertStateBackend,
 {

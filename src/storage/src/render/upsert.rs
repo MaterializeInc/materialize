@@ -21,6 +21,7 @@ use differential_dataflow::hashable::Hashable;
 use differential_dataflow::{AsCollection, Collection};
 use futures::future::FutureExt;
 use itertools::Itertools;
+use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_storage_operators::metrics::BackpressureMetrics;
@@ -421,7 +422,7 @@ where
         let mut state = UpsertState::new(
             state().await,
             upsert_shared_metrics,
-            upsert_metrics,
+            &upsert_metrics,
             source_config.source_statistics,
             upsert_config.shrink_upsert_unused_buffers_by_ratio
         );
@@ -550,6 +551,7 @@ where
         // Now it's time to emit the error corrections. It doesn't matter at what timestamp we emit
         // them at because all they do is change the representation. The error count at any
         // timestamp remains constant.
+        upsert_metrics.legacy_value_errors.set(u64::cast_from(legacy_errors_to_correct.len()));
         consolidation::consolidate(&mut legacy_errors_to_correct);
         for (mut error, diff) in legacy_errors_to_correct {
             assert!(error.is_legacy_dont_touch_it, "attempted to correct non-legacy error");
