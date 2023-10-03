@@ -76,6 +76,7 @@ steps:
           - { value: data-ingest }
           - { value: parallel-workload-dml }
           - { value: parallel-workload }
+          - { value: incident-72-remediation }
           #- { value: parallel-workload-100-threads }
           - { value: parallel-workload-cancel }
           #- { value: parallel-workload-kill }
@@ -892,6 +893,15 @@ steps:
   #  retry:
   #    manual:
   #      permit_on_passed: true
+
+  - id: incident-72-remediation
+    label: "Remediation of incident 72"
+    agents:
+      queue: linux-x86_64
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: incident-72
 
   - wait: ~
     continue_on_failure: true
