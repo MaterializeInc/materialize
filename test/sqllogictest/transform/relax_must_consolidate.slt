@@ -423,16 +423,13 @@ Explained Query:
           Get::PassArrangements l0
             raw=false
             arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
-            types=[integer?, integer?]
           Get::PassArrangements l0
             raw=false
             arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
-            types=[integer?, integer?]
     cte l0 =
       Get::PassArrangements materialize.public.t
         raw=false
         arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
-        types=[integer?, integer?]
 
 Used Indexes:
   - materialize.public.t_idx (differential join)
@@ -523,7 +520,6 @@ Explained Query:
           ArrangeBy
             raw=true
             arrangements[0]={ key=[#0], permutation=id, thinning=() }
-            types=[integer]
             Get::Collection materialize.public.t
               project=(#1)
               filter=((#0 = 5) AND (1 = (#0 % 2)) AND (#1) IS NOT NULL)
@@ -531,7 +527,6 @@ Explained Query:
           ArrangeBy
             raw=true
             arrangements[0]={ key=[#0], permutation=id, thinning=() }
-            types=[integer]
             Get::Collection materialize.public.t
               project=(#1)
               filter=((#0 = 5) AND (#1) IS NOT NULL)

@@ -100,6 +100,7 @@ where
     pub(super) shutdown_token: ShutdownToken,
     /// The implementation to use for rendering linear joins.
     pub(super) linear_join_impl: LinearJoinImpl,
+    pub(super) enable_specialized_arrangements: bool,
 }
 
 impl<S: Scope> Context<S>
@@ -127,6 +128,7 @@ where
             bindings: BTreeMap::new(),
             shutdown_token: Default::default(),
             linear_join_impl: Default::default(),
+            enable_specialized_arrangements: Default::default(),
         }
     }
 }
@@ -1004,6 +1006,7 @@ where
         input_key: Option<Vec<MirScalarExpr>>,
         input_mfp: MapFilterProject,
         until: Antichain<mz_repr::Timestamp>,
+        enable_specialized_arrangements: bool,
     ) -> Self {
         if collections == Default::default() {
             return self;
@@ -1031,15 +1034,25 @@ where
                 // TODO: Consider allowing more expressive names.
                 let name = format!("ArrangeBy[{:?}]", key);
 
-                let (key_types, val_types) =
-                    derive_key_val_types(&key, &thinning, collections.types.as_ref());
+                let (key_types, val_types) = if enable_specialized_arrangements {
+                    derive_key_val_types(&key, &thinning, collections.types.as_ref())
+                } else {
+                    (Default::default(), Default::default())
+                };
 
                 let (oks, errs) = self
                     .collection
                     .clone()
                     .expect("Collection constructed above");
-                let (oks, errs_keyed) =
-                    Self::specialized_arrange(&name, oks, &key, &thinning, key_types, val_types);
+                let (oks, errs_keyed) = Self::specialized_arrange(
+                    &name,
+                    oks,
+                    &key,
+                    &thinning,
+                    key_types,
+                    val_types,
+                    enable_specialized_arrangements,
+                );
                 let errs: KeyCollection<_, _, _> = errs.concat(&errs_keyed).into();
                 let errs = errs.mz_arrange::<ErrSpine<_, _, _>>(&format!("{}-errors", name));
                 self.arranged
@@ -1059,8 +1072,9 @@ where
         thinning: &Vec<usize>,
         key_types: Vec<ColumnType>,
         _val_types: Vec<ColumnType>,
+        enable_specialized_arrangements: bool,
     ) -> (SpecializedArrangement<S>, Collection<S, DataflowError, i64>) {
-        if Bytes9::valid_schema(&key_types) {
+        if enable_specialized_arrangements && Bytes9::valid_schema(&key_types) {
             // 9-byte key specialization.
             let (oks, errs) = oks.map_fallible(
                 "FormArrangementKey [9-byte]",

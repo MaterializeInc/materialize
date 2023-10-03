@@ -165,6 +165,7 @@ where
                     inputs[stage_plan.lookup_relation].enter_region(inner),
                     stage_plan,
                     &mut errors,
+                    self.enable_specialized_arrangements,
                 );
                 // Update joined results and capture any errors.
                 joined = JoinedFlavor::Collection(stream);
@@ -222,6 +223,7 @@ fn differential_join<G, T>(
         lookup_relation: _,
     }: LinearStagePlan,
     errors: &mut Vec<Collection<G, DataflowError, Diff>>,
+    _enable_specialized_arrangements: bool,
 ) -> Collection<G, Row, Diff>
 where
     G: Scope,
@@ -252,6 +254,10 @@ where
         });
 
         errors.push(errs);
+
+        // TODO(vmarcos): We should implement arrangement specialization here (#22104).
+        // Note that not specializing may lead to panics when enable_specialized_arrangements
+        // is turned on.
         let arranged = keyed.mz_arrange::<RowSpine<_, _, _, _>>("JoinStage");
         joined = JoinedFlavor::Local(SpecializedArrangement::RowRow(arranged));
     }

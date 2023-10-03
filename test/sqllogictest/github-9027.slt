@@ -74,7 +74,6 @@ Explained Query:
       ArrangeBy
         raw=true
         arrangements[0]={ key=[#0], permutation=id, thinning=() }
-        types=[integer]
         Get::PassArrangements l0
           raw=true
       Reduce::Distinct
@@ -95,7 +94,6 @@ Explained Query:
           ArrangeBy
             raw=true
             arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-            types=[date, date]
             Get::Collection materialize.public.lineitem
               project=(#1, #2)
               raw=true
@@ -108,7 +106,6 @@ Explained Query:
           ArrangeBy
             raw=true
             arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
-            types=[integer, date]
             Get::Collection materialize.public.orders
               filter=((#0) IS NOT NULL)
               raw=true
@@ -122,7 +119,6 @@ Explained Query:
         ArrangeBy
           raw=true
           arrangements[0]={ key=[], permutation=id, thinning=(#0) }
-          types=[integer]
           Get::Collection materialize.public.lineitem
             project=(#0)
             raw=true

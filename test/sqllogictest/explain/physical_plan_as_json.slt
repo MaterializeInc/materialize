@@ -205,16 +205,7 @@ SELECT * FROM t
                 ]
               ]
             ],
-            "types": [
-              {
-                "scalar_type": "Int32",
-                "nullable": true
-              },
-              {
-                "scalar_type": "Int32",
-                "nullable": true
-              }
-            ]
+            "types": null
           },
           "plan": "PassArrangements"
         }
@@ -289,16 +280,7 @@ SELECT a + b, 1 FROM t
                 ]
               ]
             ],
-            "types": [
-              {
-                "scalar_type": "Int32",
-                "nullable": true
-              },
-              {
-                "scalar_type": "Int32",
-                "nullable": true
-              }
-            ]
+            "types": null
           },
           "plan": {
             "Arrangement": [
@@ -476,16 +458,7 @@ SELECT * FROM ov
                         ]
                       ]
                     ],
-                    "types": [
-                      {
-                        "scalar_type": "Int32",
-                        "nullable": true
-                      },
-                      {
-                        "scalar_type": "Int32",
-                        "nullable": true
-                      }
-                    ]
+                    "types": null
                   },
                   "plan": "PassArrangements"
                 }
@@ -580,16 +553,7 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                               ]
                             ]
                           ],
-                          "types": [
-                            {
-                              "scalar_type": "Int32",
-                              "nullable": true
-                            },
-                            {
-                              "scalar_type": "Int32",
-                              "nullable": true
-                            }
-                          ]
+                          "types": null
                         },
                         "plan": {
                           "Arrangement": [
@@ -745,16 +709,7 @@ SELECT * FROM ov
                         ]
                       ]
                     ],
-                    "types": [
-                      {
-                        "scalar_type": "Int32",
-                        "nullable": true
-                      },
-                      {
-                        "scalar_type": "Int32",
-                        "nullable": true
-                      }
-                    ]
+                    "types": null
                   },
                   "plan": "PassArrangements"
                 }
@@ -853,16 +808,7 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                   ]
                                 ]
                               ],
-                              "types": [
-                                {
-                                  "scalar_type": "Int32",
-                                  "nullable": true
-                                },
-                                {
-                                  "scalar_type": "Int32",
-                                  "nullable": true
-                                }
-                              ]
+                              "types": null
                             },
                             "plan": {
                               "Arrangement": [
@@ -1171,16 +1117,7 @@ SELECT x * 5 FROM cte WHERE x = 5
                                         ]
                                       ]
                                     ],
-                                    "types": [
-                                      {
-                                        "scalar_type": "Int32",
-                                        "nullable": true
-                                      },
-                                      {
-                                        "scalar_type": "Int32",
-                                        "nullable": true
-                                      }
-                                    ]
+                                    "types": null
                                   },
                                   "plan": "PassArrangements"
                                 }
@@ -1220,12 +1157,7 @@ SELECT x * 5 FROM cte WHERE x = 5
                                         []
                                       ]
                                     ],
-                                    "types": [
-                                      {
-                                        "scalar_type": "Int32",
-                                        "nullable": false
-                                      }
-                                    ]
+                                    "types": []
                                   },
                                   "input_key": null,
                                   "input_mfp": {
@@ -1478,16 +1410,7 @@ SELECT generate_series(a, b) from t
                     ]
                   ]
                 ],
-                "types": [
-                  {
-                    "scalar_type": "Int32",
-                    "nullable": true
-                  },
-                  {
-                    "scalar_type": "Int32",
-                    "nullable": true
-                  }
-                ]
+                "types": null
               },
               "plan": "PassArrangements"
             }
@@ -1574,16 +1497,7 @@ SELECT DISTINCT a, b FROM t
                     ]
                   ]
                 ],
-                "types": [
-                  {
-                    "scalar_type": "Int32",
-                    "nullable": true
-                  },
-                  {
-                    "scalar_type": "Int32",
-                    "nullable": true
-                  }
-                ]
+                "types": null
               },
               "plan": "PassArrangements"
             }
@@ -1664,16 +1578,7 @@ GROUP BY a
                     ]
                   ]
                 ],
-                "types": [
-                  {
-                    "scalar_type": "Int32",
-                    "nullable": true
-                  },
-                  {
-                    "scalar_type": "Int32",
-                    "nullable": true
-                  }
-                ]
+                "types": null
               },
               "plan": "PassArrangements"
             }
@@ -1802,16 +1707,7 @@ FROM t
                         ]
                       ]
                     ],
-                    "types": [
-                      {
-                        "scalar_type": "Int32",
-                        "nullable": true
-                      },
-                      {
-                        "scalar_type": "Int32",
-                        "nullable": true
-                      }
-                    ]
+                    "types": null
                   },
                   "plan": {
                     "Arrangement": [
@@ -2105,16 +2001,7 @@ SELECT * FROM hierarchical_group_by
                     ]
                   ]
                 ],
-                "types": [
-                  {
-                    "scalar_type": "Int32",
-                    "nullable": true
-                  },
-                  {
-                    "scalar_type": "Int32",
-                    "nullable": true
-                  }
-                ]
+                "types": null
               },
               "plan": "PassArrangements"
             }
@@ -2209,16 +2096,7 @@ MATERIALIZED VIEW hierarchical_global_mv
                         ]
                       ]
                     ],
-                    "types": [
-                      {
-                        "scalar_type": "Int32",
-                        "nullable": true
-                      },
-                      {
-                        "scalar_type": "Int32",
-                        "nullable": true
-                      }
-                    ]
+                    "types": null
                   },
                   "plan": {
                     "Arrangement": [
@@ -2492,16 +2370,7 @@ SELECT * FROM hierarchical_global
                         ]
                       ]
                     ],
-                    "types": [
-                      {
-                        "scalar_type": "Int32",
-                        "nullable": true
-                      },
-                      {
-                        "scalar_type": "Int32",
-                        "nullable": true
-                      }
-                    ]
+                    "types": null
                   },
                   "plan": {
                     "Arrangement": [
@@ -2769,16 +2638,7 @@ GROUP BY a
                     ]
                   ]
                 ],
-                "types": [
-                  {
-                    "scalar_type": "Int32",
-                    "nullable": true
-                  },
-                  {
-                    "scalar_type": "Int32",
-                    "nullable": true
-                  }
-                ]
+                "types": null
               },
               "plan": "PassArrangements"
             }
@@ -3190,16 +3050,7 @@ FROM t
                         ]
                       ]
                     ],
-                    "types": [
-                      {
-                        "scalar_type": "Int32",
-                        "nullable": true
-                      },
-                      {
-                        "scalar_type": "Int32",
-                        "nullable": true
-                      }
-                    ]
+                    "types": null
                   },
                   "plan": {
                     "Arrangement": [
@@ -3776,16 +3627,7 @@ MATERIALIZED VIEW collated_group_by_mv
                     ]
                   ]
                 ],
-                "types": [
-                  {
-                    "scalar_type": "Int32",
-                    "nullable": true
-                  },
-                  {
-                    "scalar_type": "Int32",
-                    "nullable": true
-                  }
-                ]
+                "types": null
               },
               "plan": "PassArrangements"
             }
@@ -4270,16 +4112,7 @@ SELECT * FROM collated_group_by
                     ]
                   ]
                 ],
-                "types": [
-                  {
-                    "scalar_type": "Int32",
-                    "nullable": true
-                  },
-                  {
-                    "scalar_type": "Int32",
-                    "nullable": true
-                  }
-                ]
+                "types": null
               },
               "plan": "PassArrangements"
             }
@@ -4759,16 +4592,7 @@ MATERIALIZED VIEW collated_global_mv
                         ]
                       ]
                     ],
-                    "types": [
-                      {
-                        "scalar_type": "Int32",
-                        "nullable": true
-                      },
-                      {
-                        "scalar_type": "Int32",
-                        "nullable": true
-                      }
-                    ]
+                    "types": null
                   },
                   "plan": {
                     "Arrangement": [
@@ -5511,16 +5335,7 @@ SELECT * FROM collated_global
                         ]
                       ]
                     ],
-                    "types": [
-                      {
-                        "scalar_type": "Int32",
-                        "nullable": true
-                      },
-                      {
-                        "scalar_type": "Int32",
-                        "nullable": true
-                      }
-                    ]
+                    "types": null
                   },
                   "plan": {
                     "Arrangement": [
@@ -6255,16 +6070,7 @@ WHERE a = c AND d = e AND b + d > 42
                       ]
                     ]
                   ],
-                  "types": [
-                    {
-                      "scalar_type": "Int32",
-                      "nullable": true
-                    },
-                    {
-                      "scalar_type": "Int32",
-                      "nullable": true
-                    }
-                  ]
+                  "types": null
                 },
                 "plan": "PassArrangements"
               }
@@ -6314,16 +6120,7 @@ WHERE a = c AND d = e AND b + d > 42
                       ]
                     ]
                   ],
-                  "types": [
-                    {
-                      "scalar_type": "Int32",
-                      "nullable": false
-                    },
-                    {
-                      "scalar_type": "Int32",
-                      "nullable": false
-                    }
-                  ]
+                  "types": []
                 },
                 "input_key": null,
                 "input_mfp": {
@@ -6378,12 +6175,7 @@ WHERE a = c AND d = e AND b + d > 42
                       []
                     ]
                   ],
-                  "types": [
-                    {
-                      "scalar_type": "Int32",
-                      "nullable": false
-                    }
-                  ]
+                  "types": []
                 },
                 "input_key": null,
                 "input_mfp": {
@@ -6706,16 +6498,7 @@ WHERE a = c AND d = e AND f = a
                       ]
                     ]
                   ],
-                  "types": [
-                    {
-                      "scalar_type": "Int32",
-                      "nullable": true
-                    },
-                    {
-                      "scalar_type": "Int32",
-                      "nullable": true
-                    }
-                  ]
+                  "types": null
                 },
                 "plan": "PassArrangements"
               }
@@ -6747,16 +6530,7 @@ WHERE a = c AND d = e AND f = a
                           ]
                         ]
                       ],
-                      "types": [
-                        {
-                          "scalar_type": "Int32",
-                          "nullable": true
-                        },
-                        {
-                          "scalar_type": "Int32",
-                          "nullable": true
-                        }
-                      ]
+                      "types": null
                     },
                     "plan": {
                       "Arrangement": [
@@ -6839,16 +6613,7 @@ WHERE a = c AND d = e AND f = a
                       []
                     ]
                   ],
-                  "types": [
-                    {
-                      "scalar_type": "Int32",
-                      "nullable": false
-                    },
-                    {
-                      "scalar_type": "Int32",
-                      "nullable": false
-                    }
-                  ]
+                  "types": []
                 },
                 "input_key": null,
                 "input_mfp": {
@@ -6889,16 +6654,7 @@ WHERE a = c AND d = e AND f = a
                           ]
                         ]
                       ],
-                      "types": [
-                        {
-                          "scalar_type": "Int32",
-                          "nullable": true
-                        },
-                        {
-                          "scalar_type": "Int32",
-                          "nullable": true
-                        }
-                      ]
+                      "types": null
                     },
                     "plan": {
                       "Arrangement": [
@@ -6981,16 +6737,7 @@ WHERE a = c AND d = e AND f = a
                       []
                     ]
                   ],
-                  "types": [
-                    {
-                      "scalar_type": "Int32",
-                      "nullable": false
-                    },
-                    {
-                      "scalar_type": "Int32",
-                      "nullable": false
-                    }
-                  ]
+                  "types": []
                 },
                 "input_key": null,
                 "input_mfp": {
@@ -7172,16 +6919,7 @@ WHERE a = c and a = e
                       ]
                     ]
                   ],
-                  "types": [
-                    {
-                      "scalar_type": "Int32",
-                      "nullable": true
-                    },
-                    {
-                      "scalar_type": "Int32",
-                      "nullable": true
-                    }
-                  ]
+                  "types": null
                 },
                 "plan": "PassArrangements"
               }
@@ -7211,16 +6949,7 @@ WHERE a = c and a = e
                       ]
                     ]
                   ],
-                  "types": [
-                    {
-                      "scalar_type": "Int32",
-                      "nullable": true
-                    },
-                    {
-                      "scalar_type": "Int32",
-                      "nullable": true
-                    }
-                  ]
+                  "types": null
                 },
                 "plan": "PassArrangements"
               }
@@ -7250,16 +6979,7 @@ WHERE a = c and a = e
                       ]
                     ]
                   ],
-                  "types": [
-                    {
-                      "scalar_type": "Int32",
-                      "nullable": true
-                    },
-                    {
-                      "scalar_type": "Int32",
-                      "nullable": true
-                    }
-                  ]
+                  "types": null
                 },
                 "plan": "PassArrangements"
               }

@@ -290,6 +290,8 @@ pub fn build_compute_dataflow<A: Allocate>(
             scope.clone().iterative::<PointStamp<u64>, _, _>(|region| {
                 let mut context = Context::for_dataflow_in(&dataflow, region.clone());
                 context.linear_join_impl = compute_state.linear_join_impl;
+                context.enable_specialized_arrangements =
+                    compute_state.enable_specialized_arrangements;
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
                     let bundle = crate::render::CollectionBundle::from_collections(
@@ -350,6 +352,8 @@ pub fn build_compute_dataflow<A: Allocate>(
             scope.clone().region_named(&build_name, |region| {
                 let mut context = Context::for_dataflow_in(&dataflow, region.clone());
                 context.linear_join_impl = compute_state.linear_join_impl;
+                context.enable_specialized_arrangements =
+                    compute_state.enable_specialized_arrangements;
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
                     let bundle = crate::render::CollectionBundle::from_collections(
@@ -981,7 +985,13 @@ where
                 input_mfp,
             } => {
                 let input = self.render_plan(*input);
-                input.ensure_collections(keys, input_key, input_mfp, self.until.clone())
+                input.ensure_collections(
+                    keys,
+                    input_key,
+                    input_mfp,
+                    self.until.clone(),
+                    self.enable_specialized_arrangements,
+                )
             }
         }
     }

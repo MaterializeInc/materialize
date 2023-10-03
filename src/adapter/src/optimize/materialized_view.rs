@@ -280,6 +280,7 @@ impl<'ctx> Optimize<'ctx, GlobalMirPlan<Resolved>> for OptimizeMaterializedView 
             df_desc,
             self.config.enable_consolidate_after_union_negate,
             false, // we are not in a monotonic context here
+            self.config.enable_specialized_arrangements,
         )
         .map_err(OptimizerError::Internal)?;
 

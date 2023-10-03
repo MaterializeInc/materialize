@@ -95,11 +95,9 @@ materialize.public.mv:
     Get::PassArrangements materialize.public.accounts
       raw=false
       arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
-      types=[integer?, integer?]
     ArrangeBy
       raw=true
       arrangements[0]={ key=[#0], permutation=id, thinning=() }
-      types=[integer]
       Constant
         - (100)
 
@@ -140,11 +138,9 @@ materialize.public.mv:
     Get::PassArrangements materialize.public.accounts
       raw=false
       arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
-      types=[integer?, integer?]
     ArrangeBy
       raw=true
       arrangements[0]={ key=[#0], permutation=id, thinning=() }
-      types=[integer]
       Constant
         - (100)
 
@@ -186,11 +182,9 @@ materialize.public.mv:
     Get::PassArrangements materialize.public.accounts
       raw=false
       arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
-      types=[integer?, integer?]
     ArrangeBy
       raw=true
       arrangements[0]={ key=[#0], permutation=id, thinning=() }
-      types=[integer]
       Constant
         - (100)
 

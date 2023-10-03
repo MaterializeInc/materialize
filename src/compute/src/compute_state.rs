@@ -90,6 +90,8 @@ pub struct ComputeState {
     pub metrics: ComputeMetrics,
     /// A process-global handle to tracing configuration.
     tracing_handle: Arc<TracingHandle>,
+    /// Enable arrangement type specialization.
+    pub enable_specialized_arrangements: bool,
 }
 
 impl ComputeState {
@@ -117,6 +119,7 @@ impl ComputeState {
             linear_join_impl: Default::default(),
             metrics,
             tracing_handle,
+            enable_specialized_arrangements: Default::default(),
         }
     }
 
@@ -197,6 +200,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             dataflow_max_inflight_bytes,
             enable_mz_join_core,
             enable_jemalloc_profiling,
+            enable_specialized_arrangements,
             persist,
             tracing,
             grpc_client: _grpc_client,
@@ -207,6 +211,9 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         }
         if let Some(v) = dataflow_max_inflight_bytes {
             self.compute_state.dataflow_max_inflight_bytes = v;
+        }
+        if let Some(v) = enable_specialized_arrangements {
+            self.compute_state.enable_specialized_arrangements = v;
         }
         if let Some(v) = enable_mz_join_core {
             self.compute_state.linear_join_impl = match v {

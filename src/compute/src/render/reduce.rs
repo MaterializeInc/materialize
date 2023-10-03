@@ -168,6 +168,7 @@ where
         let mut errors = Default::default();
         let arrangement = self.render_reduce_plan_inner(plan, collection, &mut errors, key_arity);
         let errs: KeyCollection<_, _, _> = err_input.concatenate(errors).into();
+        // TODO(vmarcos): We should implement arrangement specialization here (#22103).
         CollectionBundle::from_columns(
             0..key_arity,
             ArrangementFlavor::Local(
