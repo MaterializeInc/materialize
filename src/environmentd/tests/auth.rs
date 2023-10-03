@@ -131,6 +131,14 @@ use uuid::Uuid;
 
 pub mod util;
 
+// How long, in seconds, a claim is valid for. Increasing this value will decrease some test flakes
+// without increasing test time.
+const EXPIRES_IN_SECS: u64 = 20;
+// Always start the refresh 5 seconds after getting a new claim. This helps reduce test
+// flakes where the refresh takes too long and the claim expires, while also limiting the amount of
+// time we sit around doing nothing.
+const REFRESH_BEFORE_SECS: u64 = EXPIRES_IN_SECS - 5;
+
 /// A certificate authority for use in tests.
 pub struct Ca {
     dir: TempDir,
@@ -810,10 +818,6 @@ fn test_auth_expiry() {
     let encoding_key =
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
 
-    const EXPIRES_IN_SECS: u64 = 20;
-    // Always start the refresh immediately after getting a new claim. This helps reduce test
-    // flakes where the refresh takes too long and the claim expires.
-    const REFRESH_BEFORE_SECS: u64 = EXPIRES_IN_SECS;
     let (_role_tx, role_rx) = tokio::sync::mpsc::unbounded_channel();
     let frontegg_server = start_mzcloud(
         encoding_key,
@@ -1692,10 +1696,6 @@ fn test_auth_admin_non_superuser() {
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
     let now = SYSTEM_TIME.clone();
 
-    const EXPIRES_IN_SECS: u64 = 20;
-    // Always start the refresh immediately after getting a new claim. This helps reduce test
-    // flakes where the refresh takes too long and the claim expires.
-    const REFRESH_BEFORE_SECS: u64 = EXPIRES_IN_SECS;
     let (_role_tx, role_rx) = tokio::sync::mpsc::unbounded_channel();
     let frontegg_server = start_mzcloud(
         encoding_key,
@@ -1802,10 +1802,6 @@ fn test_auth_admin_superuser() {
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
     let now = SYSTEM_TIME.clone();
 
-    const EXPIRES_IN_SECS: u64 = 20;
-    // Always start the refresh immediately after getting a new claim. This helps reduce test
-    // flakes where the refresh takes too long and the claim expires.
-    const REFRESH_BEFORE_SECS: u64 = EXPIRES_IN_SECS;
     let (_role_tx, role_rx) = tokio::sync::mpsc::unbounded_channel();
     let frontegg_server = start_mzcloud(
         encoding_key,
@@ -1912,10 +1908,6 @@ fn test_auth_admin_superuser_revoked() {
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
     let now = SYSTEM_TIME.clone();
 
-    const EXPIRES_IN_SECS: u64 = 20;
-    // Always start the refresh immediately after getting a new claim. This helps reduce test
-    // flakes where the refresh takes too long and the claim expires.
-    const REFRESH_BEFORE_SECS: u64 = EXPIRES_IN_SECS;
     let (role_tx, role_rx) = tokio::sync::mpsc::unbounded_channel();
     let frontegg_server = start_mzcloud(
         encoding_key,
