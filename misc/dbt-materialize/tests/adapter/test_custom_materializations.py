@@ -62,7 +62,7 @@ class TestCustomMaterializations:
 
     def test_custom_materializations(self, project):
         project.run_sql("CREATE ROLE bi")
-        project.run_sql("CREATE ROLE reporter")
+        project.run_sql('CREATE ROLE "test@materialize.com"')
 
         # seed seeds
         results = run_dbt(["seed"])
