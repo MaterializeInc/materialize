@@ -115,7 +115,10 @@ for each auction at its `end_time`.
     WHERE auctions.id = bids.auction_id
       AND bids.bid_time < auctions.end_time
       AND mz_now() >= auctions.end_time
-    ORDER BY auctions.id, bids.amount DESC;
+    ORDER BY auctions.id,
+      bids.bid_time DESC,
+      bids.amount,
+      bids.buyer;
     ```
 
     Like in other SQL databases, a view in Materialize is just an alias for the
