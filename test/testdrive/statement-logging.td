@@ -22,7 +22,7 @@ statement_logging_sample_rate
 1.0
 
 # Verify that we can get application names
-# that are set after session initialization 
+# that are set after session initialization
 > SET application_name TO my_app
 
 # Later, we need to ignore everything
