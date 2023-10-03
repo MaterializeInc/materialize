@@ -29,7 +29,7 @@ version=${1#v}
 
 sed -i.bak \
     "s/^version = .*/version = \"$version\"/" \
-    src/{clusterd,environmentd,persist-client}/Cargo.toml
+    src/{clusterd,environmentd,persist-client,testdrive}/Cargo.toml
 
 if ! [[ "$version" = *dev ]]; then
     sed -i.bak \

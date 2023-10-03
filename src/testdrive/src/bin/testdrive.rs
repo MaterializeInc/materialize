@@ -87,6 +87,7 @@ use aws_credential_types::Credentials;
 use aws_types::region::Region;
 use globset::GlobBuilder;
 use itertools::Itertools;
+use mz_build_info::{build_info, BuildInfo};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::path::PathExt;
 use mz_testdrive::Config;
@@ -105,6 +106,8 @@ macro_rules! die {
         process::exit(1);
     }}
 }
+
+pub const BUILD_INFO: BuildInfo = build_info!();
 
 /// Integration test driver for Materialize.
 #[derive(clap::Parser)]
@@ -213,6 +216,14 @@ struct Args {
     /// Validate the stash state of the specified postgres connection string.
     #[clap(long, value_name = "POSTGRES_URL")]
     validate_postgres_stash: Option<String>,
+
+    // === Persist options. ===
+    /// Handle to the persist consensus system.
+    #[clap(long, value_name = "PERSIST_CONSENSUS_URL")]
+    persist_consensus_url: Option<String>,
+    /// Handle to the persist blob storage.
+    #[clap(long, value_name = "PERSIST_BLOB_URL")]
+    persist_blob_url: Option<String>,
 
     // === Confluent options. ===
     /// Address of the Kafka broker that testdrive will interact with.
@@ -401,6 +412,11 @@ async fn main() {
         materialize_internal_http_port: args.materialize_internal_http_port,
         materialize_params: args.materialize_param,
         materialize_catalog_postgres_stash: args.validate_postgres_stash,
+        build_info: &BUILD_INFO,
+
+        // === Persist options. ===
+        persist_consensus_url: args.persist_consensus_url,
+        persist_blob_url: args.persist_blob_url,
 
         // === Confluent options. ===
         kafka_addr: args.kafka_addr,
