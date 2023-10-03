@@ -810,8 +810,10 @@ fn test_auth_expiry() {
     let encoding_key =
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
 
-    const EXPIRES_IN_SECS: u64 = 40;
-    const REFRESH_BEFORE_SECS: u64 = 20;
+    const EXPIRES_IN_SECS: u64 = 20;
+    // Always start the refresh immediately after getting a new claim. This helps reduce test
+    // flakes where the refresh takes too long and the claim expires.
+    const REFRESH_BEFORE_SECS: u64 = EXPIRES_IN_SECS;
     let (_role_tx, role_rx) = tokio::sync::mpsc::unbounded_channel();
     let frontegg_server = start_mzcloud(
         encoding_key,
@@ -1690,8 +1692,10 @@ fn test_auth_admin_non_superuser() {
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
     let now = SYSTEM_TIME.clone();
 
-    const EXPIRES_IN_SECS: u64 = 40;
-    const REFRESH_BEFORE_SECS: u64 = 20;
+    const EXPIRES_IN_SECS: u64 = 20;
+    // Always start the refresh immediately after getting a new claim. This helps reduce test
+    // flakes where the refresh takes too long and the claim expires.
+    const REFRESH_BEFORE_SECS: u64 = EXPIRES_IN_SECS;
     let (_role_tx, role_rx) = tokio::sync::mpsc::unbounded_channel();
     let frontegg_server = start_mzcloud(
         encoding_key,
@@ -1798,8 +1802,10 @@ fn test_auth_admin_superuser() {
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
     let now = SYSTEM_TIME.clone();
 
-    const EXPIRES_IN_SECS: u64 = 40;
-    const REFRESH_BEFORE_SECS: u64 = 20;
+    const EXPIRES_IN_SECS: u64 = 20;
+    // Always start the refresh immediately after getting a new claim. This helps reduce test
+    // flakes where the refresh takes too long and the claim expires.
+    const REFRESH_BEFORE_SECS: u64 = EXPIRES_IN_SECS;
     let (_role_tx, role_rx) = tokio::sync::mpsc::unbounded_channel();
     let frontegg_server = start_mzcloud(
         encoding_key,
@@ -1868,7 +1874,7 @@ fn test_auth_admin_superuser() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
-fn test_auth_admin_show_is_superuser() {
+fn test_auth_admin_superuser_revoked() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
@@ -1906,8 +1912,10 @@ fn test_auth_admin_show_is_superuser() {
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
     let now = SYSTEM_TIME.clone();
 
-    const EXPIRES_IN_SECS: u64 = 40;
-    const REFRESH_BEFORE_SECS: u64 = 20;
+    const EXPIRES_IN_SECS: u64 = 20;
+    // Always start the refresh immediately after getting a new claim. This helps reduce test
+    // flakes where the refresh takes too long and the claim expires.
+    const REFRESH_BEFORE_SECS: u64 = EXPIRES_IN_SECS;
     let (role_tx, role_rx) = tokio::sync::mpsc::unbounded_channel();
     let frontegg_server = start_mzcloud(
         encoding_key,
