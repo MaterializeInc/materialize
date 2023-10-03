@@ -454,8 +454,7 @@ impl Catalog {
         debug_stash_factory: &DebugStashFactory,
         now: NowFn,
     ) -> Result<Catalog, anyhow::Error> {
-        let mut openable_storage =
-            mz_catalog::debug_stash_backed_catalog_state(debug_stash_factory);
+        let openable_storage = mz_catalog::debug_stash_backed_catalog_state(debug_stash_factory);
         let storage = openable_storage
             .open(now.clone(), &debug_bootstrap_args(), None)
             .await?;
@@ -479,7 +478,7 @@ impl Catalog {
             schema: Some(schema),
             tls,
         };
-        let mut openable_storage = mz_catalog::stash_backed_catalog_state(stash_config);
+        let openable_storage = mz_catalog::stash_backed_catalog_state(stash_config);
         let storage = openable_storage
             .open(now.clone(), &debug_bootstrap_args(), None)
             .await?;
@@ -493,7 +492,7 @@ impl Catalog {
         stash_config: StashConfig,
         now: NowFn,
     ) -> Result<Catalog, anyhow::Error> {
-        let mut openable_storage = mz_catalog::stash_backed_catalog_state(stash_config);
+        let openable_storage = mz_catalog::stash_backed_catalog_state(stash_config);
         let storage = openable_storage
             .open_read_only(now.clone(), &debug_bootstrap_args())
             .await?;

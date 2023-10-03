@@ -924,7 +924,7 @@ impl RustType<proto::IdAllocKey> for IdAllocKey {
     }
 }
 
-#[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct IdAllocValue {
     pub(crate) next_id: u64,
 }

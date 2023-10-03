@@ -346,20 +346,22 @@ impl Listeners {
             mz_ore::server::serve(internal_http_conns, internal_http_server)
         });
 
-        let mut openable_adapter_storage = mz_catalog::stash_backed_catalog_state(StashConfig {
-            stash_factory: mz_stash::StashFactory::from_metrics(Arc::clone(
-                &config.controller.stash_metrics,
-            )),
-            stash_url: config.adapter_stash_url.clone(),
-            schema: stash_schema.clone(),
-            tls: tls.clone(),
-        });
-
         'leader_promotion: {
             let Some(deploy_generation) = config.deploy_generation else {
                 break 'leader_promotion;
             };
             tracing::info!("Requested deploy generation {deploy_generation}");
+
+            let mut openable_adapter_storage =
+                mz_catalog::stash_backed_catalog_state(StashConfig {
+                    stash_factory: mz_stash::StashFactory::from_metrics(Arc::clone(
+                        &config.controller.stash_metrics,
+                    )),
+                    stash_url: config.adapter_stash_url.clone(),
+                    schema: stash_schema.clone(),
+                    tls: tls.clone(),
+                });
+
             if !openable_adapter_storage.is_initialized().await? {
                 tracing::info!("Stash doesn't exist so there's no current deploy generation. We won't wait to be leader");
                 break 'leader_promotion;
@@ -409,6 +411,14 @@ impl Listeners {
             }
         }
 
+        let openable_adapter_storage = mz_catalog::stash_backed_catalog_state(StashConfig {
+            stash_factory: mz_stash::StashFactory::from_metrics(Arc::clone(
+                &config.controller.stash_metrics,
+            )),
+            stash_url: config.adapter_stash_url.clone(),
+            schema: stash_schema.clone(),
+            tls: tls.clone(),
+        });
         let mut adapter_storage = Box::new(
             openable_adapter_storage
                 .open(

@@ -11,7 +11,7 @@ use crate::builtin::{BuiltinLog, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS};
 use crate::objects::{
     AuditLogKey, Cluster, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
     ClusterKey, ClusterReplica, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, CommentKey,
-    CommentValue, ConfigKey, ConfigValue, Database, DatabaseKey, DatabaseValue,
+    CommentValue, Config, ConfigKey, ConfigValue, Database, DatabaseKey, DatabaseValue,
     DefaultPrivilegesKey, DefaultPrivilegesValue, DurableType, GidMappingKey, GidMappingValue,
     IdAllocKey, IdAllocValue, IntrospectionSourceIndex, Item, ItemKey, ItemValue, ReplicaConfig,
     Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue, ServerConfigurationKey,
@@ -20,7 +20,7 @@ use crate::objects::{
 };
 use crate::objects::{ClusterConfig, ClusterVariant};
 use crate::{
-    BootstrapArgs, CatalogError, DurableCatalogState, ReplicaLocation, Snapshot,
+    BootstrapArgs, CatalogError, DurableCatalogState, ReplicaLocation, Snapshot, TimelineTimestamp,
     DATABASE_ID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY,
     SYSTEM_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
@@ -28,6 +28,7 @@ use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller::clusters::ReplicaLogging;
 use mz_controller_types::{ClusterId, ReplicaId};
+use mz_ore::collections::CollectionExt;
 use mz_proto::RustType;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
@@ -595,18 +596,33 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn get_and_increment_id(&mut self, key: String) -> Result<u64, CatalogError> {
-        let id = self
+        Ok(self.get_and_increment_id_by(key, 1)?.into_element())
+    }
+
+    pub fn get_and_increment_id_by(
+        &mut self,
+        key: String,
+        amount: u64,
+    ) -> Result<Vec<u64>, CatalogError> {
+        let current_id = self
             .id_allocator
             .items()
             .get(&IdAllocKey { name: key.clone() })
             .unwrap_or_else(|| panic!("{key} id allocator missing"))
             .next_id;
-        let next_id = id.checked_add(1).ok_or(SqlCatalogError::IdExhaustion)?;
+        let next_id = current_id
+            .checked_add(amount)
+            .ok_or(SqlCatalogError::IdExhaustion)?;
         let prev = self
             .id_allocator
             .set(IdAllocKey { name: key }, Some(IdAllocValue { next_id }))?;
-        assert!(prev.is_some());
-        Ok(id)
+        assert_eq!(
+            prev,
+            Some(IdAllocValue {
+                next_id: current_id
+            })
+        );
+        Ok((current_id..next_id).collect())
     }
 
     pub(crate) fn insert_id_allocator(
@@ -690,6 +706,14 @@ impl<'a> Transaction<'a> {
             assert!(deleted.is_empty());
             Err(SqlCatalogError::UnknownClusterReplica(id.to_string()).into())
         }
+    }
+
+    /// Removes all storage usage events in `events` from the transaction.
+    pub(crate) fn remove_storage_usage_events(&mut self, events: Vec<VersionedStorageUsage>) {
+        let events = events
+            .into_iter()
+            .map(|event| (StorageUsageKey { metric: event }.into_proto(), (), -1));
+        self.storage_usage_updates.extend(events);
     }
 
     /// Removes item `id` from the transaction.
@@ -971,6 +995,80 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
+    /// Set persisted setting.
+    pub(crate) fn set_setting(
+        &mut self,
+        name: String,
+        value: Option<String>,
+    ) -> Result<(), CatalogError> {
+        self.settings.set(
+            SettingKey { name },
+            value.map(|value| SettingValue { value }),
+        )?;
+        Ok(())
+    }
+
+    /// Set persisted introspection source index.
+    pub(crate) fn set_introspection_source_index(
+        &mut self,
+        introspection_source_index: IntrospectionSourceIndex,
+    ) -> Result<(), CatalogError> {
+        let (key, value) = introspection_source_index.into_key_value();
+        self.introspection_sources.set(key, Some(value))?;
+        Ok(())
+    }
+
+    /// Set persisted system object mappings.
+    pub(crate) fn set_system_object_mapping(
+        &mut self,
+        mapping: SystemObjectMapping,
+    ) -> Result<(), CatalogError> {
+        let (key, value) = mapping.into_key_value();
+        self.system_gid_mapping.set(key, Some(value))?;
+        Ok(())
+    }
+
+    /// Set persisted timestamp.
+    pub(crate) fn set_timestamp(
+        &mut self,
+        timeline: Timeline,
+        ts: mz_repr::Timestamp,
+    ) -> Result<(), CatalogError> {
+        let timeline_timestamp = TimelineTimestamp { timeline, ts };
+        let (key, value) = timeline_timestamp.into_key_value();
+        self.timestamps.set(key, Some(value))?;
+        Ok(())
+    }
+
+    /// Set persisted replica.
+    pub(crate) fn set_replica(
+        &mut self,
+        replica_id: ReplicaId,
+        cluster_id: ClusterId,
+        name: String,
+        config: ReplicaConfig,
+        owner_id: RoleId,
+    ) -> Result<(), CatalogError> {
+        let replica = ClusterReplica {
+            cluster_id,
+            replica_id,
+            name,
+            config,
+            owner_id,
+        };
+        let (key, value) = replica.into_key_value();
+        self.cluster_replicas.set(key, Some(value))?;
+        Ok(())
+    }
+
+    /// Set persisted configuration.
+    pub(crate) fn set_config(&mut self, key: String, value: u64) -> Result<(), CatalogError> {
+        let config = Config { key, value };
+        let (key, value) = config.into_key_value();
+        self.configs.set(key, Some(value))?;
+        Ok(())
+    }
+
     pub fn update_comment(
         &mut self,
         object_id: CommentObjectId,
@@ -1043,12 +1141,7 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    /// Commits the storage transaction to the stash. Any error returned indicates the stash may be
-    /// in an indeterminate state and needs to be fully re-read before proceeding. In general, this
-    /// must be fatal to the calling process. We do not panic/halt inside this function itself so
-    /// that errors can bubble up during initialization.
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn commit(self) -> Result<(), CatalogError> {
+    pub(crate) fn into_parts(self) -> (TransactionBatch, &'a mut dyn DurableCatalogState) {
         let txn_batch = TransactionBatch {
             databases: self.databases.pending(),
             schemas: self.schemas.pending(),
@@ -1069,7 +1162,17 @@ impl<'a> Transaction<'a> {
             audit_log_updates: self.audit_log_updates,
             storage_usage_updates: self.storage_usage_updates,
         };
-        self.durable_catalog.commit_transaction(txn_batch).await
+        (txn_batch, self.durable_catalog)
+    }
+
+    /// Commits the storage transaction to the stash. Any error returned indicates the stash may be
+    /// in an indeterminate state and needs to be fully re-read before proceeding. In general, this
+    /// must be fatal to the calling process. We do not panic/halt inside this function itself so
+    /// that errors can bubble up during initialization.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn commit(self) -> Result<(), CatalogError> {
+        let (txn_batch, durable_catalog) = self.into_parts();
+        durable_catalog.commit_transaction(txn_batch).await
     }
 }
 

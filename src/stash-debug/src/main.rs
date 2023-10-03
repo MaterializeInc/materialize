@@ -479,7 +479,7 @@ impl Usage {
 
         let metrics_registry = &MetricsRegistry::new();
         let now = SYSTEM_TIME.clone();
-        let mut openable_storage = mz_catalog::stash_backed_catalog_state(stash_config);
+        let openable_storage = mz_catalog::stash_backed_catalog_state(stash_config);
         let storage = Box::new(
             openable_storage
                 .open_savepoint(
