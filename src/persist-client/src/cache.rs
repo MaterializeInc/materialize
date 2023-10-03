@@ -193,6 +193,7 @@ impl PersistClientCache {
                 })
                 .await;
                 let blob = Arc::new(MetricsBlob::new(blob, Arc::clone(&self.metrics)));
+                let blob = Arc::new(Tasked(blob));
                 let task = blob_rtt_latency_task(
                     Arc::clone(&blob),
                     Arc::clone(&self.metrics),
@@ -221,7 +222,7 @@ impl PersistClientCache {
 /// start.
 #[allow(clippy::unused_async)]
 async fn blob_rtt_latency_task(
-    blob: Arc<MetricsBlob>,
+    blob: Arc<Tasked<MetricsBlob>>,
     metrics: Arc<Metrics>,
     measurement_interval: Duration,
 ) -> JoinHandle<()> {
@@ -266,7 +267,7 @@ async fn consensus_rtt_latency_task(
     metrics: Arc<Metrics>,
     measurement_interval: Duration,
 ) -> JoinHandle<()> {
-    mz_ore::task::spawn(|| "persist::blob_rtt_latency", async move {
+    mz_ore::task::spawn(|| "persist::consensus_rtt_latency", async move {
         // Use the tokio Instant for next_measurement because the reclock tests
         // mess with the tokio sleep clock.
         let mut next_measurement = tokio::time::Instant::now();
