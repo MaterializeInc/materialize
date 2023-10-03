@@ -5,10 +5,10 @@ menu:
   main:
     parent: "webhooks"
     name: "SnowcatCloud"
-    weight: 10
+    weight: 15
 ---
 
-[SnowcatCloud](https://www.snowcatcloud.com/) provides cloud-hosted and managed infrastructure to collect, enrich, and route event data using Snowplow and Analytics.js compatible pipelines. SnowcatCloud is SOC 2 Type 2 Certified and has infrastructure in NA, EU, and AP.
+[SnowcatCloud](https://www.snowcatcloud.com/) provides cloud-hosted and managed infrastructure to collect, enrich, and route event data using Snowplow and Analytics.js compatible pipelines. SnowcatCloud is SOC 2 Type 2 certified and has infrastructure in NA, EU, and AP.
 
 This guide will walk you through the steps to ingest data from SnowcatCloud to Materialize.
 
@@ -19,7 +19,9 @@ Ensure that you have:
 - [A SnowcatCloud account](https://app.snowcatcloud.com/register)
 - A Snowplow or Analytics.js compatible pipeline set up and running.
 
-## Step 1. Create a Materialize Cluster
+## Step 1. (Optional) Create a Materialize cluster
+
+If you already have a cluster for your webhook sources, you can skip this step.
 
 To create a Materialize cluster, follow the steps outlined in Materialize create a [cluster](/sql/create-cluster) guide,
 or create a managed cluster using the following SQL statement:
@@ -61,11 +63,14 @@ CREATE SOURCE snowcatcloud_source IN CLUSTER snowcatcloud_cluster
 The above webhook source uses [basic authentication](https://developer.mozilla.org/en-US/docs/Web/HTTP/Authentication#basic_authentication_scheme).
 This enables a simple and rudimentary way to grant authorization to your webhook source.
 
-## Step 4. Add Materialize Destination in SnowcatCloud
+After a successful run, the command returns a `NOTICE` message containing the [webhook URL](https://materialize.com/docs/sql/create-source/webhook/#webhook-url).
+Copy and store it. You will need it for the next steps. Otherwise, you can query it here: [`mz_internal.mz_webhook_sources`](https://materialize.com/docs/sql/system-catalog/mz_internal/#mz_webhook_sources).
 
-To configure a Materialize Webhook as a destination in SnowcatCloud, follow the steps outlined below:
+## Step 4. Add a Materialize Destination in SnowcatCloud
 
-1.  **Select Your SnowcatCloud Pipe**: Identify the pipeline you wish to add Materialize destination to.
+To configure a Materialize webhook as a destination in SnowcatCloud, follow the steps outlined below:
+
+1.  **Select Your SnowcatCloud Pipe**: Identify the pipeline you wish to add Materialize to as a destination.
 
 1.  **Select Materialize as a Destination**:
     1. Navigate to the destinations section.
@@ -75,9 +80,7 @@ To configure a Materialize Webhook as a destination in SnowcatCloud, follow the 
 
 On the Materialize Settings page:
 
-- **Webhook URL**: Define the endpoint where events will be dispatched by SnowcatCloud.
-
-    [The webhook URL structure](/sql/create-source/webhook/#webhook-url) is:
+- **Webhook URL**: Define the endpoint where events will be dispatched by SnowcatCloud. Use the URL from [Step 3](#step-3-set-up-a-webhook-source), which should have the following structure.
 
     ```
     https://<HOST>/api/webhook/<database>/<schema>/<src_name>
@@ -86,7 +89,7 @@ On the Materialize Settings page:
 - **Shared Secret**: Add the shared secret (the same value used in [Step 2](#step-2-create-a-shared-secret)).
 - **Click Save & Test**: If the webhook is configured successfully, you will see a success message and the destination will start `PROVISIONING`; once it is `ACTIVE`, all your data will be streaming to Materialize's webhook.
 
-## Step 5. Monitor Incoming Data
+## Step 5. Inspect Incoming Data
 
 With the source set up in Materialize, you can now monitor the incoming data from SnowcatCloud:
 
@@ -102,7 +105,7 @@ With the source set up in Materialize, you can now monitor the incoming data fro
     SELECT * FROM snowcatcloud_source LIMIT 10;
     ```
 
-This will show you the last ten records ingested from SnowcatCloud. Note that while the destination is `PROVISIONING` you will only see the test event.
+This will show you the last ten records ingested from SnowcatCloud. Note that while the destination is `PROVISIONING`, you will only see the test event.
 
 ## Step 6. Parse Incoming Data
 
@@ -242,7 +245,7 @@ FROM
 ```
 
 Furthermore, with the vast amount of data processed and potential network issues, it's not uncommon to receive duplicate records. You can use the
-`DISTINCT` clause to remove duplicates, for more details, refer to the webhook source [documentation](/sql/create-source/webhook/#duplicated-and-partial-events).
+`DISTINCT ON` clause to remove duplicates. For more details, refer to the webhook source [documentation](/sql/create-source/webhook/#handling-duplicated-and-partial-events).
 
 
 ---
