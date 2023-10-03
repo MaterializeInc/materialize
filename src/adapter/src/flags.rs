@@ -28,6 +28,7 @@ pub fn compute_config(config: &SystemVars) -> ComputeParameters {
         dataflow_max_inflight_bytes: Some(config.dataflow_max_inflight_bytes()),
         enable_arrangement_size_logging: Some(config.enable_arrangement_size_logging()),
         enable_mz_join_core: Some(config.enable_mz_join_core()),
+        enable_jemalloc_profiling: Some(config.enable_jemalloc_profiling()),
         persist: persist_config(config),
         tracing: tracing_config(config),
         grpc_client: grpc_client_config(config),

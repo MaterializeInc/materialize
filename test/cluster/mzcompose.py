@@ -11,12 +11,14 @@ import json
 import os
 import re
 import time
+from collections.abc import Callable
 from copy import copy
 from datetime import datetime
 from statistics import quantiles
 from textwrap import dedent
 from threading import Thread
 
+import requests
 from pg8000 import Cursor
 from pg8000.dbapi import ProgrammingError
 
@@ -98,6 +100,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "test-compute-controller-metrics",
             "test-metrics-retention-across-restart",
             "test-concurrent-connections",
+            "test-profile-fetch",
         ]
     ):
         if shard is None or shard_count is None or i % int(shard_count) == shard:
@@ -2546,3 +2549,98 @@ def workflow_test_concurrent_connections(c: Composition) -> None:
         assert (
             p99 < p99_limit
         ), f"p99 is {p99:.2f}s, should be less than {p99_limit:.2f}s"
+
+
+def workflow_test_profile_fetch(c: Composition) -> None:
+    """
+    Test fetching memory and CPU profiles via the internal HTTP
+    endpoint.
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+    c.up("clusterd1")
+
+    envd_port = c.port("materialized", 6878)
+    envd_url = f"http://localhost:{envd_port}/prof/"
+    clusterd_port = c.port("clusterd1", 6878)
+    clusterd_url = f"http://localhost:{clusterd_port}/"
+
+    def test_post(data: dict[str, str], check: Callable[[int, str], None]) -> None:
+        resp = requests.post(envd_url, data=data)
+        check(resp.status_code, resp.text)
+
+        resp = requests.post(clusterd_url, data=data)
+        check(resp.status_code, resp.text)
+
+    def test_get(path: str, check: Callable[[int, str], None]) -> None:
+        resp = requests.get(envd_url + path)
+        check(resp.status_code, resp.text)
+
+        resp = requests.get(clusterd_url + path)
+        check(resp.status_code, resp.text)
+
+    def make_check(code: int, contents: str) -> Callable[[int, str], None]:
+        def check(code_: int, text: str) -> None:
+            assert code_ == code, f"expected {code}, got {code_}"
+            assert contents in text, f"'{contents}' not found in text: {text}"
+
+        return check
+
+    def make_ok_check(contents: str) -> Callable[[int, str], None]:
+        return make_check(200, contents)
+
+    def check_profiling_disabled(code: int, text: str) -> None:
+        check = make_check(403, "heap profiling not activated")
+        check(code, text)
+
+    # Test fetching CPU profiles.
+    test_post(
+        {"action": "time_fg", "time_secs": "1", "hz": "1"},
+        make_ok_check(
+            "mz_fg_version: 1\\nSampling time (s): 1\\nSampling frequency (Hz): 1\\n"
+        ),
+    )
+
+    # Activate memory profiling.
+    test_post({"action": "activate"}, make_ok_check("Jemalloc profiling active"))
+
+    # Test fetching heap profiles.
+    test_post({"action": "dump_jeheap"}, make_ok_check("heap_v2/"))
+    test_post(
+        {"action": "dump_sym_mzfg"}, make_ok_check("mz_fg_version: 1\nAllocated:")
+    )
+    test_post(
+        {"action": "mem_fg"},
+        make_ok_check("mz_fg_version: 1\\ndisplay_bytes: 1\\nAllocated:"),
+    )
+    test_get("heap", make_ok_check(""))
+
+    # Deactivate memory profiling.
+    test_post(
+        {"action": "deactivate"},
+        make_ok_check("Jemalloc profiling enabled but inactive"),
+    )
+
+    # Test that fetching heap profiles is forbidden.
+    test_post({"action": "dump_jeheap"}, check_profiling_disabled)
+    test_post({"action": "dump_sym_mzfg"}, check_profiling_disabled)
+    test_post({"action": "mem_fg"}, check_profiling_disabled)
+    test_get("heap", check_profiling_disabled)
+
+    # Test toggling profiling via feature flag.
+    c.sql(
+        "ALTER SYSTEM SET enable_jemalloc_profiling = true;",
+        port=6877,
+        user="mz_system",
+    )
+    code = requests.get(envd_url + "heap").status_code
+    assert code == 200, f"expected 200, got {code}"
+
+    c.sql(
+        "ALTER SYSTEM SET enable_jemalloc_profiling = false;",
+        port=6877,
+        user="mz_system",
+    )
+    code = requests.get(envd_url + "heap").status_code
+    assert code == 403, f"expected 403, got {code}"

@@ -196,6 +196,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             dataflow_max_inflight_bytes,
             enable_arrangement_size_logging,
             enable_mz_join_core,
+            enable_jemalloc_profiling,
             persist,
             tracing,
             grpc_client: _grpc_client,
@@ -215,6 +216,21 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 false => LinearJoinImpl::DifferentialDataflow,
                 true => LinearJoinImpl::Materialize,
             };
+        }
+        match enable_jemalloc_profiling {
+            Some(true) => {
+                mz_ore::task::spawn(
+                    || "activate-jemalloc-profiling",
+                    mz_prof::activate_jemalloc_profiling(),
+                );
+            }
+            Some(false) => {
+                mz_ore::task::spawn(
+                    || "deactivate-jemalloc-profiling",
+                    mz_prof::deactivate_jemalloc_profiling(),
+                );
+            }
+            None => (),
         }
 
         persist.apply(self.compute_state.persist_clients.cfg());

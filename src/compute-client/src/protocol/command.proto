@@ -67,4 +67,5 @@ message ProtoComputeParameters {
     mz_tracing.params.ProtoTracingParameters tracing = 5;
     mz_service.params.ProtoGrpcClientParameters grpc_client = 6;
     optional bool enable_arrangement_size_logging = 7;
+    optional bool enable_jemalloc_profiling = 8;
 }

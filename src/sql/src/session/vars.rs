@@ -1710,6 +1710,11 @@ feature_flags!(
         enable_unified_clusters,
         "unified compute and storage cluster"
     ),
+    (
+        enable_jemalloc_profiling,
+        "jemalloc heap memory profiling",
+        false
+    ),
 );
 
 /// Represents the input to a variable.
@@ -4737,6 +4742,7 @@ pub fn is_compute_config_var(name: &str) -> bool {
         || name == DATAFLOW_MAX_INFLIGHT_BYTES.name()
         || name == ENABLE_ARRANGEMENT_SIZE_LOGGING.name()
         || name == ENABLE_MZ_JOIN_CORE.name()
+        || name == ENABLE_JEMALLOC_PROFILING.name()
         || is_persist_config_var(name)
         || is_tracing_var(name)
 }

@@ -86,6 +86,20 @@
 //!
 //! Currently only works on Linux
 
+use std::fmt;
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct BuildId(Vec<u8>);
+
+impl fmt::Display for BuildId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for byte in &self.0 {
+            write!(f, "{byte:02x}")?;
+        }
+        Ok(())
+    }
+}
+
 /// Gets the GNU build IDs for all loaded images, including the main
 /// program binary as well as all dynamically loaded libraries.
 /// Intended to be useful for profilers, who can use the supplied IDs
@@ -108,8 +122,10 @@
 /// is not documented as being thread-safe.
 /// (2) The running binary must be in ELF format and running on Linux.
 #[cfg(target_os = "linux")]
+// TODO(btv): Document why the `as` conversions in this function are legit
+#[allow(clippy::as_conversions)]
 pub unsafe fn all_build_ids(
-) -> Result<std::collections::BTreeMap<std::path::PathBuf, Vec<u8>>, anyhow::Error> {
+) -> Result<std::collections::BTreeMap<std::path::PathBuf, BuildId>, anyhow::Error> {
     // local imports to avoid polluting the namespace for macOS builds
     use std::collections::btree_map::Entry;
     use std::collections::BTreeMap;
@@ -123,7 +139,7 @@ pub unsafe fn all_build_ids(
     use mz_ore::cast::CastFrom;
 
     struct CallbackState {
-        map: BTreeMap<PathBuf, Vec<u8>>,
+        map: BTreeMap<PathBuf, BuildId>,
         is_first: bool,
         fatal_error: Option<anyhow::Error>,
     }
@@ -249,7 +265,7 @@ pub unsafe fn all_build_ids(
                                         )
                                     };
 
-                                    found_build_id = Some(desc.to_vec());
+                                    found_build_id = Some(BuildId(desc.to_vec()));
                                     break 'outer;
                                 }
                             }
