@@ -5042,7 +5042,7 @@ impl Catalog {
                         cluster_id,
                         id,
                         &name,
-                        &config.clone().into(),
+                        config.clone().into(),
                         owner_id,
                     )?;
                     if let ReplicaLocation::Managed(ManagedReplicaLocation {

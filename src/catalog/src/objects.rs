@@ -432,6 +432,29 @@ pub struct Snapshot {
     pub system_privileges: BTreeMap<proto::SystemPrivilegesKey, proto::SystemPrivilegesValue>,
 }
 
+impl Snapshot {
+    pub fn empty() -> Snapshot {
+        Snapshot {
+            databases: BTreeMap::new(),
+            schemas: BTreeMap::new(),
+            roles: BTreeMap::new(),
+            items: BTreeMap::new(),
+            comments: BTreeMap::new(),
+            clusters: BTreeMap::new(),
+            cluster_replicas: BTreeMap::new(),
+            introspection_sources: BTreeMap::new(),
+            id_allocator: BTreeMap::new(),
+            configs: BTreeMap::new(),
+            settings: BTreeMap::new(),
+            timestamps: BTreeMap::new(),
+            system_object_mappings: BTreeMap::new(),
+            system_configurations: BTreeMap::new(),
+            default_privileges: BTreeMap::new(),
+            system_privileges: BTreeMap::new(),
+        }
+    }
+}
+
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct SettingKey {
     pub(crate) name: String,

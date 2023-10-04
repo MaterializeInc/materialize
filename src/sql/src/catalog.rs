@@ -1175,6 +1175,12 @@ pub enum CatalogError {
     },
     /// Ran out of unique IDs.
     IdExhaustion,
+    /// Timeline already exists.
+    TimelineAlreadyExists(String),
+    /// Id Allocator already exists.
+    IdAllocatorAlreadyExists(String),
+    /// Config already exists.
+    ConfigAlreadyExists(String),
     /// Builtin migrations failed.
     FailedBuiltinSchemaMigration(String),
 }
@@ -1217,6 +1223,9 @@ impl fmt::Display for CatalogError {
                 typ,
             ),
             Self::IdExhaustion => write!(f, "id counter overflows i64"),
+            Self::TimelineAlreadyExists(name) => write!(f, "timeline '{name}' already exists"),
+            Self::IdAllocatorAlreadyExists(name) => write!(f, "ID allocator '{name}' already exists"),
+            Self::ConfigAlreadyExists(key) => write!(f, "config '{key}' already exists"),
             Self::FailedBuiltinSchemaMigration(objects) => write!(f, "failed to migrate schema of builtin objects: {objects}"),
         }
     }
