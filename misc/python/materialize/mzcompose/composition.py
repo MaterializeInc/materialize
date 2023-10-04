@@ -701,13 +701,13 @@ class Composition:
     def sanity_restart_mz(self) -> None:
         """Restart Materialized if it is part of the composition to find
         problems with persisted objects, functions as a sanity check."""
-        # Exclude environmentd image, which is used in cloud-canary, and doesn't start up fully without clusterd images
         if (
             "materialized" in self.compose["services"]
-            and "materialize/environmentd"
-            not in self.compose["services"]["materialized"]["image"]
+            and "sanity_restart" in self.compose["services"]["materialized"]["labels"]
         ):
-            ui.header("Sanity Check: Restart Mz, verify source/sink/replica health")
+            ui.header(
+                "Sanity Restart: Restart Mz and verify source/sink/replica health"
+            )
             self.kill("materialized")
             # TODO(def-): Better way to detect when kill has finished
             time.sleep(3)
@@ -724,6 +724,10 @@ class Composition:
                 # Sources and cluster replicas need a few seconds to start up
                 print(f"Retrying ({i+1}/{NUM_RETRIES})...")
                 time.sleep(1)
+        else:
+            ui.header(
+                "Sanity Restart skipped because Mz not in services or `sanity_restart` label not set"
+            )
 
     def down(
         self,

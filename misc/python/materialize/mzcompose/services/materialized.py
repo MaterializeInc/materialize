@@ -48,6 +48,7 @@ class Materialized(Service):
         system_parameter_defaults: dict[str, str] | None = None,
         additional_system_parameter_defaults: dict[str, str] | None = None,
         soft_assertions: bool = True,
+        sanity_restart: bool = True,
     ) -> None:
         depends_graph: dict[str, ServiceDependency] = {
             s: {"condition": "service_started"} for s in depends_on
@@ -163,6 +164,9 @@ class Materialized(Service):
         # memory limit is known.
         if memory:
             config["deploy"] = {"resources": {"limits": {"memory": memory}}}
+
+        if sanity_restart:
+            config.setdefault("labels", []).append("sanity_restart")
 
         volumes = []
         if use_default_volumes:
