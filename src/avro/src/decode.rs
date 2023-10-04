@@ -55,6 +55,7 @@ where
 {
     type Decoder = <Self as StatefulAvroDecodable>::Decoder;
 
+    // TODO nothing
     fn new_decoder() -> Self::Decoder {
         <Self as StatefulAvroDecodable>::new_decoder(Default::default())
     }
@@ -136,7 +137,7 @@ mod tests {
             Value::Timestamp(NaiveDateTime::from_timestamp_opt(-1, 999_999_000).unwrap())
         );
         assert_eq!(
-            build_ts_value(-123_456_789_123, TsUnit::Micros).unwrap(),
+            build_ts_value(-123_456_789_120, TsUnit::Micros).unwrap(),
             Value::Timestamp(
                 NaiveDateTime::from_timestamp_opt(-123_457, (1_000_000 - 789_123) * 1_000).unwrap()
             )
