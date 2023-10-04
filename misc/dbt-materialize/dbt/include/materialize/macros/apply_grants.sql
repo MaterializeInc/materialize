@@ -31,3 +31,12 @@
     {% set quoted_grantees = quote_grantees(grantees) %}
     revoke {{ privilege }} on {{ relation }} from {{ quoted_grantees | join(', ') }}
 {%- endmacro -%}
+
+{%- macro materialize__get_show_grant_sql(relation) -%}
+  select grantee, privilege_type
+  from {{ relation.information_schema('role_table_grants') }}
+      where grantor = current_role
+        and grantee != current_role
+        and table_schema = '{{ relation.schema }}'
+        and table_name = '{{ relation.identifier }}'
+{%- endmacro -%}
