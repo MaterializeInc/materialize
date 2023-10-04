@@ -784,11 +784,11 @@ impl CatalogState {
         };
         for u in &entry.uses().0 {
             match self.entry_by_id.get_mut(u) {
-                Some(metadata) => metadata.used_by.push(entry.id),
+                Some(metadata) => metadata.used_by.push(entry.id()),
                 None => panic!(
                     "Catalog: missing dependent catalog item {} while installing {}",
                     &u,
-                    self.resolve_full_name(&entry.name, entry.conn_id())
+                    self.resolve_full_name(entry.name(), entry.conn_id())
                 ),
             }
         }
@@ -800,38 +800,40 @@ impl CatalogState {
         );
 
         let prev_id = if let CatalogItem::Func(_) = entry.item() {
-            schema.functions.insert(entry.name.item.clone(), entry.id)
+            schema
+                .functions
+                .insert(entry.name().item.clone(), entry.id())
         } else {
-            schema.items.insert(entry.name.item.clone(), entry.id)
+            schema.items.insert(entry.name().item.clone(), entry.id())
         };
 
         assert!(
             prev_id.is_none(),
             "builtin name collision on {:?}",
-            entry.name.item.clone()
+            entry.name().item.clone()
         );
 
-        self.entry_by_id.insert(entry.id, entry.clone());
+        self.entry_by_id.insert(entry.id(), entry.clone());
     }
 
     #[tracing::instrument(level = "trace", skip(self))]
     pub(super) fn drop_item(&mut self, id: GlobalId) {
         let metadata = self.entry_by_id.remove(&id).expect("catalog out of sync");
-        if !metadata.item.is_placeholder() {
+        if !metadata.item().is_placeholder() {
             info!(
                 "drop {} {} ({})",
                 metadata.item_type(),
-                self.resolve_full_name(&metadata.name, metadata.conn_id()),
+                self.resolve_full_name(metadata.name(), metadata.conn_id()),
                 id
             );
         }
         for u in &metadata.uses().0 {
             if let Some(dep_metadata) = self.entry_by_id.get_mut(u) {
-                dep_metadata.used_by.retain(|u| *u != metadata.id)
+                dep_metadata.used_by.retain(|u| *u != metadata.id())
             }
         }
 
-        let conn_id = metadata.item.conn_id().unwrap_or(&SYSTEM_CONN_ID);
+        let conn_id = metadata.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
         let schema = self.get_schema_mut(
             &metadata.name().qualifiers.database_spec,
             &metadata.name().qualifiers.schema_spec,
@@ -843,7 +845,7 @@ impl CatalogState {
             .expect("catalog out of sync");
 
         if !id.is_system() {
-            if let Some(cluster_id) = metadata.item.cluster_id() {
+            if let Some(cluster_id) = metadata.item().cluster_id() {
                 assert!(
                     self.clusters_by_id
                         .get_mut(&cluster_id)
@@ -866,7 +868,7 @@ impl CatalogState {
     /// * the item is already bound to the new cluster.
     pub(super) fn move_item(&mut self, id: GlobalId, in_cluster: ClusterId) {
         let metadata = self.entry_by_id.get_mut(&id).expect("catalog out of sync");
-        if let Some(cluster_id) = metadata.item.cluster_id() {
+        if let Some(cluster_id) = metadata.item().cluster_id() {
             assert!(
                 self.clusters_by_id
                     .get_mut(&cluster_id)
