@@ -9,9 +9,9 @@
 
 use std::collections::BTreeMap;
 
-use crate::objects::{wire_compatible, WireCompatible};
-use crate::upgrade::MigrationAction;
-use crate::upgrade::{objects_v35 as v35, objects_v36 as v36};
+use mz_stash_types::upgrade::{objects_v35 as v35, objects_v36 as v36};
+
+use crate::upgrade::{wire_compatible, MigrationAction, WireCompatible};
 use crate::{StashError, Transaction, TypedCollection};
 
 wire_compatible!(v35::ServerConfigurationKey with v36::ServerConfigurationKey);

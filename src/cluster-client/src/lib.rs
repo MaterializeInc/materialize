@@ -84,7 +84,7 @@ use std::str::FromStr;
 
 use anyhow::bail;
 use mz_proto::{RustType, TryFromProtoError};
-use mz_stash::objects::proto;
+use mz_stash_types::objects::proto;
 use serde::{Deserialize, Serialize};
 
 pub mod client;

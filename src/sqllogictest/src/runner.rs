@@ -71,7 +71,7 @@ use mz_sql_parser::ast::{
     UnresolvedItemName, UnresolvedObjectName, ViewDefinition,
 };
 use mz_sql_parser::parser;
-use mz_stash::StashFactory;
+use mz_stash_types::metrics::Metrics as StashMetrics;
 use mz_storage_types::connections::ConnectionContext;
 use once_cell::sync::Lazy;
 use postgres_protocol::types;
@@ -959,7 +959,6 @@ impl<'a> RunnerInner<'a> {
             |_, _| PubSubClientConnection::noop(),
         );
         let persist_clients = Arc::new(persist_clients);
-        let postgres_factory = StashFactory::new(&metrics_registry);
         let secrets_controller = Arc::clone(&orchestrator);
         let connection_context = ConnectionContext::for_tests(orchestrator.reader());
         let listeners = mz_environmentd::Listeners::bind_any_local().await?;
@@ -981,7 +980,7 @@ impl<'a> RunnerInner<'a> {
                 persist_clients,
                 storage_stash_url,
                 now: SYSTEM_TIME.clone(),
-                postgres_factory: postgres_factory.clone(),
+                stash_metrics: Arc::new(StashMetrics::register_into(&metrics_registry)),
                 metrics_registry: metrics_registry.clone(),
                 persist_pubsub_url: "http://not-needed-for-sqllogictests".into(),
                 secrets_args: mz_service::secrets::SecretsReaderCliArgs {

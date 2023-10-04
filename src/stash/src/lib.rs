@@ -79,18 +79,15 @@
 
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
-use std::error::Error;
 use std::fmt::{self, Debug};
 use std::marker::PhantomData;
 use std::sync::Arc;
 
 use mz_ore::soft_assert;
 use mz_proto::{RustType, TryFromProtoError};
+use mz_stash_types::{InternalStashError, StashError};
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
-use tokio_postgres::error::SqlState;
-
-pub mod objects;
 
 mod postgres;
 mod transaction;
@@ -104,18 +101,6 @@ mod tests;
 pub use crate::postgres::{DebugStashFactory, Stash, StashFactory};
 pub use crate::transaction::{Transaction, INSERT_BATCH_SPLIT_SIZE};
 
-/// The current version of the [`Stash`].
-///
-/// We will initialize new [`Stash`]es with this version, and migrate existing [`Stash`]es to this
-/// version. Whenever the [`Stash`] changes, e.g. the protobufs we serialize in the [`Stash`]
-/// change, we need to bump this version.
-pub const STASH_VERSION: u64 = 40;
-
-/// The minimum [`Stash`] version number that we support migrating from.
-///
-/// After bumping this we can delete the old migrations.
-pub(crate) const MIN_STASH_VERSION: u64 = 35;
-
 // TODO(jkosh44) There's some circular logic going on with this key across crates.
 // mz_catalog::stash initializes uses this value to initialize
 // `CONFIG_COLLECTION: mz_stash::TypedCollection`. Then `mz_stash::postgres::Stash` uses this value
@@ -123,8 +108,8 @@ pub(crate) const MIN_STASH_VERSION: u64 = 35;
 /// The key within the Config Collection that stores the version of the Stash.
 pub const USER_VERSION_KEY: &str = "user_version";
 pub const COLLECTION_CONFIG: TypedCollection<
-    objects::proto::ConfigKey,
-    objects::proto::ConfigValue,
+    mz_stash_types::objects::proto::ConfigKey,
+    mz_stash_types::objects::proto::ConfigValue,
 > = TypedCollection::new("config");
 
 pub type Diff = i64;
@@ -200,133 +185,6 @@ where
 impl<'a, T> From<&'a Antichain<T>> for AntichainFormatter<'a, T> {
     fn from(antichain: &Antichain<T>) -> AntichainFormatter<T> {
         AntichainFormatter(antichain.elements())
-    }
-}
-
-/// An error that can occur while interacting with a [`Stash`].
-///
-/// Stash errors are deliberately opaque. They generally indicate unrecoverable
-/// conditions, like running out of disk space.
-#[derive(Debug)]
-pub struct StashError {
-    // Internal to avoid leaking implementation details.
-    inner: InternalStashError,
-}
-
-impl StashError {
-    /// Reports whether the error is unrecoverable (retrying will never succeed,
-    /// or a retry is not safe due to an indeterminate state).
-    pub fn is_unrecoverable(&self) -> bool {
-        match &self.inner {
-            InternalStashError::Fence(_) | InternalStashError::StashNotWritable(_) => true,
-            _ => false,
-        }
-    }
-
-    /// Reports whether the error can be recovered if we opened the stash in writeable
-    pub fn can_recover_with_write_mode(&self) -> bool {
-        match &self.inner {
-            InternalStashError::StashNotWritable(_) => true,
-            _ => false,
-        }
-    }
-
-    /// The underlying transaction failed in a way that must be resolved by retrying
-    pub fn should_retry(&self) -> bool {
-        match &self.inner {
-            InternalStashError::Postgres(e) => {
-                matches!(e.code(), Some(&SqlState::T_R_SERIALIZATION_FAILURE))
-            }
-            _ => false,
-        }
-    }
-}
-
-#[derive(Debug)]
-enum InternalStashError {
-    Postgres(::tokio_postgres::Error),
-    Fence(String),
-    PeekSinceUpper(String),
-    IncompatibleVersion(u64),
-    Proto(TryFromProtoError),
-    Decoding(prost::DecodeError),
-    Uninitialized,
-    StashNotWritable(String),
-    Other(String),
-}
-
-impl fmt::Display for StashError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("stash error: ")?;
-        match &self.inner {
-            InternalStashError::Postgres(e) => write!(f, "postgres: {e}"),
-            InternalStashError::Proto(e) => write!(f, "proto: {e}"),
-            InternalStashError::Decoding(e) => write!(f, "prost decoding: {e}"),
-            InternalStashError::Fence(e) => f.write_str(e),
-            InternalStashError::PeekSinceUpper(e) => f.write_str(e),
-            InternalStashError::IncompatibleVersion(v) => {
-                write!(f, "incompatible Stash version {v}, minimum: {MIN_STASH_VERSION}, current: {STASH_VERSION}")
-            }
-            InternalStashError::Uninitialized => write!(f, "uninitialized"),
-            InternalStashError::StashNotWritable(e) => f.write_str(e),
-            InternalStashError::Other(e) => f.write_str(e),
-        }
-    }
-}
-
-impl Error for StashError {}
-
-impl From<InternalStashError> for StashError {
-    fn from(inner: InternalStashError) -> StashError {
-        StashError { inner }
-    }
-}
-
-impl From<prost::DecodeError> for StashError {
-    fn from(e: prost::DecodeError) -> Self {
-        StashError {
-            inner: InternalStashError::Decoding(e),
-        }
-    }
-}
-
-impl From<TryFromProtoError> for StashError {
-    fn from(e: TryFromProtoError) -> Self {
-        StashError {
-            inner: InternalStashError::Proto(e),
-        }
-    }
-}
-
-impl From<String> for StashError {
-    fn from(e: String) -> StashError {
-        StashError {
-            inner: InternalStashError::Other(e),
-        }
-    }
-}
-
-impl From<&str> for StashError {
-    fn from(e: &str) -> StashError {
-        StashError {
-            inner: InternalStashError::Other(e.into()),
-        }
-    }
-}
-
-impl From<std::io::Error> for StashError {
-    fn from(e: std::io::Error) -> StashError {
-        StashError {
-            inner: InternalStashError::Other(e.to_string()),
-        }
-    }
-}
-
-impl From<anyhow::Error> for StashError {
-    fn from(e: anyhow::Error) -> Self {
-        StashError {
-            inner: InternalStashError::Other(e.to_string()),
-        }
     }
 }
 

@@ -22,7 +22,8 @@ use mz_sql::names::{
 };
 use mz_sql::rbac;
 use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID};
-use mz_stash::{STASH_VERSION, USER_VERSION_KEY};
+use mz_stash::USER_VERSION_KEY;
+use mz_stash_types::STASH_VERSION;
 use mz_storage_types::sources::Timeline;
 
 use crate::builtin::BUILTIN_ROLES;

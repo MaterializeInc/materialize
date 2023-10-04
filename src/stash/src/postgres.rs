@@ -18,12 +18,12 @@ use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::future::{self, BoxFuture, FutureExt, TryFutureExt};
 use futures::{Future, StreamExt};
-use mz_ore::metric;
 use mz_ore::metrics::{MetricsFutureExt, MetricsRegistry};
 use mz_ore::retry::Retry;
-use mz_ore::stats::histogram_seconds_buckets;
+use mz_stash_types::metrics::Metrics;
+use mz_stash_types::{InternalStashError, StashError, MIN_STASH_VERSION, STASH_VERSION};
 use postgres_openssl::MakeTlsConnector;
-use prometheus::{Histogram, HistogramVec, IntCounter, IntCounterVec};
+use prometheus::Histogram;
 use rand::Rng;
 use timely::progress::Antichain;
 use tokio::sync::{mpsc, oneshot};
@@ -33,10 +33,7 @@ use tokio_postgres::{Client, Config, Statement};
 use tracing::{debug, event, info, warn, Level};
 
 use crate::upgrade;
-use crate::{
-    Diff, Id, InternalStashError, StashError, Timestamp, COLLECTION_CONFIG, MIN_STASH_VERSION,
-    STASH_VERSION, USER_VERSION_KEY,
-};
+use crate::{Diff, Id, Timestamp, COLLECTION_CONFIG, USER_VERSION_KEY};
 
 // TODO: Change the indexes on data to be more applicable to the current
 // consolidation technique. This will involve a migration (which we don't yet
@@ -320,9 +317,11 @@ pub struct StashFactory {
 
 impl StashFactory {
     pub fn new(registry: &MetricsRegistry) -> StashFactory {
-        StashFactory {
-            metrics: Arc::new(Metrics::register_into(registry)),
-        }
+        Self::from_metrics(Arc::new(Metrics::register_into(registry)))
+    }
+
+    pub fn from_metrics(metrics: Arc<Metrics>) -> StashFactory {
+        StashFactory { metrics }
     }
 
     /// Opens the stash stored at the specified path.
@@ -429,49 +428,6 @@ impl StashFactory {
         }
 
         Ok(conn)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct Metrics {
-    transactions: IntCounter,
-    transaction_errors: IntCounterVec,
-    query_latency_duration_seconds: HistogramVec,
-}
-
-impl Metrics {
-    fn register_into(registry: &MetricsRegistry) -> Metrics {
-        let metrics = Metrics {
-            transactions: registry.register(metric!(
-                name: "mz_stash_transactions",
-                help: "Total number of started transactions.",
-            )),
-            transaction_errors: registry.register(metric!(
-                name: "mz_stash_transaction_errors",
-                help: "Total number of transaction errors.",
-                var_labels: ["cause"],
-            )),
-            query_latency_duration_seconds: registry.register(metric!(
-                name: "mz_query_latency",
-                help: "Latency for queries to CockroachDB",
-                var_labels: ["query_kind"],
-                buckets: histogram_seconds_buckets(0.000_128, 32.0),
-            )),
-        };
-        // Initialize error codes to 0 so we can observe their increase.
-        metrics
-            .transaction_errors
-            .with_label_values(&["closed"])
-            .inc_by(0);
-        metrics
-            .transaction_errors
-            .with_label_values(&["retry"])
-            .inc_by(0);
-        metrics
-            .transaction_errors
-            .with_label_values(&["other"])
-            .inc_by(0);
-        metrics
     }
 }
 
@@ -1147,14 +1103,6 @@ impl Stash {
 
     pub fn epoch(&self) -> Option<NonZeroI64> {
         self.epoch
-    }
-}
-
-impl From<tokio_postgres::Error> for StashError {
-    fn from(e: tokio_postgres::Error) -> StashError {
-        StashError {
-            inner: InternalStashError::Postgres(e),
-        }
     }
 }
 

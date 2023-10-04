@@ -22,7 +22,7 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     CreateIndexStatement, FetchStatement, Ident, Raw, RawClusterName, RawItemName, Statement,
 };
-use mz_stash::StashError;
+use mz_stash_types::StashError;
 use mz_storage_types::controller::StorageError;
 use mz_transform::TransformError;
 use tokio::sync::mpsc::UnboundedSender;
