@@ -159,6 +159,7 @@ impl<'a, O: Clone> HealthState<'a, O> {
 /// - `Debug`-printable.
 /// - `Ord`, where the order increases in severity. The state returned by `starting()` should
 /// be the minimum.
+// TODO(guswynn): the implementors of this trait are probably merge-able.
 pub(crate) trait HealthStatus: timely::ExchangeData + Debug + Ord {
     /// The user-readable name of the status state.
     fn name(&self) -> &'static str;
