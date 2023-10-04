@@ -113,7 +113,7 @@ pub use crate::catalog::state::CatalogState;
 use crate::client::ConnectionId;
 use crate::command::CatalogDump;
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
-use crate::coord::{timeline, ConnMeta, TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW};
+use crate::coord::{timestamp_oracle, ConnMeta, TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW};
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
 use crate::util::ResultExt;
 use crate::{AdapterError, AdapterNotice, ExecuteResponse};
@@ -2059,7 +2059,7 @@ impl Catalog {
                 .get_timestamp(&Timeline::EpochMilliseconds)
                 .await?
                 .expect("missing EpochMilliseconds timeline");
-            let boot_ts = timeline::monotonic_now(config.now, previous_ts);
+            let boot_ts = timestamp_oracle::catalog_oracle::monotonic_now(config.now, previous_ts);
             if !storage.is_read_only() {
                 // IMPORTANT: we durably record the new timestamp before using it.
                 storage
