@@ -1,12 +1,12 @@
 
 # Maintainer instructions for `mz-lsp-server`
 
-## Testing the CLI
+## Testing the Language Server Protocol (LSP)
 
-All the tests for the CLI reside in a single function inside `./tests/e2e.rs`. To test locally, run:
+All the tests for the LSP reside in a single function inside `./tests/test.rs`. To test locally, run:
 
 ```
-cargo test -p mz
+cargo test -p mz-lsp-server
 ```
 
 ## Cutting a new release
@@ -38,13 +38,5 @@ cargo test -p mz
    git push --set-upstream upstream mz-lsp-server-$VERSION
    ```
 
-6. Find the [Deploy mz-lsp-server](https://buildkite.com/materialize/deploy-mz) Buildkite
+6. Find the [Deploy mz-lsp-server](https://buildkite.com/materialize/deploy-mz-lsp-server) Buildkite
    build for your branch.
-
-7. Once it completes, ensure that the new version is available on Docker Hub:
-
-   ```
-   docker run materialize/mz:$VERSION
-   ```
-
-8. Update the [Homebrew tap](https://github.com/MaterializeInc/homebrew-materialize/blob/master/CONTRIBUTING.md).
