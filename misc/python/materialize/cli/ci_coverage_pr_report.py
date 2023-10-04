@@ -98,7 +98,9 @@ def ignore_file_in_coverage_report(file_path: str) -> bool:
     if not file_path.endswith(".rs"):
         return True
 
+    print(f"Path is {file_path}")
     if IGNORE_FILE_PATH_RE.match(file_path):
+        print(f"{file_path} matches ignore!")
         return True
 
     return False
