@@ -99,7 +99,7 @@ def ignore_file_in_coverage_report(file_path: str) -> bool:
         return True
 
     print(f"Path is {file_path}")
-    if IGNORE_FILE_PATH_RE.match(file_path):
+    if IGNORE_FILE_PATH_RE.search(file_path):
         print(f"{file_path} matches ignore!")
         return True
 
@@ -242,7 +242,7 @@ ci-coverage-pr-report creates a code coverage report for CI.""",
         lambda lines, i, line: bool(
             lines.get(i + 1) is None
             or (lines.get(i + 1) or 0) != 0
-            or IGNORE_SRC_LINE_RE.match(line)
+            or IGNORE_SRC_LINE_RE.search(line)
         ),
     )
 
