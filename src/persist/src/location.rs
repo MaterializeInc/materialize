@@ -496,6 +496,59 @@ pub trait Blob: std::fmt::Debug {
     async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError>;
 }
 
+#[async_trait]
+impl<A: Blob + Sync + Send + 'static> Blob for Tasked<A> {
+    async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
+        let backing = self.clone_backing();
+        let key = key.to_owned();
+        mz_ore::task::spawn(
+            || "persist::task::get",
+            async move { backing.get(&key).await },
+        )
+        .await?
+    }
+
+    /// List all of the keys in the map with metadata about the entry.
+    ///
+    /// Can be optionally restricted to only list keys starting with a
+    /// given prefix.
+    async fn list_keys_and_metadata(
+        &self,
+        key_prefix: &str,
+        f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
+    ) -> Result<(), ExternalError> {
+        // TODO: No good way that I can see to make this one a task because of
+        // the closure and Blob needing to be object-safe.
+        self.0.list_keys_and_metadata(key_prefix, f).await
+    }
+
+    /// Inserts a key-value pair into the map.
+    ///
+    /// When atomicity is required, writes must be atomic and either succeed or
+    /// leave the previous value intact.
+    async fn set(&self, key: &str, value: Bytes, atomic: Atomicity) -> Result<(), ExternalError> {
+        let backing = self.clone_backing();
+        let key = key.to_owned();
+        mz_ore::task::spawn(|| "persist::task::set", async move {
+            backing.set(&key, value, atomic).await
+        })
+        .await?
+    }
+
+    /// Remove a key from the map.
+    ///
+    /// Returns Some and the size of the deleted blob if if exists. Succeeds and
+    /// returns None if it does not exist.
+    async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
+        let backing = self.clone_backing();
+        let key = key.to_owned();
+        mz_ore::task::spawn(|| "persist::task::delete", async move {
+            backing.delete(&key).await
+        })
+        .await?
+    }
+}
+
 #[cfg(test)]
 pub mod tests {
     use std::future::Future;
