@@ -399,7 +399,7 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
             let mut args = (service_config.args)(listen_addrs);
             let TracingCliArgs {
                 log_filter: _,
-                startup_log_filter: _,
+                startup_log_filter,
                 log_prefix,
                 log_format,
                 opentelemetry_endpoint,
@@ -416,6 +416,7 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
                 sentry_dsn,
                 sentry_environment,
             } = &self.tracing_args;
+            args.push(format!("--startup-log-filter={startup_log_filter}"));
             args.push(format!("--log-format={log_format}"));
             if log_prefix.is_some() {
                 args.push(format!("--log-prefix={}-{}", self.namespace, id));
