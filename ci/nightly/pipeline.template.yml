@@ -849,6 +849,7 @@ steps:
 
   - id: incident-70
     label: "Test for incident 70"
+    skip: "Affected by #15209"
     agents:
       queue: linux-x86_64-large
     artifact_paths: junit_*.xml
