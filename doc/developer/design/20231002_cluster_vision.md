@@ -2,23 +2,13 @@
 
 - Associated: [Epic](https://github.com/MaterializeInc/materialize/issues/22120)
 
-<!--
-The goal of a design document is to thoroughly discover problems and
-examine potential solutions before moving into the delivery phase of
-a project. In order to be ready to share, a design document must address
-the questions in each of the following sections. Any additional content
-is at the discretion of the author.
-
-Note: Feel free to add or remove sections as needed. However, most design
-docs should at least keep the suggested sections.
--->
-
 ## The Problem
 We need a documented vision for the cluster UX in the long term which covers both
 the "end state" goal as well as the short and medium states in order to:
+* Ensure alignment in the future that we are working toward
 * Make product prioritization decisions around cluster work
-* Communicate to customers what to expect around cluster management
-* Set expectations for other projects on how they should be interacting with clusters
+* Make folks more comfortable accepting intermediate states that aren't ideal in service of a greater goal
+* Come up with a narrative for customers on what to expect around cluster management
 
 Epic: https://github.com/MaterializeInc/materialize/issues/22120
 
@@ -29,7 +19,7 @@ and is socialized to GTM.
 Secondarily, a roadmap for cluster work for the next quarter.
 
 Qualitatively, positive feedback from EPD leadership and GTM folks that they
-have clarity [TODO(chaas) define this more explicitly].
+have clarity on the vision and roadmap, and the reasoning behind those decisions.
 
 ## Out of Scope
 Designing the actual cluster API changes themselves, or proposing implementation details.
@@ -49,7 +39,7 @@ Imperative is like `CREATE/DROP CLUSTER REPLICA`.
 This means deprecating manual cluster replica management. \
 We believe this is easier to use and manage.
 
-The primary work item for this is **graceful rehydration**. At the moment, a change in size causes downtime until the new replicas are hydrated. As such, customers still want the flexibility to create their own replicas for graceful resizing. We can avoid this by leaving a subset of the original replicas around until the new replicas are hydrated. \
+The primary work item for this is **graceful reconfiguration**. At the moment, a change in size causes downtime until the new replicas are hydrated. As such, customers still want the flexibility to create their own replicas for graceful resizing. We can avoid this by leaving a subset of the original replicas around until the new replicas are hydrated. \
 This requires us to 1) detect when hydration is complete and 2) trigger database object changes based on this event (without/based on an earlier DDL statement).
 
 Another consideration is internal use-cases, such as unbilled replicas. We may want to keep around an imperitive API for internal (support) use only.
@@ -75,8 +65,6 @@ We believe this will make it clearer how to achieve appropriate fault tolerance 
 
 ### Support & testing
 Support is able to create create unbilled or partially billed cluster resources for resolving customer issues. This is soon to be possible via unbilled replicas [#20317](https://github.com/MaterializeInc/materialize/issues/20317).
-
-Engineering is also able to create additional unbilled shadow replicas for testing new features and query plan changes, which do not serve customers' production workflows.
 
 ### Roadmap
 **Now**
