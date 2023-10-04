@@ -34,7 +34,7 @@ import yaml
 from materialize import mzbuild, spawn
 from materialize.mzcompose.composition import Composition
 
-from ..deploy.deploy_util import rust_version
+from .deploy.deploy_util import rust_version
 
 # These paths contain "CI glue code", i.e., the code that powers CI itself,
 # including this very script! All of CI implicitly depends on this code, so
@@ -58,6 +58,7 @@ so it is executed.""",
     )
 
     parser.add_argument("--coverage", action="store_true")
+    parser.add_argument("pipeline", type=str)
     # TODO Empty argument, used in tests pipeline, remove
     parser.add_argument("rest", nargs=argparse.REMAINDER)
     args = parser.parse_args()
@@ -69,33 +70,32 @@ so it is executed.""",
     os.environ["GIT_PAGER"] = ""
     spawn.runv(["git", "diff", "--stat", "origin/main..."])
 
-    with open(Path(__file__).parent / "pipeline.template.yml") as f:
+    with open(Path(__file__).parent / args.pipeline / "pipeline.template.yml") as f:
         raw = f.read()
     raw = raw.replace("$RUST_VERSION", rust_version())
     pipeline = yaml.safe_load(raw)
 
-    if args.coverage:
-        print("Coverage build, not trimming pipeline")
-    elif os.environ["BUILDKITE_BRANCH"] == "main" or os.environ["BUILDKITE_TAG"]:
-        print("On main branch or tag, so not trimming pipeline")
-    elif have_paths_changed(CI_GLUE_GLOBS):
-        # We still execute pipeline trimming on a copy of the pipeline to
-        # protect against bugs in the pipeline trimming itself.
-        print("--- [DRY RUN] Trimming unchanged steps from pipeline")
-        print(
-            "Repository glue code has changed, so the trimmed pipeline below does not apply"
-        )
-        trim_pipeline(copy.deepcopy(pipeline), args.coverage)
-    else:
-        print("--- Trimming unchanged steps from pipeline")
-        trim_pipeline(pipeline, args.coverage)
+    if args.pipeline == "test":
+        if args.coverage:
+            print("Coverage build, not trimming pipeline")
+        elif os.environ["BUILDKITE_BRANCH"] == "main" or os.environ["BUILDKITE_TAG"]:
+            print("On main branch or tag, so not trimming pipeline")
+        elif have_paths_changed(CI_GLUE_GLOBS):
+            # We still execute pipeline trimming on a copy of the pipeline to
+            # protect against bugs in the pipeline trimming itself.
+            print("--- [DRY RUN] Trimming unchanged steps from pipeline")
+            print(
+                "Repository glue code has changed, so the trimmed pipeline below does not apply"
+            )
+            trim_pipeline(copy.deepcopy(pipeline), args.coverage)
+        else:
+            print("--- Trimming unchanged steps from pipeline")
+            trim_pipeline(pipeline, args.coverage)
 
-    prioritize_pipeline(pipeline)
-
-    # Upload a dummy JUnit report so that the "Analyze tests" step doesn't fail
-    # if we trim away all the JUnit report-generating steps.
-    Path("junit-dummy.xml").write_text("")
-    spawn.runv(["buildkite-agent", "artifact", "upload", "junit-dummy.xml"])
+        # Upload a dummy JUnit report so that the "Analyze tests" step doesn't fail
+        # if we trim away all the JUnit report-generating steps.
+        Path("junit-dummy.xml").write_text("")
+        spawn.runv(["buildkite-agent", "artifact", "upload", "junit-dummy.xml"])
 
     if args.coverage:
         pipeline["env"]["CI_BUILDER_SCCACHE"] = 1
@@ -114,6 +114,9 @@ so it is executed.""",
             if step.get("coverage") == "only":
                 step["skip"] = True
 
+    prioritize_pipeline(pipeline)
+
+    permit_rerunning_successful_steps(pipeline)
     # Remove the Materialize-specific keys from the configuration that are
     # only used to inform how to trim the pipeline and for coverage runs.
     for step in pipeline["steps"]:
@@ -159,6 +162,16 @@ def prioritize_pipeline(pipeline: Any) -> None:
                 # Trigger and Wait steps do not allow priorities.
                 continue
             config["priority"] = config.get("priority", 0) + priority
+
+
+def permit_rerunning_successful_steps(pipeline: Any) -> None:
+    for config in pipeline["steps"]:
+        if "trigger" in config or "wait" in config:
+            # Trigger and Wait steps do not allow rerunning
+            continue
+        config.setdefault("retry", {}).setdefault("manual", {}).setdefault(
+            "permit_on_passed", True
+        )
 
 
 def trim_pipeline(pipeline: Any, coverage: bool) -> None:
