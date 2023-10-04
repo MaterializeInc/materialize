@@ -390,6 +390,25 @@ class Composition:
             # Run the next composition.
             yield
         finally:
+            # If sanity_check existed in the overriden service, but
+            # override() disabled it by removing the label,
+            # keep the sanity check disabled
+            if (
+                "materialized" in old_compose["services"]
+                and "labels" in old_compose["services"]["materialized"]
+                and "sanity_restart"
+                in old_compose["services"]["materialized"]["labels"]
+            ):
+                if (
+                    "labels" not in self.compose["services"]["materialized"]
+                    or "sanity_restart"
+                    not in self.compose["services"]["materialized"]["labels"]
+                ):
+                    print("sanity_restart disabled by override(), keeping it disabled")
+                    old_compose["services"]["materialized"]["labels"].remove(
+                        "sanity_restart"
+                    )
+
             # Restore the old composition.
             self.compose = old_compose
             self._write_compose()
