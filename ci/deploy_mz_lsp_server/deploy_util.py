@@ -24,13 +24,15 @@ import humanize
 from materialize import git
 
 APT_BUCKET = "materialize-apt"
-#  "materialize-binaries-staging"
-BINARIES_BUCKET = "materialize-binaries-staging"
+BINARIES_BUCKET = "materialize-binaries"
 TAG = os.environ["BUILDKITE_TAG"]
 VERSION = Version.parse(TAG.removeprefix("mz-lsp-server-v"))
 
 
 def _tardir(name: str) -> tarfile.TarInfo:
+    """Takes a dir path and creates a TarInfo. It sets the
+    modification time, mode, and type of the dir."""
+
     d = tarfile.TarInfo(name)
     d.mtime = int(time.time())
     d.mode = 0o40755
@@ -45,6 +47,7 @@ def _sanitize_tarinfo(tarinfo: tarfile.TarInfo) -> tarfile.TarInfo:
 
 
 def upload_tarball(tarball: Path, platform: str, version: str) -> None:
+    """Uploads the tarball (.tar) to the S3 binaries bucket."""
     s3_object = f"mz-lsp-server-{version}-{platform}.tar.gz"
     boto3.client("s3").upload_file(
         Filename=str(tarball),
@@ -69,6 +72,10 @@ def upload_redirect(key: str, to: str) -> None:
 
 
 def upload_latest_redirect(platform: str, version: str) -> None:
+    """Uploads an S3 object containing the latest version number of the package,
+    not the package itself. This is useful for determining the
+    latest available version number of the package.
+    As an example, mz (CLI) uses this information to check if there is a new update available."""
     upload_redirect(
         f"mz-lsp-server-latest-{platform}.tar.gz",
         f"/mz-lsp-server-{version}-{platform}.tar.gz",
