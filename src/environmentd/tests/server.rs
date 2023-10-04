@@ -237,8 +237,9 @@ fn setup_statement_logging(
     setup_statement_logging_core(max_sample_rate, sample_rate, util::Config::default())
 }
 
-#[mz_ore::test]
 // Test that we log various kinds of statement whose execution terminates in the coordinator.
+#[mz_ore::test]
+#[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/21598
 fn test_statement_logging_immediate() {
     let (_server, mut client) = setup_statement_logging(1.0, 1.0);
     let successful_immediates: &[&str] = &[
