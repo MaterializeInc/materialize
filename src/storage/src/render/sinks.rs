@@ -11,7 +11,6 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -28,31 +27,25 @@ use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sinks::{
     MetadataFilled, SinkEnvelope, StorageSinkConnection, StorageSinkDesc,
 };
-use timely::dataflow::Scope;
+use timely::dataflow::operators::{Leave, Map};
+use timely::dataflow::scopes::Child;
+use timely::dataflow::{Scope, Stream};
 use tracing::warn;
 
-use crate::storage_state::{SinkToken, StorageState};
+use crate::sink::SinkStatus;
+use crate::storage_state::StorageState;
 
 /// _Renders_ complete _differential_ [`Collection`]s
 /// that represent the sink and its errors as requested
 /// by the original `CREATE SINK` statement.
-pub(crate) fn render_sink<G: Scope<Timestamp = Timestamp>>(
-    scope: &mut G,
+pub(crate) fn render_sink<'g, G: Scope<Timestamp = ()>>(
+    scope: &mut Child<'g, G, mz_repr::Timestamp>,
     storage_state: &mut StorageState,
-    tokens: &mut std::collections::BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
-    import_ids: BTreeSet<GlobalId>,
+    tokens: &mut Vec<Rc<dyn std::any::Any>>,
     sink_id: GlobalId,
     sink: &StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>,
-) {
+) -> Stream<G, (usize, SinkStatus)> {
     let sink_render = get_sink_render_for(&sink.connection);
-
-    // put together tokens that belong to the export
-    let mut needed_tokens = Vec::new();
-    for import_id in import_ids {
-        if let Some(token) = tokens.get(&import_id) {
-            needed_tokens.push(Rc::clone(token))
-        }
-    }
 
     let (ok_collection, err_collection, source_token) = persist_source::persist_source(
         scope,
@@ -66,34 +59,24 @@ pub(crate) fn render_sink<G: Scope<Timestamp = Timestamp>>(
         // Copy the logic in DeltaJoin/Get/Join to start.
         |_timer, count| count > 1_000_000,
     );
-    needed_tokens.push(source_token);
+    tokens.push(source_token);
 
     let ok_collection =
         apply_sink_envelope(sink_id, sink, &sink_render, ok_collection.as_collection());
 
-    let healthchecker_args = HealthcheckerArgs {
-        persist_clients: Arc::clone(&storage_state.persist_clients),
-        persist_location: sink.from_storage_metadata.persist_location.clone(),
-        status_shard_id: sink.status_id,
-        now_fn: storage_state.now.clone(),
-    };
-
-    let sink_token = sink_render.render_continuous_sink(
+    let (health, sink_token) = sink_render.render_continuous_sink(
         storage_state,
         sink,
         sink_id,
         ok_collection,
         err_collection.as_collection(),
-        healthchecker_args,
     );
 
     if let Some(sink_token) = sink_token {
-        needed_tokens.push(sink_token);
+        tokens.push(sink_token);
     }
 
-    storage_state
-        .sink_tokens
-        .insert(sink_id, SinkToken::new(Box::new(needed_tokens)));
+    health.map(|status| (0, status)).leave()
 }
 
 #[allow(clippy::borrowed_box)]
@@ -262,8 +245,7 @@ where
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
-        healthchecker_args: HealthcheckerArgs,
-    ) -> Option<Rc<dyn Any>>
+    ) -> (Stream<G, SinkStatus>, Option<Rc<dyn Any>>)
     where
         G: Scope<Timestamp = Timestamp>;
 }

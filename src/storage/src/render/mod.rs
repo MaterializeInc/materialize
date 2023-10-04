@@ -197,7 +197,7 @@
 //!
 //! Not yet documented
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use mz_ore::error::ErrorExt;
@@ -352,27 +352,57 @@ pub fn build_export_dataflow<A: Allocate>(
     let worker_logging = timely_worker.log_register().get("timely");
     let debug_name = id.to_string();
     let name = format!("Source dataflow: {debug_name}");
-    timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
+    timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, root_scope| {
         // The scope.clone() occurs to allow import in the region.
         // We build a region here to establish a pattern of a scope inside the dataflow,
         // so that other similar uses (e.g. with iterative scopes) do not require weird
         // alternate type signatures.
-        scope.clone().region_named(&name, |region| {
+        root_scope.clone().scoped(&name, |scope| {
             let _debug_name = format!("{debug_name}-sinks");
             let _: &mut timely::dataflow::scopes::Child<
                 timely::dataflow::scopes::Child<TimelyWorker<A>, _>,
                 mz_repr::Timestamp,
-            > = region;
-            let mut tokens = BTreeMap::new();
-            let import_ids = BTreeSet::new();
-            crate::render::sinks::render_sink(
-                region,
+            > = scope;
+            let mut tokens = Vec::new();
+            let health_stream = crate::render::sinks::render_sink(
+                scope,
                 storage_state,
                 &mut tokens,
-                import_ids,
                 id,
                 &description,
             );
+
+            use mz_storage_client::healthcheck::MZ_SINK_STATUS_HISTORY_DESC;
+            let mut health_configs = BTreeMap::new();
+            health_configs.insert(
+                // There is only 1 sink (as opposed to many sub-sources), so we just use a single
+                // index.
+                0,
+                crate::healthcheck::ObjectHealthConfig {
+                    id,
+                    schema: &*MZ_SINK_STATUS_HISTORY_DESC,
+                    status_shard: description.status_id,
+                    persist_location: description.from_storage_metadata.persist_location.clone(),
+                },
+            );
+
+            // Note that sinks also have only 1 active worker, which simplifies the work that
+            // `health_operator` has to do internally.
+            let health_token = crate::healthcheck::health_operator(
+                scope,
+                storage_state,
+                [id].into_iter().collect(),
+                id,
+                "sink",
+                &health_stream,
+                health_configs,
+            );
+            tokens.push(health_token);
+
+            use crate::storage_state::SinkToken;
+            storage_state
+                .sink_tokens
+                .insert(id, SinkToken::new(Box::new(tokens)));
         })
     });
 }
