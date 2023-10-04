@@ -322,7 +322,8 @@ impl Coordinator {
                 self.sequence_explain_plan(ctx, plan, target_cluster).await;
             }
             Plan::ExplainTimestamp(plan) => {
-                self.sequence_explain_timestamp(ctx, plan, target_cluster);
+                self.sequence_explain_timestamp(ctx, plan, target_cluster)
+                    .await;
             }
             Plan::Insert(plan) => {
                 self.sequence_insert(ctx, plan).await;
@@ -641,7 +642,7 @@ impl Coordinator {
         self.sequence_create_role(None, plan).await
     }
 
-    pub(crate) fn sequence_explain_timestamp_finish(
+    pub(crate) async fn sequence_explain_timestamp_finish(
         &mut self,
         ctx: &mut ExecuteContext,
         format: ExplainFormat,
@@ -658,6 +659,7 @@ impl Coordinator {
             id_bundle,
             real_time_recency_ts,
         )
+        .await
     }
 
     pub(crate) fn allocate_transient_id(&mut self) -> Result<GlobalId, AdapterError> {

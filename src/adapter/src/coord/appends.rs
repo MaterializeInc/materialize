@@ -176,7 +176,7 @@ impl Coordinator {
     /// writes.
     #[tracing::instrument(level = "debug", skip(self))]
     pub(crate) async fn try_group_commit(&mut self, permit: Option<GroupCommitPermit>) {
-        let timestamp = self.peek_local_write_ts();
+        let timestamp = self.peek_local_write_ts().await;
         let now = Timestamp::from((self.catalog().config().now)());
 
         // HACK: This is a special case to allow writes to the mz_sessions table to proceed even

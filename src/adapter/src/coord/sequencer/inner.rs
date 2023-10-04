@@ -2225,14 +2225,17 @@ impl Coordinator {
         stage.validity.dependency_ids.extend(id_bundle.iter());
 
         let stats = {
-            match self.determine_timestamp(
-                ctx.session(),
-                &id_bundle,
-                &stage.when,
-                stage.cluster_id,
-                &stage.timeline_context,
-                None,
-            ) {
+            match self
+                .determine_timestamp(
+                    ctx.session(),
+                    &id_bundle,
+                    &stage.when,
+                    stage.cluster_id,
+                    &stage.timeline_context,
+                    None,
+                )
+                .await
+            {
                 Err(_) => Box::new(EmptyStatisticsOracle),
                 Ok(query_as_of) => self
                     .statistics_oracle(
@@ -2459,21 +2462,23 @@ impl Coordinator {
             self.index_oracle(cluster_id)
                 .sufficient_collections(&source_ids)
         });
-        let peek_plan = self.plan_peek(
-            dataflow,
-            ctx.session_mut(),
-            &when,
-            cluster_id,
-            view_id,
-            index_id,
-            timeline_context,
-            source_ids,
-            &id_bundle,
-            real_time_recency_ts,
-            key,
-            typ,
-            &finishing,
-        )?;
+        let peek_plan = self
+            .plan_peek(
+                dataflow,
+                ctx.session_mut(),
+                &when,
+                cluster_id,
+                view_id,
+                index_id,
+                timeline_context,
+                source_ids,
+                &id_bundle,
+                real_time_recency_ts,
+                key,
+                typ,
+                &finishing,
+            )
+            .await?;
 
         let determination = peek_plan.determination.clone();
 
@@ -2512,7 +2517,7 @@ impl Coordinator {
 
     /// Determines the query timestamp and acquires read holds on dependent sources
     /// if necessary.
-    fn sequence_peek_timestamp(
+    async fn sequence_peek_timestamp(
         &mut self,
         session: &mut Session,
         when: &QueryWhen,
@@ -2551,14 +2556,16 @@ impl Coordinator {
                         // If not in a transaction, use the source.
                         source_bundle
                     };
-                    let determination = self.determine_timestamp(
-                        session,
-                        determine_bundle,
-                        when,
-                        cluster_id,
-                        &timeline_context,
-                        real_time_recency_ts,
-                    )?;
+                    let determination = self
+                        .determine_timestamp(
+                            session,
+                            determine_bundle,
+                            when,
+                            cluster_id,
+                            &timeline_context,
+                            real_time_recency_ts,
+                        )
+                        .await?;
                     // We only need read holds if the read depends on a timestamp. We don't set the
                     // read holds here because it makes the code a bit more clear to handle the two
                     // cases for "is this the first statement in a transaction?" in an if/else block
@@ -2630,7 +2637,7 @@ impl Coordinator {
         Ok(determination)
     }
 
-    fn plan_peek(
+    async fn plan_peek(
         &mut self,
         mut dataflow: DataflowDescription<OptimizedMirRelationExpr>,
         session: &mut Session,
@@ -2647,15 +2654,17 @@ impl Coordinator {
         finishing: &RowSetFinishing,
     ) -> Result<PlannedPeek, AdapterError> {
         let conn_id = session.conn_id().clone();
-        let determination = self.sequence_peek_timestamp(
-            session,
-            when,
-            cluster_id,
-            timeline_context,
-            id_bundle,
-            &source_ids,
-            real_time_recency_ts,
-        )?;
+        let determination = self
+            .sequence_peek_timestamp(
+                session,
+                when,
+                cluster_id,
+                timeline_context,
+                id_bundle,
+                &source_ids,
+                real_time_recency_ts,
+            )
+            .await?;
 
         // Now that we have a timestamp, set the as of and resolve calls to mz_now().
         dataflow.set_as_of(determination.timestamp_context.antichain());
@@ -2785,7 +2794,8 @@ impl Coordinator {
                 cluster_id,
                 &timeline,
                 None,
-            )?
+            )
+            .await?
             .timestamp_context
             .timestamp_or_default();
 
@@ -3320,7 +3330,8 @@ impl Coordinator {
                 &id_bundle,
                 &source_ids,
                 None, // no real-time recency
-            )?
+            )
+            .await?
             .timestamp_context;
 
         // Load cardinality statistics.
@@ -3700,7 +3711,7 @@ impl Coordinator {
         Ok((used_indexes, None, df_metainfo, transient_items))
     }
 
-    pub fn sequence_explain_timestamp(
+    pub async fn sequence_explain_timestamp(
         &mut self,
         mut ctx: ExecuteContext,
         plan: plan::ExplainTimestampPlan,
@@ -3745,14 +3756,16 @@ impl Coordinator {
                 });
             }
             None => {
-                let result = self.sequence_explain_timestamp_finish_inner(
-                    ctx.session_mut(),
-                    format,
-                    cluster_id,
-                    optimized_plan,
-                    id_bundle,
-                    None,
-                );
+                let result = self
+                    .sequence_explain_timestamp_finish_inner(
+                        ctx.session_mut(),
+                        format,
+                        cluster_id,
+                        optimized_plan,
+                        id_bundle,
+                        None,
+                    )
+                    .await;
                 ctx.retire(result);
             }
         }
@@ -3854,7 +3867,7 @@ impl Coordinator {
         }
     }
 
-    pub(super) fn sequence_explain_timestamp_finish_inner(
+    pub(super) async fn sequence_explain_timestamp_finish_inner(
         &mut self,
         session: &mut Session,
         format: ExplainFormat,
@@ -3873,15 +3886,17 @@ impl Coordinator {
         let source_ids = source.depends_on();
         let timeline_context = self.validate_timeline_context(source_ids.clone())?;
 
-        let determination = self.sequence_peek_timestamp(
-            session,
-            &QueryWhen::Immediately,
-            cluster_id,
-            timeline_context,
-            &id_bundle,
-            &source_ids,
-            real_time_recency_ts,
-        )?;
+        let determination = self
+            .sequence_peek_timestamp(
+                session,
+                &QueryWhen::Immediately,
+                cluster_id,
+                timeline_context,
+                &id_bundle,
+                &source_ids,
+                real_time_recency_ts,
+            )
+            .await?;
         let explanation = self.explain_timestamp(session, cluster_id, &id_bundle, determination);
 
         let s = if is_json {
