@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Debug;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::Error;
 use crossbeam_channel::{RecvError, TryRecvError};
@@ -135,7 +136,12 @@ impl CommandReceiverQueue {
     /// is available.
     fn recv<A: Allocate>(&mut self, worker: &mut Worker<A>) -> Result<ComputeCommand, RecvError> {
         while self.is_empty() {
+            let start = Instant::now();
             worker.timely_worker.step_or_park(None);
+            worker
+                .metrics
+                .timely_step_duration_seconds
+                .observe(start.elapsed().as_secs_f64());
         }
         match self.try_recv() {
             Ok(cmd) => Ok(cmd),
@@ -367,7 +373,11 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                 compute_state.traces.maintenance();
             }
 
+            let start = Instant::now();
             self.timely_worker.step_or_park(None);
+            self.metrics
+                .timely_step_duration_seconds
+                .observe(start.elapsed().as_secs_f64());
 
             // Report frontier information back the coordinator.
             if let Some(mut compute_state) = self.activate_compute(&mut response_tx) {
