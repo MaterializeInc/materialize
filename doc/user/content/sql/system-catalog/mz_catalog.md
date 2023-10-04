@@ -244,6 +244,7 @@ Field        | Type     | Meaning
 -------------|----------|--------
 `id`         | [`text`] | The ID of the list type.
 `element_id` | [`text`] | The IID of the list's element type.
+`element_modifiers` | [`int8 list`] | The element type modifiers, or `NULL` if none.
 
 ### `mz_map_types`
 
@@ -255,6 +256,8 @@ Field          | Type       | Meaning
 `id`           | [`text`]   | The ID of the map type.
 `key_id `      | [`text`]   | The ID of the map's key type.
 `value_id`     | [`text`]   | The ID of the map's value type.
+`key_modifiers` | [`int8 list`] | The key type modifiers, or `NULL` if none.
+`value_modifiers` | [`int8 list`] | The value type modifiers, or `NULL` if none.
 
 ### `mz_materialized_views`
 

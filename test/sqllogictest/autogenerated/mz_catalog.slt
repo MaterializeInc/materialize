@@ -177,6 +177,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 ----
 1  id  text
 2  element_id  text
+3  element_modifiers  list
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_map_types' ORDER BY position
@@ -184,6 +185,8 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 1  id  text
 2  key_id   text
 3  value_id  text
+4  key_modifiers  list
+5  value_modifiers  list
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_materialized_views' ORDER BY position

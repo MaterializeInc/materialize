@@ -835,10 +835,13 @@ pub enum CatalogType<T: TypeReference> {
     Jsonb,
     List {
         element_reference: T::Reference,
+        element_modifiers: Vec<i64>,
     },
     Map {
         key_reference: T::Reference,
+        key_modifiers: Vec<i64>,
         value_reference: T::Reference,
+        value_modifiers: Vec<i64>,
     },
     Numeric,
     Oid,
@@ -849,7 +852,7 @@ pub enum CatalogType<T: TypeReference> {
         element_reference: T::Reference,
     },
     Record {
-        fields: Vec<(ColumnName, T::Reference)>,
+        fields: Vec<CatalogRecordField<T>>,
     },
     RegClass,
     RegProc,
@@ -862,6 +865,17 @@ pub enum CatalogType<T: TypeReference> {
     VarChar,
     Int2Vector,
     MzAclItem,
+}
+
+/// A description of a field in a [`CatalogType::Record`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CatalogRecordField<T: TypeReference> {
+    /// The name of the field.
+    pub name: ColumnName,
+    /// The ID of the type of the field.
+    pub type_reference: T::Reference,
+    /// Modifiers to apply to the type.
+    pub type_modifiers: Vec<i64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

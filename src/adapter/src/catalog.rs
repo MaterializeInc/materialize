@@ -68,9 +68,9 @@ use mz_sql::ast::Expr;
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError as SqlCatalogError,
     CatalogItem as SqlCatalogItem, CatalogItemType as SqlCatalogItemType, CatalogItemType,
-    CatalogRole, CatalogSchema, CatalogType, CatalogTypeDetails, DefaultPrivilegeAclItem,
-    DefaultPrivilegeObject, EnvironmentId, IdReference, NameReference, RoleAttributes,
-    RoleMembership, RoleVars, SessionCatalog, SystemObjectType,
+    CatalogRecordField, CatalogRole, CatalogSchema, CatalogType, CatalogTypeDetails,
+    DefaultPrivilegeAclItem, DefaultPrivilegeObject, EnvironmentId, IdReference, NameReference,
+    RoleAttributes, RoleMembership, RoleVars, SessionCatalog, SystemObjectType,
 };
 use mz_sql::func::OP_IMPLS;
 use mz_sql::names::{
@@ -3025,15 +3025,23 @@ impl Catalog {
             CatalogType::Array { element_reference } => CatalogType::Array {
                 element_reference: name_to_id_map[element_reference],
             },
-            CatalogType::List { element_reference } => CatalogType::List {
+            CatalogType::List {
+                element_reference,
+                element_modifiers,
+            } => CatalogType::List {
                 element_reference: name_to_id_map[element_reference],
+                element_modifiers: element_modifiers.clone(),
             },
             CatalogType::Map {
                 key_reference,
                 value_reference,
+                key_modifiers,
+                value_modifiers,
             } => CatalogType::Map {
                 key_reference: name_to_id_map[key_reference],
                 value_reference: name_to_id_map[value_reference],
+                key_modifiers: key_modifiers.clone(),
+                value_modifiers: value_modifiers.clone(),
             },
             CatalogType::Range { element_reference } => CatalogType::Range {
                 element_reference: name_to_id_map[element_reference],
@@ -3041,8 +3049,10 @@ impl Catalog {
             CatalogType::Record { fields } => CatalogType::Record {
                 fields: fields
                     .into_iter()
-                    .map(|(column_name, reference)| {
-                        (column_name.clone(), name_to_id_map[reference])
+                    .map(|f| CatalogRecordField {
+                        name: f.name.clone(),
+                        type_reference: name_to_id_map[f.type_reference],
+                        type_modifiers: f.type_modifiers.clone(),
                     })
                     .collect(),
             },

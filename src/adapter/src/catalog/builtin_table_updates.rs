@@ -25,7 +25,7 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
-use mz_repr::{Datum, Diff, GlobalId, Row};
+use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker};
 use mz_sql::ast::{CreateIndexStatement, Statement};
 use mz_sql::catalog::{CatalogCluster, CatalogDatabase, CatalogSchema, CatalogType, TypeCategory};
 use mz_sql::func::FuncImplCatalogDetails;
@@ -910,38 +910,59 @@ impl CatalogState {
             diff,
         });
 
-        let (index_id, update) = match typ.details.typ {
+        let mut row = Row::default();
+        let mut packer = row.packer();
+
+        fn append_modifier(packer: &mut RowPacker<'_>, mods: &[i64]) {
+            if mods.is_empty() {
+                packer.push(Datum::Null);
+            } else {
+                packer.push_list(mods.iter().map(|m| Datum::Int64(*m)));
+            }
+        }
+
+        let index_id = match &typ.details.typ {
             CatalogType::Array {
                 element_reference: element_id,
-            } => (
-                self.resolve_builtin_table(&MZ_ARRAY_TYPES),
-                vec![id.to_string(), element_id.to_string()],
-            ),
+            } => {
+                packer.push(Datum::String(&id.to_string()));
+                packer.push(Datum::String(&element_id.to_string()));
+                self.resolve_builtin_table(&MZ_ARRAY_TYPES)
+            }
             CatalogType::List {
                 element_reference: element_id,
-            } => (
-                self.resolve_builtin_table(&MZ_LIST_TYPES),
-                vec![id.to_string(), element_id.to_string()],
-            ),
+                element_modifiers,
+            } => {
+                packer.push(Datum::String(&id.to_string()));
+                packer.push(Datum::String(&element_id.to_string()));
+                append_modifier(&mut packer, element_modifiers);
+                self.resolve_builtin_table(&MZ_LIST_TYPES)
+            }
             CatalogType::Map {
                 key_reference: key_id,
                 value_reference: value_id,
-            } => (
-                self.resolve_builtin_table(&MZ_MAP_TYPES),
-                vec![id.to_string(), key_id.to_string(), value_id.to_string()],
-            ),
-            CatalogType::Pseudo => (
-                self.resolve_builtin_table(&MZ_PSEUDO_TYPES),
-                vec![id.to_string()],
-            ),
-            _ => (
-                self.resolve_builtin_table(&MZ_BASE_TYPES),
-                vec![id.to_string()],
-            ),
+                key_modifiers,
+                value_modifiers,
+            } => {
+                packer.push(Datum::String(&id.to_string()));
+                packer.push(Datum::String(&key_id.to_string()));
+                packer.push(Datum::String(&value_id.to_string()));
+                append_modifier(&mut packer, key_modifiers);
+                append_modifier(&mut packer, value_modifiers);
+                self.resolve_builtin_table(&MZ_MAP_TYPES)
+            }
+            CatalogType::Pseudo => {
+                packer.push(Datum::String(&id.to_string()));
+                self.resolve_builtin_table(&MZ_PSEUDO_TYPES)
+            }
+            _ => {
+                packer.push(Datum::String(&id.to_string()));
+                self.resolve_builtin_table(&MZ_BASE_TYPES)
+            }
         };
         out.push(BuiltinTableUpdate {
             id: index_id,
-            row: Row::pack_slice(&update.iter().map(|c| Datum::String(c)).collect::<Vec<_>>()[..]),
+            row,
             diff,
         });
 
