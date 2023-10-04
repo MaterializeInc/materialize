@@ -655,6 +655,14 @@ const PERSIST_FAST_PATH_LIMIT: ServerVar<usize> = ServerVar {
     internal: true,
 };
 
+pub static DEFAULT_TIMESTAMP_ORACLE: Lazy<String> = Lazy::new(|| "catalog".to_string());
+pub static TIMESTAMP_ORACLE: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
+    name: UncasedStr::new("timestamp_oracle"),
+    value: &DEFAULT_TIMESTAMP_ORACLE,
+    description: "Backing implementation of TimestampOracle.",
+    internal: true,
+});
+
 /// The default for the `DISK` option when creating managed clusters and cluster replicas.
 const DISK_CLUSTER_REPLICAS_DEFAULT: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("disk_cluster_replicas_default"),
@@ -2453,7 +2461,8 @@ impl SystemVars {
             .with_var(&TRUNCATE_STATEMENT_LOG)
             .with_var(&STATEMENT_LOGGING_RETENTION)
             .with_var(&OPTIMIZER_STATS_TIMEOUT)
-            .with_var(&OPTIMIZER_ONESHOT_STATS_TIMEOUT);
+            .with_var(&OPTIMIZER_ONESHOT_STATS_TIMEOUT)
+            .with_var(&TIMESTAMP_ORACLE);
 
         for flag in PersistFeatureFlag::ALL {
             vars = vars.with_var(&flag.into())
@@ -3201,6 +3210,12 @@ impl SystemVars {
     /// Returns the `optimizer_oneshot_stats_timeout` configuration parameter.
     pub fn optimizer_oneshot_stats_timeout(&self) -> Duration {
         *self.expect_value(&OPTIMIZER_ONESHOT_STATS_TIMEOUT)
+    }
+
+    pub fn timestamp_oracle(&self) -> String {
+        let res = self.expect_value(&TIMESTAMP_ORACLE);
+
+        res.clone()
     }
 }
 

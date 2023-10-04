@@ -2195,6 +2195,13 @@ pub async fn serve(
                 let persistence =
                     CatalogTimestampPersistence::new(timeline.clone(), Arc::clone(&catalog));
 
+                let timestamp_oracle_impl = catalog.system_config().timestamp_oracle();
+
+                println!(
+                    "------------- TIMESTAMP ORACLE IMPL: {}",
+                    timestamp_oracle_impl
+                );
+
                 handle.block_on(Coordinator::ensure_timeline_state_with_initial_time(
                     &timeline,
                     initial_timestamp,
