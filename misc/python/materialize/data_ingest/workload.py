@@ -205,7 +205,9 @@ def execute_workload(
             if actual_result == expected_result:
                 if correct_once:
                     break
-                print("Check for correctness again to make sure the result is stable")
+                print(
+                    "Results match. Check for correctness again to make sure the result is stable"
+                )
                 correct_once = True
                 time.sleep(sleep_time)
                 continue
