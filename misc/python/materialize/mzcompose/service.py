@@ -159,6 +159,9 @@ class ServiceConfig(TypedDict, total=False):
     restart: str
     """Restart policy."""
 
+    labels: list[str]
+    """Container labels."""
+
 
 class Service:
     """A Docker Compose service in a `Composition`.
