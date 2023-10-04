@@ -29,10 +29,19 @@ SOURCE_RE = re.compile(
 )
 # Deriving generates more code, but we don't expect to cover this in most
 # cases, so ignore such lines. Same for mz_ore::test
-IGNORE_RE = re.compile(
+IGNORE_SRC_LINE_RE = re.compile(
     r"""
     ( \#\[derive\(.*\)\]
     | \#\[mz_ore::test.*\]
+    | \.await
+    )
+    """,
+    re.VERBOSE,
+)
+
+IGNORE_FILE_PATH_RE = re.compile(
+    r"""
+    (  /maelstrom/
     )
     """,
     re.VERBOSE,
@@ -60,17 +69,17 @@ def find_modified_lines() -> Coverage:
     )
 
     coverage: Coverage = {}
-    file = None
+    file_path = None
     for line_raw in result.stdout.splitlines():
         line = line_raw.decode("utf-8")
         # +++ b/src/adapter/src/coord/command_handler.rs
         if line.startswith("+++"):
-            file = line.removeprefix("+++ b/")
-            if not line.endswith(".rs"):
+            file_path = line.removeprefix("+++ b/")
+            if ignore_file_in_coverage_report(file_path):
                 continue
-            coverage[file] = OrderedDict()
+            coverage[file_path] = OrderedDict()
         # @@ -641,7 +640,6 @@ impl Coordinator {
-        elif line.startswith("@@ ") and file in coverage:
+        elif line.startswith("@@ ") and file_path in coverage:
             # We only care about the second value ("+640,6" in the example),
             # which contains the line number and length of the modified block
             # in new code state.
@@ -81,8 +90,18 @@ def find_modified_lines() -> Coverage:
                 start = int(parts)
                 length = 1
             for line_nr in range(start, start + length):
-                coverage[file][line_nr] = None
+                coverage[file_path][line_nr] = None
     return coverage
+
+
+def ignore_file_in_coverage_report(file_path: str) -> bool:
+    if not file_path.endswith(".rs"):
+        return True
+
+    if IGNORE_FILE_PATH_RE.match(file_path):
+        return True
+
+    return False
 
 
 unittests_have_run = False
@@ -221,7 +240,7 @@ ci-coverage-pr-report creates a code coverage report for CI.""",
         lambda lines, i, line: bool(
             lines.get(i + 1) is None
             or (lines.get(i + 1) or 0) != 0
-            or IGNORE_RE.match(line)
+            or IGNORE_SRC_LINE_RE.match(line)
         ),
     )
 
