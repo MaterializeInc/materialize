@@ -11,7 +11,7 @@
 > SELECT COUNT(*) FROM one;
 10
 
-$ set-regex match=(\d{13}|u\d{1,3}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)) replacement=<>
+$ set-regex match=(\d{13}|u\d{1,3}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d\.\d\d\d\)) replacement=<>
 
 # Note that the above regex does NOT match timestamps that are `0`, and also that we check `can respond immediately` == `false`.
 # We are explicitly checking that the _upper_ of `two` has moved, but we see that we can't actually query any
