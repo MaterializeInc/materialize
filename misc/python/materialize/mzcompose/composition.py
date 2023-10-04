@@ -703,6 +703,7 @@ class Composition:
         problems with persisted objects, functions as a sanity check."""
         if (
             "materialized" in self.compose["services"]
+            and "labels" in self.compose["services"]["materialized"]
             and "sanity_restart" in self.compose["services"]["materialized"]["labels"]
         ):
             ui.header(
