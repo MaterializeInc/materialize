@@ -307,7 +307,16 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     (0, halt_status)
                 });
                 health_streams.push(sink_health.leave());
-                health_configs.insert(export.output_index, (export_id, export.storage_metadata));
+                use mz_storage_client::healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC;
+                health_configs.insert(
+                    export.output_index,
+                    crate::healthcheck::ObjectHealthConfig {
+                        id: export_id,
+                        schema: &*MZ_SOURCE_STATUS_HISTORY_DESC,
+                        status_shard: export.storage_metadata.status_shard,
+                        persist_location: export.storage_metadata.persist_location.clone(),
+                    },
+                );
             }
 
             into_time_scope
@@ -318,8 +327,9 @@ pub fn build_ingestion_dataflow<A: Allocate>(
             let health_token = crate::healthcheck::health_operator(
                 into_time_scope,
                 storage_state,
-                resume_uppers,
+                resume_uppers.keys().copied().collect(),
                 primary_source_id,
+                "source",
                 &health_stream,
                 health_configs,
             );
