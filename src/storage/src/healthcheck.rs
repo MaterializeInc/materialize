@@ -11,6 +11,7 @@
 
 use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Debug;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -23,8 +24,6 @@ use mz_persist_client::PersistLocation;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{GlobalId, RelationDesc, Timestamp};
-use mz_storage_client::healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC;
-use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sources::SourceData;
 use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
 use timely::dataflow::channels::pact::Exchange;
@@ -35,8 +34,6 @@ use timely::progress::Antichain;
 use tracing::{info, trace, warn};
 
 use crate::internal_control::InternalStorageCommand;
-use crate::render::sources::OutputIndex;
-use crate::source::types::{HealthStatus, HealthStatusUpdate};
 
 pub async fn write_to_persist(
     collection_id: GlobalId,
@@ -109,38 +106,77 @@ pub async fn write_to_persist(
 /// prevent hot restart loops.
 const SUSPEND_AND_RESTART_DELAY: Duration = Duration::from_secs(30);
 
-
-struct HealthState<'a> {
-    source_id: GlobalId,
-    persist_details: Option<(ShardId, &'a PersistClient)>,
-    healths: Vec<Option<HealthStatus>>,
-    last_reported_status: Option<HealthStatus>,
-    halt_with: Option<HealthStatus>,
+/// Configuration for a specific index in an indexed health stream.
+pub(crate) struct ObjectHealthConfig {
+    /// The id of the object.
+    pub(crate) id: GlobalId,
+    /// The status schema for the object.
+    pub(crate) schema: &'static RelationDesc,
+    /// The (optional) location to write status updates.
+    pub(crate) status_shard: Option<ShardId>,
+    /// The location of `status_shard`.
+    pub(crate) persist_location: PersistLocation,
 }
 
-impl<'a> HealthState<'a> {
+struct HealthState<'a, O> {
+    id: GlobalId,
+    persist_details: Option<(ShardId, &'a PersistClient)>,
+    healths: Vec<Option<O>>,
+    schema: &'static RelationDesc,
+    last_reported_status: Option<O>,
+    halt_with: Option<O>,
+}
+
+impl<'a, O: Clone> HealthState<'a, O> {
     fn new(
-        source_id: GlobalId,
-        metadata: CollectionMetadata,
+        id: GlobalId,
+        status_shard: Option<ShardId>,
+        persist_location: PersistLocation,
         persist_clients: &'a BTreeMap<PersistLocation, PersistClient>,
+        schema: &'static RelationDesc,
         worker_count: usize,
-    ) -> HealthState<'a> {
-        let persist_details = match (
-            metadata.status_shard,
-            persist_clients.get(&metadata.persist_location),
-        ) {
+    ) -> HealthState<'a, O> {
+        let persist_details = match (status_shard, persist_clients.get(&persist_location)) {
             (Some(shard), Some(persist_client)) => Some((shard, persist_client)),
             _ => None,
         };
 
         HealthState {
-            source_id,
+            id,
             persist_details,
             healths: vec![None; worker_count],
+            schema,
             last_reported_status: None,
             halt_with: None,
         }
     }
+}
+
+/// A trait that lets a user of the `health_operator` specify a health status object.
+///
+/// In addition to these methods, heath statuses should:
+/// - Be cloneable/exhangeable so they can be moved around in timely.
+/// - `Debug`-printable.
+/// - `Ord`, where the order increases in severity. The state returned by `starting()` should
+/// be the minimum.
+pub(crate) trait HealthStatus: timely::ExchangeData + Debug + Ord {
+    /// The user-readable name of the status state.
+    fn name(&self) -> &'static str;
+    /// The user-readable error string, if there is one.
+    fn error(&self) -> Option<&str>;
+    /// A hint for solving the error, if there is one.
+    fn hint(&self) -> Option<&str>;
+    /// Whether or not we should halt the dataflow instances and restart it.
+    fn should_halt(&self) -> bool;
+    /// Whether or not we can transition from a state (or lack of one).
+    ///
+    /// Each time this returns `true`, a new status message will be communicated to the user.
+    /// Note that messages that are identical except for `should_halt` don't need to be
+    /// able to transition between each other, that is handled separately.
+    fn can_transition_from(&self, other: Option<&Self>) -> bool;
+    /// A instance of a status that specifies that the object is starting. Used when the dataflow
+    /// starts up.
+    fn starting() -> Self;
 }
 
 /// Writes updates that come across `health_stream` to the collection's status shards, as identified
@@ -148,16 +184,29 @@ impl<'a> HealthState<'a> {
 ///
 /// Only one worker will be active and write to the status shard.
 ///
-/// The `OutputIndex` values that come across `health_stream` must be a strict subset of those in
+/// The `OutputIndex` values that come across `health_stream` must be a strict subset of thosema,
 /// `configs`'s keys.
-pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
+pub(crate) fn health_operator<'g, G, O>(
     scope: &mut Child<'g, G, mz_repr::Timestamp>,
     storage_state: &crate::storage_state::StorageState,
-    resume_uppers: BTreeMap<GlobalId, Antichain<mz_repr::Timestamp>>,
-    primary_source_id: GlobalId,
-    health_stream: &Stream<G, (OutputIndex, HealthStatusUpdate)>,
-    configs: BTreeMap<OutputIndex, (GlobalId, CollectionMetadata)>,
-) -> Rc<dyn Any> {
+    // A set of id's that should be marked as `HealthStatus::starting()` during startup.
+    mark_starting: BTreeSet<GlobalId>,
+    // An id that is allowed to halt the dataflow. Others are ignored, and panic during debug
+    // mode.
+    halting_id: GlobalId,
+    // A description of the object type we are writing status updates about. Used in log lines.
+    object_type: &'static str,
+    // An indexed stream of health updates. Indexes are configured in `configs`.
+    health_stream: &Stream<G, (usize, O)>,
+    // A configuration per _index_. Indexes support things like subsources, and allow the
+    // `health_operator` to understand where each sub-object should have its status written down
+    // at.
+    configs: BTreeMap<usize, ObjectHealthConfig>,
+) -> Rc<dyn Any>
+where
+    G: Scope<Timestamp = ()>,
+    O: HealthStatus,
+{
     // Derived config options
     let healthcheck_worker_id = scope.index();
     let worker_count = scope.peers();
@@ -176,7 +225,7 @@ pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
     let operator_name = format!("healthcheck({})", healthcheck_worker_id);
     let mut health_op = AsyncOperatorBuilder::new(operator_name, scope.clone());
 
-    let health = health_stream.enter(&scope);
+    let health = health_stream.enter(scope);
 
     let mut input = health_op.new_input(
         &health,
@@ -186,22 +235,31 @@ pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
     // Construct a minimal number of persist clients
     let persist_locations: BTreeSet<_> = configs
         .values()
-        .filter_map(|(source_id, metadata)| {
-            if is_active_worker {
-                match &metadata.status_shard {
-                    Some(status_shard) => {
-                        info!("Health for source {source_id} being written to {status_shard}");
-                        Some(metadata.persist_location.clone())
+        .filter_map(
+            |ObjectHealthConfig {
+                 id,
+                 status_shard,
+                 persist_location,
+                 ..
+             }| {
+                if is_active_worker {
+                    match &status_shard {
+                        Some(status_shard) => {
+                            info!("Health for {object_type} {id} being written to {status_shard}");
+                            Some(persist_location.clone())
+                        }
+                        None => {
+                            trace!(
+                                "Health for {object_type} {id} not being written to status shard"
+                            );
+                            None
+                        }
                     }
-                    None => {
-                        trace!("Health for source {source_id} not being written to status shard");
-                        None
-                    }
+                } else {
+                    None
                 }
-            } else {
-                None
-            }
-        })
+            },
+        )
         .collect();
 
     let button = health_op.build(move |mut _capabilities| async move {
@@ -210,37 +268,55 @@ pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
         for persist_location in persist_locations {
             persist_clients_per_location.insert(
                 persist_location.clone(),
-                persist_clients
-                    .open(persist_location)
-                    .await
-                    .expect("error creating persist client for Healthchecker"),
+                persist_clients.open(persist_location).await.expect(
+                    "error creating persist \
+                            client for Healthchecker",
+                ),
             );
         }
 
         let mut health_states: BTreeMap<_, _> = configs
             .into_iter()
-            .map(|(output_idx, (id, metadata))| {
-                (
+            .map(
+                |(
                     output_idx,
-                    HealthState::new(id, metadata, &persist_clients_per_location, worker_count),
-                )
-            })
+                    ObjectHealthConfig {
+                        id,
+                        status_shard,
+                        persist_location,
+                        schema,
+                        ..
+                    },
+                )| {
+                    (
+                        output_idx,
+                        HealthState::<O>::new(
+                            id,
+                            status_shard,
+                            persist_location,
+                            &persist_clients_per_location,
+                            schema,
+                            worker_count,
+                        ),
+                    )
+                },
+            )
             .collect();
 
-        // Write the initial starting state to the status shard for all managed sources
+        // Write the initial starting state to the status shard for all managed objects
         if is_active_worker {
             for state in health_states.values() {
-                if !resume_uppers[&state.source_id].is_empty() {
+                if mark_starting.contains(&state.id) {
                     if let Some((status_shard, persist_client)) = state.persist_details {
-                        let status = HealthStatus::Starting;
+                        let status = O::starting();
                         write_to_persist(
-                            state.source_id,
+                            state.id,
                             status.name(),
                             status.error(),
                             now.clone(),
                             persist_client,
                             status_shard,
-                            &*MZ_SOURCE_STATUS_HISTORY_DESC,
+                            state.schema,
                             status.hint(),
                         )
                         .await;
@@ -254,13 +330,13 @@ pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
             if let AsyncEvent::Data(_cap, rows) = event {
                 for (worker_id, (output_index, health_event)) in rows.drain(..) {
                     let HealthState {
-                        source_id,
+                        id,
                         healths,
                         halt_with,
                         ..
                     } = match health_states.get_mut(&output_index) {
                         Some(health) => health,
-                        // This is a health status update for a subsource that we did not request to
+                        // This is a health status update for a sub-object_type that we did not request to
                         // be generated, which means it doesn't have a GlobalId and should not be
                         // propagated to the shard.
                         None => continue,
@@ -270,21 +346,16 @@ pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
 
                     if !is_active_worker {
                         warn!(
-                            "Health messages for source {source_id} passed to \
+                            "Health messages for {object_type} {id} passed to \
                               an unexpected worker id: {healthcheck_worker_id}"
                         )
                     }
 
-                    let HealthStatusUpdate {
-                        update,
-                        should_halt,
-                    } = health_event;
-
-                    if should_halt {
-                        *halt_with = Some(update.clone());
+                    if health_event.should_halt() {
+                        *halt_with = Some(health_event.clone());
                     }
 
-                    let update = Some(update);
+                    let update = Some(health_event);
                     // Keep the max of the messages in each round; this ensures that errors don't
                     // get lost while also letting us frequently update to the newest status.
                     if new_round || &healths[worker_id] < &update {
@@ -296,9 +367,10 @@ pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
 
                 while let Some(output_index) = outputs_seen.pop_first() {
                     let HealthState {
-                        source_id,
+                        id,
                         healths,
                         persist_details,
+                        schema,
                         last_reported_status,
                         halt_with,
                     } = health_states
@@ -308,20 +380,20 @@ pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
                     let overall_status = healths.iter().filter_map(Option::as_ref).max();
 
                     if let Some(new_status) = overall_status {
-                        if last_reported_status.as_ref() != Some(&new_status) {
+                        if new_status.can_transition_from(last_reported_status.as_ref()) {
                             info!(
-                                "Health transition for source {source_id}: \
+                                "Health transition for {object_type} {id}: \
                                   {last_reported_status:?} -> {new_status:?}"
                             );
                             if let Some((status_shard, persist_client)) = persist_details {
                                 write_to_persist(
-                                    *source_id,
+                                    *id,
                                     new_status.name(),
                                     new_status.error(),
                                     now.clone(),
                                     persist_client,
                                     *status_shard,
-                                    &*MZ_SOURCE_STATUS_HISTORY_DESC,
+                                    schema,
                                     new_status.hint(),
                                 )
                                 .await;
@@ -333,7 +405,7 @@ pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
 
                     // Set halt with if None.
                     if halt_with_outer.is_none() && halt_with.is_some() {
-                        halt_with_outer = Some((*source_id, halt_with.clone()));
+                        halt_with_outer = Some((*id, halt_with.clone()));
                     }
                 }
 
@@ -343,22 +415,24 @@ pub(crate) fn health_operator<'g, G: Scope<Timestamp = ()>>(
                 // We should definitely do that, but this is okay for a PoC.
                 if let Some((id, halt_with)) = halt_with_outer {
                     mz_ore::soft_assert!(
-                        id == primary_source_id,
-                        "subsources should not produce halting errors, however {:?} halted while primary \
-                                            source is {:?}",
+                        id == halting_id,
+                        "sub{object_type}s should not produce \
+                        halting errors, however {:?} halted while primary \
+                                            {object_type} is {:?}",
                         id,
-                        primary_source_id
+                        halting_id
                     );
 
                     info!(
-                        "Broadcasting suspend-and-restart command because of {:?} after {:?} delay",
+                        "Broadcasting suspend-and-restart \
+                        command because of {:?} after {:?} delay",
                         halt_with, SUSPEND_AND_RESTART_DELAY
                     );
                     tokio::time::sleep(SUSPEND_AND_RESTART_DELAY).await;
                     internal_cmd_tx.borrow_mut().broadcast(
                         InternalStorageCommand::SuspendAndRestart {
-                            // Suspend and restart is expected to operate on the primary source and
-                            // not any of the subsources.
+                            // Suspend and restart is expected to operate on the primary object and
+                            // not any of the sub-objects
                             id,
                             reason: format!("{:?}", halt_with),
                         },
