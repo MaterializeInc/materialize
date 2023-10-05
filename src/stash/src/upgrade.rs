@@ -48,16 +48,6 @@ use crate::{
     COLLECTION_CONFIG, USER_VERSION_KEY,
 };
 
-pub(crate) mod v25_to_v26;
-pub(crate) mod v26_to_v27;
-pub(crate) mod v27_to_v28;
-pub(crate) mod v28_to_v29;
-pub(crate) mod v29_to_v30;
-pub(crate) mod v30_to_v31;
-pub(crate) mod v31_to_v32;
-pub(crate) mod v32_to_v33;
-pub(crate) mod v33_to_v34;
-pub(crate) mod v34_to_v35;
 pub(crate) mod v35_to_v36;
 pub(crate) mod v36_to_v37;
 pub(crate) mod v37_to_v38;
@@ -76,10 +66,11 @@ macro_rules! objects {
     }
 }
 
-objects!(v27, v28, v29, v31, v32, v33, v34, v35, v36, v37, v38, v39, v40);
+objects!(v35, v36, v37, v38, v39, v40);
 
 pub(crate) enum MigrationAction<K1, K2, V2> {
     /// Deletes the provided key.
+    #[allow(unused)]
     Delete(K1),
     /// Inserts the provided key-value pair. The key must not currently exist!
     Insert(K2, V2),
@@ -160,6 +151,7 @@ where
 
     /// Provided a closure, will migrate a [`TypedCollection`] of types `K` and `V` to
     /// [`WireCompatible`] types `K2` and `V2`.
+    #[allow(unused)]
     pub(crate) async fn migrate_compat<K2, V2>(
         &self,
         tx: &mut Transaction<'_>,
