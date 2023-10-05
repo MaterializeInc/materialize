@@ -103,6 +103,7 @@ use mz_frontegg_auth::{
     AuthenticationConfig as FronteggConfig, Claims, RefreshToken, REFRESH_SUFFIX,
 };
 use mz_ore::assert_contains;
+use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NowFn, SYSTEM_TIME};
 use mz_ore::retry::Retry;
 use mz_ore::task::RuntimeExt;
@@ -134,10 +135,6 @@ pub mod util;
 // How long, in seconds, a claim is valid for. Increasing this value will decrease some test flakes
 // without increasing test time.
 const EXPIRES_IN_SECS: u64 = 20;
-// Always start the refresh 5 seconds after getting a new claim. This helps reduce test
-// flakes where the refresh takes too long and the claim expires, while also limiting the amount of
-// time we sit around doing nothing waiting for a refresh.
-const REFRESH_BEFORE_SECS: u64 = EXPIRES_IN_SECS - 5;
 
 /// A certificate authority for use in tests.
 pub struct Ca {
@@ -681,7 +678,7 @@ fn start_mzcloud(
                     .refresh_tokens
                     .lock()
                     .unwrap()
-                    .get(&args.refresh_token),
+                    .get(args.refresh_token),
                 context.enable_refresh.load(Ordering::Relaxed),
             ) {
                 (Some(email), true) => email.to_string(),
@@ -806,6 +803,7 @@ fn test_auth_expiry() {
     let (server_cert, server_key) = ca
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
         .unwrap();
+    let metrics_registry = MetricsRegistry::new();
 
     let tenant_id = Uuid::new_v4();
     let client_id = Uuid::new_v4();
@@ -835,17 +833,18 @@ fn test_auth_expiry() {
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
-            refresh_before_secs: i64::try_from(REFRESH_BEFORE_SECS).unwrap(),
             admin_role: "mzadmin".to_string(),
         },
         mz_frontegg_auth::Client::default(),
+        &metrics_registry,
     );
     let frontegg_user = "user@_.com";
     let frontegg_password = &format!("mzp_{client_id}{secret}");
 
     let config = util::Config::default()
         .with_tls(server_cert, server_key)
-        .with_frontegg(&frontegg_auth);
+        .with_frontegg(&frontegg_auth)
+        .with_metrics_registry(metrics_registry);
     let server = util::start_server(config).unwrap();
 
     let mut pg_client = server
@@ -895,6 +894,7 @@ fn test_auth_base_require_tls_frontegg() {
     let (server_cert, server_key) = ca
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
         .unwrap();
+    let metrics_registry = MetricsRegistry::new();
 
     let tenant_id = Uuid::new_v4();
     let client_id = Uuid::new_v4();
@@ -976,10 +976,10 @@ fn test_auth_base_require_tls_frontegg() {
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now,
-            refresh_before_secs: 0,
             admin_role: "mzadmin".to_string(),
         },
         mz_frontegg_auth::Client::default(),
+        &metrics_registry,
     );
     let frontegg_user = "uSeR@_.com";
     let frontegg_password = &format!("mzp_{client_id}{secret}");
@@ -1001,7 +1001,8 @@ fn test_auth_base_require_tls_frontegg() {
     // authentication.
     let config = util::Config::default()
         .with_tls(server_cert, server_key)
-        .with_frontegg(&frontegg_auth);
+        .with_frontegg(&frontegg_auth)
+        .with_metrics_registry(metrics_registry);
     let server = util::start_server(config).unwrap();
     run_tests(
         "TlsMode::Require, MzCloud",
@@ -1663,6 +1664,7 @@ fn test_auth_admin_non_superuser() {
     let (server_cert, server_key) = ca
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
         .unwrap();
+    let metrics_registry = MetricsRegistry::new();
 
     let tenant_id = Uuid::new_v4();
     let client_id = Uuid::new_v4();
@@ -1714,10 +1716,10 @@ fn test_auth_admin_non_superuser() {
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now,
-            refresh_before_secs: i64::try_from(REFRESH_BEFORE_SECS).unwrap(),
             admin_role: admin_role.to_string(),
         },
         mz_frontegg_auth::Client::default(),
+        &metrics_registry,
     );
 
     let frontegg_password = &format!("{password_prefix}{client_id}{secret}");
@@ -1726,7 +1728,8 @@ fn test_auth_admin_non_superuser() {
 
     let config = util::Config::default()
         .with_tls(server_cert, server_key)
-        .with_frontegg(&frontegg_auth);
+        .with_frontegg(&frontegg_auth)
+        .with_metrics_registry(metrics_registry);
     let server = util::start_server(config).unwrap();
 
     run_tests(
@@ -1769,6 +1772,7 @@ fn test_auth_admin_superuser() {
     let (server_cert, server_key) = ca
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
         .unwrap();
+    let metrics_registry = MetricsRegistry::new();
 
     let tenant_id = Uuid::new_v4();
     let client_id = Uuid::new_v4();
@@ -1820,10 +1824,10 @@ fn test_auth_admin_superuser() {
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now,
-            refresh_before_secs: i64::try_from(REFRESH_BEFORE_SECS).unwrap(),
             admin_role: admin_role.to_string(),
         },
         mz_frontegg_auth::Client::default(),
+        &metrics_registry,
     );
 
     let admin_frontegg_password = &format!("{password_prefix}{admin_client_id}{admin_secret}");
@@ -1832,7 +1836,8 @@ fn test_auth_admin_superuser() {
 
     let config = util::Config::default()
         .with_tls(server_cert, server_key)
-        .with_frontegg(&frontegg_auth);
+        .with_frontegg(&frontegg_auth)
+        .with_metrics_registry(metrics_registry);
     let server = util::start_server(config).unwrap();
 
     run_tests(
@@ -1875,6 +1880,7 @@ fn test_auth_admin_superuser_revoked() {
     let (server_cert, server_key) = ca
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
         .unwrap();
+    let metrics_registry = MetricsRegistry::new();
 
     let tenant_id = Uuid::new_v4();
     let client_id = Uuid::new_v4();
@@ -1926,17 +1932,18 @@ fn test_auth_admin_superuser_revoked() {
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now,
-            refresh_before_secs: i64::try_from(REFRESH_BEFORE_SECS).unwrap(),
             admin_role: admin_role.to_string(),
         },
         mz_frontegg_auth::Client::default(),
+        &metrics_registry,
     );
 
     let frontegg_password = &format!("{password_prefix}{client_id}{secret}");
 
     let config = util::Config::default()
         .with_tls(server_cert, server_key)
-        .with_frontegg(&frontegg_auth);
+        .with_frontegg(&frontegg_auth)
+        .with_metrics_registry(metrics_registry);
     let server = util::start_server(config).unwrap();
 
     let mut pg_client = server

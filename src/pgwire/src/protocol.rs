@@ -26,7 +26,9 @@ use mz_adapter::{
     AdapterError, AdapterNotice, ExecuteContextExtra, ExecuteResponse, PeekResponseUnary,
     RowsFuture,
 };
-use mz_frontegg_auth::Authentication as FronteggAuthentication;
+use mz_frontegg_auth::{
+    Authentication as FronteggAuthentication, ExchangePasswordForTokenResponse,
+};
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
 use mz_ore::server::TlsMode;
@@ -166,47 +168,41 @@ where
                     .await
             }
         };
-        match frontegg
-            .exchange_password_for_token(&password)
-            .await
-            .and_then(|response| {
-                let response = frontegg.validate_api_token_response(response, Some(&user))?;
+
+        let auth_response = frontegg.exchange_password_for_token(&password, user).await;
+        match auth_response {
+            Ok(result) => {
+                let ExchangePasswordForTokenResponse {
+                    claims,
+                    refresh_updates,
+                    valid_until_fut,
+                } = result;
 
                 // Create a session based on the validated claims.
                 //
-                // In particular, it's important that the username come from the
-                // claims, as Frontegg may return an email address with
-                // different casing than the user supplied via the pgwire
-                // username field. We want to use the Frontegg casing as
+                // In particular, it's important that the username come from the claims, as
+                // Frontegg may return an email address with different casing than the user
+                // supplied via the pgwire username field. We want to use the Frontegg casing as
                 // canonical.
                 let mut session = adapter_client.new_session(
                     conn.conn_id().clone(),
                     User {
-                        name: response.claims.email.clone(),
+                        name: claims.email.clone(),
                         external_metadata: Some(ExternalUserMetadata {
-                            user_id: response.claims.user_id,
-                            admin: response.claims.is_admin,
+                            user_id: claims.user_id,
+                            admin: claims.is_admin,
                         }),
                     },
                 );
 
-                // Arrange to continuously refresh and revalidate the access
-                // token, updating the session as necessary.
-                let external_metadata_tx = session.retain_external_metadata_transmitter();
-                let is_expired =
-                    frontegg.continuously_revalidate_api_token_response(response, move |claims| {
-                        // Ignore error if client has hung up.
-                        let _ = external_metadata_tx.send(ExternalUserMetadata {
-                            user_id: claims.user_id,
-                            admin: claims.is_admin,
-                        });
-                    });
+                // Whenever refreshing a token, if the metadata has changed we'll update our
+                // session vars.
+                session.register_external_metadata_transmitter(refresh_updates);
 
-                Ok((session, is_expired))
-            }) {
-            Ok((session, is_expired)) => (session, is_expired.left_future()),
-            Err(e) => {
-                warn!("pgwire connection failed authentication: {}", e);
+                (session, valid_until_fut.left_future())
+            }
+            Err(err) => {
+                warn!(?err, "pgwire connection failed authentication");
                 return conn
                     .send(ErrorResponse::fatal(
                         SqlState::INVALID_PASSWORD,

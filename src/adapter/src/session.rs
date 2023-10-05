@@ -41,6 +41,7 @@ use mz_storage_types::sources::Timeline;
 use qcell::{QCell, QCellOwner};
 use rand::Rng;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use tokio::sync::watch;
 use tokio::sync::OwnedMutexGuard;
 use uuid::Uuid;
 
@@ -83,8 +84,7 @@ pub struct Session<T = mz_repr::Timestamp> {
     notices_rx: mpsc::UnboundedReceiver<AdapterNotice>,
     next_transaction_id: TransactionId,
     secret_key: u32,
-    external_metadata_tx: mpsc::UnboundedSender<ExternalUserMetadata>,
-    external_metadata_rx: mpsc::UnboundedReceiver<ExternalUserMetadata>,
+    external_metadata_rx: Option<watch::Receiver<ExternalUserMetadata>>,
     // Token allowing us to access `Arc<QCell<StatementLogging>>`
     // metadata. We want these to be reference-counted, because the same
     // statement might be referenced from multiple portals simultaneously.
@@ -166,7 +166,6 @@ impl<T: TimestampManipulation> Session<T> {
         user: User,
     ) -> Session<T> {
         let (notices_tx, notices_rx) = mpsc::unbounded_channel();
-        let (external_metadata_tx, external_metadata_rx) = mpsc::unbounded_channel();
         let default_cluster = INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER.get(&user.name);
         let mut vars = SessionVars::new(build_info, user);
         if let Some(default_cluster) = default_cluster {
@@ -185,8 +184,7 @@ impl<T: TimestampManipulation> Session<T> {
             notices_rx,
             next_transaction_id: 0,
             secret_key: rand::thread_rng().gen(),
-            external_metadata_tx,
-            external_metadata_rx,
+            external_metadata_rx: None,
             qcell_owner: QCellOwner::new(),
         }
     }
@@ -695,18 +693,32 @@ impl<T: TimestampManipulation> Session<T> {
         self.vars.is_superuser()
     }
 
-    /// Returns a channel on which to send external metadata to the session.
-    pub fn retain_external_metadata_transmitter(
+    /// Register a receiver which pushes updates of [`ExternalUserMetadata`].
+    pub fn register_external_metadata_transmitter(
         &mut self,
-    ) -> UnboundedSender<ExternalUserMetadata> {
-        self.external_metadata_tx.clone()
+        rx: tokio::sync::watch::Receiver<ExternalUserMetadata>,
+    ) {
+        let old = self.external_metadata_rx.replace(rx);
+        if old.is_some() {
+            tracing::error!("Double register of external metadata transmitter!");
+        }
     }
 
     /// Drains any external metadata updates and applies the changes from the latest update.
     pub fn apply_external_metadata_updates(&mut self) {
-        while let Ok(metadata) = self.external_metadata_rx.try_recv() {
-            self.vars.set_external_user_metadata(metadata);
+        // If no sender is registered then there isn't anything to do.
+        let Some(rx) = &mut self.external_metadata_rx else {
+            return;
+        };
+
+        // If the value hasn't changed then return.
+        if !rx.has_changed().unwrap_or(false) {
+            return;
         }
+
+        // Update our metadata!
+        let metadata = rx.borrow_and_update().clone();
+        self.vars.set_external_user_metadata(metadata);
     }
 
     /// Initializes the session's role metadata.
