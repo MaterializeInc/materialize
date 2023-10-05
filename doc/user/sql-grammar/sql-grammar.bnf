@@ -254,6 +254,8 @@ explain_plan ::=
   'FOR'?
   (
     select_stmt |
+    create_index |
+    create_materialized_view |
     'INDEX' index_name |
     'MATERIALIZED VIEW' view_name
   )
