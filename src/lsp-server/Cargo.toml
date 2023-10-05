@@ -26,13 +26,3 @@ httparse = "1.8.0"
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
-
-[package.metadata.deb]
-name = "materialize-lsp-server"
-maintainer = "Materialize, Inc."
-copyright = "Materialize, Inc. and contributors"
-section = "utility"
-assets = [
-    ["target/release/mz-lsp-server", "usr/bin/", "755"],
-]
-depends = "$auto"
