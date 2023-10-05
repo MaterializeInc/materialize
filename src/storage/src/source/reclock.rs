@@ -465,16 +465,14 @@ where
             clock_stream,
         };
 
-        // Initialize or load the initial state that might exist in the shard
-        let trace_batch = if upper.elements() == [IntoTime::minimum()] {
-            let (_, upper) = operator.clock_stream.next().await.expect("end of time");
-            let batch = vec![(FromTime::minimum(), IntoTime::minimum(), 1)];
-            match operator.append_batch(batch, upper.clone()).await {
-                Ok(trace_batch) => trace_batch,
-                Err(UpperMismatch { current, .. }) => operator.sync(current.borrow()).await,
-            }
-        } else {
+        // Load the initial state that might exist in the shard
+        let trace_batch = if upper.elements() != [IntoTime::minimum()] {
             operator.sync(upper.borrow()).await
+        } else {
+            ReclockBatch {
+                updates: vec![],
+                upper: Antichain::from_elem(IntoTime::minimum()),
+            }
         };
 
         (operator, trace_batch)
@@ -540,7 +538,9 @@ where
             upper: self.upper.clone(),
         };
 
-        while PartialOrder::less_than(&self.source_upper.frontier(), &new_source_upper) {
+        while *self.upper == [IntoTime::minimum()]
+            || PartialOrder::less_than(&self.source_upper.frontier(), &new_source_upper)
+        {
             let (ts, mut upper) = self
                 .clock_stream
                 .by_ref()
@@ -559,12 +559,22 @@ where
                 upper = Antichain::new();
             }
 
+            // If this is the first binding we mint then we will mint it at the minimum target
+            // timestamp. The first source upper is always the upper of the snapshot and by mapping
+            // it to the minimum target timestamp we make it so that the final shard never appears
+            // empty at any timestamp.
+            let binding_ts = if *self.upper == [IntoTime::minimum()] {
+                IntoTime::minimum()
+            } else {
+                ts
+            };
+
             let mut updates = vec![];
             for src_ts in self.source_upper.frontier().iter().cloned() {
-                updates.push((src_ts, ts.clone(), -1));
+                updates.push((src_ts, binding_ts.clone(), -1));
             }
             for src_ts in new_source_upper.iter().cloned() {
-                updates.push((src_ts, ts.clone(), 1));
+                updates.push((src_ts, binding_ts.clone(), 1));
             }
             consolidation::consolidate_updates(&mut updates);
 
@@ -703,12 +713,22 @@ mod tests {
         .await
         .unwrap();
 
-        let (operator, initial_batch) = ReclockOperator::new(remap_handle, clock_stream).await;
+        let (mut operator, initial_batch) = ReclockOperator::new(remap_handle, clock_stream).await;
 
         let mut follower = ReclockFollower::new(as_of);
 
         // Push any updates that might already exist in the persist shard to the follower.
-        follower.push_trace_batch(initial_batch);
+        if *initial_batch.upper == [Timestamp::minimum()] {
+            // In the tests we always reclock the minimum source frontier to the minimum target
+            // frontier, which we do in this step.
+            follower.push_trace_batch(
+                operator
+                    .mint(Antichain::from_elem(Partitioned::minimum()).borrow())
+                    .await,
+            );
+        } else {
+            follower.push_trace_batch(initial_batch);
+        }
 
         (operator, follower)
     }
