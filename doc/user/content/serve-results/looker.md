@@ -46,7 +46,7 @@ To configure a custom Materialize [cluster](/sql/create-cluster), follow these s
     options=--cluster%3D<cluster_name>
     ```
 
-    Make sure to replace <cluster_name> with the actual name of your cluster.
+    Make sure to replace `<cluster_name>` with the actual name of your cluster.
 
 ## Known limitations
 
