@@ -14,7 +14,7 @@ from ci.deploy.deploy_util import rust_version
 from materialize import mzbuild, spawn
 
 from . import deploy_util
-from .deploy_util import APT_BUCKET, VERSION
+from .deploy_util import VERSION
 
 
 def main() -> None:
