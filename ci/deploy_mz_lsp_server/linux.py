@@ -25,14 +25,18 @@ def main() -> None:
     assert repo.rd.cargo_workspace.crates["mz-lsp-server"].version == VERSION
 
     print("--- Building mz-lsp-server")
-    print(f"Roost toolchain: {rust_version()}")
+    # The bin/ci-builder uses target-xcompile as the volume and
+    # is where the binary release will be available.
+    path = Path("target-xcompile") / "release" / "mz-lsp-server"
     spawn.runv(
         ["cargo", "build", "--bin", "mz-lsp-server", "--release"],
         env=dict(os.environ, RUSTUP_TOOLCHAIN=rust_version()),
     )
+    mzbuild.chmod_x(path)
+
 
     print(f"--- Uploading {target} binary tarball")
-    deploy_util.deploy_tarball(target, Path("target") / "release" / "mz-lsp-server")
+    deploy_util.deploy_tarball(target, path)
 
     print("--- Publishing Debian package")
     filename = f"mz-lsp-server_{VERSION}_{repo.rd.arch.go_str()}.deb"
