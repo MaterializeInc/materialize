@@ -25,48 +25,17 @@ def main() -> None:
     assert repo.rd.cargo_workspace.crates["mz-lsp-server"].version == VERSION
 
     print("--- Building mz-lsp-server")
-    print(f"Roost toolchain: {rust_version()}")
+    # The bin/ci-builder uses target-xcompile as the volume and
+    # is where the binary release will be available.
+    path = Path("target-xcompile") / "release" / "mz-lsp-server"
     spawn.runv(
         ["cargo", "build", "--bin", "mz-lsp-server", "--release"],
         env=dict(os.environ, RUSTUP_TOOLCHAIN=rust_version()),
     )
+    mzbuild.chmod_x(path)
 
     print(f"--- Uploading {target} binary tarball")
-    deploy_util.deploy_tarball(target, Path("target") / "release" / "mz-lsp-server")
-
-    print("--- Publishing Debian package")
-    filename = f"mz-lsp-server_{VERSION}_{repo.rd.arch.go_str()}.deb"
-    print(f"Publishing {filename}")
-    spawn.runv(
-        [
-            *repo.rd.cargo("deb", rustflags=[]),
-            "--no-build",
-            "--no-strip",
-            "--deb-version",
-            str(VERSION),
-            "-p",
-            "mz-lsp-server",
-            "-o",
-            filename,
-        ],
-        cwd=repo.root,
-    )
-    # Import our GPG signing key from the environment.
-    spawn.runv(["gpg", "--import"], stdin=os.environ["GPG_KEY"].encode("ascii"))
-    # Run deb-s3 to update the repository. No need to upload the file again.
-    spawn.runv(
-        [
-            "deb-s3",
-            "upload",
-            "-p",
-            "--sign",
-            "-b",
-            APT_BUCKET,
-            "-c",
-            "generic",
-            filename,
-        ]
-    )
+    deploy_util.deploy_tarball(target, path)
 
 
 if __name__ == "__main__":
