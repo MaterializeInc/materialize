@@ -306,7 +306,7 @@ where
 
         // Write the initial starting state to the status shard for all managed objects
         if is_active_worker {
-            for state in health_states.values() {
+            for state in health_states.values_mut() {
                 if mark_starting.contains(&state.id) {
                     if let Some((status_shard, persist_client)) = state.persist_details {
                         let status = O::starting();
@@ -321,6 +321,8 @@ where
                             status.hint(),
                         )
                         .await;
+
+                        state.last_reported_status = Some(status);
                     }
                 }
             }
