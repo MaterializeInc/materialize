@@ -29,6 +29,7 @@ http-body = "0.4.5"
 humantime = "2.1.0"
 hyper = { version = "0.14.23", features = ["http1", "server"] }
 hyper-openssl = "0.9.2"
+hyper-tls = { version = "0.5.0" }
 include_dir = "0.7.3"
 itertools = "0.10.5"
 jsonwebtoken = "8.2.0"
