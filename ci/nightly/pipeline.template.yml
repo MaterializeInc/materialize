@@ -76,6 +76,7 @@ steps:
           - { value: data-ingest }
           - { value: parallel-workload-dml }
           - { value: parallel-workload }
+          - { value: incident-70 }
           - { value: incident-72-remediation }
           #- { value: parallel-workload-100-threads }
           - { value: parallel-workload-cancel }
@@ -845,6 +846,17 @@ steps:
   #    - ./ci/plugins/mzcompose:
   #        composition: parallel-workload
   #        args: [--runtime=1500, --scenario=kill]
+
+  - id: incident-70
+    label: "Test for incident 70"
+    skip: "Affected by #15209"
+    agents:
+      queue: linux-x86_64-large
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: cluster
+          run: test-incident-70
 
   - id: incident-72-remediation
     label: "Remediation of incident 72"
