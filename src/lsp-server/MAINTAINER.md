@@ -39,4 +39,6 @@ cargo test -p mz-lsp-server
    ```
 
 6. Find the [Deploy mz-lsp-server](https://buildkite.com/materialize/deploy-mz-lsp-server) Buildkite
-   build for your branch.
+   build for your branch. Make sure the macOS release runs; it tends to get stuck. If it happens, leave a message in Slack so it can be manually addressed.
+
+7. The release is complete!
