@@ -33,10 +33,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from inspect import Traceback, getframeinfo, getmembers, isfunction, stack
 from tempfile import TemporaryFile
-from typing import (
-    Any,
-    cast,
-)
+from typing import Any, cast
 
 import pg8000
 import sqlparse
@@ -250,6 +247,7 @@ class Composition:
         capture_stderr: bool = False,
         stdin: str | None = None,
         check: bool = True,
+        max_tries: int = 1,
     ) -> subprocess.CompletedProcess:
         """Invoke `docker compose` on the rendered composition.
 
@@ -275,29 +273,43 @@ class Composition:
             ("--project-name", self.project_name) if self.project_name else ()
         )
 
-        try:
-            return subprocess.run(
-                [
-                    "docker",
-                    "compose",
-                    f"-f/dev/fd/{self.file.fileno()}",
-                    "--project-directory",
-                    self.path,
-                    *project_name_args,
-                    *args,
-                ],
-                close_fds=False,
-                check=check,
-                stdout=stdout,
-                stderr=stderr,
-                input=stdin,
-                text=True,
-                bufsize=1,
-            )
-        except subprocess.CalledProcessError as e:
-            if e.stdout:
-                print(e.stdout)
-            raise UIError(f"running docker compose failed (exit status {e.returncode})")
+        ret = None
+        for retry in range(1, max_tries + 1):
+            try:
+                ret = subprocess.run(
+                    [
+                        "docker",
+                        "compose",
+                        f"-f/dev/fd/{self.file.fileno()}",
+                        "--project-directory",
+                        self.path,
+                        *project_name_args,
+                        *args,
+                    ],
+                    close_fds=False,
+                    check=check,
+                    stdout=stdout,
+                    stderr=stderr,
+                    input=stdin,
+                    text=True,
+                    bufsize=1,
+                )
+            except subprocess.CalledProcessError as e:
+                if e.stdout:
+                    print(e.stdout)
+
+                if retry < max_tries:
+                    print("Retrying ...")
+                    time.sleep(1)
+                    continue
+                else:
+                    raise UIError(
+                        f"running docker compose failed (exit status {e.returncode})"
+                    )
+            break
+
+        assert ret is not None
+        return ret
 
     def port(self, service: str, private_port: int | str) -> int:
         """Get the public port for a service's private port.
@@ -554,7 +566,7 @@ class Composition:
         # Restart any dependencies whose definitions have changed. The trick,
         # taken from Buildkite's Docker Compose plugin, is to run an `up`
         # command that requests zero instances of the requested service.
-        self.invoke("up", "--detach", "--scale", f"{service}=0", service)
+        self.up("--scale", f"{service}=0", service, wait=False)
         return self.invoke(
             "run",
             *(["--entrypoint", entrypoint] if entrypoint else []),
@@ -610,7 +622,7 @@ class Composition:
             check=check,
         )
 
-    def pull_if_variable(self, services: list[str]) -> None:
+    def pull_if_variable(self, services: list[str], max_tries: int = 2) -> None:
         """Pull fresh service images in case the tag indicates thee underlying image may change over time.
 
         Args:
@@ -622,7 +634,7 @@ class Composition:
                 self.compose["services"][service]["image"].endswith(tag)
                 for tag in [":latest", ":unstable", ":rolling"]
             ):
-                self.invoke("pull", service)
+                self.invoke("pull", service, max_tries=max_tries)
 
     def up(
         self,
@@ -630,7 +642,7 @@ class Composition:
         detach: bool = True,
         wait: bool = True,
         persistent: bool = False,
-        max_retries: int = 2,
+        max_tries: int = 2,
     ) -> None:
         """Build, (re)create, and start the named services.
 
@@ -644,7 +656,7 @@ class Composition:
             persistent: Replace the container's entrypoint and command with
                 `sleep infinity` so that additional commands can be scheduled
                 on the container with `Composition.exec`.
-            max_retries: Number of retries on failure.
+            max_tries: Number of tries on failure.
         """
         if persistent:
             old_compose = copy.deepcopy(self.compose)
@@ -653,23 +665,13 @@ class Composition:
                 service["command"] = []
             self._write_compose()
 
-        for retry in range(1, max_retries + 1):
-            try:
-                self.invoke(
-                    "up",
-                    *(["--detach"] if detach else []),
-                    *(["--wait"] if wait else []),
-                    *services,
-                )
-            except UIError as e:
-                if retry < max_retries:
-                    print("Retrying ...")
-                    time.sleep(1)
-                    continue
-                else:
-                    raise e
-
-            break
+        self.invoke(
+            "up",
+            *(["--detach"] if detach else []),
+            *(["--wait"] if wait else []),
+            *services,
+            max_tries=2,
+        )
 
         if persistent:
             self.compose = old_compose  # type: ignore
