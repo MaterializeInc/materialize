@@ -248,6 +248,114 @@ Used Indexes:
 
 EOF
 
+query T multiline
+EXPLAIN SELECT id FROM mz_catalog.mz_indexes
+----
+Explained Query (fast path):
+  Project (#0)
+    ReadIndex on=mz_catalog.mz_indexes mz_indexes_ind=[*** full scan ***]
+
+Used Indexes:
+  - mz_internal.mz_indexes_ind (*** full scan ***)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT id FROM mz_catalog.mz_roles
+----
+Explained Query (fast path):
+  Project (#0)
+    ReadIndex on=mz_catalog.mz_roles mz_roles_ind=[*** full scan ***]
+
+Used Indexes:
+  - mz_internal.mz_roles_ind (*** full scan ***)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT id FROM mz_catalog.mz_sources
+----
+Explained Query (fast path):
+  Project (#0)
+    ReadIndex on=mz_catalog.mz_sources mz_sources_ind=[*** full scan ***]
+
+Used Indexes:
+  - mz_internal.mz_sources_ind (*** full scan ***)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT id FROM mz_catalog.mz_sinks
+----
+Explained Query (fast path):
+  Project (#0)
+    ReadIndex on=mz_catalog.mz_sinks mz_sinks_ind=[*** full scan ***]
+
+Used Indexes:
+  - mz_internal.mz_sinks_ind (*** full scan ***)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT id FROM mz_catalog.mz_materialized_views
+----
+Explained Query (fast path):
+  Project (#0)
+    ReadIndex on=mz_catalog.mz_materialized_views mz_materialized_views_ind=[*** full scan ***]
+
+Used Indexes:
+  - mz_internal.mz_materialized_views_ind (*** full scan ***)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT cluster_id FROM mz_internal.mz_cluster_links
+----
+Explained Query (fast path):
+  Project (#0)
+    ReadIndex on=mz_internal.mz_cluster_links mz_cluster_links_ind=[*** full scan ***]
+
+Used Indexes:
+  - mz_internal.mz_cluster_links_ind (*** full scan ***)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT object_id FROM mz_internal.mz_object_dependencies
+----
+Explained Query (fast path):
+  Project (#0)
+    ReadIndex on=mz_internal.mz_object_dependencies mz_object_dependencies_ind=[*** full scan ***]
+
+Used Indexes:
+  - mz_internal.mz_object_dependencies_ind (*** full scan ***)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT dependency_id FROM mz_internal.mz_compute_dependencies
+----
+Explained Query (fast path):
+  Project (#0)
+    ReadIndex on=mz_internal.mz_compute_dependencies mz_compute_dependencies_ind=[*** full scan ***]
+
+Used Indexes:
+  - mz_internal.mz_compute_dependencies_ind (*** full scan ***)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT dropped_at FROM mz_internal.mz_cluster_replica_history
+----
+Explained Query (fast path):
+  Project (#0)
+    ReadIndex on=mz_internal.mz_cluster_replica_history mz_cluster_replica_history_ind=[*** full scan ***]
+
+Used Indexes:
+  - mz_internal.mz_cluster_replica_history_ind (*** full scan ***)
+
+EOF
+
 # Following are used in the UI
 
 query T multiline
@@ -304,35 +412,32 @@ Explained Query:
       Map (null, null)
         Union
           Negate
-            Project (#0..=#4)
-              Join on=(#0 = #5) type=differential
-                Get l1
-                ArrangeBy keys=[[#0]]
-                  Distinct group_by=[#0]
-                    Project (#0)
-                      Get l2
-          Get l0
-      Get l2
+            Project (#0, #1, #3, #4, #6)
+              Filter like["u%"](#0)
+                Join on=(#0 = #11) type=differential
+                  Get l0
+                  ArrangeBy keys=[[#0]]
+                    Distinct group_by=[#0]
+                      Project (#0)
+                        Get l1
+          Project (#0, #1, #3, #4, #6)
+            Filter like["u%"](#0)
+              ReadIndex on=mz_sources mz_sources_ind=[*** full scan ***]
+      Get l1
   With
-    cte l2 =
-      Project (#0..=#4, #9, #10)
+    cte l1 =
+      Project (#0, #1, #3, #4, #6, #15, #16)
         Filter like["u%"](#0)
-          Join on=(#0 = #5) type=differential
-            Get l1
+          Join on=(#0 = #11) type=differential
+            Get l0
             ArrangeBy keys=[[#0]]
               ReadIndex on=mz_source_statuses mz_source_statuses_ind=[differential join]
-    cte l1 =
-      ArrangeBy keys=[[#0]]
-        Get l0
     cte l0 =
-      Project (#0, #1, #3, #4, #6)
-        Filter like["u%"](#0)
-          ReadStorage mz_catalog.mz_sources
-
-Source mz_catalog.mz_sources
-  filter=(like["u%"](#0))
+      ArrangeBy keys=[[#0]]
+        ReadIndex on=mz_sources mz_sources_ind=[differential join]
 
 Used Indexes:
+  - mz_internal.mz_sources_ind (*** full scan ***, differential join)
   - mz_internal.mz_source_statuses_ind (differential join)
 
 EOF
