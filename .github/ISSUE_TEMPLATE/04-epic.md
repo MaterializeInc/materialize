@@ -56,7 +56,8 @@ Please use the "problem" issue template for work items.
 
 <!--
 Record all notable decisions as the project evolves, such as setting a target
-date or changing the epic's scope or its breakdown.
+date or changing the epic's scope or its breakdown. Please order entries in
+descending order (the latest update should be the top most item).
 
 Example:
 > * **18 September 2023.** Added Nullability control for Avro-formatted sinks #21722 as a work item.
