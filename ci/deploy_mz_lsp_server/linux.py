@@ -14,7 +14,7 @@ from ci.deploy.deploy_util import rust_version
 from materialize import mzbuild, spawn
 
 from . import deploy_util
-from .deploy_util import APT_BUCKET, VERSION
+from .deploy_util import VERSION
 
 
 def main() -> None:
@@ -36,40 +36,6 @@ def main() -> None:
 
     print(f"--- Uploading {target} binary tarball")
     deploy_util.deploy_tarball(target, path)
-
-    print("--- Publishing Debian package")
-    filename = f"mz-lsp-server_{VERSION}_{repo.rd.arch.go_str()}.deb"
-    print(f"Publishing {filename}")
-    spawn.runv(
-        [
-            *repo.rd.cargo("deb", rustflags=[]),
-            "--no-build",
-            "--no-strip",
-            "--deb-version",
-            str(VERSION),
-            "-p",
-            "mz-lsp-server",
-            "-o",
-            filename,
-        ],
-        cwd=repo.root,
-    )
-    # Import our GPG signing key from the environment.
-    spawn.runv(["gpg", "--import"], stdin=os.environ["GPG_KEY"].encode("ascii"))
-    # Run deb-s3 to update the repository. No need to upload the file again.
-    spawn.runv(
-        [
-            "deb-s3",
-            "upload",
-            "-p",
-            "--sign",
-            "-b",
-            APT_BUCKET,
-            "-c",
-            "generic",
-            filename,
-        ]
-    )
 
 
 if __name__ == "__main__":

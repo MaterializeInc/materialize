@@ -23,7 +23,6 @@ import humanize
 
 from materialize import git
 
-APT_BUCKET = "materialize-apt"
 BINARIES_BUCKET = "materialize-binaries"
 TAG = os.environ["BUILDKITE_TAG"]
 VERSION = Version.parse(TAG.removeprefix("mz-lsp-server-v"))
