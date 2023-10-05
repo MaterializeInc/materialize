@@ -2871,7 +2871,7 @@ pub const PG_DESCRIPTION: BuiltinView = BuiltinView {
 SELECT
 	pg_obj.objoid,
 	pg_obj.classoid,
-	COALESCE(cmt.object_sub_id::INT4, 0) AS objsubid,
+	COALESCE(cmt.object_sub_id::pg_catalog.int4, 0) AS objsubid,
 	cmt.comment AS description
 FROM
 	(
