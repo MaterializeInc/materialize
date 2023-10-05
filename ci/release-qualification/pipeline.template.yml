@@ -8,25 +8,6 @@
 # by the Apache License, Version 2.0.
 
 steps:
-  - block: Release Qualification test selection
-    prompt: |
-      What tests would you like to run? As a convenience, leaving all tests
-      unchecked will run all tests.
-    blocked_state: running
-    fields:
-      - select: Tests
-        key: tests
-        options:
-          - { value: zippy-kafka-sources-large }
-          - { value: zippy-dataflows-large }
-          - { value: zippy-pg-cdc-large }
-          - { value: zippy-cluster-replicas-large }
-          - { value: zippy-user-tables-large }
-          - { value: feature-benchmark-scale-plus-one }
-        multiple: true
-        required: false
-    if: build.source == "ui"
-
   - id: build-x86_64
     label: Build x86_64
     command: bin/ci-builder run stable bin/pyactivate -m ci.test.build x86_64
