@@ -23,6 +23,19 @@ ALTER SYSTEM SET enable_webhook_sources = true
 ----
 COMPLETE 0
 
+# Helper view with object IDs.
+statement ok
+CREATE VIEW pg_description_view AS
+	SELECT
+		id, objsubid, description
+	FROM
+		pg_catalog.pg_description AS d
+		JOIN (
+				SELECT id, oid FROM mz_catalog.mz_objects
+				UNION ALL SELECT id, oid FROM mz_catalog.mz_schemas
+			)
+				AS mz_obj (id, oid) ON d.objoid = mz_obj.oid
+
 statement ok
 CREATE TABLE a ( x int8, y text, z jsonb );
 
@@ -32,7 +45,12 @@ COMMENT ON TABLE a IS 'foo_table';
 query TTTT
 SELECT * FROM mz_internal.mz_comments;
 ----
-u1  table  NULL  foo_table
+u2  table  NULL  foo_table
+
+query TIT
+SELECT * FROM pg_description_view;
+----
+u2  0  foo_table
 
 statement ok
 COMMENT ON COLUMN a.y IS 'load_bearing';
@@ -40,8 +58,14 @@ COMMENT ON COLUMN a.y IS 'load_bearing';
 query TTTT
 SELECT * FROM mz_internal.mz_comments;
 ----
-u1  table  NULL  foo_table
-u1  table  2  load_bearing
+u2  table  NULL  foo_table
+u2  table  2  load_bearing
+
+query TIT
+SELECT * FROM pg_description_view;
+----
+u2  0  foo_table
+u2  2  load_bearing
 
 statement ok
 CREATE TABLE b ( ts timestamptz );
@@ -52,9 +76,16 @@ COMMENT ON COLUMN b.ts IS 'utc_timestamp';
 query TTTT
 SELECT * FROM mz_internal.mz_comments;
 ----
-u1  table  NULL  foo_table
-u1  table  2  load_bearing
-u2  table  1  utc_timestamp
+u2  table  NULL  foo_table
+u2  table  2  load_bearing
+u3  table  1  utc_timestamp
+
+query TIT
+SELECT * FROM pg_description_view;
+----
+u2  0  foo_table
+u2  2  load_bearing
+u3  1  utc_timestamp
 
 statement ok
 COMMENT ON TABLE b IS 'foo_table';
@@ -65,8 +96,14 @@ DROP TABLE a;
 query TTTT
 SELECT * FROM mz_internal.mz_comments;
 ----
-u2  table  NULL foo_table
-u2  table  1  utc_timestamp
+u3  table  NULL foo_table
+u3  table  1  utc_timestamp
+
+query TIT
+SELECT * FROM pg_description_view;
+----
+u3  0  foo_table
+u3  1  utc_timestamp
 
 statement ok
 COMMENT ON TABLE b IS NULL
@@ -76,6 +113,10 @@ COMMENT ON COLUMN b.ts IS NULL
 
 query TTTT
 SELECT * FROM mz_internal.mz_comments;
+----
+
+query TIT
+SELECT * FROM pg_description_view;
 ----
 
 statement error unknown catalog item 'c'
@@ -99,8 +140,14 @@ COMMENT ON VIEW c IS 'this_is_a_view';
 query TTTT
 SELECT * FROM mz_internal.mz_comments;
 ----
-u3  index NULL  speed_up
-u4  view  NULL  this_is_a_view
+u4  index NULL  speed_up
+u5  view  NULL  this_is_a_view
+
+query TIT
+SELECT * FROM pg_description_view;
+----
+u4  0  speed_up
+u5  0  this_is_a_view
 
 statement ok
 DROP TABLE b CASCADE;
@@ -111,8 +158,14 @@ COMMENT ON COLUMN c.col_1 IS 'this_works';
 query TTTT
 SELECT * FROM mz_internal.mz_comments;
 ----
-u4  view  NULL  this_is_a_view
-u4  view  1  this_works
+u5  view  NULL  this_is_a_view
+u5  view  1  this_works
+
+query TIT
+SELECT * FROM pg_description_view;
+----
+u5  1  this_works
+u5  0  this_is_a_view
 
 statement ok
 CREATE MATERIALIZED VIEW mv ( x ) AS SELECT 1
@@ -126,10 +179,18 @@ COMMENT ON MATERIALIZED VIEW mv IS 'mat_foo';
 query TTTT
 SELECT * FROM mz_internal.mz_comments;
 ----
-u4  view  NULL  this_is_a_view
-u4  view  1  this_works
-u5  materialized-view  NULL  mat_foo
-u5  materialized-view  1  comment_mat_view_col
+u5  view  NULL  this_is_a_view
+u5  view  1  this_works
+u6  materialized-view  NULL  mat_foo
+u6  materialized-view  1  comment_mat_view_col
+
+query TIT
+SELECT * FROM pg_description_view;
+----
+u6  0  mat_foo
+u5  1  this_works
+u5  0  this_is_a_view
+u6  1  comment_mat_view_col
 
 statement ok
 DROP VIEW c;
@@ -139,6 +200,10 @@ DROP MATERIALIZED VIEW mv;
 
 query TTTT
 SELECT * FROM mz_internal.mz_comments;
+----
+
+query TIT
+SELECT * FROM pg_description_view;
 ----
 
 statement ok
@@ -156,6 +221,10 @@ SELECT * FROM mz_internal.mz_comments;
 u2 cluster NULL careful_now
 u3 cluster-replica NULL second_replicator
 
+query TIT
+SELECT * FROM pg_description_view;
+----
+
 statement ok
 DROP CLUSTER REPLICA comment_cluster.r2;
 
@@ -172,8 +241,14 @@ query TTTT
 SELECT * FROM mz_internal.mz_comments;
 ----
 u2 cluster NULL careful_now
-u6 source NULL all_the_data
-u6 source 1 json_blob
+u7 source NULL all_the_data
+u7 source 1 json_blob
+
+query TIT
+SELECT * FROM pg_description_view;
+----
+u7  1  json_blob
+u7  0  all_the_data
 
 statement ok
 CREATE TYPE int4_list AS LIST (ELEMENT TYPE = int4);
@@ -185,9 +260,16 @@ query TTTT
 SELECT * FROM mz_internal.mz_comments;
 ----
 u2 cluster NULL careful_now
-u6 source NULL all_the_data
-u7 type NULL supercool_list
-u6 source 1 json_blob
+u7 source NULL all_the_data
+u8 type NULL supercool_list
+u7 source 1 json_blob
+
+query TIT
+SELECT * FROM pg_description_view;
+----
+u7 1 json_blob
+u7 0 all_the_data
+u8 0 supercool_list
 
 statement ok
 DROP CLUSTER comment_cluster CASCADE;
@@ -201,8 +283,13 @@ COMMENT ON SECRET my_secret IS 'supersecret';
 query TTTT
 SELECT * FROM mz_internal.mz_comments;
 ----
-u8 secret NULL supersecret
-u7 type NULL supercool_list
+u9 secret NULL supersecret
+u8 type NULL supercool_list
+
+query TIT
+SELECT * FROM pg_description_view;
+----
+u8  0  supercool_list
 
 statement ok
 CREATE DATABASE comment_on_db;
@@ -228,6 +315,11 @@ SELECT * FROM mz_internal.mz_comments;
 u2 database NULL this_is_my_db
 u7 schema NULL this_is_my_schema
 
+query TIT
+SELECT * FROM pg_description_view;
+----
+u7  0  this_is_my_schema
+
 statement ok
 DROP DATABASE comment_on_db;
 
@@ -246,6 +338,10 @@ query TTTT
 SELECT * FROM mz_internal.mz_comments;
 ----
 u2 role NULL limited_role
+
+query TIT
+SELECT * FROM pg_description_view;
+----
 
 statement ok
 CREATE TABLE foo ( x int8 );
@@ -274,6 +370,10 @@ SELECT * FROM mz_internal.mz_comments;
 u3 role NULL foo
 u2 role NULL limited_role
 
+query TIT
+SELECT * FROM pg_description_view;
+----
+
 simple conn=mz_system,user=mz_system
 REVOKE CREATEROLE ON SYSTEM FROM student;
 ----
@@ -295,6 +395,10 @@ query TTTT
 SELECT * FROM mz_internal.mz_comments;
 ----
 
+query TIT
+SELECT * FROM pg_description_view;
+----
+
 statement error must be owner of DATABASE materialize
 COMMENT ON DATABASE materialize IS 'main_db';
 
@@ -310,3 +414,7 @@ query TTTT
 SELECT * FROM mz_internal.mz_comments;
 ----
 u1 database NULL main_db
+
+query TIT
+SELECT * FROM pg_description_view;
+----

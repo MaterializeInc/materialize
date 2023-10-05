@@ -2862,15 +2862,51 @@ LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
 WHERE s.database_id IS NULL OR d.name = current_database()",
 };
 
+// Note: Databases, Roles, Clusters, Cluster Replicas, Secrets, and Connections are excluded from
+// this view.
 pub const PG_DESCRIPTION: BuiltinView = BuiltinView {
     name: "pg_description",
     schema: PG_CATALOG_SCHEMA,
-    sql: "CREATE VIEW pg_catalog.pg_description AS SELECT
-    c.oid as objoid,
-    NULL::pg_catalog.oid as classoid,
-    0::pg_catalog.int4 as objsubid,
-    NULL::pg_catalog.text as description
-FROM pg_catalog.pg_class c",
+    sql: "CREATE VIEW pg_catalog.pg_description AS
+SELECT
+	pg_obj.objoid,
+	pg_obj.classoid,
+	COALESCE(cmt.object_sub_id::INT4, 0) AS objsubid,
+	cmt.comment AS description
+FROM
+	(
+		SELECT
+			oid, (SELECT oid FROM mz_catalog.mz_objects WHERE name = 'pg_class')
+		FROM
+			pg_catalog.pg_class
+		UNION ALL
+			SELECT
+				oid,
+				(SELECT oid FROM mz_catalog.mz_objects WHERE name = 'pg_type')
+			FROM
+				pg_catalog.pg_type
+		UNION ALL
+			SELECT
+				oid,
+				(
+					SELECT
+						oid
+					FROM
+						mz_catalog.mz_objects
+					WHERE
+						name = 'pg_namespace'
+				)
+			FROM
+				pg_catalog.pg_namespace
+	)
+		AS pg_obj (objoid, classoid)
+	JOIN (
+			SELECT id, oid, type FROM mz_catalog.mz_objects
+			UNION ALL SELECT id, oid, 'schema' FROM mz_catalog.mz_schemas
+		)
+			AS mz_obj (id, oid, type) ON pg_obj.objoid = mz_obj.oid
+	JOIN mz_internal.mz_comments AS cmt ON
+			mz_obj.id = cmt.id AND lower(mz_obj.type) = lower(cmt.object_type)",
 };
 
 pub const PG_TYPE: BuiltinView = BuiltinView {
@@ -5226,8 +5262,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&PG_DEPEND),
         Builtin::View(&PG_DATABASE),
         Builtin::View(&PG_INDEX),
-        Builtin::View(&PG_DESCRIPTION),
         Builtin::View(&PG_TYPE),
+        Builtin::View(&PG_DESCRIPTION),
         Builtin::View(&PG_ATTRIBUTE),
         Builtin::View(&PG_PROC),
         Builtin::View(&PG_OPERATOR),
