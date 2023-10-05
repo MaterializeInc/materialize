@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-"""Skips unselected tests in the pipeline.yml in the ci subdirectory provided as argument."""
+"""Skips unselected tests in the pipeline.template.yml in the ci subdirectory provided as argument."""
 
 import argparse
 import subprocess
@@ -29,7 +29,7 @@ def main() -> int:
         return 0
 
     # Otherwise, filter down to the selected tests.
-    with open(MZ_ROOT / "ci" / args.pipeline / "pipeline.yml") as f:
+    with open(MZ_ROOT / "ci" / args.pipeline / "pipeline.template.yml") as f:
         pipeline = yaml.safe_load(f.read())
     selected_tests = set(
         spawn.capture(["buildkite-agent", "meta-data", "get", "tests"]).splitlines()
