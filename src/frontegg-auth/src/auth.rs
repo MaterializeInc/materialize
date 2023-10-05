@@ -182,6 +182,8 @@ impl Authentication {
                     tracing::debug!(?req, "spawning new request");
 
                     inflight.insert(req.clone(), vec![tx]);
+                    // Explicitly drop the lock guard.
+                    drop(inflight);
 
                     let client = self.client.clone();
                     let inflight = Arc::clone(&self.inflight_auth_requests);

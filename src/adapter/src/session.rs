@@ -716,7 +716,8 @@ impl<T: TimestampManipulation> Session<T> {
             return;
         }
 
-        // Update our metadata!
+        // Update our metadata! Note the short critical section (just a clone) to avoid blocking
+        // the sending side of this watch channel.
         let metadata = rx.borrow_and_update().clone();
         self.vars.set_external_user_metadata(metadata);
     }
