@@ -62,7 +62,7 @@ Field                | Value  | Description
 ---------------------|--------|------------
 `AVRO KEY FULLNAME`  | `text` | Default: `row`. Sets the Avro fullname on the generated key schema, if a `KEY` is specified. When used, a value must be specified for `AVRO VALUE FULLNAME`.
 `AVRO VALUE FULLNAME`| `text` | Default: `envelope`. Sets the Avro fullname on the generated value schema. When `KEY` is specified, `AVRO KEY FULLNAME` must additionally be specified.
-`NULL DEFAULTS`      | `bool` | Default: `false`. Whether to automatically default nullable fields to `NULL` in the generated schemas.
+`NULL DEFAULTS`      | `bool` | Default: `false`. Whether to automatically default nullable fields to `null` in the generated schemas.
 
 ### `WITH` options
 
@@ -115,7 +115,7 @@ When using a Confluent Schema Registry:
     Avro schemas Materialize generates using the `AVRO KEY FULLNAME` and `AVRO
     VALUE FULLNAME` [syntax](#syntax).
 
-  * You can automatically have nullable fields in the Avro schemas default to `NULL`
+  * You can automatically have nullable fields in the Avro schemas default to `null`
     by using the [`NULL DEFAULTS` option](#syntax).
 
 SQL types are converted to Avro types according to the following conversion
