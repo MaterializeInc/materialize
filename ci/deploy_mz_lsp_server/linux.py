@@ -34,7 +34,6 @@ def main() -> None:
     )
     mzbuild.chmod_x(path)
 
-
     print(f"--- Uploading {target} binary tarball")
     deploy_util.deploy_tarball(target, path)
 
