@@ -7,6 +7,7 @@ members = [
     "src/avro-derive",
     "src/aws-s3-util",
     "src/aws-secrets-controller",
+    "src/balancerd",
     "src/build-id",
     "src/build-info",
     "src/ccsr",

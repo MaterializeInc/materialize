@@ -26,6 +26,7 @@ use tokio::io::{self, AsyncRead, AsyncReadExt};
 
 use crate::format::Format;
 use crate::message::{FrontendStartupMessage, VERSION_CANCEL, VERSION_GSSENC, VERSION_SSL};
+use crate::FrontendMessage;
 
 pub const REJECT_ENCRYPTION: u8 = b'N';
 pub const ACCEPT_SSL_ENCRYPTION: u8 = b'S';
@@ -120,6 +121,78 @@ where
         }
     };
     Ok(Some(message))
+}
+
+impl FrontendStartupMessage {
+    /// Encodes self into dst.
+    pub fn encode(&self, dst: &mut BytesMut) -> Result<(), io::Error> {
+        // Write message length placeholder. The true length is filled in later.
+        let base = dst.len();
+        dst.put_u32(0);
+
+        // Write message contents.
+        match self {
+            FrontendStartupMessage::Startup { version, params } => {
+                dst.put_i32(*version);
+                for (k, v) in params {
+                    dst.put_string(k);
+                    dst.put_string(v);
+                }
+                dst.put_i8(0);
+            }
+            _ => panic!("unsupported"),
+        }
+
+        let len = dst.len() - base;
+
+        // Overwrite length placeholder with true length.
+        let len = i32::try_from(len).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                "length of encoded message does not fit into an i32",
+            )
+        })?;
+        dst[base..base + 4].copy_from_slice(&len.to_be_bytes());
+
+        Ok(())
+    }
+}
+
+impl FrontendMessage {
+    /// Encodes self into dst.
+    pub fn encode(&self, dst: &mut BytesMut) -> Result<(), io::Error> {
+        // Write type byte.
+        let byte = match self {
+            FrontendMessage::Password { .. } => b'p',
+            _ => panic!("unsupported"),
+        };
+        dst.put_u8(byte);
+
+        // Write message length placeholder. The true length is filled in later.
+        let base = dst.len();
+        dst.put_u32(0);
+
+        // Write message contents.
+        match self {
+            FrontendMessage::Password { password } => {
+                dst.put_string(password);
+            }
+            _ => panic!("unsupported"),
+        }
+
+        let len = dst.len() - base;
+
+        // Overwrite length placeholder with true length.
+        let len = i32::try_from(len).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                "length of encoded message does not fit into an i32",
+            )
+        })?;
+        dst[base..base + 4].copy_from_slice(&len.to_be_bytes());
+
+        Ok(())
+    }
 }
 
 #[derive(Debug)]

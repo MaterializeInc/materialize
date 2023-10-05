@@ -25,8 +25,8 @@ pub struct AuthenticationConfig {
     pub admin_api_token_url: String,
     /// JWK used to validate JWTs.
     pub decoding_key: DecodingKey,
-    /// Tenant id used to validate JWTs.
-    pub tenant_id: Uuid,
+    /// Optional tenant id used to validate JWTs.
+    pub tenant_id: Option<Uuid>,
     /// Function to provide system time to validate exp (expires at) field of JWTs.
     pub now: NowFn,
     /// Number of seconds before which to attempt to renew an expiring token.
@@ -41,7 +41,8 @@ pub struct Authentication {
     admin_api_token_url: String,
     #[derivative(Debug = "ignore")]
     decoding_key: DecodingKey,
-    tenant_id: Uuid,
+    /// If Some, verifies that any returned tenant_id in a Claim matches.
+    tenant_id: Option<Uuid>,
     now: NowFn,
     validation: Validation,
     refresh_before_secs: i64,
@@ -120,8 +121,10 @@ impl Authentication {
         if msg.claims.exp < self.now.as_secs() {
             return Err(Error::TokenExpired);
         }
-        if msg.claims.tenant_id != self.tenant_id {
-            return Err(Error::UnauthorizedTenant);
+        if let Some(expected_tenant_id) = self.tenant_id {
+            if msg.claims.tenant_id != expected_tenant_id {
+                return Err(Error::UnauthorizedTenant);
+            }
         }
         if let Some(expected_email) = expected_email {
             // To match Frontegg, email addresses are compared case
@@ -140,6 +143,7 @@ impl Authentication {
         Ok(ValidatedClaims {
             exp: msg.claims.exp,
             email: msg.claims.email,
+            tenant_id: msg.claims.tenant_id,
             // If the claims come from the exchange of an API token, the `sub`
             // will be the ID of the API token and the user ID will be in the
             // `user_id` field. If the claims come from the exchange of a
@@ -262,6 +266,8 @@ pub struct ValidatedClaims {
     pub user_id: Uuid,
     /// The email address of the authenticated user.
     pub email: String,
+    /// The tenant id of the authenticated user.
+    pub tenant_id: Uuid,
     /// Whether the authenticated user is an administrator.
     pub is_admin: bool,
     // Prevent construction outside of `Authentication::validate_access_token`.

@@ -3603,6 +3603,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-balancerd"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "bytesize",
+ "clap",
+ "futures",
+ "jsonwebtoken",
+ "mz-build-info",
+ "mz-frontegg-auth",
+ "mz-orchestrator-tracing",
+ "mz-ore",
+ "mz-pgwire-common",
+ "num_cpus",
+ "openssl",
+ "semver",
+ "tokio",
+ "tokio-openssl",
+ "tokio-postgres",
+ "tokio-util",
+ "tracing",
+ "uuid",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-build-id"
 version = "0.1.0"
 dependencies = [
