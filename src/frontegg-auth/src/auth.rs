@@ -382,7 +382,7 @@ fn valid_for(now: &NowFn, claims: &ValidatedClaims) -> Duration {
     Duration::from_secs(valid_for)
 }
 
-/// Returns a `Future` that resolves then the sending side of the provided channel closes.
+/// Returns a `Future` that resolves when the sending side of the provided channel closes.
 fn make_valid_until_future(
     refresh_rx: &watch::Receiver<ExternalUserMetadata>,
 ) -> BoxFuture<'static, ()> {

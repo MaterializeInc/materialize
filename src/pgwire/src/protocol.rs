@@ -197,7 +197,19 @@ where
 
                 // Whenever refreshing a token, if the metadata has changed we'll update our
                 // session vars.
-                session.register_external_metadata_transmitter(refresh_updates);
+                if session
+                    .register_external_metadata_transmitter(refresh_updates)
+                    .is_err()
+                {
+                    // TODO(parkmycar): Promote this to a panic as long as we don't see it in production.
+                    tracing::error!("Double register of external metadata transmitter!");
+                    return conn
+                        .send(ErrorResponse::fatal(
+                            SqlState::INTERNAL_ERROR,
+                            "resource already registered",
+                        ))
+                        .await;
+                }
 
                 (session, valid_until_fut.left_future())
             }

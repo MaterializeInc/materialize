@@ -693,14 +693,18 @@ impl<T: TimestampManipulation> Session<T> {
         self.vars.is_superuser()
     }
 
-    /// Register a receiver which pushes updates of [`ExternalUserMetadata`].
+    /// Register a receiver which pushes updates of [`ExternalUserMetadata`]. Errors if a receiver
+    /// was already registered.
     pub fn register_external_metadata_transmitter(
         &mut self,
         rx: tokio::sync::watch::Receiver<ExternalUserMetadata>,
-    ) {
-        let old = self.external_metadata_rx.replace(rx);
-        if old.is_some() {
-            tracing::error!("Double register of external metadata transmitter!");
+    ) -> Result<(), ()> {
+        match self.external_metadata_rx {
+            Some(_) => Err(()),
+            None => {
+                self.external_metadata_rx = Some(rx);
+                Ok(())
+            }
         }
     }
 

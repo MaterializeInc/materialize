@@ -689,7 +689,7 @@ fn start_mzcloud(
                     .refresh_tokens
                     .lock()
                     .unwrap()
-                    .get(args.refresh_token),
+                    .remove(args.refresh_token),
                 context.enable_refresh.load(Ordering::Relaxed),
             ) {
                 (Some(email), true) => email.to_string(),
