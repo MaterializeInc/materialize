@@ -130,8 +130,11 @@ impl CatalogState {
             }
         }
         for (global_id, entry) in &self.entry_by_id {
-            if self.roles_by_id.get(&entry.owner_id).is_none() {
-                inconsistencies.push(RoleInconsistency::Entry(*global_id, entry.owner_id));
+            if self.roles_by_id.get(entry.owner_id()).is_none() {
+                inconsistencies.push(RoleInconsistency::Entry(
+                    *global_id,
+                    entry.owner_id().clone(),
+                ));
             }
         }
         for (cluster_id, cluster) in &self.clusters_by_id {
@@ -310,7 +313,7 @@ impl CatalogState {
                     });
                     continue;
                 };
-                if !used_entry.used_by.contains(id) {
+                if !used_entry.used_by().contains(id) {
                     dependency_inconsistencies.push(
                         ObjectDependencyInconsistency::InconsistentUsedBy {
                             object_a: *id,
