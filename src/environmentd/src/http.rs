@@ -62,6 +62,7 @@ use tracing::{error, warn};
 use crate::BUILD_INFO;
 
 mod catalog;
+mod console;
 mod memory;
 mod metrics;
 mod probe;
@@ -354,25 +355,6 @@ pub async fn handle_leader_promote(
     )
 }
 
-/// This route allows User Impersonation by using Teleport to proxy requests to the Internal HTTP Server.
-/// Teleport is configured to handle the user auth and then set an auth cookie stored in the user's browser
-/// that is tied to the host being proxied (the InternalHTTPServer). This /internal-console route accepts
-/// that request and then redirects the user's browser to a Web Console URL, and the Console code can
-/// then make further requests to the InternalHTTPServer using the teleport auth cookie now in the user's browser
-async fn handle_internal_console_redirect(
-    internal_console_redirect_url: &Option<String>,
-) -> Response {
-    if let Some(redirect_url) = internal_console_redirect_url {
-        Redirect::temporary(redirect_url).into_response()
-    } else {
-        (
-            StatusCode::BAD_REQUEST,
-            "Redirect URL is not correctly configured".to_string(),
-        )
-            .into_response()
-    }
-}
-
 impl InternalHttpServer {
     pub fn new(
         InternalHttpConfig {
@@ -385,6 +367,11 @@ impl InternalHttpServer {
         }: InternalHttpConfig,
     ) -> InternalHttpServer {
         let metrics = Metrics::register_into(&metrics_registry, "mz_internal_http");
+        let console_config = Arc::new(console::ConsoleProxyConfig::new(
+            internal_console_redirect_url,
+            "/internal-console".to_string(),
+        ));
+
         let router = base_router(BaseRouterConfig { profiling: true })
             .route(
                 "/metrics",
@@ -437,13 +424,20 @@ impl InternalHttpServer {
                 routing::get(catalog::handle_coordinator_check),
             )
             .route(
-                "/api/internal-console",
-                routing::get(|| async move {
-                    handle_internal_console_redirect(&internal_console_redirect_url).await
-                }),
+                "/internal-console",
+                routing::get(|| async { Redirect::temporary("/internal-console/") }),
+            )
+            .route(
+                "/internal-console/*path",
+                routing::get(console::handle_internal_console),
+            )
+            .route(
+                "/internal-console/",
+                routing::get(console::handle_internal_console),
             )
             .layer(middleware::from_fn(internal_http_auth))
             .layer(Extension(adapter_client_rx.shared()))
+            .layer(Extension(console_config))
             .layer(Extension(active_connection_count));
 
         let leader_router = Router::new()

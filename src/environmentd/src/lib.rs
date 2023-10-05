@@ -208,7 +208,7 @@ pub struct Config {
     pub deploy_generation: Option<u64>,
     /// Host name or URL for connecting to the HTTP server of this instance.
     pub http_host_name: Option<String>,
-    /// URL of the Web Console to redirect to from the /internal-console endpoint on the InternalHTTPServer
+    /// URL of the Web Console to proxy from the /internal-console endpoint on the InternalHTTPServer
     pub internal_console_redirect_url: Option<String>,
 
     // === Tracing options. ===

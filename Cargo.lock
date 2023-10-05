@@ -4026,6 +4026,7 @@ dependencies = [
  "humantime",
  "hyper",
  "hyper-openssl",
+ "hyper-tls",
  "include_dir",
  "itertools",
  "jsonwebtoken",
