@@ -32,9 +32,9 @@ Database password      | App-specific password.
 
 ![Connect using the credentials provided in the Materialize console](https://github-production-user-asset-6210df.s3.amazonaws.com/21223421/272911799-2525c5ae-4594-4d33-bdfa-c20af835c7c5.png)
 
-## Configuring a non-default cluster
+## Configure a custom cluster
 
-To configure a non-default Materialize [cluster](/sql/create-cluster), follow these steps:
+To configure a custom Materialize [cluster](/sql/create-cluster), follow these steps:
 
 * Edit the Materialize connection.
 
