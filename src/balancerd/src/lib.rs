@@ -434,31 +434,29 @@ impl Resolver {
                     Some(FrontendMessage::Password { password }) => password,
                     _ => anyhow::bail!("expected Password message"),
                 };
-                match auth
-                    .exchange_password_for_token(&password)
-                    .await
-                    .and_then(|response| {
-                        let response = auth.validate_api_token_response(response, Some(user))?;
-                        Ok(response.claims.tenant_id)
-                    }) {
-                    Ok(tenant_id) => {
-                        let addr = addr_template.replace("{}", &tenant_id.to_string());
-                        let mut addrs = tokio::net::lookup_host(&addr).await?;
-                        let Some(addr) = addrs.next() else {
-                            error!("{addr} did not resolve to any addresses");
-                            anyhow::bail!("internal error");
-                        };
-                        Ok(ResolvedAddr {
-                            addr,
-                            password: Some(password),
-                        })
-                    }
+
+                let auth_response = auth
+                    .exchange_password_for_token(&password, user.to_string())
+                    .await;
+                let claims = match auth_response {
+                    Ok(result) => result.claims,
                     Err(e) => {
                         warn!("pgwire connection failed authentication: {}", e);
                         // TODO: fix error codes.
                         anyhow::bail!("invalid password");
                     }
-                }
+                };
+
+                let addr = addr_template.replace("{}", &claims.tenant_id.to_string());
+                let mut addrs = tokio::net::lookup_host(&addr).await?;
+                let Some(addr) = addrs.next() else {
+                    error!("{addr} did not resolve to any addresses");
+                    anyhow::bail!("internal error");
+                };
+                Ok(ResolvedAddr {
+                    addr,
+                    password: Some(password),
+                })
             }
             Resolver::Static(addr) => Ok(ResolvedAddr {
                 addr: addr.clone(),

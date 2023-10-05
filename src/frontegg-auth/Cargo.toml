@@ -11,8 +11,11 @@ anyhow = "1.0.66"
 base64 = "0.13.1"
 clap = { version = "3.2.24", features = ["wrap_help", "env", "derive"] }
 derivative = "2.2.0"
+futures = "0.3.25"
 jsonwebtoken = "8.2.0"
-mz-ore = { path = "../ore", features = ["network"] }
+mz-ore = { path = "../ore", features = ["network", "metrics"] }
+mz-repr = { path = "../repr" }
+prometheus = { version = "0.13.3", default-features = false }
 reqwest = { version = "0.11.13", features = ["json"] }
 reqwest-middleware = "0.2.2"
 reqwest-retry = "0.2.2"

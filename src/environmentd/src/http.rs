@@ -36,15 +36,18 @@ use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use http::{Method, Request, StatusCode};
 use hyper_openssl::MaybeHttpsStream;
 use mz_adapter::{AdapterError, AdapterNotice, Client, SessionClient};
-use mz_frontegg_auth::{Authentication as FronteggAuthentication, Error as FronteggError};
+use mz_frontegg_auth::{
+    Authentication as FronteggAuthentication, Error as FronteggError,
+    ExchangePasswordForTokenResponse,
+};
 use mz_http_util::DynamicFilterTarget;
 use mz_ore::cast::u64_to_usize;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::server::{ConnectionHandler, Server};
 use mz_ore::str::StrExt;
+use mz_repr::user::ExternalUserMetadata;
 use mz_sql::session::user::{
-    ExternalUserMetadata, User, HTTP_DEFAULT_USER, SUPPORT_USER, SUPPORT_USER_NAME, SYSTEM_USER,
-    SYSTEM_USER_NAME,
+    User, HTTP_DEFAULT_USER, SUPPORT_USER, SUPPORT_USER_NAME, SYSTEM_USER, SYSTEM_USER_NAME,
 };
 use mz_sql::session::vars::{ConnectionCounter, DropConnection, VarInput};
 use openssl::ssl::{Ssl, SslContext};
@@ -785,18 +788,19 @@ async fn auth(
         // be validated. In either case, if a username was specified in the
         // client cert, it must match that of the JWT.
         (Some(frontegg), creds) => {
-            let (user, token) = match creds {
-                Credentials::Password { username, password } => (
-                    Some(username),
-                    frontegg
-                        .exchange_password_for_token(&password)
-                        .await?
-                        .access_token,
-                ),
-                Credentials::Token { token } => (None, token),
+            let claims = match creds {
+                Credentials::Password { username, password } => {
+                    let ExchangePasswordForTokenResponse { claims, .. } = frontegg
+                        .exchange_password_for_token(&password, username)
+                        .await?;
+                    claims
+                }
+                Credentials::Token { token } => {
+                    let claims = frontegg.validate_access_token(&token, None)?;
+                    claims
+                }
                 Credentials::User(_) => return Err(AuthError::MissingHttpAuthentication),
             };
-            let claims = frontegg.validate_access_token(&token, user.as_deref())?;
             User {
                 external_metadata: Some(ExternalUserMetadata {
                     user_id: claims.user_id,

@@ -10,8 +10,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use mz_repr::role_id::RoleId;
+use mz_repr::user::ExternalUserMetadata;
 use once_cell::sync::Lazy;
-use uuid::Uuid;
 
 pub const SYSTEM_USER_NAME: &str = "mz_system";
 pub static SYSTEM_USER: Lazy<User> = Lazy::new(|| User {
@@ -55,15 +55,6 @@ pub struct User {
     pub name: String,
     /// Metadata about this user in an external system.
     pub external_metadata: Option<ExternalUserMetadata>,
-}
-
-/// Metadata about a [`User`] in an external system.
-#[derive(Debug, Clone)]
-pub struct ExternalUserMetadata {
-    /// The ID of the user in the external system.
-    pub user_id: Uuid,
-    /// Indicates if the user is an admin in the external system.
-    pub admin: bool,
 }
 
 impl PartialEq for User {

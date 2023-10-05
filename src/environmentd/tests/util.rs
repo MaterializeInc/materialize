@@ -147,6 +147,7 @@ pub struct Config {
     system_parameter_defaults: BTreeMap<String, String>,
     concurrent_webhook_req_count: Option<usize>,
     internal_console_redirect_url: Option<String>,
+    metrics_registry: Option<MetricsRegistry>,
 }
 
 impl Default for Config {
@@ -170,6 +171,7 @@ impl Default for Config {
             system_parameter_defaults: BTreeMap::new(),
             concurrent_webhook_req_count: None,
             internal_console_redirect_url: None,
+            metrics_registry: None,
         }
     }
 }
@@ -277,6 +279,11 @@ impl Config {
         self.internal_console_redirect_url = internal_console_redirect_url;
         self
     }
+
+    pub fn with_metrics_registry(mut self, registry: MetricsRegistry) -> Self {
+        self.metrics_registry = Some(registry);
+        self
+    }
 }
 
 pub struct Listeners {
@@ -322,7 +329,7 @@ impl Listeners {
                 format!("{cockroach_url}?options=--search_path=storage_{seed}"),
             )
         };
-        let metrics_registry = MetricsRegistry::new();
+        let metrics_registry = config.metrics_registry.unwrap_or_else(MetricsRegistry::new);
         let orchestrator = Arc::new(
             self.runtime
                 .block_on(ProcessOrchestrator::new(ProcessOrchestratorConfig {

@@ -15,14 +15,19 @@ impl Client {
     /// Exchanges a client id and secret for a jwt token.
     pub async fn exchange_client_secret_for_token(
         &self,
-        client_id: Uuid,
-        secret: Uuid,
+        request: ApiTokenArgs,
         admin_api_token_url: &str,
     ) -> Result<ApiTokenResponse, Error> {
-        let args = ApiTokenArgs { client_id, secret };
         let result = self
-            .make_request(admin_api_token_url.to_string(), args)
+            .client
+            .post(admin_api_token_url)
+            .json(&request)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
             .await?;
+
         Ok(result)
     }
 
@@ -32,11 +37,16 @@ impl Client {
         refresh_url: &str,
         refresh_token: &str,
     ) -> Result<ApiTokenResponse, Error> {
-        let args = RefreshToken {
-            refresh_token: refresh_token.to_string(),
-        };
-        let result = self.make_request(refresh_url.to_string(), args).await?;
-        Ok(result)
+        let res = self
+            .client
+            .post(refresh_url)
+            .json(&RefreshToken { refresh_token })
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<ApiTokenResponse>()
+            .await?;
+        Ok(res)
     }
 }
 
@@ -58,17 +68,8 @@ pub struct ApiTokenResponse {
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RefreshToken {
-    pub refresh_token: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RefreshTokenResponse {
-    pub expires: String,
-    pub expires_in: i64,
-    pub access_token: String,
-    pub refresh_token: String,
+pub struct RefreshToken<'a> {
+    pub refresh_token: &'a str,
 }
 
 #[cfg(test)]
@@ -81,7 +82,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::ApiTokenResponse;
-    use crate::Client;
+    use crate::{ApiTokenArgs, Client};
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method` on OS `linux`
@@ -134,12 +135,12 @@ mod tests {
             code: u16,
             should_retry: bool,
         ) -> Result<(), String> {
+            let args = ApiTokenArgs {
+                client_id: Uuid::new_v4(),
+                secret: Uuid::new_v4(),
+            };
             let exchange_result = client
-                .exchange_client_secret_for_token(
-                    Uuid::new_v4(),
-                    Uuid::new_v4(),
-                    &format!("http://{addr}/{code}"),
-                )
+                .exchange_client_secret_for_token(args, &format!("http://{addr}/{code}"))
                 .await
                 .map(|_| ())
                 .map_err(|e| e.to_string());
