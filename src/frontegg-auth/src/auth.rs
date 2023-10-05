@@ -7,82 +7,269 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::future::Future;
+use std::fmt;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use anyhow::Context;
 use derivative::Derivative;
+use futures::future::BoxFuture;
 use jsonwebtoken::{Algorithm, DecodingKey, Validation};
+use mz_ore::cast::{CastLossy, ReinterpretCast};
+use mz_ore::collections::HashMap;
+use mz_ore::metrics::{MetricsFutureExt, MetricsRegistry};
 use mz_ore::now::NowFn;
+use mz_repr::user::ExternalUserMetadata;
 use serde::{Deserialize, Serialize};
-use tokio::time;
-use tracing::info;
+use tokio::sync::{oneshot, watch};
 use uuid::Uuid;
 
-use crate::{ApiTokenResponse, AppPassword, Client, Error};
+use crate::metrics::Metrics;
+use crate::{ApiTokenArgs, ApiTokenResponse, AppPassword, Client, Error, FronteggCliArgs};
 
+pub const REFRESH_SUFFIX: &str = "/token/refresh";
+
+#[derive(Clone, Derivative)]
+#[derivative(Debug)]
 pub struct AuthenticationConfig {
     /// URL for the token endpoint, including full path.
     pub admin_api_token_url: String,
     /// JWK used to validate JWTs.
+    #[derivative(Debug = "ignore")]
     pub decoding_key: DecodingKey,
     /// Optional tenant id used to validate JWTs.
     pub tenant_id: Option<Uuid>,
     /// Function to provide system time to validate exp (expires at) field of JWTs.
     pub now: NowFn,
-    /// Number of seconds before which to attempt to renew an expiring token.
-    pub refresh_before_secs: i64,
     /// Name of admin role.
     pub admin_role: String,
 }
 
-#[derive(Clone, Derivative)]
-#[derivative(Debug)]
+/// Facilitates authenticating users via Frontegg, and verifying returned JWTs.
+#[derive(Clone, Debug)]
 pub struct Authentication {
+    /// Configuration for validating JWTs.
+    validation_config: ValidationConfig,
+
+    /// Metrics to track the performance of Frontegg.
+    metrics: Metrics,
+
+    /// URL for the token endpoint, including full path.
     admin_api_token_url: String,
-    #[derivative(Debug = "ignore")]
-    decoding_key: DecodingKey,
-    /// If Some, verifies that any returned tenant_id in a Claim matches.
-    tenant_id: Option<Uuid>,
-    now: NowFn,
-    validation: Validation,
-    refresh_before_secs: i64,
-    admin_role: String,
+    /// HTTP client for making requests.
     client: Client,
+    /// Map of inflight authentication requests, used for de-duplicating requests.
+    inflight_auth_requests: Arc<Mutex<HashMap<ApiTokenArgs, ResponseHandles>>>,
 }
 
-pub const REFRESH_SUFFIX: &str = "/token/refresh";
+type ResponseHandles =
+    Vec<oneshot::Sender<Result<(ExchangePasswordForTokenResponse, RefreshTaskId), Error>>>;
+
+/// An ID emitted in logs to help debug.
+#[derive(Copy, Clone, Debug)]
+pub struct RefreshTaskId(Uuid);
+
+impl RefreshTaskId {
+    /// Generates a new [`RefreshTaskId`].
+    pub fn new() -> Self {
+        RefreshTaskId(uuid::Uuid::new_v4())
+    }
+}
+
+impl fmt::Display for RefreshTaskId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Derivative)]
+#[derivative(Debug)]
+pub struct ExchangePasswordForTokenResponse {
+    /// Validated JWT.
+    pub claims: ValidatedClaims,
+    /// Recieves periodic updates of [`ExternalUserMetadata`] when the initial JWT is refreshed.
+    pub refresh_updates: watch::Receiver<ExternalUserMetadata>,
+    /// Our current authentication is valid, until this Future resolves.
+    #[derivative(Debug = "ignore")]
+    pub valid_until_fut: BoxFuture<'static, ()>,
+}
 
 impl Authentication {
     /// Creates a new frontegg auth.
-    pub fn new(config: AuthenticationConfig, client: Client) -> Self {
-        let mut validation = Validation::new(Algorithm::RS256);
+    pub fn new(config: AuthenticationConfig, client: Client, registry: &MetricsRegistry) -> Self {
         // We validate with our own now function.
+        let mut validation = Validation::new(Algorithm::RS256);
         validation.validate_exp = false;
-        Self {
-            admin_api_token_url: config.admin_api_token_url,
+        let validation_config = ValidationConfig {
             decoding_key: config.decoding_key,
             tenant_id: config.tenant_id,
             now: config.now,
-            validation,
-            refresh_before_secs: config.refresh_before_secs,
             admin_role: config.admin_role,
+            validation,
+        };
+
+        let inflight_auth_requests = Arc::new(Mutex::new(HashMap::new()));
+        let metrics = Metrics::register_into(registry);
+
+        Self {
+            validation_config,
+            metrics,
+            admin_api_token_url: config.admin_api_token_url,
             client,
+            inflight_auth_requests,
         }
+    }
+
+    /// Create an [`Authentication`] from [`FronteggCliArgs`].
+    pub fn from_args(
+        args: FronteggCliArgs,
+        registry: &MetricsRegistry,
+    ) -> Result<Option<Self>, Error> {
+        let config = match (
+            args.frontegg_tenant,
+            args.frontegg_api_token_url,
+            args.frontegg_jwk,
+            args.frontegg_admin_role,
+        ) {
+            (None, None, None, None) => {
+                return Ok(None);
+            }
+            (Some(tenant_id), Some(admin_api_token_url), Some(jwk), Some(admin_role)) => {
+                AuthenticationConfig {
+                    admin_api_token_url,
+                    decoding_key: DecodingKey::from_rsa_pem(jwk.as_bytes())?,
+                    tenant_id: Some(tenant_id),
+                    now: mz_ore::now::SYSTEM_TIME.clone(),
+                    admin_role,
+                }
+            }
+            _ => unreachable!("clap enforced"),
+        };
+        let client = Client::environmentd_default();
+
+        Ok(Some(Self::new(config, client, registry)))
     }
 
     /// Exchanges a password for an access token and a refresh token.
     pub async fn exchange_password_for_token(
         &self,
         password: &str,
-    ) -> Result<ApiTokenResponse, Error> {
+        expected_email: String,
+    ) -> Result<ExchangePasswordForTokenResponse, Error> {
         let password: AppPassword = password.parse()?;
-        self.client
-            .exchange_client_secret_for_token(
-                password.client_id,
-                password.secret_key,
-                &self.admin_api_token_url,
-            )
-            .await
+        let req = ApiTokenArgs {
+            client_id: password.client_id,
+            secret: password.secret_key,
+        };
+
+        // Note: we get the reciever in a block to scope the access to the mutex.
+        let rx = {
+            let mut inflight = self
+                .inflight_auth_requests
+                .lock()
+                .expect("Frontegg Auth Client panicked");
+            let (tx, rx) = tokio::sync::oneshot::channel();
+
+            match inflight.get_mut(&req) {
+                // Already have an inflight request, add to our list of waiters.
+                Some(senders) => {
+                    tracing::debug!(?req, "reusing request");
+                    senders.push(tx);
+                    rx
+                }
+                // New request! Need to queue one up.
+                None => {
+                    tracing::debug!(?req, "spawning new request");
+
+                    inflight.insert(req.clone(), vec![tx]);
+
+                    let client = self.client.clone();
+                    let inflight = Arc::clone(&self.inflight_auth_requests);
+                    let req_ = req.clone();
+                    let url = self.admin_api_token_url.clone();
+                    let validate_config = self.validation_config.clone();
+                    let metrics = self.metrics.clone();
+                    let request_hist = self
+                        .metrics
+                        .request_duration_seconds
+                        .with_label_values(&["exchange_secret_for_token"]);
+
+                    let name = format!("frontegg-auth-request-{}", req.client_id);
+                    mz_ore::task::spawn(move || name, async move {
+                        // Make the actual request.
+                        let result = client
+                            .exchange_client_secret_for_token(req_, &url)
+                            .wall_time()
+                            .observe(request_hist)
+                            .await;
+
+                        // Validate the returned JWT.
+                        let validated_result = result.and_then(|api_resp| {
+                            validate_access_token(
+                                &validate_config,
+                                &api_resp.access_token,
+                                Some(&expected_email),
+                            )
+                            .map(|claims| (api_resp, claims))
+                        });
+
+                        // Get all of our waiters.
+                        let mut inflight = inflight.lock().expect("Frontegg Auth Client panicked");
+                        let Some(waiters) = inflight.remove(&req) else {
+                            tracing::error!(?req, "Inflight entry already removed?");
+                            return;
+                        };
+
+                        // If the request failed then notify and bail.
+                        let (api_resp, claims) = match validated_result {
+                            Err(err) => {
+                                for tx in waiters {
+                                    let _ = tx.send(Err(err.clone()));
+                                }
+                                return;
+                            }
+                            Ok(result) => result,
+                        };
+
+                        // Spawn a task to continuously refresh our token.
+                        let external_metadata = ExternalUserMetadata {
+                            user_id: claims.user_id,
+                            admin: claims.is_admin,
+                        };
+                        let (refresh_tx, refresh_rx) = watch::channel(external_metadata);
+                        let id = continuously_refresh(
+                            &url,
+                            client,
+                            metrics,
+                            api_resp,
+                            expected_email,
+                            validate_config,
+                            refresh_tx,
+                        );
+
+                        // Respond to all of our waiters.
+                        for tx in waiters {
+                            let valid_until_fut = make_valid_until_future(&refresh_rx);
+                            let resp = ExchangePasswordForTokenResponse {
+                                claims: claims.clone(),
+                                refresh_updates: refresh_rx.clone(),
+                                valid_until_fut,
+                            };
+                            let _ = tx.send(Ok((resp, id)));
+                        }
+                    });
+
+                    rx
+                }
+            }
+        };
+
+        let resp = rx.await.context("waiting for inflight response")?;
+
+        let (result, id) = resp?;
+        tracing::debug!(?id, "token being refreshed");
+
+        Ok(result)
     }
 
     /// Validates an API token response, returning a validated response
@@ -117,115 +304,222 @@ impl Authentication {
         token: &str,
         expected_email: Option<&str>,
     ) -> Result<ValidatedClaims, Error> {
-        let msg = jsonwebtoken::decode::<Claims>(token, &self.decoding_key, &self.validation)?;
-        if msg.claims.exp < self.now.as_secs() {
-            return Err(Error::TokenExpired);
-        }
-        if let Some(expected_tenant_id) = self.tenant_id {
-            if msg.claims.tenant_id != expected_tenant_id {
-                return Err(Error::UnauthorizedTenant);
-            }
-        }
-        if let Some(expected_email) = expected_email {
-            // To match Frontegg, email addresses are compared case
-            // insensitively.
-            //
-            // NOTE(benesch): we could save some allocations by using
-            // `unicase::eq` here, but the `unicase` crate has had some critical
-            // correctness bugs that make it scary to use in such
-            // security-sensitive code.
-            //
-            // See: https://github.com/seanmonstar/unicase/pull/39
-            if msg.claims.email.to_lowercase() != expected_email.to_lowercase() {
-                return Err(Error::WrongEmail);
-            }
-        }
-        Ok(ValidatedClaims {
-            exp: msg.claims.exp,
-            email: msg.claims.email,
-            tenant_id: msg.claims.tenant_id,
-            // If the claims come from the exchange of an API token, the `sub`
-            // will be the ID of the API token and the user ID will be in the
-            // `user_id` field. If the claims come from the exchange of a
-            // username and password, the `sub` is the user ID and the `user_id`
-            // field will not be present. This makes sense once you think about
-            // it, but is confusing enough that we massage into a single
-            // `user_id` field that always contains the user ID.
-            user_id: msg.claims.user_id.unwrap_or(msg.claims.sub),
-            // The user is an administrator if they have the admin role that the
-            // `Authenticator` has been configured with.
-            is_admin: msg.claims.roles.iter().any(|r| *r == self.admin_role),
-            _private: (),
-        })
+        validate_access_token(&self.validation_config, token, expected_email)
     }
+}
 
-    /// Continuously refreshes and revalidates a [`ValidatedApiTokenResponse`].
-    ///
-    /// The returned future will attempt to refresh the access token before it
-    /// expires, resolving iff the token expires or fails to refresh.
-    ///
-    /// Whenever the access token is successfully refreshed and revalidated,
-    /// `claims_processor` will be invoked with the new validated claims.
-    pub fn continuously_revalidate_api_token_response(
-        &self,
-        mut response: ValidatedApiTokenResponse,
-        mut claims_processor: impl FnMut(&ValidatedClaims),
-    ) -> impl Future<Output = ()> {
-        let frontegg = self.clone();
+#[derive(Clone, Derivative)]
+#[derivative(Debug)]
+pub struct ValidationConfig {
+    /// Fields of a JWT that we validate.
+    pub validation: Validation,
+    /// JWK used to validate JWTs.
+    #[derivative(Debug = "ignore")]
+    pub decoding_key: DecodingKey,
+    /// Tenant id used to validate JWTs.
+    pub tenant_id: Option<Uuid>,
+    /// Function to provide system time to validate exp (expires at) field of JWTs.
+    pub now: NowFn,
+    /// Name of admin role.
+    pub admin_role: String,
+}
 
-        // This future resolves once the token expiry time has been reached. It will
-        // repeatedly attempt to refresh the token before it expires.
-        async move {
-            let refresh_url = format!("{}{}", frontegg.admin_api_token_url, REFRESH_SUFFIX);
-            loop {
-                let expire_in = response.claims.exp - frontegg.now.as_secs();
-                let check_in = u64::try_from(expire_in - frontegg.refresh_before_secs).unwrap_or(0);
-                time::sleep(Duration::from_secs(check_in)).await;
-
-                let refresh_request = async {
-                    loop {
-                        let res = async {
-                            let res = frontegg
-                                .client
-                                .refresh_token(&refresh_url, &response.refresh_token)
-                                .await?;
-                            frontegg.validate_api_token_response(res, Some(&response.claims.email))
-                        };
-                        match res.await {
-                            Ok(res) => return res,
-                            Err(e) => {
-                                // Log at info level, not warn or error level,
-                                // because the error could be a result of a
-                                // user's permissions being intentionally
-                                // revoked.
-                                //
-                                // TODO: report Frontegg errors at `error!`
-                                // level or via a Prometheus metric so that
-                                // we can alert on them.
-                                info!(
-                                    "failed to refresh token for {}: {:#}",
-                                    response.claims.email, e
-                                );
-                                // Retry again later. 5 seconds chosen arbitrarily.
-                                time::sleep(Duration::from_secs(5)).await;
-                            }
-                        }
-                    }
-                };
-                let expire_in =
-                    u64::try_from(response.claims.exp - frontegg.now.as_secs()).unwrap_or(0);
-                let expire_in = time::sleep(Duration::from_secs(expire_in));
-
-                tokio::select! {
-                    _ = expire_in => return,
-                    res = refresh_request => {
-                        response = res;
-                        claims_processor(&response.claims);
-                    },
-                };
-            }
+/// Validates the provided JSON web token, returning [`ValidatedClaims`].
+fn validate_access_token(
+    config: &ValidationConfig,
+    jwt: &str,
+    expected_email: Option<&str>,
+) -> Result<ValidatedClaims, Error> {
+    let msg = jsonwebtoken::decode::<Claims>(jwt, &config.decoding_key, &config.validation)?;
+    if msg.claims.exp < config.now.as_secs() {
+        return Err(Error::TokenExpired);
+    }
+    if let Some(expected_tenant_id) = config.tenant_id {
+        if msg.claims.tenant_id != expected_tenant_id {
+            return Err(Error::UnauthorizedTenant);
         }
     }
+    if let Some(expected_email) = expected_email {
+        // To match Frontegg, email addresses are compared case
+        // insensitively.
+        //
+        // NOTE(benesch): we could save some allocations by using
+        // `unicase::eq` here, but the `unicase` crate has had some critical
+        // correctness bugs that make it scary to use in such
+        // security-sensitive code.
+        //
+        // See: https://github.com/seanmonstar/unicase/pull/39
+        if msg.claims.email.to_lowercase() != expected_email.to_lowercase() {
+            return Err(Error::WrongEmail);
+        }
+    }
+    Ok(ValidatedClaims {
+        exp: msg.claims.exp,
+        email: msg.claims.email,
+        tenant_id: msg.claims.tenant_id,
+        // If the claims come from the exchange of an API token, the `sub`
+        // will be the ID of the API token and the user ID will be in the
+        // `user_id` field. If the claims come from the exchange of a
+        // username and password, the `sub` is the user ID and the `user_id`
+        // field will not be present. This makes sense once you think about
+        // it, but is confusing enough that we massage into a single
+        // `user_id` field that always contains the user ID.
+        user_id: msg.claims.user_id.unwrap_or(msg.claims.sub),
+        // The user is an administrator if they have the admin role that the
+        // `Authenticator` has been configured with.
+        is_admin: msg.claims.roles.iter().any(|r| *r == config.admin_role),
+        _private: (),
+    })
+}
+
+/// Returns a [`Duration`] for how long the provided claims are valid for.
+fn valid_for(now: &NowFn, claims: &ValidatedClaims) -> Duration {
+    let valid_for = claims.exp - now.as_secs();
+    let valid_for = u64::try_from(valid_for).unwrap_or(0);
+
+    Duration::from_secs(valid_for)
+}
+
+/// Returns a `Future` that resolves then the sending side of the provided channel closes.
+fn make_valid_until_future(
+    refresh_rx: &watch::Receiver<ExternalUserMetadata>,
+) -> BoxFuture<'static, ()> {
+    // Our auth is valid for as long as the sender is alive.
+    let mut refresh_rx = refresh_rx.clone();
+    let future = async move { while let Ok(_) = refresh_rx.changed().await {} };
+    Box::pin(future)
+}
+
+/// Spawns a task that will continuously refresh the `RefreshToken` provided in `first_response`.
+fn continuously_refresh(
+    admin_api_token_url: &str,
+    client: Client,
+    metrics: Metrics,
+    first_response: ApiTokenResponse,
+    expected_email: String,
+    validation_config: ValidationConfig,
+    refresh_tx: watch::Sender<ExternalUserMetadata>,
+) -> RefreshTaskId {
+    let refresh_url = format!("{}{}", admin_api_token_url, REFRESH_SUFFIX);
+    let id = RefreshTaskId::new();
+
+    // Continuously refresh.
+    let name = format!("frontegg-auth-refresh-{}", id);
+    mz_ore::task::spawn(|| name, async move {
+        tracing::debug!(?id, "starting refresh task");
+        let mut latest_response = first_response;
+
+        let gauge = metrics.refresh_tasks_active.with_label_values(&[]);
+        gauge.inc();
+
+        loop {
+            // If the token is not valid, close the channel.
+            let validated = validate_access_token(
+                &validation_config,
+                &latest_response.access_token,
+                Some(&expected_email),
+            );
+            let claims = match validated {
+                Err(err) => {
+                    tracing::warn!(?id, ?err, "Token expired!");
+                    drop(refresh_tx);
+                    return;
+                }
+                Ok(claims) => claims,
+            };
+            let valid_for = valid_for(&validation_config.now, &claims);
+
+            // Notify listeners that we've refreshed.
+            let metadata = ExternalUserMetadata {
+                user_id: claims.user_id,
+                admin: claims.is_admin,
+            };
+            if let Err(_) = refresh_tx.send(metadata) {
+                tracing::info!(?id, "All listeners disappeared");
+                break;
+            }
+
+            // Odd, but guards against a negative "expires_in" value.
+            let expires_in = latest_response.expires_in.max(60);
+            // Safe because we know expires_in will always be positive.
+            let expires_in = u64::reinterpret_cast(expires_in);
+            // Need to to be a float so we can scale the value.
+            let expires_in = f64::cast_lossy(expires_in);
+
+            // The Frontegg Python SDK scales the expires_in this way.
+            //
+            // <https://github.com/frontegg/python-sdk/blob/840f8318aced35cea6a41d83270597edfceb4019/frontegg/common/frontegg_authenticator.py#L45>
+            let scaled_expires_in = expires_in * 0.8;
+            let scaled_expires_in = Duration::from_secs_f64(scaled_expires_in);
+            tracing::debug!(?id, ?expires_in, ?scaled_expires_in, "waiting to refresh");
+
+            // Weird. The token would expire before the refresh token window.
+            let refresh_in = if valid_for < scaled_expires_in {
+                tracing::warn!(
+                    ?id,
+                    ?valid_for,
+                    ?scaled_expires_in,
+                    "refresh after token expires"
+                );
+                valid_for.saturating_sub(Duration::from_secs(10))
+            } else {
+                scaled_expires_in
+            };
+
+            // While we wait for the refresh, continuously check if our listeners went away.
+            tokio::select! {
+                // Waiting on a tokio::Sleep is cancel safe.
+                _ = tokio::time::sleep(refresh_in) => (),
+                // Checking if the channel closed is cancel safe.
+                _ = refresh_tx.closed() => {
+                    tracing::debug!(?id, "channel closed, exiting");
+                    break;
+                },
+            }
+
+            let request_hist = metrics
+                .request_duration_seconds
+                .with_label_values(&["refresh"]);
+            let current_response = client
+                .refresh_token(&refresh_url, &latest_response.refresh_token)
+                .wall_time()
+                .observe(request_hist)
+                .await;
+
+            // If we failed to refresh, then close the channel.
+            let current_response = match current_response {
+                Ok(resp) => {
+                    tracing::debug!(?id, "refresh successful");
+                    resp
+                }
+                Err(err) => {
+                    // Maintain metrics of our success rates.
+                    let status = match &err {
+                        Error::ReqwestError(e) => e
+                            .status()
+                            .map(|s| s.to_string())
+                            .unwrap_or("other".to_string()),
+                        _ => "other".to_string(),
+                    };
+                    metrics
+                        .request_count
+                        .with_label_values(&["refresh", &status])
+                        .inc();
+
+                    // Dropping the channel will close it.
+                    drop(refresh_tx);
+                    return;
+                }
+            };
+
+            latest_response = current_response;
+        }
+
+        gauge.dec();
+        tracing::debug!(?id, "shutting down refresh task");
+    });
+
+    id
 }
 
 /// An [`ApiTokenResponse`] that has been validated by
