@@ -321,19 +321,21 @@ Reads of data shards are almost as straightforward as writes. A data shard may
 be read normally, using snapshots, subscriptions, shard_source, etc, through the
 most recent non-empty write. However, the upper of the txns shard (and thus the
 logical upper of the data shard) may be arbitrarily far ahead of the physical
-upper of the data shard. As a result, we have to "translate" timestamps by
-synthesizing ranges of empty time that have not yet been committed (but are
-guaranteed to remain empty):
+upper of the data shard. As a result, we do the following:
 
 - To take a snapshot of a data shard, the `as_of` is passed through unchanged if
-  the timestamp of that shard's latest non-empty write is past it. Otherwise,
-  the timestamp of the latest non-empty write is used. Concretely, to read a
-  snapshot as of `T`:
+  the timestamp of that shard's latest non-empty write is past it. Otherwise, we
+  know the times between them have no writes and can fill them with empty
+  updates. Concretely, to read a snapshot as of `T`:
   - We read the txns shard contents up through and including `T`, blocking until
     the upper passes `T` if necessary.
   - We then find, for the requested data shard, the latest non-empty write at a
     timestamp `T' <= T`.
-  - We then take a normal snapshot on the data shard at `T'`.
+  - We wait for `T'` to be applied by watching the data shard upper.
+  - We `compare_and_append` empty updates for `(T', T]`, which is known by the
+    txn system to not have writes for this shard (otherwise we'd have picked a
+    different `T'`).
+  - We read the snapshot at `T` as normal.
 - To iterate a listen on a data shard, when writes haven't been read yet they
   are passed through unchanged, otherwise if the txns shard indicates that there
   are ranges of empty time progress is returned, otherwise progress to the txns
@@ -347,6 +349,18 @@ Also note that the above is structured such that it is possible to write a
 timely operator with the data shard as an input, passing on all payloads
 unchanged and simply manipulating capabilities in response to data and txns
 shard progress.
+
+Initially, an alternative was considered where we'd "translate" the as_of and
+read the snapshot at `T'`, but this had an important defect: we'd forever have
+to consider this when reasoning about later persist changes, such as a future
+consolidated shard_source operator. It's quite counter-intuitive for reads to
+involve writes, but I think this is fine. In particular, because writing empty
+updates to a persist shard is a metadata-only operation (we'll need to document
+a new guarantee that a CaA of empty updates never results in compaction work,
+but this seems like a reasonable guarantee). It might result in things like GC
+maintenance or a CRDB write, but this is also true for registering a reader. On
+the balance, I think this is a _much_ better set of tradeoffs than the original
+plan.
 
 ## Alternatives
 

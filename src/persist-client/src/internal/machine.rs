@@ -829,8 +829,110 @@ where
         }
     }
 
-    pub fn next_listen_batch(&self, frontier: &Antichain<T>) -> Result<HollowBatch<T>, SeqNo> {
-        self.applier.next_listen_batch(frontier)
+    pub async fn next_listen_batch(
+        &mut self,
+        frontier: &Antichain<T>,
+        watch: &mut StateWatch<K, V, T, D>,
+        reader_id: Option<&LeasedReaderId>,
+    ) -> HollowBatch<T> {
+        let mut seqno = match self.applier.next_listen_batch(frontier) {
+            Ok(b) => return b,
+            Err(seqno) => seqno,
+        };
+
+        // The latest state still doesn't have a new frontier for us:
+        // watch+sleep in a loop until it does.
+        let sleeps = self.applier.metrics.retries.next_listen_batch.stream(
+            self.applier
+                .cfg
+                .dynamic
+                .next_listen_batch_retry_params()
+                .into_retry(SystemTime::now())
+                .into_retry_stream(),
+        );
+
+        enum Wake<'a, K, V, T, D> {
+            Watch(&'a mut StateWatch<K, V, T, D>),
+            Sleep(MetricsRetryStream),
+        }
+        let mut wakes = FuturesUnordered::<
+            std::pin::Pin<Box<dyn Future<Output = Wake<K, V, T, D>> + Send + Sync>>,
+        >::new();
+        wakes.push(Box::pin(
+            watch
+                .wait_for_seqno_ge(seqno.next())
+                .map(Wake::Watch)
+                .instrument(trace_span!("snapshot::watch")),
+        ));
+        wakes.push(Box::pin(
+            sleeps
+                .sleep()
+                .map(Wake::Sleep)
+                .instrument(trace_span!("snapshot::sleep")),
+        ));
+
+        loop {
+            assert_eq!(wakes.len(), 2);
+            let wake = wakes.next().await.expect("wakes should be non-empty");
+            // Note that we don't need to fetch in the Watch case, because the
+            // Watch wakeup is a signal that the shared state has already been
+            // updated.
+            match &wake {
+                Wake::Watch(_) => self.applier.metrics.watch.listen_woken_via_watch.inc(),
+                Wake::Sleep(_) => {
+                    self.applier.metrics.watch.listen_woken_via_sleep.inc();
+                    self.applier.fetch_and_update_state(Some(seqno)).await;
+                }
+            }
+
+            seqno = match self.applier.next_listen_batch(frontier) {
+                Ok(b) => {
+                    match &wake {
+                        Wake::Watch(_) => {
+                            self.applier.metrics.watch.listen_resolved_via_watch.inc()
+                        }
+                        Wake::Sleep(_) => {
+                            self.applier.metrics.watch.listen_resolved_via_sleep.inc()
+                        }
+                    }
+                    return b;
+                }
+                Err(seqno) => seqno,
+            };
+
+            // There might be some holdup in the next batch being
+            // produced. Perhaps we've quiesced a table or maybe a
+            // dataflow is taking a long time to start up because it has
+            // to read a lot of data. Heartbeat ourself so we don't
+            // accidentally lose our lease while we wait for things to
+            // resume.
+            // self.maybe_heartbeat_reader().await;
+
+            // Wait a bit and try again. Intentionally don't ever log
+            // this at info level.
+            match wake {
+                Wake::Watch(watch) => wakes.push(Box::pin(
+                    async move {
+                        watch.wait_for_seqno_ge(seqno.next()).await;
+                        Wake::Watch(watch)
+                    }
+                    .instrument(trace_span!("snapshot::watch")),
+                )),
+                Wake::Sleep(sleeps) => {
+                    debug!(
+                        "{:?}: next_listen_batch didn't find new data, retrying in {:?}",
+                        reader_id,
+                        sleeps.next_sleep()
+                    );
+                    wakes.push(Box::pin(
+                        sleeps
+                            .sleep()
+                            .map(Wake::Sleep)
+                            .instrument(trace_span!("snapshot::sleep")),
+                    ));
+                }
+            }
+        }
     }
 
     async fn apply_unbatched_idempotent_cmd<
