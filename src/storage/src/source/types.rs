@@ -140,6 +140,31 @@ impl HealthStatusUpdate {
     }
 }
 
+impl crate::healthcheck::HealthStatus for HealthStatusUpdate {
+    fn name(&self) -> &'static str {
+        self.update.name()
+    }
+    fn error(&self) -> Option<&str> {
+        self.update.error()
+    }
+    fn hint(&self) -> Option<&str> {
+        self.update.hint()
+    }
+    fn should_halt(&self) -> bool {
+        self.should_halt
+    }
+    fn can_transition_from(&self, other: Option<&Self>) -> bool {
+        if let Some(other) = other {
+            self.update != other.update
+        } else {
+            true
+        }
+    }
+    fn starting() -> Self {
+        Self::status(HealthStatus::Starting)
+    }
+}
+
 /// Source-agnostic wrapper for messages. Each source must implement a
 /// conversion to Message.
 #[derive(Debug, Clone)]
