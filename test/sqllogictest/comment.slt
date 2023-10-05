@@ -43,12 +43,12 @@ statement ok
 COMMENT ON TABLE a IS 'foo_table';
 
 query TTTT
-SELECT * FROM mz_internal.mz_comments;
+SELECT id, object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
 u2  table  NULL  foo_table
 
 query TIT
-SELECT * FROM pg_description_view;
+SELECT id, objsubid, description FROM pg_description_view;
 ----
 u2  0  foo_table
 
@@ -56,13 +56,13 @@ statement ok
 COMMENT ON COLUMN a.y IS 'load_bearing';
 
 query TTTT
-SELECT * FROM mz_internal.mz_comments;
+SELECT id, object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
 u2  table  NULL  foo_table
 u2  table  2  load_bearing
 
 query TIT
-SELECT * FROM pg_description_view;
+SELECT id, objsubid, description FROM pg_description_view;
 ----
 u2  0  foo_table
 u2  2  load_bearing
@@ -74,14 +74,14 @@ statement ok
 COMMENT ON COLUMN b.ts IS 'utc_timestamp';
 
 query TTTT
-SELECT * FROM mz_internal.mz_comments;
+SELECT id, object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
 u2  table  NULL  foo_table
 u2  table  2  load_bearing
 u3  table  1  utc_timestamp
 
 query TIT
-SELECT * FROM pg_description_view;
+SELECT id, objsubid, description FROM pg_description_view;
 ----
 u2  0  foo_table
 u2  2  load_bearing
@@ -94,13 +94,13 @@ statement ok
 DROP TABLE a;
 
 query TTTT
-SELECT * FROM mz_internal.mz_comments;
+SELECT id, object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
 u3  table  NULL foo_table
 u3  table  1  utc_timestamp
 
 query TIT
-SELECT * FROM pg_description_view;
+SELECT id, objsubid, description FROM pg_description_view;
 ----
 u3  0  foo_table
 u3  1  utc_timestamp
@@ -112,11 +112,11 @@ statement ok
 COMMENT ON COLUMN b.ts IS NULL
 
 query TTTT
-SELECT * FROM mz_internal.mz_comments;
+SELECT id, object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
 
 query TIT
-SELECT * FROM pg_description_view;
+SELECT id, objsubid, description FROM pg_description_view;
 ----
 
 statement error unknown catalog item 'c'
@@ -138,13 +138,13 @@ statement ok
 COMMENT ON VIEW c IS 'this_is_a_view';
 
 query TTTT
-SELECT * FROM mz_internal.mz_comments;
+SELECT id, object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
 u4  index NULL  speed_up
 u5  view  NULL  this_is_a_view
 
 query TIT
-SELECT * FROM pg_description_view;
+SELECT id, objsubid, description FROM pg_description_view;
 ----
 u4  0  speed_up
 u5  0  this_is_a_view
@@ -156,13 +156,13 @@ statement ok
 COMMENT ON COLUMN c.col_1 IS 'this_works';
 
 query TTTT
-SELECT * FROM mz_internal.mz_comments;
+SELECT id, object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
 u5  view  NULL  this_is_a_view
 u5  view  1  this_works
 
 query TIT
-SELECT * FROM pg_description_view;
+SELECT id, objsubid, description FROM pg_description_view;
 ----
 u5  1  this_works
 u5  0  this_is_a_view
@@ -177,7 +177,7 @@ statement ok
 COMMENT ON MATERIALIZED VIEW mv IS 'mat_foo';
 
 query TTTT
-SELECT * FROM mz_internal.mz_comments;
+SELECT id, object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
 u5  view  NULL  this_is_a_view
 u5  view  1  this_works
@@ -185,7 +185,7 @@ u6  materialized-view  NULL  mat_foo
 u6  materialized-view  1  comment_mat_view_col
 
 query TIT
-SELECT * FROM pg_description_view;
+SELECT id, objsubid, description FROM pg_description_view;
 ----
 u6  0  mat_foo
 u5  1  this_works
@@ -199,11 +199,11 @@ statement ok
 DROP MATERIALIZED VIEW mv;
 
 query TTTT
-SELECT * FROM mz_internal.mz_comments;
+SELECT id, object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
 
 query TIT
-SELECT * FROM pg_description_view;
+SELECT id, objsubid, description FROM pg_description_view;
 ----
 
 statement ok
@@ -216,13 +216,13 @@ statement ok
 COMMENT ON CLUSTER REPLICA comment_cluster.r2 IS 'second_replicator';
 
 query TTTT
-SELECT * FROM mz_internal.mz_comments;
+SELECT id, object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
 u2 cluster NULL careful_now
 u3 cluster-replica NULL second_replicator
 
 query TIT
-SELECT * FROM pg_description_view;
+SELECT id, objsubid, description FROM pg_description_view;
 ----
 
 statement ok
@@ -238,14 +238,14 @@ statement ok
 COMMENT ON COLUMN my_webhook.body IS 'json_blob';
 
 query TTTT
-SELECT * FROM mz_internal.mz_comments;
+SELECT id, object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
 u2 cluster NULL careful_now
 u7 source NULL all_the_data
 u7 source 1 json_blob
 
 query TIT
-SELECT * FROM pg_description_view;
+SELECT id, objsubid, description FROM pg_description_view;
 ----
 u7  1  json_blob
 u7  0  all_the_data
@@ -257,7 +257,7 @@ statement ok
 COMMENT ON TYPE int4_list IS 'supercool_list';
 
 query TTTT
-SELECT * FROM mz_internal.mz_comments;
+SELECT id, object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
 u2 cluster NULL careful_now
 u7 source NULL all_the_data
@@ -265,7 +265,7 @@ u8 type NULL supercool_list
 u7 source 1 json_blob
 
 query TIT
-SELECT * FROM pg_description_view;
+SELECT id, objsubid, description FROM pg_description_view;
 ----
 u7 1 json_blob
 u7 0 all_the_data
@@ -281,13 +281,13 @@ statement ok
 COMMENT ON SECRET my_secret IS 'supersecret';
 
 query TTTT
-SELECT * FROM mz_internal.mz_comments;
+SELECT id, object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
 u9 secret NULL supersecret
 u8 type NULL supercool_list
 
 query TIT
-SELECT * FROM pg_description_view;
+SELECT id, objsubid, description FROM pg_description_view;
 ----
 u8  0  supercool_list
 
@@ -310,13 +310,13 @@ statement ok
 DROP TYPE int4_list;
 
 query TTTT
-SELECT * FROM mz_internal.mz_comments;
+SELECT id, object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
 u2 database NULL this_is_my_db
 u7 schema NULL this_is_my_schema
 
 query TIT
-SELECT * FROM pg_description_view;
+SELECT id, objsubid, description FROM pg_description_view;
 ----
 u7  0  this_is_my_schema
 
@@ -335,12 +335,12 @@ statement ok
 COMMENT ON ROLE student IS 'limited_role';
 
 query TTTT
-SELECT * FROM mz_internal.mz_comments;
+SELECT id, object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
 u2 role NULL limited_role
 
 query TIT
-SELECT * FROM pg_description_view;
+SELECT id, objsubid, description FROM pg_description_view;
 ----
 
 statement ok
@@ -365,13 +365,13 @@ COMMENT ON ROLE teacher IS 'foo';
 COMPLETE 0
 
 query TTTT
-SELECT * FROM mz_internal.mz_comments;
+SELECT id, object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
 u3 role NULL foo
 u2 role NULL limited_role
 
 query TIT
-SELECT * FROM pg_description_view;
+SELECT id, objsubid, description FROM pg_description_view;
 ----
 
 simple conn=mz_system,user=mz_system
@@ -392,11 +392,11 @@ statement ok
 DROP ROLE teacher;
 
 query TTTT
-SELECT * FROM mz_internal.mz_comments;
+SELECT id, object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
 
 query TIT
-SELECT * FROM pg_description_view;
+SELECT id, objsubid, description FROM pg_description_view;
 ----
 
 statement error must be owner of DATABASE materialize
@@ -411,10 +411,10 @@ COMMENT ON DATABASE materialize IS 'main_db';
 COMPLETE 0
 
 query TTTT
-SELECT * FROM mz_internal.mz_comments;
+SELECT id, object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
 u1 database NULL main_db
 
 query TIT
-SELECT * FROM pg_description_view;
+SELECT id, objsubid, description FROM pg_description_view;
 ----
