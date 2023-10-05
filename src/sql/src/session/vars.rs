@@ -83,6 +83,7 @@ use mz_persist_client::batch::UntrimmableColumns;
 use mz_persist_client::cfg::{PersistConfig, PersistFeatureFlag};
 use mz_pgwire_common::Severity;
 use mz_repr::adt::numeric::Numeric;
+use mz_repr::user::ExternalUserMetadata;
 use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_tracing::CloneableEnvFilter;
 use once_cell::sync::Lazy;
@@ -90,7 +91,7 @@ use serde::Serialize;
 use uncased::UncasedStr;
 
 use crate::ast::Ident;
-use crate::session::user::{ExternalUserMetadata, User, SYSTEM_USER};
+use crate::session::user::{User, SYSTEM_USER};
 use crate::DEFAULT_SCHEMA;
 
 /// The action to take during end_transaction.

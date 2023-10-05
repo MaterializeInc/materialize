@@ -42,9 +42,9 @@ use mz_ore::cast::u64_to_usize;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::server::{ConnectionHandler, Server};
 use mz_ore::str::StrExt;
+use mz_repr::user::ExternalUserMetadata;
 use mz_sql::session::user::{
-    ExternalUserMetadata, User, HTTP_DEFAULT_USER, SUPPORT_USER, SUPPORT_USER_NAME, SYSTEM_USER,
-    SYSTEM_USER_NAME,
+    User, HTTP_DEFAULT_USER, SUPPORT_USER, SUPPORT_USER_NAME, SYSTEM_USER, SYSTEM_USER_NAME,
 };
 use mz_sql::session::vars::{ConnectionCounter, DropConnection, VarInput};
 use openssl::ssl::{Ssl, SslContext};
