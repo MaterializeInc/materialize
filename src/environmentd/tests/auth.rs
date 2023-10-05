@@ -637,9 +637,11 @@ fn start_mzcloud(
     role_updates_rx: UnboundedReceiver<(String, Vec<String>)>,
     now: NowFn,
     expires_in_secs: i64,
+    latency_secs: Option<u64>,
 ) -> Result<MzCloudServer, anyhow::Error> {
     let refreshes = Arc::new(Mutex::new(0u64));
     let enable_refresh = Arc::new(AtomicBool::new(true));
+    let auth_requests = Arc::new(Mutex::new(0u64));
     #[derive(Clone)]
     struct Context {
         encoding_key: EncodingKey,
@@ -649,10 +651,12 @@ fn start_mzcloud(
         role_updates_rx: Arc<Mutex<tokio::sync::mpsc::UnboundedReceiver<(String, Vec<String>)>>>,
         now: NowFn,
         expires_in_secs: i64,
+        latency_secs: Option<u64>,
         // Uuid -> email
         refresh_tokens: Arc<Mutex<BTreeMap<String, String>>>,
         refreshes: Arc<Mutex<u64>>,
         enable_refresh: Arc<AtomicBool>,
+        auth_requests: Arc<Mutex<u64>>,
     }
     let context = Context {
         encoding_key,
@@ -662,11 +666,18 @@ fn start_mzcloud(
         role_updates_rx: Arc::new(Mutex::new(role_updates_rx)),
         now,
         expires_in_secs,
+        latency_secs,
         refresh_tokens: Arc::new(Mutex::new(BTreeMap::new())),
         refreshes: Arc::clone(&refreshes),
         enable_refresh: Arc::clone(&enable_refresh),
+        auth_requests: Arc::clone(&auth_requests),
     };
     async fn handle(context: Context, req: Request<Body>) -> Result<Response<Body>, Infallible> {
+        // In some cases we want to add latency to test de-duplicating results.
+        if let Some(latency) = context.latency_secs {
+            tokio::time::sleep(Duration::from_secs(latency)).await;
+        }
+
         let (parts, body) = req.into_parts();
         let body = body::to_bytes(body).await.unwrap();
         let email: String = if parts.uri.path().ends_with(REFRESH_SUFFIX) {
@@ -690,6 +701,7 @@ fn start_mzcloud(
                 }
             }
         } else {
+            *context.auth_requests.lock().unwrap() += 1;
             let args: ApiTokenArgs = serde_json::from_slice(&body).unwrap();
             match context
                 .users
@@ -727,7 +739,7 @@ fn start_mzcloud(
         .unwrap();
         let resp = ApiTokenResponse {
             expires: "".to_string(),
-            expires_in: 0,
+            expires_in: context.expires_in_secs,
             access_token,
             refresh_token,
         };
@@ -756,6 +768,7 @@ fn start_mzcloud(
         url,
         refreshes,
         enable_refresh,
+        auth_requests,
         _runtime: runtime,
     })
 }
@@ -764,6 +777,7 @@ struct MzCloudServer {
     url: String,
     refreshes: Arc<Mutex<u64>>,
     enable_refresh: Arc<AtomicBool>,
+    auth_requests: Arc<Mutex<u64>>,
     _runtime: Arc<Runtime>,
 }
 
@@ -825,6 +839,7 @@ fn test_auth_expiry() {
         role_rx,
         SYSTEM_TIME.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
+        None,
     )
     .unwrap();
     let frontegg_auth = FronteggAuthentication::new(
@@ -968,6 +983,7 @@ fn test_auth_base_require_tls_frontegg() {
         role_rx,
         now.clone(),
         1_000,
+        None,
     )
     .unwrap();
     let frontegg_auth = FronteggAuthentication::new(
@@ -1707,6 +1723,7 @@ fn test_auth_admin_non_superuser() {
         role_rx,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
+        None,
     )
     .unwrap();
     let password_prefix = "mzp_";
@@ -1815,6 +1832,7 @@ fn test_auth_admin_superuser() {
         role_rx,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
+        None,
     )
     .unwrap();
     let password_prefix = "mzp_";
@@ -1923,6 +1941,7 @@ fn test_auth_admin_superuser_revoked() {
         role_rx,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
+        None,
     )
     .unwrap();
     let password_prefix = "mzp_";
@@ -1989,4 +2008,220 @@ fn test_auth_admin_superuser_revoked() {
             .get::<_, String>(0),
         "off"
     );
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+fn test_auth_deduplication() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+    let metrics_registry = MetricsRegistry::new();
+
+    let tenant_id = Uuid::new_v4();
+    let client_id = Uuid::new_v4();
+    let secret = Uuid::new_v4();
+    let users = BTreeMap::from([(
+        (client_id.to_string(), secret.to_string()),
+        "user@_.com".to_string(),
+    )]);
+    let roles = BTreeMap::from([("user@_.com".to_string(), Vec::new())]);
+    let encoding_key =
+        EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+
+    let (_role_tx, role_rx) = tokio::sync::mpsc::unbounded_channel();
+    let frontegg_server = start_mzcloud(
+        encoding_key,
+        tenant_id,
+        users,
+        roles,
+        role_rx,
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+        Some(2),
+    )
+    .unwrap();
+    let frontegg_auth = FronteggAuthentication::new(
+        FronteggConfig {
+            admin_api_token_url: frontegg_server.url.clone(),
+            decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
+            tenant_id: Some(tenant_id),
+            now: SYSTEM_TIME.clone(),
+            admin_role: "mzadmin".to_string(),
+        },
+        mz_frontegg_auth::Client::default(),
+        &metrics_registry,
+    );
+    let frontegg_user = "user@_.com";
+    let frontegg_password = &format!("mzp_{client_id}{secret}");
+
+    let config = util::Config::default()
+        .with_tls(server_cert, server_key)
+        .with_frontegg(&frontegg_auth)
+        .with_metrics_registry(metrics_registry);
+    let server = util::start_server(config).unwrap();
+
+    assert_eq!(*frontegg_server.auth_requests.lock().unwrap(), 0);
+
+    let mut pg_client_1_config = server.pg_config_async();
+    let pg_client_1_fut = pg_client_1_config
+        .ssl_mode(SslMode::Require)
+        .user(frontegg_user)
+        .password(frontegg_password)
+        .connect(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
+            Ok(b.set_verify(SslVerifyMode::NONE))
+        })));
+
+    let mut pg_client_2_config = server.pg_config_async();
+    let pg_client_2_fut = pg_client_2_config
+        .ssl_mode(SslMode::Require)
+        .user(frontegg_user)
+        .password(frontegg_password)
+        .connect(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
+            Ok(b.set_verify(SslVerifyMode::NONE))
+        })));
+    let client_fut = futures::future::join(pg_client_1_fut, pg_client_2_fut);
+    let (client_1_result, client_2_result) = server.runtime.block_on(client_fut);
+
+    let (pg_client_1, pg_client_1_conn) = client_1_result.unwrap();
+    let (pg_client_2, pg_client_2_conn) = client_2_result.unwrap();
+
+    server.runtime.spawn_named(|| "pg-client-1", async move {
+        pg_client_1_conn.await.expect("connection 1 failed");
+    });
+    server.runtime.spawn_named(|| "pg-client-2", async move {
+        pg_client_2_conn.await.expect("connection 2 failed");
+    });
+
+    let frontegg_user_client_1 = server
+        .runtime
+        .block_on(pg_client_1.query_one("SELECT current_user", &[]))
+        .unwrap()
+        .get::<_, String>(0);
+    assert_eq!(frontegg_user_client_1, frontegg_user);
+
+    let frontegg_user_client_2 = server
+        .runtime
+        .block_on(pg_client_2.query_one("SELECT current_user", &[]))
+        .unwrap()
+        .get::<_, String>(0);
+    assert_eq!(frontegg_user_client_2, frontegg_user);
+
+    // We should have de-duplicated the request and only actually sent 1.
+    assert_eq!(*frontegg_server.auth_requests.lock().unwrap(), 1);
+
+    // Wait for a refresh to occur.
+    wait_for_refresh(&frontegg_server, 10);
+    assert_eq!(*frontegg_server.refreshes.lock().unwrap(), 1);
+
+    // Both clients should still be queryable.
+    let frontegg_user_client_1_post_refresh = server
+        .runtime
+        .block_on(pg_client_1.query_one("SELECT current_user", &[]))
+        .unwrap()
+        .get::<_, String>(0);
+    assert_eq!(frontegg_user_client_1_post_refresh, frontegg_user);
+
+    let frontegg_user_client_2_post_refresh = server
+        .runtime
+        .block_on(pg_client_2.query_one("SELECT current_user", &[]))
+        .unwrap()
+        .get::<_, String>(0);
+    assert_eq!(frontegg_user_client_2_post_refresh, frontegg_user);
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+fn test_refresh_task_metrics() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+    let metrics_registry = MetricsRegistry::new();
+
+    let tenant_id = Uuid::new_v4();
+    let client_id = Uuid::new_v4();
+    let secret = Uuid::new_v4();
+    let users = BTreeMap::from([(
+        (client_id.to_string(), secret.to_string()),
+        "user@_.com".to_string(),
+    )]);
+    let roles = BTreeMap::from([("user@_.com".to_string(), Vec::new())]);
+    let encoding_key =
+        EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+
+    let (_role_tx, role_rx) = tokio::sync::mpsc::unbounded_channel();
+    let frontegg_server = start_mzcloud(
+        encoding_key,
+        tenant_id,
+        users,
+        roles,
+        role_rx,
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+        None,
+    )
+    .unwrap();
+    let frontegg_auth = FronteggAuthentication::new(
+        FronteggConfig {
+            admin_api_token_url: frontegg_server.url.clone(),
+            decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
+            tenant_id: Some(tenant_id),
+            now: SYSTEM_TIME.clone(),
+            admin_role: "mzadmin".to_string(),
+        },
+        mz_frontegg_auth::Client::default(),
+        &metrics_registry,
+    );
+    let frontegg_user = "user@_.com";
+    let frontegg_password = &format!("mzp_{client_id}{secret}");
+
+    let config = util::Config::default()
+        .with_tls(server_cert, server_key)
+        .with_frontegg(&frontegg_auth)
+        .with_metrics_registry(metrics_registry);
+    let server = util::start_server(config).unwrap();
+
+    let mut pg_client = server
+        .pg_config()
+        .ssl_mode(SslMode::Require)
+        .user(frontegg_user)
+        .password(frontegg_password)
+        .connect(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
+            Ok(b.set_verify(SslVerifyMode::NONE))
+        })))
+        .unwrap();
+
+    assert_eq!(
+        pg_client
+            .query_one("SELECT current_user", &[])
+            .unwrap()
+            .get::<_, String>(0),
+        frontegg_user
+    );
+
+    // Make sure our guage indicates there is one refresh task running.
+    let metrics = server.metrics_registry.gather();
+    let mut metrics: Vec<_> = metrics
+        .into_iter()
+        .filter(|family| family.get_name() == "mz_auth_refresh_tasks_active")
+        .collect();
+    assert_eq!(metrics.len(), 1);
+    let metric = metrics.pop().unwrap();
+    let metric = &metric.get_metric()[0];
+    assert_eq!(metric.get_gauge().get_value(), 1.0);
+
+    drop(pg_client);
+
+    // After dropping the client we should not have any refresh tasks running.
+    let metrics = server.metrics_registry.gather();
+    let mut metrics: Vec<_> = metrics
+        .into_iter()
+        .filter(|family| family.get_name() == "mz_auth_refresh_tasks_active")
+        .collect();
+    assert_eq!(metrics.len(), 1);
+    let metric = metrics.pop().unwrap();
+    let metric = &metric.get_metric()[0];
+    assert_eq!(metric.get_gauge().get_value(), 0.0);
 }
