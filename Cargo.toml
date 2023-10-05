@@ -131,6 +131,7 @@ rustc-demangle = { opt-level = 3 }
 # and ship it separately to an s3 bucket before building their
 # docker containers.
 debug = 2
+lto = "thin"
 
 # IMPORTANT: when patching a dependency, you should only depend on "main",
 # "master", or an upstream release branch (e.g., "v7.x"). Do *not* depend on a
