@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+// buf breaking: ignore (Ignored until #21887 is reverted)
+
 syntax = "proto3";
 
 import "expr/src/scalar.proto";
