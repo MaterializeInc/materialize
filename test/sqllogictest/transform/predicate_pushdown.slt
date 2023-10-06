@@ -390,14 +390,12 @@ Explained Query:
                 ReadIndex on=mz_views mz_show_views_ind=[*** full scan ***] // { arity: 7 }
             Project (#2, #3, #8) // { arity: 3 }
               Map ("materialized-view") // { arity: 9 }
-                ReadStorage mz_catalog.mz_materialized_views // { arity: 8 }
-
-Source mz_catalog.mz_materialized_views
-  filter=(true)
+                ReadIndex on=mz_materialized_views mz_materialized_views_ind=[*** full scan ***] // { arity: 8 }
 
 Used Indexes:
   - mz_internal.mz_show_schemas_ind (*** full scan ***)
   - mz_internal.mz_show_views_ind (*** full scan ***)
+  - mz_internal.mz_materialized_views_ind (*** full scan ***)
 
 EOF
 
