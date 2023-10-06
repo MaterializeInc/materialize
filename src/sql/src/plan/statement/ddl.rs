@@ -3412,18 +3412,19 @@ impl TryFrom<&KafkaConnectionOptionExtracted> for Option<SaslConfig> {
     type Error = PlanError;
     fn try_from(k: &KafkaConnectionOptionExtracted) -> Result<Self, Self::Error> {
         let res = if k.sasl_config().iter().all(|config| k.seen.contains(config)) {
-            let sasl_mechanism = k.sasl_mechanisms.clone().unwrap();
-            if sasl_mechanism
-                .chars()
-                .any(|c| c.is_ascii_alphabetic() && !c.is_uppercase())
-            {
-                sql_bail!(
-                    "invalid SASL MECHANISM {}: must be uppercase",
-                    sasl_mechanism.quoted()
-                );
-            }
+            // librdkafka requires SASL mechanisms to be upper case (PLAIN,
+            // SCRAM-SHA-256). For usability, we automatically uppercase the
+            // mechanism that user provides. This avoids a frustrating
+            // interaction with identifier case folding. Consider `SASL
+            // MECHANISMS = PLAIN`. Identifier case folding results in a SASL
+            // mechanism of `plain` (note the lowercase), which Materialize
+            // previously rejected with an error of "SASL mechanism must be
+            // uppercase." This was deeply frustarting for users who were not
+            // familiar with identifier case folding rules. See #22205.
+            let sasl_mechanism = k.sasl_mechanisms.clone().unwrap().to_uppercase();
+
             Some(SaslConfig {
-                mechanisms: sasl_mechanism,
+                sasl_mechanism,
                 username: k.sasl_username.clone().unwrap(),
                 password: k.sasl_password.unwrap().into(),
                 tls_root_cert: k.ssl_certificate_authority.clone(),

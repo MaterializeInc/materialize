@@ -258,7 +258,7 @@ pub struct KafkaTlsConfig {
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct SaslConfig {
-    pub mechanisms: String,
+    pub sasl_mechanism: String,
     pub username: StringOrSecret,
     pub password: GlobalId,
     pub tls_root_cert: Option<StringOrSecret>,
@@ -276,8 +276,8 @@ impl Arbitrary for SaslConfig {
             proptest::option::of(any::<StringOrSecret>()),
         )
             .prop_map(
-                |(mechanisms, username, password, tls_root_cert)| SaslConfig {
-                    mechanisms,
+                |(sasl_mechanism, username, password, tls_root_cert)| SaslConfig {
+                    sasl_mechanism,
                     username,
                     password,
                     tls_root_cert,
@@ -415,7 +415,7 @@ impl KafkaConnection {
                 }
             }
             Some(KafkaSecurity::Sasl(SaslConfig {
-                mechanisms,
+                sasl_mechanism: mechanisms,
                 username,
                 password,
                 tls_root_cert: certificate_authority,
@@ -563,7 +563,7 @@ impl RustType<ProtoKafkaConnectionTlsConfig> for KafkaTlsConfig {
 impl RustType<ProtoKafkaConnectionSaslConfig> for SaslConfig {
     fn into_proto(&self) -> ProtoKafkaConnectionSaslConfig {
         ProtoKafkaConnectionSaslConfig {
-            mechanisms: self.mechanisms.into_proto(),
+            sasl_mechanism: self.sasl_mechanism.into_proto(),
             username: Some(self.username.into_proto()),
             password: Some(self.password.into_proto()),
             tls_root_cert: self.tls_root_cert.into_proto(),
@@ -572,7 +572,7 @@ impl RustType<ProtoKafkaConnectionSaslConfig> for SaslConfig {
 
     fn from_proto(proto: ProtoKafkaConnectionSaslConfig) -> Result<Self, TryFromProtoError> {
         Ok(SaslConfig {
-            mechanisms: proto.mechanisms,
+            sasl_mechanism: proto.sasl_mechanism,
             username: proto
                 .username
                 .into_rust_if_some("ProtoKafkaConnectionSaslConfig::username")?,
