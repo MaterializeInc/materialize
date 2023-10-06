@@ -342,19 +342,21 @@ pub fn create_fast_path_plan<T: Timestamp>(
 impl FastPathPlan {
     pub fn used_indexes(&self, finishing: &Option<RowSetFinishing>) -> UsedIndexes {
         match self {
-            FastPathPlan::Constant(..) => UsedIndexes::new(Vec::new()),
+            FastPathPlan::Constant(..) => UsedIndexes::default(),
             FastPathPlan::PeekExisting(_coll_id, idx_id, literal_constraints, _mfp) => {
                 if literal_constraints.is_some() {
-                    UsedIndexes::new(vec![(*idx_id, vec![IndexUsageType::Lookup(*idx_id)])])
+                    UsedIndexes::new([(*idx_id, vec![IndexUsageType::Lookup(*idx_id)])].into())
                 } else {
                     if let Some(finishing) = finishing {
                         if finishing.limit.is_some() && finishing.order_by.is_empty() {
-                            UsedIndexes::new(vec![(*idx_id, vec![IndexUsageType::FastPathLimit])])
+                            UsedIndexes::new(
+                                [(*idx_id, vec![IndexUsageType::FastPathLimit])].into(),
+                            )
                         } else {
-                            UsedIndexes::new(vec![(*idx_id, vec![IndexUsageType::FullScan])])
+                            UsedIndexes::new([(*idx_id, vec![IndexUsageType::FullScan])].into())
                         }
                     } else {
-                        UsedIndexes::new(vec![(*idx_id, vec![IndexUsageType::FullScan])])
+                        UsedIndexes::new([(*idx_id, vec![IndexUsageType::FullScan])].into())
                     }
                 }
             }

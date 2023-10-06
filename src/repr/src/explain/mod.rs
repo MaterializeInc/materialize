@@ -686,25 +686,22 @@ impl<'a> fmt::Display for HumanizedAttributes<'a> {
 
 /// A set of indexes that are used in the explained plan.
 ///
-/// Each vector element consists of the following components:
+/// Each element consists of the following components:
 /// 1. The id of the index.
 /// 2. A vector of [IndexUsageType] denoting how the index is used in the plan.
-#[derive(Debug)]
-pub struct UsedIndexes(Vec<(GlobalId, Vec<IndexUsageType>)>);
+///
+/// Using a `BTreeSet` here ensures a deterministic iteration order, which in turn ensures that
+/// the corresponding EXPLAIN output is determistic as well.
+#[derive(Debug, Default)]
+pub struct UsedIndexes(BTreeSet<(GlobalId, Vec<IndexUsageType>)>);
 
 impl UsedIndexes {
-    pub fn new(values: Vec<(GlobalId, Vec<IndexUsageType>)>) -> UsedIndexes {
+    pub fn new(values: BTreeSet<(GlobalId, Vec<IndexUsageType>)>) -> UsedIndexes {
         UsedIndexes(values)
     }
 
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
-    }
-}
-
-impl Default for UsedIndexes {
-    fn default() -> Self {
-        UsedIndexes(Vec::new())
     }
 }
 
