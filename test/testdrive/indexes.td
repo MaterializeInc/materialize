@@ -279,7 +279,7 @@ DROP INDEX sys_ind
 ALTER SYSTEM SET enable_rbac_checks TO false
 
 # Test that creating indexes on objects in the mz_internal schema fails
-! CREATE INDEX illegal_sys_ind ON mz_internal.mz_view_keys (object_id)
+! CREATE INDEX illegal_sys_ind ON mz_internal.mz_comments (id)
 contains:cannot create index with unstable dependencies
 
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize

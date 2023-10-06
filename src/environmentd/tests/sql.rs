@@ -2133,7 +2133,7 @@ fn test_introspection_user_permissions() {
         .is_err());
 
     assert!(introspection_client
-        .query("SELECT * FROM mz_internal.mz_view_keys", &[])
+        .query("SELECT * FROM mz_internal.mz_comments", &[])
         .is_ok());
     assert!(introspection_client
         .query("SELECT * FROM mz_catalog.mz_tables", &[])
@@ -2146,7 +2146,7 @@ fn test_introspection_user_permissions() {
         .batch_execute("SET CLUSTER TO 'mz_system'")
         .unwrap();
     assert!(introspection_client
-        .query("SELECT * FROM mz_internal.mz_view_keys", &[])
+        .query("SELECT * FROM mz_internal.mz_comments", &[])
         .is_ok());
     assert!(introspection_client
         .query("SELECT * FROM mz_catalog.mz_tables", &[])
@@ -2160,7 +2160,7 @@ fn test_introspection_user_permissions() {
         .unwrap();
     assert!(introspection_client.query("SELECT * FROM t1", &[]).is_err());
     assert!(introspection_client
-        .query("SELECT * FROM mz_internal.mz_view_keys", &[])
+        .query("SELECT * FROM mz_internal.mz_comments", &[])
         .is_ok());
     assert!(introspection_client
         .query("SELECT * FROM mz_catalog.mz_tables", &[])
