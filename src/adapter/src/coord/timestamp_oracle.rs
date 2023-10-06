@@ -15,6 +15,7 @@
 //! emitted write timestamps.
 
 use async_trait::async_trait;
+use mz_ore::now::NowFn;
 
 use crate::coord::timeline::WriteTimestamp;
 
@@ -49,4 +50,19 @@ pub trait TimestampOracle<T> {
     /// All subsequent values of `self.read_ts()` will be greater or equal to
     /// `write_ts`.
     async fn apply_write(&mut self, write_ts: T);
+}
+
+/// A [`NowFn`] that is generic over the timestamp.
+///
+/// The oracle operations work in terms of [`mz_repr::Timestamp`] and we could
+/// work around it by bridging between the two in the oracle implementation
+/// itself. This wrapper type makes that slightly easier, though.
+pub trait GenericNowFn<T>: Clone + Send + Sync {
+    fn now(&self) -> T;
+}
+
+impl GenericNowFn<mz_repr::Timestamp> for NowFn {
+    fn now(&self) -> mz_repr::Timestamp {
+        (self)().into()
+    }
 }

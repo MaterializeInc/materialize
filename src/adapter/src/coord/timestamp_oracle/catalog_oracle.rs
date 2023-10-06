@@ -24,7 +24,7 @@ use tracing::error;
 
 use crate::catalog::Catalog;
 use crate::coord::timeline::WriteTimestamp;
-use crate::coord::timestamp_oracle::{catalog_oracle, TimestampOracle};
+use crate::coord::timestamp_oracle::{catalog_oracle, GenericNowFn, TimestampOracle};
 use crate::util::ResultExt;
 
 /// A type that provides write and read timestamps, reads observe exactly their
@@ -38,24 +38,30 @@ use crate::util::ResultExt;
 /// and writes happen at the write timestamp. After the write has completed, but
 /// before a response is sent, the read timestamp must be updated to a value
 /// greater than or equal to `self.write_ts`.
-struct InMemoryTimestampOracle<T> {
+struct InMemoryTimestampOracle<T, N>
+where
+    N: GenericNowFn<T>,
+{
     read_ts: T,
     write_ts: T,
-    next: Box<dyn Fn() -> T>,
+    next: N,
 }
 
-impl<T: TimestampManipulation> InMemoryTimestampOracle<T> {
+impl<T: TimestampManipulation, N> InMemoryTimestampOracle<T, N>
+where
+    N: GenericNowFn<T>,
+{
     /// Create a new timeline, starting at the indicated time. `next` generates
     /// new timestamps when invoked. The timestamps have no requirements, and
     /// can retreat from previous invocations.
-    pub fn new<F>(initially: T, next: F) -> Self
+    pub fn new(initially: T, next: N) -> Self
     where
-        F: Fn() -> T + 'static,
+        N: GenericNowFn<T>,
     {
         Self {
             read_ts: initially.clone(),
             write_ts: initially,
-            next: Box::new(next),
+            next,
         }
     }
 
@@ -64,7 +70,7 @@ impl<T: TimestampManipulation> InMemoryTimestampOracle<T> {
     /// This timestamp will be strictly greater than all prior values of
     /// `self.read_ts()` and `self.write_ts()`.
     fn write_ts(&mut self) -> WriteTimestamp<T> {
-        let mut next = (self.next)();
+        let mut next = self.next.now();
         if next.less_equal(&self.write_ts) {
             next = TimestampManipulation::step_forward(&self.write_ts);
         }
@@ -134,27 +140,32 @@ pub const TIMESTAMP_INTERVAL_UPPER_BOUND: u64 = 2;
 ///
 /// See [`TimestampOracle`] for more details on the properties of the
 /// timestamps.
-pub struct CatalogTimestampOracle<T> {
-    timestamp_oracle: InMemoryTimestampOracle<T>,
+pub struct CatalogTimestampOracle<T, N>
+where
+    N: GenericNowFn<T>,
+{
+    timestamp_oracle: InMemoryTimestampOracle<T, N>,
     durable_timestamp: T,
     persist_interval: T,
     timestamp_persistence: Box<dyn TimestampPersistence<T>>,
 }
 
-impl<T: TimestampManipulation> CatalogTimestampOracle<T> {
+impl<T: TimestampManipulation, N> CatalogTimestampOracle<T, N>
+where
+    N: GenericNowFn<T>,
+{
     /// Create a new durable timeline, starting at the indicated time.
     /// Timestamps will be allocated in groups of size `persist_interval`. Also
     /// returns the new timestamp that needs to be persisted to disk.
     ///
     /// See [`InMemoryTimestampOracle::new`] for more details.
-    pub(crate) async fn new<F, P>(
+    pub(crate) async fn new<P>(
         initially: T,
-        next: F,
+        next: N,
         persist_interval: T,
         timestamp_persistence: P,
     ) -> Self
     where
-        F: Fn() -> T + 'static,
         P: TimestampPersistence<T> + 'static,
     {
         let mut oracle = Self {
@@ -191,7 +202,10 @@ impl<T: TimestampManipulation> CatalogTimestampOracle<T> {
 }
 
 #[async_trait(?Send)]
-impl<T: TimestampManipulation> TimestampOracle<T> for CatalogTimestampOracle<T> {
+impl<T: TimestampManipulation, N> TimestampOracle<T> for CatalogTimestampOracle<T, N>
+where
+    N: GenericNowFn<T>,
+{
     async fn write_ts(&mut self) -> WriteTimestamp<T> {
         let ts = self.timestamp_oracle.write_ts();
         self.maybe_allocate_new_timestamps(&ts.timestamp).await;

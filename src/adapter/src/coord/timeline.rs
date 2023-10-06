@@ -198,27 +198,34 @@ impl Coordinator {
         P: TimestampPersistence<mz_repr::Timestamp> + 'static,
     {
         if !global_timelines.contains_key(timeline) {
-            let oracle = if timeline == &Timeline::EpochMilliseconds {
-                CatalogTimestampOracle::new(
-                    initially,
-                    move || (now)().into(),
-                    *TIMESTAMP_PERSIST_INTERVAL,
-                    timestamp_persistence,
-                )
-                .await
+            let now_fn = if timeline == &Timeline::EpochMilliseconds {
+                now
             } else {
+                // Timelines that are not `EpochMilliseconds` don't have an
+                // "external" clock that wants to drive forward timestamps in
+                // addition to the rule that write timestamps must be strictly
+                // monotonically increasing.
+                //
+                // Passing in a clock that always yields the minimum takes the
+                // clock out of the equation and makes timestamps advance only
+                // by the rule about strict monotonicity mentioned above.
+                NowFn::from(|| Timestamp::minimum().into())
+            };
+
+            let oracle: Box<dyn TimestampOracle<mz_repr::Timestamp>> = Box::new(
                 CatalogTimestampOracle::new(
                     initially,
-                    Timestamp::minimum,
+                    now_fn,
                     *TIMESTAMP_PERSIST_INTERVAL,
                     timestamp_persistence,
                 )
-                .await
-            };
+                .await,
+            );
+
             global_timelines.insert(
                 timeline.clone(),
                 TimelineState {
-                    oracle: Box::new(oracle),
+                    oracle,
                     read_holds: ReadHolds::new(),
                 },
             );
