@@ -185,6 +185,36 @@ pub struct StateRollupArgs {
     pub(crate) rollup_key: Option<String>,
 }
 
+/// Arguments for commands that work over both backing stores.
+/// TODO: squish this into `StateArgs`.
+#[derive(Debug, Clone, clap::Parser)]
+pub struct StoreArgs {
+    /// Consensus to use.
+    ///
+    /// When connecting to a deployed environment's consensus table, the Postgres/CRDB connection
+    /// string must contain the database name and `options=--search_path=consensus`.
+    ///
+    /// When connecting to Cockroach Cloud, use the following format:
+    ///
+    /// ```text
+    /// postgresql://<user>:$COCKROACH_PW@<hostname>:<port>/environment_<environment-id>
+    ///   ?sslmode=verify-full
+    ///   &sslrootcert=/path/to/cockroach-cloud/certs/cluster-ca.crt
+    ///   &options=--search_path=consensus
+    /// ```
+    ///
+    #[clap(long, verbatim_doc_comment, env = "CONSENSUS_URI")]
+    pub(crate) consensus_uri: String,
+
+    /// Blob to use
+    ///
+    /// When connecting to a deployed environment's blob, the necessary connection glue must be in
+    /// place. e.g. for S3, sign into SSO, set AWS_PROFILE and AWS_REGION appropriately, with a blob
+    /// URI scoped to the environment's bucket prefix.
+    #[clap(long, env = "BLOB_URI")]
+    pub(crate) blob_uri: String,
+}
+
 /// Arguments for viewing the current state of a given shard
 #[derive(Debug, Clone, clap::Parser)]
 pub struct StateArgs {

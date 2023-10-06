@@ -15,7 +15,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
 
-use anyhow::anyhow;
+use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
@@ -35,12 +35,16 @@ use tracing::{info, warn};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::cache::StateCache;
-use crate::cli::inspect::StateArgs;
+use crate::cli::inspect::{StateArgs, StoreArgs};
 use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
-use crate::internal::encoding::Schemas;
+use crate::internal::encoding::{Schemas, UntypedState};
 use crate::internal::gc::{GarbageCollector, GcReq};
 use crate::internal::machine::Machine;
 use crate::internal::metrics::{MetricsBlob, MetricsConsensus};
+use crate::internal::state::State;
+use crate::internal::state_diff::{StateDiff, StateFieldValDiff};
+
+use crate::internal::paths::BlobKey;
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::rpc::NoopPubSubSender;
 use crate::write::WriterId;
@@ -64,6 +68,9 @@ pub(crate) enum Command {
     ForceCompaction(ForceCompactionArgs),
     /// Manually kick off a GC run for a shard.
     ForceGc(ForceGcArgs),
+    /// Attempt to ensure that all the files referenced by consensus are available
+    /// in Blob.
+    RestoreBlob(StoreArgs),
 }
 
 /// Manually completes all fueled compactions in a shard.
@@ -124,6 +131,91 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
             )
             .await?;
             info_log_non_zero_metrics(&metrics_registry.gather());
+        }
+        Command::RestoreBlob(args) => {
+            let StoreArgs {
+                consensus_uri,
+                blob_uri,
+            } = args;
+            let commit = command.commit;
+            let cfg = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone());
+            let metrics_registry = MetricsRegistry::new();
+            let metrics = Arc::new(Metrics::new(&cfg, &metrics_registry));
+            let consensus =
+                make_consensus(&cfg, &consensus_uri, commit, Arc::clone(&metrics)).await?;
+            let shards = consensus.list_keys().await?;
+            let blob = make_blob(&cfg, &blob_uri, commit, Arc::clone(&metrics)).await?;
+            let versions = StateVersions::new(cfg.clone(), consensus, Arc::clone(&blob), metrics);
+
+            for shard_id in shards {
+                let shard_id = ShardId::from_str(&shard_id).expect("invalid shard id");
+
+                let diffs = versions.fetch_all_live_diffs(&shard_id).await;
+                let Some(least_seqno) = diffs.0.first().map(|d| d.seqno) else {
+                    info!("No diffs for shard {shard_id}.");
+                    return Ok(());
+                };
+
+                fn after<A>(diff: StateFieldValDiff<A>) -> Option<A> {
+                    match diff {
+                        StateFieldValDiff::Insert(a) => Some(a),
+                        StateFieldValDiff::Update(_, a) => Some(a),
+                        StateFieldValDiff::Delete(_) => None,
+                    }
+                }
+
+                let mut not_restored = vec![];
+                let mut check_restored = |key: &BlobKey, result: Result<(), _>| {
+                    if result.is_err() {
+                        not_restored.push(key.clone());
+                    }
+                };
+
+                for diff in diffs.0 {
+                    let diff: StateDiff<u64> = StateDiff::decode(&cfg.build_version, diff.data);
+                    for rollup in diff.rollups {
+                        if rollup.key >= least_seqno {
+                            if let Some(value) = after(rollup.val) {
+                                let key = value.key.complete(&shard_id);
+                                check_restored(&key, blob.restore(&key).await);
+                                if rollup.key == least_seqno {
+                                    let rollup_bytes = blob
+                                        .get(&key)
+                                        .await?
+                                        .ok_or_else(|| anyhow!("fetching just-restored rollup"))?;
+                                    let rollup_state: State<u64> =
+                                        UntypedState::decode(&cfg.build_version, rollup_bytes)
+                                            .check_ts_codec(&shard_id)?;
+                                    for (seqno, rollup) in &rollup_state.collections.rollups {
+                                        if *seqno >= least_seqno {
+                                            let key = rollup.key.complete(&shard_id);
+                                            check_restored(&key, blob.restore(&key).await);
+                                        }
+                                    }
+                                    for batch in rollup_state.collections.trace.batches() {
+                                        for part in &batch.parts {
+                                            let key = part.key.complete(&shard_id);
+                                            check_restored(&key, blob.restore(&key).await);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    for batch in diff.spine {
+                        if let Some(_) = after(batch.val) {
+                            for part in batch.key.parts {
+                                let key = part.key.complete(&shard_id);
+                                check_restored(&key, blob.restore(&key).await);
+                            }
+                        }
+                    }
+                }
+
+                if !not_restored.is_empty() {
+                    bail!("referenced blobs were not restored: {not_restored:?}")
+                }
+            }
         }
     }
     Ok(())
