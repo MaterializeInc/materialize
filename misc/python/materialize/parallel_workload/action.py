@@ -621,7 +621,8 @@ class CancelAction(Action):
         exe.execute(
             f"SELECT pg_cancel_backend({pid})", extra_info=f"Canceling {worker}"
         )
-        time.sleep(self.rng.uniform(0, 3))
+        # Sleep less often to work around #22228 / #2392
+        time.sleep(self.rng.uniform(1, 10))
 
 
 class KillAction(Action):
