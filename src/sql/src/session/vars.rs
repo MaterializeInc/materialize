@@ -1376,13 +1376,6 @@ pub const ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE: ServerVar<bool> = ServerVar {
     internal: false,
 };
 
-pub const ENABLE_COMMENT: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("enable_comment"),
-    value: &false,
-    description: "Enables the COMMENT ON feature for objects in the database (Materialize).",
-    internal: false,
-};
-
 pub const MIN_TIMESTAMP_INTERVAL: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("min_timestamp_interval"),
     value: &Duration::from_millis(1000),
@@ -1716,6 +1709,12 @@ feature_flags!(
         "jemalloc heap memory profiling",
         false
     ),
+    (
+        enable_comment,
+        "the COMMENT ON feature for objects",
+        false, // default false
+        false  // internal false
+    )
 );
 
 /// Represents the input to a variable.
@@ -2422,7 +2421,6 @@ impl SystemVars {
             .with_var(&ENABLE_STORAGE_SHARD_FINALIZATION)
             .with_var(&ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE)
             .with_var(&ENABLE_DEFAULT_CONNECTION_VALIDATION)
-            .with_var(&ENABLE_COMMENT)
             .with_var(&MIN_TIMESTAMP_INTERVAL)
             .with_var(&MAX_TIMESTAMP_INTERVAL)
             .with_var(&LOGGING_FILTER)
@@ -3083,11 +3081,6 @@ impl SystemVars {
     /// Returns the `enable_default_connection_validation` configuration parameter.
     pub fn enable_default_connection_validation(&self) -> bool {
         *self.expect_value(&ENABLE_DEFAULT_CONNECTION_VALIDATION)
-    }
-
-    /// Returns the `enable_comment` configuration parameter.
-    pub fn enable_comment(&self) -> bool {
-        *self.expect_value(&ENABLE_COMMENT)
     }
 
     /// Returns the `min_timestamp_interval` configuration parameter.
