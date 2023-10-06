@@ -11,7 +11,7 @@
 
 use mz_expr::MirRelationExpr;
 
-use crate::attribute::{Attribute, DerivedAttributes, RequiredAttributes};
+use crate::attribute::{Attribute, DerivedAttributes, DerivedAttributesBuilder};
 
 /// Compute the number of MirRelationExpr in each subtree in a bottom-up manner.
 #[derive(Default)]
@@ -104,7 +104,7 @@ impl Attribute for SubtreeSize {
         }
     }
 
-    fn add_dependencies(_builder: &mut RequiredAttributes)
+    fn add_dependencies(_builder: &mut DerivedAttributesBuilder)
     where
         Self: Sized,
     {

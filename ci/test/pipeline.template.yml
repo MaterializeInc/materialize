@@ -16,6 +16,11 @@ dag: true
 
 env:
   CI_BUILDER_SCCACHE: 1
+  # TODO(def-): Reenable when we upgrade to Rust >= 1.72
+  # Note: In .cargo/config we set the default build jobs to -1 so on developer machines we keep
+  # a single core open when compiling. But we want to use all of CI's resources, hence setting the
+  # build jobs to "default" which will use all cores.
+  # CARGO_BUILD_JOBS: "default"
 
 steps:
   - id: build-x86_64
@@ -223,11 +228,12 @@ steps:
       queue: linux-x86_64
 
   - id: cluster-tests
-    label: Cluster tests
+    label: Cluster tests %n
     depends_on: build-x86_64
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
     inputs: [test/cluster]
+    parallelism: 2
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cluster
@@ -418,7 +424,7 @@ steps:
   - id: ssh-connection
     label: SSH connection tests
     depends_on: build-x86_64
-    timeout_in_minutes: 10
+    timeout_in_minutes: 20
     inputs: [test/ssh-connection]
     artifact_paths: junit_*.xml
     plugins:
@@ -483,11 +489,24 @@ steps:
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
     agents:
-      queue: linux-x86_64
+      queue: builder-linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
           args: [--scenario=DropCreateDefaultReplica, "--seed=$BUILDKITE_JOB_ID"]
+
+  - id: checks-no-restart-no-upgrade
+    label: "Checks without restart or upgrade"
+    depends_on: build-x86_64
+    inputs: [misc/python/materialize/checks]
+    timeout_in_minutes: 30
+    artifact_paths: junit_*.xml
+    agents:
+      queue: builder-linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: platform-checks
+          args: [--scenario=NoRestartNoUpgrade, "--seed=$BUILDKITE_JOB_ID"]
 
   - id: checks-restart-clusterd-compute
     label: "Checks + restart clusterd compute"
@@ -496,7 +515,7 @@ steps:
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
     agents:
-      queue: linux-x86_64
+      queue: builder-linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
@@ -509,7 +528,7 @@ steps:
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
     agents:
-      queue: linux-x86_64
+      queue: builder-linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
@@ -522,7 +541,7 @@ steps:
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
     agents:
-      queue: linux-x86_64
+      queue: builder-linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
@@ -535,7 +554,7 @@ steps:
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
     agents:
-      queue: linux-x86_64
+      queue: builder-linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
@@ -690,6 +709,7 @@ steps:
 
   - id: nightly-if-risky
     label: Nightly for risky PRs
+    skip: "Temporary disabled until a cost/beneft analysis"
     depends_on: devel-docker-tags
     trigger: nightlies
     async: true
@@ -704,6 +724,8 @@ steps:
     if: build.tag != "" && build.branch != "main" && build.branch !~ /^v.*\..*\$/
 
     inputs:
+      # Changes to dependencies
+      - Cargo.lock
       # Changes to the SQL syntax
       - src/sql-parser/src
       - src/expr-parser/src
@@ -741,6 +763,9 @@ steps:
     priority: 1
     agents:
       queue: builder-linux-x86_64
+    retry:
+      manual:
+        permit_on_passed: true
     coverage: only
 
   - wait: ~

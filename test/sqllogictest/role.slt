@@ -23,6 +23,18 @@ SELECT name, inherit FROM mz_roles WHERE id LIKE 'u%'
 ----
 materialize  true
 
+simple conn=mz_support,user=mz_support
+SELECT mz_catalog.mz_is_superuser()
+----
+f
+COMPLETE 1
+
+simple conn=mz_system,user=mz_system
+SELECT mz_catalog.mz_is_superuser()
+----
+t
+COMPLETE 1
+
 # Give materialize the CREATEROLE attribute.
 simple conn=mz_system,user=mz_system
 GRANT CREATEROLE ON SYSTEM TO materialize

@@ -1,7 +1,7 @@
 [
   {
     "name": "objects.proto",
-    "md5": "caeba871ee4c70243741bb5efa474b9e"
+    "md5": "5d9b643479290ad46a91165aadf5ddb4"
   },
   {
     "name": "objects_v25.proto",
@@ -38,5 +38,33 @@
   {
     "name": "objects_v33.proto",
     "md5": "b5f70889965589369efc18ec36e8cbd8"
+  },
+  {
+    "name": "objects_v34.proto",
+    "md5": "cddbbfecec523eec8a9f685633fb5c7c"
+  },
+  {
+    "name": "objects_v35.proto",
+    "md5": "7d989b1afbbf906cb6fcc72fab67aba2"
+  },
+  {
+    "name": "objects_v36.proto",
+    "md5": "7e7dabc91c90e5cdd22391e50c689c35"
+  },
+  {
+    "name": "objects_v37.proto",
+    "md5": "dc4c8ab26c13c3d695568446d91fe703"
+  },
+  {
+    "name": "objects_v38.proto",
+    "md5": "6f550ac63b0e7c00b7ea0e371b00cf81"
+  },
+  {
+    "name": "objects_v39.proto",
+    "md5": "30b5e2154b986e166603a98d1582a887"
+  },
+  {
+    "name": "objects_v40.proto",
+    "md5": "19d354a8768359fa8f9346bf3920bff2"
   }
 ]

@@ -112,6 +112,8 @@ Select the option that works best for you.
 
 {{< tab "Use AWS PrivateLink">}}
 
+{{< public-preview />}}
+
 [AWS PrivateLink](https://aws.amazon.com/privatelink/) lets you connect Materialize to your RDS instance without exposing traffic to the public internet. To use AWS PrivateLink, you create a network load balancer in the same VPC as your RDS instance and a VPC endpoint service that Materialize connects to. The VPC endpoint service then routes requests from Materialize to RDS via the network load balancer.
 
 {{< note >}}
@@ -160,6 +162,9 @@ Materialize provides a Terraform module that automates the creation and configur
     - For **Load balancer type**, choose **Network** and then select the network load balancer you created in the previous step.
 
     - After creating the VPC endpoint service, note its **Service name**. You'll use this service name when connecting Materialize later.
+
+    **Remarks**:
+    By disabling [Acceptance Required](https://docs.aws.amazon.com/vpc/latest/privatelink/configure-endpoint-service.html#accept-reject-connection-requests), while still strictly managing who can view your endpoint via IAM, Materialze will be able to seamlessly recreate and migrate endpoints as we work to stabilize this feature.
 
 1. Go back to the target group you created for the network load balancer and make sure that the [health checks](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-health-checks.html) are reporting the targets as healthy.
 
@@ -292,6 +297,14 @@ Now that you've configured your database network and created an ingestion cluste
 
     **Note:** It can take some time for the connection request to show up. Do not move on to the next step until you've approved the connection.
 
+1. Validate the AWS PrivateLink connection you created using the [`VALIDATE CONNECTION`](/sql/validate-connection) command:
+
+    ```sql
+    VALIDATE CONNECTION privatelink_svc;
+    ```
+
+    If no validation error is returned, move to the next step.
+
 1. Use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the password for the `materialize` PostgreSQL user you created [earlier](#step-2-create-a-publication):
 
     ```sql
@@ -357,7 +370,15 @@ Now that you've configured your database network and created an ingestion cluste
     echo "ssh-ed25519 AAAA...hLYV materialize" >> ~/.ssh/authorized_keys
     ```
 
-1. Back in the `psql` shell connected to Materialize, use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the password for the `materialize` PostgreSQL user you created [earlier](#step-2-create-a-publication):
+1. Back in the `psql` shell connected to Materialize, validate the SSH tunnel connection you created using the [`VALIDATE CONNECTION`](/sql/validate-connection) command:
+
+    ```sql
+    VALIDATE CONNECTION ssh_connection;
+    ```
+
+    If no validation error is returned, move to the next step.
+
+1. Use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the password for the `materialize` PostgreSQL user you created [earlier](#step-2-create-a-publication):
 
     ```sql
     CREATE SECRET pgpass AS '<PASSWORD>';

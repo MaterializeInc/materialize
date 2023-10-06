@@ -13,15 +13,13 @@ import sys
 import tempfile
 from textwrap import dedent
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import (
-    Clusterd,
-    Kafka,
-    Materialized,
-    SchemaRegistry,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 
 class Generator:
@@ -473,7 +471,7 @@ class KafkaSinks(Generator):
 
     @classmethod
     def body(cls) -> None:
-        print("$ set-regex match=\d{13} replacement=<TIMESTAMP>")
+        print("$ set-regex match=\\d{13} replacement=<TIMESTAMP>")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_materialized_views = {KafkaSinks.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
@@ -520,7 +518,7 @@ class KafkaSinksSameSource(Generator):
 
     @classmethod
     def body(cls) -> None:
-        print("$ set-regex match=\d{13} replacement=<TIMESTAMP>")
+        print("$ set-regex match=\\d{13} replacement=<TIMESTAMP>")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_sinks = {KafkaSinksSameSource.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
@@ -1126,6 +1124,11 @@ class UnionsNested(Generator):
 
 
 class CaseWhen(Generator):
+    # Originally this was working with 1000, but after moving lowering and
+    # decorrelation from the `plan_~` to the `sequence_~` method we had to
+    # reduce it a bit in order to avoid overflowing the stack.
+    COUNT = 950
+
     @classmethod
     def body(cls) -> None:
         print(
@@ -1185,7 +1188,7 @@ class ArrayAgg(Generator):
         slt = dedent(
             f"""
             > CREATE TABLE t ({
-                f", ".join(
+                ", ".join(
                     ", ".join([
                         f"a{i} STRING",
                         f"b{i} STRING",
@@ -1199,7 +1202,7 @@ class ArrayAgg(Generator):
             > INSERT INTO t DEFAULT VALUES;
 
             > CREATE MATERIALIZED VIEW v2 AS SELECT {
-                f", ".join(
+                ", ".join(
                     f"ARRAY_AGG(a{i} ORDER BY b1) FILTER (WHERE 's{i}' = ANY(d{i})) AS r{i}"
                     for i in cls.all()
                 )
@@ -1236,7 +1239,7 @@ class FilterSubqueries(Generator):
             $ set-sql-timeout duration=600s
 
             > SELECT * FROM t1 AS a1 WHERE {
-                f" AND ".join(
+                " AND ".join(
                     f"f1 IN (SELECT * FROM t1 WHERE f1 = a1.f1 AND f1 <= {i})"
                     for i in cls.all()
                 )

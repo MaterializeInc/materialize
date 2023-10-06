@@ -39,6 +39,28 @@ SHOW COLUMNS FROM webhook_bytes
 ----
 body false bytea
 
+query TT
+SELECT name, regexp_match(url, '(/api/webhook/.*)') FROM mz_internal.mz_webhook_sources
+----
+webhook_bytes {/api/webhook/materialize/public/webhook_bytes}
+
+statement ok
+CREATE SOURCE "weird-name-(]%/'" IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT BYTES
+
+query TT
+SELECT name, regexp_match(url, '(/api/webhook/.*)') FROM mz_internal.mz_webhook_sources
+----
+webhook_bytes {/api/webhook/materialize/public/webhook_bytes}
+weird-name-(]%/' {/api/webhook/materialize/public/weird-name-(]%25%2F'}
+
+statement ok
+DROP SOURCE "weird-name-(]%/'"
+
+query TT
+SELECT id, regexp_match(url, '(/api/webhook/.*)') FROM mz_internal.mz_webhook_sources
+----
+u1 {/api/webhook/materialize/public/webhook_bytes}
+
 statement ok
 CREATE SOURCE webhook_bytes_include_headers IN CLUSTER webhook_cluster FROM WEBHOOK
     BODY FORMAT BYTES
@@ -91,7 +113,23 @@ body false text
 headers false map
 
 # Make sure that webhook_cluster only contains sources.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_unified_clusters = false
+----
+COMPLETE 0
+
 statement error cannot create this kind of item in a cluster that contains sources or sinks
+CREATE MATERIALIZED VIEW mat_view_text IN CLUSTER webhook_cluster AS (
+    SELECT body FROM webhook_text_include_headers
+);
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_unified_clusters = true
+----
+COMPLETE 0
+
+statement ok
 CREATE MATERIALIZED VIEW mat_view_text IN CLUSTER webhook_cluster AS (
     SELECT body FROM webhook_text_include_headers
 );
@@ -213,6 +251,15 @@ CREATE SOURCE webhook_buildkite2 IN CLUSTER webhook_cluster FROM WEBHOOK
   )
 
 statement ok
+ALTER SOURCE webhook_buildkite2 RENAME TO webhook_buildkite2_renamed;
+
+statement ok
+SELECT * FROM webhook_buildkite2_renamed;
+
+statement error unknown catalog item 'webhook_buildkite2'
+SELECT * FROM webhook_buildkite2;
+
+statement ok
 CREATE SECRET other_secret AS 'another_one';
 
 statement ok
@@ -288,6 +335,47 @@ CREATE SOURCE webhook_with_duplicate_aliases IN CLUSTER webhook_cluster FROM WEB
     length(x) > 0
   )
 
+statement ok
+CREATE SOURCE webhook_text_with_mapped_headers IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+  INCLUDE HEADER 'x-special-header' AS "specialHeader"
+  INCLUDE HEADER 'x-hash' AS hash BYTES
+  INCLUDE HEADER 'content-type' AS content_type
+
+query TTT
+SHOW COLUMNS FROM webhook_text_with_mapped_headers
+----
+body false text
+specialHeader true text
+hash true bytea
+content_type true text
+
+statement ok
+CREATE SOURCE webhook_text_mapped_and_filtered_headers IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+  INCLUDE HEADER 'x-hash' as hash BYTES
+  INCLUDE HEADER 'content-type' as content_type
+  INCLUDE HEADERS ('x-special-header')
+
+query TTT
+SHOW COLUMNS FROM webhook_text_mapped_and_filtered_headers
+----
+body false text
+headers false map
+hash true bytea
+content_type true text
+
+statement error column reference "header_a" is ambiguous
+CREATE SOURCE webhook_text_with_duplicate_header_alias IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+  INCLUDE HEADER 'x-first-header' as header_a
+  INCLUDE HEADER 'x-second-header' as header_a
+
+statement error column reference "body" is ambiguous
+CREATE SOURCE webhook_text_with_header_alias_as_body IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+  INCLUDE HEADER 'x-my-header' as body
+
 # Try creating a webhook source in a compute cluster.
 
 statement ok
@@ -296,9 +384,37 @@ CREATE CLUSTER compute_cluster REPLICAS (r1 (SIZE '1'));
 statement ok
 CREATE MATERIALIZED VIEW mv1 IN CLUSTER compute_cluster AS SELECT name FROM mz_objects;
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_unified_clusters = false
+----
+COMPLETE 0
+
 statement error cannot create source in cluster containing indexes or materialized views
 CREATE SOURCE webhook_on_compute_cluster IN CLUSTER compute_cluster FROM WEBHOOK
   BODY FORMAT BYTES;
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_unified_clusters = true
+----
+COMPLETE 0
+
+statement ok
+CREATE SOURCE webhook_on_compute_cluster IN CLUSTER compute_cluster FROM WEBHOOK
+  BODY FORMAT BYTES;
+
+# Make sure we report webhook sources as running.
+
+query TTTT
+SELECT name, type, status, error FROM mz_internal.mz_source_statuses WHERE name = 'webhook_bytes'
+----
+webhook_bytes webhook running NULL
+
+statement ok
+DROP SOURCE webhook_bytes;
+
+query TTTT
+SELECT name, type, status, error FROM mz_internal.mz_source_statuses WHERE name = 'webhook_bytes'
+----
 
 # Cleanup.
 statement ok

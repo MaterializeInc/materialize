@@ -19,12 +19,10 @@ use mz::command::profile::{ConfigGetArgs, ConfigRemoveArgs, ConfigSetArgs};
 use mz::context::Context;
 use mz::error::Error;
 
-use crate::mixin::{EndpointArgs, ProfileArg};
+use crate::mixin::EndpointArgs;
 
 #[derive(Debug, clap::Args)]
 pub struct ProfileCommand {
-    #[clap(flatten)]
-    profile: ProfileArg,
     #[clap(subcommand)]
     subcommand: ProfileSubcommand,
 }
@@ -77,8 +75,6 @@ pub enum ProfileConfigSubcommand {
 }
 
 pub async fn run(mut cx: Context, cmd: ProfileCommand) -> Result<(), Error> {
-    let profile = cmd.profile.profile;
-
     match &cmd.subcommand {
         // Initiating a profile doesn't requires an active profile.
         ProfileSubcommand::Init {
@@ -87,7 +83,6 @@ pub async fn run(mut cx: Context, cmd: ProfileCommand) -> Result<(), Error> {
         } => {
             mz::command::profile::init(
                 &mut cx,
-                profile,
                 *no_browser,
                 endpoint.admin_endpoint.clone(),
                 endpoint.cloud_endpoint.clone(),
@@ -97,7 +92,7 @@ pub async fn run(mut cx: Context, cmd: ProfileCommand) -> Result<(), Error> {
         ProfileSubcommand::List => mz::command::profile::list(&mut cx),
         ProfileSubcommand::Remove => mz::command::profile::remove(&mut cx).await,
         _ => {
-            let mut cx = cx.activate_profile(profile)?;
+            let mut cx = cx.activate_profile()?;
 
             match &cmd.subcommand {
                 ProfileSubcommand::Config(cmd) => match cmd {

@@ -1147,6 +1147,24 @@ impl MirScalarExpr {
                                     e.typ(column_types).scalar_type,
                                 ),
                             };
+                        } else if *func == VariadicFunc::RegexpSplitToArray
+                            && exprs[1].is_literal()
+                            && exprs.get(2).map_or(true, |e| e.is_literal())
+                        {
+                            let needle = exprs[1].as_literal_str().unwrap();
+                            let flags = match exprs.len() {
+                                3 => exprs[2].as_literal_str().unwrap(),
+                                _ => "",
+                            };
+                            *e = match func::build_regex(needle, flags) {
+                                Ok(regex) => mem::take(exprs).into_first().call_unary(
+                                    UnaryFunc::RegexpSplitToArray(func::RegexpSplitToArray(regex)),
+                                ),
+                                Err(err) => MirScalarExpr::literal(
+                                    Err(err),
+                                    e.typ(column_types).scalar_type,
+                                ),
+                            };
                         } else if *func == VariadicFunc::ListIndex && is_list_create_call(&exprs[0])
                         {
                             // We are looking for ListIndex(ListCreate, literal), and eliminate
@@ -1199,7 +1217,11 @@ impl MirScalarExpr {
                             }
                         } else if then == els {
                             *e = then.take();
-                        } else if then.is_literal_ok() && els.is_literal_ok() {
+                        } else if then.is_literal_ok()
+                            && els.is_literal_ok()
+                            && then.typ(column_types).scalar_type == ScalarType::Bool
+                            && els.typ(column_types).scalar_type == ScalarType::Bool
+                        {
                             match (then.as_literal(), els.as_literal()) {
                                 // Note: NULLs from the condition should not be propagated to the result
                                 // of the expression.
@@ -2044,6 +2066,18 @@ impl MirScalarExpr {
             .chain(third)
             .chain(variadic.into_iter().flatten())
     }
+
+    /// Visits all subexpressions in DFS preorder.
+    pub fn visit_pre<F>(&self, f: &mut F)
+    where
+        F: FnMut(&Self),
+    {
+        let mut worklist = vec![self];
+        while let Some(e) = worklist.pop() {
+            f(e);
+            worklist.extend(e.children().rev());
+        }
+    }
 }
 
 /// Filter characteristics that are used for ordering join inputs.
@@ -2222,7 +2256,18 @@ impl FilterCharacteristics {
 }
 
 #[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Copy,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect,
 )]
 pub enum DomainLimit {
     None,
@@ -2353,7 +2398,7 @@ pub enum EvalError {
         detail: Option<String>,
     },
     ArrayFillWrongArraySubscripts,
-    // TODO: propagate this check more widly throughout the expr crate
+    // TODO: propagate this check more widely throughout the expr crate
     MaxArraySizeExceeded(usize),
     DateDiffOverflow {
         unit: String,

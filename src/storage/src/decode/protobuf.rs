@@ -10,8 +10,8 @@
 use mz_interchange::protobuf::{DecodedDescriptors, Decoder};
 use mz_ore::error::ErrorExt;
 use mz_repr::Row;
-use mz_storage_client::types::errors::DecodeErrorKind;
-use mz_storage_client::types::sources::encoding::ProtobufEncoding;
+use mz_storage_types::errors::DecodeErrorKind;
+use mz_storage_types::sources::encoding::ProtobufEncoding;
 
 #[derive(Debug)]
 pub struct ProtobufDecoderState {

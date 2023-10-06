@@ -15,7 +15,6 @@ use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
 use mz_ore::str::StrExt;
-use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::char::{format_str_trim, Char};
 use mz_repr::adt::date::Date;
 use mz_repr::adt::interval::Interval;
@@ -24,15 +23,18 @@ use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::adt::pg_legacy_name::PgLegacyName;
 use mz_repr::adt::regex::Regex;
 use mz_repr::adt::system::{Oid, PgLegacyChar};
-use mz_repr::adt::timestamp::CheckedTimestamp;
+use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampPrecision};
 use mz_repr::adt::varchar::{VarChar, VarCharMaxLength};
-use mz_repr::{strconv, ColumnType, Datum, Row, RowArena, ScalarType};
+use mz_repr::{strconv, ColumnType, Datum, RowArena, ScalarType};
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::scalar::func::{array_create_scalar, format, EagerUnaryFunc, LazyUnaryFunc};
+use crate::func::regexp_match_static;
+use crate::scalar::func::{
+    array_create_scalar, regexp_split_to_array_re, EagerUnaryFunc, LazyUnaryFunc,
+};
 use crate::{like_pattern, EvalError, MirScalarExpr, UnaryFunc};
 
 sqlfunc!(
@@ -203,16 +205,35 @@ sqlfunc!(
     }
 );
 
-sqlfunc!(
-    #[sqlname = "text_to_timestamp"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastTimestampToString)]
-    fn cast_string_to_timestamp<'a>(
-        a: &'a str,
-    ) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
-        strconv::parse_timestamp(a).err_into()
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
+pub struct CastStringToTimestamp(pub Option<TimestampPrecision>);
+
+impl<'a> EagerUnaryFunc<'a> for CastStringToTimestamp {
+    type Input = &'a str;
+    type Output = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
+
+    fn call(&self, a: &'a str) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
+        let out = strconv::parse_timestamp(a)?;
+        let updated = out.round_to_precision(self.0)?;
+        Ok(updated)
     }
-);
+
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::Timestamp { precision: self.0 }.nullable(input.nullable)
+    }
+
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
+        to_unary!(super::CastTimestampToString)
+    }
+}
+
+impl fmt::Display for CastStringToTimestamp {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("text_to_timestamp")
+    }
+}
 
 sqlfunc!(
     #[sqlname = "try_parse_monotonic_iso8601_timestamp"]
@@ -224,23 +245,42 @@ sqlfunc!(
     fn try_parse_monotonic_iso8601_timestamp<'a>(
         a: &'a str,
     ) -> Option<CheckedTimestamp<NaiveDateTime>> {
-        let ts = format::try_parse_monotonic_iso8601_timestamp(a)?;
+        let ts = mz_persist_types::timestamp::try_parse_monotonic_iso8601_timestamp(a)?;
         let ts = CheckedTimestamp::from_timestamplike(ts)
             .expect("monotonic_iso8601 range is a subset of CheckedTimestamp domain");
         Some(ts)
     }
 );
 
-sqlfunc!(
-    #[sqlname = "text_to_timestamp_with_time_zone"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastTimestampTzToString)]
-    fn cast_string_to_timestamp_tz<'a>(
-        a: &'a str,
-    ) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
-        strconv::parse_timestamptz(a).err_into()
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
+pub struct CastStringToTimestampTz(pub Option<TimestampPrecision>);
+
+impl<'a> EagerUnaryFunc<'a> for CastStringToTimestampTz {
+    type Input = &'a str;
+    type Output = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
+
+    fn call(&self, a: &'a str) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
+        let out = strconv::parse_timestamptz(a)?;
+        let updated = out.round_to_precision(self.0)?;
+        Ok(updated)
     }
-);
+
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::TimestampTz { precision: self.0 }.nullable(input.nullable)
+    }
+
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
+        to_unary!(super::CastTimestampTzToString)
+    }
+}
+
+impl fmt::Display for CastStringToTimestampTz {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("text_to_timestamp_with_time_zone")
+    }
+}
 
 sqlfunc!(
     #[sqlname = "text_to_interval"]
@@ -877,42 +917,7 @@ impl LazyUnaryFunc for RegexpMatch {
         if haystack.is_null() {
             return Ok(Datum::Null);
         }
-        let mut row = Row::default();
-        let mut packer = row.packer();
-        if self.0.captures_len() > 1 {
-            // The regex contains capture groups, so return an array containing the
-            // matched text in each capture group, unless the entire match fails.
-            // Individual capture groups may also be null if that group did not
-            // participate in the match.
-            match self.0.captures(haystack.unwrap_str()) {
-                None => packer.push(Datum::Null),
-                Some(captures) => packer.push_array(
-                    &[ArrayDimension {
-                        lower_bound: 1,
-                        length: captures.len() - 1,
-                    }],
-                    // Skip the 0th capture group, which is the whole match.
-                    captures.iter().skip(1).map(|mtch| match mtch {
-                        None => Datum::Null,
-                        Some(mtch) => Datum::String(mtch.as_str()),
-                    }),
-                )?,
-            }
-        } else {
-            // The regex contains no capture groups, so return a one-element array
-            // containing the match, or null if there is no match.
-            match self.0.find(haystack.unwrap_str()) {
-                None => packer.push(Datum::Null),
-                Some(mtch) => packer.push_array(
-                    &[ArrayDimension {
-                        lower_bound: 1,
-                        length: 1,
-                    }],
-                    std::iter::once(Datum::String(mtch.as_str())),
-                )?,
-            };
-        };
-        Ok(temp_storage.push_unary_row(row))
+        regexp_match_static(haystack, temp_storage, &self.0)
     }
 
     /// The output ColumnType of this function
@@ -950,6 +955,63 @@ impl fmt::Display for RegexpMatch {
         write!(
             f,
             "regexp_match[{}, case_insensitive={}]",
+            self.0.pattern.quoted(),
+            self.0.case_insensitive
+        )
+    }
+}
+
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+pub struct RegexpSplitToArray(pub Regex);
+
+impl LazyUnaryFunc for RegexpSplitToArray {
+    fn eval<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+        a: &'a MirScalarExpr,
+    ) -> Result<Datum<'a>, EvalError> {
+        let haystack = a.eval(datums, temp_storage)?;
+        if haystack.is_null() {
+            return Ok(Datum::Null);
+        }
+        regexp_split_to_array_re(haystack.unwrap_str(), &self.0, temp_storage)
+    }
+
+    /// The output ColumnType of this function
+    fn output_type(&self, input_type: ColumnType) -> ColumnType {
+        ScalarType::Array(Box::new(ScalarType::String)).nullable(input_type.nullable)
+    }
+
+    /// Whether this function will produce NULL on NULL input
+    fn propagates_nulls(&self) -> bool {
+        true
+    }
+
+    /// Whether this function will produce NULL on non-NULL input
+    fn introduces_nulls(&self) -> bool {
+        false
+    }
+
+    /// Whether this function preserves uniqueness
+    fn preserves_uniqueness(&self) -> bool {
+        false
+    }
+
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
+        None
+    }
+
+    fn is_monotone(&self) -> bool {
+        false
+    }
+}
+
+impl fmt::Display for RegexpSplitToArray {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "regexp_split_to_array[{}, case_insensitive={}]",
             self.0.pattern.quoted(),
             self.0.case_insensitive
         )

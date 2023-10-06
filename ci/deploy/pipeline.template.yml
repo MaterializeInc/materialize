@@ -1,0 +1,58 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+steps:
+  - command: bin/ci-builder run nightly ci/deploy/devsite.sh
+    branches: main
+    timeout_in_minutes: 30
+    agents:
+      queue: builder-linux-x86_64
+    concurrency: 1
+    concurrency_group: deploy/devsite
+
+  - command: bin/ci-builder run stable bin/pyactivate -m ci.deploy.docker
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
+    concurrency: 1
+    concurrency_group: deploy/linux
+
+  - command: bin/ci-builder run stable bin/pyactivate -m ci.deploy.pypi
+    timeout_in_minutes: 30
+    concurrency: 1
+    concurrency_group: deploy/pypi
+    agents:
+      queue: linux-x86_64
+
+  - command: bin/ci-builder run stable bin/pyactivate -m ci.deploy.npm
+    timeout_in_minutes: 30
+    concurrency: 1
+    concurrency_group: deploy/npm
+    agents:
+      queue: linux-x86_64
+
+  - label: ":bulb: Full SQL Logic Tests"
+    trigger: sql-logic-tests
+    async: true
+    branches: "v*.*rc*"
+    build:
+      commit: "$BUILDKITE_COMMIT"
+      branch: "$BUILDKITE_BRANCH"
+      env:
+        BUILDKITE_TAG: "$BUILDKITE_TAG"
+
+  - label: ":nightmare: Full Nightly"
+    trigger: nightlies
+    async: true
+    branches: "v*.*rc*"
+    build:
+      commit: "$BUILDKITE_COMMIT"
+      branch: "$BUILDKITE_BRANCH"
+      env:
+        BUILDKITE_TAG: "$BUILDKITE_TAG"

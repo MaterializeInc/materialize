@@ -13,26 +13,31 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context};
 use mz_kafka_util::client::{MzClientContext, DEFAULT_FETCH_METADATA_TIMEOUT};
 use mz_ore::collections::CollectionExt;
-use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication};
-use rdkafka::ClientContext;
-use tracing::warn;
-
-use crate::types::connections::ConnectionContext;
-use crate::types::sinks::{
+use mz_storage_types::connections::inline::ReferencedConnection;
+use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::sinks::{
     KafkaConsistencyConfig, KafkaSinkConnection, KafkaSinkConnectionBuilder,
     KafkaSinkConnectionRetention, KafkaSinkFormat, KafkaSinkProgressConnection,
     PublishedSchemaInfo, StorageSinkConnection, StorageSinkConnectionBuilder,
 };
+use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication};
+use rdkafka::ClientContext;
+use tracing::warn;
 
 /// Build a sink connection.
 // N.B.: We don't want to use a `StorageError` here because some of those variants should not be
 // infinitely retried -- and we don't one to unintentionally be introduced in this function.
 pub async fn build_sink_connection(
     builder: StorageSinkConnectionBuilder,
+    // TODO: The entire sink connection pipeline needs to be refactored and this
+    // will be removed as part of that.
+    referenced_builder: StorageSinkConnectionBuilder<ReferencedConnection>,
     connection_context: ConnectionContext,
-) -> Result<StorageSinkConnection, anyhow::Error> {
-    match builder {
-        StorageSinkConnectionBuilder::Kafka(k) => build_kafka(k, connection_context).await,
+) -> Result<StorageSinkConnection<ReferencedConnection>, anyhow::Error> {
+    match (builder, referenced_builder) {
+        (StorageSinkConnectionBuilder::Kafka(k), StorageSinkConnectionBuilder::Kafka(rk)) => {
+            build_kafka(k, rk, connection_context).await
+        }
     }
 }
 
@@ -222,12 +227,17 @@ async fn publish_kafka_schemas(
 
 async fn build_kafka(
     builder: KafkaSinkConnectionBuilder,
+    referenced_builder: KafkaSinkConnectionBuilder<ReferencedConnection>,
     connection_context: ConnectionContext,
-) -> Result<StorageSinkConnection, anyhow::Error> {
+) -> Result<StorageSinkConnection<ReferencedConnection>, anyhow::Error> {
     // Create Kafka topic.
     let client: AdminClient<_> = builder
         .connection
-        .create_with_context(&connection_context, MzClientContext, &BTreeMap::new())
+        .create_with_context(
+            &connection_context,
+            MzClientContext::default(),
+            &BTreeMap::new(),
+        )
         .await
         .context("creating admin client failed")?;
     ensure_kafka_topic(
@@ -283,7 +293,7 @@ async fn build_kafka(
     };
 
     Ok(StorageSinkConnection::Kafka(KafkaSinkConnection {
-        connection: builder.connection,
+        connection: referenced_builder.connection,
         connection_id: builder.connection_id,
         topic: builder.topic_name,
         relation_key_indices: builder.relation_key_indices,

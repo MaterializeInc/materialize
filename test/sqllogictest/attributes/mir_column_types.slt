@@ -34,9 +34,9 @@ EXPLAIN OPTIMIZED PLAN WITH(types) AS TEXT FOR (SELECT * FROM v WHERE f) UNION A
 Explained Query:
   Union // { types: "(double precision?, boolean?)" }
     Filter #1 // { types: "(double precision?, boolean)" }
-      Get materialize.public.v // { types: "(double precision?, boolean?)" }
+      ReadStorage materialize.public.v // { types: "(double precision?, boolean?)" }
     Filter (#0) IS NOT NULL // { types: "(double precision, boolean?)" }
-      Get materialize.public.v // { types: "(double precision?, boolean?)" }
+      ReadStorage materialize.public.v // { types: "(double precision?, boolean?)" }
 
 EOF
 
@@ -47,9 +47,9 @@ EXPLAIN OPTIMIZED PLAN WITH(types) AS TEXT FOR (SELECT * FROM v WHERE e = 1.25) 
 Explained Query:
   Union // { types: "(double precision, boolean?)" }
     Filter (#0 = 1.25) // { types: "(double precision, boolean?)" }
-      Get materialize.public.v // { types: "(double precision?, boolean?)" }
+      ReadStorage materialize.public.v // { types: "(double precision?, boolean?)" }
     Filter (#0) IS NOT NULL // { types: "(double precision, boolean?)" }
-      Get materialize.public.v // { types: "(double precision?, boolean?)" }
+      ReadStorage materialize.public.v // { types: "(double precision?, boolean?)" }
 
 EOF
 
@@ -67,7 +67,7 @@ Explained Query:
       Negate // { types: "(bigint?, text?, date?)" }
         Project (#1, #2, #0) // { types: "(bigint?, text?, date?)" }
           Reduce group_by=[#2] aggregates=[sum(#0), max(#1)] // { types: "(date?, bigint?, text?)" }
-            Get materialize.public.t // { types: "(integer?, text?, date?)" }
+            ReadStorage materialize.public.t // { types: "(integer?, text?, date?)" }
       Constant // { types: "(bigint, text, date?)" }
         - (1, "hello", null)
 
@@ -88,13 +88,13 @@ Explained Query:
             Project () // { types: "()" }
               Join on=(#0 = #1) type=differential // { types: "(integer, integer)" }
                 ArrangeBy keys=[[#0]] // { types: "(integer?)" }
-                  Get materialize.public.u // { types: "(integer?)" }
+                  ReadStorage materialize.public.u // { types: "(integer?)" }
                 ArrangeBy keys=[[#0]] // { types: "(integer)" }
                   Distinct group_by=[#0] // { types: "(integer)" }
                     Project (#0) // { types: "(integer)" }
                       Get l0 // { types: "(integer, text?, date?)" }
           Project () // { types: "()" }
-            Get materialize.public.u // { types: "(integer?)" }
+            ReadStorage materialize.public.u // { types: "(integer?)" }
       Get l0 // { types: "(integer, text?, date?)" }
   With
     cte l0 =
@@ -102,10 +102,10 @@ Explained Query:
         Join on=(#0 = #1) type=differential // { types: "(integer, integer, text?, date?)" }
           ArrangeBy keys=[[#0]] // { types: "(integer)" }
             Filter (#0) IS NOT NULL // { types: "(integer)" }
-              Get materialize.public.u // { types: "(integer?)" }
+              ReadStorage materialize.public.u // { types: "(integer?)" }
           ArrangeBy keys=[[#0]] // { types: "(integer, text?, date?)" }
             Filter (#0) IS NOT NULL // { types: "(integer, text?, date?)" }
-              Get materialize.public.t // { types: "(integer?, text?, date?)" }
+              ReadStorage materialize.public.t // { types: "(integer?, text?, date?)" }
 
 Source materialize.public.t
   filter=((#0) IS NOT NULL)
@@ -127,19 +127,19 @@ Explained Query:
                 Join on=(#0 = #2) type=differential // { types: "(double precision, boolean?, double precision)" }
                   ArrangeBy keys=[[#0]] // { types: "(double precision, boolean?)" }
                     Filter (#0) IS NOT NULL // { types: "(double precision, boolean?)" }
-                      Get materialize.public.v // { types: "(double precision?, boolean?)" }
+                      ReadStorage materialize.public.v // { types: "(double precision?, boolean?)" }
                   ArrangeBy keys=[[#0]] // { types: "(double precision)" }
                     Union // { types: "(double precision)" }
                       Project (#1) // { types: "(double precision)" }
                         Filter (#1) IS NOT NULL // { types: "(integer?, double precision)" }
                           Map (integer_to_double(#0)) // { types: "(integer?, double precision?)" }
-                            Get materialize.public.u // { types: "(integer?)" }
+                            ReadStorage materialize.public.u // { types: "(integer?)" }
                       Map (error("more than one record produced in subquery")) // { types: "(double precision)" }
                         Project () // { types: "()" }
                           Filter error("more than one record produced in subquery") AND (#0 > 1) // { types: "(bigint)" }
                             Reduce aggregates=[count(*)] // { types: "(bigint)" }
                               Project () // { types: "()" }
-                                Get materialize.public.u // { types: "(integer?)" }
+                                ReadStorage materialize.public.u // { types: "(integer?)" }
       Constant // { types: "(boolean?, bigint)" }
         - (null, 10)
 

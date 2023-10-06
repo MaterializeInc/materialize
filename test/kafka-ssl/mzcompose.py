@@ -7,16 +7,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.mzcompose import Composition
-from materialize.mzcompose.services import (
-    Kafka,
-    Materialized,
-    SchemaRegistry,
-    SshBastionHost,
-    TestCerts,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
+from materialize.mzcompose.services.test_certs import TestCerts
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
     TestCerts(),
@@ -96,9 +94,12 @@ SERVICES = [
             "--ccsr-username=materialize "
             '--var=materialized-kafka-key="$$(</share/secrets/materialized-kafka.key)" '
             '--var=materialized-kafka-crt="$$(</share/secrets/materialized-kafka.crt)" '
+            '--var=materialized-kafka1-key="$$(</share/secrets/materialized-kafka1.key)" '
+            '--var=materialized-kafka1-crt="$$(</share/secrets/materialized-kafka1.crt)" '
             '--var=materialized-schema-registry-key="$$(</share/secrets/materialized-schema-registry.key)" '
             '--var=materialized-schema-registry-crt="$$(</share/secrets/materialized-schema-registry.crt)" '
             '--var=ca-crt="$$(</share/secrets/ca.crt)" '
+            '--var=ca-alt-crt="$$(</share/secrets/ca-selective.crt)" '
             '"$$@"',
         ],
         volumes_extra=["secrets:/share/secrets"],

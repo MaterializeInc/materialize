@@ -303,8 +303,6 @@ See #18829 for the design doc."
 
 ### Modifying the output format
 
-{{< private-preview />}}
-
 #### `ENVELOPE UPSERT`
 
 To modify the output of `SUBSCRIBE` to support upserts, use `ENVELOPE UPSERT`.
@@ -392,6 +390,8 @@ structure:
 column. Each progress row will have a `NULL` key and a `NULL` value.
 
 #### `ENVELOPE DEBEZIUM`
+
+{{< private-preview />}}
 
 To modify the output of `SUBSCRIBE` to support upserts using a
 [Debezium-style diff envelope](https://materialize.com/docs/sql/create-sink/#debezium-envelope)
@@ -486,6 +486,8 @@ structure:
 before and after value.
 
 #### `WITHIN TIMESTAMP ORDER BY`
+
+{{< private-preview />}}
 
 To modify the ordering of the output of `SUBSCRIBE`, use `WITHIN TIMESTAMP ORDER
 BY`. This clause allows you to specify an `ORDER BY` expression which is used

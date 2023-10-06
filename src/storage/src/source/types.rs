@@ -24,10 +24,10 @@ use mz_expr::PartitionId;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use mz_repr::{Diff, GlobalId, Row};
 use mz_rocksdb::RocksDBInstanceMetrics;
-use mz_storage_client::metrics::BackpressureMetrics;
-use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::errors::{DecodeError, SourceErrorDetails};
-use mz_storage_client::types::sources::{MzOffset, SourceTimestamp};
+use mz_storage_operators::metrics::BackpressureMetrics;
+use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::errors::{DecodeError, SourceErrorDetails};
+use mz_storage_types::sources::{MzOffset, SourceTimestamp};
 use prometheus::core::{AtomicF64, AtomicI64, AtomicU64};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::{Scope, Stream};
@@ -140,21 +140,41 @@ impl HealthStatusUpdate {
     }
 }
 
+impl crate::healthcheck::HealthStatus for HealthStatusUpdate {
+    fn name(&self) -> &'static str {
+        self.update.name()
+    }
+    fn error(&self) -> Option<&str> {
+        self.update.error()
+    }
+    fn hint(&self) -> Option<&str> {
+        self.update.hint()
+    }
+    fn should_halt(&self) -> bool {
+        self.should_halt
+    }
+    fn can_transition_from(&self, other: Option<&Self>) -> bool {
+        if let Some(other) = other {
+            self.update != other.update
+        } else {
+            true
+        }
+    }
+    fn starting() -> Self {
+        Self::status(HealthStatus::Starting)
+    }
+}
+
 /// Source-agnostic wrapper for messages. Each source must implement a
 /// conversion to Message.
 #[derive(Debug, Clone)]
 pub struct SourceMessage<Key, Value> {
-    /// The time that an external system first observed the message
-    ///
-    /// Milliseconds since the unix epoch
-    pub upstream_time_millis: Option<i64>,
     /// The message key
     pub key: Key,
     /// The message value
     pub value: Value,
-    /// Headers, if the source is configured to pass them along. If it is, but there are none, it
-    /// passes `Some([])`
-    pub headers: Option<Vec<(String, Option<Vec<u8>>)>>,
+    /// Additional metadata columns requested by the user
+    pub metadata: Row,
 }
 
 /// A record produced by a source
@@ -164,17 +184,12 @@ pub struct SourceOutput<K, V> {
     pub key: K,
     /// The record's value
     pub value: V,
-    /// The position in the partition described by the `partition` in the source
-    /// (e.g., Kafka offset, file line number, monotonic increasing
-    /// number, etc.)
-    pub position: MzOffset,
-    /// The time the record was created in the upstream system, as milliseconds since the epoch
-    pub upstream_time_millis: Option<i64>,
-    /// The partition of this message, present iff the partition comes from Kafka
-    pub partition: PartitionId,
-    /// Headers, if the source is configured to pass them along. If it is, but there are none, it
-    /// passes `Some([])`
-    pub headers: Option<Vec<(String, Option<Vec<u8>>)>>,
+    /// Additional metadata columns requested by the user
+    pub metadata: Row,
+    /// The offset position in the partition of a kafka source. This is field is on its way out and
+    /// its only valid use is in the upsert operator. Do NOT use it in any new place!
+    // TODO(petrosagg): remove this field
+    pub position_for_upsert: MzOffset,
 }
 
 impl<K, V> SourceOutput<K, V> {
@@ -182,18 +197,14 @@ impl<K, V> SourceOutput<K, V> {
     pub fn new(
         key: K,
         value: V,
-        position: MzOffset,
-        upstream_time_millis: Option<i64>,
-        partition: PartitionId,
-        headers: Option<Vec<(String, Option<Vec<u8>>)>>,
+        metadata: Row,
+        position_for_upsert: MzOffset,
     ) -> SourceOutput<K, V> {
         SourceOutput {
             key,
             value,
-            position,
-            upstream_time_millis,
-            partition,
-            headers,
+            metadata,
+            position_for_upsert,
         }
     }
 }
@@ -207,16 +218,12 @@ pub struct DecodeResult {
     /// differential `diff` value for this value, if the value
     /// is present and not and error.
     pub value: Option<Result<Row, DecodeError>>,
-    /// The index of the decoded value in the stream
-    pub position: MzOffset,
-    /// The time the record was created in the upstream system, as milliseconds since the epoch
-    pub upstream_time_millis: Option<i64>,
-    /// The partition this record came from
-    pub partition: PartitionId,
-    /// If this is a Kafka stream, the appropriate metadata
-    // TODO(bwm): This should probably be statically different for different streams, or we should
-    // propagate whether metadata is requested into the decoder
+    /// Additional metadata requested by the user
     pub metadata: Row,
+    /// The offset position in the partition of a kafka source. This is field is on its way out and
+    /// its only valid use is in the upsert operator. Do NOT use it in any new place!
+    // TODO(petrosagg): remove this field
+    pub position_for_upsert: MzOffset,
 }
 
 /// A structured error for `SourceReader::get_next_message` implementors.
@@ -495,10 +502,15 @@ pub struct UpsertMetrics {
     pub(crate) merge_snapshot_updates: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) merge_snapshot_inserts: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) merge_snapshot_deletes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) upsert_inserts: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) upsert_updates: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) upsert_deletes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) multi_get_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) multi_get_result_bytes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) multi_get_result_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) multi_put_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+
+    pub(crate) legacy_value_errors: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
 
     pub(crate) shared: Arc<UpsertSharedMetrics>,
     pub(crate) rocksdb_shared: Arc<mz_rocksdb::RocksDBSharedMetrics>,
@@ -541,6 +553,15 @@ impl UpsertMetrics {
             merge_snapshot_deletes: base
                 .merge_snapshot_deletes
                 .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+            upsert_inserts: base
+                .upsert_inserts
+                .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+            upsert_updates: base
+                .upsert_updates
+                .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+            upsert_deletes: base
+                .upsert_deletes
+                .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
             multi_get_size: base
                 .multi_get_size
                 .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
@@ -553,6 +574,10 @@ impl UpsertMetrics {
             multi_put_size: base
                 .multi_put_size
                 .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+
+            legacy_value_errors: base
+                .legacy_value_errors
+                .get_delete_on_drop_gauge(vec![source_id_s.clone(), worker_id.clone()]),
 
             shared: base.shared(&source_id),
             rocksdb_shared: base.rocksdb_shared(&source_id),

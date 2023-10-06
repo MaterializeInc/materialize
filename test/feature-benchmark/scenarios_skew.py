@@ -31,15 +31,15 @@ class SkewedJoin(Scenario):
                 > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) > 0 FROM skewed_table JOIN uniform_table USING (f1)
                   /* A */
 
-                > INSERT INTO uniform_table (f1) SELECT generate_series FROM generate_series(0, {count-1});
+                > INSERT INTO uniform_table (f1) SELECT generate_series FROM generate_series(0, {count-1}::integer);
 
                 # Make sure 0 is overrepresented
-                > INSERT INTO skewed_table (f1) SELECT 0 FROM generate_series(1, {count});
+                > INSERT INTO skewed_table (f1) SELECT 0 FROM generate_series(1, {count}::integer);
                 """
             )
             + "\n".join(
                 [
-                    f"> INSERT INTO skewed_table (f1) SELECT MOD(generate_series, POW(10, {i})) FROM generate_series(1, {count} / {scale});"
+                    f"> INSERT INTO skewed_table (f1) SELECT MOD(generate_series, POW(10, {i})) FROM generate_series(1, ({count} / {scale})::integer);"
                     for i in range(floor(scale))
                 ]
             )

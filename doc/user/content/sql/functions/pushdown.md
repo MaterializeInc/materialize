@@ -11,17 +11,16 @@ menu:
 {{</ private-preview >}}
 
 `try_parse_monotonic_iso8601_timestamp` parses a subset of [ISO 8601]
-timestamps that is chosen to both:
-
-- Match the 24 character length output of the javascript [Date.toISOString()]
-  function and
-- For which the lexicographical order corresponds to chronological order.
-
-In contrast to other parsing functions, inputs that fail to parse return `NULL`
+timestamps that matches the 24 character length output
+of the javascript [Date.toISOString()] function.
+Unlike other parsing functions, inputs that fail to parse return `NULL`
 instead of error.
 
-Combined, this allows `try_parse_monotonic_iso8601_timestamp` to be used with
-the [temporal filter pushdown] feature on `string` timestamps stored in [jsonb] columns.
+This allows `try_parse_monotonic_iso8601_timestamp` to be used with
+the [temporal filter pushdown] feature on `text` timestamps.
+This is particularly useful when working with
+[JSON sources](/sql/create-source/#json),
+or other external data sources that store timestamps as strings.
 
 Specifically, the accepted format is `YYYY-MM-DDThh:mm:ss.sssZ`:
 
@@ -39,6 +38,10 @@ Specifically, the accepted format is `YYYY-MM-DDThh:mm:ss.sssZ`:
 - A literal `.`
 - A 3-digit millisecond, left-padded with zeros followed by
 - A literal `Z`, indicating the UTC time zone.
+
+Ordinary `text`-to-`timestamp` casts will prevent a filter from being pushed down.
+Replacing those casts with `try_parse_monotonic_iso8601_timestamp` can unblock that
+optimization for your query.
 
 ## Examples
 

@@ -20,12 +20,16 @@ use std::iter;
 
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
-use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
+use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig, TryIntoTimelyConfig};
 use mz_ore::cast::CastFrom;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, Row};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
 use mz_service::grpc::{GrpcClient, GrpcServer, ProtoServiceTypes, ResponseStream};
+use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::parameters::StorageParameters;
+use mz_storage_types::sinks::{MetadataFilled, StorageSinkDesc};
+use mz_storage_types::sources::IngestionDescription;
 use mz_timely_util::progress::any_antichain;
 use proptest::prelude::{any, Arbitrary};
 use proptest::strategy::{BoxedStrategy, Strategy, Union};
@@ -35,11 +39,7 @@ use timely::PartialOrder;
 use tonic::{Request, Status, Streaming};
 
 use crate::client::proto_storage_server::ProtoStorage;
-use crate::controller::CollectionMetadata;
 use crate::metrics::RehydratingStorageClientMetrics;
-use crate::types::parameters::StorageParameters;
-use crate::types::sinks::{MetadataFilled, StorageSinkDesc};
-use crate::types::sources::IngestionDescription;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_client.client.rs"));
 
@@ -318,6 +318,7 @@ pub struct SourceStatisticsUpdate {
     pub bytes_received: u64,
     pub envelope_state_bytes: u64,
     pub envelope_state_count: u64,
+    pub rehydration_latency_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -348,6 +349,7 @@ impl PackableStats for SourceStatisticsUpdate {
         packer.push(Datum::from(self.bytes_received));
         packer.push(Datum::from(self.envelope_state_bytes));
         packer.push(Datum::from(self.envelope_state_count));
+        packer.push(Datum::from(self.rehydration_latency_ms));
     }
 }
 impl PackableStats for SinkStatisticsUpdate {
@@ -404,6 +406,7 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
                                 bytes_received: update.bytes_received,
                                 envelope_state_bytes: update.envelope_state_bytes,
                                 envelope_state_count: update.envelope_state_count,
+                                rehydration_latency_ms: update.rehydration_latency_ms,
                             })
                             .collect(),
                         sink_updates: sink_stats
@@ -450,6 +453,7 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
                             bytes_received: update.bytes_received,
                             envelope_state_bytes: update.envelope_state_bytes,
                             envelope_state_count: update.envelope_state_count,
+                            rehydration_latency_ms: update.rehydration_latency_ms,
                         })
                     })
                     .collect::<Result<Vec<_>, TryFromProtoError>>()?,
@@ -744,6 +748,15 @@ impl RustType<ProtoCompaction> for (GlobalId, Antichain<mz_repr::Timestamp>) {
                 .frontier
                 .into_rust_if_some("ProtoCompaction::frontier")?,
         ))
+    }
+}
+
+impl TryIntoTimelyConfig for StorageCommand {
+    fn try_into_timely_config(self) -> Result<(TimelyConfig, ClusterStartupEpoch), Self> {
+        match self {
+            StorageCommand::CreateTimely { config, epoch } => Ok((config, epoch)),
+            cmd => Err(cmd),
+        }
     }
 }
 

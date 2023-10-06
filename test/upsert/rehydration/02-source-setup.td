@@ -64,13 +64,14 @@ mammalmore    moose    2
 # Ensure that statistics are correctly updated
 > SELECT
     SUM(u.envelope_state_bytes) > 0,
-    SUM(u.envelope_state_count)
+    SUM(u.envelope_state_count),
+    bool_and(u.rehydration_latency_ms IS NOT NULL)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
-true 3
+true 3 true
 
 # Write another part to test backpressure
 $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}

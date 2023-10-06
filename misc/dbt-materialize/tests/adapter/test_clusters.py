@@ -100,7 +100,7 @@ class TestModelCluster:
         results = run_dbt(["seed"])
         assert len(results) == 1
 
-        project.run_sql("CREATE CLUSTER not_default REPLICAS (r1 (SIZE '1'))")
+        project.run_sql("CREATE CLUSTER not_default SIZE = '1'")
         run_dbt(["run", "--exclude", "invalid_cluster", "default_cluster"])
 
         check_relations_equal(project.adapter, ["actual_clusters", "expected_clusters"])
@@ -118,7 +118,7 @@ class TestModelCluster:
         run_dbt(["run", "--models", "override_cluster"], expect_pass=True)
         run_dbt(["run", "--models", "default_cluster"], expect_pass=False)
 
-        project.run_sql("CREATE CLUSTER default REPLICAS (r1 (SIZE '1'))")
+        project.run_sql("CREATE CLUSTER default SIZE = '1'")
 
 
 class TestProjectConfigCluster:

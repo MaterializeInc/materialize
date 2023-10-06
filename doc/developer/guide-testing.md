@@ -215,7 +215,7 @@ implementation is properly serializing dates.
 
 ### pgtest
 
-Pgtest is DSL to specify raw pgwire messages to send and their expected
+Pgtest is a DSL to specify raw pgwire messages to send and their expected
 responses. It can be used to test message sequences that are difficult
 or impossible to test with PostgreSQL drivers. Its output is generated
 against PostgreSQL and then tested against Materialize. Usage is

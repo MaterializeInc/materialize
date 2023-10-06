@@ -11,7 +11,7 @@ import os
 import random
 import sys
 import time
-from typing import Generator, List
+from collections.abc import Generator
 
 import networkx as nx
 
@@ -37,15 +37,13 @@ from materialize.checks.checks import Check
 from materialize.checks.executors import MzcomposeExecutor
 from materialize.checks.scenarios import *  # noqa: F401 F403
 from materialize.checks.scenarios import Scenario
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import (
-    Cockroach,
-    Debezium,
-    Materialized,
-    Postgres,
-    Redpanda,
-)
-from materialize.mzcompose.services import Testdrive as TestdriveService
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.debezium import Debezium
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.redpanda import Redpanda
+from materialize.mzcompose.services.testdrive import Testdrive as TestdriveService
 from materialize.util import MzVersion
 from materialize.version_list import VersionsFromDocs
 
@@ -167,7 +165,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 )
 
             # Convert the Nodes from the path into Checks Actions
-            def actions(self) -> List[Action]:
+            def actions(self) -> list[Action]:
                 actions = []
                 for node in upgrade_scenario:
                     actions.extend(node.actions(self))
@@ -183,9 +181,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 def random_simple_paths(
     G: nx.DiGraph, source: Node, target: Node
-) -> Generator[List[Node], None, None]:
+) -> Generator[list[Node], None, None]:
     current: Node = source
-    path: List[Node] = [source]
+    path: list[Node] = [source]
 
     def reset() -> None:
         nonlocal current, path
@@ -212,8 +210,8 @@ def random_simple_paths(
 
 
 def get_upgrade_scenarios(
-    versions: List[MzVersion], num_scenarios: int
-) -> List[List[Node]]:
+    versions: list[MzVersion], num_scenarios: int
+) -> list[list[Node]]:
     g = nx.DiGraph()
 
     # Nodes for the start and end of the upgrade scenario

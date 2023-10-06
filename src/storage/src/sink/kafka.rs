@@ -20,9 +20,8 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context};
 use differential_dataflow::{Collection, Hashable};
 use futures::{StreamExt, TryFutureExt};
-use itertools::Itertools;
 use maplit::btreemap;
-use mz_interchange::avro::{AvroEncoder, AvroSchemaGenerator};
+use mz_interchange::avro::{AvroEncoder, AvroSchemaGenerator, AvroSchemaOptions};
 use mz_interchange::encode::Encode;
 use mz_interchange::json::JsonEncoder;
 use mz_kafka_util::client::{
@@ -36,9 +35,9 @@ use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::task;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::client::SinkStatisticsUpdate;
-use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::errors::DataflowError;
-use mz_storage_client::types::sinks::{
+use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::errors::DataflowError;
+use mz_storage_types::sinks::{
     KafkaSinkConnection, MetadataFilled, PublishedSchemaInfo, SinkAsOf, SinkEnvelope,
     StorageSinkDesc,
 };
@@ -52,6 +51,7 @@ use rdkafka::producer::{BaseRecord, DeliveryResult, Producer, ProducerContext, T
 use rdkafka::{Offset, TopicPartitionList};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::Exchange;
+use timely::dataflow::channels::pushers::TeeCore;
 use timely::dataflow::operators::{Enter, Leave, Map};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp as _};
@@ -59,9 +59,8 @@ use timely::PartialOrder;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
-use crate::internal_control::{InternalCommandSender, InternalStorageCommand};
-use crate::render::sinks::{HealthcheckerArgs, SinkRender};
-use crate::sink::{Healthchecker, KafkaBaseMetrics, SinkStatus};
+use crate::render::sinks::SinkRender;
+use crate::sink::{KafkaBaseMetrics, SinkStatus};
 use crate::statistics::{SinkStatisticsMetrics, StorageStatistics};
 use crate::storage_state::StorageState;
 
@@ -97,8 +96,7 @@ where
         // TODO(benesch): errors should stream out through the sink,
         // if we figure out a protocol for that.
         _err_collection: Collection<G, DataflowError, Diff>,
-        healthchecker_args: HealthcheckerArgs,
-    ) -> Option<Rc<dyn Any>>
+    ) -> (Stream<G, SinkStatus>, Option<Rc<dyn Any>>)
     where
         G: Scope<Timestamp = Timestamp>,
     {
@@ -120,9 +118,7 @@ where
             Antichain::new()
         }));
 
-        let internal_cmd_tx = Rc::clone(&storage_state.internal_cmd_tx);
-
-        let token = kafka(
+        let (health, token) = kafka(
             sinked_collection,
             sink_id,
             self.clone(),
@@ -136,15 +132,13 @@ where
                 .expect("statistics initialized")
                 .clone(),
             storage_state.connection_context.clone(),
-            healthchecker_args,
-            internal_cmd_tx,
         );
 
         storage_state
             .sink_write_frontiers
             .insert(sink_id, shared_frontier);
 
-        Some(token)
+        (health, Some(token))
     }
 }
 
@@ -225,16 +219,17 @@ impl KafkaSinkSendRetryManager {
 pub struct SinkProducerContext {
     metrics: Arc<SinkMetrics>,
     retry_manager: Arc<Mutex<KafkaSinkSendRetryManager>>,
+    inner: MzClientContext,
 }
 
 impl ClientContext for SinkProducerContext {
     // The shape of the rdkafka *Context traits require us to forward to the `MzClientContext`
     // implementation.
     fn log(&self, level: rdkafka::config::RDKafkaLogLevel, fac: &str, log_message: &str) {
-        MzClientContext.log(level, fac, log_message)
+        self.inner.log(level, fac, log_message)
     }
     fn error(&self, error: KafkaError, reason: &str) {
-        MzClientContext.error(error, reason)
+        self.inner.error(error, reason)
     }
 }
 impl ProducerContext for SinkProducerContext {
@@ -368,8 +363,20 @@ impl KafkaTxProducer {
     }
 }
 
+struct HealthOutputHandle {
+    health_cap: timely::dataflow::operators::Capability<Timestamp>,
+    // TODO(guswynn): We probably don't need this Mutex, but removing it
+    // is a large refactor of this entire module.
+    handle: Mutex<
+        mz_timely_util::builder_async::AsyncOutputHandle<
+            mz_repr::Timestamp,
+            Vec<SinkStatus>,
+            TeeCore<mz_repr::Timestamp, Vec<SinkStatus>>,
+        >,
+    >,
+}
+
 struct KafkaSinkState {
-    sink_id: GlobalId,
     name: String,
     topic: String,
     metrics: Arc<SinkMetrics>,
@@ -382,8 +389,7 @@ struct KafkaSinkState {
     progress_key: String,
     progress_client: Option<Arc<BaseConsumer<BrokerRewritingClientContext<MzClientContext>>>>,
 
-    healthchecker: Option<Mutex<Healthchecker>>,
-    internal_cmd_tx: Rc<RefCell<dyn InternalCommandSender>>,
+    healthchecker: HealthOutputHandle,
     gate_ts: Rc<Cell<Option<Timestamp>>>,
 
     /// Timestamp of the latest progress record that was written out to Kafka.
@@ -401,17 +407,17 @@ struct KafkaSinkState {
 }
 
 impl KafkaSinkState {
+    // Until `try` blocks, we need this for using `fail_point!` correctly.
     async fn new(
+        sink_id: GlobalId,
         connection: KafkaSinkConnection,
         sink_name: String,
-        sink_id: &GlobalId,
         worker_id: String,
         write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
         metrics: &KafkaBaseMetrics,
         connection_context: &ConnectionContext,
         gate_ts: Rc<Cell<Option<Timestamp>>>,
-        internal_cmd_tx: Rc<RefCell<dyn InternalCommandSender>>,
-        healthchecker: Option<Healthchecker>,
+        healthchecker: HealthOutputHandle,
     ) -> Self {
         let metrics = Arc::new(SinkMetrics::new(
             metrics,
@@ -425,14 +431,12 @@ impl KafkaSinkState {
         let producer_context = SinkProducerContext {
             metrics: Arc::clone(&metrics),
             retry_manager: Arc::clone(&retry_manager),
+            inner: MzClientContext::default(),
         };
-
-        let healthchecker = healthchecker.map(Mutex::new);
 
         let producer = halt_on_err(
             &healthchecker,
-            *sink_id,
-            &internal_cmd_tx,
+            #[allow(clippy::redundant_closure_call)]
             (|| async {
                 fail::fail_point!("kafka_sink_creation_error", |_| Err(anyhow::anyhow!(
                     "synthetic error"
@@ -485,13 +489,11 @@ impl KafkaSinkState {
 
         let progress_client = halt_on_err(
             &healthchecker,
-            *sink_id,
-            &internal_cmd_tx,
             connection
                 .connection
                 .create_with_context(
                     connection_context,
-                    MzClientContext,
+                    MzClientContext::default(),
                     &btreemap! {
                         "group.id" => format!("materialize-bootstrap-sink-{sink_id}"),
                         "isolation.level" => "read_committed".into(),
@@ -505,7 +507,6 @@ impl KafkaSinkState {
         .await;
 
         KafkaSinkState {
-            sink_id: sink_id.clone(),
             name: sink_name,
             topic: connection.topic,
             metrics,
@@ -517,7 +518,6 @@ impl KafkaSinkState {
             progress_key: format!("mz-sink-{sink_id}"),
             progress_client: Some(Arc::new(progress_client)),
             healthchecker,
-            internal_cmd_tx,
             gate_ts,
             latest_progress_ts: Timestamp::minimum(),
             write_frontier,
@@ -832,18 +832,7 @@ impl KafkaSinkState {
 
         let mut progress_emitted = false;
 
-        // This only looks at the first entry of the antichain.
-        // If we ever have multi-dimensional time, this is not correct
-        // anymore. There might not even be progress in the first dimension.
-        // We panic, so that future developers introducing multi-dimensional
-        // time in Materialize will notice.
-        let min_frontier = min_frontier
-            .iter()
-            .at_most_one()
-            .expect("more than one element in the frontier")
-            .cloned();
-
-        if let Some(min_frontier) = min_frontier {
+        if let Some(min_frontier) = min_frontier.into_option() {
             // A frontier of `t` means we still might receive updates with `t`. The progress
             // frontier we emit `f` indicates that all future values will be greater than `f`.
             //
@@ -865,7 +854,7 @@ impl KafkaSinkState {
                 )
                 .await;
 
-                info!(
+                debug!(
                     "{}: sending progress for gate ts: {:?}",
                     &self.name, min_frontier
                 );
@@ -885,7 +874,7 @@ impl KafkaSinkState {
             let mut write_frontier = self.write_frontier.borrow_mut();
 
             // make sure we don't regress
-            info!(
+            debug!(
                 "{}: downgrading write frontier to: {:?}",
                 &self.name, min_frontier
             );
@@ -908,28 +897,20 @@ impl KafkaSinkState {
 
     /// Report a SinkStatus::Stalled and then halt with the same message.
     pub async fn halt_on_err<T>(&self, result: Result<T, anyhow::Error>) -> T {
-        halt_on_err(
-            &self.healthchecker,
-            self.sink_id,
-            &self.internal_cmd_tx,
-            result,
-        )
+        halt_on_err(&self.healthchecker, result).await
+    }
+}
+
+async fn update_status(healthchecker: &HealthOutputHandle, status: SinkStatus) {
+    healthchecker
+        .handle
+        .lock()
         .await
-    }
+        .give(&healthchecker.health_cap, status)
+        .await;
 }
 
-async fn update_status(healthchecker: &Option<Mutex<Healthchecker>>, status: SinkStatus) {
-    if let Some(hc) = healthchecker {
-        hc.lock().await.update_status(status).await;
-    }
-}
-
-async fn halt_on_err<T>(
-    healthchecker: &Option<Mutex<Healthchecker>>,
-    sink_id: GlobalId,
-    internal_cmd_tx: &RefCell<dyn InternalCommandSender>,
-    result: Result<T, anyhow::Error>,
-) -> T {
+async fn halt_on_err<T>(healthchecker: &HealthOutputHandle, result: Result<T, anyhow::Error>) -> T {
     match result {
         Ok(t) => t,
         Err(error) => {
@@ -960,12 +941,6 @@ async fn halt_on_err<T>(
                 },
             )
             .await;
-            internal_cmd_tx
-                .borrow_mut()
-                .broadcast(InternalStorageCommand::SuspendAndRestart {
-                    id: sink_id.clone(),
-                    reason: error.to_string(),
-                });
 
             // Make sure to never return, preventing the sink from writing
             // out anything it might regret in the future.
@@ -992,9 +967,7 @@ fn kafka<G>(
     metrics: KafkaBaseMetrics,
     sink_statistics: StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics>,
     connection_context: ConnectionContext,
-    healthchecker_args: HealthcheckerArgs,
-    internal_cmd_tx: Rc<RefCell<dyn InternalCommandSender>>,
-) -> Rc<dyn Any>
+) -> (Stream<G, SinkStatus>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -1015,14 +988,14 @@ where
             key_schema_id,
             value_schema_id,
         }) => {
-            let schema_generator = AvroSchemaGenerator::new(
-                None,
-                None,
-                key_desc,
-                value_desc,
-                matches!(envelope, Some(SinkEnvelope::Debezium)),
-            )
-            .expect("avro schema validated");
+            let options = AvroSchemaOptions {
+                avro_key_fullname: None,
+                avro_value_fullname: None,
+                set_null_defaults: false,
+                is_debezium: matches!(envelope, Some(SinkEnvelope::Debezium)),
+            };
+            let schema_generator = AvroSchemaGenerator::new(key_desc, value_desc, options)
+                .expect("avro schema validated");
             let encoder = AvroEncoder::new(schema_generator, key_schema_id, value_schema_id);
             encode_stream(
                 stream,
@@ -1059,8 +1032,6 @@ where
         metrics,
         sink_statistics,
         connection_context,
-        healthchecker_args,
-        internal_cmd_tx,
     )
 }
 
@@ -1086,9 +1057,7 @@ pub fn produce_to_kafka<G>(
     metrics: KafkaBaseMetrics,
     sink_statistics: StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics>,
     connection_context: ConnectionContext,
-    healthchecker_args: HealthcheckerArgs,
-    internal_cmd_tx: Rc<RefCell<dyn InternalCommandSender>>,
-) -> Rc<dyn Any>
+) -> (Stream<G, SinkStatus>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -1106,40 +1075,32 @@ where
 
     let mut input = builder.new_input(&stream, Exchange::new(move |_| hashed_id));
 
-    let button = builder.build(move |_capabilities| async move {
+    // The frontier of this output is never inspected, so we can just use a normal output,
+    // even if its frontier is connected to the input.
+    let (health_output, health_stream) = builder.new_output();
+
+    let button = builder.build(move |caps| async move {
+        let [health_cap]: [_; 1] = caps.try_into().unwrap();
+
         if !is_active_worker {
             return;
         }
 
-        let healthchecker = if let Some(status_shard_id) = healthchecker_args.status_shard_id {
-            let hc = Healthchecker::new(
-                id,
-                &healthchecker_args.persist_clients,
-                healthchecker_args.persist_location.clone(),
-                status_shard_id,
-                healthchecker_args.now_fn.clone(),
-            )
-            .await
-            .expect("error initializing healthchecker");
-            Some(hc)
-        } else {
-            None
-        };
         let mut s = KafkaSinkState::new(
+            id,
             connection,
             name,
-            &id,
             worker_id.to_string(),
             write_frontier,
             &metrics,
             &connection_context,
             Rc::clone(&shared_gate_ts),
-            internal_cmd_tx,
-            healthchecker,
+            HealthOutputHandle {
+                health_cap,
+                handle: Mutex::new(health_output),
+            },
         )
         .await;
-
-        s.update_status(SinkStatus::Starting).await;
 
         s.halt_on_err(
             s.producer
@@ -1341,7 +1302,7 @@ where
         }
     });
 
-    Rc::new(button.press_on_drop())
+    (health_stream, Rc::new(button.press_on_drop()))
 }
 
 /// Encodes a stream of `(Option<Row>, Option<Row>)` updates using the specified encoder.

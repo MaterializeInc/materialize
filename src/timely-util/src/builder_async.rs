@@ -74,7 +74,11 @@ impl ArcWake for TimelyWaker {
         arc_self.task_ready.store(true, Ordering::SeqCst);
         // Only activate the timely operator if it's not already active to avoid an infinite loop
         if !arc_self.active.load(Ordering::SeqCst) {
-            arc_self.activator.activate().unwrap();
+            // We don't have any guarantees about how long the Waker will be held for and so we
+            // must be prepared for the receiving end to have hung up when we finally do get woken.
+            // This can happen if by the time the waker is called the receiving timely worker has
+            // been shutdown. For this reason we ignore the activation error.
+            let _ = arc_self.activator.activate();
         }
     }
 }

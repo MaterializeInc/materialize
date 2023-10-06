@@ -7,12 +7,15 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from textwrap import dedent
-from typing import Callable
 
-from materialize.mzcompose import Composition
-from materialize.mzcompose.services import Materialized, Redpanda, Testdrive, Toxiproxy
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.redpanda import Redpanda
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.toxiproxy import Toxiproxy
 
 SERVICES = [
     Materialized(options=["--persist-pubsub-url=http://toxiproxy:6879"]),

@@ -15,7 +15,7 @@ use std::iter;
 
 use itertools::Itertools;
 use mz_compute_client::protocol::response::{SubscribeBatch, SubscribeResponse};
-use mz_controller::clusters::ClusterId;
+use mz_controller_types::ClusterId;
 use mz_expr::compare_columns;
 use mz_ore::now::EpochMillis;
 use mz_repr::adt::numeric;

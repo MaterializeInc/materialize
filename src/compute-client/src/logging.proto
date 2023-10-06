@@ -11,7 +11,6 @@ syntax = "proto3";
 
 import "google/protobuf/empty.proto";
 import "repr/src/global_id.proto";
-import "storage-client/src/controller.proto";
 import "proto/src/proto.proto";
 
 package mz_compute_client.logging;
@@ -48,7 +47,6 @@ message ProtoDifferentialLog {
 message ProtoComputeLog {
     oneof kind {
         google.protobuf.Empty dataflow_current = 1;
-        google.protobuf.Empty dataflow_dependency = 2;
         google.protobuf.Empty frontier_current = 3;
         google.protobuf.Empty peek_current = 4;
         google.protobuf.Empty peek_duration = 5;

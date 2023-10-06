@@ -23,8 +23,27 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"a": 1}
 
 > CREATE SECRET ssl_key_kafka AS '${arg.materialized-kafka-key}'
+> CREATE SECRET ssl_key_kafka1 AS '${arg.materialized-kafka1-key}'
 > CREATE SECRET ssl_key_csr AS '${arg.materialized-schema-registry-key}'
 > CREATE SECRET password_csr AS 'sekurity'
+
+# Attempt to connect with the wrong certificate
+! CREATE CONNECTION kafka_ssl TO KAFKA (
+    BROKER 'kafka:9092',
+    SSL KEY = SECRET ssl_key_kafka1,
+    SSL CERTIFICATE = '${arg.materialized-kafka1-crt}',
+    SSL CERTIFICATE AUTHORITY = '${arg.ca-crt}'
+  );
+contains:Connection reset: error:1408F119:SSL routines:ssl3_get_record:decryption failed or bad record mac
+
+# Attempt to connect with the wrong CA
+! CREATE CONNECTION kafka_ssl TO KAFKA (
+    BROKER 'kafka:9092',
+    SSL KEY = SECRET ssl_key_kafka,
+    SSL CERTIFICATE = '${arg.materialized-kafka-crt}',
+    SSL CERTIFICATE AUTHORITY = '${arg.ca-alt-crt}'
+  );
+contains:Invalid CA certificate
 
 # Ensure connections track their dependencies
 > CREATE CONNECTION kafka_ssl TO KAFKA (
@@ -137,4 +156,4 @@ a
     SSL KEY = SECRET ssl_key_kafka,
     SSL CERTIFICATE = '${arg.materialized-kafka-crt}'
   );
-contains:Meta data fetch error: BrokerTransportFailure (Local: Broker transport failure)
+contains:Invalid CA certificate

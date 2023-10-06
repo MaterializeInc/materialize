@@ -14,6 +14,7 @@ from materialize.checks.array_type import *  # noqa: F401 F403
 from materialize.checks.boolean_type import *  # noqa: F401 F403
 from materialize.checks.cast import *  # noqa: F401 F403
 from materialize.checks.cluster import *  # noqa: F401 F403
+from materialize.checks.cluster_unification import *  #  noqa: F401 F403
 from materialize.checks.commit import *  # noqa: F401 F403
 from materialize.checks.constant_plan import *  # noqa: F401 F403
 from materialize.checks.create_index import *  # noqa: F401 F403
@@ -25,6 +26,7 @@ from materialize.checks.delete import *  # noqa: F401 F403
 from materialize.checks.drop_index import *  # noqa: F401 F403
 from materialize.checks.drop_table import *  # noqa: F401 F403
 from materialize.checks.error import *  # noqa: F401 F403
+from materialize.checks.explain_catalog_item import *  # noqa: F401 F403
 from materialize.checks.float_types import *  # noqa: F401 F403
 from materialize.checks.having import *  # noqa: F401 F403
 from materialize.checks.identifiers import *  # noqa: F401 F403
@@ -62,6 +64,7 @@ from materialize.checks.rollback import *  # noqa: F401 F403
 from materialize.checks.sink import *  # noqa: F401 F403
 from materialize.checks.source_errors import *  # noqa: F401 F403
 from materialize.checks.string import *  # noqa: F401 F403
+from materialize.checks.subsource import *  # noqa: F401 F403
 from materialize.checks.temporal_types import *  # noqa: F401 F403
 from materialize.checks.text_bytea_types import *  # noqa: F401 F403
 from materialize.checks.threshold import *  # noqa: F401 F403
@@ -72,3 +75,4 @@ from materialize.checks.upsert_shrink_grow import *  # noqa: F401 F403
 from materialize.checks.uuid import *  # noqa: F401 F403
 from materialize.checks.webhook import *  # noqa: F401 F403
 from materialize.checks.window_functions import *  # noqa: F401 F403
+from materialize.checks.with_mutually_recursive import *  # noqa: F401 F403

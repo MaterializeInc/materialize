@@ -48,6 +48,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
 use mz_repr::adt::numeric::{NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION};
+use mz_repr::adt::timestamp::TimestampPrecision;
 use mz_repr::{ColumnName, ColumnType, RelationDesc, ScalarType};
 use tracing::warn;
 
@@ -209,8 +210,12 @@ fn validate_schema_2(
         SchemaPiece::Float => ScalarType::Float32,
         SchemaPiece::Double => ScalarType::Float64,
         SchemaPiece::Date => ScalarType::Date,
-        SchemaPiece::TimestampMilli => ScalarType::Timestamp,
-        SchemaPiece::TimestampMicro => ScalarType::Timestamp,
+        SchemaPiece::TimestampMilli => ScalarType::Timestamp {
+            precision: Some(TimestampPrecision::try_from(3).unwrap()),
+        },
+        SchemaPiece::TimestampMicro => ScalarType::Timestamp {
+            precision: Some(TimestampPrecision::try_from(6).unwrap()),
+        },
         SchemaPiece::Decimal {
             precision, scale, ..
         } => {

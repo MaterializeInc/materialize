@@ -12,7 +12,7 @@ use std::mem::size_of;
 use std::str::FromStr;
 
 use anyhow::{anyhow, Error};
-use columnation::{CloneRegion, Columnation};
+use columnation::{Columnation, CopyRegion};
 use mz_lowertest::MzReflect;
 use mz_proto::{RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
@@ -171,7 +171,7 @@ impl RustType<ProtoRoleId> for RoleId {
 }
 
 impl Columnation for RoleId {
-    type InnerRegion = CloneRegion<RoleId>;
+    type InnerRegion = CopyRegion<RoleId>;
 }
 
 #[mz_ore::test]

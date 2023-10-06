@@ -153,7 +153,7 @@ is instantiated once per `pytest` invocation
 ```
 from materialize.cloudtest.util.wait import wait
 
-wait(condition="condition=Ready", resource="pod/compute-cluster-1-replica-1-0")
+wait(condition="condition=Ready", resource="pod/compute-cluster-u1-replica-u1-0")
 ```
 
 `wait` uses `kubectl wait` behind the scenes. Here is what the `kubectl wait`

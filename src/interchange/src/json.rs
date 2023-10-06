@@ -77,7 +77,7 @@ impl fmt::Debug for JsonEncoder {
                 "schema",
                 &format!(
                     "{:?}",
-                    build_row_schema_json(&self.value_columns, "schema", &BTreeMap::new())
+                    build_row_schema_json(&self.value_columns, "schema", &BTreeMap::new(), false)
                 ),
             )
             .finish()
@@ -95,139 +95,163 @@ where
     let value_fields = datums
         .into_iter()
         .zip(names_types)
-        .map(|(datum, (name, typ))| (name.to_string(), TypedDatum::new(datum, typ).json()))
+        .map(|(datum, (name, typ))| {
+            (
+                name.to_string(),
+                TypedDatum::new(datum, typ).json(&JsonNumberPolicy::KeepAsNumber),
+            )
+        })
         .collect();
     serde_json::Value::Object(value_fields)
 }
 
+/// Policies for how to handle Numbers in JSON.
+#[derive(Debug)]
+pub enum JsonNumberPolicy {
+    /// Do not change Numbers.
+    KeepAsNumber,
+    /// Convert Numbers to their String representation. Useful for JavaScript consumers that may
+    /// interpret some numbers incorrectly.
+    ConvertNumberToString,
+}
+
 pub trait ToJson {
     /// Transforms this value to a JSON value.
-    fn json(self) -> serde_json::Value;
+    fn json(self, number_policy: &JsonNumberPolicy) -> serde_json::Value;
 }
 
 impl ToJson for TypedDatum<'_> {
-    fn json(self) -> serde_json::Value {
+    fn json(self, number_policy: &JsonNumberPolicy) -> serde_json::Value {
         let TypedDatum { datum, typ } = self;
         if typ.nullable && datum.is_null() {
-            serde_json::Value::Null
-        } else {
-            match &typ.scalar_type {
-                ScalarType::AclItem => json!(datum.unwrap_acl_item().to_string()),
-                ScalarType::Bool => json!(datum.unwrap_bool()),
-                ScalarType::PgLegacyChar => json!(datum.unwrap_uint8()),
-                ScalarType::Int16 => json!(datum.unwrap_int16()),
-                ScalarType::Int32 => json!(datum.unwrap_int32()),
-                ScalarType::Int64 => json!(datum.unwrap_int64()),
-                ScalarType::UInt16 => json!(datum.unwrap_uint16()),
-                ScalarType::UInt32
-                | ScalarType::Oid
-                | ScalarType::RegClass
-                | ScalarType::RegProc
-                | ScalarType::RegType => {
-                    json!(datum.unwrap_uint32())
-                }
-                ScalarType::UInt64 => json!(datum.unwrap_uint64()),
-                ScalarType::Float32 => json!(datum.unwrap_float32()),
-                ScalarType::Float64 => json!(datum.unwrap_float64()),
-                ScalarType::Numeric { .. } => {
-                    json!(datum.unwrap_numeric().0.to_standard_notation_string())
-                }
-                // https://stackoverflow.com/questions/10286204/what-is-the-right-json-date-format
-                ScalarType::Date => serde_json::Value::String(format!("{}", datum.unwrap_date())),
-                ScalarType::Time => serde_json::Value::String(format!("{:?}", datum.unwrap_time())),
-                ScalarType::Timestamp => serde_json::Value::String(format!(
-                    "{:?}",
-                    datum.unwrap_timestamp().to_naive().timestamp_millis()
-                )),
-                ScalarType::TimestampTz => serde_json::Value::String(format!(
-                    "{:?}",
-                    datum.unwrap_timestamptz().to_naive().timestamp_millis()
-                )),
-                ScalarType::Interval => {
-                    serde_json::Value::String(format!("{}", datum.unwrap_interval()))
-                }
-                ScalarType::Bytes => json!(datum.unwrap_bytes()),
-                ScalarType::String | ScalarType::VarChar { .. } | ScalarType::PgLegacyName => {
-                    json!(datum.unwrap_str())
-                }
-                ScalarType::Char { length } => {
-                    let s = char::format_str_pad(datum.unwrap_str(), *length);
-                    serde_json::Value::String(s)
-                }
-                ScalarType::Jsonb => JsonbRef::from_datum(datum).to_serde_json(),
-                ScalarType::Uuid => json!(datum.unwrap_uuid()),
-                ty @ (ScalarType::Array(..) | ScalarType::Int2Vector | ScalarType::List { .. }) => {
-                    let list = match typ.scalar_type {
-                        ScalarType::Array(_) | ScalarType::Int2Vector => {
-                            datum.unwrap_array().elements()
-                        }
-                        ScalarType::List { .. } => datum.unwrap_list(),
-                        _ => unreachable!(),
-                    };
-                    let values = list
-                        .into_iter()
-                        .map(|datum| {
-                            TypedDatum::new(
-                                datum,
-                                &ColumnType {
-                                    nullable: true,
-                                    scalar_type: ty.unwrap_collection_element_type().clone(),
-                                },
-                            )
-                            .json()
-                        })
-                        .collect();
-                    serde_json::Value::Array(values)
-                }
-                ScalarType::Record { fields, .. } => {
-                    let list = datum.unwrap_list();
-                    let fields: Map<String, serde_json::Value> = fields
-                        .iter()
-                        .zip(list.into_iter())
-                        .map(|((name, typ), datum)| {
-                            let name = name.to_string();
-                            let datum = TypedDatum::new(datum, typ);
-                            let value = datum.json();
-                            (name, value)
-                        })
-                        .collect();
-                    fields.into()
-                }
-                ScalarType::Map { value_type, .. } => {
-                    let map = datum.unwrap_map();
-                    let elements = map
-                        .into_iter()
-                        .map(|(key, datum)| {
-                            let value = TypedDatum::new(
-                                datum,
-                                &ColumnType {
-                                    nullable: true,
-                                    scalar_type: (**value_type).clone(),
-                                },
-                            )
-                            .json();
-                            (key.to_string(), value)
-                        })
-                        .collect();
-                    serde_json::Value::Object(elements)
-                }
-                ScalarType::MzTimestamp => json!(datum.unwrap_mz_timestamp().to_string()),
-                ScalarType::Range { .. } => {
-                    // Ranges' interiors are not expected to be types whose
-                    // string representations are misleading/wrong, e.g.
-                    // records.
-                    json!(datum.unwrap_range().to_string())
-                }
-                ScalarType::MzAclItem => json!(datum.unwrap_mz_acl_item().to_string()),
+            return serde_json::Value::Null;
+        }
+        let value = match &typ.scalar_type {
+            ScalarType::AclItem => json!(datum.unwrap_acl_item().to_string()),
+            ScalarType::Bool => json!(datum.unwrap_bool()),
+            ScalarType::PgLegacyChar => json!(datum.unwrap_uint8()),
+            ScalarType::Int16 => json!(datum.unwrap_int16()),
+            ScalarType::Int32 => json!(datum.unwrap_int32()),
+            ScalarType::Int64 => json!(datum.unwrap_int64()),
+            ScalarType::UInt16 => json!(datum.unwrap_uint16()),
+            ScalarType::UInt32
+            | ScalarType::Oid
+            | ScalarType::RegClass
+            | ScalarType::RegProc
+            | ScalarType::RegType => {
+                json!(datum.unwrap_uint32())
             }
+            ScalarType::UInt64 => json!(datum.unwrap_uint64()),
+            ScalarType::Float32 => json!(datum.unwrap_float32()),
+            ScalarType::Float64 => json!(datum.unwrap_float64()),
+            ScalarType::Numeric { .. } => {
+                json!(datum.unwrap_numeric().0.to_standard_notation_string())
+            }
+            // https://stackoverflow.com/questions/10286204/what-is-the-right-json-date-format
+            ScalarType::Date => serde_json::Value::String(format!("{}", datum.unwrap_date())),
+            ScalarType::Time => serde_json::Value::String(format!("{:?}", datum.unwrap_time())),
+            ScalarType::Timestamp { .. } => serde_json::Value::String(format!(
+                "{:?}",
+                datum.unwrap_timestamp().to_naive().timestamp_millis()
+            )),
+            ScalarType::TimestampTz { .. } => serde_json::Value::String(format!(
+                "{:?}",
+                datum.unwrap_timestamptz().to_naive().timestamp_millis()
+            )),
+            ScalarType::Interval => {
+                serde_json::Value::String(format!("{}", datum.unwrap_interval()))
+            }
+            ScalarType::Bytes => json!(datum.unwrap_bytes()),
+            ScalarType::String | ScalarType::VarChar { .. } | ScalarType::PgLegacyName => {
+                json!(datum.unwrap_str())
+            }
+            ScalarType::Char { length } => {
+                let s = char::format_str_pad(datum.unwrap_str(), *length);
+                serde_json::Value::String(s)
+            }
+            ScalarType::Jsonb => JsonbRef::from_datum(datum).to_serde_json(),
+            ScalarType::Uuid => json!(datum.unwrap_uuid()),
+            ty @ (ScalarType::Array(..) | ScalarType::Int2Vector | ScalarType::List { .. }) => {
+                let list = match typ.scalar_type {
+                    ScalarType::Array(_) | ScalarType::Int2Vector => {
+                        datum.unwrap_array().elements()
+                    }
+                    ScalarType::List { .. } => datum.unwrap_list(),
+                    _ => unreachable!(),
+                };
+                let values = list
+                    .into_iter()
+                    .map(|datum| {
+                        TypedDatum::new(
+                            datum,
+                            &ColumnType {
+                                nullable: true,
+                                scalar_type: ty.unwrap_collection_element_type().clone(),
+                            },
+                        )
+                        .json(number_policy)
+                    })
+                    .collect();
+                serde_json::Value::Array(values)
+            }
+            ScalarType::Record { fields, .. } => {
+                let list = datum.unwrap_list();
+                let fields: Map<String, serde_json::Value> = fields
+                    .iter()
+                    .zip(&list)
+                    .map(|((name, typ), datum)| {
+                        let name = name.to_string();
+                        let datum = TypedDatum::new(datum, typ);
+                        let value = datum.json(number_policy);
+                        (name, value)
+                    })
+                    .collect();
+                fields.into()
+            }
+            ScalarType::Map { value_type, .. } => {
+                let map = datum.unwrap_map();
+                let elements = map
+                    .into_iter()
+                    .map(|(key, datum)| {
+                        let value = TypedDatum::new(
+                            datum,
+                            &ColumnType {
+                                nullable: true,
+                                scalar_type: (**value_type).clone(),
+                            },
+                        )
+                        .json(number_policy);
+                        (key.to_string(), value)
+                    })
+                    .collect();
+                serde_json::Value::Object(elements)
+            }
+            ScalarType::MzTimestamp => json!(datum.unwrap_mz_timestamp().to_string()),
+            ScalarType::Range { .. } => {
+                // Ranges' interiors are not expected to be types whose
+                // string representations are misleading/wrong, e.g.
+                // records.
+                json!(datum.unwrap_range().to_string())
+            }
+            ScalarType::MzAclItem => json!(datum.unwrap_mz_acl_item().to_string()),
+        };
+        // We don't need to recurse into map or object here because those already recursively call
+        // .json() with the number policy to generate the member Values.
+        match (number_policy, value) {
+            (JsonNumberPolicy::KeepAsNumber, value) => value,
+            (JsonNumberPolicy::ConvertNumberToString, serde_json::Value::Number(n)) => {
+                serde_json::Value::String(n.to_string())
+            }
+            (JsonNumberPolicy::ConvertNumberToString, value) => value,
         }
     }
 }
 
-fn build_row_schema_field(
+fn build_row_schema_field_type(
     type_namer: &mut Namer,
     custom_names: &BTreeMap<GlobalId, String>,
     typ: &ColumnType,
+    set_null_defaults: bool,
 ) -> serde_json::Value {
     let mut field_type = match &typ.scalar_type {
         ScalarType::AclItem => json!("string"),
@@ -257,9 +281,12 @@ fn build_row_schema_field(
             "type": "long",
             "logicalType": "time-micros",
         }),
-        ScalarType::Timestamp | ScalarType::TimestampTz => json!({
+        ScalarType::Timestamp { precision } | ScalarType::TimestampTz { precision } => json!({
             "type": "long",
-            "logicalType": "timestamp-micros"
+            "logicalType": match precision {
+                Some(precision) if precision.into_u8() <= 3 => "timestamp-millis",
+                _ => "timestamp-micros",
+            },
         }),
         ScalarType::Interval => type_namer.interval_type(),
         ScalarType::Bytes => json!("bytes"),
@@ -278,13 +305,14 @@ fn build_row_schema_field(
             "logicalType": "uuid",
         }),
         ty @ (ScalarType::Array(..) | ScalarType::Int2Vector | ScalarType::List { .. }) => {
-            let inner = build_row_schema_field(
+            let inner = build_row_schema_field_type(
                 type_namer,
                 custom_names,
                 &ColumnType {
                     nullable: true,
                     scalar_type: ty.unwrap_collection_element_type().clone(),
                 },
+                set_null_defaults,
             );
             json!({
                 "type": "array",
@@ -292,13 +320,14 @@ fn build_row_schema_field(
             })
         }
         ScalarType::Map { value_type, .. } => {
-            let inner = build_row_schema_field(
+            let inner = build_row_schema_field_type(
                 type_namer,
                 custom_names,
                 &ColumnType {
                     nullable: true,
                     scalar_type: (**value_type).clone(),
                 },
+                set_null_defaults,
             );
             json!({
                 "type": "map",
@@ -316,7 +345,8 @@ fn build_row_schema_field(
                 json!(name)
             } else {
                 let fields = fields.to_vec();
-                let json_fields = build_row_schema_fields(&fields, type_namer, custom_names);
+                let json_fields =
+                    build_row_schema_fields(&fields, type_namer, custom_names, set_null_defaults);
                 json!({
                     "type": "record",
                     "name": name,
@@ -342,6 +372,9 @@ fn build_row_schema_field(
         ScalarType::MzAclItem => json!("string"),
     };
     if typ.nullable {
+        // Should be revisited if we ever support a different kind of union scheme.
+        // Currently adding the "null" at the beginning means we can set the default
+        // value to "null" if such a preference is set.
         field_type = json!(["null", field_type]);
     }
     field_type
@@ -351,16 +384,32 @@ fn build_row_schema_fields(
     columns: &[(ColumnName, ColumnType)],
     type_namer: &mut Namer,
     custom_names: &BTreeMap<GlobalId, String>,
+    set_null_defaults: bool,
 ) -> Vec<serde_json::Value> {
     let mut fields = Vec::new();
     let mut field_namer = Namer::default();
     for (name, typ) in columns.iter() {
         let (name, _seen) = field_namer.valid_name(name.as_str());
-        let field_type = build_row_schema_field(type_namer, custom_names, typ);
-        fields.push(json!({
-            "name": name,
-            "type": field_type,
-        }));
+        let field_type =
+            build_row_schema_field_type(type_namer, custom_names, typ, set_null_defaults);
+
+        // It's a nullable union if the type is an array and the first option is "null"
+        let is_nullable_union = field_type
+            .as_array()
+            .is_some_and(|array| array.first().is_some_and(|first| first == &json!("null")));
+
+        if set_null_defaults && is_nullable_union {
+            fields.push(json!({
+                "name": name,
+                "type": field_type,
+                "default": null,
+            }));
+        } else {
+            fields.push(json!({
+                "name": name,
+                "type": field_type,
+            }));
+        }
     }
     fields
 }
@@ -370,8 +419,14 @@ pub fn build_row_schema_json(
     columns: &[(ColumnName, ColumnType)],
     name: &str,
     custom_names: &BTreeMap<GlobalId, String>,
+    set_null_defaults: bool,
 ) -> Result<serde_json::Value, anyhow::Error> {
-    let fields = build_row_schema_fields(columns, &mut Namer::default(), custom_names);
+    let fields = build_row_schema_fields(
+        columns,
+        &mut Namer::default(),
+        custom_names,
+        set_null_defaults,
+    );
     let _ = mz_avro::schema::Name::parse_simple(name)?;
     Ok(json!({
         "type": "record",

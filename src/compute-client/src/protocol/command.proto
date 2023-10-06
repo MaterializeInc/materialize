@@ -10,7 +10,7 @@
 syntax = "proto3";
 
 import "compute-client/src/logging.proto";
-import "compute-client/src/types/dataflows.proto";
+import "compute-types/src/dataflows.proto";
 import "expr/src/linear.proto";
 import "expr/src/relation.proto";
 import "persist-client/src/cfg.proto";
@@ -20,7 +20,7 @@ import "repr/src/row.proto";
 import "cluster-client/src/client.proto";
 import "service/src/params.proto";
 import "storage-client/src/client.proto";
-import "storage-client/src/types/parameters.proto";
+import "storage-types/src/parameters.proto";
 import "tracing/src/params.proto";
 
 import "google/protobuf/empty.proto";
@@ -35,14 +35,18 @@ message ProtoComputeCommand {
 
     oneof kind {
         ProtoCreateTimely create_timely = 1;
-        logging.ProtoLoggingConfig create_instance = 2;
-        types.dataflows.ProtoDataflowDescription create_dataflow = 3;
+        ProtoInstanceConfig create_instance = 2;
+        mz_compute_types.dataflows.ProtoDataflowDescription create_dataflow = 3;
         mz_storage_client.client.ProtoCompaction allow_compaction = 4;
         ProtoPeek peek = 5;
         mz_proto.ProtoU128 cancel_peek = 6;
         google.protobuf.Empty initialization_complete = 7;
         ProtoComputeParameters update_configuration = 8;
     }
+}
+
+message ProtoInstanceConfig {
+    logging.ProtoLoggingConfig logging = 1;
 }
 
 message ProtoPeek {
@@ -63,4 +67,5 @@ message ProtoComputeParameters {
     mz_tracing.params.ProtoTracingParameters tracing = 5;
     mz_service.params.ProtoGrpcClientParameters grpc_client = 6;
     optional bool enable_arrangement_size_logging = 7;
+    optional bool enable_jemalloc_profiling = 8;
 }

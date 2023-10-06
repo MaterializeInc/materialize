@@ -176,7 +176,7 @@ We've identified the following early candidate clients for the cost model:
 
 1. **Join ordering.** There are some trade offs here between set enumeration and more heuristic approaches---in an ideal world, we'd have an explicit "optimization budget" to determine how much of the join ordering space to explore. (Uses memory at joins; cardinality and predicate selectivity across MIR.)
 
-2. **CTE filter pushdown.** Pushing filters all the way down can be advantageous, depending on selectivity. (Uses cardinality and predicate selectivity across MIR.)
+2. **CTE filter pushdown.** Pushing filters all the way down can be advantageous, depending on selectivity. (Uses cardinality and predicate selectivity across MIR.) [LDBC BI Q16 is an example that would benefit.](https://github.com/MaterializeInc/materialize/pull/20565#discussion_r1291677593)
 
 3. **Reduction pushdown.** Pushing reductions down is not always advantageous. (Uses cardinality and predicate selectivity across MIR.)
 

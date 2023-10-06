@@ -57,7 +57,6 @@ NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42704
 NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42704"},{"typ":"M","value":"SCHEMA \"t\" does not exist, skipping"}]}
 CommandComplete {"tag":"DROP SCHEMA"}
 ReadyForQuery {"status":"I"}
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"RBAC is disabled so no role attributes or object ownership will be considered when executing statements"}]}
 CommandComplete {"tag":"CREATE ROLE"}
 ReadyForQuery {"status":"I"}
 NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42704"},{"typ":"M","value":"ROLE \"s\" does not exist, skipping"}]}
@@ -94,7 +93,6 @@ ReadyForQuery
 ReadyForQuery
 ReadyForQuery
 ----
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"01000"},{"typ":"M","value":"RBAC is disabled so no role attributes or object ownership will be considered when executing statements"}]}
 CommandComplete {"tag":"CREATE ROLE"}
 ReadyForQuery {"status":"I"}
 NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42704"},{"typ":"M","value":"DATABASE \"d\" does not exist, skipping"}]}

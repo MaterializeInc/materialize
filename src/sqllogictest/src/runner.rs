@@ -72,7 +72,7 @@ use mz_sql_parser::ast::{
 };
 use mz_sql_parser::parser;
 use mz_stash::StashFactory;
-use mz_storage_client::types::connections::ConnectionContext;
+use mz_storage_types::connections::ConnectionContext;
 use once_cell::sync::Lazy;
 use postgres_protocol::types;
 use regex::Regex;
@@ -391,6 +391,7 @@ pub struct Runner<'a> {
 pub struct RunnerInner<'a> {
     server_addr: SocketAddr,
     internal_server_addr: SocketAddr,
+    internal_http_server_addr: SocketAddr,
     // Drop order matters for these fields.
     client: tokio_postgres::Client,
     system_client: tokio_postgres::Client,
@@ -631,6 +632,10 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
         (Type::Integer, Value::Numeric(d)) => {
             let mut d = d.0 .0.clone();
             let mut cx = numeric::cx_datum();
+            // Truncate the decimal to match sqlite.
+            if mode == Mode::Standard {
+                cx.set_rounding(dec::Rounding::Down);
+            }
             cx.round(&mut d);
             numeric::munge_numeric(&mut d).unwrap();
             d.to_standard_notation_string()
@@ -744,6 +749,14 @@ impl<'a> Runner<'a> {
                 .run_record(record, in_transaction)
                 .await
         }
+    }
+
+    async fn check_catalog(&self) -> Result<(), anyhow::Error> {
+        self.inner
+            .as_ref()
+            .expect("RunnerInner missing")
+            .check_catalog()
+            .await
     }
 
     async fn reset_database(&mut self) -> Result<(), anyhow::Error> {
@@ -950,6 +963,7 @@ impl<'a> RunnerInner<'a> {
         let secrets_controller = Arc::clone(&orchestrator);
         let connection_context = ConnectionContext::for_tests(orchestrator.reader());
         let listeners = mz_environmentd::Listeners::bind_any_local().await?;
+        let host_name = format!("localhost:{}", listeners.http_local_addr().port());
         let server_config = mz_environmentd::Config {
             adapter_stash_url,
             controller: ControllerConfig {
@@ -1008,6 +1022,8 @@ impl<'a> RunnerInner<'a> {
             config_sync_loop_interval: None,
             bootstrap_role: Some("materialize".into()),
             deploy_generation: None,
+            http_host_name: Some(host_name),
+            internal_console_redirect_url: None,
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned
@@ -1016,6 +1032,7 @@ impl<'a> RunnerInner<'a> {
         // be live at the start of the next file's server.
         let (server_addr_tx, server_addr_rx) = oneshot::channel();
         let (internal_server_addr_tx, internal_server_addr_rx) = oneshot::channel();
+        let (internal_http_server_addr_tx, internal_http_server_addr_rx) = oneshot::channel();
         let (shutdown_trigger, shutdown_tripwire) = oneshot::channel();
         let server_thread = thread::spawn(|| {
             let runtime = match Runtime::new() {
@@ -1042,10 +1059,14 @@ impl<'a> RunnerInner<'a> {
             internal_server_addr_tx
                 .send(server.internal_sql_local_addr())
                 .expect("receiver should not drop first");
+            internal_http_server_addr_tx
+                .send(server.internal_http_local_addr())
+                .expect("receiver should not drop first");
             let _ = runtime.block_on(shutdown_tripwire);
         });
         let server_addr = server_addr_rx.await??;
         let internal_server_addr = internal_server_addr_rx.await?;
+        let internal_http_server_addr = internal_http_server_addr_rx.await?;
 
         let system_client = connect(internal_server_addr, Some("mz_system")).await;
         let client = connect(server_addr, None).await;
@@ -1053,6 +1074,7 @@ impl<'a> RunnerInner<'a> {
         let inner = RunnerInner {
             server_addr,
             internal_server_addr,
+            internal_http_server_addr,
             _shutdown_trigger: shutdown_trigger,
             _server_thread: server_thread.join_on_drop(),
             _temp_dir: temp_dir,
@@ -1074,18 +1096,14 @@ impl<'a> RunnerInner<'a> {
     /// Set features that should be enabled regardless of whether reset-server was
     /// called. These features may be set conditionally depending on the run configuration.
     async fn ensure_fixed_features(&self) -> Result<(), anyhow::Error> {
-        // We turn on enable_monotonic_oneshot_selects and enable_with_mutually_recursive,
-        // as these two features have reached enough maturity to do so.
+        // We turn on enable_monotonic_oneshot_selects,
+        // as that feature has reached enough maturity to do so.
         // TODO(vmarcos): Remove this code when we retire these feature flags.
         self.system_client
             .execute(
                 "ALTER SYSTEM SET enable_monotonic_oneshot_selects = on",
                 &[],
             )
-            .await?;
-
-        self.system_client
-            .execute("ALTER SYSTEM SET enable_with_mutually_recursive = on", &[])
             .await?;
 
         // Dangerous functions are useful for tests so we enable it for all tests.
@@ -1596,7 +1614,7 @@ impl<'a> RunnerInner<'a> {
             None => &self.client,
             Some(name) => {
                 if !self.clients.contains_key(name) {
-                    let addr = if matches!(user, Some("mz_system") | Some("mz_introspection")) {
+                    let addr = if matches!(user, Some("mz_system") | Some("mz_support")) {
                         self.internal_server_addr
                     } else {
                         self.server_addr
@@ -1647,6 +1665,22 @@ impl<'a> RunnerInner<'a> {
             })
         } else {
             Ok(Outcome::Success)
+        }
+    }
+
+    async fn check_catalog(&self) -> Result<(), anyhow::Error> {
+        let url = format!(
+            "http://{}/api/catalog/check",
+            self.internal_http_server_addr
+        );
+        let response: serde_json::Value = reqwest::get(&url).await?.json().await?;
+
+        if let Some(inconsistencies) = response.get("err") {
+            let inconsistencies = serde_json::to_string_pretty(&inconsistencies)
+                .expect("serializing Value cannot fail");
+            Err(anyhow::anyhow!("Catalog inconsistency\n{inconsistencies}"))
+        } else {
+            Ok(())
         }
     }
 }
@@ -1829,7 +1863,10 @@ pub async fn run_string(
 pub async fn run_file(runner: &mut Runner<'_>, filename: &Path) -> Result<Outcomes, anyhow::Error> {
     let mut input = String::new();
     File::open(filename)?.read_to_string(&mut input)?;
-    run_string(runner, &format!("{}", filename.display()), &input).await
+    let outcomes = run_string(runner, &format!("{}", filename.display()), &input).await?;
+    runner.check_catalog().await?;
+
+    Ok(outcomes)
 }
 
 pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<(), anyhow::Error> {
@@ -2230,7 +2267,9 @@ fn generate_view_sql(
 /// so we may end up deriving `None` for the number of attributes
 /// as a conservative approximation.
 fn derive_num_attributes(body: &SetExpr<Raw>) -> Option<usize> {
-    let Some((projection, _)) = find_projection(body) else { return None };
+    let Some((projection, _)) = find_projection(body) else {
+        return None;
+    };
     derive_num_attributes_from_projection(projection)
 }
 
@@ -2252,7 +2291,9 @@ fn derive_order_by(
     Vec<SelectItem<Raw>>,
     Option<Distinct<Raw>>,
 ) {
-    let Some((projection, distinct)) = find_projection(body) else { return (vec![], vec![], None) };
+    let Some((projection, distinct)) = find_projection(body) else {
+        return (vec![], vec![], None);
+    };
     let (view_order_by, extra_columns) = derive_order_by_from_projection(projection, order_by);
     (view_order_by, extra_columns, distinct.clone())
 }
@@ -2280,7 +2321,9 @@ fn find_projection(body: &SetExpr<Raw>) -> Option<(&Vec<SelectItem<Raw>>, &Optio
 fn derive_num_attributes_from_projection(projection: &Vec<SelectItem<Raw>>) -> Option<usize> {
     let mut num_attributes = 0usize;
     for item in projection.iter() {
-        let SelectItem::Expr { expr, .. } = item else { return None };
+        let SelectItem::Expr { expr, .. } = item else {
+            return None;
+        };
         match expr {
             Expr::QualifiedWildcard(..) | Expr::WildcardAccess(..) => {
                 return None;

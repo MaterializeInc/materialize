@@ -37,6 +37,8 @@ You can only use `mz_now()` to establish a temporal filter under the following c
 - The comparison must be one of `=`, `<`, `<=`, `>`, or `>=`, or operators that desugar to them or a conjunction of them (for example, `BETWEEN...AND...`).
     At the moment, you can't use the `!=` operator with `mz_now()`.
 
+You cannot use temporal filters in the `WHERE` clause of an [aggregate `FILTER` expression](/sql/functions/filters).
+
 ## Examples
 
 These examples create real objects.
@@ -236,8 +238,6 @@ This is often referred to as a **grace period**.
 
 ## Temporal filter pushdown
 
-{{< private-preview />}}
-
 All of the queries in the previous examples only return results based on recently-added events.
 Materialize can "push down" filters that match this pattern all the way down to its storage layer, skipping over old data that’s not relevant to the query.
 Here are the key benefits of this optimization:
@@ -249,7 +249,7 @@ In the examples above, the `event_ts` value in each event correlates with the ti
 However, the values in the `content` column are not correlated with insertion time in any way, so filters against `content` will probably not be pushed down to the storage layer.
 
 Temporal filters that consist of arithmetic, date math, and comparisons are eligible for pushdown, including all the examples in this page.
-However, more complex filters might not be. You can check whether the filters in your query can be pushed down by using [the `filter_pushdown` option](/sql/explain/#output-modifiers) in an `EXPLAIN` statement. For example:
+However, more complex filters might not be. You can check whether the filters in your query can be pushed down by using [the `filter_pushdown` option](/sql/explain-plan/#output-modifiers) in an `EXPLAIN` statement. For example:
 
 ```sql
 EXPLAIN WITH(filter_pushdown)
@@ -265,3 +265,5 @@ Source materialize.public.events
 ```
 
 The filter in our query appears in the `pushdown=` list at the bottom of the output, so the filter pushdown optimization will be able to filter out irrelevant ranges of data in that source and make the overall query more efficient.
+
+Some common functions, such as casting from a string to a timestamp, can prevent filter pushdown for a query. For similar functions that _do_ allow pushdown, see [the pushdown functions documentation](/sql/functions/pushdown/).

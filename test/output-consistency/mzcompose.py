@@ -7,8 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import Cockroach, Materialized
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.materialized import Materialized
 from materialize.output_consistency.output_consistency_test import (
     parse_output_consistency_input_args,
     run_output_consistency_tests,

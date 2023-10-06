@@ -1,7 +1,7 @@
 [package]
 name = "mz-testdrive"
 description = "Integration test driver for Materialize."
-version = "0.0.0"
+version = "0.73.0-dev"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
@@ -33,18 +33,23 @@ md-5 = "0.10.5"
 mysql_async = { version = "0.32.2",  default-features = false, features = ["minimal"] }
 mz-avro = { path = "../avro", features = ["snappy"] }
 mz-aws-s3-util = { path = "../aws-s3-util" }
+mz-build-info = { path = "../build-info" }
+mz-catalog = { path = "../catalog" }
 mz-ccsr = { path = "../ccsr" }
 mz-adapter = { path = "../adapter" }
 mz-expr = { path = "../expr" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-ore = { path = "../ore", features = ["async"] }
+mz-persist-types = { path = "../persist-types" }
+mz-persist-client = { path = "../persist-client" }
 mz-pgrepr = { path = "../pgrepr" }
-mz-postgres-util = { path = "../postgres-util" }
 mz-repr = { path = "../repr" }
 mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
+mz-storage-types = { path = "../storage-types" }
 mz-stash = { path = "../stash" }
+mz-tls-util = { path = "../tls-util" }
 postgres_array = { version = "0.11.0" }
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 prost-reflect = { version = "0.11.4", features = ["serde"] }
@@ -62,7 +67,7 @@ tiberius = { version = "0.11.3", default-features = false }
 time = "0.3.17"
 tracing = "0.1.37"
 tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
-tokio = { version = "1.24.2", features = ["process"] }
+tokio = { version = "1.32.0", features = ["process"] }
 tokio-postgres = { version = "0.7.8", features = ["with-chrono-0_4", "with-serde_json-1"] }
 tokio-stream = "0.1.11"
 tokio-util = { version = "0.7.4", features = ["compat"] }

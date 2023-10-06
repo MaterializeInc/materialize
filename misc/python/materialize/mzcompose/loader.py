@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 from pathlib import Path
-from typing import Optional
 
 # The path of the composition that is currently being loaded.
-composition_path: Optional[Path] = None
+composition_path: Path | None = None

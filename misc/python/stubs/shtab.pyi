@@ -8,12 +8,11 @@
 # by the Apache License, Version 2.0.
 
 from argparse import ArgumentParser
-from typing import List, Optional, Union
 
 def add_argument_to(
     parser: ArgumentParser,
-    option_string: Union[str, List[str]] = ...,
+    option_string: str | list[str] = ...,
     help: str = ...,
-    parent: Optional[ArgumentParser] = ...,
+    parent: ArgumentParser | None = ...,
     preamble: str = ...,
 ) -> None: ...

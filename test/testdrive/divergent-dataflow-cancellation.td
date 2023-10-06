@@ -80,9 +80,6 @@ contains: canceling statement due to statement timeout
 > SELECT count(*) FROM mz_internal.mz_compute_delays_histogram_raw
 0
 
-> SELECT count(*) FROM mz_internal.mz_compute_dependencies_per_worker
-0
-
 > SELECT count(*) FROM mz_internal.mz_compute_exports_per_worker
 0
 
@@ -90,7 +87,7 @@ contains: canceling statement due to statement timeout
 > SELECT count(*)
   FROM mz_internal.mz_compute_frontiers_per_worker
   WHERE worker_id = 0
-25
+24
 
 > SELECT count(*) FROM mz_internal.mz_compute_import_frontiers_per_worker
 0

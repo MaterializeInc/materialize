@@ -9,7 +9,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use mz_compute_client::controller::ComputeInstanceId;
+use mz_compute_types::ComputeInstanceId;
 use mz_repr::GlobalId;
 use serde::Deserialize;
 

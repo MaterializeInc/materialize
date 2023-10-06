@@ -22,7 +22,7 @@ use mz_persist_client::usage::ShardsUsageReferenced;
 use mz_sql::ast::Statement;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{CreateSourcePlans, Plan};
-use mz_storage_client::controller::CollectionMetadata;
+use mz_storage_types::controller::CollectionMetadata;
 use rand::{rngs, Rng, SeedableRng};
 use tracing::{event, warn, Instrument, Level};
 
@@ -34,6 +34,7 @@ use crate::coord::{
     PendingReadTxn, PlanValidity, PurifiedStatementReady, RealTimeRecencyContext,
     SinkConnectionReady,
 };
+use crate::session::Session;
 use crate::util::{ComputeSinkId, ResultExt};
 use crate::{catalog, AdapterNotice, TimestampContext};
 
@@ -58,20 +59,14 @@ impl Coordinator {
                 self.message_create_connection_validation_ready(ready).await
             }
             Message::SinkConnectionReady(ready) => self.message_sink_connection_ready(ready).await,
-            Message::Execute {
-                portal_name,
-                ctx,
-                span,
-            } => {
-                let span = tracing::debug_span!(parent: &span, "message (execute)");
-                self.handle_execute(portal_name, ctx).instrument(span).await;
-            }
             Message::WriteLockGrant(write_lock_guard) => {
                 self.message_write_lock_grant(write_lock_guard).await;
             }
-            Message::GroupCommitInitiate(span) => self.try_group_commit().instrument(span).await,
-            Message::GroupCommitApply(timestamp, responses, write_lock_guard) => {
-                self.group_commit_apply(timestamp, responses, write_lock_guard)
+            Message::GroupCommitInitiate(span, permit) => {
+                self.try_group_commit(permit).instrument(span).await
+            }
+            Message::GroupCommitApply(timestamp, responses, write_lock_guard, notifies, permit) => {
+                self.group_commit_apply(timestamp, responses, write_lock_guard, notifies, permit)
                     .await;
             }
             Message::AdvanceTimelines => {
@@ -101,8 +96,8 @@ impl Coordinator {
                 self.message_real_time_recency_timestamp(conn_id, real_time_recency_ts, validity)
                     .await;
             }
-            Message::RetireExecute { data } => {
-                self.retire_execute(data);
+            Message::RetireExecute { data, reason } => {
+                self.retire_execution(reason, data);
             }
             Message::ExecuteSingleStatementTransaction { ctx, stmt, params } => {
                 self.sequence_execute_single_statement_transaction(ctx, stmt, params)
@@ -110,6 +105,9 @@ impl Coordinator {
             }
             Message::PeekStageReady { ctx, stage } => {
                 self.sequence_peek_stage(ctx, stage).await;
+            }
+            Message::DrainStatementLog => {
+                self.drain_statement_log().await;
             }
         }
     }
@@ -184,13 +182,13 @@ impl Coordinator {
             });
         }
 
-        if let Err(err) = self.catalog_transact(None, ops).await {
+        if let Err(err) = self.catalog_transact(None::<&Session>, ops).await {
             tracing::warn!("Failed to update storage metrics: {:?}", err);
         }
-        self.schedule_storage_usage_collection();
+        self.schedule_storage_usage_collection().await;
     }
 
-    pub fn schedule_storage_usage_collection(&self) {
+    pub async fn schedule_storage_usage_collection(&self) {
         // Instead of using an `tokio::timer::Interval`, we calculate the time until the next
         // usage collection and wait for that amount of time. This is so we can keep the intervals
         // consistent even across restarts. If collection takes too long, it is possible that
@@ -218,7 +216,7 @@ impl Coordinator {
                 .expect("storage usage collection interval must fit into u64");
         let offset =
             rngs::SmallRng::from_seed(seed).gen_range(0..storage_usage_collection_interval_ms);
-        let now_ts: EpochMillis = self.peek_local_write_ts().into();
+        let now_ts: EpochMillis = self.peek_local_write_ts().await.into();
 
         // 2) Determine the amount of ms between now and the next collection time.
         let previous_collection_ts =
@@ -334,6 +332,18 @@ impl Coordinator {
                     };
                     self.buffer_builtin_table_updates(updates);
                 }
+            }
+            ControllerResponse::ComputeDependencyUpdate {
+                id,
+                dependencies,
+                diff,
+            } => {
+                let state = self.catalog().state();
+                let updates = dependencies
+                    .into_iter()
+                    .map(|dep_id| state.pack_compute_dependency_update(id, dep_id, diff))
+                    .collect();
+                self.buffer_builtin_table_updates(updates);
             }
         }
     }
@@ -592,7 +602,10 @@ impl Coordinator {
                             .await;
                     }
                 }
-                Deferred::GroupCommit => self.group_commit_initiate(Some(write_lock_guard)).await,
+                Deferred::GroupCommit => {
+                    self.group_commit_initiate(Some(write_lock_guard), None)
+                        .await
+                }
             }
         }
         // N.B. if no deferred plans, write lock is released by drop
@@ -608,7 +621,7 @@ impl Coordinator {
         let Some(cluster) = self.catalog().try_get_cluster(event.cluster_id) else {
             return;
         };
-        let Some(replica) = cluster.replicas_by_id.get(&event.replica_id) else {
+        let Some(replica) = cluster.replica(event.replica_id) else {
             return;
         };
 
@@ -616,7 +629,7 @@ impl Coordinator {
             let old_status = replica.status();
 
             self.catalog_transact(
-                None,
+                None::<&Session>,
                 vec![catalog::Op::UpdateClusterReplicaStatus {
                     event: event.clone(),
                 }],
@@ -625,7 +638,7 @@ impl Coordinator {
             .unwrap_or_terminate("updating cluster status cannot fail");
 
             let cluster = self.catalog().get_cluster(event.cluster_id);
-            let replica = &cluster.replicas_by_id[&event.replica_id];
+            let replica = cluster.replica(event.replica_id).expect("Replica exists");
             let new_status = replica.status();
 
             if old_status != new_status {
@@ -653,8 +666,8 @@ impl Coordinator {
             if let TimestampContext::TimelineTimestamp(timeline, timestamp) =
                 read_txn.txn.timestamp_context()
             {
-                let timestamp_oracle = self.get_timestamp_oracle_mut(&timeline);
-                let read_ts = timestamp_oracle.read_ts();
+                let timestamp_oracle = self.get_timestamp_oracle(&timeline);
+                let read_ts = timestamp_oracle.read_ts().await;
                 if timestamp <= read_ts {
                     ready_txns.push(read_txn);
                 } else {
@@ -738,14 +751,16 @@ impl Coordinator {
                 optimized_plan,
                 id_bundle,
             } => {
-                let result = self.sequence_explain_timestamp_finish(
-                    ctx.session_mut(),
-                    format,
-                    cluster_id,
-                    optimized_plan,
-                    id_bundle,
-                    Some(real_time_recency_ts),
-                );
+                let result = self
+                    .sequence_explain_timestamp_finish(
+                        &mut ctx,
+                        format,
+                        cluster_id,
+                        optimized_plan,
+                        id_bundle,
+                        Some(real_time_recency_ts),
+                    )
+                    .await;
                 ctx.retire(result);
             }
             RealTimeRecencyContext::Peek {
@@ -763,6 +778,7 @@ impl Coordinator {
                 in_immediate_multi_stmt_txn: _,
                 key,
                 typ,
+                dataflow_metainfo,
             } => {
                 self.sequence_peek_stage(
                     ctx,
@@ -782,6 +798,7 @@ impl Coordinator {
                         real_time_recency_ts: Some(real_time_recency_ts),
                         key,
                         typ,
+                        dataflow_metainfo,
                     }),
                 )
                 .await;

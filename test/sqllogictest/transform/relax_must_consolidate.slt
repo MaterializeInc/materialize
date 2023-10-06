@@ -189,7 +189,8 @@ Explained Query:
         key_plan
           project=()
         FlatMap generate_series(1, #0, 1)
-          project=(#1, #2)
+          mfp_after
+            project=(#1, #2)
           Get::PassArrangements materialize.public.t
             raw=true
 
@@ -431,7 +432,7 @@ Explained Query:
         arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
 
 Used Indexes:
-  - materialize.public.t_idx (differential join, differential join)
+  - materialize.public.t_idx (differential join)
 
 EOF
 
@@ -746,7 +747,8 @@ Explained Query:
         key_plan
           project=()
         FlatMap generate_series(1, #1, 1)
-          project=(#0, #2)
+          mfp_after
+            project=(#0, #2)
           Union
             Get::Collection l0
               project=(#0, #1)

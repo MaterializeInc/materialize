@@ -7,18 +7,16 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
-from materialize.mzcompose import Composition
-from materialize.mzcompose.services import (
-    Clusterd,
-    Kafka,
-    Materialized,
-    SchemaRegistry,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.ui import UIError
 
 SERVICES = [
@@ -125,7 +123,7 @@ def validate(c: Composition) -> None:
         """
 # Dataflows
 
-$ set-regex match=\d{13} replacement=<TIMESTAMP>
+$ set-regex match=\\d{13} replacement=<TIMESTAMP>
 
 > SET cluster=cluster2
 

@@ -10,18 +10,16 @@
 import random
 import time
 
-from materialize.data_ingest.executor import KafkaExecutor
+from materialize.data_ingest.executor import KafkaExecutor, KafkaRoundtripExecutor
 from materialize.data_ingest.workload import *  # noqa: F401 F403
 from materialize.data_ingest.workload import Workload, execute_workload
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import (
-    Clusterd,
-    Kafka,
-    Materialized,
-    Postgres,
-    SchemaRegistry,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
     Postgres(),
@@ -37,7 +35,10 @@ SERVICES = [
     ),
     SchemaRegistry(),
     # Fixed port so that we keep the same port after restarting Mz in disruptions
-    Materialized(ports=["16875:6875"]),
+    Materialized(
+        ports=["16875:6875"],
+        additional_system_parameter_defaults={"enable_table_keys": "true"},
+    ),
     Clusterd(name="clusterd1", options=["--scratch-directory=/mzdata/source_data"]),
 ]
 
@@ -86,7 +87,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     conn.autocommit = False
     conn.close()
 
-    executor_classes = [KafkaExecutor]
+    executor_classes = [KafkaRoundtripExecutor, KafkaExecutor]
     ports = {s: c.default_port(s) for s in services}
 
     for i, workload_class in enumerate(workloads):

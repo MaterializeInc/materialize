@@ -99,8 +99,8 @@ use mz_ore::result::ResultExt;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
-use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::sources::{MzOffset, PostgresSourceConnection};
+use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
 use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
 use mz_timely_util::operator::StreamExt as TimelyStreamExt;
 
@@ -176,7 +176,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 .connection
                 .config(&*context.secrets_reader)
                 .await?
-                .replication_timeouts(config.params.pg_replication_timeouts.clone());
+                .tcp_timeouts(config.params.pg_source_tcp_timeouts.clone());
             let slot = &connection.publication_details.slot;
             let replication_client = connection_config.connect_replication().await?;
             super::ensure_replication_slot(&replication_client, slot).await?;

@@ -30,15 +30,15 @@
 //! constructor for [`Explain`] to indicate that the implementation does
 //! not support this `$format`.
 
+use itertools::Itertools;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::fmt::Formatter;
+use std::fmt::{Display, Formatter};
 
 use mz_ore::stack::RecursionLimitError;
-use mz_ore::str::Indent;
-use mz_proto::{RustType, TryFromProtoError};
+use mz_ore::str::{bracketed, separated, Indent};
 
 use crate::explain::dot::{dot_string, DisplayDot};
 use crate::explain::json::{json_string, DisplayJson};
@@ -53,8 +53,6 @@ pub mod tracing;
 
 #[cfg(feature = "tracing_")]
 pub use crate::explain::tracing::trace_plan;
-
-include!(concat!(env!("OUT_DIR"), "/mz_repr.explain.rs"));
 
 /// Possible output formats for an explanation.
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -181,6 +179,10 @@ pub struct ExplainConfig {
     pub filter_pushdown: bool,
     /// Show cardinality information.
     pub cardinality: bool,
+    /// Show inferred column names.
+    pub column_names: bool,
+    /// Use inferred column names when rendering scalar and aggregate expressions.
+    pub humanized_exprs: bool,
 }
 
 impl Default for ExplainConfig {
@@ -199,6 +201,8 @@ impl Default for ExplainConfig {
             types: false,
             filter_pushdown: false,
             cardinality: false,
+            column_names: false,
+            humanized_exprs: false,
         }
     }
 }
@@ -211,6 +215,7 @@ impl ExplainConfig {
             || self.types
             || self.keys
             || self.cardinality
+            || self.column_names
     }
 }
 
@@ -237,6 +242,8 @@ impl TryFrom<BTreeSet<String>> for ExplainConfig {
             types: flags.remove("types"),
             filter_pushdown: flags.remove("filter_pushdown") || flags.remove("mfp_pushdown"),
             cardinality: flags.remove("cardinality"),
+            column_names: flags.remove("column_names"),
+            humanized_exprs: flags.remove("humanized_exprs") && !flags.contains("raw_plans"),
         };
         if flags.is_empty() {
             Ok(result)
@@ -249,10 +256,16 @@ impl TryFrom<BTreeSet<String>> for ExplainConfig {
 /// The type of object to be explained
 #[derive(Clone, Debug)]
 pub enum Explainee {
-    /// An object that will be served using a dataflow
+    /// An existing materialized view.
+    MaterializedView(GlobalId),
+    /// An existing index.
+    Index(GlobalId),
+    /// An object that will be served using a dataflow.
+    ///
+    /// This variant is deprecated and will be removed in #18089.
     Dataflow(GlobalId),
-    /// The object to be explained is a one-off query and may or may not served
-    /// using a dataflow.
+    /// The object to be explained is a one-off query and may or may not be
+    /// served using a dataflow.
     Query,
 }
 
@@ -290,7 +303,7 @@ pub trait Explain<'a>: 'a {
     /// should return an [`ExplainError::UnsupportedFormat`].
     ///
     /// If an [`ExplainConfig`] parameter cannot be honored, the
-    /// implementation should silently ignore this paramter and
+    /// implementation should silently ignore this parameter and
     /// proceed without returning a [`Result::Err`].
     fn explain(
         &'a mut self,
@@ -420,7 +433,7 @@ impl<'a, T> AsRef<&'a dyn ExprHumanizer> for PlanRenderingContext<'a, T> {
 /// This will be most often used as part of the rendering context
 /// type for various `Display$Format` implementation.
 pub trait ExprHumanizer: fmt::Debug {
-    /// Attempts to return the a human-readable string for the relation
+    /// Attempts to return a human-readable string for the relation
     /// identified by `id`.
     fn humanize_id(&self, id: GlobalId) -> Option<String>;
 
@@ -430,13 +443,92 @@ pub trait ExprHumanizer: fmt::Debug {
     /// Returns a human-readable name for the specified scalar type.
     fn humanize_scalar_type(&self, ty: &ScalarType) -> String;
 
-    /// Returns a human-readable name for the specified scalar type.
+    /// Returns a human-readable name for the specified column type.
     fn humanize_column_type(&self, typ: &ColumnType) -> String {
         format!(
             "{}{}",
             self.humanize_scalar_type(&typ.scalar_type),
             if typ.nullable { "?" } else { "" }
         )
+    }
+
+    /// Returns a vector of column names for the relation identified by `id`.
+    fn column_names_for_id(&self, id: GlobalId) -> Option<Vec<String>>;
+
+    /// Returns whether the specified id exists.
+    fn id_exists(&self, id: GlobalId) -> bool;
+}
+
+/// An [`ExprHumanizer`] that extends the `inner` instance with shadow items
+/// that are reported as present, even though they might not exist in `inner`.
+#[derive(Debug)]
+pub struct ExprHumanizerExt<'a> {
+    /// A map of custom items that might not exist in the backing `inner`
+    /// humanizer, but are reported as present by this humanizer instance.
+    items: BTreeMap<GlobalId, TransientItem>,
+    /// The inner humanizer used to resolve queries for [GlobalId] values not
+    /// present in the `items` map.
+    inner: &'a dyn ExprHumanizer,
+}
+
+impl<'a> ExprHumanizerExt<'a> {
+    pub fn new(items: BTreeMap<GlobalId, TransientItem>, inner: &'a dyn ExprHumanizer) -> Self {
+        Self { items, inner }
+    }
+}
+
+impl<'a> ExprHumanizer for ExprHumanizerExt<'a> {
+    fn humanize_id(&self, id: GlobalId) -> Option<String> {
+        match self.items.get(&id) {
+            Some(item) => item.humanized_id.clone(),
+            None => self.inner.humanize_id(id),
+        }
+    }
+
+    fn humanize_id_unqualified(&self, id: GlobalId) -> Option<String> {
+        match self.items.get(&id) {
+            Some(item) => item.humanized_id_unqualified.clone(),
+            None => self.inner.humanize_id_unqualified(id),
+        }
+    }
+
+    fn humanize_scalar_type(&self, ty: &ScalarType) -> String {
+        self.inner.humanize_scalar_type(ty)
+    }
+
+    fn column_names_for_id(&self, id: GlobalId) -> Option<Vec<String>> {
+        match self.items.get(&id) {
+            Some(item) => item.column_names.clone(),
+            None => self.inner.column_names_for_id(id),
+        }
+    }
+
+    fn id_exists(&self, id: GlobalId) -> bool {
+        self.items.contains_key(&id) || self.inner.id_exists(id)
+    }
+}
+
+/// A description of a catalog item that does not exist, but can be reported as
+/// present in the catalog by a [`ExprHumanizerExt`] instance that has it in its
+/// `items` list.
+#[derive(Debug)]
+pub struct TransientItem {
+    humanized_id: Option<String>,
+    humanized_id_unqualified: Option<String>,
+    column_names: Option<Vec<String>>,
+}
+
+impl TransientItem {
+    pub fn new(
+        humanized_id: Option<String>,
+        humanized_id_unqualified: Option<String>,
+        column_names: Option<Vec<String>>,
+    ) -> Self {
+        Self {
+            humanized_id,
+            humanized_id_unqualified,
+            column_names,
+        }
     }
 }
 
@@ -462,6 +554,14 @@ impl ExprHumanizer for DummyHumanizer {
     fn humanize_scalar_type(&self, ty: &ScalarType) -> String {
         // The debug implementation is better than nothing.
         format!("{:?}", ty)
+    }
+
+    fn column_names_for_id(&self, _id: GlobalId) -> Option<Vec<String>> {
+        None
+    }
+
+    fn id_exists(&self, _id: GlobalId) -> bool {
+        false
     }
 }
 
@@ -496,42 +596,107 @@ pub struct Attributes {
     pub non_negative: Option<bool>,
     pub subtree_size: Option<usize>,
     pub arity: Option<usize>,
-    pub types: Option<String>,
-    pub keys: Option<String>,
+    pub types: Option<Option<Vec<ColumnType>>>,
+    pub keys: Option<Vec<Vec<usize>>>,
     pub cardinality: Option<String>,
+    pub column_names: Option<Vec<String>>,
 }
 
-impl fmt::Display for Attributes {
+#[derive(Debug, Clone)]
+pub struct HumanizedAttributes<'a> {
+    attrs: &'a Attributes,
+    humanizer: &'a dyn ExprHumanizer,
+    config: &'a ExplainConfig,
+}
+
+impl<'a> HumanizedAttributes<'a> {
+    pub fn new<T>(attrs: &'a Attributes, ctx: &PlanRenderingContext<'a, T>) -> Self {
+        Self {
+            attrs,
+            humanizer: ctx.humanizer,
+            config: ctx.config,
+        }
+    }
+}
+
+impl<'a> fmt::Display for HumanizedAttributes<'a> {
+    // Attribute rendering is guarded by the ExplainConfig flag for each
+    // attribute. This is needed because we might have derived attributes that
+    // are not explicitly requested (such as column_names), in which case we
+    // don't want to display them.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut builder = f.debug_struct("//");
-        if let Some(subtree_size) = &self.subtree_size {
-            builder.field("subtree_size", subtree_size);
+
+        if self.config.subtree_size {
+            let subtree_size = self.attrs.subtree_size.expect("subtree_size");
+            builder.field("subtree_size", &subtree_size);
         }
-        if let Some(non_negative) = &self.non_negative {
-            builder.field("non_negative", non_negative);
+
+        if self.config.non_negative {
+            let non_negative = self.attrs.non_negative.expect("non_negative");
+            builder.field("non_negative", &non_negative);
         }
-        if let Some(arity) = &self.arity {
-            builder.field("arity", arity);
+
+        if self.config.arity {
+            let arity = self.attrs.arity.expect("arity");
+            builder.field("arity", &arity);
         }
-        if let Some(types) = &self.types {
-            builder.field("types", types);
+
+        if self.config.types {
+            let types = match self.attrs.types.as_ref().expect("types") {
+                Some(types) => {
+                    let types = types
+                        .into_iter()
+                        .map(|c| self.humanizer.humanize_column_type(c))
+                        .collect::<Vec<_>>();
+
+                    bracketed("(", ")", separated(", ", types)).to_string()
+                }
+                None => "(<error>)".to_string(),
+            };
+            builder.field("types", &types);
         }
-        if let Some(keys) = &self.keys {
-            builder.field("keys", keys);
+
+        if self.config.keys {
+            let keys = self
+                .attrs
+                .keys
+                .as_ref()
+                .expect("keys")
+                .into_iter()
+                .map(|key| bracketed("[", "]", separated(", ", key)).to_string());
+            let keys = bracketed("(", ")", separated(", ", keys)).to_string();
+            builder.field("keys", &keys);
         }
-        if let Some(cardinality) = &self.cardinality {
+
+        if self.config.cardinality {
+            let cardinality = self.attrs.cardinality.as_ref().expect("cardinality");
             builder.field("cardinality", cardinality);
         }
+
+        if self.config.column_names {
+            let column_names = self.attrs.column_names.as_ref().expect("column_names");
+            let column_names = bracketed("(", ")", separated(", ", column_names)).to_string();
+            builder.field("column_names", &column_names);
+        }
+
         builder.finish()
     }
 }
 
 /// A set of indexes that are used in the explained plan.
-#[derive(Debug)]
-pub struct UsedIndexes(Vec<(GlobalId, Vec<IndexUsageType>)>);
+///
+/// Each element consists of the following components:
+/// 1. The id of the index.
+/// 2. A vector of [IndexUsageType] denoting how the index is used in the plan.
+///
+/// Using a `BTreeSet` here ensures a deterministic iteration order, which in turn ensures that
+/// the corresponding EXPLAIN output is determistic as well.
+#[derive(Debug, Default)]
+pub struct UsedIndexes(BTreeSet<(GlobalId, Vec<IndexUsageType>)>);
 
 impl UsedIndexes {
-    pub fn new(values: Vec<(GlobalId, Vec<IndexUsageType>)>) -> UsedIndexes {
+    pub fn new(values: BTreeSet<(GlobalId, Vec<IndexUsageType>)>) -> UsedIndexes {
         UsedIndexes(values)
     }
 
@@ -540,35 +705,45 @@ impl UsedIndexes {
     }
 }
 
-impl Default for UsedIndexes {
-    fn default() -> Self {
-        UsedIndexes(Vec::new())
-    }
-}
-
-#[derive(Debug, Clone, Arbitrary, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Debug, Clone, Arbitrary, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum IndexUsageType {
     /// Read the entire index.
     FullScan,
-    /// `IndexedFilter`, e.g., something like `WHERE x = 42`.
-    Lookup,
-    /// Differential join. Only records that have a match are read.
+    /// Differential join. The work is proportional to the number of matches.
     DifferentialJoin,
     /// Delta join; the bool indicates whether it's the first input of the join.
     /// In a snapshot, the first input is scanned, the others only get lookups.
     /// When later input batches are arriving, all inputs are fully read.
     DeltaJoin(bool),
-    /// This is when the entire plan is simply an `ArrangeBy` + `Get`. This is a rare case, the only
-    /// situation that I know of when it occurs is if one index is used to directly build another
-    /// index (probably one with a different key). Note that we won't be able to actually observe
-    /// this case in an EXPLAIN output until we implement `EXPLAIN INDEX` or `EXPLAIN CREATE INDEX`.
-    /// (`export_index` inserts the `ArrangeBy`.)
-    PlanRoot,
+    /// `IndexedFilter`, e.g., something like `WHERE x = 42` with an index on `x`.
+    /// This also stores the id of the index that we want to do the lookup from. (This id is already
+    /// chosen by `LiteralConstraints`, and then `IndexUsageType::Lookup` communicates this inside
+    /// `CollectIndexRequests` from the `IndexedFilter` to the `Get`.)
+    Lookup(GlobalId),
+    /// This is a rare case that happens when the user creates an index that is identical to an
+    /// existing one (i.e., on the same object, and with the same keys). We'll re-use the
+    /// arrangement of the existing index. The plan is an `ArrangeBy` + `Get`, where the `ArrangeBy`
+    /// is requesting the same key as an already existing index. (`export_index` is what inserts
+    /// this `ArrangeBy`.)
+    PlanRootNoArrangement,
+    /// The index is used for directly writing to a sink. Can happen with a SUBSCRIBE to an indexed
+    /// view.
+    SinkExport,
+    /// The index is used for creating a new index. Note that either a `FullScan` or a
+    /// `PlanRootNoArrangement` usage will always accompany an `IndexExport` usage.
+    IndexExport,
+    /// When a fast path peek has a LIMIT, but no ORDER BY, then we read from the index only as many
+    /// records (approximately), as the OFFSET + LIMIT needs.
+    /// Note: When a fast path peek does a lookup and also has a limit, the usage type will be
+    /// `Lookup`. However, the smart limiting logic will still apply.
+    FastPathLimit,
     /// We saw a dangling `ArrangeBy`, i.e., where we have no idea what the arrangement will be used
     /// for. This is an internal error. Can be a bug either in `CollectIndexRequests`, or some
     /// other transform that messed up the plan. It's also possible that somebody is trying to add
     /// an `ArrangeBy` marking for some operator other than a `Join`. (Which is fine, but please
     /// update `CollectIndexRequests`.)
+    DanglingArrangeBy,
+    /// Internal error in `CollectIndexRequests`.
     Unknown,
 }
 
@@ -579,46 +754,33 @@ impl std::fmt::Display for IndexUsageType {
             "{}",
             match self {
                 IndexUsageType::FullScan => "*** full scan ***",
-                IndexUsageType::Lookup => "lookup",
+                IndexUsageType::Lookup(_idx_id) => "lookup",
                 IndexUsageType::DifferentialJoin => "differential join",
-                IndexUsageType::DeltaJoin(true) => "delta join 1st input",
-                IndexUsageType::DeltaJoin(false) => "delta join",
-                IndexUsageType::PlanRoot => "plan root",
-                IndexUsageType::Unknown => "*** unknown -- INTERNAL ERROR ***",
+                IndexUsageType::DeltaJoin(true) => "delta join 1st input (full scan)",
+                // Technically, this is a lookup only for a snapshot. For later update batches, all
+                // records are read. However, I wrote lookup here, because in most cases the
+                // lookup/scan distinction matters only for a snapshot. This is because for arriving
+                // update records, something in the system will always do work proportional to the
+                // number of records anyway. In other words, something is always scanning new
+                // updates, but we can avoid scanning records again and again in snapshots.
+                IndexUsageType::DeltaJoin(false) => "delta join lookup",
+                IndexUsageType::PlanRootNoArrangement => "plan root (no new arrangement)",
+                IndexUsageType::SinkExport => "sink export",
+                IndexUsageType::IndexExport => "index export",
+                IndexUsageType::FastPathLimit => "fast path limit",
+                IndexUsageType::DanglingArrangeBy => "*** INTERNAL ERROR (dangling ArrangeBy) ***",
+                IndexUsageType::Unknown => "*** INTERNAL ERROR (unknown usage) ***",
             }
         )
     }
 }
 
-impl RustType<ProtoIndexUsageType> for IndexUsageType {
-    fn into_proto(&self) -> ProtoIndexUsageType {
-        use crate::explain::proto_index_usage_type::Kind::*;
-        ProtoIndexUsageType {
-            kind: Some(match self {
-                IndexUsageType::FullScan => FullScan(()),
-                IndexUsageType::Lookup => Lookup(()),
-                IndexUsageType::DifferentialJoin => DifferentialJoin(()),
-                IndexUsageType::DeltaJoin(first) => DeltaJoin(*first),
-                IndexUsageType::PlanRoot => PlanRoot(()),
-                IndexUsageType::Unknown => Unknown(()),
-            }),
-        }
-    }
-    fn from_proto(proto: ProtoIndexUsageType) -> Result<Self, TryFromProtoError> {
-        use crate::explain::proto_index_usage_type::Kind::*;
-
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoIndexUsageType::Kind"))?;
-
-        match kind {
-            FullScan(()) => Ok(IndexUsageType::FullScan),
-            Lookup(()) => Ok(IndexUsageType::Lookup),
-            DifferentialJoin(()) => Ok(IndexUsageType::DifferentialJoin),
-            DeltaJoin(first) => Ok(IndexUsageType::DeltaJoin(first)),
-            PlanRoot(()) => Ok(IndexUsageType::PlanRoot),
-            Unknown(()) => Ok(IndexUsageType::Unknown),
-        }
+impl IndexUsageType {
+    pub fn display_vec<'a, I>(usage_types: I) -> impl Display + Sized + 'a
+    where
+        I: IntoIterator<Item = &'a IndexUsageType>,
+    {
+        separated(", ", usage_types.into_iter().sorted().dedup())
     }
 }
 
@@ -723,6 +885,8 @@ mod tests {
             types: false,
             filter_pushdown: false,
             cardinality: false,
+            column_names: false,
+            humanized_exprs: false,
         };
         let context = ExplainContext {
             env,

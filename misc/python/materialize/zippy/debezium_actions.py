@@ -10,9 +10,8 @@
 
 import random
 from textwrap import dedent
-from typing import List, Set, Type
 
-from materialize.mzcompose import Composition
+from materialize.mzcompose.composition import Composition
 from materialize.zippy.debezium_capabilities import (
     DebeziumRunning,
     DebeziumSourceExists,
@@ -27,7 +26,7 @@ from materialize.zippy.storaged_capabilities import StoragedRunning
 class DebeziumStart(Action):
     """Start a Debezium instance."""
 
-    def provides(self) -> List[Capability]:
+    def provides(self) -> list[Capability]:
         return [DebeziumRunning()]
 
     def run(self, c: Composition) -> None:
@@ -38,10 +37,10 @@ class DebeziumStop(Action):
     """Stop the Debezium instance."""
 
     @classmethod
-    def requires(self) -> Set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {DebeziumRunning}
 
-    def withholds(self) -> Set[Type[Capability]]:
+    def withholds(self) -> set[type[Capability]]:
         return {DebeziumRunning}
 
     def run(self, c: Composition) -> None:
@@ -52,7 +51,7 @@ class CreateDebeziumSource(Action):
     """Creates a Debezium source in Materialized."""
 
     @classmethod
-    def requires(self) -> Set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {MzIsRunning, StoragedRunning, KafkaRunning, PostgresTableExists}
 
     def __init__(self, capabilities: Capabilities) -> None:
@@ -109,7 +108,8 @@ class CreateDebeziumSource(Action):
                         "database.history.kafka.bootstrap.servers": "kafka:9092",
                         "database.history.kafka.topic": "schema-changes.history",
                         "truncate.handling.mode": "include",
-                        "decimal.handling.mode": "precise"
+                        "decimal.handling.mode": "precise",
+                        "topic.prefix": "postgres"
                       }}
                     }}
 
@@ -128,5 +128,5 @@ class CreateDebeziumSource(Action):
                 )
             )
 
-    def provides(self) -> List[Capability]:
+    def provides(self) -> list[Capability]:
         return [self.debezium_source] if self.new_debezium_source else []

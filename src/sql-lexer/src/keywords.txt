@@ -27,6 +27,7 @@ Access
 Acks
 Add
 Addresses
+Aggregate
 All
 Alter
 And
@@ -45,6 +46,7 @@ Aws
 Begin
 Between
 Bigint
+Billed
 Body
 Boolean
 Both
@@ -70,7 +72,9 @@ Cluster
 Clusters
 Coalesce
 Collate
+Column
 Columns
+Comment
 Commit
 Committed
 Compaction
@@ -105,6 +109,7 @@ Decimal
 Declare
 Decorrelated
 Default
+Defaults
 Delete
 Delimited
 Delimiter
@@ -175,10 +180,12 @@ Info
 Inherit
 Inline
 Inner
+Input
 Insert
 Inspect
 Int
 Integer
+Internal
 Intersect
 Interval
 Into
@@ -350,6 +357,7 @@ Subsource
 Subsources
 Substring
 Superuser
+Swap
 System
 Table
 Tables
@@ -365,6 +373,7 @@ Time
 Timeline
 Timeout
 Timestamp
+TimestampTz
 To
 Token
 Topic

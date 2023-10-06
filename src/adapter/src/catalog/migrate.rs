@@ -10,16 +10,16 @@
 use std::collections::BTreeMap;
 
 use futures::future::BoxFuture;
+use mz_catalog::{self, Transaction};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::EpochMillis;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Raw;
-use mz_storage_client::types::connections::ConnectionContext;
+use mz_storage_types::connections::ConnectionContext;
 use semver::Version;
 use tracing::info;
 
-use crate::catalog::storage::Transaction;
-use crate::catalog::{storage, Catalog, ConnCatalog, SerializedCatalogItem};
+use crate::catalog::{Catalog, ConnCatalog};
 
 async fn rewrite_items<F>(
     tx: &mut Transaction<'_>,
@@ -36,17 +36,11 @@ where
     let mut updated_items = BTreeMap::new();
     let items = tx.loaded_items();
     for mut item in items {
-        let create_sql = match &item.definition {
-            SerializedCatalogItem::V1 { create_sql } => create_sql,
-        };
-        let mut stmt = mz_sql::parse::parse(create_sql)?.into_element().ast;
+        let mut stmt = mz_sql::parse::parse(&item.create_sql)?.into_element().ast;
 
         f(tx, &cat, &mut stmt).await?;
 
-        let serialized_item = SerializedCatalogItem::V1 {
-            create_sql: stmt.to_ast_string_stable(),
-        };
-        item.definition = serialized_item;
+        item.create_sql = stmt.to_ast_string_stable();
 
         updated_items.insert(item.id, item);
     }
@@ -127,7 +121,7 @@ fn _add_to_audit_log(
     details: mz_audit_log::EventDetails,
     occurred_at: EpochMillis,
 ) -> Result<(), anyhow::Error> {
-    let id = tx.get_and_increment_id(storage::AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
+    let id = tx.get_and_increment_id(mz_catalog::AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
     let event =
         mz_audit_log::VersionedEvent::new(id, event_type, object_type, details, None, occurred_at);
     tx.insert_audit_log_event(event);

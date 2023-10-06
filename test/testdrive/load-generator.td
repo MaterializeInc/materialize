@@ -10,50 +10,33 @@
 > CREATE SOURCE auction_house FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
 
 > SHOW SOURCES
-accounts                subsource      <null>
-auction_house           load-generator ${arg.default-storage-size}
-auction_house_progress  progress       <null>
-auctions                subsource      <null>
-bids                    subsource      <null>
-organizations           subsource      <null>
-users                   subsource      <null>
+accounts                subsource      <null>                         <null>
+auction_house           load-generator ${arg.default-storage-size}    materialize_public_auction_house
+auction_house_progress  progress       <null>                         <null>
+auctions                subsource      <null>                         <null>
+bids                    subsource      <null>                         <null>
+organizations           subsource      <null>                         <null>
+users                   subsource      <null>                         <null>
 
-# Adding test to check for tables() work
-> CREATE SCHEMA a;
-> CREATE SOURCE a.auction_bids FROM LOAD GENERATOR AUCTION FOR TABLES (bids);
-
-> SHOW SOURCES FROM a;
-auction_bids            load-generator ${arg.default-storage-size}
-auction_bids_progress   progress       <null>
-bids                    subsource      <null>
+# FOR TABLES doesn't always work.
+# A previous test here checked bids, which worked.
+# It did not check users, which causes a panic.
+# If this is fixed in the future, tests should probably exhaustively check each subsource.
+! CREATE SOURCE auction_house FROM LOAD GENERATOR AUCTION FOR TABLES (user);
+contains:LOAD GENERATOR source validation: FOR TABLES (..) unsupported
 
 # For Tables with mentioned schema should work
 > CREATE SCHEMA another;
 > CREATE SOURCE another.auction_house FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
 
 > SHOW SOURCES FROM another;
-accounts                subsource      <null>
-auction_house           load-generator ${arg.default-storage-size}
-auction_house_progress  progress       <null>
-auctions                subsource      <null>
-bids                    subsource      <null>
-organizations           subsource      <null>
-users                   subsource      <null>
-
-# Subsources should be created in source schema if no schema is provided
-> CREATE SCHEMA foo;
-> CREATE SCHEMA bar;
-> CREATE SOURCE foo.auction_subset
-  FROM LOAD GENERATOR AUCTION
-  FOR TABLES (bids as foo_bids, users as bar.bar_users);
-
-> SHOW SOURCES FROM foo;
-auction_subset            load-generator ${arg.default-storage-size}
-auction_subset_progress   progress       <null>
-foo_bids                  subsource      <null>
-
-> SHOW SOURCES FROM bar;
-bar_users                 subsource      <null>
+accounts                subsource      <null>                       <null>
+auction_house           load-generator ${arg.default-storage-size}  materialize_another_auction_house
+auction_house_progress  progress       <null>                       <null>
+auctions                subsource      <null>                       <null>
+bids                    subsource      <null>                       <null>
+organizations           subsource      <null>                       <null>
+users                   subsource      <null>                       <null>
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
@@ -70,7 +53,7 @@ materialize.public.accounts "CREATE SUBSOURCE \"materialize\".\"public\".\"accou
 
 # Check that non-append-only `COUNTER` sources reach the proper size
 
-> CREATE SOURCE counter FROM LOAD GENERATOR COUNTER (MAX CARDINALITY 8, TICK INTERVAL '0.001s') WITH (SIZE '1')
+> CREATE SOURCE counter FROM LOAD GENERATOR COUNTER (MAX CARDINALITY 8, TICK INTERVAL '0.001s')
 
 > SELECT count(*) FROM counter
 8
@@ -83,10 +66,10 @@ materialize.public.accounts "CREATE SUBSOURCE \"materialize\".\"public\".\"accou
 8
 
 # Check that negative max cardinalities are rejected
-! CREATE SOURCE counter2 FROM LOAD GENERATOR COUNTER (MAX CARDINALITY -1) WITH (SIZE '1')
-contains: unsupported max cardinality
+! CREATE SOURCE counter2 FROM LOAD GENERATOR COUNTER (MAX CARDINALITY -1)
+contains:invalid MAX CARDINALITY: invalid unsigned numeric value: invalid digit found in string
 
-> CREATE SOURCE counter3 FROM LOAD GENERATOR COUNTER (MAX CARDINALITY 0) WITH (SIZE '1')
+> CREATE SOURCE counter3 FROM LOAD GENERATOR COUNTER (MAX CARDINALITY 0)
 
 > SELECT count(*) FROM counter3
 0
@@ -111,7 +94,7 @@ $ set-regex match=\d+ replacement=<NUMBER>
 <NUMBER>
 
 # Ensure we report the write frontier of the progress subsource
-$ set-regex match=(\s{12}0|\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d\d\d\)|true|false) replacement=<>
+$ set-regex match=(\s{12}0|\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d\.\d\d\d\)|true|false) replacement=<>
 > EXPLAIN TIMESTAMP FOR SELECT * FROM auction_house_progress
 "                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.public.auction_house_progress (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"
 
@@ -120,9 +103,3 @@ $ set-regex match=(\s{12}0|\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d.\d
   FROM LOAD GENERATOR COUNTER (MAX CARDINALITY 8, TICK INTERVAL '0.001s')
   FOR ALL TABLES;
 contains: FOR ALL TABLES is only valid for multi-output sources
-
-# Check that for tables() clause is rejected with no subsources
-! CREATE SOURCE counter6
-  FROM LOAD GENERATOR COUNTER (MAX CARDINALITY 8, TICK INTERVAL '0.001s')
-  FOR TABLES(t1);
-contains: FOR TABLES (..) is only valid for multi-output sources

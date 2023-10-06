@@ -13,10 +13,10 @@ build apply=PredicatePushdown
       [[1 2 3]
        [4 5 6]]
       [int64 int64 int64])
-   (filter (get x) [#0]))
+   (filter (get x) [(call_binary eq #0 (5 Int32))]))
 ----
 Filter
-  Filter #0
+  Filter (#0 = 5)
     Constant
       - (1, 2, 3)
       - (4, 5, 6)

@@ -22,18 +22,20 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use mz_build_info::BuildInfo;
-use mz_controller::clusters::{ClusterId, ReplicaId};
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::MirScalarExpr;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::str::StrExt;
+use mz_proto::IntoRustIfSome;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, GlobalId, RelationDesc};
 use mz_sql_parser::ast::{Expr, QualifiedReplica, UnresolvedItemName};
 use mz_stash::objects::{proto, RustType, TryFromProtoError};
-use mz_storage_client::types::connections::Connection;
-use mz_storage_client::types::sources::SourceDesc;
+use mz_storage_types::connections::inline::{ConnectionResolver, ReferencedConnection};
+use mz_storage_types::connections::Connection;
+use mz_storage_types::sources::SourceDesc;
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use regex::Regex;
@@ -42,15 +44,15 @@ use uuid::Uuid;
 
 use crate::func::Func;
 use crate::names::{
-    Aug, DatabaseId, FullItemName, FullSchemaName, ObjectId, PartialItemName, QualifiedItemName,
-    QualifiedSchemaName, ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier,
-    SystemObjectId,
+    Aug, CommentObjectId, DatabaseId, FullItemName, FullSchemaName, ObjectId, PartialItemName,
+    QualifiedItemName, QualifiedSchemaName, ResolvedDatabaseSpecifier, ResolvedIds, SchemaId,
+    SchemaSpecifier, SystemObjectId,
 };
 use crate::normalize;
 use crate::plan::statement::ddl::PlannedRoleAttributes;
 use crate::plan::statement::StatementDesc;
 use crate::plan::{PlanError, PlanNotice};
-use crate::session::vars::SystemVars;
+use crate::session::vars::{OwnedVarInput, SystemVars};
 
 /// A catalog keeps track of SQL objects and session state available to the
 /// planner.
@@ -80,7 +82,7 @@ use crate::session::vars::SystemVars;
 /// [`list_databases`]: Catalog::list_databases
 /// [`get_item`]: Catalog::resolve_item
 /// [`resolve_item`]: SessionCatalog::resolve_item
-pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
+pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionResolver {
     /// Returns the id of the role that is issuing the query.
     fn active_role_id(&self) -> &RoleId;
 
@@ -410,8 +412,6 @@ pub trait CatalogSchema {
     fn privileges(&self) -> &PrivilegeMap;
 }
 
-// TODO(jkosh44) When https://github.com/MaterializeInc/materialize/issues/17824 is implemented
-//  then switch this to a bitflag (https://docs.rs/bitflags/latest/bitflags/)
 /// Attributes belonging to a [`CatalogRole`].
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd, Arbitrary)]
 pub struct RoleAttributes {
@@ -423,7 +423,7 @@ pub struct RoleAttributes {
 
 impl RoleAttributes {
     /// Creates a new [`RoleAttributes`] with default attributes.
-    pub fn new() -> RoleAttributes {
+    pub const fn new() -> RoleAttributes {
         RoleAttributes {
             inherit: true,
             _private: (),
@@ -431,9 +431,14 @@ impl RoleAttributes {
     }
 
     /// Adds all attributes.
-    pub fn with_all(mut self) -> RoleAttributes {
+    pub const fn with_all(mut self) -> RoleAttributes {
         self.inherit = true;
         self
+    }
+
+    /// Returns whether or not the role has inheritence of privileges.
+    pub const fn is_inherit(&self) -> bool {
+        self.inherit
     }
 }
 
@@ -442,17 +447,6 @@ impl From<PlannedRoleAttributes> for RoleAttributes {
         let default_attributes = RoleAttributes::new();
         RoleAttributes {
             inherit: inherit.unwrap_or(default_attributes.inherit),
-            _private: (),
-        }
-    }
-}
-
-impl From<(&dyn CatalogRole, PlannedRoleAttributes)> for RoleAttributes {
-    fn from(
-        (role, PlannedRoleAttributes { inherit }): (&dyn CatalogRole, PlannedRoleAttributes),
-    ) -> RoleAttributes {
-        RoleAttributes {
-            inherit: inherit.unwrap_or_else(|| role.is_inherit()),
             _private: (),
         }
     }
@@ -474,6 +468,63 @@ impl RustType<proto::RoleAttributes> for RoleAttributes {
     }
 }
 
+/// Default variable values for a [`CatalogRole`].
+#[derive(Default, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct RoleVars {
+    /// Map of variable names to their value.
+    pub map: BTreeMap<String, OwnedVarInput>,
+}
+
+impl RustType<proto::role_vars::entry::Val> for OwnedVarInput {
+    fn into_proto(&self) -> proto::role_vars::entry::Val {
+        match self.clone() {
+            OwnedVarInput::Flat(v) => proto::role_vars::entry::Val::Flat(v),
+            OwnedVarInput::SqlSet(entries) => {
+                proto::role_vars::entry::Val::SqlSet(proto::role_vars::SqlSet { entries })
+            }
+        }
+    }
+
+    fn from_proto(proto: proto::role_vars::entry::Val) -> Result<Self, TryFromProtoError> {
+        let result = match proto {
+            proto::role_vars::entry::Val::Flat(v) => OwnedVarInput::Flat(v),
+            proto::role_vars::entry::Val::SqlSet(proto::role_vars::SqlSet { entries }) => {
+                OwnedVarInput::SqlSet(entries)
+            }
+        };
+        Ok(result)
+    }
+}
+
+impl RustType<proto::RoleVars> for RoleVars {
+    fn into_proto(&self) -> proto::RoleVars {
+        let entries = self
+            .map
+            .clone()
+            .into_iter()
+            .map(|(key, val)| proto::role_vars::Entry {
+                key,
+                val: Some(val.into_proto()),
+            })
+            .collect();
+
+        proto::RoleVars { entries }
+    }
+
+    fn from_proto(proto: proto::RoleVars) -> Result<Self, TryFromProtoError> {
+        let map = proto
+            .entries
+            .into_iter()
+            .map(|entry| {
+                let val = entry.val.into_rust_if_some("role_vars::Entry::Val")?;
+                Ok::<_, TryFromProtoError>((entry.key, val))
+            })
+            .collect::<Result<_, _>>()?;
+
+        Ok(RoleVars { map })
+    }
+}
+
 /// A role in a [`SessionCatalog`].
 pub trait CatalogRole {
     /// Returns a fully-specified name of the role.
@@ -482,14 +533,17 @@ pub trait CatalogRole {
     /// Returns a stable ID for the role.
     fn id(&self) -> RoleId;
 
-    /// Indicates whether the role has inheritance of privileges.
-    fn is_inherit(&self) -> bool;
-
     /// Returns all role IDs that this role is an immediate a member of, and the grantor of that
     /// membership.
     ///
     /// Key is the role that some role is a member of, value is the grantor role ID.
     fn membership(&self) -> &BTreeMap<RoleId, RoleId>;
+
+    /// Returns the attributes associated with this role.
+    fn attributes(&self) -> &RoleAttributes;
+
+    /// Returns all variables that this role has a default value stored for.
+    fn vars(&self) -> &BTreeMap<String, OwnedVarInput>;
 }
 
 /// A cluster in a [`SessionCatalog`].
@@ -572,12 +626,12 @@ pub trait CatalogItem {
     ///
     /// If the catalog item is not of a type that contains a `SourceDesc`
     /// (i.e., anything other than sources), it returns an error.
-    fn source_desc(&self) -> Result<Option<&SourceDesc>, CatalogError>;
+    fn source_desc(&self) -> Result<Option<&SourceDesc<ReferencedConnection>>, CatalogError>;
 
     /// Returns the resolved connection.
     ///
     /// If the catalog item is not a connection, it returns an error.
-    fn connection(&self) -> Result<&Connection, CatalogError>;
+    fn connection(&self) -> Result<&Connection<ReferencedConnection>, CatalogError>;
 
     /// Returns the type of the catalog item.
     fn item_type(&self) -> CatalogItemType;
@@ -726,6 +780,8 @@ pub struct CatalogTypeDetails<T: TypeReference> {
     pub array_id: Option<GlobalId>,
     /// The description of this type.
     pub typ: CatalogType<T>,
+    /// The OID of the `typreceive` function in PostgreSQL, if available.
+    pub typreceive_oid: Option<u32>,
 }
 
 /// Represents a reference to type in the catalog
@@ -779,10 +835,13 @@ pub enum CatalogType<T: TypeReference> {
     Jsonb,
     List {
         element_reference: T::Reference,
+        element_modifiers: Vec<i64>,
     },
     Map {
         key_reference: T::Reference,
+        key_modifiers: Vec<i64>,
         value_reference: T::Reference,
+        value_modifiers: Vec<i64>,
     },
     Numeric,
     Oid,
@@ -793,7 +852,7 @@ pub enum CatalogType<T: TypeReference> {
         element_reference: T::Reference,
     },
     Record {
-        fields: Vec<(ColumnName, T::Reference)>,
+        fields: Vec<CatalogRecordField<T>>,
     },
     RegClass,
     RegProc,
@@ -806,6 +865,17 @@ pub enum CatalogType<T: TypeReference> {
     VarChar,
     Int2Vector,
     MzAclItem,
+}
+
+/// A description of a field in a [`CatalogType::Record`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CatalogRecordField<T: TypeReference> {
+    /// The name of the field.
+    pub name: ColumnName,
+    /// The ID of the type of the field.
+    pub type_reference: T::Reference,
+    /// Modifiers to apply to the type.
+    pub type_modifiers: Vec<i64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1056,16 +1126,28 @@ impl Error for InvalidCloudProviderError {}
 pub enum CatalogError {
     /// Unknown database.
     UnknownDatabase(String),
+    /// Database already exists.
+    DatabaseAlreadyExists(String),
     /// Unknown schema.
     UnknownSchema(String),
+    /// Schema already exists.
+    SchemaAlreadyExists(String),
     /// Unknown role.
     UnknownRole(String),
+    /// Role already exists.
+    RoleAlreadyExists(String),
     /// Unknown cluster.
     UnknownCluster(String),
+    /// Cluster already exists.
+    ClusterAlreadyExists(String),
     /// Unknown cluster replica.
     UnknownClusterReplica(String),
+    /// Duplicate Replica. #[error("cannot create multiple replicas named '{0}' on cluster '{1}'")]
+    DuplicateReplica(String, String),
     /// Unknown item.
     UnknownItem(String),
+    /// Item already exists.
+    ItemAlreadyExists(GlobalId, String),
     /// Unknown function.
     UnknownFunction {
         /// The identifier of the function we couldn't find
@@ -1091,21 +1173,31 @@ pub enum CatalogError {
         /// The invalid item's type.
         typ: CatalogItemType,
     },
+    /// Ran out of unique IDs.
+    IdExhaustion,
+    /// Builtin migrations failed.
+    FailedBuiltinSchemaMigration(String),
 }
 
 impl fmt::Display for CatalogError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::UnknownDatabase(name) => write!(f, "unknown database '{}'", name),
+            Self::DatabaseAlreadyExists(name) => write!(f, "database '{name}' already exists"),
             Self::UnknownFunction { name, .. } => write!(f, "function \"{}\" does not exist", name),
             Self::UnknownConnection(name) => write!(f, "connection \"{}\" does not exist", name),
             Self::UnknownSchema(name) => write!(f, "unknown schema '{}'", name),
+            Self::SchemaAlreadyExists(name) => write!(f, "schema '{name}' already exists"),
             Self::UnknownRole(name) => write!(f, "unknown role '{}'", name),
+            Self::RoleAlreadyExists(name) => write!(f, "role '{name}' already exists"),
             Self::UnknownCluster(name) => write!(f, "unknown cluster '{}'", name),
+            Self::ClusterAlreadyExists(name) => write!(f, "cluster '{name}' already exists"),
             Self::UnknownClusterReplica(name) => {
                 write!(f, "unknown cluster replica '{}'", name)
             }
+            Self::DuplicateReplica(replica_name, cluster_name) => write!(f, "cannot create multiple replicas named '{replica_name}' on cluster '{cluster_name}'"),
             Self::UnknownItem(name) => write!(f, "unknown catalog item '{}'", name),
+            Self::ItemAlreadyExists(_gid, name) => write!(f, "catalog item '{name}' already exists"),
             Self::UnexpectedType {
                 name,
                 actual_type,
@@ -1124,6 +1216,8 @@ impl fmt::Display for CatalogError {
                 },
                 typ,
             ),
+            Self::IdExhaustion => write!(f, "id counter overflows i64"),
+            Self::FailedBuiltinSchemaMigration(objects) => write!(f, "failed to migrate schema of builtin objects: {objects}"),
         }
     }
 }
@@ -1271,6 +1365,28 @@ impl From<mz_sql_parser::ast::ObjectType> for ObjectType {
             mz_sql_parser::ast::ObjectType::Database => ObjectType::Database,
             mz_sql_parser::ast::ObjectType::Schema => ObjectType::Schema,
             mz_sql_parser::ast::ObjectType::Func => ObjectType::Func,
+        }
+    }
+}
+
+impl From<CommentObjectId> for ObjectType {
+    fn from(value: CommentObjectId) -> ObjectType {
+        match value {
+            CommentObjectId::Table(_) => ObjectType::Table,
+            CommentObjectId::View(_) => ObjectType::View,
+            CommentObjectId::MaterializedView(_) => ObjectType::MaterializedView,
+            CommentObjectId::Source(_) => ObjectType::Source,
+            CommentObjectId::Sink(_) => ObjectType::Sink,
+            CommentObjectId::Index(_) => ObjectType::Index,
+            CommentObjectId::Func(_) => ObjectType::Func,
+            CommentObjectId::Connection(_) => ObjectType::Connection,
+            CommentObjectId::Type(_) => ObjectType::Type,
+            CommentObjectId::Secret(_) => ObjectType::Secret,
+            CommentObjectId::Role(_) => ObjectType::Role,
+            CommentObjectId::Database(_) => ObjectType::Database,
+            CommentObjectId::Schema(_) => ObjectType::Schema,
+            CommentObjectId::Cluster(_) => ObjectType::Cluster,
+            CommentObjectId::ClusterReplica(_) => ObjectType::ClusterReplica,
         }
     }
 }
@@ -1449,6 +1565,83 @@ impl Display for ErrorMessageObjectDescription {
             }
             ErrorMessageObjectDescription::System => f.write_str("SYSTEM"),
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+// These attributes are needed because the key of a map must be a string. We also
+// get the added benefit of flattening this struct in it's serialized form.
+#[serde(into = "BTreeMap<String, RoleId>")]
+#[serde(try_from = "BTreeMap<String, RoleId>")]
+/// Represents the grantee and a grantor of a role membership.
+pub struct RoleMembership {
+    /// Key is the role that some role is a member of, value is the grantor role ID.
+    // TODO(jkosh44) This structure does not allow a role to have multiple of the same membership
+    // from different grantors. This isn't a problem now since we don't implement ADMIN OPTION, but
+    // we should figure this out before implementing ADMIN OPTION. It will likely require a messy
+    // migration.
+    pub map: BTreeMap<RoleId, RoleId>,
+}
+
+impl RoleMembership {
+    /// Creates a new [`RoleMembership`].
+    pub fn new() -> RoleMembership {
+        RoleMembership {
+            map: BTreeMap::new(),
+        }
+    }
+}
+
+impl From<RoleMembership> for BTreeMap<String, RoleId> {
+    fn from(value: RoleMembership) -> Self {
+        value
+            .map
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect()
+    }
+}
+
+impl TryFrom<BTreeMap<String, RoleId>> for RoleMembership {
+    type Error = anyhow::Error;
+
+    fn try_from(value: BTreeMap<String, RoleId>) -> Result<Self, Self::Error> {
+        Ok(RoleMembership {
+            map: value
+                .into_iter()
+                .map(|(k, v)| Ok((RoleId::from_str(&k)?, v)))
+                .collect::<Result<_, anyhow::Error>>()?,
+        })
+    }
+}
+
+impl RustType<proto::RoleMembership> for RoleMembership {
+    fn into_proto(&self) -> proto::RoleMembership {
+        proto::RoleMembership {
+            map: self
+                .map
+                .iter()
+                .map(|(key, val)| proto::role_membership::Entry {
+                    key: Some(key.into_proto()),
+                    value: Some(val.into_proto()),
+                })
+                .collect(),
+        }
+    }
+
+    fn from_proto(proto: proto::RoleMembership) -> Result<Self, TryFromProtoError> {
+        Ok(RoleMembership {
+            map: proto
+                .map
+                .into_iter()
+                .map(|e| {
+                    let key = e.key.into_rust_if_some("RoleMembership::Entry::key")?;
+                    let val = e.value.into_rust_if_some("RoleMembership::Entry::value")?;
+
+                    Ok((key, val))
+                })
+                .collect::<Result<_, TryFromProtoError>>()?,
+        })
     }
 }
 

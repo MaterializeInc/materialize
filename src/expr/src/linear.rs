@@ -34,7 +34,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_expr.linear.rs"));
 /// expressions in `self.expressions`, even though this is not something
 /// we can directly evaluate. The plan creation methods will defensively
 /// ensure that the right thing happens.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, Ord, PartialOrd)]
 pub struct MapFilterProject {
     /// A sequence of expressions that should be appended to the row.
     ///
@@ -1119,14 +1119,18 @@ impl MapFilterProject {
         let mut reference_count = vec![0; input_arity + self.expressions.len()];
         // Increment reference counts for each use
         for expr in self.expressions.iter() {
-            for col in expr.support().into_iter() {
-                reference_count[col] += 1;
-            }
+            expr.visit_pre(&mut |e| {
+                if let MirScalarExpr::Column(i) = e {
+                    reference_count[*i] += 1;
+                }
+            });
         }
         for (_, pred) in self.predicates.iter() {
-            for col in pred.support().into_iter() {
-                reference_count[col] += 1;
-            }
+            pred.visit_pre(&mut |e| {
+                if let MirScalarExpr::Column(i) = e {
+                    reference_count[*i] += 1;
+                }
+            });
         }
         for proj in self.projection.iter() {
             reference_count[*proj] += 1;
@@ -1437,7 +1441,7 @@ pub mod plan {
     };
 
     /// A wrapper type which indicates it is safe to simply evaluate all expressions.
-    #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+    #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
     pub struct SafeMfpPlan {
         pub(crate) mfp: MapFilterProject,
     }
@@ -1771,13 +1775,11 @@ pub mod plan {
         {
             match self.mfp.evaluate_inner(datums, arena) {
                 Err(e) => {
-                    return Some(Err((e.into(), time, diff)))
-                        .into_iter()
-                        .chain(None.into_iter());
+                    return Some(Err((e.into(), time, diff))).into_iter().chain(None);
                 }
                 Ok(true) => {}
                 Ok(false) => {
-                    return None.into_iter().chain(None.into_iter());
+                    return None.into_iter().chain(None);
                 }
             }
 
@@ -1812,7 +1814,7 @@ pub mod plan {
 
             // If the lower bound exceeds our `until` frontier, it should not appear in the output.
             if !valid_time(&lower_bound) {
-                return None.into_iter().chain(None.into_iter());
+                return None.into_iter().chain(None);
             }
 
             // If there are any upper bounds, determine the minimum upper bound.
@@ -1866,9 +1868,9 @@ pub mod plan {
                 let upper_opt =
                     upper_bound.map(|upper_bound| Ok((row_builder.clone(), upper_bound, -diff)));
                 let lower = Some(Ok((row_builder.clone(), lower_bound, diff)));
-                lower.into_iter().chain(upper_opt.into_iter())
+                lower.into_iter().chain(upper_opt)
             } else {
-                None.into_iter().chain(None.into_iter())
+                None.into_iter().chain(None)
             }
         }
 

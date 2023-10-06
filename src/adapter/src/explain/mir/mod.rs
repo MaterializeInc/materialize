@@ -16,7 +16,8 @@
 //! and conssequently are not available for the default [`Explain`]
 //! implementation for [`MirRelationExpr`] in [`mz_expr`].
 
-use mz_compute_client::types::dataflows::DataflowDescription;
+use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::explain::export_ids_for;
 use mz_expr::explain::{
     enforce_linear_chains, ExplainContext, ExplainMultiPlan, ExplainSinglePlan, ExplainSource,
 };
@@ -92,6 +93,7 @@ impl<'a> Explainable<'a, DataflowDescription<OptimizedMirRelationExpr>> {
         &'a mut self,
         context: &'a ExplainContext<'a>,
     ) -> Result<ExplainMultiPlan<'a, MirRelationExpr>, ExplainError> {
+        let export_ids = export_ids_for(self.0);
         let plans = self
             .0
             .objects_to_build
@@ -112,10 +114,14 @@ impl<'a> Explainable<'a, DataflowDescription<OptimizedMirRelationExpr>> {
                     normalize_lets(plan).map_err(|e| ExplainError::UnknownError(e.to_string()))?;
                 }
 
+                let public_id = export_ids
+                    .get(&build_desc.id)
+                    .unwrap_or(&build_desc.id)
+                    .clone();
                 let id = context
                     .humanizer
-                    .humanize_id(build_desc.id)
-                    .unwrap_or_else(|| build_desc.id.to_string());
+                    .humanize_id(public_id)
+                    .unwrap_or_else(|| public_id.to_string());
 
                 Ok((id, annotate_plan(plan, context)?))
             })
@@ -126,13 +132,8 @@ impl<'a> Explainable<'a, DataflowDescription<OptimizedMirRelationExpr>> {
             .source_imports
             .iter_mut()
             .filter_map(|(id, (source_desc, _))| {
-                source_desc.arguments.operators.as_ref().map(|op| {
-                    let id = context
-                        .humanizer
-                        .humanize_id(*id)
-                        .unwrap_or_else(|| id.to_string());
-                    ExplainSource::new(id, op, context)
-                })
+                let op = source_desc.arguments.operators.as_ref();
+                op.map(|op| ExplainSource::new(*id, op, context.config.filter_pushdown))
             })
             .collect::<Vec<_>>();
 

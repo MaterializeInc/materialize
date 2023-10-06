@@ -9,7 +9,8 @@
 
 import random
 import time
-from typing import Any, Dict, Iterator, List
+from collections.abc import Iterator
+from typing import Any
 
 import pg8000
 
@@ -36,13 +37,13 @@ from materialize.data_ingest.transaction_def import (
     TransactionDef,
     TransactionSize,
 )
-from materialize.mzcompose import Composition
+from materialize.mzcompose.composition import Composition
 
 
 class Workload:
-    cycle: List[TransactionDef]
+    cycle: list[TransactionDef]
 
-    def generate(self, fields: List[Field]) -> Iterator[Transaction]:
+    def generate(self, fields: list[Field]) -> Iterator[Transaction]:
         while True:
             for transaction_def in self.cycle:
                 for transaction in transaction_def.generate(fields):
@@ -137,15 +138,15 @@ class DeleteDataAtEndOfDayDisruptions(Workload):
 # TODO: Implement
 # class ProgressivelyEnrichRecords(Workload):
 #    def __init__(self) -> None:
-#        self.cycle: List[Definition] = [
+#        self.cycle: list[Definition] = [
 #        ]
 
 
 def execute_workload(
-    executor_classes: List[Any],
+    executor_classes: list[Any],
     workload: Workload,
     num: int,
-    ports: Dict[str, int],
+    ports: dict[str, int],
     runtime: int,
     verbose: bool,
 ) -> None:
@@ -204,7 +205,9 @@ def execute_workload(
             if actual_result == expected_result:
                 if correct_once:
                     break
-                print("Check for correctness again to make sure the result is stable")
+                print(
+                    "Results match. Check for correctness again to make sure the result is stable"
+                )
                 correct_once = True
                 time.sleep(sleep_time)
                 continue
@@ -214,4 +217,4 @@ def execute_workload(
             time.sleep(sleep_time)
             sleep_time *= 2
         else:
-            raise ValueError(f"Unexpected result {actual_result} != {expected_result}")
+            raise ValueError(f"Unexpected result {actual_result} != {expected_result}")  # type: ignore

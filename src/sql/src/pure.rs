@@ -31,8 +31,9 @@ use mz_sql_parser::ast::{
     KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection, PgConfigOption,
     PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy, Statement, UnresolvedItemName,
 };
-use mz_storage_client::types::connections::{Connection, ConnectionContext};
-use mz_storage_client::types::sources::{
+use mz_storage_types::connections::inline::IntoInlineConnection;
+use mz_storage_types::connections::{Connection, ConnectionContext};
+use mz_storage_types::sources::{
     GenericSourceConnection, PostgresSourcePublicationDetails, SourceConnection,
 };
 use prost::Message;
@@ -48,12 +49,18 @@ use crate::ast::{
 };
 use crate::catalog::{ErsatzCatalog, SessionCatalog};
 use crate::kafka_util::KafkaConfigOptionExtracted;
-use crate::names::{Aug, RawDatabaseSpecifier};
+use crate::names::Aug;
 use crate::plan::error::PlanError;
 use crate::plan::statement::ddl::load_generator_ast_to_generator;
 use crate::plan::StatementContext;
 use crate::{kafka_util, normalize};
 
+use self::error::{
+    KafkaSourcePurificationError, LoadGeneratorSourcePurificationError, PgSourcePurificationError,
+    TestScriptSourcePurificationError,
+};
+
+pub(crate) mod error;
 mod postgres;
 
 fn subsource_gen<'a, T>(
@@ -174,6 +181,7 @@ async fn purify_create_source(
 
     // Disallow manually targetting subsources, this syntax is reserved for purification only
     named_subsource_err(progress_subsource)?;
+
     if let Some(ReferencedSubsources::SubsetTables(subsources)) = referenced_subsources {
         for CreateSourceSubsource {
             subsource,
@@ -193,29 +201,15 @@ async fn purify_create_source(
     let mut subsources = vec![];
 
     let progress_desc = match &connection {
-        CreateSourceConnection::Kafka(_) => &mz_storage_client::types::sources::KAFKA_PROGRESS_DESC,
-        CreateSourceConnection::Postgres { .. } => {
-            &mz_storage_client::types::sources::PG_PROGRESS_DESC
-        }
+        CreateSourceConnection::Kafka(_) => &mz_storage_types::sources::KAFKA_PROGRESS_DESC,
+        CreateSourceConnection::Postgres { .. } => &mz_storage_types::sources::PG_PROGRESS_DESC,
         CreateSourceConnection::LoadGenerator { .. } => {
-            &mz_storage_client::types::sources::LOAD_GEN_PROGRESS_DESC
+            &mz_storage_types::sources::LOAD_GEN_PROGRESS_DESC
         }
         CreateSourceConnection::TestScript { .. } => {
-            &mz_storage_client::types::sources::TEST_SCRIPT_PROGRESS_DESC
+            &mz_storage_types::sources::TEST_SCRIPT_PROGRESS_DESC
         }
     };
-
-    match &connection {
-        CreateSourceConnection::Kafka(_) | CreateSourceConnection::TestScript { .. } => {
-            if let Some(referenced_subsources) = &referenced_subsources {
-                sql_bail!(
-                    "{} is only valid for multi-output sources",
-                    referenced_subsources.to_ast_string()
-                );
-            }
-        }
-        CreateSourceConnection::Postgres { .. } | CreateSourceConnection::LoadGenerator { .. } => {}
-    }
 
     match connection {
         CreateSourceConnection::Kafka(KafkaSourceConnection {
@@ -226,16 +220,23 @@ async fn purify_create_source(
                 },
             ..
         }) => {
+            if let Some(referenced_subsources) = referenced_subsources {
+                Err(KafkaSourcePurificationError::ReferencedSubsources(
+                    referenced_subsources.clone(),
+                ))?;
+            }
+
             let scx = StatementContext::new(None, &catalog);
             let mut connection = {
                 let item = scx.get_item_by_resolved_name(connection)?;
                 // Get Kafka connection
                 match item.connection()? {
-                    Connection::Kafka(connection) => connection.clone(),
-                    _ => sql_bail!(
-                        "{} is not a kafka connection",
-                        scx.catalog.resolve_full_name(item.name())
-                    ),
+                    Connection::Kafka(connection) => {
+                        connection.clone().into_inline_connection(&catalog)
+                    }
+                    _ => Err(KafkaSourcePurificationError::NotKafkaConnection(
+                        scx.catalog.resolve_full_name(item.name()),
+                    ))?,
                 }
             };
 
@@ -251,15 +252,19 @@ async fn purify_create_source(
 
             let topic = extracted_options
                 .topic
-                .ok_or_else(|| sql_err!("KAFKA CONNECTION without TOPIC"))?;
+                .ok_or(KafkaSourcePurificationError::ConnectionMissingTopic)?;
 
             let consumer = connection
-                .create_with_context(&connection_context, MzClientContext, &BTreeMap::new())
+                .create_with_context(
+                    &connection_context,
+                    MzClientContext::default(),
+                    &BTreeMap::new(),
+                )
                 .await
                 .map_err(|e| {
-                    anyhow!(
-                        "Failed to create and connect Kafka consumer: {}",
-                        e.display_with_causes()
+                    // anyhow doesn't support Clone, so not trivial to move into PlanError
+                    KafkaSourcePurificationError::KafkaConsumerError(
+                        e.display_with_causes().to_string(),
                     )
                 })?;
             let consumer = Arc::new(consumer);
@@ -301,6 +306,11 @@ async fn purify_create_source(
             }
         }
         CreateSourceConnection::TestScript { desc_json: _ } => {
+            if let Some(referenced_subsources) = referenced_subsources {
+                Err(TestScriptSourcePurificationError::ReferencedSubsources(
+                    referenced_subsources.clone(),
+                ))?;
+            }
             // TODO: verify valid json and valid schema
         }
         CreateSourceConnection::Postgres {
@@ -310,12 +320,13 @@ async fn purify_create_source(
             let scx = StatementContext::new(None, &catalog);
             let connection = {
                 let item = scx.get_item_by_resolved_name(connection)?;
-                match item.connection()? {
-                    Connection::Postgres(connection) => connection.clone(),
-                    _ => sql_bail!(
-                        "{} is not a postgres connection",
-                        scx.catalog.resolve_full_name(item.name())
-                    ),
+                match item.connection().map_err(PlanError::from)? {
+                    Connection::Postgres(connection) => {
+                        connection.clone().into_inline_connection(&catalog)
+                    }
+                    _ => Err(PgSourcePurificationError::NotPgConnection(
+                        scx.catalog.resolve_full_name(item.name()),
+                    ))?,
                 }
             };
             let crate::plan::statement::PgConfigOptionExtracted {
@@ -324,11 +335,11 @@ async fn purify_create_source(
                 details,
                 ..
             } = options.clone().try_into()?;
-            let publication = publication
-                .ok_or_else(|| sql_err!("POSTGRES CONNECTION must specify PUBLICATION"))?;
+            let publication =
+                publication.ok_or(PgSourcePurificationError::ConnectionMissingPublication)?;
 
             if details.is_some() {
-                return Err(PlanError::PgSourceUserSpecifiedDetails);
+                Err(PgSourcePurificationError::UserSpecifiedDetails)?;
             }
 
             // verify that we can connect upstream and snapshot publication metadata
@@ -340,7 +351,9 @@ async fn purify_create_source(
                 mz_postgres_util::publication_info(&config, &publication, None).await?;
 
             if publication_tables.is_empty() {
-                return Err(PlanError::EmptyPublication(publication.to_string()));
+                Err(PgSourcePurificationError::EmptyPublication(
+                    publication.to_string(),
+                ))?;
             }
 
             let publication_catalog = postgres::derive_catalog_from_publication_tables(
@@ -349,8 +362,11 @@ async fn purify_create_source(
             )?;
 
             let mut validated_requested_subsources = vec![];
-            match referenced_subsources {
-                Some(ReferencedSubsources::All) => {
+            match referenced_subsources
+                .as_mut()
+                .ok_or(PgSourcePurificationError::RequiresReferencedSubsources)?
+            {
+                ReferencedSubsources::All => {
                     for table in &publication_tables {
                         let upstream_name = UnresolvedItemName::qualified(&[
                             &connection.database,
@@ -361,7 +377,7 @@ async fn purify_create_source(
                         validated_requested_subsources.push((upstream_name, subsource_name, table));
                     }
                 }
-                Some(ReferencedSubsources::SubsetSchemas(schemas)) => {
+                ReferencedSubsources::SubsetSchemas(schemas) => {
                     let available_schemas: BTreeSet<_> = mz_postgres_util::get_schemas(&config)
                         .await?
                         .into_iter()
@@ -377,9 +393,10 @@ async fn purify_create_source(
                         .collect();
 
                     if !missing_schemas.is_empty() {
-                        return Err(PlanError::PostgresDatabaseMissingFilteredSchemas {
+                        Err(PgSourcePurificationError::DatabaseMissingFilteredSchemas {
+                            database: connection.database.clone(),
                             schemas: missing_schemas,
-                        });
+                        })?;
                     }
 
                     for table in &publication_tables {
@@ -396,7 +413,7 @@ async fn purify_create_source(
                         validated_requested_subsources.push((upstream_name, subsource_name, table));
                     }
                 }
-                Some(ReferencedSubsources::SubsetTables(subsources)) => {
+                ReferencedSubsources::SubsetTables(subsources) => {
                     // The user manually selected a subset of upstream tables so we need to
                     // validate that the names actually exist and are not ambiguous
                     validated_requested_subsources.extend(subsource_gen(
@@ -404,9 +421,6 @@ async fn purify_create_source(
                         &publication_catalog,
                         source_name,
                     )?);
-                }
-                None => {
-                    sql_bail!("multi-output sources require a FOR TABLES (..), FOR SCHEMAS (..), or FOR ALL TABLES clause");
                 }
             };
 
@@ -482,9 +496,7 @@ async fn purify_create_source(
                 Some(ReferencedSubsources::All) => {
                     let available_subsources = match &available_subsources {
                         Some(available_subsources) => available_subsources,
-                        None => {
-                            sql_bail!("FOR ALL TABLES is only valid for multi-output sources")
-                        }
+                        None => Err(LoadGeneratorSourcePurificationError::ForAllTables)?,
                     };
                     for (name, (_, desc)) in available_subsources {
                         let upstream_name = UnresolvedItemName::from(name.clone());
@@ -493,43 +505,14 @@ async fn purify_create_source(
                     }
                 }
                 Some(ReferencedSubsources::SubsetSchemas(..)) => {
-                    sql_bail!("FOR SCHEMAS (..) invalid for LOAD GENERATOR sources");
+                    Err(LoadGeneratorSourcePurificationError::ForSchemas)?
                 }
-                Some(ReferencedSubsources::SubsetTables(selected_subsources)) => {
-                    let available_subsources = match &available_subsources {
-                        Some(available_subsources) => available_subsources,
-                        None => {
-                            sql_bail!("FOR TABLES (..) is only valid for multi-output sources")
-                        }
-                    };
-                    // The user manually selected a subset of upstream tables so we need to
-                    // validate that the names actually exist and are not ambiguous
-
-                    // An index from table name -> schema name -> database name -> PostgresTableDesc
-                    let mut tables_by_name = BTreeMap::new();
-                    for (subsource_name, (_, desc)) in available_subsources {
-                        let database = match &subsource_name.database {
-                            RawDatabaseSpecifier::Name(database) => database.clone(),
-                            RawDatabaseSpecifier::Ambient => unreachable!(),
-                        };
-                        tables_by_name
-                            .entry(subsource_name.item.clone())
-                            .or_insert_with(BTreeMap::new)
-                            .entry(subsource_name.schema.clone())
-                            .or_insert_with(BTreeMap::new)
-                            .entry(database)
-                            .or_insert(desc);
-                    }
-
-                    validated_requested_subsources.extend(subsource_gen(
-                        selected_subsources,
-                        &ErsatzCatalog(tables_by_name),
-                        source_name,
-                    )?);
+                Some(ReferencedSubsources::SubsetTables(_)) => {
+                    Err(LoadGeneratorSourcePurificationError::ForTables)?
                 }
                 None => {
                     if available_subsources.is_some() {
-                        sql_bail!("multi-output sources require a FOR TABLES (..) or FOR ALL TABLES statement");
+                        Err(LoadGeneratorSourcePurificationError::MultiOutputRequiresForAllTables)?
                     }
                 }
             };
@@ -671,7 +654,7 @@ async fn purify_alter_source(
 
         // Ensure it's an ingestion-based and alterable source.
         let desc = match item.source_desc()? {
-            Some(desc) => desc,
+            Some(desc) => desc.clone().into_inline_connection(scx.catalog),
             None => {
                 sql_bail!("cannot ALTER this type of source")
             }
@@ -682,8 +665,8 @@ async fn purify_alter_source(
             return Ok((vec![], Statement::AlterSource(stmt)));
         }
 
-        match &desc.connection {
-            GenericSourceConnection::Postgres(pg_connection) => pg_connection.clone(),
+        match desc.connection {
+            GenericSourceConnection::Postgres(pg_connection) => pg_connection,
             _ => sql_bail!(
                 "{} is a {} source, which does not support ALTER TABLE...ADD SUBSOURCES",
                 scx.catalog.minimal_qualification(item.name()),
@@ -732,9 +715,9 @@ async fn purify_alter_source(
             .await?;
 
     if publication_tables.is_empty() {
-        return Err(PlanError::EmptyPublication(
+        Err(PgSourcePurificationError::EmptyPublication(
             pg_source_connection.publication.to_string(),
-        ));
+        ))?;
     }
 
     let publication_catalog = postgres::derive_catalog_from_publication_tables(
@@ -766,10 +749,9 @@ async fn purify_alter_source(
 
     for (upstream_name, _, _) in validated_requested_subsources.iter() {
         if current_subsources.contains_key(upstream_name) {
-            sql_bail!(
-                "cannot create multiple subsources in the same source that refer to upstream table {}",
-                upstream_name
-            );
+            Err(PgSourcePurificationError::SubsourceAlreadyReferredTo {
+                name: upstream_name.clone(),
+            })?;
         }
     }
 
@@ -963,7 +945,7 @@ async fn purify_csr_connection_proto(
             let scx = StatementContext::new(None, &*catalog);
 
             let ccsr_connection = match scx.get_item_by_resolved_name(connection)?.connection()? {
-                Connection::Csr(connection) => connection.clone(),
+                Connection::Csr(connection) => connection.clone().into_inline_connection(catalog),
                 _ => sql_bail!("{} is not a schema registry connection", connection),
             };
 
@@ -1016,7 +998,7 @@ async fn purify_csr_connection_avro(
     if seed.is_none() {
         let scx = StatementContext::new(None, &*catalog);
         let csr_connection = match scx.get_item_by_resolved_name(connection)?.connection()? {
-            Connection::Csr(connection) => connection.clone(),
+            Connection::Csr(connection) => connection.clone().into_inline_connection(catalog),
             _ => sql_bail!("{} is not a schema registry connection", connection),
         };
         let ccsr_client = csr_connection.connect(connection_context).await?;

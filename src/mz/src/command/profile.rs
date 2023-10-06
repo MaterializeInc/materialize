@@ -40,6 +40,22 @@ use crate::{
     server::server,
 };
 
+/// Strips the `.api` from the login endpoint.
+/// The `.api` prefix will cause a failure during login
+/// in the browser.
+fn strip_api_from_endpoint(endpoint: Url) -> Url {
+    if let Some(domain) = endpoint.domain() {
+        if let Some(corrected_domain) = domain.strip_prefix("api.") {
+            let mut new_endpoint = endpoint.clone();
+            let _ = new_endpoint.set_host(Some(corrected_domain));
+
+            return new_endpoint;
+        }
+    };
+
+    endpoint
+}
+
 /// Opens the default web browser in the host machine
 /// and awaits a single request containing the profile's app password.
 pub async fn init_with_browser(cloud_endpoint: Option<Url>) -> Result<AppPassword, Error> {
@@ -48,7 +64,9 @@ pub async fn init_with_browser(cloud_endpoint: Option<Url>) -> Result<AppPasswor
     let (server, port) = server(tx);
 
     // Build the login URL
-    let mut url = cloud_endpoint.unwrap_or_else(|| DEFAULT_ENDPOINT.clone());
+    let mut url =
+        strip_api_from_endpoint(cloud_endpoint.unwrap_or_else(|| DEFAULT_ENDPOINT.clone()));
+
     url.path_segments_mut()
         .expect("constructor validated URL can be a base")
         .extend(&["account", "login"]);
@@ -56,9 +74,8 @@ pub async fn init_with_browser(cloud_endpoint: Option<Url>) -> Result<AppPasswor
     let mut query_pairs = url.query_pairs_mut();
     query_pairs.append_pair(
         "redirectUrl",
-        &format!("/access/cli?redirectUri=http://localhost:{port}"),
+        &format!("/access/cli?redirectUri=http://localhost:{port}&tokenDescription=Materialize%20CLI%20%28mz%29"),
     );
-
     // The replace is a little hack to avoid asking an additional parameter
     // for a custom login.
     let open_url = &query_pairs.finish().as_str().replace("cloud", "console");
@@ -66,7 +83,7 @@ pub async fn init_with_browser(cloud_endpoint: Option<Url>) -> Result<AppPasswor
     // Open the browser to login user.
     if let Err(_err) = open::that(open_url) {
         println!(
-            "Could not open a browser to visit the login page <{:?}>: Please open the page yourself.",
+            "Error: Unable to launch a web browser. Access the login page using this link: '{:?}', or execute `mz profile init --no-browser` in your command line.",
             open_url
         )
     }
@@ -122,7 +139,7 @@ pub async fn init_without_browser(admin_endpoint: Option<Url>) -> Result<AppPass
 
     let app_password = admin_client
         .create_app_password(CreateAppPasswordRequest {
-            description: "App password for the CLI",
+            description: "Materialize CLI (mz)",
         })
         .await?;
 
@@ -136,7 +153,6 @@ pub async fn init_without_browser(admin_endpoint: Option<Url>) -> Result<AppPass
 /// 2. By opening the browser and creating the credentials in the console.
 pub async fn init(
     scx: &mut Context,
-    profile_name: Option<String>,
     no_browser: bool,
     admin_endpoint: Option<Url>,
     cloud_endpoint: Option<Url>,
@@ -154,9 +170,11 @@ pub async fn init(
         cloud_endpoint: cloud_endpoint.map(|url| url.to_string()),
     };
 
-    scx.config_file()
+    let config_file = scx.config_file();
+    config_file
         .add_profile(
-            profile_name.map_or(scx.config_file().profile().to_string(), |n| n),
+            scx.get_global_profile()
+                .map_or(config_file.profile().to_string(), |n| n),
             new_profile,
         )
         .await?;
@@ -184,7 +202,10 @@ pub fn list(cx: &mut Context) -> Result<(), Error> {
 /// Removes the profile from the configuration file.
 pub async fn remove(cx: &mut Context) -> Result<(), Error> {
     cx.config_file()
-        .remove_profile(cx.config_file().profile())
+        .remove_profile(
+            &cx.get_global_profile()
+                .unwrap_or(cx.config_file().profile().to_string()),
+        )
         .await
 }
 
@@ -241,14 +262,15 @@ pub fn config_get(
     cx: &mut ProfileContext,
     ConfigGetArgs { name }: ConfigGetArgs<'_>,
 ) -> Result<(), Error> {
-    let value = cx.config_file().get_profile_param(name).unwrap();
+    let profile = cx.get_profile();
+    let value = cx.config_file().get_profile_param(name, &profile)?;
     cx.output_formatter().output_scalar(value)?;
     Ok(())
 }
 
 /// Shows all the possible field and its values in the profile configuration.
 pub fn config_list(cx: &mut ProfileContext) -> Result<(), Error> {
-    let profile_params = cx.config_file().list_profile_params()?;
+    let profile_params = cx.config_file().list_profile_params(&cx.get_profile())?;
     let output = cx.output_formatter();
 
     // Structure to format the output. The name of the field equals the column name.
@@ -280,7 +302,9 @@ pub async fn config_set(
     cx: &mut ProfileContext,
     ConfigSetArgs { name, value }: ConfigSetArgs<'_>,
 ) -> Result<(), Error> {
-    cx.config_file().set_profile_param(name, Some(value)).await
+    cx.config_file()
+        .set_profile_param(&cx.get_profile(), name, Some(value))
+        .await
 }
 
 /// Represents the args to remove the value from a profile configuration field.
@@ -294,5 +318,7 @@ pub async fn config_remove(
     cx: &mut ProfileContext,
     ConfigRemoveArgs { name }: ConfigRemoveArgs<'_>,
 ) -> Result<(), Error> {
-    cx.config_file().set_profile_param(name, None).await
+    cx.config_file()
+        .set_profile_param(&cx.get_profile(), name, None)
+        .await
 }

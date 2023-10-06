@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> SELECT * FROM mz_list_types;
+> SELECT id, element_id, element_modifiers::text FROM mz_list_types;
 
 > SHOW TYPES
 

@@ -320,6 +320,7 @@ mod tests {
             &crate::encode::column_names_and_types(desc),
             "data",
             &BTreeMap::new(),
+            false,
         )
         .unwrap();
         let schema = build_schema(row_schema);

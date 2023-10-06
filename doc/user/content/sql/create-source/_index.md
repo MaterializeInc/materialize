@@ -18,23 +18,33 @@ Like other relations, sources are [namespaced](../namespaces/) by a database and
 
 ## Connectors
 
-Materialize bundles **native connectors** for the following external systems:
+Materialize bundles **native connectors** that allow ingesting data from the following external systems:
 
 {{< multilinkbox >}}
 {{< linkbox title="Message Brokers" >}}
 - [Kafka](/sql/create-source/kafka)
 - [Redpanda](/sql/create-source/kafka)
+- [Other message brokers](/integrations/#message-brokers)
 {{</ linkbox >}}
 {{< linkbox title="Databases (CDC)" >}}
 - [PostgreSQL](/sql/create-source/postgres)
+- [MySQL](/sql/create-source/postgres)
+- [Other databases](/integrations/#other-databases)
 {{</ linkbox >}}
-{{< linkbox title="Datagen" >}}
-- [Load generator](/sql/create-source/load-generator)
-- [Webhook](/sql/create-source/webhook)
+{{< linkbox title="Webhooks" >}}
+- [Amazon EventBridge](/sql/create-source/webhook/#connecting-with-amazon-eventbridge)
+- [Segment](/ingest-data/segment/)
+- [Other webhooks](/sql/create-source/webhook)
 {{</ linkbox >}}
 {{</ multilinkbox >}}
 
 For details on the syntax, supported formats and features of each connector, check out the dedicated `CREATE SOURCE` documentation pages.
+
+**Sample data**
+
+To get started with no external dependencies, you can use the [load generator source](/sql/create-source/load-generator/)
+to produce sample data that is suitable for demo and performance test
+scenarios.
 
 ## Formats
 
@@ -217,7 +227,7 @@ Debezium may produce duplicate records if the connector is interrupted. Material
 
 ### Sizing a source
 
-Some sources are low traffic and require relatively few resources to handle data ingestion, while others are high traffic and require hefty resource allocations. You choose the amount of CPU and memory available to a source using the `SIZE` option, and adjust the provisioned size after source creation using the [`ALTER SOURCE`](/sql/alter-source) command.
+Some sources are low traffic and require relatively few resources to handle data ingestion, while others are high traffic and require hefty resource allocations. You choose the amount of CPU, memory, and disk available to a source using the `SIZE` option, and adjust the provisioned size after source creation using the [`ALTER SOURCE`](/sql/alter-source) command.
 
 It's a good idea to size up a source when:
 
@@ -227,9 +237,13 @@ It's a good idea to size up a source when:
 
   * You are using the [upsert envelope](#upsert-envelope) or [Debezium
     envelope](#debezium-envelope), and your source contains **many unique
-    keys**. These envelopes must keep in-memory state proportional to the number
-    of unique keys in the upstream external system. Larger sizes can store more
-    unique keys.
+    keys**. These envelopes maintain state proportional to the number of unique
+    keys in the upstream external system. Larger sizes can store more unique
+    keys.
+
+    In this case, it's also possible to enable _spill to disk_ to accommodate
+    larger state sizes without sizing up. See the [`CREATE CLUSTER`: Disk](/sql/create-cluster#disk)
+    documentation for more details.
 
 Sources that specify the `SIZE` option are linked to a single-purpose cluster
 dedicated to maintaining that source.

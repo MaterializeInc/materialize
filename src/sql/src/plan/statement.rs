@@ -19,7 +19,8 @@ use mz_sql_parser::ast::{
     ColumnDef, RawItemName, ShowStatement, TableConstraint, UnresolvedDatabaseName,
     UnresolvedSchemaName,
 };
-use mz_storage_client::types::connections::{AwsPrivatelink, Connection, SshTunnel, Tunnel};
+use mz_storage_types::connections::inline::ReferencedConnection;
+use mz_storage_types::connections::{AwsPrivatelink, Connection, SshTunnel, Tunnel};
 
 use crate::ast::{Ident, Statement, UnresolvedItemName};
 use crate::catalog::{
@@ -119,6 +120,7 @@ pub fn describe(
         Statement::AlterConnection(stmt) => ddl::describe_alter_connection(&scx, stmt)?,
         Statement::AlterIndex(stmt) => ddl::describe_alter_index_options(&scx, stmt)?,
         Statement::AlterObjectRename(stmt) => ddl::describe_alter_object_rename(&scx, stmt)?,
+        Statement::AlterObjectSwap(stmt) => ddl::describe_alter_object_swap(&scx, stmt)?,
         Statement::AlterRole(stmt) => ddl::describe_alter_role(&scx, stmt)?,
         Statement::AlterSecret(stmt) => ddl::describe_alter_secret_options(&scx, stmt)?,
         Statement::AlterSetCluster(stmt) => ddl::describe_alter_set_cluster(&scx, stmt)?,
@@ -127,6 +129,7 @@ pub fn describe(
         Statement::AlterSystemSet(stmt) => ddl::describe_alter_system_set(&scx, stmt)?,
         Statement::AlterSystemReset(stmt) => ddl::describe_alter_system_reset(&scx, stmt)?,
         Statement::AlterSystemResetAll(stmt) => ddl::describe_alter_system_reset_all(&scx, stmt)?,
+        Statement::Comment(stmt) => ddl::describe_comment(&scx, stmt)?,
         Statement::CreateCluster(stmt) => ddl::describe_create_cluster(&scx, stmt)?,
         Statement::CreateClusterReplica(stmt) => ddl::describe_create_cluster_replica(&scx, stmt)?,
         Statement::CreateConnection(stmt) => ddl::describe_create_connection(&scx, stmt)?,
@@ -191,7 +194,7 @@ pub fn describe(
         // SCL statements.
         Statement::Close(stmt) => scl::describe_close(&scx, stmt)?,
         Statement::Deallocate(stmt) => scl::describe_deallocate(&scx, stmt)?,
-        Statement::Declare(stmt) => scl::describe_declare(&scx, stmt)?,
+        Statement::Declare(stmt) => scl::describe_declare(&scx, stmt, param_types_in)?,
         Statement::Discard(stmt) => scl::describe_discard(&scx, stmt)?,
         Statement::Execute(stmt) => scl::describe_execute(&scx, stmt)?,
         Statement::Fetch(stmt) => scl::describe_fetch(&scx, stmt)?,
@@ -205,7 +208,8 @@ pub fn describe(
         // DML statements.
         Statement::Copy(stmt) => dml::describe_copy(&scx, stmt)?,
         Statement::Delete(stmt) => dml::describe_delete(&scx, stmt)?,
-        Statement::Explain(stmt) => dml::describe_explain(&scx, stmt)?,
+        Statement::ExplainPlan(stmt) => dml::describe_explain_plan(&scx, stmt)?,
+        Statement::ExplainTimestamp(stmt) => dml::describe_explain_timestamp(&scx, stmt)?,
         Statement::Insert(stmt) => dml::describe_insert(&scx, stmt)?,
         Statement::Select(stmt) => dml::describe_select(&scx, stmt)?,
         Statement::Subscribe(stmt) => dml::describe_subscribe(&scx, stmt)?,
@@ -291,6 +295,7 @@ pub fn plan(
         Statement::AlterConnection(stmt) => ddl::plan_alter_connection(scx, stmt),
         Statement::AlterIndex(stmt) => ddl::plan_alter_index_options(scx, stmt),
         Statement::AlterObjectRename(stmt) => ddl::plan_alter_object_rename(scx, stmt),
+        Statement::AlterObjectSwap(stmt) => ddl::plan_alter_object_swap(scx, stmt),
         Statement::AlterRole(stmt) => ddl::plan_alter_role(scx, stmt),
         Statement::AlterSecret(stmt) => ddl::plan_alter_secret(scx, stmt),
         Statement::AlterSetCluster(stmt) => ddl::plan_alter_item_set_cluster(scx, stmt),
@@ -299,6 +304,7 @@ pub fn plan(
         Statement::AlterSystemSet(stmt) => ddl::plan_alter_system_set(scx, stmt),
         Statement::AlterSystemReset(stmt) => ddl::plan_alter_system_reset(scx, stmt),
         Statement::AlterSystemResetAll(stmt) => ddl::plan_alter_system_reset_all(scx, stmt),
+        Statement::Comment(stmt) => ddl::plan_comment(scx, stmt),
         Statement::CreateCluster(stmt) => ddl::plan_create_cluster(scx, stmt),
         Statement::CreateClusterReplica(stmt) => ddl::plan_create_cluster_replica(scx, stmt),
         Statement::CreateConnection(stmt) => ddl::plan_create_connection(scx, stmt),
@@ -332,10 +338,11 @@ pub fn plan(
         // DML statements.
         Statement::Copy(stmt) => dml::plan_copy(scx, stmt),
         Statement::Delete(stmt) => dml::plan_delete(scx, stmt, params),
-        Statement::Explain(stmt) => dml::plan_explain(scx, stmt, params),
+        Statement::ExplainPlan(stmt) => dml::plan_explain_plan(scx, stmt, params),
+        Statement::ExplainTimestamp(stmt) => dml::plan_explain_timestamp(scx, stmt, params),
         Statement::Insert(stmt) => dml::plan_insert(scx, stmt, params),
         Statement::Select(stmt) => dml::plan_select(scx, stmt, params, None),
-        Statement::Subscribe(stmt) => dml::plan_subscribe(scx, stmt, None),
+        Statement::Subscribe(stmt) => dml::plan_subscribe(scx, stmt, params, None),
         Statement::Update(stmt) => dml::plan_update(scx, stmt, params),
 
         // `SHOW` statements.
@@ -366,7 +373,7 @@ pub fn plan(
         // SCL statements.
         Statement::Close(stmt) => scl::plan_close(scx, stmt),
         Statement::Deallocate(stmt) => scl::plan_deallocate(scx, stmt),
-        Statement::Declare(stmt) => scl::plan_declare(scx, stmt),
+        Statement::Declare(stmt) => scl::plan_declare(scx, stmt, params),
         Statement::Discard(stmt) => scl::plan_discard(scx, stmt),
         Statement::Execute(stmt) => scl::plan_execute(scx, stmt),
         Statement::Fetch(stmt) => scl::plan_fetch(scx, stmt),
@@ -801,16 +808,16 @@ impl<'a> StatementContext<'a> {
         &self,
         ssh_tunnel: Option<with_options::Object>,
         aws_privatelink: Option<with_options::Object>,
-    ) -> Result<Tunnel, PlanError> {
+    ) -> Result<Tunnel<ReferencedConnection>, PlanError> {
         match (ssh_tunnel, aws_privatelink) {
             (None, None) => Ok(Tunnel::Direct),
             (Some(ssh_tunnel), None) => {
                 let id = GlobalId::from(ssh_tunnel);
                 let ssh_tunnel = self.catalog.get_item(&id);
                 match ssh_tunnel.connection()? {
-                    Connection::Ssh(connection) => Ok(Tunnel::Ssh(SshTunnel {
+                    Connection::Ssh(_connection) => Ok(Tunnel::Ssh(SshTunnel {
                         connection_id: id,
-                        connection: connection.clone(),
+                        connection: id,
                     })),
                     _ => sql_bail!("{} is not an SSH connection", ssh_tunnel.name().item),
                 }

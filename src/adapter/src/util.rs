@@ -12,9 +12,9 @@ use std::fmt::Debug;
 use mz_compute_client::controller::error::{
     CollectionUpdateError, DataflowCreationError, InstanceMissing, PeekError, SubscribeTargetError,
 };
-use mz_controller::clusters::ClusterId;
+use mz_controller_types::ClusterId;
 use mz_ore::{halt, soft_assert};
-use mz_repr::{GlobalId, RelationDesc, Row, ScalarType};
+use mz_repr::{GlobalId, RelationDesc, ScalarType};
 use mz_sql::names::FullItemName;
 use mz_sql::plan::StatementDesc;
 use mz_sql::session::vars::Var;
@@ -23,7 +23,7 @@ use mz_sql_parser::ast::{
     CreateIndexStatement, FetchStatement, Ident, Raw, RawClusterName, RawItemName, Statement,
 };
 use mz_stash::StashError;
-use mz_storage_client::controller::StorageError;
+use mz_storage_types::controller::StorageError;
 use mz_transform::TransformError;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
@@ -33,7 +33,7 @@ use crate::command::{Command, Response};
 use crate::coord::{Message, PendingTxnResponse};
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, Session};
-use crate::{ExecuteContext, ExecuteResponse, PeekResponseUnary};
+use crate::{ExecuteContext, ExecuteResponse};
 
 /// Handles responding to clients.
 #[derive(Debug)]
@@ -45,7 +45,7 @@ pub struct ClientTransmitter<T: Transmittable> {
     allowed: Option<Vec<T::Allowed>>,
 }
 
-impl<T: Transmittable> ClientTransmitter<T> {
+impl<T: Transmittable + std::fmt::Debug> ClientTransmitter<T> {
     /// Creates a new client transmitter.
     pub fn new(
         tx: oneshot::Sender<Response<T>>,
@@ -71,7 +71,7 @@ impl<T: Transmittable> ClientTransmitter<T> {
                 (Ok(ref t), Some(allowed)) => allowed.contains(&t.to_allowed()),
                 _ => true,
             },
-            "tried to send disallowed value through ClientTransmitter; \
+            "tried to send disallowed value {result:?} through ClientTransmitter; \
             see ClientTransmitter::set_allowed"
         );
 
@@ -85,7 +85,7 @@ impl<T: Transmittable> ClientTransmitter<T> {
         {
             self.internal_cmd_tx
                 .send(Message::Command(Command::Terminate {
-                    session: res.session,
+                    conn_id: res.session.conn_id().clone(),
                     tx: None,
                 }))
                 .expect("coordinator unexpectedly gone");
@@ -178,16 +178,6 @@ impl<T: Transmittable> Drop for ClientTransmitter<T> {
     }
 }
 
-/// Constructs an [`ExecuteResponse`] that that will send some rows to the
-/// client immediately, as opposed to asking the dataflow layer to send along
-/// the rows after some computation.
-pub(crate) fn send_immediate_rows(rows: Vec<Row>) -> ExecuteResponse {
-    ExecuteResponse::SendingRows {
-        future: Box::pin(async { PeekResponseUnary::Rows(rows) }),
-        span: tracing::Span::none(),
-    }
-}
-
 // TODO(benesch): constructing the canonical CREATE INDEX statement should be
 // the responsibility of the SQL package.
 pub fn index_sql(
@@ -238,7 +228,12 @@ pub fn describe(
                 .get_portal_unverified(name.as_str())
                 .map(|p| p.desc.clone())
             {
-                Some(desc) => Ok(desc),
+                Some(mut desc) => {
+                    // Parameters are already bound to the portal and will not be accepted through
+                    // FETCH.
+                    desc.param_types = Vec::new();
+                    Ok(desc)
+                }
                 None => Err(AdapterError::UnknownCursor(name.to_string())),
             }
         }
@@ -301,6 +296,15 @@ impl ShouldHalt for crate::catalog::Error {
     fn should_halt(&self) -> bool {
         match &self.kind {
             crate::catalog::ErrorKind::Stash(e) => e.should_halt(),
+            _ => false,
+        }
+    }
+}
+
+impl ShouldHalt for mz_catalog::Error {
+    fn should_halt(&self) -> bool {
+        match &self {
+            Self::Stash(e) => e.should_halt(),
             _ => false,
         }
     }

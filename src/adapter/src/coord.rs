@@ -69,7 +69,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::Ipv4Addr;
 use std::ops::Neg;
-use std::sync::{Arc, Mutex};
+use std::sync::{atomic, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -81,21 +81,20 @@ use futures::StreamExt;
 use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig};
-use mz_compute_client::controller::ComputeInstanceId;
-use mz_compute_client::types::dataflows::DataflowDescription;
-use mz_controller::clusters::{
-    ClusterConfig, ClusterEvent, ClusterId, CreateReplicaConfig, ReplicaId,
-};
+use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::ComputeInstanceId;
+use mz_controller::clusters::{ClusterConfig, ClusterEvent, CreateReplicaConfig};
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::cast::CastFrom;
-use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::NowFn;
+use mz_ore::metrics::{MetricsFutureExt, MetricsRegistry};
+use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::retry::Retry;
 use mz_ore::task::spawn;
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
-use mz_ore::{stack, task};
+use mz_ore::{soft_assert_or_log, stack, task};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::ExplainFormat;
 use mz_repr::role_id::RoleId;
@@ -106,52 +105,63 @@ use mz_sql::ast::{CreateSubsourceStatement, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::names::{Aug, ResolvedIds};
 use mz_sql::plan::{CopyFormat, CreateConnectionPlan, Params, QueryWhen};
+use mz_sql::rbac::UnauthorizedError;
+use mz_sql::session::user::{RoleMetadata, User};
 use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_client::controller::{
-    CollectionDescription, CreateExportToken, DataSource, StorageError,
+    CollectionDescription, CreateExportToken, DataSource, DataSourceOther,
 };
-use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::sinks::StorageSinkConnection;
-use mz_storage_client::types::sources::Timeline;
+use mz_storage_types::connections::inline::{IntoInlineConnection, ReferencedConnection};
+use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::controller::StorageError;
+use mz_storage_types::sinks::StorageSinkConnection;
+use mz_storage_types::sources::Timeline;
+use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::Optimizer;
 use timely::progress::Antichain;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
-use tracing::{info, info_span, span, warn, Instrument, Level, Span};
+use tracing::{debug, info, info_span, span, warn, Instrument, Level, Span};
 use uuid::Uuid;
 
-use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
-    self, storage, AwsPrincipalContext, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog,
-    CatalogItem, ClusterReplicaSizeMap, DataSourceDesc, Source, StorageSinkConnectionState,
+    self, AwsPrincipalContext, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog, CatalogItem,
+    ClusterReplicaSizeMap, DataSourceDesc, Source, StorageSinkConnectionState,
 };
 use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
 use crate::config::SystemParameterSyncConfig;
-use crate::coord::appends::{Deferred, PendingWriteTxn};
+use crate::coord::appends::{Deferred, GroupCommitPermit, PendingWriteTxn};
 use crate::coord::dataflows::dataflow_import_id_bundle;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
 use crate::coord::read_policy::ReadCapability;
 use crate::coord::timeline::{TimelineContext, TimelineState, WriteTimestamp};
+use crate::coord::timestamp_oracle::catalog_oracle::CatalogTimestampPersistence;
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
 use crate::session::{EndTransactionAction, Session};
+use crate::statement_logging::StatementEndedExecutionReason;
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, ResultExt};
 use crate::{flags, AdapterNotice, TimestampProvider};
+use mz_catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 
 pub(crate) mod dataflows;
+use self::statement_logging::{StatementLogging, StatementLoggingId};
+
 pub(crate) mod id_bundle;
 pub(crate) mod peek;
 pub(crate) mod statement_logging;
 pub(crate) mod timeline;
+pub(crate) mod timestamp_oracle;
 pub(crate) mod timestamp_selection;
 
 mod appends;
 mod command_handler;
+pub mod consistency;
 mod ddl;
 mod indexes;
 mod introspection;
@@ -189,7 +199,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     SinkConnectionReady(SinkConnectionReady),
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
     /// Initiates a group commit.
-    GroupCommitInitiate(Span),
+    GroupCommitInitiate(Span, Option<GroupCommitPermit>),
     /// Makes a group commit visible to all clients.
     GroupCommitApply(
         /// Timestamp of the writes in the group commit.
@@ -198,6 +208,15 @@ pub enum Message<T = mz_repr::Timestamp> {
         Vec<CompletedClientTransmitter>,
         /// Optional lock if the group commit contained writes to user tables.
         Option<OwnedMutexGuard<()>>,
+        /// Operations waiting on this group commit to finish.
+        ///
+        /// Note: this differs from the [`CompletedClientTransmitter`]s above because those are
+        /// used to send a response to a request, which indicates the Coordinator has finished all
+        /// of it's work, but these represent auxiliary work that still needs to be done, e.g.
+        /// waiting for a write to Persist to complete.
+        Vec<oneshot::Sender<()>>,
+        /// Permit which limits how many group commits we run at once.
+        Option<GroupCommitPermit>,
     ),
     AdvanceTimelines,
     ClusterEvent(ClusterEvent),
@@ -212,16 +231,12 @@ pub enum Message<T = mz_repr::Timestamp> {
         real_time_recency_ts: Timestamp,
         validity: PlanValidity,
     },
-    // Like Command::Execute, but its context has already been allocated.
-    Execute {
-        portal_name: String,
-        ctx: ExecuteContext,
-        span: tracing::Span,
-    },
+
     /// Performs any cleanup and logging actions necessary for
     /// finalizing a statement execution.
     RetireExecute {
         data: ExecuteContextExtra,
+        reason: StatementEndedExecutionReason,
     },
     ExecuteSingleStatementTransaction {
         ctx: ExecuteContext,
@@ -232,6 +247,49 @@ pub enum Message<T = mz_repr::Timestamp> {
         ctx: ExecuteContext,
         stage: PeekStage,
     },
+    DrainStatementLog,
+}
+
+impl Message {
+    /// Returns a string to identify the kind of [`Message`], useful for logging.
+    pub const fn kind(&self) -> &'static str {
+        match self {
+            Message::Command(msg) => match msg {
+                Command::CatalogSnapshot { .. } => "command-catalog_snapshot",
+                Command::Startup { .. } => "command-startup",
+                Command::Execute { .. } => "command-execute",
+                Command::Commit { .. } => "command-commit",
+                Command::CancelRequest { .. } => "command-cancel_request",
+                Command::PrivilegedCancelRequest { .. } => "command-privileged_cancel_request",
+                Command::AppendWebhook { .. } => "command-append_webhook",
+                Command::GetSystemVars { .. } => "command-get_system_vars",
+                Command::SetSystemVars { .. } => "command-set_system_vars",
+                Command::Terminate { .. } => "command-terminate",
+                Command::RetireExecute { .. } => "command-retire_execute",
+                Command::CheckConsistency { .. } => "command-check_consistency",
+            },
+            Message::ControllerReady => "controller_ready",
+            Message::PurifiedStatementReady(_) => "purified_statement_ready",
+            Message::CreateConnectionValidationReady(_) => "create_connection_validation_ready",
+            Message::SinkConnectionReady(_) => "sink_connection_ready",
+            Message::WriteLockGrant(_) => "write_lock_grant",
+            Message::GroupCommitInitiate(..) => "group_commit_initiate",
+            Message::GroupCommitApply(..) => "group_commit_apply",
+            Message::AdvanceTimelines => "advance_timelines",
+            Message::ClusterEvent(_) => "cluster_event",
+            Message::RemovePendingPeeks { .. } => "remove_pending_peeks",
+            Message::LinearizeReads(_) => "linearize_reads",
+            Message::StorageUsageFetch => "storage_usage_fetch",
+            Message::StorageUsageUpdate(_) => "storage_usage_update",
+            Message::RealTimeRecencyTimestamp { .. } => "real_time_recency_timestamp",
+            Message::RetireExecute { .. } => "retire_execute",
+            Message::ExecuteSingleStatementTransaction { .. } => {
+                "execute_single_statement_transaction"
+            }
+            Message::PeekStageReady { .. } => "peek_stage_ready",
+            Message::DrainStatementLog => "drain_statement_log",
+        }
+    }
 }
 
 #[derive(Derivative)]
@@ -270,7 +328,7 @@ pub struct SinkConnectionReady {
     pub id: GlobalId,
     pub oid: u32,
     pub create_export_token: CreateExportToken,
-    pub result: Result<StorageSinkConnection, AdapterError>,
+    pub result: Result<StorageSinkConnection<ReferencedConnection>, AdapterError>,
 }
 
 #[derive(Debug)]
@@ -297,6 +355,7 @@ pub enum RealTimeRecencyContext {
         in_immediate_multi_stmt_txn: bool,
         key: Vec<MirScalarExpr>,
         typ: RelationType,
+        dataflow_metainfo: DataflowMetainfo,
     },
 }
 
@@ -367,6 +426,7 @@ pub struct PeekStageTimestamp {
     in_immediate_multi_stmt_txn: bool,
     key: Vec<MirScalarExpr>,
     typ: RelationType,
+    dataflow_metainfo: DataflowMetainfo,
 }
 
 #[derive(Debug)]
@@ -386,18 +446,21 @@ pub struct PeekStageFinish {
     real_time_recency_ts: Option<mz_repr::Timestamp>,
     key: Vec<MirScalarExpr>,
     typ: RelationType,
+    dataflow_metainfo: DataflowMetainfo,
 }
 
 /// An enum describing which cluster to run a statement on.
 ///
 /// One example usage would be that if a query depends only on system tables, we might
 /// automatically run it on the introspection cluster to benefit from indexes that exist there.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum TargetCluster {
     /// The introspection cluster.
     Introspection,
     /// The current user's active cluster.
     Active,
+    /// The cluster selected at the start of a transaction.
+    Transaction(ClusterId),
 }
 
 /// A struct to hold information about the validity of plans and if they should be abandoned after
@@ -410,6 +473,7 @@ pub struct PlanValidity {
     dependency_ids: BTreeSet<GlobalId>,
     cluster_id: Option<ComputeInstanceId>,
     replica_id: Option<ReplicaId>,
+    role_metadata: RoleMetadata,
 }
 
 impl PlanValidity {
@@ -426,7 +490,7 @@ impl PlanValidity {
             };
 
             if let Some(replica_id) = self.replica_id {
-                if !cluster.replicas_by_id.contains_key(&replica_id) {
+                if cluster.replica(replica_id).is_none() {
                     return Err(AdapterError::ChangedPlan);
                 }
             }
@@ -440,6 +504,33 @@ impl PlanValidity {
                 return Err(AdapterError::ChangedPlan);
             }
         }
+        if catalog
+            .try_get_role(&self.role_metadata.current_role)
+            .is_none()
+        {
+            return Err(AdapterError::Unauthorized(
+                UnauthorizedError::ConcurrentRoleDrop(self.role_metadata.current_role.clone()),
+            ));
+        }
+        if catalog
+            .try_get_role(&self.role_metadata.session_role)
+            .is_none()
+        {
+            return Err(AdapterError::Unauthorized(
+                UnauthorizedError::ConcurrentRoleDrop(self.role_metadata.session_role.clone()),
+            ));
+        }
+
+        if catalog
+            .try_get_role(&self.role_metadata.authenticated_role)
+            .is_none()
+        {
+            return Err(AdapterError::Unauthorized(
+                UnauthorizedError::ConcurrentRoleDrop(
+                    self.role_metadata.authenticated_role.clone(),
+                ),
+            ));
+        }
         self.transient_revision = catalog.transient_revision();
         Ok(())
     }
@@ -448,7 +539,7 @@ impl PlanValidity {
 /// Configures a coordinator.
 pub struct Config {
     pub dataflow_client: mz_controller::Controller,
-    pub storage: storage::Connection,
+    pub storage: Box<dyn mz_catalog::DurableCatalogState>,
     pub unsafe_mode: bool,
     pub all_features: bool,
     pub build_info: &'static BuildInfo,
@@ -471,6 +562,7 @@ pub struct Config {
     pub aws_account_id: Option<String>,
     pub aws_privatelink_availability_zones: Option<Vec<String>>,
     pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
+    pub http_host_name: Option<String>,
     pub tracing_handle: TracingHandle,
 }
 
@@ -498,6 +590,12 @@ pub struct ConnMeta {
     /// requests are required to authenticate with the secret of the connection
     /// that they are targeting.
     secret_key: u32,
+    /// The time when the session's connection was initiated.
+    connected_at: EpochMillis,
+    user: User,
+    application_name: String,
+    uuid: Uuid,
+    conn_id: ConnectionId,
 
     /// Sinks that will need to be dropped when the current transaction, if
     /// any, is cleared.
@@ -506,8 +604,36 @@ pub struct ConnMeta {
     /// Channel on which to send notices to a session.
     notice_tx: mpsc::UnboundedSender<AdapterNotice>,
 
-    /// The authenticated role of the session, set once at session connection.
-    pub(crate) authenticated_role: RoleId,
+    /// The role that initiated the database context. Fixed for the duration of the connection.
+    /// WARNING: This role reference is not updated when the role is dropped.
+    /// Consumers should not assume that this role exist.
+    authenticated_role: RoleId,
+}
+
+impl ConnMeta {
+    pub fn conn_id(&self) -> &ConnectionId {
+        &self.conn_id
+    }
+
+    pub fn user(&self) -> &User {
+        &self.user
+    }
+
+    pub fn application_name(&self) -> &str {
+        &self.application_name
+    }
+
+    pub fn authenticated_role_id(&self) -> &RoleId {
+        &self.authenticated_role
+    }
+
+    pub fn uuid(&self) -> Uuid {
+        self.uuid
+    }
+
+    pub fn connected_at(&self) -> EpochMillis {
+        self.connected_at
+    }
 }
 
 #[derive(Debug)]
@@ -647,10 +773,48 @@ impl PendingRead {
 /// to produce a value that will cause the coordinator to do nothing, and
 /// is intended for use by code that invokes the execution processing flow
 /// (i.e., `sequence_plan`) without actually being a statement execution.
-// Currently nothing; planned to be data related to statement logging
-// at some point in the future.
+///
+/// This struct must not be dropped if it contains non-trivial
+/// state. The only valid way to get rid of it is to pass it to the
+/// coordinator for retirement. To enforce this, we assert in the
+/// `Drop` implementation.
 #[derive(Debug, Default)]
-pub struct ExecuteContextExtra;
+#[must_use]
+pub struct ExecuteContextExtra {
+    statement_uuid: Option<StatementLoggingId>,
+}
+
+impl ExecuteContextExtra {
+    pub(crate) fn new(statement_uuid: Option<StatementLoggingId>) -> Self {
+        Self { statement_uuid }
+    }
+    pub fn is_trivial(&self) -> bool {
+        let Self { statement_uuid } = self;
+        statement_uuid.is_none()
+    }
+    pub fn contents(&self) -> Option<StatementLoggingId> {
+        let Self { statement_uuid } = self;
+        *statement_uuid
+    }
+    /// Take responsibility for the contents.  This should only be
+    /// called from code that knows what to do to finish up logging
+    /// based on the inner value.
+    #[must_use]
+    fn retire(mut self) -> Option<StatementLoggingId> {
+        let Self { statement_uuid } = &mut self;
+        statement_uuid.take()
+    }
+}
+
+impl Drop for ExecuteContextExtra {
+    fn drop(&mut self) {
+        let Self { statement_uuid } = &*self;
+        soft_assert_or_log!(
+            statement_uuid.is_none(),
+            "execute context dropped without being properly retired."
+        )
+    }
+}
 
 /// Bundle of state related to statement execution.
 ///
@@ -736,10 +900,28 @@ impl ExecuteContext {
             session,
             extra,
         } = self;
+        let reason = if extra.is_trivial() {
+            None
+        } else {
+            Some((&result).into())
+        };
         tx.send(result, session);
-        if let Err(e) = internal_cmd_tx.send(Message::RetireExecute { data: extra }) {
-            warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+        if let Some(reason) = reason {
+            if let Err(e) = internal_cmd_tx.send(Message::RetireExecute {
+                data: extra,
+                reason,
+            }) {
+                warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+            }
         }
+    }
+
+    pub fn extra(&self) -> &ExecuteContextExtra {
+        &self.extra
+    }
+
+    pub fn extra_mut(&mut self) -> &mut ExecuteContextExtra {
+        &mut self.extra
     }
 }
 
@@ -763,6 +945,8 @@ pub struct Coordinator {
 
     /// Channel to manage internal commands from the coordinator to itself.
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
+    /// Notification that triggers a group commit.
+    group_commit_tx: appends::GroupCommitNotifier,
 
     /// Channel for strict serializable reads ready to commit.
     strict_serializable_reads_tx: mpsc::UnboundedSender<PendingReadTxn>,
@@ -866,6 +1050,12 @@ pub struct Coordinator {
 
     /// Tracing handle.
     tracing_handle: TracingHandle,
+
+    /// Data used by the statement logging feature.
+    statement_logging: StatementLogging,
+
+    /// Whether to start replicas with the new variable-length row encoding scheme.
+    variable_length_row_encoding: bool,
 }
 
 impl Coordinator {
@@ -901,7 +1091,7 @@ impl Coordinator {
         let mut policies_to_set: BTreeMap<Timestamp, CollectionIdBundle> = Default::default();
         policies_to_set.insert(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS, Default::default());
 
-        info!("coordinator init: creating compute replicas");
+        debug!("coordinator init: creating compute replicas");
         let mut replicas_to_start = vec![];
         for instance in self.catalog.clusters() {
             self.controller.create_cluster(
@@ -909,20 +1099,21 @@ impl Coordinator {
                 ClusterConfig {
                     arranged_logs: instance.log_indexes.clone(),
                 },
+                self.variable_length_row_encoding,
             )?;
-            for (replica_id, replica) in instance.replicas_by_id.clone() {
+            for replica in instance.replicas() {
                 let role = instance.role();
                 replicas_to_start.push(CreateReplicaConfig {
                     cluster_id: instance.id,
-                    replica_id,
+                    replica_id: replica.replica_id,
                     role,
-                    config: replica.config,
+                    config: replica.config.clone(),
                 });
             }
         }
         self.controller.create_replicas(replicas_to_start).await?;
 
-        info!("coordinator init: migrating builtin objects");
+        debug!("coordinator init: migrating builtin objects");
         // Migrate builtin objects.
         self.controller
             .storage
@@ -1051,24 +1242,33 @@ impl Coordinator {
         // This is disabled for the moment because it has unusual upper
         // advancement behavior.
         // See: https://materializeinc.slack.com/archives/C01CFKM1QRF/p1660726837927649
-        let source_status_collection_id = Some(self.catalog().resolve_builtin_storage_collection(
-            &crate::catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
-        ));
+        let source_status_collection_id = Some(
+            self.catalog()
+                .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY),
+        );
 
         let mut collections_to_create = Vec::new();
 
         fn source_desc<T>(
+            catalog: &Catalog,
             source_status_collection_id: Option<GlobalId>,
             source: &Source,
         ) -> CollectionDescription<T> {
             let (data_source, status_collection_id) = match &source.data_source {
                 // Re-announce the source description.
-                DataSourceDesc::Ingestion(ingestion) => (
-                    DataSource::Ingestion(ingestion.clone()),
+                DataSourceDesc::Ingestion(ingestion) => {
+                    let ingestion = ingestion.clone().into_inline_connection(catalog.state());
+
+                    (
+                        DataSource::Ingestion(ingestion.clone()),
+                        source_status_collection_id,
+                    )
+                }
+                // Subsources use source statuses.
+                DataSourceDesc::Source => (
+                    DataSource::Other(DataSourceOther::Source),
                     source_status_collection_id,
                 ),
-                // Subsources use source statuses.
-                DataSourceDesc::Source => (DataSource::Other, source_status_collection_id),
                 DataSourceDesc::Webhook { .. } => {
                     (DataSource::Webhook, source_status_collection_id)
                 }
@@ -1085,27 +1285,34 @@ impl Coordinator {
             }
         }
 
+        let migratable_collections = entries
+            .iter()
+            .filter_map(|entry| match entry.item() {
+                CatalogItem::Source(source) => Some((
+                    entry.id(),
+                    source_desc(self.catalog(), source_status_collection_id, source),
+                )),
+                CatalogItem::Table(table) => {
+                    let collection_desc = CollectionDescription::from_desc(
+                        table.desc.clone(),
+                        DataSourceOther::TableWrites,
+                    );
+                    Some((entry.id(), collection_desc))
+                }
+                CatalogItem::MaterializedView(mview) => {
+                    let collection_desc = CollectionDescription::from_desc(
+                        mview.desc.clone(),
+                        DataSourceOther::Compute,
+                    );
+                    Some((entry.id(), collection_desc))
+                }
+                _ => None,
+            })
+            .collect();
+
         self.controller
             .storage
-            .migrate_collections(
-                entries
-                    .iter()
-                    .filter_map(|entry| match entry.item() {
-                        CatalogItem::Source(source) => {
-                            Some((entry.id(), source_desc(source_status_collection_id, source)))
-                        }
-                        CatalogItem::Table(table) => {
-                            let collection_desc = table.desc.clone().into();
-                            Some((entry.id(), collection_desc))
-                        }
-                        CatalogItem::MaterializedView(mview) => {
-                            let collection_desc = mview.desc.clone().into();
-                            Some((entry.id(), collection_desc))
-                        }
-                        _ => None,
-                    })
-                    .collect(),
-            )
+            .migrate_collections(migratable_collections)
             .await?;
 
         // Do a first pass looking for collections to create so we can call
@@ -1116,14 +1323,19 @@ impl Coordinator {
         for entry in &entries {
             match entry.item() {
                 CatalogItem::Table(table) => {
-                    let collection_desc = table.desc.clone().into();
+                    let collection_desc = CollectionDescription::from_desc(
+                        table.desc.clone(),
+                        DataSourceOther::TableWrites,
+                    );
                     collections_to_create.push((entry.id(), collection_desc));
                 }
                 // User sources can have dependencies, so do avoid them in the
                 // batch.
                 CatalogItem::Source(source) if entry.id().is_system() => {
-                    collections_to_create
-                        .push((entry.id(), source_desc(source_status_collection_id, source)));
+                    collections_to_create.push((
+                        entry.id(),
+                        source_desc(self.catalog(), source_status_collection_id, source),
+                    ));
                 }
                 _ => {
                     // No collections to create.
@@ -1131,16 +1343,18 @@ impl Coordinator {
             }
         }
 
+        let register_ts = self.get_local_write_ts().await.timestamp;
         self.controller
             .storage
-            .create_collections(collections_to_create)
+            .create_collections(Some(register_ts), collections_to_create)
             .await
             .unwrap_or_terminate("cannot fail to create collections");
+        self.apply_local_write(register_ts).await;
 
-        info!("coordinator init: installing existing objects in catalog");
+        debug!("coordinator init: installing existing objects in catalog");
         let mut privatelink_connections = BTreeMap::new();
         for entry in &entries {
-            info!(
+            debug!(
                 "coordinator init: installing {} {}",
                 entry.item().typ(),
                 entry.id()
@@ -1164,10 +1378,11 @@ impl Coordinator {
                 CatalogItem::Source(source) => {
                     // System sources were created above, add others here.
                     if !entry.id().is_system() {
-                        let source_desc = source_desc(source_status_collection_id, source);
+                        let source_desc =
+                            source_desc(self.catalog(), source_status_collection_id, source);
                         self.controller
                             .storage
-                            .create_collections(vec![(entry.id(), source_desc)])
+                            .create_collections(None, vec![(entry.id(), source_desc)])
                             .await
                             .unwrap_or_terminate("cannot fail to create collections");
                     }
@@ -1196,11 +1411,28 @@ impl Coordinator {
                             .or_insert_with(BTreeSet::new)
                             .insert(entry.id());
                     } else {
-                        let mut dataflow = self
+                        let (mut df, df_metainfo) = self
                             .dataflow_builder(idx.cluster_id)
                             .build_index_dataflow(entry.id())?;
-                        let as_of = self.bootstrap_index_as_of(&dataflow, idx.cluster_id);
-                        dataflow.set_as_of(as_of);
+
+                        // Note: ideally, the optimized_plan should be computed and
+                        // set when the CatalogItem is re-constructed (in
+                        // parse_item).
+                        //
+                        // However, it's not clear how exactly to change
+                        // `load_catalog_items` to accommodate for the
+                        // `build_index_dataflow` call above.
+                        self.catalog_mut()
+                            .set_optimized_plan(entry.id(), df.clone());
+                        self.catalog_mut()
+                            .set_dataflow_metainfo(entry.id(), df_metainfo);
+
+                        let as_of = self.bootstrap_index_as_of(
+                            &df,
+                            idx.cluster_id,
+                            idx.is_retained_metrics_object,
+                        );
+                        df.set_as_of(as_of);
 
                         // What follows is morally equivalent to `self.ship_dataflow(df, idx.cluster_id)`,
                         // but we cannot call that as it will also downgrade the read hold on the index.
@@ -1208,21 +1440,27 @@ impl Coordinator {
                             .compute_ids
                             .entry(idx.cluster_id)
                             .or_insert_with(Default::default)
-                            .extend(dataflow.export_ids());
-                        let dataflow_plan = self.must_finalize_dataflow(dataflow, idx.cluster_id);
+                            .extend(df.export_ids());
+
+                        let df = self.must_finalize_dataflow(df, idx.cluster_id);
+                        self.catalog_mut().set_physical_plan(entry.id(), df.clone());
+
                         self.controller
                             .active_compute()
-                            .create_dataflow(idx.cluster_id, dataflow_plan)
+                            .create_dataflow(idx.cluster_id, df)
                             .unwrap_or_terminate("cannot fail to create dataflows");
                     }
                 }
                 CatalogItem::View(_) => (),
                 CatalogItem::MaterializedView(mview) => {
                     // Re-create the storage collection.
-                    let collection_desc = mview.desc.clone().into();
+                    let collection_desc = CollectionDescription::from_desc(
+                        mview.desc.clone(),
+                        DataSourceOther::Compute,
+                    );
                     self.controller
                         .storage
-                        .create_collections(vec![(entry.id(), collection_desc)])
+                        .create_collections(None, vec![(entry.id(), collection_desc)])
                         .await
                         .unwrap_or_terminate("cannot fail to create collections");
 
@@ -1234,12 +1472,38 @@ impl Coordinator {
 
                     // Re-create the sink on the compute instance.
                     let internal_view_id = self.allocate_transient_id()?;
-                    let mut df = self
-                        .dataflow_builder(mview.cluster_id)
-                        .build_materialized_view_dataflow(entry.id(), internal_view_id)?;
+                    let debug_name = self
+                        .catalog()
+                        .resolve_full_name(entry.name(), entry.conn_id())
+                        .to_string();
+
+                    let mut builder = self.dataflow_builder(mview.cluster_id);
+                    let (mut df, df_metainfo) = builder.build_materialized_view(
+                        entry.id(),
+                        internal_view_id,
+                        debug_name,
+                        &mview.optimized_expr,
+                        &mview.desc,
+                    )?;
+
+                    // Note: ideally, the optimized_plan should be computed and
+                    // set when the CatalogItem is re-constructed (in
+                    // parse_item).
+                    //
+                    // However, it's not clear how exactly to change
+                    // `load_catalog_items` to accommodate for the
+                    // `build_materialized_view` call above.
+                    self.catalog_mut()
+                        .set_optimized_plan(entry.id(), df.clone());
+                    self.catalog_mut()
+                        .set_dataflow_metainfo(entry.id(), df_metainfo);
+
+                    // The 'as_of' field of the dataflow changes after restart
                     let as_of = self.bootstrap_materialized_view_as_of(&df, mview.cluster_id);
                     df.set_as_of(as_of);
-                    self.must_ship_dataflow(df, mview.cluster_id).await;
+
+                    let df = self.must_ship_dataflow(df, mview.cluster_id).await;
+                    self.catalog_mut().set_physical_plan(entry.id(), df);
                 }
                 CatalogItem::Sink(sink) => {
                     // Re-create the sink.
@@ -1262,6 +1526,9 @@ impl Coordinator {
                         .prepare_export(id, sink.from)
                         .unwrap_or_terminate("cannot fail to prepare export");
 
+                    let referenced_builder = builder.clone();
+                    let builder = builder.into_inline_connection(self.catalog().state());
+
                     task::spawn(
                         || format!("sink_connection_ready:{}", sink.from),
                         async move {
@@ -1269,10 +1536,12 @@ impl Coordinator {
                                 .max_tries(usize::MAX)
                                 .clamp_backoff(Duration::from_secs(60 * 10))
                                 .retry_async(|_| async {
+                                    let referenced_builder = referenced_builder.clone();
                                     let builder = builder.clone();
                                     let connection_context = connection_context.clone();
                                     mz_storage_client::sink::build_sink_connection(
                                         builder,
+                                        referenced_builder,
                                         connection_context,
                                     )
                                     .await
@@ -1297,7 +1566,7 @@ impl Coordinator {
                     );
                 }
                 CatalogItem::Connection(catalog_connection) => {
-                    if let mz_storage_client::types::connections::Connection::AwsPrivatelink(conn) =
+                    if let mz_storage_types::connections::Connection::AwsPrivatelink(conn) =
                         &catalog_connection.connection
                     {
                         privatelink_connections.insert(
@@ -1346,12 +1615,12 @@ impl Coordinator {
             self.initialize_read_policies(&policies, Some(ts)).await;
         }
 
-        info!("coordinator init: announcing completion of initialization to controller");
+        debug!("coordinator init: announcing completion of initialization to controller");
         // Announce the completion of initialization.
         self.controller.initialization_complete();
 
         // Announce primary and foreign key relationships.
-        info!("coordinator init: announcing primary and foreign key relationships");
+        debug!("coordinator init: announcing primary and foreign key relationships");
         let mz_view_keys = self.catalog().resolve_builtin_table(&MZ_VIEW_KEYS);
         for log in BUILTINS::logs() {
             let log_id = &self.catalog().resolve_builtin_log(log).to_string();
@@ -1409,32 +1678,33 @@ impl Coordinator {
         builtin_table_updates.extend(self.catalog().state().pack_all_replica_size_updates());
 
         // Advance all tables to the current timestamp
-        info!("coordinator init: advancing all tables to current timestamp");
+        debug!("coordinator init: advancing all tables to current timestamp");
         let WriteTimestamp {
-            timestamp: _,
+            timestamp: write_ts,
             advance_to,
         } = self.get_local_write_ts().await;
         let appends = entries
             .iter()
             .filter(|entry| entry.is_table())
-            .map(|entry| (entry.id(), Vec::new(), advance_to))
+            .map(|entry| (entry.id(), Vec::new()))
             .collect();
         self.controller
             .storage
-            .append(appends)
+            .append_table(write_ts.clone(), advance_to, appends)
             .expect("invalid updates")
             .await
             .expect("One-shot shouldn't be dropped during bootstrap")
             .unwrap_or_terminate("cannot fail to append");
+        self.apply_local_write(write_ts).await;
 
         // Add builtin table updates the clear the contents of all system tables
-        info!("coordinator init: resetting system tables");
-        let read_ts = self.get_local_read_ts();
+        debug!("coordinator init: resetting system tables");
+        let read_ts = self.get_local_read_ts().await;
         for system_table in entries
             .iter()
             .filter(|entry| entry.is_table() && entry.id().is_system())
         {
-            info!(
+            debug!(
                 "coordinator init: resetting system table {} ({})",
                 self.catalog().resolve_full_name(system_table.name(), None),
                 system_table.id()
@@ -1445,7 +1715,7 @@ impl Coordinator {
                 .snapshot(system_table.id(), read_ts)
                 .await
                 .unwrap_or_terminate("cannot fail to fetch snapshot");
-            info!("coordinator init: table size {}", current_contents.len());
+            debug!("coordinator init: table size {}", current_contents.len());
             let retractions = current_contents
                 .into_iter()
                 .map(|(row, diff)| BuiltinTableUpdate {
@@ -1456,8 +1726,9 @@ impl Coordinator {
             builtin_table_updates.extend(retractions);
         }
 
-        info!("coordinator init: sending builtin table updates");
-        self.send_builtin_table_updates(builtin_table_updates).await;
+        debug!("coordinator init: sending builtin table updates");
+        self.send_builtin_table_updates_blocking(builtin_table_updates)
+            .await;
 
         // Signal to the storage controller that it is now free to reconcile its
         // state with what it has learned from the adapter.
@@ -1497,11 +1768,12 @@ impl Coordinator {
         &self,
         dataflow: &DataflowDescription<OptimizedMirRelationExpr>,
         cluster_id: ComputeInstanceId,
+        is_retained_metrics_index: bool,
     ) -> Antichain<Timestamp> {
         // All inputs must be readable at the chosen `as_of`, so it must be at least the join of
         // the `since`s of all dependencies.
         let id_bundle = dataflow_import_id_bundle(dataflow, cluster_id);
-        let mut as_of = self.least_valid_read(&id_bundle);
+        let min_as_of = self.least_valid_read(&id_bundle);
 
         // For compute reconciliation to recognize that an existing dataflow can be reused, we want
         // to advance the `as_of` far enough that it is beyond the `as_of`s of all dataflows that
@@ -1512,11 +1784,32 @@ impl Coordinator {
         // this time either.
         let write_frontier = self.least_valid_write(&id_bundle);
         // Things go wrong if we try to create a dataflow with `as_of = []`, so avoid that.
-        if !write_frontier.is_empty() {
-            as_of.join_assign(&write_frontier);
+        if write_frontier.is_empty() {
+            return min_as_of;
         }
 
-        as_of
+        // Advancing the `as_of` to the write frontier means that we lose some historical data.
+        // That might be acceptable for the default 1-second index compaction window, but not for
+        // retained-metrics indexes. So we need to regress the write frontier by the retention
+        // duration of the index.
+        //
+        // NOTE: If we ever allow custom index compaction windows, we'll need to apply those here
+        // as well.
+        let lag = if is_retained_metrics_index {
+            let retention = self.catalog().state().system_config().metrics_retention();
+            Timestamp::new(u64::try_from(retention.as_millis()).unwrap_or_else(|_| {
+                tracing::error!("absurd metrics retention duration: {retention:?}");
+                u64::MAX
+            }))
+        } else {
+            DEFAULT_LOGICAL_COMPACTION_WINDOW_TS
+        };
+
+        let time = write_frontier.into_option().expect("checked above");
+        let time = time.saturating_sub(lag);
+        let max_as_of = Antichain::from_elem(time);
+
+        min_as_of.join(&max_as_of)
     }
 
     /// Returns an `as_of` suitable for bootstrapping the given materialized view dataflow.
@@ -1557,27 +1850,67 @@ impl Coordinator {
         mut internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
         mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<PendingReadTxn>,
         mut cmd_rx: mpsc::UnboundedReceiver<Command>,
+        group_commit_rx: appends::GroupCommitWaiter,
     ) {
-        // // Watcher that listens for and reports cluster service status changes.
+        // Watcher that listens for and reports cluster service status changes.
         let mut cluster_events = self.controller.events_stream();
+
         let (idle_tx, mut idle_rx) = tokio::sync::mpsc::channel(1);
         let idle_metric = self.metrics.queue_busy_seconds.with_label_values(&[]);
-        spawn(|| "coord idle metric", async move {
+        spawn(|| "coord watchdog", async move {
             // Every 5 seconds, attempt to measure how long it takes for the
             // coord select loop to be empty, because this message is the last
             // processed. If it is idle, this will result in some microseconds
             // of measurement.
             let mut interval = tokio::time::interval(Duration::from_secs(5));
+            // If we end up having to wait more than 5 seconds for the coord to respond, then the
+            // behavior of Delay results in the interval "restarting" from whenever we yield
+            // instead of trying to catch up.
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+            // Track if we become stuck to de-dupe error reporting.
+            let mut coord_stuck = false;
+
             loop {
                 interval.tick().await;
-                // If the buffer is full (or the channel is closed), ignore and
-                // try again later.
-                let _ = idle_tx.try_send(idle_metric.start_timer());
+
+                // Wait for space in the channel, if we timeout then the coordinator is stuck!
+                let duration = tokio::time::Duration::from_secs(60);
+                let timeout = tokio::time::timeout(duration, idle_tx.reserve()).await;
+                let Ok(maybe_permit) = timeout else {
+                    // Only log the error if we're newly stuck, to prevent logging repeatedly.
+                    if !coord_stuck {
+                        tracing::error!("Coordinator is stuck, did not respond after {duration:?}");
+                    }
+                    coord_stuck = true;
+
+                    continue;
+                };
+
+                // We got a permit, we're not stuck!
+                if coord_stuck {
+                    tracing::info!("Coordinator became unstuck");
+                }
+                coord_stuck = false;
+
+                // If we failed to acquire a permit it's because we're shutting down.
+                let Ok(permit) = maybe_permit else {
+                    break;
+                };
+
+                permit.send(idle_metric.start_timer());
             }
         });
 
-        self.schedule_storage_usage_collection();
+        self.schedule_storage_usage_collection().await;
+        self.spawn_statement_logging_task();
         flags::tracing_config(self.catalog.system_config()).apply(&self.tracing_handle);
+
+        // Report if the handling of a single message takes longer than this threshold.
+        let reporting_threshold = self
+            .catalog
+            .system_config()
+            .coord_slow_message_reporting_threshold_ms();
 
         loop {
             // Before adding a branch to this select loop, please ensure that the branch is
@@ -1599,6 +1932,12 @@ impl Coordinator {
                 () = self.controller.ready() => {
                     Message::ControllerReady
                 }
+                // See [`appends::GroupCommitWaiter`] for notes on why this is cancel safe.
+                permit = group_commit_rx.ready() => {
+                    let span = info_span!(parent: None, "group_commit_notify");
+                    span.follows_from(Span::current());
+                    Message::GroupCommitInitiate(span, Some(permit))
+                },
                 // `recv()` on `UnboundedReceiver` is cancellation safe:
                 // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
                 m = cmd_rx.recv() => match m {
@@ -1619,7 +1958,7 @@ impl Coordinator {
                 _ = self.advance_timelines_interval.tick() => {
                     let span = info_span!(parent: None, "advance_timelines_interval");
                     span.follows_from(Span::current());
-                    Message::GroupCommitInitiate(span)
+                    Message::GroupCommitInitiate(span, None)
                 },
 
                 // Process the idle metric at the lowest priority to sample queue non-idle time.
@@ -1631,10 +1970,19 @@ impl Coordinator {
                 }
             };
 
+            // Track the wall time for each message for reporting.
+            let histogram_metric = self
+                .metrics
+                .slow_message_handling
+                .with_label_values(&[msg.kind()]);
+
             self.handle_message(msg)
                 // All message processing functions trace. Start a parent span for them to make
                 // it easy to find slow messages.
                 .instrument(span!(Level::DEBUG, "coordinator message processing"))
+                .wall_time()
+                .observe(histogram_metric)
+                .with_filter(move |wall_time| wall_time >= reporting_threshold)
                 .await;
         }
     }
@@ -1662,13 +2010,6 @@ impl Coordinator {
         Arc::make_mut(&mut self.catalog)
     }
 
-    /// Obtain writeable Catalog and Controller references. This function is
-    /// needed to allow rust to have multiple mutable references on self at the
-    /// same time.
-    fn catalog_and_controller_mut(&mut self) -> (&mut Catalog, &mut mz_controller::Controller) {
-        (Arc::make_mut(&mut self.catalog), &mut self.controller)
-    }
-
     /// Publishes a notice message to all sessions.
     pub(crate) fn broadcast_notice(&mut self, notice: AdapterNotice) {
         for meta in self.active_conns.values() {
@@ -1678,6 +2019,16 @@ impl Coordinator {
 
     pub(crate) fn active_conns(&self) -> &BTreeMap<ConnectionId, ConnMeta> {
         &self.active_conns
+    }
+
+    pub(crate) fn retire_execution(
+        &mut self,
+        reason: StatementEndedExecutionReason,
+        ctx_extra: ExecuteContextExtra,
+    ) {
+        if let Some(uuid) = ctx_extra.retire() {
+            self.end_statement_execution(uuid, reason);
+        }
     }
 }
 
@@ -1718,6 +2069,7 @@ pub async fn serve(
         aws_privatelink_availability_zones,
         system_parameter_sync_config,
         active_connection_count,
+        http_host_name,
         tracing_handle,
     }: Config,
 ) -> Result<(Handle, Client), AdapterError> {
@@ -1725,6 +2077,7 @@ pub async fn serve(
 
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
+    let (group_commit_tx, group_commit_rx) = appends::notifier();
     let (strict_serializable_reads_tx, strict_serializable_reads_rx) = mpsc::unbounded_channel();
 
     // Validate and process availability zones.
@@ -1772,6 +2125,7 @@ pub async fn serve(
             storage_usage_retention_period,
             connection_context: Some(connection_context.clone()),
             active_connection_count,
+            http_host_name,
         })
         .await?;
     let session_id = catalog.config().session_id;
@@ -1792,30 +2146,41 @@ pub async fn serve(
     let advance_timelines_interval = tokio::time::interval(catalog.config().timestamp_interval);
     let thread = thread::Builder::new()
         // The Coordinator thread tends to keep a lot of data on its stack. To
-        // prevent a stack overflow we allocate a stack twice as big as the default
+        // prevent a stack overflow we allocate a stack three times as big as the default
         // stack.
-        .stack_size(2 * stack::STACK_SIZE)
+        .stack_size(3 * stack::STACK_SIZE)
         .name("coordinator".to_string())
         .spawn(move || {
+            let catalog = Arc::new(catalog);
+
             let mut timestamp_oracles = BTreeMap::new();
             for (timeline, initial_timestamp) in initial_timestamps {
+                let persistence =
+                    CatalogTimestampPersistence::new(timeline.clone(), Arc::clone(&catalog));
+
                 handle.block_on(Coordinator::ensure_timeline_state_with_initial_time(
                     &timeline,
                     initial_timestamp,
                     coord_now.clone(),
-                    |ts| catalog.persist_timestamp(&timeline, ts),
+                    persistence,
                     &mut timestamp_oracles,
                 ));
             }
 
             let caching_secrets_reader = CachingSecretsReader::new(secrets_controller.reader());
+            let variable_length_row_encoding = catalog
+                .system_config()
+                .variable_length_row_encoding_DANGEROUS();
+            mz_repr::VARIABLE_LENGTH_ROW_ENCODING
+                .store(variable_length_row_encoding, atomic::Ordering::SeqCst);
             let mut coord = Coordinator {
                 controller: dataflow_client,
                 view_optimizer: Optimizer::logical_optimizer(
                     &mz_transform::typecheck::empty_context(),
                 ),
-                catalog: Arc::new(catalog),
+                catalog,
                 internal_cmd_tx,
+                group_commit_tx,
                 strict_serializable_reads_tx,
                 global_timelines: timestamp_oracles,
                 transient_id_counter: 1,
@@ -1841,6 +2206,8 @@ pub async fn serve(
                 segment_client,
                 metrics,
                 tracing_handle,
+                statement_logging: StatementLogging::new(),
+                variable_length_row_encoding,
             };
             let bootstrap = handle.block_on(async {
                 coord
@@ -1849,7 +2216,10 @@ pub async fn serve(
                     .await?;
                 coord
                     .controller
-                    .remove_orphaned_replicas(coord.catalog().get_next_replica_id().await?)
+                    .remove_orphaned_replicas(
+                        coord.catalog().get_next_user_replica_id().await?,
+                        coord.catalog().get_next_system_replica_id().await?,
+                    )
                     .await
                     .map_err(AdapterError::Orchestrator)?;
                 Ok(())
@@ -1859,7 +2229,12 @@ pub async fn serve(
                 .send(bootstrap)
                 .expect("bootstrap_rx is not dropped until it receives this message");
             if ok {
-                handle.block_on(coord.serve(internal_cmd_rx, strict_serializable_reads_rx, cmd_rx));
+                handle.block_on(coord.serve(
+                    internal_cmd_rx,
+                    strict_serializable_reads_rx,
+                    cmd_rx,
+                    group_commit_rx,
+                ));
             }
         })
         .expect("failed to create coordinator thread");

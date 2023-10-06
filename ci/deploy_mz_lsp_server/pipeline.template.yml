@@ -1,0 +1,59 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+steps:
+  - command: bin/ci-builder run stable bin/pyactivate -m ci.deploy_mz_lsp_server.version
+    timeout_in_minutes: 30
+    concurrency: 1
+    concurrency_group: deploy-mz-lsp-server/version
+    retry:
+      manual:
+        permit_on_passed: true
+
+  - id: linux-x86_64
+    command: bin/ci-builder run stable bin/pyactivate -m ci.deploy_mz_lsp_server.linux
+    timeout_in_minutes: 30
+    agents:
+      queue: builder-linux-x86_64
+    concurrency: 1
+    concurrency_group: deploy-mz-lsp-server/linux/x86_64
+    retry:
+      manual:
+        permit_on_passed: true
+
+  - id: linux-aarch64
+    command: bin/ci-builder run stable bin/pyactivate -m ci.deploy_mz_lsp_server.linux
+    timeout_in_minutes: 30
+    agents:
+      queue: builder-linux-aarch64
+    concurrency: 1
+    concurrency_group: deploy-mz-lsp-server/linux/aarch64
+    retry:
+      manual:
+        permit_on_passed: true
+
+  - command: bin/pyactivate -m ci.deploy_mz_lsp_server.macos
+    agents:
+      queue: mac-x86_64
+    timeout_in_minutes: 30
+    concurrency: 1
+    concurrency_group: deploy-mz-lsp-server/macos/x86_64
+    retry:
+      manual:
+        permit_on_passed: true
+
+  - command: bin/pyactivate -m ci.deploy_mz_lsp_server.macos
+    agents:
+      queue: mac-aarch64
+    timeout_in_minutes: 30
+    concurrency: 1
+    concurrency_group: deploy-mz-lsp-server/macos/aarch64
+    retry:
+      manual:
+        permit_on_passed: true

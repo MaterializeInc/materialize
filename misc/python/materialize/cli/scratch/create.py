@@ -11,13 +11,13 @@ import argparse
 import datetime
 import json
 import sys
-from typing import Any, Dict, List
+from typing import Any
 
 from materialize.cli.scratch import check_required_vars
 from materialize.scratch import (
     DEFAULT_INSTANCE_PROFILE_NAME,
     DEFAULT_SECURITY_GROUP_NAME,
-    ROOT,
+    MZ_ROOT,
     MachineDesc,
     launch_cluster,
     mssh,
@@ -28,7 +28,7 @@ from materialize.scratch import (
 MAX_AGE_DAYS = 1.5
 
 
-def multi_json(s: str) -> List[Dict[Any, Any]]:
+def multi_json(s: str) -> list[dict[Any, Any]]:
     """Read zero or more JSON objects from a string,
     without requiring each of them to be on its own line.
 
@@ -122,7 +122,7 @@ def run(args: argparse.Namespace) -> None:
     extra_tags["LaunchedBy"] = whoami()
 
     if args.machine:
-        with open(ROOT / "misc" / "scratch" / "{}.json".format(args.machine)) as f:
+        with open(MZ_ROOT / "misc" / "scratch" / "{}.json".format(args.machine)) as f:
 
             print("Reading machine configs from {}".format(f.name))
             descs = [MachineDesc.parse_obj(obj) for obj in multi_json(f.read())]

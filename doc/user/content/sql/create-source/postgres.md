@@ -174,6 +174,31 @@ Instead, remove all rows from a table using an unqualified `DELETE`.
 DELETE FROM t;
 ```
 
+##### Inherited tables
+
+When using [PostgreSQL table
+inheritance](https://www.postgresql.org/docs/current/tutorial-inheritance.html),
+PostgreSQL serves data from `SELECT`s as if the inheriting tables' data is also
+present in the inherited table. However, both PostgreSQL's logical replication
+and `COPY` only present data written to the tables themselves, i.e. the
+inheriting data is _not_ treated as part of the inherited table.
+
+PostgreSQL sources use logical replication and `COPY` to ingest table data, so
+inheriting tables' data will only be ingested as part of the inheriting table,
+i.e. in Materialize, the data will not be returned when serving `SELECT`s from
+the inherited table.
+
+You can mimic PostgreSQL's `SELECT` behavior with inherited tables by creating a
+materialized view that `UNION`s data from the inherited and inheriting tables,
+though there are many caveats:
+
+-   Materialized views are maintained in arrangements, which moves the tables'
+    data from being stored in relatively low-cost storage into being stored in
+    memory.
+-   If new tables inherit from the table, data from the inheriting tables will
+    not be available in the view. You will need to add the inheriting tables via
+    `ADD SUBSOURCE` and create a new view that unions the new table.
+
 ## Examples
 
 {{< warning >}}
@@ -203,6 +228,8 @@ If your PostgreSQL server is not exposed to the public internet, you can [tunnel
 
 {{< tabs tabID="1" >}}
 {{< tab "AWS PrivateLink">}}
+
+{{< public-preview />}}
 
 ```sql
 CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (

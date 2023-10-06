@@ -76,9 +76,9 @@ a min max
 
 $ set-regex match=(.User.:\s\d+|\(u\d+\)) replacement=UID
 
-? EXPLAIN PHYSICAL PLAN FOR VIEW v2
-materialize.public.v2:
-  TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=3
+? EXPLAIN PHYSICAL PLAN FOR SELECT * FROM v2
+Explained Query:
+  TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=3 must_consolidate
     ArrangeBy
       input_key=[#0]
       raw=true
@@ -100,9 +100,9 @@ Used Indexes:
 
 > CREATE VIEW v3 AS SELECT * FROM non_dbz_data_indexed ORDER BY b LIMIT 3
 
-? EXPLAIN PHYSICAL PLAN FOR VIEW v3
-materialize.public.v3:
-  TopK::MonotonicTopK order_by=[#1 asc nulls_last] limit=3
+? EXPLAIN PHYSICAL PLAN FOR SELECT * FROM v3
+Explained Query:
+  TopK::MonotonicTopK order_by=[#1 asc nulls_last] limit=3 must_consolidate
     ArrangeBy
       input_key=[#0, #1]
       raw=true
@@ -120,9 +120,9 @@ Used Indexes:
 
 > CREATE VIEW v5 AS SELECT * from i4 ORDER BY c LIMIT 2;
 
-? EXPLAIN PHYSICAL PLAN FOR VIEW v5;
-materialize.public.v5:
-  TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=2
+? EXPLAIN PHYSICAL PLAN FOR SELECT * FROM v5;
+Explained Query:
+  TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=2 must_consolidate
     ArrangeBy
       input_key=[#0]
       raw=true
@@ -140,9 +140,9 @@ Used Indexes:
 
 > CREATE VIEW v7 AS SELECT * from i6 ORDER BY c LIMIT 2;
 
-? EXPLAIN PHYSICAL PLAN FOR VIEW v7;
-materialize.public.v7:
-  TopK::Basic order_by=[#0 asc nulls_last] limit=2
+? EXPLAIN PHYSICAL PLAN FOR SELECT * FROM v7;
+Explained Query:
+  TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=2 must_consolidate
     ArrangeBy
       input_key=[#0]
       raw=true
@@ -163,9 +163,9 @@ Used Indexes:
 
 # Propagating monotonicity analysis in a complex situation: (i1, i1) -> i8; (i1, i8) -> i9
 
-? EXPLAIN PHYSICAL PLAN FOR VIEW v10;
-materialize.public.v10:
-  TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=2
+? EXPLAIN PHYSICAL PLAN FOR SELECT * FROM v10;
+Explained Query:
+  TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=2 must_consolidate
     ArrangeBy
       input_key=[#0]
       raw=true
@@ -208,8 +208,8 @@ ReduceMonotonic
 
 # Propagating monotonicity analysis through materialized views
 
-? EXPLAIN PHYSICAL PLAN FOR VIEW v11;
-materialize.public.v11:
+? EXPLAIN PHYSICAL PLAN FOR SELECT * FROM v11;
+Explained Query:
   TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=3
     Get::PassArrangements materialize.public.m1
       raw=true

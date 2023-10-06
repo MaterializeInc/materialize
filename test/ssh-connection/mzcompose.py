@@ -7,18 +7,16 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.mzcompose import Composition
-from materialize.mzcompose.services import (
-    Kafka,
-    Materialized,
-    Postgres,
-    Redpanda,
-    SchemaRegistry,
-    SshBastionHost,
-    TestCerts,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.redpanda import Redpanda
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
+from materialize.mzcompose.services.test_certs import TestCerts
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
     Zookeeper(),
@@ -321,15 +319,23 @@ def workflow_rotated_ssh_key_after_restart(c: Composition) -> None:
 def workflow_default(c: Composition) -> None:
     # Test against both standard schema registry
     # and kafka implementations.
-    workflow_basic_ssh_features(c, redpanda=False)
-    workflow_basic_ssh_features(c, redpanda=True)
-    workflow_validate_connection(c)
-    # https://github.com/MaterializeInc/materialize/issues/19252
-    # workflow_kafka_csr_via_ssh_tunnel(c, redpanda=False)
-    # workflow_kafka_csr_via_ssh_tunnel(c, redpanda=True)
-    workflow_ssh_key_after_restart(c)
-    workflow_rotated_ssh_key_after_restart(c)
-    workflow_pg_via_ssh_tunnel(c)
-    workflow_pg_via_ssh_tunnel_with_ssl(c)
-    workflow_pg_restart_bastion(c)
-    workflow_hidden_hosts(c)
+    for workflow in [
+        workflow_basic_ssh_features,
+        workflow_kafka_csr_via_ssh_tunnel,
+        workflow_hidden_hosts,
+    ]:
+        workflow(c, redpanda=False)
+        c.sanity_restart_mz()
+        workflow(c, redpanda=True)
+        c.sanity_restart_mz()
+
+    for workflow in [
+        workflow_validate_connection,
+        workflow_ssh_key_after_restart,
+        workflow_rotated_ssh_key_after_restart,
+        workflow_pg_via_ssh_tunnel,
+        workflow_pg_via_ssh_tunnel_with_ssl,
+        workflow_pg_restart_bastion,
+    ]:
+        workflow(c)
+        c.sanity_restart_mz()

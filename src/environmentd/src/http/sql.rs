@@ -29,9 +29,8 @@ use mz_adapter::{
     SessionClient,
 };
 use mz_interchange::encode::TypedDatum;
-use mz_interchange::json::ToJson;
+use mz_interchange::json::{JsonNumberPolicy, ToJson};
 use mz_ore::result::ResultExt;
-use mz_pgwire::Severity;
 use mz_repr::{Datum, RelationDesc, RowArena};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Raw, Statement, StatementKind};
@@ -254,9 +253,7 @@ async fn forward_notices(
     let ws_notices = notices.into_iter().map(|notice| {
         WebSocketResponse::Notice(Notice {
             message: notice.to_string(),
-            severity: Severity::for_adapter_notice(&notice)
-                .as_str()
-                .to_lowercase(),
+            severity: notice.severity().as_str().to_lowercase(),
             detail: notice.detail(),
             hint: notice.hint(),
         })
@@ -666,7 +663,10 @@ impl ResultSender for WebSocket {
                                         datums
                                             .iter()
                                             .enumerate()
-                                            .map(|(i, d)| TypedDatum::new(*d, &types[i]).json())
+                                            .map(|(i, d)| {
+                                                TypedDatum::new(*d, &types[i])
+                                                    .json(&JsonNumberPolicy::ConvertNumberToString)
+                                            })
                                             .collect(),
                                     ),
                                 )
@@ -921,7 +921,7 @@ async fn execute_stmt<S: ResultSender>(
             None => Datum::Null,
             Some(raw_param) => {
                 match mz_pgrepr::Value::decode(
-                    mz_pgrepr::Format::Text,
+                    mz_pgwire_common::Format::Text,
                     &pg_typ,
                     raw_param.as_bytes(),
                 ) {
@@ -937,7 +937,7 @@ async fn execute_stmt<S: ResultSender>(
     }
 
     let result_formats = vec![
-        mz_pgrepr::Format::Text;
+        mz_pgwire_common::Format::Text;
         prep_stmt
             .desc()
             .relation_desc
@@ -970,7 +970,7 @@ async fn execute_stmt<S: ResultSender>(
         .expect("unnamed portal should be present");
 
     let (res, execute_started) = match client
-        .execute(EMPTY_PORTAL.into(), futures::future::pending())
+        .execute(EMPTY_PORTAL.into(), futures::future::pending(), None)
         .await
     {
         Ok(res) => res,
@@ -999,6 +999,7 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::CreatedViews { .. }
         | ExecuteResponse::CreatedMaterializedView { .. }
         | ExecuteResponse::CreatedType
+        | ExecuteResponse::Comment
         | ExecuteResponse::Deleted(_)
         | ExecuteResponse::DiscardedTemp
         | ExecuteResponse::DiscardedAll
@@ -1021,7 +1022,6 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::AlteredSystemConfiguration
         | ExecuteResponse::Deallocate { .. }
         | ExecuteResponse::ValidatedConnection
-        | ExecuteResponse::CreatedWebhookSource
         | ExecuteResponse::Prepare => SqlResult::ok(client, tag.expect("ok only called on tag-generating results"), Vec::default()).into(),
         ExecuteResponse::TransactionCommitted { params } | ExecuteResponse::TransactionRolledBack { params }=> {
             let notify_set: mz_ore::collections::HashSet<String> = client
@@ -1066,16 +1066,28 @@ async fn execute_stmt<S: ResultSender>(
             let types = &desc.typ().column_types;
             for row in rows {
                 let datums = datum_vec.borrow_with(&row);
-                sql_rows.push(datums.iter().enumerate().map(|(i, d)| TypedDatum::new(*d, &types[i]).json()).collect());
+                sql_rows.push(datums.iter().enumerate().map(|(i, d)| TypedDatum::new(*d, &types[i]).json(&JsonNumberPolicy::ConvertNumberToString)).collect());
             }
             let tag = format!("SELECT {}", sql_rows.len());
             SqlResult::rows(client, tag, sql_rows, desc).into()
         }
-        ExecuteResponse::Subscribing { rx }  => {
+        ExecuteResponse::SendingRowsImmediate { rows, span: _} => {
+            let mut sql_rows: Vec<Vec<serde_json::Value>> = vec![];
+            let mut datum_vec = mz_repr::DatumVec::new();
+            let desc = desc.relation_desc.expect("RelationDesc must exist");
+            let types = &desc.typ().column_types;
+            for row in rows {
+                let datums = datum_vec.borrow_with(&row);
+                sql_rows.push(datums.iter().enumerate().map(|(i, d)| TypedDatum::new(*d, &types[i]).json(&JsonNumberPolicy::ConvertNumberToString)).collect());
+            }
+            let tag = format!("SELECT {}", sql_rows.len());
+            SqlResult::rows(client, tag, sql_rows, desc).into()
+        }
+        ExecuteResponse::Subscribing { rx, ctx_extra: _ }  => {
             StatementResult::Subscribe {
-                tag: "SUBSCRIBE".into(),
+                tag:"SUBSCRIBE".into(),
                 desc: desc.relation_desc.unwrap(),
-                rx: RecordFirstRowStream::new(Box::new(UnboundedReceiverStream::new(rx)), execute_started, client),
+                rx: RecordFirstRowStream::new(Box::new(UnboundedReceiverStream::new(rx)), execute_started, client)
             }
         },
         res @ (ExecuteResponse::Fetch { .. }
@@ -1100,9 +1112,7 @@ fn make_notices(client: &mut SessionClient) -> Vec<Notice> {
         .into_iter()
         .map(|notice| Notice {
             message: notice.to_string(),
-            severity: Severity::for_adapter_notice(&notice)
-                .as_str()
-                .to_lowercase(),
+            severity: notice.severity().as_str().to_lowercase(),
             detail: notice.detail(),
             hint: notice.hint(),
         })

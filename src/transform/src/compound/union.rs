@@ -18,7 +18,7 @@ use mz_expr::visit::Visit;
 use mz_expr::MirRelationExpr;
 use mz_repr::RelationType;
 
-use crate::TransformArgs;
+use crate::TransformCtx;
 
 /// Fuses `Union` and `Negate` operators into one `Union` and multiple `Negate` operators.
 #[derive(Debug)]
@@ -34,7 +34,7 @@ impl crate::Transform for UnionNegateFusion {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
+        _: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
         relation.visit_mut_post(&mut Self::action)?;
         mz_repr::explain::trace_plan(&*relation);

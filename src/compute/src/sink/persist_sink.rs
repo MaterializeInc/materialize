@@ -16,18 +16,17 @@ use std::sync::Arc;
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{Collection, Hashable};
-use mz_compute_client::types::sinks::{ComputeSinkDesc, PersistSinkConnection};
+use mz_compute_types::sinks::{ComputeSinkDesc, PersistSinkConnection};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
-use mz_persist_client::batch::{Batch, BatchBuilder};
+use mz_persist_client::batch::{Batch, BatchBuilder, ProtoBatch};
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::write::WriterEnrichedHollowBatch;
 use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
-use mz_storage_client::controller::CollectionMetadata;
-use mz_storage_client::types::errors::DataflowError;
-use mz_storage_client::types::sources::SourceData;
+use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::errors::DataflowError;
+use mz_storage_types::sources::SourceData;
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 use mz_timely_util::probe::{self, ProbeNotify};
 use serde::{Deserialize, Serialize};
@@ -94,7 +93,7 @@ where
     // `persist_source` to select an appropriate `as_of`. We only care about times beyond the
     // current shard upper anyway.
     let source_as_of = None;
-    let (ok_stream, err_stream, token) = mz_storage_client::source::persist_source::persist_source(
+    let (ok_stream, err_stream, token) = mz_storage_operators::persist_source::persist_source(
         &mut desired_collection.scope(),
         sink_id,
         Arc::clone(&compute_state.persist_clients),
@@ -531,7 +530,7 @@ where
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 enum BatchOrData {
-    Batch(WriterEnrichedHollowBatch<Timestamp>),
+    Batch(ProtoBatch),
     Data {
         lower: Antichain<Timestamp>,
         upper: Antichain<Timestamp>,
@@ -852,7 +851,7 @@ where
                                     batch.upper()
                                 );
                             }
-                            BatchOrData::Batch(batch.into_writer_hollow_batch())
+                            BatchOrData::Batch(batch.into_transmittable_batch())
                         } else {
                             BatchOrData::Data {
                                 lower: batch_lower.clone(),
@@ -1036,7 +1035,7 @@ where
                             for batch in data.drain(..) {
                                 match batch {
                                     BatchOrData::Batch(batch) => {
-                                        let batch = write.batch_from_hollow_batch(batch);
+                                        let batch = write.batch_from_transmittable_batch(batch);
                                         let batch_description = (batch.lower().clone(), batch.upper().clone());
 
                                         let batches = in_flight_batches

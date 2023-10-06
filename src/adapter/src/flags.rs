@@ -16,7 +16,7 @@ use mz_ore::error::ErrorExt;
 use mz_persist_client::cfg::{PersistParameters, RetryParameters};
 use mz_service::params::GrpcClientParameters;
 use mz_sql::session::vars::SystemVars;
-use mz_storage_client::types::parameters::{
+use mz_storage_types::parameters::{
     StorageMaxInflightBytesConfig, StorageParameters, UpsertAutoSpillConfig,
 };
 use mz_tracing::params::TracingParameters;
@@ -28,6 +28,7 @@ pub fn compute_config(config: &SystemVars) -> ComputeParameters {
         dataflow_max_inflight_bytes: Some(config.dataflow_max_inflight_bytes()),
         enable_arrangement_size_logging: Some(config.enable_arrangement_size_logging()),
         enable_mz_join_core: Some(config.enable_mz_join_core()),
+        enable_jemalloc_profiling: Some(config.enable_jemalloc_profiling()),
         persist: persist_config(config),
         tracing: tracing_config(config),
         grpc_client: grpc_client_config(config),
@@ -38,13 +39,14 @@ pub fn compute_config(config: &SystemVars) -> ComputeParameters {
 pub fn storage_config(config: &SystemVars) -> StorageParameters {
     StorageParameters {
         persist: persist_config(config),
-        pg_replication_timeouts: mz_postgres_util::ReplicationTimeouts {
-            connect_timeout: Some(config.pg_replication_connect_timeout()),
-            keepalives_retries: Some(config.pg_replication_keepalives_retries()),
-            keepalives_idle: Some(config.pg_replication_keepalives_idle()),
-            keepalives_interval: Some(config.pg_replication_keepalives_interval()),
-            tcp_user_timeout: Some(config.pg_replication_tcp_user_timeout()),
+        pg_source_tcp_timeouts: mz_postgres_util::TcpTimeoutConfig {
+            connect_timeout: Some(config.pg_source_connect_timeout()),
+            keepalives_retries: Some(config.pg_source_keepalives_retries()),
+            keepalives_idle: Some(config.pg_source_keepalives_idle()),
+            keepalives_interval: Some(config.pg_source_keepalives_interval()),
+            tcp_user_timeout: Some(config.pg_source_tcp_user_timeout()),
         },
+        pg_source_snapshot_statement_timeout: config.pg_source_snapshot_statement_timeout(),
         keep_n_source_status_history_entries: config.keep_n_source_status_history_entries(),
         keep_n_sink_status_history_entries: config.keep_n_source_status_history_entries(),
         upsert_rocksdb_tuning_config: {
@@ -61,6 +63,22 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
                 config.upsert_rocksdb_stats_log_interval_seconds(),
                 config.upsert_rocksdb_stats_persist_interval_seconds(),
                 config.upsert_rocksdb_point_lookup_block_cache_size_mb(),
+                config.upsert_rocksdb_shrink_allocated_buffers_by_ratio(),
+                config.upsert_rocksdb_write_buffer_manager_memory_bytes(),
+                config
+                    .upsert_rocksdb_write_buffer_manager_cluster_memory_fraction()
+                    .and_then(|d| match d.try_into() {
+                        Err(e) => {
+                            tracing::error!(
+                                "Couldn't convert upsert_rocksdb_write_buffer_manager_cluster_memory_fraction {:?} to f64, so defaulting to `None`: {e:?}",
+                                config
+                                    .upsert_rocksdb_write_buffer_manager_cluster_memory_fraction()
+                            );
+                            None
+                        }
+                        Ok(o) => Some(o),
+                    }),
+                config.upsert_rocksdb_write_buffer_manager_allow_stall(),
             ) {
                 Ok(u) => u,
                 Err(e) => {
@@ -100,6 +118,10 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
         },
         grpc_client: grpc_client_config(config),
         delay_sources_past_rehydration: config.storage_dataflow_delay_sources_past_rehydration(),
+        shrink_upsert_unused_buffers_by_ratio: config
+            .storage_shrink_upsert_unused_buffers_by_ratio(),
+        truncate_statement_log: config.truncate_statement_log(),
+        statement_logging_retention_time_seconds: config.statement_logging_retention().as_secs(),
     }
 }
 
@@ -138,12 +160,16 @@ fn persist_config(config: &SystemVars) -> PersistParameters {
             multiplier: config.persist_next_listen_batch_retryer_multiplier(),
             clamp: config.persist_next_listen_batch_retryer_clamp(),
         }),
+        reader_lease_duration: Some(config.persist_reader_lease_duration()),
         stats_audit_percent: Some(config.persist_stats_audit_percent()),
         stats_collection_enabled: Some(config.persist_stats_collection_enabled()),
         stats_filter_enabled: Some(config.persist_stats_filter_enabled()),
+        stats_budget_bytes: Some(config.persist_stats_budget_bytes()),
+        stats_untrimmable_columns: Some(config.persist_stats_untrimmable_columns()),
         pubsub_client_enabled: Some(config.persist_pubsub_client_enabled()),
         pubsub_push_diff_enabled: Some(config.persist_pubsub_push_diff_enabled()),
         rollup_threshold: Some(config.persist_rollup_threshold()),
+        feature_flags: config.persist_flags(),
     }
 }
 

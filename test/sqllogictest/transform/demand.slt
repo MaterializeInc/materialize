@@ -71,7 +71,7 @@ Explained Query:
             Get l1 // { arity: 2 }
           Project (#0, #0) // { arity: 2 }
             Filter (#0) IS NOT NULL // { arity: 1 }
-              Get materialize.public.t // { arity: 1 }
+              ReadStorage materialize.public.t // { arity: 1 }
 
 Source materialize.public.t
   filter=((#0) IS NOT NULL)
@@ -93,7 +93,8 @@ WITH MUTUALLY RECURSIVE
     FROM c0, c1
     WHERE c0.key = c1.key
   )
-SELECT * FROM c2;
+SELECT * FROM c2
+ORDER BY 1, 2;
 ----
 2  1
 4  0

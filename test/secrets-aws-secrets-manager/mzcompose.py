@@ -7,20 +7,22 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Any, Dict, cast
+from typing import Any, cast
 
 import boto3
 
-from materialize.mzcompose import Composition
-from materialize.mzcompose.services import (
+from materialize.mzcompose import (
     DEFAULT_CLOUD_REGION,
     DEFAULT_MZ_ENVIRONMENT_ID,
     DEFAULT_ORDINAL,
     DEFAULT_ORG_ID,
-    Localstack,
-    Materialized,
-    Testdrive,
 )
+from materialize.mzcompose.composition import (
+    Composition,
+)
+from materialize.mzcompose.services.localstack import Localstack
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.testdrive import Testdrive
 
 ENVIRONMENT_NAME = f"environment-{DEFAULT_ORG_ID}-{DEFAULT_ORDINAL}"
 NAMESPACE = ENVIRONMENT_NAME
@@ -143,7 +145,7 @@ def workflow_default(c: Composition) -> None:
         ],
     )
 
-    def list_secrets() -> Dict[str, Dict[str, Any]]:
+    def list_secrets() -> dict[str, dict[str, Any]]:
         return {
             secret["Name"]: secret for secret in sm_client.list_secrets()["SecretList"]
         }

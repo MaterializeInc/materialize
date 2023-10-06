@@ -8,11 +8,12 @@
 # by the Apache License, Version 2.0.
 
 from textwrap import dedent
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any
 
 from materialize.checks.actions import Action
 from materialize.checks.executors import Executor
-from materialize.mzcompose.services import Clusterd, Materialized
+from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.materialized import Materialized
 from materialize.util import MzVersion
 
 if TYPE_CHECKING:
@@ -28,9 +29,9 @@ class MzcomposeAction(Action):
 class StartMz(MzcomposeAction):
     def __init__(
         self,
-        tag: Optional[MzVersion] = None,
-        environment_extra: List[str] = [],
-        system_parameter_defaults: Optional[Dict[str, str]] = None,
+        tag: MzVersion | None = None,
+        environment_extra: list[str] = [],
+        system_parameter_defaults: dict[str, str] | None = None,
     ) -> None:
         self.tag = tag
         self.environment_extra = environment_extra
@@ -67,7 +68,7 @@ class StartMz(MzcomposeAction):
 
 class ConfigureMz(MzcomposeAction):
     def __init__(self, scenario: "Scenario") -> None:
-        self.handle: Optional[Any] = None
+        self.handle: Any | None = None
 
     def execute(self, e: Executor) -> None:
         input = dedent(
@@ -164,7 +165,7 @@ class UseClusterdCompute(MzcomposeAction):
 
         c.sql(
             f"""
-
+            ALTER CLUSTER default SET (MANAGED = false);
             DROP CLUSTER REPLICA default.r1;
             CREATE CLUSTER REPLICA default.r1
                 {storage_addresses},
@@ -185,7 +186,7 @@ class KillClusterdCompute(MzcomposeAction):
 
 
 class StartClusterdCompute(MzcomposeAction):
-    def __init__(self, tag: Optional[MzVersion] = None) -> None:
+    def __init__(self, tag: MzVersion | None = None) -> None:
         self.tag = tag
 
     def execute(self, e: Executor) -> None:
@@ -244,8 +245,9 @@ class DropCreateDefaultReplica(MzcomposeAction):
 
         c.sql(
             """
-           DROP CLUSTER REPLICA default.r1;
-           CREATE CLUSTER REPLICA default.r1 SIZE '1';
+            ALTER CLUSTER default SET (MANAGED = false);
+            DROP CLUSTER REPLICA default.r1;
+            CREATE CLUSTER REPLICA default.r1 SIZE '1';
             """,
             port=6877,
             user="mz_system",

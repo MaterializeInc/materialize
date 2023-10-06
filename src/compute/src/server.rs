@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Debug;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::Error;
 use crossbeam_channel::{RecvError, TryRecvError};
@@ -22,7 +23,7 @@ use mz_compute_client::protocol::command::ComputeCommand;
 use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::ComputeResponse;
 use mz_compute_client::service::ComputeClient;
-use mz_compute_client::types::dataflows::{BuildDesc, DataflowDescription};
+use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
 use mz_ore::cast::CastFrom;
 use mz_ore::halt;
 use mz_ore::tracing::TracingHandle;
@@ -135,7 +136,12 @@ impl CommandReceiverQueue {
     /// is available.
     fn recv<A: Allocate>(&mut self, worker: &mut Worker<A>) -> Result<ComputeCommand, RecvError> {
         while self.is_empty() {
+            let start = Instant::now();
             worker.timely_worker.step_or_park(None);
+            worker
+                .metrics
+                .timely_step_duration_seconds
+                .observe(start.elapsed().as_secs_f64());
         }
         match self.try_recv() {
             Ok(cmd) => Ok(cmd),
@@ -367,7 +373,11 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                 compute_state.traces.maintenance();
             }
 
+            let start = Instant::now();
             self.timely_worker.step_or_park(None);
+            self.metrics
+                .timely_step_duration_seconds
+                .observe(start.elapsed().as_secs_f64());
 
             // Report frontier information back the coordinator.
             if let Some(mut compute_state) = self.activate_compute(&mut response_tx) {
@@ -396,14 +406,6 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                 compute_state.process_peeks();
                 compute_state.process_subscribes();
             }
-        }
-    }
-
-    #[allow(dead_code)]
-    fn shut_down(&mut self, response_tx: &mut ResponseSender) {
-        if let Some(mut compute_state) = self.activate_compute(response_tx) {
-            compute_state.compute_state.traces.del_all_traces();
-            compute_state.shutdown_logging();
         }
     }
 
@@ -463,6 +465,8 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
         command_rx: &mut CommandReceiverQueue,
         response_tx: &mut ResponseSender,
     ) -> Result<(), RecvError> {
+        let worker_id = self.timely_worker.index();
+
         // To initialize the connection, we want to drain all commands until we receive a
         // `ComputeCommand::InitializationComplete` command to form a target command state.
         let mut new_commands = Vec::new();
@@ -484,9 +488,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
         if let Some(compute_state) = &mut self.compute_state {
             // Reduce the installed commands.
             // Importantly, act as if all peeks may have been retired (as we cannot know otherwise).
-            compute_state
-                .command_history
-                .retain_peeks(&BTreeMap::<_, ()>::default());
+            compute_state.command_history.discard_peeks();
             compute_state.command_history.reduce();
 
             // At this point, we need to sort out which of the *certainly installed* dataflows are
@@ -501,16 +503,16 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
             // this before being too confident. It should be rare without peeks, but could happen with e.g.
             // multiple outputs of a dataflow.
 
-            // The logging configuration with which a prior `CreateInstance` was called, if it was.
-            let mut old_logging_config = None;
+            // The values with which a prior `CreateInstance` was called, if it was.
+            let mut old_instance_config = None;
             // Index dataflows by `export_ids().collect()`, as this is a precondition for their compatibility.
             let mut old_dataflows = BTreeMap::default();
             // Maintain allowed compaction, in case installed identifiers may have been allowed to compact.
             let mut old_frontiers = BTreeMap::default();
             for command in compute_state.command_history.iter() {
                 match command {
-                    ComputeCommand::CreateInstance(logging) => {
-                        old_logging_config = Some(logging);
+                    ComputeCommand::CreateInstance(config) => {
+                        old_instance_config = Some(config);
                     }
                     ComputeCommand::CreateDataflow(dataflow) => {
                         let export_ids = dataflow.export_ids().collect::<BTreeSet<_>>();
@@ -569,7 +571,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                             }
 
                             compute_state.metrics.record_dataflow_reconciliation(
-                                self.timely_worker.index(),
+                                worker_id,
                                 compatible,
                                 uncompacted,
                                 subscribe_free,
@@ -578,13 +580,13 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                             todo_commands.push(ComputeCommand::CreateDataflow(dataflow.clone()));
                         }
                     }
-                    ComputeCommand::CreateInstance(logging) => {
+                    ComputeCommand::CreateInstance(config) => {
                         // Cluster creation should not be performed again!
-                        if Some(logging) != old_logging_config {
+                        if Some(config) != old_instance_config {
                             halt!(
-                                "new logging configuration does not match existing logging configuration:\n{:?}\nvs\n{:?}",
-                                logging,
-                                old_logging_config,
+                                "new instance configuration does not match existing instance configuration:\n{:?}\nvs\n{:?}",
+                                config,
+                                old_instance_config,
                             );
                         }
                     }
@@ -657,7 +659,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
 
                 // Compensate what already was sent to logging sources.
                 if let Some(logger) = &compute_state.compute_logger {
-                    if let Some(time) = collection.reported_frontier().logging_time() {
+                    if let Some(time) = collection.reported_frontier.logging_time() {
                         logger.log(ComputeEvent::Frontier { id, time, diff: -1 });
                     }
                     if let Some(time) = new_reported_frontier.logging_time() {
@@ -665,7 +667,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                     }
                 }
 
-                collection.set_reported_frontier(new_reported_frontier);
+                collection.reported_frontier = new_reported_frontier;
 
                 // Sink tokens should be retained for retained dataflows, and dropped for dropped
                 // dataflows.
@@ -694,9 +696,10 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
         // Overwrite `self.command_history` to reflect `new_commands`.
         // It is possible that there still isn't a compute state yet.
         if let Some(compute_state) = &mut self.compute_state {
-            let mut command_history = ComputeCommandHistory::new(self.metrics.for_history());
+            let mut command_history =
+                ComputeCommandHistory::new(self.metrics.for_history(worker_id));
             for command in new_commands.iter() {
-                command_history.push(command.clone(), &compute_state.pending_peeks);
+                command_history.push(command.clone());
             }
             compute_state.command_history = command_history;
         }

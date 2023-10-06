@@ -12,8 +12,10 @@ import os
 import tempfile
 from textwrap import dedent, indent
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import Materialized, Redpanda, Testdrive
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.redpanda import Redpanda
+from materialize.mzcompose.services.testdrive import Testdrive
 
 SERVICES = [
     Redpanda(),
@@ -222,35 +224,6 @@ class FeatureTestScenario:
     def query_item(cls, ordinal: int) -> str:
         """A SQL query referencing an item that depends on the feature."""
         assert False, "query_item() must be overriden"
-
-
-class WithMutuallyRecursive(FeatureTestScenario):
-    @classmethod
-    def feature_name(cls) -> str:
-        return "enable_with_mutually_recursive"
-
-    @classmethod
-    def feature_error(cls) -> str:
-        return "WITH MUTUALLY RECURSIVE is not supported"
-
-    @classmethod
-    def create_item(cls, ordinal: int) -> str:
-        return dedent(
-            f"""
-            CREATE VIEW wmr_{ordinal:02d} AS WITH MUTUALLY RECURSIVE
-                foo (a int, b int) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar),
-                bar (a int) as (SELECT a FROM foo)
-            SELECT * FROM bar;
-            """
-        )
-
-    @classmethod
-    def drop_item(cls, ordinal: int) -> str:
-        return f"DROP VIEW wmr_{ordinal:02d}"
-
-    @classmethod
-    def query_item(cls, ordinal: int) -> str:
-        return f"SELECT * FROM wmr_{ordinal:02d}"
 
 
 def run_test(c: Composition, args: argparse.Namespace) -> None:

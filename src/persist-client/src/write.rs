@@ -19,7 +19,9 @@ use differential_dataflow::trace::Description;
 use mz_ore::task::RuntimeExt;
 use mz_persist::location::Blob;
 use mz_persist_types::{Codec, Codec64};
+use mz_proto::{IntoRustIfSome, ProtoType};
 use proptest_derive::Arbitrary;
+use semver::Version;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -29,10 +31,11 @@ use uuid::Uuid;
 
 use crate::batch::{
     validate_truncate_batch, Added, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
+    ProtoBatch,
 };
 use crate::error::{InvalidUsage, UpperMismatch};
 use crate::internal::compact::Compactor;
-use crate::internal::encoding::{Schemas, SerdeWriterEnrichedHollowBatch};
+use crate::internal::encoding::Schemas;
 use crate::internal::machine::Machine;
 use crate::internal::metrics::Metrics;
 use crate::internal::state::{HandleDebugState, HollowBatch, Upper};
@@ -81,25 +84,6 @@ impl WriterId {
     pub(crate) fn new() -> Self {
         WriterId(*Uuid::new_v4().as_bytes())
     }
-}
-
-/// A token representing one written batch.
-///
-/// This may be exchanged (including over the network). It is tradeable via
-/// [`WriteHandle::batch_from_hollow_batch`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(bound(
-    serialize = "T: Timestamp + Codec64",
-    deserialize = "T: Timestamp + Codec64"
-))]
-#[serde(
-    into = "SerdeWriterEnrichedHollowBatch",
-    from = "SerdeWriterEnrichedHollowBatch"
-)]
-pub struct WriterEnrichedHollowBatch<T> {
-    pub(crate) shard_id: ShardId,
-    pub(crate) version: semver::Version,
-    pub(crate) batch: HollowBatch<T>,
 }
 
 /// A "capability" granting the ability to apply updates to some shard at times
@@ -184,11 +168,28 @@ where
         }
     }
 
+    /// This handle's shard id.
+    pub fn shard_id(&self) -> ShardId {
+        self.machine.shard_id()
+    }
+
     /// A cached version of the shard-global `upper` frontier.
     ///
-    /// This will always be less or equal to the shard-global `upper`.
+    /// This is the most recent upper discovered by this handle. It is
+    /// potentially more stale than [Self::shared_upper] but is lock-free and
+    /// allocation-free. This will always be less or equal to the shard-global
+    /// `upper`.
     pub fn upper(&self) -> &Antichain<T> {
         &self.upper
+    }
+
+    /// A less-stale cached version of the shard-global `upper` frontier.
+    ///
+    /// This is the most recently known upper for this shard process-wide, but
+    /// unlike [Self::upper] it requires a mutex and a clone. This will always be
+    /// less or equal to the shard-global `upper`.
+    pub fn shared_upper(&self) -> Antichain<T> {
+        self.machine.applier.clone_upper()
     }
 
     /// Fetches and returns a recent shard-global `upper`. Importantly, this operation is not
@@ -453,10 +454,17 @@ where
         let since = Antichain::from_elem(T::minimum());
         let desc = Description::new(lower, upper, since);
 
-        let (mut parts, mut num_updates) = (Vec::new(), 0);
+        let (mut parts, mut num_updates, mut runs) = (vec![], 0, vec![]);
         for batch in batches.iter() {
             let () = validate_truncate_batch(&batch.batch.desc, &desc)?;
-            parts.extend_from_slice(&batch.batch.parts);
+            for run in batch.batch.runs() {
+                // Mark the boundary if this is not the first run in the batch.
+                let start_index = parts.len();
+                if start_index != 0 {
+                    runs.push(start_index);
+                }
+                parts.extend_from_slice(run);
+            }
             num_updates += batch.batch.len;
         }
 
@@ -468,7 +476,7 @@ where
                     desc: desc.clone(),
                     parts,
                     len: num_updates,
-                    runs: vec![],
+                    runs,
                 },
                 &self.writer_id,
                 &self.debug_state,
@@ -501,26 +509,24 @@ where
         Ok(Ok(()))
     }
 
-    /// Turns the given [`WriterEnrichedHollowBatch`] back into a [`Batch`]
-    /// which can be used to append it to this shard.
-    pub fn batch_from_hollow_batch(
-        &self,
-        hollow: WriterEnrichedHollowBatch<T>,
-    ) -> Batch<K, V, T, D> {
-        assert_eq!(
-            hollow.shard_id,
-            self.machine.shard_id(),
-            "hollow batch with shard id {} is not for this shard {}",
-            hollow.shard_id,
-            self.machine.shard_id()
-        );
-        Batch {
-            shard_id: self.machine.shard_id(),
-            version: hollow.version,
-            batch: hollow.batch,
+    /// Turns the given [`ProtoBatch`] back into a [`Batch`] which can be used
+    /// to append it to this shard.
+    pub fn batch_from_transmittable_batch(&self, batch: ProtoBatch) -> Batch<K, V, T, D> {
+        let ret = Batch {
+            shard_id: batch
+                .shard_id
+                .into_rust()
+                .expect("valid transmittable batch"),
+            version: Version::parse(&batch.version).expect("valid transmittable batch"),
+            batch: batch
+                .batch
+                .into_rust_if_some("ProtoBatch::batch")
+                .expect("valid transmittable batch"),
             _blob: Arc::clone(&self.blob),
             _phantom: std::marker::PhantomData,
-        }
+        };
+        assert_eq!(ret.shard_id, self.machine.shard_id());
+        ret
     }
 
     /// Returns a [BatchBuilder] that can be used to write a batch of updates to
@@ -588,6 +594,19 @@ where
         }
 
         builder.finish(upper.clone()).await
+    }
+
+    /// Blocks until the given `frontier` is less than the upper of the shard.
+    pub async fn wait_for_upper_past(&mut self, frontier: &Antichain<T>) {
+        let mut watch = self.machine.applier.watch();
+        let batch = self
+            .machine
+            .next_listen_batch(frontier, &mut watch, None)
+            .await;
+        if PartialOrder::less_than(&self.upper, batch.desc.upper()) {
+            self.upper.clone_from(batch.desc.upper());
+        }
+        assert!(PartialOrder::less_than(frontier, &self.upper));
     }
 
     /// Politely expires this writer, releasing any associated state.
@@ -724,6 +743,8 @@ mod tests {
     use std::str::FromStr;
 
     use differential_dataflow::consolidation::consolidate_updates;
+    use futures_util::FutureExt;
+    use mz_ore::collections::CollectionExt;
     use serde_json::json;
 
     use crate::tests::{all_ok, new_test_client};
@@ -797,6 +818,15 @@ mod tests {
             .expect_compare_and_append_batch(&mut [&mut batch0, &mut batch1], 0, 4)
             .await;
 
+        let batch = write
+            .machine
+            .snapshot(&Antichain::from_elem(3))
+            .await
+            .expect("just wrote this")
+            .into_element();
+
+        assert!(batch.runs().count() >= 2);
+
         let expected = vec![
             (("1".to_owned(), "one".to_owned()), 1, 2),
             (("2".to_owned(), "two".to_owned()), 2, 2),
@@ -858,8 +888,8 @@ mod tests {
         // But a) turning a batch into a hollow batch consumes it, and b) Batch
         // doesn't have Eq/PartialEq.
         let batch = write.expect_batch(&data, 0, 4).await;
-        let hollow_batch = batch.into_writer_hollow_batch();
-        let mut rehydrated_batch = write.batch_from_hollow_batch(hollow_batch);
+        let hollow_batch = batch.into_transmittable_batch();
+        let mut rehydrated_batch = write.batch_from_transmittable_batch(hollow_batch);
 
         write
             .expect_compare_and_append_batch(&mut [&mut rehydrated_batch], 0, 4)
@@ -873,5 +903,39 @@ mod tests {
         let mut actual = read.expect_snapshot_and_fetch(3).await;
         consolidate_updates(&mut actual);
         assert_eq!(actual, all_ok(&expected, 3));
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn wait_for_upper_past() {
+        let client = new_test_client().await;
+        let (mut write, _) = client.expect_open::<(), (), u64, i64>(ShardId::new()).await;
+        let five = Antichain::from_elem(5);
+
+        // Upper is not past 5.
+        assert_eq!(write.wait_for_upper_past(&five).now_or_never(), None);
+
+        // Upper is still not past 5.
+        write
+            .expect_compare_and_append(&[(((), ()), 1, 1)], 0, 5)
+            .await;
+        assert_eq!(write.wait_for_upper_past(&five).now_or_never(), None);
+
+        // Upper is past 5.
+        write
+            .expect_compare_and_append(&[(((), ()), 5, 1)], 5, 7)
+            .await;
+        assert_eq!(write.wait_for_upper_past(&five).now_or_never(), Some(()));
+        assert_eq!(write.upper(), &Antichain::from_elem(7));
+
+        // Waiting for previous uppers does not regress the handle's cached
+        // upper.
+        assert_eq!(
+            write
+                .wait_for_upper_past(&Antichain::from_elem(2))
+                .now_or_never(),
+            Some(())
+        );
+        assert_eq!(write.upper(), &Antichain::from_elem(7));
     }
 }

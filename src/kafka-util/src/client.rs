@@ -11,10 +11,12 @@
 
 use std::collections::BTreeMap;
 use std::error::Error;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::bail;
+use crossbeam::channel::{unbounded, Receiver, Sender};
 use mz_ore::collections::CollectionExt;
 use rdkafka::client::{BrokerAddr, Client, NativeClient, OAuthToken};
 use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
@@ -36,7 +38,121 @@ pub const DEFAULT_FETCH_METADATA_TIMEOUT: Duration = Duration::from_secs(30);
 /// context or a custom context that delegates the `log` and `error` methods to
 /// this implementation.
 #[derive(Clone)]
-pub struct MzClientContext;
+pub struct MzClientContext {
+    /// The last observed error log, if any.
+    error_tx: Sender<MzKafkaError>,
+}
+
+impl Default for MzClientContext {
+    fn default() -> Self {
+        Self::with_errors().0
+    }
+}
+
+impl MzClientContext {
+    /// Constructs a new client context and returns an mpsc `Receiver` that can be used to learn
+    /// about librdkafka errors.
+    // `crossbeam` channel receivers can be cloned, but this is intended to be used as a mpsc,
+    // until we upgrade to `1.72` and the std mpsc sender is `Sync`.
+    pub fn with_errors() -> (Self, Receiver<MzKafkaError>) {
+        let (error_tx, error_rx) = unbounded();
+        (Self { error_tx }, error_rx)
+    }
+
+    fn record_error(&self, msg: &str) {
+        let err = match MzKafkaError::from_str(msg) {
+            Ok(err) => err,
+            Err(()) => {
+                error!(message = msg, "failed to parse kafka error");
+                MzKafkaError::Internal(msg.to_owned())
+            }
+        };
+        // If no one cares about errors we drop them on the floor
+        let _ = self.error_tx.send(err);
+    }
+}
+
+/// A structured error type for errors reported by librdkafka through its logs.
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum MzKafkaError {
+    /// Invalid username or password
+    #[error("Invalid username or password")]
+    InvalidCredentials,
+    /// Missing CA certificate
+    #[error("Invalid CA certificate")]
+    InvalidCACertificate,
+    /// Broker does not support SSL connections
+    #[error("Broker does not support SSL connections")]
+    SSLUnsupported,
+    /// Broker did not provide a certificate
+    #[error("Broker did not provide a certificate")]
+    BrokerCertificateMissing,
+    /// Failed to verify broker certificate
+    #[error("Failed to verify broker certificate")]
+    InvalidBrokerCertificate,
+    /// Connection reset
+    #[error("Connection reset: {0}")]
+    ConnectionReset(String),
+    /// Connection timeout
+    #[error("Connection timeout")]
+    ConnectionTimeout,
+    /// Failed to resolve hostname
+    #[error("Failed to resolve hostname")]
+    HostnameResolutionFailed,
+    /// Unsupported SASL mechanism
+    #[error("Unsupported SASL mechanism")]
+    UnsupportedSASLMechanism,
+    /// Unsupported broker version
+    #[error("Unsupported broker version")]
+    UnsupportedBrokerVersion,
+    /// SASL authentication required
+    #[error("SASL authentication required")]
+    SASLAuthenticationRequired,
+    /// SSL authentication required
+    #[error("SSL authentication required")]
+    SSLAuthenticationRequired,
+    /// An internal kafka error
+    #[error("Internal kafka error: {0}")]
+    Internal(String),
+}
+
+impl FromStr for MzKafkaError {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.contains("Authentication failed: Invalid username or password") {
+            Ok(Self::InvalidCredentials)
+        } else if s.contains("broker certificate could not be verified") {
+            Ok(Self::InvalidCACertificate)
+        } else if s.contains("client SSL authentication might be required") {
+            Ok(Self::SSLAuthenticationRequired)
+        } else if s.contains("connecting to a PLAINTEXT broker listener") {
+            Ok(Self::SSLUnsupported)
+        } else if s.contains("Broker did not provide a certificate") {
+            Ok(Self::BrokerCertificateMissing)
+        } else if s.contains("Failed to verify broker certificate: ") {
+            Ok(Self::InvalidBrokerCertificate)
+        } else if let Some((_prefix, inner)) = s.split_once("Send failed: ") {
+            Ok(Self::ConnectionReset(inner.to_owned()))
+        } else if let Some((_prefix, inner)) = s.split_once("Receive failed: ") {
+            Ok(Self::ConnectionReset(inner.to_owned()))
+        } else if s.contains("request(s) timed out: disconnect") {
+            Ok(Self::ConnectionTimeout)
+        } else if s.contains("Failed to resolve") {
+            Ok(Self::HostnameResolutionFailed)
+        } else if s.contains("mechanism handshake failed:") {
+            Ok(Self::UnsupportedSASLMechanism)
+        } else if s.contains("verify that security.protocol is correctly configured, broker might require SASL authentication") {
+            Ok(Self::SASLAuthenticationRequired)
+        } else if s.contains("incorrect security.protocol configuration (connecting to a SSL listener?)") {
+            Ok(Self::SSLAuthenticationRequired)
+        } else if s.contains("probably due to broker version < 0.10") {
+            Ok(Self::UnsupportedBrokerVersion)
+        } else {
+            Err(())
+        }
+    }
+}
 
 impl ClientContext for MzClientContext {
     fn log(&self, level: rdkafka::config::RDKafkaLogLevel, fac: &str, log_message: &str) {
@@ -45,9 +161,14 @@ impl ClientContext for MzClientContext {
         // but using `tracing`
         match level {
             Emerg | Alert | Critical | Error => {
-                error!(target: "librdkafka", "{} {}", fac, log_message);
+                self.record_error(log_message);
+                // We downgrade error messages to `warn!` level to avoid
+                // sending the errors to Sentry. Most errors are customer
+                // configuration problems that are not appropriate to send to
+                // Sentry.
+                warn!(target: "librdkafka", "error: {} {}", fac, log_message);
             }
-            Warning => warn!(target: "librdkafka", "{} {}", fac, log_message),
+            Warning => warn!(target: "librdkafka", "warning: {} {}", fac, log_message),
             Notice => info!(target: "librdkafka", "{} {}", fac, log_message),
             Info => info!(target: "librdkafka", "{} {}", fac, log_message),
             Debug => debug!(target: "librdkafka", "{} {}", fac, log_message),
@@ -55,8 +176,9 @@ impl ClientContext for MzClientContext {
     }
 
     fn error(&self, error: KafkaError, reason: &str) {
+        self.record_error(reason);
         // Refer to the comment in the `log` callback.
-        error!(target: "librdkafka", "{}: {}", error, reason);
+        warn!(target: "librdkafka", "error: {}: {}", error, reason);
     }
 }
 

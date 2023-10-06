@@ -16,7 +16,6 @@
 
 from dbt.adapters.base import AdapterPlugin
 from dbt.adapters.materialize.connections import (
-    MaterializeConnectionManager,
     MaterializeCredentials,
 )
 from dbt.adapters.materialize.impl import MaterializeAdapter

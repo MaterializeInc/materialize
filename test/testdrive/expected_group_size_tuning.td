@@ -101,6 +101,11 @@
 "Dataflow: materialize.public.lineitem_by_suppkey" ReduceHierarchical 8 5 4095
 "Dataflow: materialize.public.lineitem_by_suppkey" TopK 8 5 4095
 
+# Validate that there are positive memory savings listed for the entries above.
+> SELECT COUNT(savings > 0)
+  FROM mz_internal.mz_expected_group_size_advice;
+8
+
 # Create partly hinted versions of the views and check that the advice gets revised accordingly.
 > DROP MATERIALIZED VIEW lineitem_by_suppkey;
 
@@ -113,7 +118,7 @@
         LIMIT 1)
   FROM lineitem l1
   GROUP BY l1.l_suppkey
-  OPTIONS (EXPECTED GROUP SIZE = 4095);
+  OPTIONS (AGGREGATE INPUT GROUP SIZE = 4095);
 
 > DROP MATERIALIZED VIEW IF EXISTS lineitem_by_orderkey;
 
@@ -122,7 +127,7 @@
         MAX(l1.l_extendedprice),
         (SELECT l2.l_quantity FROM lineitem l2
         WHERE l2.l_orderkey = l1.l_orderkey
-        OPTIONS (EXPECTED GROUP SIZE = 15)
+        OPTIONS (LIMIT INPUT GROUP SIZE = 15)
         ORDER BY l2.l_extendedprice DESC
         LIMIT 1)
   FROM lineitem l1
@@ -137,3 +142,8 @@
 "Dataflow: materialize.public.lineitem_by_partkey" ReduceHierarchical 8 6 255
 "Dataflow: materialize.public.lineitem_by_partkey" TopK 8 6 255
 "Dataflow: materialize.public.lineitem_by_suppkey" TopK 8 5 4095
+
+# Validate that there are positive memory savings listed for the entries above.
+> SELECT COUNT(savings > 0)
+  FROM mz_internal.mz_expected_group_size_advice;
+6

@@ -31,6 +31,7 @@
 
 use std::collections::BTreeMap;
 use std::num::NonZeroI64;
+use std::sync::mpsc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -38,12 +39,16 @@ use differential_dataflow::lattice::Lattice;
 use futures::{future, FutureExt};
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
+use mz_cluster_client::ReplicaId;
+use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::ComputeInstanceId;
 use mz_expr::RowSetFinishing;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, Row};
+use mz_stash::objects::proto;
 use mz_storage_client::controller::{ReadPolicy, StorageController};
-use mz_storage_client::types::instances::StorageInstanceId;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::progress::{Antichain, Timestamp};
@@ -62,22 +67,11 @@ use crate::metrics::ComputeControllerMetrics;
 use crate::protocol::command::ComputeParameters;
 use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
-use crate::types::dataflows::DataflowDescription;
 
 mod instance;
 mod replica;
 
 pub mod error;
-
-/// Identifier of a compute instance.
-pub type ComputeInstanceId = StorageInstanceId;
-
-/// Identifier of a replica.
-pub type ReplicaId = mz_cluster_client::ReplicaId;
-
-/// Identifier of a replica.
-// TODO(#18377): Replace `ReplicaId` with this type.
-pub type NewReplicaId = mz_cluster_client::NewReplicaId;
 
 /// Responses from the compute controller.
 #[derive(Debug)]
@@ -89,6 +83,12 @@ pub enum ComputeControllerResponse<T> {
     /// A notification that we heard a response from the given replica at the
     /// given time.
     ReplicaHeartbeat(ReplicaId, DateTime<Utc>),
+    /// A notification about dependency updates.
+    DependencyUpdate {
+        id: GlobalId,
+        dependencies: Vec<GlobalId>,
+        diff: i64,
+    },
 }
 
 /// Replica configuration
@@ -101,12 +101,8 @@ pub struct ComputeReplicaConfig {
     pub idle_arrangement_merge_effort: Option<u32>,
 }
 
-/// The default logging interval for [`ComputeReplicaLogging`], in number
-/// of microseconds.
-pub const DEFAULT_COMPUTE_REPLICA_LOGGING_INTERVAL_MICROS: u32 = 1_000_000;
-
 /// Logging configuration of a replica.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct ComputeReplicaLogging {
     /// Whether to enable logging for the logging dataflows.
     pub log_logging: bool,
@@ -123,6 +119,22 @@ impl ComputeReplicaLogging {
     }
 }
 
+impl RustType<proto::ReplicaLogging> for ComputeReplicaLogging {
+    fn into_proto(&self) -> proto::ReplicaLogging {
+        proto::ReplicaLogging {
+            log_logging: self.log_logging,
+            interval: self.interval.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::ReplicaLogging) -> Result<Self, TryFromProtoError> {
+        Ok(ComputeReplicaLogging {
+            log_logging: proto.log_logging,
+            interval: proto.interval.into_rust()?,
+        })
+    }
+}
+
 /// A controller for the compute layer.
 pub struct ComputeController<T> {
     instances: BTreeMap<ComputeInstanceId, Instance<T>>,
@@ -131,14 +143,21 @@ pub struct ComputeController<T> {
     initialized: bool,
     /// Compute configuration to apply to new instances.
     config: ComputeParameters,
-    /// A response to handle on the next call to `ActiveComputeController::process`.
-    stashed_response: Option<(ComputeInstanceId, ReplicaId, ComputeResponse<T>)>,
+    /// A replica response to be handled by the corresponding `Instance` on a subsequent call to
+    /// `ActiveComputeController::process`.
+    stashed_replica_response: Option<(ComputeInstanceId, ReplicaId, ComputeResponse<T>)>,
     /// Times we have last received responses from replicas.
     replica_heartbeats: BTreeMap<ReplicaId, DateTime<Utc>>,
     /// A number that increases on every `environmentd` restart.
     envd_epoch: NonZeroI64,
     /// The compute controller metrics
     metrics: ComputeControllerMetrics,
+
+    /// Receiver for responses produced by `Instance`s, to be delivered on subsequent calls to
+    /// `ActiveComputeController::process`.
+    response_rx: mpsc::Receiver<ComputeControllerResponse<T>>,
+    /// Response sender that's passed to new `Instance`s.
+    response_tx: mpsc::Sender<ComputeControllerResponse<T>>,
 }
 
 impl<T> ComputeController<T> {
@@ -148,15 +167,19 @@ impl<T> ComputeController<T> {
         envd_epoch: NonZeroI64,
         metrics_registry: MetricsRegistry,
     ) -> Self {
+        let (response_tx, response_rx) = mpsc::channel();
+
         Self {
             instances: BTreeMap::new(),
             build_info,
             initialized: false,
             config: Default::default(),
-            stashed_response: None,
+            stashed_replica_response: None,
             replica_heartbeats: BTreeMap::new(),
             envd_epoch,
             metrics: ComputeControllerMetrics::new(metrics_registry),
+            response_rx,
+            response_tx,
         }
     }
 
@@ -205,6 +228,17 @@ impl<T> ComputeController<T> {
             storage,
         }
     }
+
+    /// List compute collections that depend on the given collection.
+    pub fn collection_reverse_dependencies(
+        &self,
+        instance_id: ComputeInstanceId,
+        id: GlobalId,
+    ) -> Result<impl Iterator<Item = &GlobalId>, InstanceMissing> {
+        Ok(self
+            .instance(instance_id)?
+            .collection_reverse_dependencies(id))
+    }
 }
 
 impl<T> ComputeController<T>
@@ -234,6 +268,7 @@ where
         &mut self,
         id: ComputeInstanceId,
         arranged_logs: BTreeMap<LogVariant, GlobalId>,
+        variable_length_row_encoding: bool,
     ) -> Result<(), InstanceExists> {
         if self.instances.contains_key(&id) {
             return Err(InstanceExists(id));
@@ -246,6 +281,8 @@ where
                 arranged_logs,
                 self.envd_epoch,
                 self.metrics.for_instance(id),
+                self.response_tx.clone(),
+                variable_length_row_encoding,
             ),
         );
 
@@ -300,7 +337,7 @@ where
     ///
     /// This method is cancellation safe.
     pub async fn ready(&mut self) {
-        if self.stashed_response.is_some() {
+        if self.stashed_replica_response.is_some() {
             // We still have a response stashed, which we are immediately ready to process.
             return;
         }
@@ -330,7 +367,7 @@ where
         match result {
             Ok((replica_id, resp)) => {
                 self.replica_heartbeats.insert(replica_id, Utc::now());
-                self.stashed_response = Some((instance_id, replica_id, resp));
+                self.stashed_replica_response = Some((instance_id, replica_id, resp));
             }
             Err(_) => {
                 // There is nothing to do here. `recv` has already added the failed replica to
@@ -447,7 +484,7 @@ where
     pub fn create_dataflow(
         &mut self,
         instance_id: ComputeInstanceId,
-        dataflow: DataflowDescription<crate::plan::Plan<T>, (), T>,
+        dataflow: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
     ) -> Result<(), DataflowCreationError> {
         self.instance(instance_id)?.create_dataflow(dataflow)?;
         Ok(())
@@ -537,9 +574,13 @@ where
         }
 
         // Process pending ready responses.
-        for instance in self.compute.instances.values_mut() {
-            if let Some(response) = instance.ready_responses.pop_front() {
-                return Some(response);
+        match self.compute.response_rx.try_recv() {
+            Ok(response) => return Some(response),
+            Err(mpsc::TryRecvError::Empty) => (),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                // This should never happen, since the `ComputeController` is always holding on to
+                // a copy of the `response_tx`.
+                panic!("response_tx has disconnected");
             }
         }
 
@@ -551,7 +592,9 @@ where
         }
 
         // Process pending responses from replicas.
-        if let Some((instance_id, replica_id, response)) = self.compute.stashed_response.take() {
+        if let Some((instance_id, replica_id, response)) =
+            self.compute.stashed_replica_response.take()
+        {
             if let Ok(mut instance) = self.instance(instance_id) {
                 return instance.handle_response(response, replica_id);
             } else {

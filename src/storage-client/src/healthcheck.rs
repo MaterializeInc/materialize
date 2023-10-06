@@ -53,16 +53,75 @@ pub fn pack_status_row(
 
 pub static MZ_SINK_STATUS_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {
     RelationDesc::empty()
-        .with_column("occurred_at", ScalarType::TimestampTz.nullable(false))
+        .with_column(
+            "occurred_at",
+            ScalarType::TimestampTz { precision: None }.nullable(false),
+        )
         .with_column("sink_id", ScalarType::String.nullable(false))
         .with_column("status", ScalarType::String.nullable(false))
         .with_column("error", ScalarType::String.nullable(true))
         .with_column("details", ScalarType::Jsonb.nullable(true))
 });
 
+pub static MZ_PREPARED_STATEMENT_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {
+    RelationDesc::empty()
+        .with_column("id", ScalarType::Uuid.nullable(false))
+        .with_column("session_id", ScalarType::Uuid.nullable(false))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("sql", ScalarType::String.nullable(false))
+        .with_column("redacted_sql", ScalarType::String.nullable(false))
+        .with_column(
+            "prepared_at",
+            ScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+});
+
+pub static MZ_SESSION_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {
+    RelationDesc::empty()
+        .with_column("id", ScalarType::Uuid.nullable(false))
+        .with_column(
+            "connected_at",
+            ScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .with_column(
+            "initial_application_name",
+            ScalarType::String.nullable(false),
+        )
+        .with_column("authenticated_user", ScalarType::String.nullable(false))
+});
+
+pub static MZ_STATEMENT_EXECUTION_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {
+    RelationDesc::empty()
+        .with_column("id", ScalarType::Uuid.nullable(false))
+        .with_column("prepared_statement_id", ScalarType::Uuid.nullable(false))
+        .with_column("sample_rate", ScalarType::Float64.nullable(false))
+        .with_column("cluster_id", ScalarType::String.nullable(true))
+        .with_column("application_name", ScalarType::String.nullable(false))
+        .with_column("cluster_name", ScalarType::String.nullable(true))
+        .with_column(
+            "params",
+            ScalarType::Array(Box::new(ScalarType::String)).nullable(false),
+        )
+        .with_column(
+            "began_at",
+            ScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .with_column(
+            "finished_at",
+            ScalarType::TimestampTz { precision: None }.nullable(true),
+        )
+        .with_column("finished_status", ScalarType::String.nullable(true))
+        .with_column("error_message", ScalarType::String.nullable(true))
+        .with_column("rows_returned", ScalarType::Int64.nullable(true))
+        .with_column("execution_strategy", ScalarType::String.nullable(true))
+});
+
 pub static MZ_SOURCE_STATUS_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {
     RelationDesc::empty()
-        .with_column("occurred_at", ScalarType::TimestampTz.nullable(false))
+        .with_column(
+            "occurred_at",
+            ScalarType::TimestampTz { precision: None }.nullable(false),
+        )
         .with_column("source_id", ScalarType::String.nullable(false))
         .with_column("status", ScalarType::String.nullable(false))
         .with_column("error", ScalarType::String.nullable(true))

@@ -32,7 +32,7 @@ pub async unsafe fn prof_time(
     time::sleep(total_time).await;
     let builder = pg.report();
     let report = builder.build_unresolved()?;
-    let mut profile = <StackProfile as Default>::default();
+    let mut profile = StackProfile::default();
     for (f, weight) in report.data {
         let thread_name;
         // No other known way to convert `*mut c_void` to `usize`.
@@ -49,7 +49,7 @@ pub async unsafe fn prof_time(
             Some(thread_name.as_ref())
         };
         let stack = WeightedStack { addrs, weight };
-        profile.push(stack, anno);
+        profile.push_stack(stack, anno);
     }
 
     Ok(profile)

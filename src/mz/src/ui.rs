@@ -11,6 +11,7 @@
 
 use std::fmt;
 use std::io;
+use std::io::Write;
 use std::time::Duration;
 
 use indicatif::ProgressBar;
@@ -20,6 +21,7 @@ use mz_ore::option::OptionExt;
 use serde::{Deserialize, Serialize};
 use serde_aux::serde_introspection::serde_introspect;
 use tabled::{Style, Table, Tabled};
+use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 
 use crate::error::Error;
 
@@ -43,18 +45,6 @@ pub struct OutputFormatter {
 
 /// Ticks displayed for loading without using colors
 const TICKS: [&str; 9] = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷", ""];
-/// Ticks displayed for loading with a green color
-const COLORED_TICKS: [&str; 9] = [
-    "\x1b[92m⣾\x1b[0m",
-    "\x1b[92m⣽\x1b[0m",
-    "\x1b[92m⣻\x1b[0m",
-    "\x1b[92m⢿\x1b[0m",
-    "\x1b[92m⡿\x1b[0m",
-    "\x1b[92m⣟\x1b[0m",
-    "\x1b[92m⣯\x1b[0m",
-    "\x1b[92m⣷\x1b[0m",
-    "",
-];
 
 impl OutputFormatter {
     /// Creates a new output formatter that uses the specified output format.
@@ -63,6 +53,33 @@ impl OutputFormatter {
             output_format,
             no_color,
         }
+    }
+
+    /// Prints a message with color
+    pub fn print_with_color(&self, message: &str, color: Color, stderr: bool) -> Result<(), Error> {
+        let mut stdeo = match stderr {
+            true => StandardStream::stderr(ColorChoice::Always),
+            false => StandardStream::stdout(ColorChoice::Always),
+        };
+        stdeo.set_color(ColorSpec::new().set_fg(Some(color)))?;
+        write!(&mut stdeo, "{}", message)?;
+
+        // Reset the std err/out to original setting.
+        let _ = stdeo.reset();
+
+        Ok(())
+    }
+
+    /// Outputs a prefix warning.
+    pub fn output_warning(&self, msg: &str) -> Result<(), Error> {
+        if self.no_color {
+            eprintln!("\n* Warning * {}", msg);
+        } else {
+            let _ = self.print_with_color("\n* Warning *", Color::Yellow, true)?;
+            eprintln!(" {}", msg);
+        }
+
+        Ok(())
     }
 
     /// Outputs a single value.
@@ -121,12 +138,12 @@ impl OutputFormatter {
 
         let tick_strings: Vec<&str> = match self.no_color {
             true => TICKS.to_vec(),
-            false => COLORED_TICKS.to_vec(),
+            false => TICKS.to_vec(),
         };
 
         progress_bar.set_style(
             ProgressStyle::default_spinner()
-                .template("{spinner} {msg}")
+                .template("{spinner:1.green/green} {msg}")
                 .expect("template known to be valid")
                 // For more spinners check out the cli-spinners project:
                 // https://github.com/sindresorhus/cli-spinners/blob/master/spinners.json

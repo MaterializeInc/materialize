@@ -118,6 +118,28 @@ VALUES (1)
 VALUES (1)
 
 parse-statement roundtrip
+TABLE t
+----
+TABLE t
+
+parse-statement roundtrip
+TABLE a.b.c
+----
+TABLE a.b.c
+
+parse-statement roundtrip
+TABLE t UNION TABLE t ORDER BY 1
+----
+TABLE t UNION TABLE t ORDER BY 1
+
+parse-statement
+TABLE 1 + 1
+----
+error: Expected identifier, found number "1"
+TABLE 1 + 1
+      ^
+
+parse-statement roundtrip
 SELECT (1)
 ----
 SELECT (1)
@@ -1250,28 +1272,28 @@ Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { 
 parse-statement
 SELECT * FROM foo OPTIONS (bar = 7)
 ----
-error: Expected EXPECTED, found identifier "bar"
+error: Expected one of EXPECTED or AGGREGATE or DISTINCT or LIMIT, found identifier "bar"
 SELECT * FROM foo OPTIONS (bar = 7)
                            ^
 
 parse-statement
 SELECT a, b, min(c) FROM foo GROUP BY a, b OPTIONS (bar = 7)
 ----
-error: Expected EXPECTED, found identifier "bar"
+error: Expected one of EXPECTED or AGGREGATE or DISTINCT or LIMIT, found identifier "bar"
 SELECT a, b, min(c) FROM foo GROUP BY a, b OPTIONS (bar = 7)
                                                     ^
 
 parse-statement
 SELECT a, b, min(c) FROM foo GROUP BY a, b OPTIONS (bar = 'baz')
 ----
-error: Expected EXPECTED, found identifier "bar"
+error: Expected one of EXPECTED or AGGREGATE or DISTINCT or LIMIT, found identifier "bar"
 SELECT a, b, min(c) FROM foo GROUP BY a, b OPTIONS (bar = 'baz')
                                                     ^
 
 parse-statement
 SELECT a, b, min(c) FROM foo GROUP BY a, b OPTIONS (bar)
 ----
-error: Expected EXPECTED, found identifier "bar"
+error: Expected one of EXPECTED or AGGREGATE or DISTINCT or LIMIT, found identifier "bar"
 SELECT a, b, min(c) FROM foo GROUP BY a, b OPTIONS (bar)
                                                     ^
 
@@ -1482,6 +1504,41 @@ parse-statement roundtrip
 SELECT 1 OPTIONS (EXPECTED GROUP SIZE = 1)
 ----
 SELECT 1 OPTIONS (EXPECTED GROUP SIZE = 1)
+
+parse-statement roundtrip
+SELECT 1 OPTIONS (AGGREGATE INPUT GROUP SIZE = 1)
+----
+SELECT 1 OPTIONS (AGGREGATE INPUT GROUP SIZE = 1)
+
+parse-statement roundtrip
+SELECT 1 OPTIONS (DISTINCT ON INPUT GROUP SIZE = 1)
+----
+SELECT 1 OPTIONS (DISTINCT ON INPUT GROUP SIZE = 1)
+
+parse-statement roundtrip
+SELECT 1 OPTIONS (LIMIT INPUT GROUP SIZE = 1)
+----
+SELECT 1 OPTIONS (LIMIT INPUT GROUP SIZE = 1)
+
+parse-statement roundtrip
+SELECT 1 OPTIONS (AGGREGATE INPUT GROUP SIZE = 1, DISTINCT ON INPUT GROUP SIZE = 2)
+----
+SELECT 1 OPTIONS (AGGREGATE INPUT GROUP SIZE = 1, DISTINCT ON INPUT GROUP SIZE = 2)
+
+parse-statement roundtrip
+SELECT 1 OPTIONS (AGGREGATE INPUT GROUP SIZE = 1, LIMIT INPUT GROUP SIZE = 3)
+----
+SELECT 1 OPTIONS (AGGREGATE INPUT GROUP SIZE = 1, LIMIT INPUT GROUP SIZE = 3)
+
+parse-statement roundtrip
+SELECT 1 OPTIONS (DISTINCT ON INPUT GROUP SIZE = 2, LIMIT INPUT GROUP SIZE = 3)
+----
+SELECT 1 OPTIONS (DISTINCT ON INPUT GROUP SIZE = 2, LIMIT INPUT GROUP SIZE = 3)
+
+parse-statement roundtrip
+SELECT 1 OPTIONS (AGGREGATE INPUT GROUP SIZE = 1, DISTINCT ON INPUT GROUP SIZE = 2, LIMIT INPUT GROUP SIZE = 3)
+----
+SELECT 1 OPTIONS (AGGREGATE INPUT GROUP SIZE = 1, DISTINCT ON INPUT GROUP SIZE = 2, LIMIT INPUT GROUP SIZE = 3)
 
 parse-statement roundtrip
 SELECT 1 AS "FOO"

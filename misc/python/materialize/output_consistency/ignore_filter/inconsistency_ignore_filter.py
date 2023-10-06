@@ -6,7 +6,6 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import List, Set
 
 from attr import dataclass
 
@@ -42,13 +41,15 @@ class IgnoreVerdict:
     ignore: bool
 
 
-@dataclass(frozen=True)
 class YesIgnore(IgnoreVerdict):
     reason: str
-    ignore: bool = True
+
+    def __init__(self, reason: str, ignore: bool = True):
+        super().__init__(ignore)
+        self.reason = reason
 
 
-@dataclass(frozen=True)
+@dataclass
 class NoIgnore(IgnoreVerdict):
     ignore: bool = False
 
@@ -107,7 +108,6 @@ class PreExecutionInconsistencyIgnoreFilter:
         expression: ExpressionWithArgs,
         row_selection: DataRowSelection,
     ) -> IgnoreVerdict:
-
         expression_characteristics = (
             expression.recursively_collect_involved_characteristics(row_selection)
         )
@@ -142,7 +142,7 @@ class PreExecutionInconsistencyIgnoreFilter:
         self,
         expression: ExpressionWithArgs,
         operation: DbOperationOrFunction,
-        _all_involved_characteristics: Set[ExpressionCharacteristics],
+        _all_involved_characteristics: set[ExpressionCharacteristics],
     ) -> IgnoreVerdict:
         if operation.is_aggregation:
             for arg in expression.args:
@@ -163,12 +163,13 @@ class PreExecutionInconsistencyIgnoreFilter:
         self,
         db_function: DbFunction,
         expression: ExpressionWithArgs,
-        all_involved_characteristics: Set[ExpressionCharacteristics],
+        all_involved_characteristics: set[ExpressionCharacteristics],
     ) -> IgnoreVerdict:
         # Note that function names are always provided in lower case.
         if db_function.function_name_in_lower_case in {
             "sum",
             "avg",
+            "avg_internal_v1",
             "stddev_samp",
             "stddev_pop",
             "var_samp",
@@ -199,7 +200,7 @@ class PreExecutionInconsistencyIgnoreFilter:
         self,
         db_operation: DbOperation,
         expression: ExpressionWithArgs,
-        all_involved_characteristics: Set[ExpressionCharacteristics],
+        all_involved_characteristics: set[ExpressionCharacteristics],
     ) -> IgnoreVerdict:
         return NoIgnore()
 
@@ -261,7 +262,7 @@ class PostExecutionInconsistencyIgnoreFilter:
         return NoIgnore()
 
     def _uses_shortcut_optimization(
-        self, expressions: List[Expression], contains_aggregation: bool
+        self, expressions: list[Expression], contains_aggregation: bool
     ) -> bool:
         if self._uses_aggregation_shortcut_optimization(
             expressions, contains_aggregation
@@ -273,7 +274,7 @@ class PostExecutionInconsistencyIgnoreFilter:
         return False
 
     def _uses_aggregation_shortcut_optimization(
-        self, expressions: List[Expression], contains_aggregation: bool
+        self, expressions: list[Expression], contains_aggregation: bool
     ) -> bool:
         if not contains_aggregation:
             # all current known optimizations causing issues involve aggregations
@@ -299,7 +300,7 @@ class PostExecutionInconsistencyIgnoreFilter:
         return False
 
     def _might_use_null_shortcut_optimization(
-        self, expressions: List[Expression]
+        self, expressions: list[Expression]
     ) -> bool:
         def is_null_expression(expression: Expression) -> bool:
             return isinstance(

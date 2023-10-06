@@ -20,7 +20,7 @@ use tokio_postgres::tls::MakeTlsConnect;
 use tokio_postgres::Client;
 use tracing::{info, warn};
 
-use crate::{make_tls, PostgresError};
+use crate::PostgresError;
 
 pub async fn drop_replication_slots(config: Config, slots: &[&str]) -> Result<(), PostgresError> {
     let client = config.connect("postgres_drop_replication_slots").await?;
@@ -74,9 +74,19 @@ pub enum TunnelConfig {
     },
 }
 
+// Some of these defaults were recommended by @ph14
+// https://github.com/MaterializeInc/materialize/pull/18644#discussion_r1160071692
+pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+pub const DEFAULT_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
+pub const DEFAULT_KEEPALIVE_IDLE: Duration = Duration::from_secs(10);
+pub const DEFAULT_KEEPALIVE_RETRIES: u32 = 5;
+// This is meant to be DEFAULT_KEEPALIVE_IDLE
+// + DEFAULT_KEEPALIVE_RETRIES * DEFAULT_KEEPALIVE_INTERVAL
+pub const DEFAULT_TCP_USER_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// Configurable timeouts that apply only when using [`Config::connect_replication`].
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ReplicationTimeouts {
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TcpTimeoutConfig {
     pub connect_timeout: Option<Duration>,
     pub keepalives_retries: Option<u32>,
     pub keepalives_idle: Option<Duration>,
@@ -84,15 +94,19 @@ pub struct ReplicationTimeouts {
     pub tcp_user_timeout: Option<Duration>,
 }
 
-// Some of these defaults were recommended by @ph14
-// https://github.com/MaterializeInc/materialize/pull/18644#discussion_r1160071692
-pub const DEFAULT_REPLICATION_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
-pub const DEFAULT_REPLICATION_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
-pub const DEFAULT_REPLICATION_KEEPALIVE_IDLE: Duration = Duration::from_secs(10);
-pub const DEFAULT_REPLICATION_KEEPALIVE_RETRIES: u32 = 5;
-// This is meant to be DEFAULT_REPLICATION_KEEPALIVE_IDLE
-// + DEFAULT_REPLICATION_KEEPALIVE_RETRIES * DEFAULT_REPLICATION_KEEPALIVE_INTERVAL
-pub const DEFAULT_REPLICATION_TCP_USER_TIMEOUT: Duration = Duration::from_secs(60);
+impl Default for TcpTimeoutConfig {
+    fn default() -> Self {
+        TcpTimeoutConfig {
+            connect_timeout: Some(DEFAULT_CONNECT_TIMEOUT),
+            keepalives_retries: Some(DEFAULT_KEEPALIVE_RETRIES),
+            keepalives_idle: Some(DEFAULT_KEEPALIVE_IDLE),
+            keepalives_interval: Some(DEFAULT_KEEPALIVE_INTERVAL),
+            tcp_user_timeout: Some(DEFAULT_TCP_USER_TIMEOUT),
+        }
+    }
+}
+
+pub const DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT: Duration = Duration::ZERO;
 
 /// Configuration for PostgreSQL connections.
 ///
@@ -102,16 +116,11 @@ pub const DEFAULT_REPLICATION_TCP_USER_TIMEOUT: Duration = Duration::from_secs(6
 pub struct Config {
     inner: tokio_postgres::Config,
     tunnel: TunnelConfig,
-    replication_timeouts: ReplicationTimeouts,
 }
 
 impl Config {
     pub fn new(inner: tokio_postgres::Config, tunnel: TunnelConfig) -> Result<Self, PostgresError> {
-        let config = Self {
-            inner,
-            tunnel,
-            replication_timeouts: ReplicationTimeouts::default(),
-        };
+        let config = Self { inner, tunnel }.tcp_timeouts(TcpTimeoutConfig::default());
 
         // Early validate that the configuration contains only a single TCP
         // server.
@@ -120,8 +129,22 @@ impl Config {
         Ok(config)
     }
 
-    pub fn replication_timeouts(mut self, replication_timeouts: ReplicationTimeouts) -> Config {
-        self.replication_timeouts = replication_timeouts;
+    pub fn tcp_timeouts(mut self, tcp_timeouts: TcpTimeoutConfig) -> Config {
+        if let Some(connect_timeout) = tcp_timeouts.connect_timeout {
+            self.inner.connect_timeout(connect_timeout);
+        }
+        if let Some(keepalives_retries) = tcp_timeouts.keepalives_retries {
+            self.inner.keepalives_retries(keepalives_retries);
+        }
+        if let Some(keepalives_idle) = tcp_timeouts.keepalives_idle {
+            self.inner.keepalives_idle(keepalives_idle);
+        }
+        if let Some(keepalives_interval) = tcp_timeouts.keepalives_interval {
+            self.inner.keepalives_interval(keepalives_interval);
+        }
+        if let Some(tcp_user_timeout) = tcp_timeouts.tcp_user_timeout {
+            self.inner.tcp_user_timeout(tcp_user_timeout);
+        }
         self
     }
 
@@ -133,33 +156,7 @@ impl Config {
     /// Starts a replication connection to the configured PostgreSQL database.
     pub async fn connect_replication(&self) -> Result<Client, PostgresError> {
         self.connect_traced("postgres_connect_replication", |config| {
-            config
-                .replication_mode(ReplicationMode::Logical)
-                .connect_timeout(
-                    self.replication_timeouts
-                        .connect_timeout
-                        .unwrap_or(DEFAULT_REPLICATION_CONNECT_TIMEOUT),
-                )
-                .keepalives_interval(
-                    self.replication_timeouts
-                        .keepalives_interval
-                        .unwrap_or(DEFAULT_REPLICATION_KEEPALIVE_INTERVAL),
-                )
-                .keepalives_idle(
-                    self.replication_timeouts
-                        .keepalives_idle
-                        .unwrap_or(DEFAULT_REPLICATION_KEEPALIVE_IDLE),
-                )
-                .keepalives_retries(
-                    self.replication_timeouts
-                        .keepalives_retries
-                        .unwrap_or(DEFAULT_REPLICATION_KEEPALIVE_RETRIES),
-                )
-                .tcp_user_timeout(
-                    self.replication_timeouts
-                        .tcp_user_timeout
-                        .unwrap_or(DEFAULT_REPLICATION_TCP_USER_TIMEOUT),
-                );
+            config.replication_mode(ReplicationMode::Logical);
         })
         .await
     }
@@ -210,7 +207,12 @@ impl Config {
     {
         let mut postgres_config = self.inner.clone();
         configure(&mut postgres_config);
-        let mut tls = make_tls(&postgres_config)?;
+
+        let mut tls = mz_tls_util::make_tls(&postgres_config).map_err(|tls_err| match tls_err {
+            mz_tls_util::TlsError::Generic(e) => PostgresError::Generic(e),
+            mz_tls_util::TlsError::OpenSsl(e) => PostgresError::PostgresSsl(e),
+        })?;
+
         match &self.tunnel {
             TunnelConfig::Direct => {
                 let (client, connection) = postgres_config.connect(tls).await?;

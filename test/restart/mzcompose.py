@@ -10,15 +10,13 @@ from textwrap import dedent
 
 import pg8000.exceptions
 
-from materialize.mzcompose import Composition
-from materialize.mzcompose.services import (
-    Cockroach,
-    Kafka,
-    Materialized,
-    SchemaRegistry,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 testdrive_no_reset = Testdrive(name="testdrive_no_reset", no_reset=True)
 
@@ -176,6 +174,10 @@ def workflow_stash(c: Composition) -> None:
         except pg8000.exceptions.InterfaceError as e:
             if str(e) != "network error":
                 raise e
+
+        # No implicit restart as sanity check here, will panic:
+        # https://github.com/MaterializeInc/materialize/issues/20510
+        c.down(sanity_restart_mz=False)
 
 
 def workflow_storage_managed_collections(c: Composition) -> None:

@@ -22,7 +22,7 @@ use differential_dataflow::lattice::Lattice;
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist::location::{
-    Blob, Consensus, ExternalError, VersionedData, BLOB_GET_LIVENESS_KEY,
+    Blob, Consensus, ExternalError, Tasked, VersionedData, BLOB_GET_LIVENESS_KEY,
     CONSENSUS_HEAD_LIVENESS_KEY,
 };
 use mz_persist_types::{Codec, Codec64};
@@ -102,7 +102,6 @@ impl PersistClientCache {
 
     /// A test helper that returns a [PersistClientCache] disconnected from
     /// metrics.
-    #[cfg(test)]
     pub fn new_no_metrics() -> Self {
         Self::new(
             PersistConfig::new_for_tests(),
@@ -160,6 +159,7 @@ impl PersistClientCache {
                     .await;
                 let consensus =
                     Arc::new(MetricsConsensus::new(consensus, Arc::clone(&self.metrics)));
+                let consensus = Arc::new(Tasked(consensus));
                 let task = consensus_rtt_latency_task(
                     Arc::clone(&consensus),
                     Arc::clone(&self.metrics),
@@ -193,6 +193,7 @@ impl PersistClientCache {
                 })
                 .await;
                 let blob = Arc::new(MetricsBlob::new(blob, Arc::clone(&self.metrics)));
+                let blob = Arc::new(Tasked(blob));
                 let task = blob_rtt_latency_task(
                     Arc::clone(&blob),
                     Arc::clone(&self.metrics),
@@ -219,8 +220,9 @@ impl PersistClientCache {
 /// rtt latency task, there's the possibility for it being confusing at some
 /// point. Err on the side of more data (including the latency measurements) to
 /// start.
+#[allow(clippy::unused_async)]
 async fn blob_rtt_latency_task(
-    blob: Arc<MetricsBlob>,
+    blob: Arc<Tasked<MetricsBlob>>,
     metrics: Arc<Metrics>,
     measurement_interval: Duration,
 ) -> JoinHandle<()> {
@@ -259,12 +261,13 @@ async fn blob_rtt_latency_task(
 /// rtt latency task, there's the possibility for it being confusing at some
 /// point. Err on the side of more data (including the latency measurements) to
 /// start.
+#[allow(clippy::unused_async)]
 async fn consensus_rtt_latency_task(
-    consensus: Arc<MetricsConsensus>,
+    consensus: Arc<Tasked<MetricsConsensus>>,
     metrics: Arc<Metrics>,
     measurement_interval: Duration,
 ) -> JoinHandle<()> {
-    mz_ore::task::spawn(|| "persist::blob_rtt_latency", async move {
+    mz_ore::task::spawn(|| "persist::consensus_rtt_latency", async move {
         // Use the tokio Instant for next_measurement because the reclock tests
         // mess with the tokio sleep clock.
         let mut next_measurement = tokio::time::Instant::now();

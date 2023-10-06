@@ -147,6 +147,7 @@ ultimately rolled back because of an error in a later part of the transaction.
 You must parse the results to understand which statements ultimately reflect
 the resultant state.
 
+Numeric results are converted to strings to avoid possible JavaScript number inaccuracy.
 Column descriptions contain the name, oid, data type size and type modifier of a returned column.
 
 #### TypeScript definition

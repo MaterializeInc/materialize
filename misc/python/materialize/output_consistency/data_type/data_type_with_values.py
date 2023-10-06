@@ -6,7 +6,6 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import List, Set
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_value.data_column import DataColumn
@@ -26,13 +25,13 @@ class DataTypeWithValues:
             "NULL", "NULL", {ExpressionCharacteristics.NULL}
         )
         # values (and implicitly a column for each value for horizontal storage)
-        self.raw_values: List[DataValue] = [self.null_value]
+        self.raw_values: list[DataValue] = [self.null_value]
 
     def _create_raw_value(
         self,
         value: str,
         column_name: str,
-        characteristics: Set[ExpressionCharacteristics],
+        characteristics: set[ExpressionCharacteristics],
     ) -> DataValue:
         return DataValue(value, self.data_type, column_name, characteristics)
 
@@ -40,7 +39,7 @@ class DataTypeWithValues:
         self,
         value: str,
         column_name: str,
-        characteristics: Set[ExpressionCharacteristics],
+        characteristics: set[ExpressionCharacteristics],
     ) -> None:
         self.raw_values.append(
             self._create_raw_value(value, column_name, characteristics)

@@ -24,6 +24,7 @@ use crate::columnar::Data;
 use crate::dyn_col::DynColumnRef;
 use crate::dyn_struct::ValidityRef;
 use crate::stats::impls::any_struct_stats_cols;
+use crate::timestamp::try_parse_monotonic_iso8601_timestamp;
 
 include!(concat!(env!("OUT_DIR"), "/mz_persist_types.stats.rs"));
 
@@ -407,6 +408,18 @@ impl TrimStats for ProtoPrimitiveStats {
         use proto_primitive_stats::*;
         match (&mut self.lower, &mut self.upper) {
             (Some(Lower::LowerString(lower)), Some(Upper::UpperString(upper))) => {
+                // If the lower and upper strings both look like iso8601
+                // timestamps, then (1) they're small and (2) that's an
+                // extremely high signal that we might want to keep them around
+                // for filtering. We technically could still recover useful
+                // bounds here in the interpret code, but the complexity isn't
+                // worth it, so just skip any trimming.
+                if try_parse_monotonic_iso8601_timestamp(lower).is_some()
+                    && try_parse_monotonic_iso8601_timestamp(upper).is_some()
+                {
+                    return;
+                }
+
                 let common_prefix = lower
                     .char_indices()
                     .zip(upper.chars())
@@ -503,20 +516,24 @@ impl TrimStats for ProtoStructStats {
 /// returns true for that column. The resulting StructStats object is
 /// guaranteed to fit within the passed budget, except when the columns that
 /// are force-kept are collectively larger than the budget.
+///
+/// The number of bytes trimmed is returned.
 pub fn trim_to_budget(
     stats: &mut ProtoStructStats,
     budget: usize,
     force_keep_col: impl Fn(&str) -> bool,
-) {
+) -> usize {
     // No trimming necessary should be the overwhelming common case in practice.
-    if stats.encoded_len() <= budget {
-        return;
+    let original_cost = stats.encoded_len();
+    if original_cost <= budget {
+        return 0;
     }
 
     // First try any lossy trimming that doesn't lose an entire column.
     stats.trim();
-    if stats.encoded_len() <= budget {
-        return;
+    let new_cost = stats.encoded_len();
+    if new_cost <= budget {
+        return original_cost.saturating_sub(new_cost);
     }
 
     // That wasn't enough. Try recursively trimming out entire cols.
@@ -527,8 +544,9 @@ pub fn trim_to_budget(
     // keep _something_. Another possibility would be to replace this whole bit
     // with some sort of recursive max-cost search with force_keep_col things
     // weighted after everything else.
-    let mut budget_shortfall = stats.encoded_len().saturating_sub(budget);
+    let mut budget_shortfall = new_cost.saturating_sub(budget);
     trim_to_budget_struct(stats, &mut budget_shortfall, &force_keep_col);
+    original_cost.saturating_sub(stats.encoded_len())
 }
 
 /// Recursively trims cols in the struct, greatest-size first, keeping force
@@ -1736,9 +1754,10 @@ mod tests {
             let mut budget = stats.encoded_len().next_power_of_two();
             while budget > 0 {
                 let cost_before = stats.encoded_len();
-                trim_to_budget(&mut stats, budget, |col| Some(col) == required);
+                let trimmed = trim_to_budget(&mut stats, budget, |col| Some(col) == required);
                 let cost_after = stats.encoded_len();
                 assert!(cost_before >= cost_after);
+                assert_eq!(trimmed, cost_before - cost_after);
                 if let Some(required) = required {
                     assert!(stats.cols.contains_key(required));
                 } else {
@@ -1774,7 +1793,8 @@ mod tests {
             let stats: ProtoJsonStats = RustType::into_proto(&JsonStats::Maps(cols));
             let ProtoJsonStats {
                 kind: Some(proto_json_stats::Kind::Maps(mut stats)),
-            } = stats else {
+            } = stats
+            else {
                 panic!("serialized produced wrong type!");
             };
 
@@ -1858,7 +1878,8 @@ mod tests {
         let stats: ProtoJsonStats = RustType::into_proto(&og_stats);
         let ProtoJsonStats {
             kind: Some(proto_json_stats::Kind::Maps(mut stats)),
-        } = stats else {
+        } = stats
+        else {
             panic!("serialized produced wrong type!");
         };
 
@@ -1874,7 +1895,10 @@ mod tests {
         assert!(elements.remove("a").is_some());
 
         let context = elements.remove("context").expect("trimmed too much");
-        let Some(ProtoJsonStats { kind: Some(proto_json_stats::Kind::Maps(context)) }) = context.stats else {
+        let Some(ProtoJsonStats {
+            kind: Some(proto_json_stats::Kind::Maps(context)),
+        }) = context.stats
+        else {
             panic!("serialized produced wrong type!")
         };
 
@@ -1888,7 +1912,8 @@ mod tests {
         let stats: ProtoJsonStats = RustType::into_proto(&og_stats);
         let ProtoJsonStats {
             kind: Some(proto_json_stats::Kind::Maps(mut stats)),
-        } = stats else {
+        } = stats
+        else {
             panic!("serialized produced wrong type!");
         };
 
@@ -1900,7 +1925,10 @@ mod tests {
         assert_eq!(stats.elements.len(), 1);
         assert_eq!(stats.elements[0].name, "context");
 
-        let Some(ProtoJsonStats { kind: Some(proto_json_stats::Kind::Maps(context)) }) = &stats.elements[0].stats else {
+        let Some(ProtoJsonStats {
+            kind: Some(proto_json_stats::Kind::Maps(context)),
+        }) = &stats.elements[0].stats
+        else {
             panic!("serialized produced wrong type!")
         };
 
@@ -1997,9 +2025,11 @@ mod tests {
             ]),
         };
         let mut proto_stats = RustType::into_proto(&source_data_stats);
-        trim_to_budget(&mut proto_stats, BIG, |x| {
+        let trimmed = trim_to_budget(&mut proto_stats, BIG, |x| {
             x.ends_with("timestamp") || x == "err"
         });
+        // Sanity-check that the test is trimming something.
+        assert!(trimmed > 0);
         // We don't want to trim either "ok" or "err".
         assert!(proto_stats.cols.contains_key("ok"));
         assert!(proto_stats.cols.contains_key("err"));
@@ -2009,5 +2039,23 @@ mod tests {
             panic!("ok was of unexpected type {:?}", ok);
         };
         assert!(ok_struct.cols.contains_key("foo_timestamp"));
+    }
+
+    // Regression test for a bug where "lossless" trimming would truncate an
+    // upper and lower bound that both parsed as our special iso8601 timestamps
+    // into something that no longer did.
+    #[mz_ore::test]
+    fn stats_trim_iso8601_recursion() {
+        use proto_primitive_stats::*;
+
+        let orig = PrimitiveStats {
+            lower: "2023-08-19T12:00:00.000Z".to_owned(),
+            upper: "2023-08-20T12:00:00.000Z".to_owned(),
+        };
+        let mut stats = RustType::into_proto(&orig);
+        stats.trim();
+        // Before the fix, this resulted in "2023-08-" and "2023-08.".
+        assert_eq!(stats.lower.unwrap(), Lower::LowerString(orig.lower));
+        assert_eq!(stats.upper.unwrap(), Upper::UpperString(orig.upper));
     }
 }

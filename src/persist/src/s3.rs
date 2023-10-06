@@ -31,8 +31,8 @@ use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart};
 use aws_sdk_s3::Client as S3Client;
 use aws_types::region::Region;
 use bytes::Bytes;
-use futures_util::future::join_all;
-use futures_util::{FutureExt, TryFutureExt};
+use futures_util::stream::FuturesOrdered;
+use futures_util::{FutureExt, StreamExt};
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
@@ -397,87 +397,67 @@ impl Blob for S3Blob {
             start_overall.elapsed(),
         );
 
-        // Get handle to our runtime so we can concurrently fetch the remaining parts.
-        let async_runtime = AsyncHandle::try_current().map_err(anyhow::Error::msg)?;
+        let mut body_futures = FuturesOrdered::new();
+        let mut first_part = Some(first_part);
 
-        // Fetch the first part's body while we fetch the other parts.
-        let min_body_elapsed_ = Arc::clone(&min_body_elapsed);
-        let first_body_fut = async move {
-            let body_start = Instant::now();
-            let result = first_part
-                .body
-                .collect()
-                .map_err(|err| Error::from(format!("s3 get first body err: {}", err)))
-                .await;
-            let elapsed = body_start.elapsed();
-            min_body_elapsed_.observe(elapsed, "s3 download first part body");
-
-            result
-        };
-
-        let mut body_handles = Vec::new();
-        // TODO: Add the key and part number once this can be annotated with metadata.
-        body_handles.push(async_runtime.spawn_named(|| "persist_s3blob_get_body", first_body_fut));
-
-        if num_parts > 1 {
-            // Fetch the headers of the rest of the parts. (Starting at part 2 because we already
-            // did part 1.)
-            for part_num in 2..=num_parts {
-                let header_future = self
-                    .client
-                    .get_object()
-                    .bucket(&self.bucket)
-                    .key(&path)
-                    .part_number(part_num)
-                    .send();
-
-                // Clone a handle to our MinElapsed trackers so we can give one to
-                // each download task.
-                let min_header_elapsed_ = Arc::clone(&min_header_elapsed);
-                let min_body_elapsed_ = Arc::clone(&min_body_elapsed);
-
-                let request_future = async move {
-                    // Request our headers.
-                    let header_start = Instant::now();
-                    let object = header_future
-                        .await
-                        .map_err(|err| ExternalError::from(anyhow!("s3 get meta err: {}", err)))?;
-                    let header_elapsed = header_start.elapsed();
-                    min_header_elapsed_.observe(header_elapsed, "s3 download part header");
-
-                    // Request the body.
-                    let body_start = Instant::now();
-                    let body = object
-                        .body
-                        .collect()
-                        .await
-                        .map_err(|err| Error::from(format!("s3 get body err: {}", err)))?;
-                    let body_elapsed = body_start.elapsed();
-                    min_body_elapsed_.observe(body_elapsed, "s3 download part body");
-
-                    Ok(body)
+        // Fetch the headers of the rest of the parts. (Starting at part 2 because we already
+        // did part 1.)
+        for part_num in 1..=num_parts {
+            // Clone a handle to our MinElapsed trackers so we can give one to
+            // each download task.
+            let min_header_elapsed = Arc::clone(&min_header_elapsed);
+            let min_body_elapsed = Arc::clone(&min_body_elapsed);
+            let first_part = first_part.take();
+            let path = &path;
+            let request_future = async move {
+                // Fetch the headers of the rest of the parts. (Using the existing headers
+                // for part 1.
+                let object = match first_part {
+                    Some(first_part) => {
+                        assert_eq!(part_num, 1, "only the first part should be prefetched");
+                        first_part
+                    }
+                    None => {
+                        assert_ne!(part_num, 1, "first part should be prefetched");
+                        // Request our headers.
+                        let header_start = Instant::now();
+                        let object = self
+                            .client
+                            .get_object()
+                            .bucket(&self.bucket)
+                            .key(path)
+                            .part_number(part_num)
+                            .send()
+                            .await
+                            .map_err(|err| {
+                                ExternalError::from(anyhow!("s3 get meta err: {}", err))
+                            })?;
+                        min_header_elapsed
+                            .observe(header_start.elapsed(), "s3 download part header");
+                        object
+                    }
                 };
 
-                // TODO: Add the key and part number once this can be annotated
-                // with metadata.
-                //
-                // Spawn all of these futures on the runtime so they run concurrently.
-                let request_handle = async_runtime.spawn_named(|| "persist_s3blob_get_header", {
-                    self.metrics.get_part.inc();
-                    request_future
-                });
+                // Request the body.
+                let body_start = Instant::now();
+                let body = object
+                    .body
+                    .collect()
+                    .await
+                    .map_err(|err| Error::from(format!("s3 get body err: {}", err)))?;
+                let body_elapsed = body_start.elapsed();
+                min_body_elapsed.observe(body_elapsed, "s3 download part body");
 
-                body_handles.push(request_handle);
-            }
+                Ok::<_, Error>(body)
+            };
+
+            body_futures.push_back(request_future);
         }
 
         // Await on all of our parts requests.
-        let part_bodies = join_all(body_handles).await;
         let mut segments = vec![];
-        for result in part_bodies {
+        while let Some(result) = body_futures.next().await {
             let part_body = result
-                // Tokio failure, we failed to spawn a task.
-                .map_err(|err| Error::from(format!("s3 spawn err: {}", err)))?
                 // Download failure, we failed to fetch the body from S3.
                 .map_err(|err| Error::from(format!("s3 get body err: {}", err)))?;
 

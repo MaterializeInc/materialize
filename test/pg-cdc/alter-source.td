@@ -51,7 +51,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP TABLE table_a CASCADE;
 
 !ALTER SOURCE mz_source ADD SUBSOURCE table_b;
-contains:PostgreSQL PUBLICATION mz_source is empty
+contains:PUBLICATION mz_source is empty
 
 # Adding a table with the same name as a running table does not allow you to add
 # the new table, even though its OID is the different.
@@ -69,7 +69,7 @@ INSERT INTO table_a VALUES (9, 'nine');
 
 # We are not aware that the new table_a is different
 !ALTER SOURCE mz_source ADD SUBSOURCE table_a;
-contains:cannot create multiple subsources in the same source that refer to upstream table postgres.public.table_a
+contains:another subsource already refers to postgres.public.table_a
 
 > DROP SOURCE mz_source;
 
@@ -274,7 +274,7 @@ contains:SOURCE "mz_source" must retain at least one non-progress subsource
 # Add subsources
 
 ! ALTER SOURCE mz_source ADD SUBSOURCE table_g;
-contains:cannot create multiple subsources in the same source that refer to upstream table postgres.public.table_g
+contains:another subsource already refers to postgres.public.table_g
 
 > ALTER SOURCE mz_source ADD SUBSOURCE table_a, table_b AS tb;
 
@@ -283,7 +283,7 @@ contains:cannot create multiple subsources in the same source that refer to upst
 2 two
 
 ! ALTER SOURCE mz_source ADD SUBSOURCE table_a;
-contains:cannot create multiple subsources in the same source that refer to upstream table postgres.public.table_a
+contains:another subsource already refers to postgres.public.table_a
 
 > SELECT * FROM tb;
 1 one
@@ -383,16 +383,27 @@ contains: invalid TEXT COLUMNS option value: unexpected multiple references to p
 > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
 "\"postgres\".\"public\".\"table_f\".\"f2\""
 
+# Drop a table that's in the publication, which shuffles the tables' output
+# indexes, then add a table to the publication and ensure it can be added.
 $ postgres-execute connection=postgres://postgres:postgres@postgres
+DROP TABLE table_c, table_d;
+
 CREATE TABLE table_i (pk INTEGER PRIMARY KEY, f2 an_enum);
 INSERT INTO table_i VALUES (1, 'var0');
 ALTER TABLE table_i REPLICA IDENTITY FULL;
 INSERT INTO table_i VALUES (2, 'var1');
 
+INSERT INTO table_f VALUES (3, 'var1');
+
 > ALTER SOURCE mz_source ADD SUBSOURCE table_i WITH (TEXT COLUMNS [table_i.f2]);
 
 > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
 "\"postgres\".\"public\".\"table_f\".\"f2\", \"postgres\".\"public\".\"table_i\".\"f2\""
+
+> SELECT * FROM table_f
+1 var0
+2 var1
+3 var1
 
 > ALTER SOURCE mz_source DROP SUBSOURCE table_f, table_i;
 
@@ -403,8 +414,8 @@ INSERT INTO table_i VALUES (2, 'var1');
 contains:invalid TEXT COLUMNS option value: table table_z not found in source
 
 ! ALTER SOURCE mz_source ADD SUBSOURCE table_e WITH (TEXT COLUMNS [table_f.f2]);
-contains:TEXT COLUMNS can only refer to tables being added to source
-detail:the following tables were referenced but not added: public.table_f
+contains:TEXT COLUMNS refers to table not currently being added
+detail:the following tables are referenced but not added: public.table_f
 
 # Test adding text cols w/o original text columns
 

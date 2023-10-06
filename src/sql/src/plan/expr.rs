@@ -19,7 +19,7 @@ use std::{fmt, mem};
 use itertools::Itertools;
 use mz_expr::virtual_syntax::{AlgExcept, Except, IR};
 use mz_expr::visit::{Visit, VisitChildren};
-use mz_expr::{func, CollectionPlan, Id, LetRecLimit};
+use mz_expr::{func, CollectionPlan, Id, LetRecLimit, RowSetFinishing};
 // these happen to be unchanged at the moment, but there might be additions later
 pub use mz_expr::{
     BinaryFunc, ColumnOrder, TableFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc, WindowFrame,
@@ -37,6 +37,8 @@ use crate::plan::error::PlanError;
 use crate::plan::query::ExprContext;
 use crate::plan::typeconv::{self, CastContext};
 use crate::plan::Params;
+
+use super::plan_utils::GroupSizeHints;
 
 #[allow(missing_debug_implementations)]
 pub struct Hir;
@@ -229,7 +231,7 @@ pub enum HirScalarExpr {
 /// order.
 pub struct WindowExpr {
     pub func: WindowExprType,
-    pub partition: Vec<HirScalarExpr>,
+    pub partition_by: Vec<HirScalarExpr>,
     // ORDER BY is represented in a complicated way: `plan_function_order_by` gave us two things:
     // - the `ColumnOrder`s we have put in `func` above,
     // - the `HirScalarExpr`s we have put in the following `order_by` field.
@@ -243,7 +245,7 @@ impl WindowExpr {
     {
         #[allow(deprecated)]
         self.func.visit_expressions(f)?;
-        for expr in self.partition.iter() {
+        for expr in self.partition_by.iter() {
             f(expr)?;
         }
         for expr in self.order_by.iter() {
@@ -258,7 +260,7 @@ impl WindowExpr {
     {
         #[allow(deprecated)]
         self.func.visit_expressions_mut(f)?;
-        for expr in self.partition.iter_mut() {
+        for expr in self.partition_by.iter_mut() {
             f(expr)?;
         }
         for expr in self.order_by.iter_mut() {
@@ -274,7 +276,7 @@ impl VisitChildren<HirScalarExpr> for WindowExpr {
         F: FnMut(&HirScalarExpr),
     {
         self.func.visit_children(&mut f);
-        for expr in self.partition.iter() {
+        for expr in self.partition_by.iter() {
             f(expr);
         }
         for expr in self.order_by.iter() {
@@ -287,7 +289,7 @@ impl VisitChildren<HirScalarExpr> for WindowExpr {
         F: FnMut(&mut HirScalarExpr),
     {
         self.func.visit_mut_children(&mut f);
-        for expr in self.partition.iter_mut() {
+        for expr in self.partition_by.iter_mut() {
             f(expr);
         }
         for expr in self.order_by.iter_mut() {
@@ -301,7 +303,7 @@ impl VisitChildren<HirScalarExpr> for WindowExpr {
         E: From<RecursionLimitError>,
     {
         self.func.try_visit_children(&mut f)?;
-        for expr in self.partition.iter() {
+        for expr in self.partition_by.iter() {
             f(expr)?;
         }
         for expr in self.order_by.iter() {
@@ -316,7 +318,7 @@ impl VisitChildren<HirScalarExpr> for WindowExpr {
         E: From<RecursionLimitError>,
     {
         self.func.try_visit_mut_children(&mut f)?;
-        for expr in self.partition.iter_mut() {
+        for expr in self.partition_by.iter_mut() {
             f(expr)?;
         }
         for expr in self.order_by.iter_mut() {
@@ -559,28 +561,31 @@ impl ValueWindowExpr {
         self.func.output_type(self.args.typ(outers, inner, params))
     }
 
-    pub fn into_expr(self) -> mz_expr::AggregateFunc {
-        match self.func {
-            // Lag and Lead are fundamentally the same function, just with opposite directions
-            ValueWindowFunc::Lag => mz_expr::AggregateFunc::LagLead {
-                order_by: self.order_by,
-                lag_lead: mz_expr::LagLeadType::Lag,
-                ignore_nulls: self.ignore_nulls,
+    pub fn into_expr(self) -> (Box<HirScalarExpr>, mz_expr::AggregateFunc) {
+        (
+            self.args,
+            match self.func {
+                // Lag and Lead are fundamentally the same function, just with opposite directions
+                ValueWindowFunc::Lag => mz_expr::AggregateFunc::LagLead {
+                    order_by: self.order_by,
+                    lag_lead: mz_expr::LagLeadType::Lag,
+                    ignore_nulls: self.ignore_nulls,
+                },
+                ValueWindowFunc::Lead => mz_expr::AggregateFunc::LagLead {
+                    order_by: self.order_by,
+                    lag_lead: mz_expr::LagLeadType::Lead,
+                    ignore_nulls: self.ignore_nulls,
+                },
+                ValueWindowFunc::FirstValue => mz_expr::AggregateFunc::FirstValue {
+                    order_by: self.order_by,
+                    window_frame: self.window_frame,
+                },
+                ValueWindowFunc::LastValue => mz_expr::AggregateFunc::LastValue {
+                    order_by: self.order_by,
+                    window_frame: self.window_frame,
+                },
             },
-            ValueWindowFunc::Lead => mz_expr::AggregateFunc::LagLead {
-                order_by: self.order_by,
-                lag_lead: mz_expr::LagLeadType::Lead,
-                ignore_nulls: self.ignore_nulls,
-            },
-            ValueWindowFunc::FirstValue => mz_expr::AggregateFunc::FirstValue {
-                order_by: self.order_by,
-                window_frame: self.window_frame,
-            },
-            ValueWindowFunc::LastValue => mz_expr::AggregateFunc::LastValue {
-                order_by: self.order_by,
-                window_frame: self.window_frame,
-            },
-        }
+        )
     }
 }
 
@@ -1670,25 +1675,34 @@ impl HirRelationExpr {
         HirRelationExpr::Constant { rows, typ }
     }
 
-    pub fn finish(&mut self, finishing: mz_expr::RowSetFinishing) {
+    /// A `RowSetFinishing` can only be directly applied to the result of a one-shot select.
+    /// This function is concerned with maintained queries, e.g., an index or materialized view.
+    /// Instead of directly applying the given `RowSetFinishing`, it converts the `RowSetFinishing`
+    /// to a `TopK`, which it then places at the top of `self`. Additionally, it turns the given
+    /// finishing into a trivial finishing.
+    pub fn finish_maintained(
+        &mut self,
+        finishing: &mut RowSetFinishing,
+        group_size_hints: GroupSizeHints,
+    ) {
         if !finishing.is_trivial(self.arity()) {
-            *self = HirRelationExpr::Project {
-                input: Box::new(HirRelationExpr::TopK {
-                    input: Box::new(std::mem::replace(
-                        self,
-                        HirRelationExpr::Constant {
-                            rows: vec![],
-                            typ: RelationType::new(Vec::new()),
-                        },
-                    )),
-                    group_key: vec![],
-                    order_key: finishing.order_by,
-                    limit: finishing.limit,
-                    offset: finishing.offset,
-                    expected_group_size: None,
-                }),
-                outputs: finishing.project,
+            let old_finishing =
+                mem::replace(finishing, RowSetFinishing::trivial(finishing.project.len()));
+            *self = HirRelationExpr::TopK {
+                input: Box::new(std::mem::replace(
+                    self,
+                    HirRelationExpr::Constant {
+                        rows: vec![],
+                        typ: RelationType::new(Vec::new()),
+                    },
+                )),
+                group_key: vec![],
+                order_key: old_finishing.order_by,
+                limit: old_finishing.limit,
+                offset: old_finishing.offset,
+                expected_group_size: group_size_hints.limit_input_group_size,
             }
+            .project(old_finishing.project)
         }
     }
 

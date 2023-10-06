@@ -23,7 +23,7 @@ use ordered_float::OrderedFloat;
 
 use crate::attribute::subtree_size::SubtreeSize;
 use crate::attribute::unique_keys::UniqueKeys;
-use crate::attribute::{Attribute, DerivedAttributes, Env, RequiredAttributes};
+use crate::attribute::{Attribute, DerivedAttributes, DerivedAttributesBuilder, Env};
 use crate::symbolic::SymbolicExpression;
 
 use super::Arity;
@@ -501,13 +501,13 @@ impl Attribute for Cardinality {
         self.env.handle_tasks(&self.results);
     }
 
-    fn add_dependencies(builder: &mut RequiredAttributes)
+    fn add_dependencies(builder: &mut DerivedAttributesBuilder)
     where
         Self: Sized,
     {
-        builder.require::<SubtreeSize>();
-        builder.require::<Arity>();
-        builder.require::<UniqueKeys>();
+        builder.require(SubtreeSize::default());
+        builder.require(Arity::default());
+        builder.require(UniqueKeys::default());
     }
 
     fn get_results(&self) -> &Vec<Self::Value> {

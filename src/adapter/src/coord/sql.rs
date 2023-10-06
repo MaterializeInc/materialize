@@ -10,12 +10,15 @@
 //! Various utility methods used by the [`Coordinator`]. Ideally these are all
 //! put in more meaningfully named modules.
 
+use mz_ore::now::EpochMillis;
 use mz_repr::{GlobalId, ScalarType};
 use mz_sql::names::{Aug, ResolvedIds};
-use mz_sql::plan::StatementDesc;
+use mz_sql::plan::{Params, StatementDesc};
+use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{Raw, Statement};
 
 use crate::catalog::Catalog;
+use crate::client::ConnectionId;
 use crate::coord::Coordinator;
 use crate::session::{Session, TransactionStatus};
 use crate::subscribe::ActiveSubscribe;
@@ -42,12 +45,13 @@ impl Coordinator {
         name: String,
         stmt: Statement<Raw>,
         sql: String,
-        param_types: Vec<Option<ScalarType>>,
+        params: Params,
     ) {
         let catalog = self.owned_catalog();
+        let now = self.now();
         mz_ore::task::spawn(|| "coord::declare", async move {
             let result =
-                Self::declare_inner(ctx.session_mut(), &catalog, name, stmt, sql, param_types)
+                Self::declare_inner(ctx.session_mut(), &catalog, name, stmt, sql, params, now)
                     .map(|()| ExecuteResponse::DeclaredCursor);
             ctx.retire(result);
         });
@@ -59,12 +63,19 @@ impl Coordinator {
         name: String,
         stmt: Statement<Raw>,
         sql: String,
-        param_types: Vec<Option<ScalarType>>,
+        params: Params,
+        now: EpochMillis,
     ) -> Result<(), AdapterError> {
+        let param_types = params
+            .types
+            .iter()
+            .map(|ty| Some(ty.clone()))
+            .collect::<Vec<_>>();
         let desc = describe(catalog, stmt.clone(), &param_types, session)?;
-        let params = vec![];
-        let result_formats = vec![mz_pgrepr::Format::Text; desc.arity()];
-        let logging = session.mint_logging(sql);
+        let params = params.datums.into_iter().zip(params.types).collect();
+        let result_formats = vec![mz_pgwire_common::Format::Text; desc.arity()];
+        let redacted_sql = stmt.to_ast_string_redacted();
+        let logging = session.mint_logging(sql, redacted_sql, now);
         session.set_portal(
             name,
             desc,
@@ -178,19 +189,23 @@ impl Coordinator {
         &mut self,
         session: &mut Session,
     ) -> TransactionStatus<mz_repr::Timestamp> {
+        self.clear_connection(session.conn_id());
+        session.clear_transaction()
+    }
+
+    /// Clears coordinator state for a connection.
+    pub(crate) fn clear_connection(&mut self, conn_id: &ConnectionId) {
         let conn_meta = self
             .active_conns
-            .get_mut(session.conn_id())
+            .get_mut(conn_id)
             .expect("must exist for active session");
         let drop_sinks = std::mem::take(&mut conn_meta.drop_sinks);
         self.drop_compute_sinks(drop_sinks);
 
         // Release this transaction's compaction hold on collections.
-        if let Some(txn_reads) = self.txn_reads.remove(session.conn_id()) {
+        if let Some(txn_reads) = self.txn_reads.remove(conn_id) {
             self.release_read_hold(&txn_reads);
         }
-
-        session.clear_transaction()
     }
 
     /// Handle adding metadata associated with a SUBSCRIBE query.
@@ -203,7 +218,7 @@ impl Coordinator {
             .catalog()
             .state()
             .pack_subscribe_update(id, &active_subscribe, 1);
-        self.send_builtin_table_updates(vec![update]).await;
+        self.send_builtin_table_updates_blocking(vec![update]).await;
 
         let session_type = metrics::session_type_label_value(&active_subscribe.user);
         self.metrics
@@ -221,7 +236,7 @@ impl Coordinator {
                 .catalog()
                 .state()
                 .pack_subscribe_update(id, &active_subscribe, -1);
-            self.send_builtin_table_updates(vec![update]).await;
+            self.send_builtin_table_updates_blocking(vec![update]).await;
 
             let session_type = metrics::session_type_label_value(&active_subscribe.user);
             self.metrics

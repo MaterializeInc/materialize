@@ -47,6 +47,12 @@ close ::=
 col_option ::=
   'NOT' 'NULL' |
   'DEFAULT' expr
+comment_on ::=
+  'COMMENT ON' (
+    'CLUSTER' | 'CLUSTER REPLICA' | 'COLUMN' | 'CONNECTION' | 'DATABASE' | 'FUNCTION' |
+    'INDEX' | 'MATERIALIZED VIEW' | 'ROLE' | 'SCHEMA' | 'SECRET' | 'SINK' | 'SOURCE' |
+    'TABLE' | 'TYPE' | 'VIEW'
+  ) object_name 'IS' ( string_literal | 'NULL' )
 commit ::=
   'COMMIT'
 copy_to ::=
@@ -68,23 +74,30 @@ create_cluster_replica ::=
 create_connection_kafka ::=
   'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'TO' 'KAFKA'
   '(' field '='? val ( ',' field '='? val )* ')'
+  ('WITH' with_options)?
 create_connection_csr ::=
   'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'TO' 'CONFLUENT' 'SCHEMA' 'REGISTRY'
   '(' field '='? val ( ',' field '='? val )* ')'
+  ('WITH' with_options)?
 create_connection_postgres ::=
   'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'TO' 'POSTGRES'
   '(' field '='? val ( ',' field '='? val )* ')'
+  ('WITH' with_options)?
 create_connection_aws_privatelink ::=
   'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'TO' 'AWS' 'PRIVATELINK'
   '(' field '='? val ( ',' field '='? val )* ')'
+  ('WITH' with_options)?
 create_connection_ssh_tunnel ::=
   'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'TO' 'SSH' 'TUNNEL'
   '(' field '='? val ( ',' field '='? val )* ')'
+  ('WITH' with_options)?
 create_connection_kafka_brokers ::= 'BROKERS' '(' kafka_broker (',' kafka_broker)* ')'
 create_connection_kafka_broker_aws_privatelink ::=
   "'host:port'" 'USING' 'AWS' 'PRIVATELINK' aws_connection ( '(' broker_option (',' broker_option)* ')' )?
 create_connection_kafka_broker_ssh_tunnel ::=
   "'host:port'" 'USING' 'SSH' 'TUNNEL' ssh_connection
+validate_connection ::=
+  'VALIDATE' 'CONNECTION' connection_name
 broker_option ::= 'PORT' number | 'AVAILABILITY ZONE' az
 create_database ::=
     'CREATE' 'DATABASE' ('IF NOT EXISTS')? database_name
@@ -135,9 +148,7 @@ create_source_load_generator ::=
   ('IN CLUSTER' cluster_name)?
   'FROM LOAD GENERATOR' ('AUCTION' | 'COUNTER' | 'MARKETING' | 'TPCH')
   ('(' (load_generator_option) ( ( ',' load_generator_option ) )* ')')?
-  (
-    'FOR ALL TABLES' |
-    'FOR TABLES' '(' table_name ('AS' subsrc_name)?  (',' table_name ('AS' subsrc_name)? )* ')')?
+  'FOR ALL TABLES'
   ('EXPOSE' 'PROGRESS' 'AS' progress_subsource_name)?
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 load_generator_option ::=
@@ -159,11 +170,16 @@ create_source_webhook ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   'IN CLUSTER' cluster_name
   'FROM' 'WEBHOOK'
-  'BODY FORMAT' (webhook_body_format)
-  ('INCLUDE HEADERS')?
+  'BODY FORMAT' ('TEXT' | 'JSON' | 'BYTES')
+  (
+    ('INCLUDE HEADER'  header_name 'AS' column_alias ('BYTES')? )? |
+    ('INCLUDE HEADERS' ( '(' ('NOT')? header_name ( ',' ('NOT')? header_name )* ')' )?)?
+  )*
   ('CHECK'
-    ('WITH' '(' ( (webhook_check_option) ( ( ',' webhook_check_option ) )* )? ')' )?
-    check_expression
+    '('
+      ('WITH' '(' ( (webhook_check_option) ( ( ',' webhook_check_option ) )* )? ')' )?
+      check_expression
+    ')'
   )?
 webhook_body_format ::= 'TEXT' | 'JSON' | 'BYTES'
 webhook_check_option ::=
@@ -230,17 +246,24 @@ drop_user ::=
     'DROP' 'USER' ('IF EXISTS')? role_name
 execute ::=
   'EXECUTE' name   ('(' (parameter_value) ( ',' parameter_value )* ')')?
-explain ::=
+explain_plan ::=
   'EXPLAIN'
-  ( ( ( 'RAW' | 'DECORRELATED' | 'OPTIMIZED' | 'PHYSICAL' ) 'PLAN' )? | 'TIMESTAMP' ? )
+  ( ( 'RAW' | 'DECORRELATED' | 'OPTIMIZED' | 'PHYSICAL' )? 'PLAN' )?
   ( 'WITH (' ( output_modifier (',' output_modifier )* ) ')' )?
   ( 'AS' ( 'TEXT' | 'JSON' ) )?
   'FOR'?
   (
     select_stmt |
-    'VIEW' view_name |
+    create_index |
+    create_materialized_view |
+    'INDEX' index_name |
     'MATERIALIZED VIEW' view_name
   )
+explain_timestamp ::=
+  'EXPLAIN' 'TIMESTAMP'
+  ( 'AS' ( 'TEXT' | 'JSON' ) )?
+  'FOR'
+  select_stmt
 fetch ::=
   'FETCH' 'FORWARD'? ('ALL' | count)? 'FROM'? cursor_name
   ( 'WITH'? '(' (option_name ('=' option_value)?) ( ',' (option_name ('=' option_value)?) )* ')' )?
@@ -401,9 +424,9 @@ show_variable ::=
 show_schemas ::=
     'SHOW' 'SCHEMAS' ('FROM' database_name)?
 show_sinks ::=
-   'SHOW' 'SINKS' ('FROM' schema_name)?
+   'SHOW' 'SINKS' ('FROM' schema_name)? ('IN CLUSTER' cluster_name)?
 show_sources ::=
-  'SHOW' 'SOURCES' ('FROM' schema_name)?
+  'SHOW' 'SOURCES' ('FROM' schema_name)? ('IN CLUSTER' cluster_name)?
 show_subsources ::=
   'SHOW' 'SUBSOURCES' ('FROM' schema_name | 'ON' on_name)?
 show_tables ::=
@@ -432,6 +455,7 @@ table_ref ::=
     | 'LATERAL'? table_func_call
     | '(' join_expr ')'
   ) ('AS'? table_alias ('(' col_alias (',' col_alias)* ')'))?
+table_expr ::= 'TABLE' table_name
 time_unit ::=
   'MILLENNIUM' | 'CENTURY' | 'DECADE' | 'YEAR' | 'MONTH' | 'DAY' | 'HOUR' | 'MINUTE' | 'SECOND' | 'MILLISECONDS' | 'MICROSECONDS'
 type_bool ::=
@@ -470,7 +494,11 @@ type_escape_text ::=
 type_time ::=
   'TIME' "'" time_str "'"
 type_timestamp ::=
-  ('TIMESTAMP' | 'TIMESTAMPTZ')
+  (
+    'TIMESTAMP' ('(' precision ')')? (('WITH' | 'WITHOUT') TIME ZONE)?
+    |
+    'TIMESTAMPTZ' ('(' precision ')')?
+  )
   "'" date_str
     ( (' ' | 'T') time_str)? ( ('+' | '-' ) tz_offset )?
   "'"
@@ -478,6 +506,7 @@ update_stmt ::=
   'UPDATE' table_name ('AS'? alias)?
   'SET' ( column_name '=' expr ) ( ( ',' column_name '=' expr ) )*
   'WHERE' condition
+values_expr ::= 'VALUES' '(' expr (',' expr)* ')' (',' '(' expr (',' expr)* ')')*
 with_ctes ::=
   'WITH'
     cte_binding ( ',' cte_binding )*

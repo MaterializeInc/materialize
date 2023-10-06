@@ -6,7 +6,6 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-from typing import List
 
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
@@ -18,6 +17,7 @@ from materialize.output_consistency.input_data.params.date_time_operation_param 
 from materialize.output_consistency.input_data.params.enum_constant_operation_params import (
     DATE_TIME_COMPONENT_PARAM,
     ISO8601_TIMESTAMP_PARAM,
+    PRECISION_PARAM,
     TIME_ZONE_PARAM,
     TYPE_FORMAT_PARAM,
 )
@@ -45,7 +45,7 @@ from materialize.output_consistency.operation.operation import (
     OperationRelevance,
 )
 
-DATE_TIME_OPERATION_TYPES: List[DbOperationOrFunction] = []
+DATE_TIME_OPERATION_TYPES: list[DbOperationOrFunction] = []
 
 DATE_TIME_OPERATION_TYPES.append(
     DbFunction(
@@ -239,5 +239,23 @@ DATE_TIME_OPERATION_TYPES.append(
         "justify_interval",
         [TimeIntervalOperationParam()],
         DateTimeReturnTypeSpec(INTERVAL_TYPE_IDENTIFIER),
+    )
+)
+
+# change precision for TIMESTAMP
+DATE_TIME_OPERATION_TYPES.append(
+    DbOperation(
+        "$::TIMESTAMP($)",
+        [DateTimeOperationParam(), PRECISION_PARAM],
+        DateTimeReturnTypeSpec(TIMESTAMP_TYPE_IDENTIFIER),
+    )
+)
+
+# change precision for TIMESTAMPTZ
+DATE_TIME_OPERATION_TYPES.append(
+    DbOperation(
+        "$::TIMESTAMPTZ($)",
+        [DateTimeOperationParam(), PRECISION_PARAM],
+        DateTimeReturnTypeSpec(TIMESTAMPTZ_TYPE_IDENTIFIER),
     )
 )

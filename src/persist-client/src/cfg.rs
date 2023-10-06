@@ -11,20 +11,50 @@
 
 //! The tunable knobs for persist.
 
+use once_cell::sync::Lazy;
+use std::collections::BTreeMap;
+use std::string::ToString;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::batch::UntrimmableColumns;
 use mz_build_info::BuildInfo;
 use mz_ore::now::NowFn;
-use mz_persist::cfg::{BlobKnobs, ConsensusKnobs};
+use mz_persist::cfg::BlobKnobs;
 use mz_persist::retry::Retry;
+use mz_postgres_client::PostgresClientKnobs;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 
 include!(concat!(env!("OUT_DIR"), "/mz_persist_client.cfg.rs"));
+
+#[derive(Copy, Clone, PartialOrd, PartialEq, Ord, Eq, Debug)]
+pub struct PersistFeatureFlag {
+    pub name: &'static str,
+    pub default: bool,
+    pub description: &'static str,
+}
+
+impl PersistFeatureFlag {
+    pub(crate) const STREAMING_COMPACTION: PersistFeatureFlag = PersistFeatureFlag {
+        name: "persist_streaming_compaction_enabled",
+        default: false,
+        description: "use the new streaming consolidate during compaction",
+    };
+    pub(crate) const STREAMING_SNAPSHOT_AND_FETCH: PersistFeatureFlag = PersistFeatureFlag {
+        name: "persist_streaming_snapshot_and_fetch_enabled",
+        default: false,
+        description: "use the new streaming consolidate during snapshot_and_fetch",
+    };
+
+    pub const ALL: &'static [PersistFeatureFlag] = &[
+        Self::STREAMING_COMPACTION,
+        Self::STREAMING_SNAPSHOT_AND_FETCH,
+    ];
+}
 
 /// The tunable knobs for persist.
 ///
@@ -86,7 +116,7 @@ pub struct PersistConfig {
     /// A clock to use for all leasing and other non-debugging use.
     pub now: NowFn,
     /// Configurations that can be dynamically updated.
-    pub(crate) dynamic: Arc<DynamicConfig>,
+    pub dynamic: Arc<DynamicConfig>,
     /// Whether to physically and logically compact batches in blob storage.
     pub compaction_enabled: bool,
     /// In Compactor::compact_and_apply_background, the maximum number of concurrent
@@ -104,9 +134,6 @@ pub struct PersistConfig {
     /// Length of time after a writer's last operation after which the writer
     /// may be expired.
     pub writer_lease_duration: Duration,
-    /// Length of time after a reader's last operation after which the reader
-    /// may be expired.
-    pub reader_lease_duration: Duration,
     /// Length of time between critical handles' calls to downgrade since
     pub critical_downgrade_interval: Duration,
     /// Timeout per connection attempt to Persist PubSub service.
@@ -150,6 +177,7 @@ impl PersistConfig {
                 ),
                 consensus_connect_timeout: RwLock::new(Self::DEFAULT_CRDB_CONNECT_TIMEOUT),
                 consensus_tcp_user_timeout: RwLock::new(Self::DEFAULT_CRDB_TCP_USER_TIMEOUT),
+                reader_lease_duration: RwLock::new(Self::DEFAULT_READ_LEASE_DURATION),
                 gc_blob_delete_concurrency_limit: AtomicUsize::new(32),
                 state_versions_recent_live_diffs_limit: AtomicUsize::new(
                     30 * Self::DEFAULT_ROLLUP_THRESHOLD,
@@ -165,9 +193,20 @@ impl PersistConfig {
                 stats_audit_percent: AtomicUsize::new(Self::DEFAULT_STATS_AUDIT_PERCENT),
                 stats_collection_enabled: AtomicBool::new(Self::DEFAULT_STATS_COLLECTION_ENABLED),
                 stats_filter_enabled: AtomicBool::new(Self::DEFAULT_STATS_FILTER_ENABLED),
+                stats_budget_bytes: AtomicUsize::new(Self::DEFAULT_STATS_BUDGET_BYTES),
+                stats_untrimmable_columns: RwLock::new(
+                    Self::DEFAULT_STATS_UNTRIMMABLE_COLUMNS.clone(),
+                ),
                 pubsub_client_enabled: AtomicBool::new(Self::DEFAULT_PUBSUB_CLIENT_ENABLED),
                 pubsub_push_diff_enabled: AtomicBool::new(Self::DEFAULT_PUBSUB_PUSH_DIFF_ENABLED),
                 rollup_threshold: AtomicUsize::new(Self::DEFAULT_ROLLUP_THRESHOLD),
+                feature_flags: {
+                    // NB: initialized with the full set of feature flags, so the map never needs updating.
+                    PersistFeatureFlag::ALL
+                        .iter()
+                        .map(|f| (f.name, AtomicBool::new(f.default)))
+                        .collect()
+                },
             }),
             compaction_enabled: !compaction_disabled,
             compaction_concurrency_limit: 5,
@@ -175,7 +214,6 @@ impl PersistConfig {
             compaction_yield_after_n_updates: 100_000,
             consensus_connection_pool_max_size: 50,
             writer_lease_duration: 60 * Duration::from_secs(60),
-            reader_lease_duration: Self::DEFAULT_READ_LEASE_DURATION,
             critical_downgrade_interval: Duration::from_secs(30),
             pubsub_connect_attempt_timeout: Duration::from_secs(5),
             pubsub_connect_max_backoff: Duration::from_secs(60),
@@ -210,13 +248,16 @@ impl PersistConfig {
     }
 
     /// Returns a new instance of [PersistConfig] for tests.
-    #[cfg(test)]
     pub fn new_for_tests() -> Self {
         use mz_build_info::DUMMY_BUILD_INFO;
         use mz_ore::now::SYSTEM_TIME;
 
         let mut cfg = Self::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
         cfg.hostname = "tests".into();
+        cfg.dynamic
+            .set_feature_flag(PersistFeatureFlag::STREAMING_COMPACTION, true);
+        cfg.dynamic
+            .set_feature_flag(PersistFeatureFlag::STREAMING_SNAPSHOT_AND_FETCH, true);
         cfg
     }
 }
@@ -240,15 +281,37 @@ impl PersistConfig {
     /// Default value for [`DynamicConfig::stats_audit_percent`].
     pub const DEFAULT_STATS_AUDIT_PERCENT: usize = 0;
     /// Default value for [`DynamicConfig::stats_collection_enabled`].
-    pub const DEFAULT_STATS_COLLECTION_ENABLED: bool = false;
+    pub const DEFAULT_STATS_COLLECTION_ENABLED: bool = true;
     /// Default value for [`DynamicConfig::stats_filter_enabled`].
-    pub const DEFAULT_STATS_FILTER_ENABLED: bool = false;
+    pub const DEFAULT_STATS_FILTER_ENABLED: bool = true;
+    /// Default value for [`DynamicConfig::stats_budget_bytes`].
+    pub const DEFAULT_STATS_BUDGET_BYTES: usize = 1024;
     /// Default value for [`DynamicConfig::pubsub_client_enabled`].
     pub const DEFAULT_PUBSUB_CLIENT_ENABLED: bool = true;
     /// Default value for [`DynamicConfig::pubsub_push_diff_enabled`].
     pub const DEFAULT_PUBSUB_PUSH_DIFF_ENABLED: bool = true;
     /// Default value for [`DynamicConfig::rollup_threshold`].
     pub const DEFAULT_ROLLUP_THRESHOLD: usize = 128;
+
+    pub const DEFAULT_STATS_UNTRIMMABLE_COLUMNS: Lazy<UntrimmableColumns> = Lazy::new(|| {
+        UntrimmableColumns {
+            equals: vec![
+                // If we trim the "err" column, then we can't ever use pushdown on a part
+                // (because it could have >0 errors).
+                "err".to_string(),
+                "ts".to_string(),
+                "receivedat".to_string(),
+                "createdat".to_string(),
+            ],
+            prefixes: vec!["last_".to_string()],
+            suffixes: vec![
+                "timestamp".to_string(),
+                "time".to_string(),
+                "_at".to_string(),
+                "_tstamp".to_string(),
+            ],
+        }
+    });
 
     /// Default value for [`PersistConfig::sink_minimum_batch_updates`].
     pub const DEFAULT_SINK_MINIMUM_BATCH_UPDATES: usize = 0;
@@ -275,7 +338,7 @@ impl PersistConfig {
     //
     // MIGRATION: Remove this once we remove the ReaderState <->
     // ProtoReaderState migration.
-    pub(crate) const DEFAULT_READ_LEASE_DURATION: Duration = Duration::from_secs(60 * 15);
+    pub const DEFAULT_READ_LEASE_DURATION: Duration = Duration::from_secs(60 * 15);
 
     // TODO: Get rid of this in favor of using PersistParameters at the
     // relevant callsites.
@@ -286,7 +349,7 @@ impl PersistConfig {
     }
 }
 
-impl ConsensusKnobs for PersistConfig {
+impl PostgresClientKnobs for PersistConfig {
     fn connection_pool_max_size(&self) -> usize {
         self.consensus_connection_pool_max_size
     }
@@ -352,14 +415,19 @@ pub struct DynamicConfig {
     consensus_tcp_user_timeout: RwLock<Duration>,
     consensus_connection_pool_ttl: RwLock<Duration>,
     consensus_connection_pool_ttl_stagger: RwLock<Duration>,
+    reader_lease_duration: RwLock<Duration>,
     sink_minimum_batch_updates: AtomicUsize,
     storage_sink_minimum_batch_updates: AtomicUsize,
     stats_audit_percent: AtomicUsize,
     stats_collection_enabled: AtomicBool,
     stats_filter_enabled: AtomicBool,
+    stats_budget_bytes: AtomicUsize,
+    stats_untrimmable_columns: RwLock<UntrimmableColumns>,
     pubsub_client_enabled: AtomicBool,
     pubsub_push_diff_enabled: AtomicBool,
     rollup_threshold: AtomicUsize,
+
+    feature_flags: BTreeMap<&'static str, AtomicBool>,
 
     // NB: These parameters are not atomically updated together in LD.
     // We put them under a single RwLock to reduce the cost of reads
@@ -414,6 +482,14 @@ impl DynamicConfig {
     // TODO: Decide if we can relax these.
     const LOAD_ORDERING: Ordering = Ordering::SeqCst;
     const STORE_ORDERING: Ordering = Ordering::SeqCst;
+
+    pub fn enabled(&self, flag: PersistFeatureFlag) -> bool {
+        self.feature_flags[flag.name].load(DynamicConfig::LOAD_ORDERING)
+    }
+
+    pub fn set_feature_flag(&self, flag: PersistFeatureFlag, to: bool) {
+        self.feature_flags[flag.name].store(to, DynamicConfig::STORE_ORDERING);
+    }
 
     /// The maximum number of parts (s3 blobs) that [crate::batch::BatchBuilder]
     /// will pipeline before back-pressuring [crate::batch::BatchBuilder::add]
@@ -502,6 +578,7 @@ impl DynamicConfig {
             .read()
             .expect("lock poisoned")
     }
+
     /// The duration to wait for a Consensus Postgres/CRDB connection to be made before retrying.
     pub fn consensus_connect_timeout(&self) -> Duration {
         *self
@@ -518,6 +595,18 @@ impl DynamicConfig {
             .consensus_tcp_user_timeout
             .read()
             .expect("lock poisoned")
+    }
+
+    /// Length of time after a reader's last operation after which the reader
+    /// may be expired.
+    pub fn reader_lease_duration(&self) -> Duration {
+        *self.reader_lease_duration.read().expect("lock poisoned")
+    }
+
+    /// Set the length of time after a reader's last operation after which the reader
+    /// may be expired.
+    pub fn set_reader_lease_duration(&self, d: Duration) {
+        *self.reader_lease_duration.write().expect("lock poisoned") = d;
     }
 
     /// The maximum number of concurrent blob deletes during garbage collection.
@@ -559,6 +648,21 @@ impl DynamicConfig {
     /// See [Self::stats_collection_enabled].
     pub fn stats_filter_enabled(&self) -> bool {
         self.stats_filter_enabled.load(Self::LOAD_ORDERING)
+    }
+
+    /// The budget (in bytes) of how many stats to write down per batch part.
+    /// When the budget is exceeded, stats will be trimmed away according to
+    /// a variety of heuristics.
+    pub fn stats_budget_bytes(&self) -> usize {
+        self.stats_budget_bytes.load(Self::LOAD_ORDERING)
+    }
+
+    /// The stats columns that will never be trimmed, even if they go over budget.
+    pub fn stats_untrimmable_columns(&self) -> UntrimmableColumns {
+        self.stats_untrimmable_columns
+            .read()
+            .expect("lock poisoned")
+            .clone()
     }
 
     /// Determines whether PubSub clients should connect to the PubSub server.
@@ -663,6 +767,8 @@ pub struct PersistParameters {
     pub consensus_connection_pool_ttl_stagger: Option<Duration>,
     /// Configures [`DynamicConfig::next_listen_batch_retry_params`].
     pub next_listen_batch_retryer: Option<RetryParameters>,
+    /// Configures [`DynamicConfig::reader_lease_duration`].
+    pub reader_lease_duration: Option<Duration>,
     /// Configures [`PersistConfig::sink_minimum_batch_updates`].
     pub sink_minimum_batch_updates: Option<usize>,
     /// Configures [`PersistConfig::storage_sink_minimum_batch_updates`].
@@ -673,12 +779,18 @@ pub struct PersistParameters {
     pub stats_collection_enabled: Option<bool>,
     /// Configures [`DynamicConfig::stats_filter_enabled`].
     pub stats_filter_enabled: Option<bool>,
+    /// Configures [`DynamicConfig::stats_budget_bytes`].
+    pub stats_budget_bytes: Option<usize>,
+    /// Configures [`DynamicConfig::stats_untrimmable_columns`].
+    pub stats_untrimmable_columns: Option<UntrimmableColumns>,
     /// Configures [`DynamicConfig::pubsub_client_enabled`]
     pub pubsub_client_enabled: Option<bool>,
     /// Configures [`DynamicConfig::pubsub_push_diff_enabled`]
     pub pubsub_push_diff_enabled: Option<bool>,
     /// Configures [`DynamicConfig::rollup_threshold`]
     pub rollup_threshold: Option<usize>,
+    /// Updates to various feature flags.
+    pub feature_flags: BTreeMap<String, bool>,
 }
 
 impl PersistParameters {
@@ -694,15 +806,19 @@ impl PersistParameters {
             consensus_tcp_user_timeout: self_consensus_tcp_user_timeout,
             consensus_connection_pool_ttl: self_consensus_connection_pool_ttl,
             consensus_connection_pool_ttl_stagger: self_consensus_connection_pool_ttl_stagger,
+            reader_lease_duration: self_reader_lease_duration,
             sink_minimum_batch_updates: self_sink_minimum_batch_updates,
             storage_sink_minimum_batch_updates: self_storage_sink_minimum_batch_updates,
             next_listen_batch_retryer: self_next_listen_batch_retryer,
             stats_audit_percent: self_stats_audit_percent,
             stats_collection_enabled: self_stats_collection_enabled,
             stats_filter_enabled: self_stats_filter_enabled,
+            stats_budget_bytes: self_stats_budget_bytes,
+            stats_untrimmable_columns: self_stats_untrimmable_columns,
             pubsub_client_enabled: self_pubsub_client_enabled,
             pubsub_push_diff_enabled: self_pubsub_push_diff_enabled,
             rollup_threshold: self_rollup_threshold,
+            feature_flags: self_feature_flags,
         } = self;
         let Self {
             blob_target_size: other_blob_target_size,
@@ -712,15 +828,19 @@ impl PersistParameters {
             consensus_tcp_user_timeout: other_consensus_tcp_user_timeout,
             consensus_connection_pool_ttl: other_consensus_connection_pool_ttl,
             consensus_connection_pool_ttl_stagger: other_consensus_connection_pool_ttl_stagger,
+            reader_lease_duration: other_reader_lease_duration,
             sink_minimum_batch_updates: other_sink_minimum_batch_updates,
             storage_sink_minimum_batch_updates: other_storage_sink_minimum_batch_updates,
             next_listen_batch_retryer: other_next_listen_batch_retryer,
             stats_audit_percent: other_stats_audit_percent,
             stats_collection_enabled: other_stats_collection_enabled,
             stats_filter_enabled: other_stats_filter_enabled,
+            stats_budget_bytes: other_stats_budget_bytes,
+            stats_untrimmable_columns: other_stats_untrimmable_columns,
             pubsub_client_enabled: other_pubsub_client_enabled,
             pubsub_push_diff_enabled: other_pubsub_push_diff_enabled,
             rollup_threshold: other_rollup_threshold,
+            feature_flags: other_feature_flags,
         } = other;
         if let Some(v) = other_blob_target_size {
             *self_blob_target_size = Some(v);
@@ -743,6 +863,9 @@ impl PersistParameters {
         if let Some(v) = other_consensus_connection_pool_ttl_stagger {
             *self_consensus_connection_pool_ttl_stagger = Some(v);
         }
+        if let Some(v) = other_reader_lease_duration {
+            *self_reader_lease_duration = Some(v);
+        }
         if let Some(v) = other_sink_minimum_batch_updates {
             *self_sink_minimum_batch_updates = Some(v);
         }
@@ -761,6 +884,12 @@ impl PersistParameters {
         if let Some(v) = other_stats_filter_enabled {
             *self_stats_filter_enabled = Some(v)
         }
+        if let Some(v) = other_stats_budget_bytes {
+            *self_stats_budget_bytes = Some(v)
+        }
+        if let Some(v) = other_stats_untrimmable_columns {
+            *self_stats_untrimmable_columns = Some(v)
+        }
         if let Some(v) = other_pubsub_client_enabled {
             *self_pubsub_client_enabled = Some(v)
         }
@@ -770,6 +899,7 @@ impl PersistParameters {
         if let Some(v) = other_rollup_threshold {
             *self_rollup_threshold = Some(v)
         }
+        self_feature_flags.extend(other_feature_flags);
     }
 
     /// Return whether all parameters are unset.
@@ -786,15 +916,19 @@ impl PersistParameters {
             consensus_tcp_user_timeout,
             consensus_connection_pool_ttl,
             consensus_connection_pool_ttl_stagger,
+            reader_lease_duration,
             sink_minimum_batch_updates,
             storage_sink_minimum_batch_updates,
             next_listen_batch_retryer,
             stats_audit_percent,
             stats_collection_enabled,
             stats_filter_enabled,
+            stats_budget_bytes,
+            stats_untrimmable_columns,
             pubsub_client_enabled,
             pubsub_push_diff_enabled,
             rollup_threshold,
+            feature_flags,
         } = self;
         blob_target_size.is_none()
             && blob_cache_mem_limit_bytes.is_none()
@@ -803,15 +937,19 @@ impl PersistParameters {
             && consensus_tcp_user_timeout.is_none()
             && consensus_connection_pool_ttl.is_none()
             && consensus_connection_pool_ttl_stagger.is_none()
+            && reader_lease_duration.is_none()
             && sink_minimum_batch_updates.is_none()
             && storage_sink_minimum_batch_updates.is_none()
             && next_listen_batch_retryer.is_none()
             && stats_audit_percent.is_none()
             && stats_collection_enabled.is_none()
             && stats_filter_enabled.is_none()
+            && stats_budget_bytes.is_none()
+            && stats_untrimmable_columns.is_none()
             && pubsub_client_enabled.is_none()
             && pubsub_push_diff_enabled.is_none()
             && rollup_threshold.is_none()
+            && feature_flags.is_empty()
     }
 
     /// Applies the parameter values to persist's in-memory config object.
@@ -829,15 +967,19 @@ impl PersistParameters {
             consensus_tcp_user_timeout,
             consensus_connection_pool_ttl,
             consensus_connection_pool_ttl_stagger,
+            reader_lease_duration,
             sink_minimum_batch_updates,
             storage_sink_minimum_batch_updates,
             next_listen_batch_retryer,
             stats_audit_percent,
             stats_collection_enabled,
             stats_filter_enabled,
+            stats_budget_bytes,
+            stats_untrimmable_columns,
             pubsub_client_enabled,
             pubsub_push_diff_enabled,
             rollup_threshold,
+            feature_flags,
         } = self;
         if let Some(blob_target_size) = blob_target_size {
             cfg.dynamic
@@ -889,6 +1031,10 @@ impl PersistParameters {
                 .expect("lock poisoned");
             *stagger = *consensus_connection_pool_ttl_stagger;
         }
+        if let Some(reader_lease_duration) = reader_lease_duration {
+            cfg.dynamic
+                .set_reader_lease_duration(*reader_lease_duration);
+        }
         if let Some(sink_minimum_batch_updates) = sink_minimum_batch_updates {
             cfg.dynamic
                 .sink_minimum_batch_updates
@@ -923,6 +1069,19 @@ impl PersistParameters {
                 .stats_filter_enabled
                 .store(*stats_filter_enabled, DynamicConfig::STORE_ORDERING);
         }
+        if let Some(stats_budget_bytes) = stats_budget_bytes {
+            cfg.dynamic
+                .stats_budget_bytes
+                .store(*stats_budget_bytes, DynamicConfig::STORE_ORDERING);
+        }
+        if let Some(stats_untrimmable_columns) = stats_untrimmable_columns {
+            let mut columns = cfg
+                .dynamic
+                .stats_untrimmable_columns
+                .write()
+                .expect("lock poisoned");
+            *columns = stats_untrimmable_columns.clone();
+        }
         if let Some(pubsub_client_enabled) = pubsub_client_enabled {
             cfg.dynamic
                 .pubsub_client_enabled
@@ -937,6 +1096,11 @@ impl PersistParameters {
             cfg.dynamic
                 .rollup_threshold
                 .store(*rollup_threshold, DynamicConfig::STORE_ORDERING);
+        }
+        for flag in PersistFeatureFlag::ALL {
+            if let Some(value) = feature_flags.get(flag.name) {
+                cfg.dynamic.set_feature_flag(*flag, *value);
+            }
         }
     }
 }
@@ -953,6 +1117,7 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             consensus_connection_pool_ttl_stagger: self
                 .consensus_connection_pool_ttl_stagger
                 .into_proto(),
+            reader_lease_duration: self.reader_lease_duration.into_proto(),
             sink_minimum_batch_updates: self.sink_minimum_batch_updates.into_proto(),
             storage_sink_minimum_batch_updates: self
                 .storage_sink_minimum_batch_updates
@@ -961,9 +1126,12 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             stats_audit_percent: self.stats_audit_percent.into_proto(),
             stats_collection_enabled: self.stats_collection_enabled.into_proto(),
             stats_filter_enabled: self.stats_filter_enabled.into_proto(),
+            stats_budget_bytes: self.stats_budget_bytes.into_proto(),
+            stats_untrimmable_columns: self.stats_untrimmable_columns.into_proto(),
             pubsub_client_enabled: self.pubsub_client_enabled.into_proto(),
             pubsub_push_diff_enabled: self.pubsub_push_diff_enabled.into_proto(),
             rollup_threshold: self.rollup_threshold.into_proto(),
+            feature_flags: self.feature_flags.clone(),
         }
     }
 
@@ -978,6 +1146,8 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             consensus_connection_pool_ttl_stagger: proto
                 .consensus_connection_pool_ttl_stagger
                 .into_rust()?,
+            reader_lease_duration: proto.reader_lease_duration.into_rust()?,
+
             sink_minimum_batch_updates: proto.sink_minimum_batch_updates.into_rust()?,
             storage_sink_minimum_batch_updates: proto
                 .storage_sink_minimum_batch_updates
@@ -986,9 +1156,12 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             stats_audit_percent: proto.stats_audit_percent.into_rust()?,
             stats_collection_enabled: proto.stats_collection_enabled.into_rust()?,
             stats_filter_enabled: proto.stats_filter_enabled.into_rust()?,
+            stats_budget_bytes: proto.stats_budget_bytes.into_rust()?,
+            stats_untrimmable_columns: proto.stats_untrimmable_columns.into_rust()?,
             pubsub_client_enabled: proto.pubsub_client_enabled.into_rust()?,
             pubsub_push_diff_enabled: proto.pubsub_push_diff_enabled.into_rust()?,
             rollup_threshold: proto.rollup_threshold.into_rust()?,
+            feature_flags: proto.feature_flags,
         })
     }
 }

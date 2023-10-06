@@ -16,9 +16,25 @@ use http::StatusCode;
 
 use crate::http::AuthedClient;
 
-pub async fn handle_internal_catalog(mut client: AuthedClient) -> impl IntoResponse {
+pub async fn handle_catalog_dump(mut client: AuthedClient) -> impl IntoResponse {
     match client.client.dump_catalog().await.map(|c| c.into_string()) {
         Ok(res) => Ok((TypedHeader(ContentType::json()), res)),
         Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
     }
+}
+
+pub async fn handle_catalog_check(mut client: AuthedClient) -> impl IntoResponse {
+    let response = match client.client.check_catalog().await {
+        Ok(_) => serde_json::Value::String("".to_string()),
+        Err(inconsistencies) => serde_json::json!({ "err": inconsistencies }),
+    };
+    (TypedHeader(ContentType::json()), response.to_string())
+}
+
+pub async fn handle_coordinator_check(mut client: AuthedClient) -> impl IntoResponse {
+    let response = match client.client.check_coordinator().await {
+        Ok(_) => serde_json::Value::String("".to_string()),
+        Err(inconsistencies) => serde_json::json!({ "err": inconsistencies }),
+    };
+    (TypedHeader(ContentType::json()), response.to_string())
 }

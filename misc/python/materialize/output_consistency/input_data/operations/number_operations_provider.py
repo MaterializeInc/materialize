@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import List
 
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
@@ -31,7 +30,7 @@ from materialize.output_consistency.operation.operation import (
     OperationRelevance,
 )
 
-NUMERIC_OPERATION_TYPES: List[DbOperationOrFunction] = []
+NUMERIC_OPERATION_TYPES: list[DbOperationOrFunction] = []
 
 NUMERIC_OPERATION_TYPES.append(
     DbOperation(

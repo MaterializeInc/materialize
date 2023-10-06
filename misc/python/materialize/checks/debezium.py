@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 from textwrap import dedent
-from typing import List
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
@@ -43,7 +42,8 @@ class DebeziumPostgres(Check):
                     "database.history.kafka.bootstrap.servers": "kafka:9092",
                     "database.history.kafka.topic": "schema-changes.history",
                     "truncate.handling.mode": "include",
-                    "decimal.handling.mode": "precise"
+                    "decimal.handling.mode": "precise",
+                    "topic.prefix": "postgres"
                   }
                 }
 
@@ -71,7 +71,7 @@ class DebeziumPostgres(Check):
             )
         )
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(dedent(s))
             for s in [

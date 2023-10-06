@@ -214,12 +214,18 @@ pub(super) struct UpsertMetrics {
     pub(super) merge_snapshot_updates: IntCounterVec,
     pub(super) merge_snapshot_inserts: IntCounterVec,
     pub(super) merge_snapshot_deletes: IntCounterVec,
+    pub(super) upsert_inserts: IntCounterVec,
+    pub(super) upsert_updates: IntCounterVec,
+    pub(super) upsert_deletes: IntCounterVec,
     pub(super) multi_get_latency: HistogramVec,
     pub(super) multi_get_size: IntCounterVec,
     pub(super) multi_get_result_count: IntCounterVec,
     pub(super) multi_get_result_bytes: IntCounterVec,
     pub(super) multi_put_latency: HistogramVec,
     pub(super) multi_put_size: IntCounterVec,
+
+    /// The number of legacy errors encountered during rehydration
+    pub(super) legacy_value_errors: UIntGaugeVec,
 
     // These are used by `rocksdb`.
     pub(super) rocksdb_multi_get_latency: HistogramVec,
@@ -301,6 +307,21 @@ impl UpsertMetrics {
                 name: "mz_storage_upsert_merge_snapshot_deletes_total",
                 help: "The number of deletes in a batch for merging snapshot updates \
                     for this source.",
+                var_labels: ["source_id", "worker_id"],
+            )),
+            upsert_inserts: registry.register(metric!(
+                name: "mz_storage_upsert_inserts_total",
+                help: "The number of inserts done by the upsert operator",
+                var_labels: ["source_id", "worker_id"],
+            )),
+            upsert_updates: registry.register(metric!(
+                name: "mz_storage_upsert_updates_total",
+                help: "The number of updates done by the upsert operator",
+                var_labels: ["source_id", "worker_id"],
+            )),
+            upsert_deletes: registry.register(metric!(
+                name: "mz_storage_upsert_deletes_total",
+                help: "The number of deletes done by the upsert operator.",
                 var_labels: ["source_id", "worker_id"],
             )),
             multi_get_latency: registry.register(metric!(
@@ -401,6 +422,12 @@ impl UpsertMetrics {
                 var_labels: ["source_id", "worker_id"],
             )),
             rocksdb_shared,
+            legacy_value_errors: registry.register(metric!(
+                name: "mz_storage_upsert_legacy_value_errors",
+                help: "The total number of legacy errors encountered during \
+                    rehydration for this source",
+                var_labels: ["source_id", "worker_id"],
+            )),
         }
     }
 

@@ -10,8 +10,9 @@
 //! A reducible history of compute commands.
 
 use std::borrow::Borrow;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
+use mz_ore::cast::CastFrom;
 use mz_ore::metrics::UIntGauge;
 use timely::progress::Antichain;
 
@@ -49,28 +50,25 @@ where
 
     /// Add a command to the history.
     ///
-    /// This action will reduce the history every time it doubles while retaining the
-    /// provided peeks.
-    pub fn push<V>(&mut self, command: ComputeCommand<T>, peeks: &BTreeMap<uuid::Uuid, V>) {
-        self.push_inner(command);
-        if self.commands.len() > 2 * self.reduced_count {
-            self.retain_peeks(peeks);
-            self.reduce();
-        }
-    }
-
-    /// Add a command to the history.
-    fn push_inner(&mut self, command: ComputeCommand<T>) {
-        self.metrics
-            .command_counts
-            .for_command(&command)
-            .borrow()
-            .inc();
-        if matches!(command, ComputeCommand::CreateDataflow(_)) {
-            self.metrics.dataflow_count.borrow().inc();
-        }
-
+    /// This action will reduce the history every time it doubles.
+    pub fn push(&mut self, command: ComputeCommand<T>) {
         self.commands.push(command);
+
+        if self.commands.len() > 2 * self.reduced_count {
+            self.reduce();
+        } else {
+            // Refresh reported metrics. `reduce` already refreshes metrics, so we only need to do
+            // that here in the non-reduce case.
+            let command = self.commands.last().expect("pushed above");
+            self.metrics
+                .command_counts
+                .for_command(command)
+                .borrow()
+                .inc();
+            if matches!(command, ComputeCommand::CreateDataflow(_)) {
+                self.metrics.dataflow_count.borrow().inc();
+            }
+        }
     }
 
     /// Reduces `self.history` to a minimal form.
@@ -85,8 +83,7 @@ where
         // and if required what `as_of` frontier should be used for its updated command.
         let mut final_frontiers = BTreeMap::new();
         let mut live_dataflows = Vec::new();
-        let mut live_peeks = Vec::new();
-        let mut live_cancels = BTreeSet::new();
+        let mut live_peeks = BTreeMap::new();
 
         let mut create_inst_command = None;
         let mut create_timely_command = None;
@@ -123,17 +120,17 @@ where
                     final_frontiers.insert(id, frontier.clone());
                 }
                 ComputeCommand::Peek(peek) => {
-                    live_peeks.push(peek);
+                    live_peeks.insert(peek.uuid, peek);
                 }
                 ComputeCommand::CancelPeek { uuid } => {
-                    live_cancels.insert(uuid);
+                    live_peeks.remove(&uuid);
                 }
             }
         }
 
         // Determine the required antichains to support live peeks;
         let mut live_peek_frontiers = std::collections::BTreeMap::new();
-        for Peek { id, timestamp, .. } in live_peeks.iter() {
+        for Peek { id, timestamp, .. } in live_peeks.values() {
             // Introduce `time` as a constraint on the `as_of` frontier of `id`.
             live_peek_frontiers
                 .entry(id)
@@ -173,64 +170,77 @@ where
         // Discard dataflows whose outputs have all been allowed to compact away.
         live_dataflows.retain(|dataflow| dataflow.as_of != Some(Antichain::new()));
 
-        // Record the volume of post-compaction commands.
-        let mut command_count = 1;
-        command_count += live_dataflows.len();
-        command_count += final_frontiers.len();
-        command_count += live_peeks.len();
-        command_count += live_cancels.len();
-        if !final_configuration.all_unset() {
-            command_count += 1;
-        }
-
-        self.metrics.reset();
-
         // Reconstitute the commands as a compact history.
+
+        // When we update `metrics`, we need to be careful to not transiently report incorrect
+        // counts, as they would be observable by other threads.
+        let command_counts = &self.metrics.command_counts;
+        let dataflow_count = &self.metrics.dataflow_count;
+
+        let count = u64::from(create_timely_command.is_some());
+        command_counts.create_timely.borrow().set(count);
         if let Some(create_timely_command) = create_timely_command {
-            self.push_inner(create_timely_command);
-        }
-        if let Some(create_inst_command) = create_inst_command {
-            self.push_inner(create_inst_command);
-        }
-        if !final_configuration.all_unset() {
-            self.push_inner(ComputeCommand::UpdateConfiguration(final_configuration));
-        }
-        for dataflow in live_dataflows {
-            self.push_inner(ComputeCommand::CreateDataflow(dataflow));
-        }
-        for peek in live_peeks {
-            self.push_inner(ComputeCommand::Peek(peek));
-        }
-        for uuid in live_cancels {
-            self.push_inner(ComputeCommand::CancelPeek { uuid });
-        }
-        // Allow compaction only after emmitting peek commands.
-        for (id, frontier) in final_frontiers {
-            self.push_inner(ComputeCommand::AllowCompaction { id, frontier });
-        }
-        if initialization_complete {
-            self.push_inner(ComputeCommand::InitializationComplete);
+            self.commands.push(create_timely_command);
         }
 
-        self.reduced_count = command_count;
+        let count = u64::from(create_inst_command.is_some());
+        command_counts.create_instance.borrow().set(count);
+        if let Some(create_inst_command) = create_inst_command {
+            self.commands.push(create_inst_command);
+        }
+
+        let count = u64::from(!final_configuration.all_unset());
+        command_counts.update_configuration.borrow().set(count);
+        if !final_configuration.all_unset() {
+            self.commands
+                .push(ComputeCommand::UpdateConfiguration(final_configuration));
+        }
+
+        let count = u64::cast_from(live_dataflows.len());
+        command_counts.create_dataflow.borrow().set(count);
+        dataflow_count.borrow().set(count);
+        for dataflow in live_dataflows {
+            self.commands.push(ComputeCommand::CreateDataflow(dataflow));
+        }
+
+        let count = u64::cast_from(live_peeks.len());
+        command_counts.peek.borrow().set(count);
+        for peek in live_peeks.into_values() {
+            self.commands.push(ComputeCommand::Peek(peek));
+        }
+
+        command_counts.cancel_peek.borrow().set(0);
+
+        // Allow compaction only after emmitting peek commands.
+        let count = u64::cast_from(final_frontiers.len());
+        command_counts.allow_compaction.borrow().set(count);
+        for (id, frontier) in final_frontiers {
+            self.commands
+                .push(ComputeCommand::AllowCompaction { id, frontier });
+        }
+
+        let count = u64::from(initialization_complete);
+        command_counts.initialization_complete.borrow().set(count);
+        if initialization_complete {
+            self.commands.push(ComputeCommand::InitializationComplete);
+        }
+
+        self.reduced_count = self.commands.len();
     }
 
-    /// Retain only those peeks present in `peeks` and discard the rest.
-    pub fn retain_peeks<V>(&mut self, peeks: &BTreeMap<uuid::Uuid, V>) {
+    /// Discard all peek commands.
+    pub fn discard_peeks(&mut self) {
         self.commands.retain(|command| {
-            let retain = match command {
-                ComputeCommand::Peek(peek) => peeks.contains_key(&peek.uuid),
-                ComputeCommand::CancelPeek { uuid } => peeks.contains_key(uuid),
-                _ => true,
-            };
-            if !retain {
+            use ComputeCommand::*;
+            let is_peek = matches!(command, Peek(_) | CancelPeek { .. });
+            if is_peek {
                 self.metrics
                     .command_counts
                     .for_command(command)
                     .borrow()
                     .dec();
             }
-            retain
+            !is_peek
         });
     }
 

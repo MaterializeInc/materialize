@@ -51,11 +51,19 @@ FROM t
 GROUP BY a
 
 statement ok
+CREATE MATERIALIZED VIEW hierarchical_group_by_mv AS
+SELECT * FROM hierarchical_group_by
+
+statement ok
 CREATE VIEW hierarchical_global AS
 SELECT
   MIN(b),
   MAX(DISTINCT b)
 FROM t
+
+statement ok
+CREATE MATERIALIZED VIEW hierarchical_global_mv AS
+SELECT * FROM hierarchical_global
 
 statement ok
 CREATE VIEW collated_group_by AS
@@ -71,15 +79,23 @@ FROM t
 GROUP BY a
 
 statement ok
+CREATE MATERIALIZED VIEW collated_group_by_mv AS
+SELECT * FROM collated_group_by
+
+statement ok
 CREATE VIEW collated_global AS
 SELECT
   COUNT(DISTINCT b),
-  STRING_AGG(b::text || '1',  ',') as b1,
+  STRING_AGG(b::text || '1',  ',') AS b1,
   MIN(b),
   MAX(DISTINCT b),
   SUM(b),
-  STRING_AGG(b::text || '2',  ',') as b2
+  STRING_AGG(b::text || '2',  ',') AS b2
 FROM t
+
+statement ok
+CREATE MATERIALIZED VIEW collated_global_mv AS
+SELECT * FROM collated_global
 
 mode cockroach
 
@@ -121,16 +137,10 @@ EXPLAIN PHYSICAL PLAN WITH(no_fast_path) AS JSON FOR
               [
                 {
                   "data": [
-                    4,
+                    42,
                     1,
-                    0,
-                    0,
-                    0,
-                    4,
-                    2,
-                    0,
-                    0,
-                    0
+                    42,
+                    2
                   ]
                 },
                 0,
@@ -139,16 +149,10 @@ EXPLAIN PHYSICAL PLAN WITH(no_fast_path) AS JSON FOR
               [
                 {
                   "data": [
-                    4,
+                    42,
                     3,
-                    0,
-                    0,
-                    0,
-                    4,
-                    4,
-                    0,
-                    0,
-                    0
+                    42,
+                    4
                   ]
                 },
                 0,
@@ -301,11 +305,8 @@ SELECT a + b, 1 FROM t
                       {
                         "Ok": {
                           "data": [
-                            4,
-                            1,
-                            0,
-                            0,
-                            0
+                            42,
+                            1
                           ]
                         }
                       },
@@ -370,7 +371,9 @@ SELECT c + d, 1 FROM u
   ],
   "sources": [
     {
-      "id": "materialize.public.u",
+      "id": {
+        "User": 2
+      },
       "op": {
         "expressions": [
           {
@@ -389,11 +392,8 @@ SELECT c + d, 1 FROM u
               {
                 "Ok": {
                   "data": [
-                    4,
-                    1,
-                    0,
-                    0,
-                    0
+                    42,
+                    1
                   ]
                 }
               },
@@ -413,105 +413,6 @@ SELECT c + d, 1 FROM u
       }
     }
   ]
-}
-EOF
-
-# TopKBasic plan.
-query T multiline
-EXPLAIN PHYSICAL PLAN WITH(no_fast_path) AS JSON FOR
-VIEW ov
-----
-{
-  "plans": [
-    {
-      "id": "materialize.public.ov",
-      "plan": {
-        "TopK": {
-          "input": {
-            "ArrangeBy": {
-              "input": {
-                "Get": {
-                  "id": {
-                    "Global": {
-                      "User": 1
-                    }
-                  },
-                  "keys": {
-                    "raw": false,
-                    "arranged": [
-                      [
-                        [
-                          {
-                            "Column": 0
-                          }
-                        ],
-                        {
-                          "0": 0,
-                          "1": 1
-                        },
-                        [
-                          1
-                        ]
-                      ]
-                    ]
-                  },
-                  "plan": "PassArrangements"
-                }
-              },
-              "forms": {
-                "raw": true,
-                "arranged": []
-              },
-              "input_key": [
-                {
-                  "Column": 0
-                }
-              ],
-              "input_mfp": {
-                "expressions": [],
-                "predicates": [],
-                "projection": [
-                  0,
-                  1
-                ],
-                "input_arity": 2
-              }
-            }
-          },
-          "top_k_plan": {
-            "Basic": {
-              "group_key": [],
-              "order_key": [
-                {
-                  "column": 1,
-                  "desc": false,
-                  "nulls_last": true
-                },
-                {
-                  "column": 0,
-                  "desc": true,
-                  "nulls_last": false
-                }
-              ],
-              "limit": 5,
-              "offset": 0,
-              "arity": 2,
-              "buckets": [
-                268435456,
-                16777216,
-                1048576,
-                65536,
-                4096,
-                256,
-                16
-              ]
-            }
-          }
-        }
-      }
-    }
-  ],
-  "sources": []
 }
 EOF
 
@@ -746,7 +647,9 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
   ],
   "sources": [
     {
-      "id": "materialize.public.mv",
+      "id": {
+        "User": 7
+      },
       "op": {
         "expressions": [],
         "predicates": [],
@@ -762,12 +665,12 @@ EOF
 
 query T multiline
 EXPLAIN PHYSICAL PLAN WITH (TYPES) AS JSON FOR
-VIEW ov
+SELECT * FROM ov
 ----
 {
   "plans": [
     {
-      "id": "materialize.public.ov",
+      "id": "Explained Query",
       "plan": {
         "TopK": {
           "input": {
@@ -822,7 +725,7 @@ VIEW ov
             }
           },
           "top_k_plan": {
-            "Basic": {
+            "MonotonicTopK": {
               "group_key": [],
               "order_key": [
                 {
@@ -837,17 +740,8 @@ VIEW ov
                 }
               ],
               "limit": 5,
-              "offset": 0,
               "arity": 2,
-              "buckets": [
-                268435456,
-                16777216,
-                1048576,
-                65536,
-                4096,
-                256,
-                16
-              ]
+              "must_consolidate": true
             }
           }
         }
@@ -1044,11 +938,8 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                     {
                                       "Ok": {
                                         "data": [
-                                          4,
-                                          1,
-                                          0,
-                                          0,
-                                          0
+                                          42,
+                                          1
                                         ]
                                       }
                                     },
@@ -1113,11 +1004,8 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                     {
                                       "Ok": {
                                         "data": [
-                                          4,
-                                          1,
-                                          0,
-                                          0,
-                                          0
+                                          42,
+                                          1
                                         ]
                                       }
                                     },
@@ -1150,7 +1038,9 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
   ],
   "sources": [
     {
-      "id": "materialize.public.mv",
+      "id": {
+        "User": 7
+      },
       "op": {
         "expressions": [],
         "predicates": [],
@@ -1224,11 +1114,8 @@ SELECT x * 5 FROM cte WHERE x = 5
                                           [
                                             {
                                               "data": [
-                                                4,
-                                                5,
-                                                0,
-                                                0,
-                                                0
+                                                42,
+                                                5
                                               ]
                                             },
                                             0,
@@ -1391,11 +1278,8 @@ SELECT x * 5 FROM cte WHERE x = 5
                   {
                     "Ok": {
                       "data": [
-                        4,
-                        25,
-                        0,
-                        0,
-                        0
+                        42,
+                        25
                       ]
                     }
                   },
@@ -1426,7 +1310,9 @@ SELECT x * 5 FROM cte WHERE x = 5
   ],
   "sources": [
     {
-      "id": "materialize.public.mv",
+      "id": {
+        "User": 7
+      },
       "op": {
         "expressions": [],
         "predicates": [
@@ -1443,11 +1329,8 @@ SELECT x * 5 FROM cte WHERE x = 5
                     {
                       "Ok": {
                         "data": [
-                          4,
-                          5,
-                          0,
-                          0,
-                          0
+                          42,
+                          5
                         ]
                       }
                     },
@@ -1524,11 +1407,8 @@ SELECT generate_series(a, b) from t
                 {
                   "Ok": {
                     "data": [
-                      4,
-                      1,
-                      0,
-                      0,
-                      0
+                      42,
+                      1
                     ]
                   }
                 },
@@ -1539,7 +1419,7 @@ SELECT generate_series(a, b) from t
               ]
             }
           ],
-          "mfp": {
+          "mfp_after": {
             "expressions": [],
             "predicates": [],
             "projection": [
@@ -2025,15 +1905,7 @@ FROM t
                             {
                               "Ok": {
                                 "data": [
-                                  5,
-                                  0,
-                                  0,
-                                  0,
-                                  0,
-                                  0,
-                                  0,
-                                  0,
-                                  0
+                                  46
                                 ]
                               }
                             },
@@ -2058,105 +1930,6 @@ FROM t
               "consolidate_output": false
             }
           }
-        }
-      }
-    }
-  ],
-  "sources": []
-}
-EOF
-
-# Test Reduce::Hierarchical (with GROUP BY).
-query T multiline
-EXPLAIN PHYSICAL PLAN AS JSON FOR
-VIEW hierarchical_group_by
-----
-{
-  "plans": [
-    {
-      "id": "materialize.public.hierarchical_group_by",
-      "plan": {
-        "Reduce": {
-          "input": {
-            "Get": {
-              "id": {
-                "Global": {
-                  "User": 1
-                }
-              },
-              "keys": {
-                "raw": false,
-                "arranged": [
-                  [
-                    [
-                      {
-                        "Column": 0
-                      }
-                    ],
-                    {
-                      "0": 0,
-                      "1": 1
-                    },
-                    [
-                      1
-                    ]
-                  ]
-                ]
-              },
-              "plan": "PassArrangements"
-            }
-          },
-          "key_val_plan": {
-            "key_plan": {
-              "mfp": {
-                "expressions": [],
-                "predicates": [],
-                "projection": [
-                  0
-                ],
-                "input_arity": 2
-              }
-            },
-            "val_plan": {
-              "mfp": {
-                "expressions": [],
-                "predicates": [],
-                "projection": [
-                  1,
-                  1
-                ],
-                "input_arity": 2
-              }
-            }
-          },
-          "plan": {
-            "Hierarchical": {
-              "Bucketed": {
-                "aggr_funcs": [
-                  "MinInt32",
-                  "MaxInt32"
-                ],
-                "skips": [
-                  0,
-                  0
-                ],
-                "buckets": [
-                  268435456,
-                  16777216,
-                  1048576,
-                  65536,
-                  4096,
-                  256,
-                  16
-                ]
-              }
-            }
-          },
-          "input_key": [
-            {
-              "Column": 0
-            }
-          ]
         }
       }
     }
@@ -2259,12 +2032,12 @@ EOF
 # Test Reduce::Hierarchical (global aggregate).
 query T multiline
 EXPLAIN PHYSICAL PLAN AS JSON FOR
-VIEW hierarchical_global
+MATERIALIZED VIEW hierarchical_global_mv
 ----
 {
   "plans": [
     {
-      "id": "materialize.public.hierarchical_global",
+      "id": "materialize.public.hierarchical_global_mv",
       "plan": {
         "Let": {
           "id": 0,
@@ -3780,12 +3553,12 @@ EOF
 # Test Reduce::Collated (with GROUP BY).
 query T multiline
 EXPLAIN PHYSICAL PLAN AS JSON FOR
-VIEW collated_group_by
+MATERIALIZED VIEW collated_group_by_mv
 ----
 {
   "plans": [
     {
-      "id": "materialize.public.collated_group_by",
+      "id": "materialize.public.collated_group_by_mv",
       "plan": {
         "Reduce": {
           "input": {
@@ -4740,12 +4513,12 @@ EOF
 # Test Reduce::Collated (global aggregate).
 query T multiline
 EXPLAIN PHYSICAL PLAN AS JSON FOR
-VIEW collated_global
+MATERIALIZED VIEW collated_global_mv
 ----
 {
   "plans": [
     {
-      "id": "materialize.public.collated_global",
+      "id": "materialize.public.collated_global_mv",
       "plan": {
         "Let": {
           "id": 0,
@@ -5364,15 +5137,7 @@ VIEW collated_global
                             {
                               "Ok": {
                                 "data": [
-                                  5,
-                                  0,
-                                  0,
-                                  0,
-                                  0,
-                                  0,
-                                  0,
-                                  0,
-                                  0
+                                  46
                                 ]
                               }
                             },
@@ -6103,15 +5868,7 @@ SELECT * FROM collated_global
                             {
                               "Ok": {
                                 "data": [
-                                  5,
-                                  0,
-                                  0,
-                                  0,
-                                  0,
-                                  0,
-                                  0,
-                                  0,
-                                  0
+                                  46
                                 ]
                               }
                             },
@@ -6463,11 +6220,8 @@ WHERE a = c AND d = e AND b + d > 42
                                     {
                                       "Ok": {
                                         "data": [
-                                          4,
                                           42,
-                                          0,
-                                          0,
-                                          0
+                                          42
                                         ]
                                       }
                                     },
@@ -6546,7 +6300,9 @@ WHERE a = c AND d = e AND b + d > 42
   ],
   "sources": [
     {
-      "id": "materialize.public.u",
+      "id": {
+        "User": 2
+      },
       "op": {
         "expressions": [],
         "predicates": [
@@ -6599,7 +6355,9 @@ WHERE a = c AND d = e AND b + d > 42
       }
     },
     {
-      "id": "materialize.public.v",
+      "id": {
+        "User": 3
+      },
       "op": {
         "expressions": [],
         "predicates": [

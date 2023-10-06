@@ -27,18 +27,18 @@
 # Define t0 source
 define
 DefSource name=t0
-  - bigint
-  - bigint?
-  - text
+  - c0: bigint
+  - c1: bigint?
+  - c2: text
 ----
 Source defined as t0
 
 # Define t1 source
 define
 DefSource name=t1
-  - text
-  - bigint
-  - boolean
+  - c0: text
+  - c1: bigint
+  - c2: boolean
 ----
 Source defined as t1
 

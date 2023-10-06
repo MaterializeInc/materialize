@@ -14,16 +14,19 @@ use std::convert::AsRef;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Instant;
 
+use differential_dataflow::consolidation;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::{AsCollection, Collection};
 use futures::future::FutureExt;
 use itertools::Itertools;
+use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_repr::{Datum, DatumVec, Diff, Row};
-use mz_storage_client::metrics::BackpressureMetrics;
-use mz_storage_client::types::errors::{DataflowError, EnvelopeError, UpsertError};
-use mz_storage_client::types::sources::UpsertEnvelope;
+use mz_storage_operators::metrics::BackpressureMetrics;
+use mz_storage_types::errors::{DataflowError, EnvelopeError, UpsertError};
+use mz_storage_types::sources::UpsertEnvelope;
 use mz_timely_util::builder_async::{
     AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
 };
@@ -156,20 +159,20 @@ pub fn rehydration_finished<G, T>(
     let mut input = builder.new_input(input, Pipeline);
 
     builder.build(move |_capabilities| async move {
-        loop {
-            if let Some(AsyncEvent::Progress(frontier)) = input.next().await {
-                if PartialOrder::less_equal(&resume_upper, &frontier) {
-                    tracing::info!(
-                        "timely-{} source {} reached the resume upper ({:?}) across all workers",
-                        worker_id,
-                        id,
-                        resume_upper
-                    );
-                    drop(token);
-                    break;
-                }
+        let mut input_upper = Antichain::from_elem(Timestamp::minimum());
+        // Ensure this operator finishes if the resume upper is `[0]`
+        while !PartialOrder::less_equal(&resume_upper, &input_upper) {
+            let Some(event) = input.next().await else {
+                break;
+            };
+            if let AsyncEvent::Progress(upper) = event {
+                input_upper = upper;
             }
         }
+        tracing::info!(
+            "timely-{worker_id} upsert source {id} has downgraded past the resume upper ({resume_upper:?}) across all workers",
+        );
+        drop(token);
     });
 }
 
@@ -191,6 +194,7 @@ pub(crate) fn upsert<G: Scope, O: timely::ExchangeData + Ord>(
 ) -> (
     Collection<G, Result<Row, DataflowError>, Diff>,
     Stream<G, (OutputIndex, HealthStatusUpdate)>,
+    Rc<dyn Any>,
 )
 where
     G::Timestamp: TotalOrder,
@@ -205,6 +209,11 @@ where
     // If we are configured to delay raw sources till we rehydrate, we do so. Otherwise, skip
     // this, to prevent unnecessary work.
     let wait_for_input_resumption = dataflow_paramters.delay_sources_past_rehydration;
+    let upsert_config = UpsertConfig {
+        wait_for_input_resumption,
+        shrink_upsert_unused_buffers_by_ratio: dataflow_paramters
+            .shrink_upsert_unused_buffers_by_ratio,
+    };
 
     if let Some(scratch_directory) = instance_context.scratch_directory.as_ref() {
         let tuning = dataflow_paramters.upsert_rocksdb_tuning_config.clone();
@@ -253,7 +262,7 @@ where
                         rocksdb_in_use_metric,
                     )
                 },
-                wait_for_input_resumption,
+                upsert_config,
             )
         } else {
             upsert_inner(
@@ -280,7 +289,7 @@ where
                         .unwrap(),
                     )
                 },
-                wait_for_input_resumption,
+                upsert_config,
             )
         }
     } else {
@@ -298,7 +307,7 @@ where
             upsert_metrics,
             source_config,
             || async { InMemoryHashMap::default() },
-            wait_for_input_resumption,
+            upsert_config,
         )
     }
 }
@@ -310,6 +319,7 @@ fn stage_input<T, O>(
     data: &mut Vec<((UpsertKey, Option<UpsertValue>, O), T, Diff)>,
     input_upper: &Antichain<T>,
     resume_upper: &Antichain<T>,
+    storage_shrink_upsert_unused_buffers_by_ratio: usize,
 ) where
     T: PartialOrder,
     O: Ord,
@@ -322,6 +332,22 @@ fn stage_input<T, O>(
         assert!(diff > 0, "invalid upsert input");
         (time, key, Reverse(order), value)
     }));
+
+    if storage_shrink_upsert_unused_buffers_by_ratio > 0 {
+        let reduced_capacity = stash.capacity() / storage_shrink_upsert_unused_buffers_by_ratio;
+        if reduced_capacity > stash.len() {
+            stash.shrink_to(reduced_capacity);
+        }
+    }
+}
+
+// Created a struct to hold the configs for upserts.
+// So that new configs don't require a new method parameter.
+struct UpsertConfig {
+    // Whether or not to wait for the `input` to reach the `resumption_frontier`
+    // before we finalize `rehydration`.
+    wait_for_input_resumption: bool,
+    shrink_upsert_unused_buffers_by_ratio: usize,
 }
 
 fn upsert_inner<G: Scope, O: timely::ExchangeData + Ord, F, Fut, US>(
@@ -333,12 +359,11 @@ fn upsert_inner<G: Scope, O: timely::ExchangeData + Ord, F, Fut, US>(
     upsert_metrics: UpsertMetrics,
     source_config: crate::source::RawSourceCreationConfig,
     state: F,
-    // Whether or not to wait for the `input` to reach the `resumption_frontier`
-    // before we finalize `rehydration`.
-    wait_for_input_resumption: bool,
+    upsert_config: UpsertConfig,
 ) -> (
     Collection<G, Result<Row, DataflowError>, Diff>,
     Stream<G, (OutputIndex, HealthStatusUpdate)>,
+    Rc<dyn Any>,
 )
 where
     G::Timestamp: TotalOrder,
@@ -355,6 +380,8 @@ where
         &input.inner,
         Exchange::new(move |((key, _, _), _, _)| UpsertKey::hashed(key)),
     );
+
+    let rehydration_started = Instant::now();
 
     // We only care about UpsertValueError since this is the only error that we can retract
     let previous = previous.flat_map(move |result| {
@@ -376,23 +403,26 @@ where
     let (mut health_output, health_stream) = builder.new_output();
 
     let upsert_shared_metrics = Arc::clone(&upsert_metrics.shared);
-    builder.build(move |caps| async move {
+    let source_metrics = source_config.source_statistics.clone();
+    let shutdown_button = builder.build(move |caps| async move {
         let [mut output_cap, health_cap]: [_; 2] = caps.try_into().unwrap();
 
         let mut state = UpsertState::new(
             state().await,
             upsert_shared_metrics,
-            upsert_metrics,
+            &upsert_metrics,
             source_config.source_statistics,
+            upsert_config.shrink_upsert_unused_buffers_by_ratio
         );
         let mut events = vec![];
         let mut snapshot_upper = Antichain::from_elem(Timestamp::minimum());
 
         let mut stash = vec![];
         let mut input_upper = Antichain::from_elem(Timestamp::minimum());
+        let mut legacy_errors_to_correct = vec![];
 
         while !PartialOrder::less_equal(&resume_upper, &snapshot_upper)
-            || (wait_for_input_resumption && !PartialOrder::less_equal(&resume_upper, &input_upper))
+            || (upsert_config.wait_for_input_resumption && !PartialOrder::less_equal(&resume_upper, &input_upper))
         {
             let previous_event = tokio::select! {
                 // Note that these are both cancel-safe. The reason we drain the `input` is to
@@ -404,7 +434,7 @@ where
                 input_event = input.next_mut() => {
                     match input_event {
                         Some(AsyncEvent::Data(_cap, data)) => {
-                            stage_input(&mut stash, data, &input_upper, &resume_upper);
+                            stage_input(&mut stash, data, &input_upper, &resume_upper, upsert_config.shrink_upsert_unused_buffers_by_ratio);
                         }
                         Some(AsyncEvent::Progress(upper)) => {
                             input_upper = upper;
@@ -444,6 +474,20 @@ where
                     None => {
                         snapshot_upper = Antichain::new();
                         break;
+                    }
+                }
+            }
+
+            for (_, value, diff) in events.iter_mut() {
+                if let Err(UpsertError::Value(ref mut err)) = value {
+                    // If we receive a legacy error in the snapshot we will keep a note of it but
+                    // insert a non-legacy error in our state. This is so that if this error is
+                    // ever retracted we will correctly retract the non-legacy version because by
+                    // that time we will have emitted the error correction, which happens before
+                    // processing any of the new source input.
+                    if err.is_legacy_dont_touch_it {
+                        legacy_errors_to_correct.push((err.clone(), diff.clone()));
+                        err.is_legacy_dont_touch_it = false;
                     }
                 }
             }
@@ -492,11 +536,29 @@ where
             output_cap.downgrade(ts);
         }
 
+        // Now it's time to emit the error corrections. It doesn't matter at what timestamp we emit
+        // them at because all they do is change the representation. The error count at any
+        // timestamp remains constant.
+        upsert_metrics.legacy_value_errors.set(u64::cast_from(legacy_errors_to_correct.len()));
+        consolidation::consolidate(&mut legacy_errors_to_correct);
+        for (mut error, diff) in legacy_errors_to_correct {
+            assert!(error.is_legacy_dont_touch_it, "attempted to correct non-legacy error");
+            tracing::info!("correcting legacy error {error:?} with diff {diff}");
+            let time = output_cap.time().clone();
+            let retraction = Err(UpsertError::Value(error.clone()));
+            error.is_legacy_dont_touch_it = false;
+            let insertion = Err(UpsertError::Value(error));
+            output_handle.give(&output_cap, (retraction, time.clone(), -diff)).await;
+            output_handle.give(&output_cap, (insertion, time, diff)).await;
+        }
+
         tracing::info!(
             "timely-{} upsert source {} finished rehydration",
             source_config.worker_id,
             source_config.id
         );
+        source_metrics
+                .set_rehydration_latency_ms(rehydration_started.elapsed().as_millis().try_into().expect("Rehydration took more than ~584 million years!"));
 
         // A re-usable buffer of changes, per key. This is an `IndexMap` because it has to be `drain`-able
         // and have a consistent iteration order.
@@ -519,7 +581,7 @@ where
         } {
             match event {
                 AsyncEvent::Data(_cap, data) => {
-                    stage_input(&mut stash, data, &input_upper, &resume_upper);
+                    stage_input(&mut stash, data, &input_upper, &resume_upper, upsert_config.shrink_upsert_unused_buffers_by_ratio);
                 }
                 AsyncEvent::Progress(upper) => {
                     // Ignore progress updates before the `resume_upper`, which is our initial
@@ -651,6 +713,7 @@ where
             Err(err) => Err(DataflowError::from(EnvelopeError::Upsert(err))),
         }),
         health_stream,
+        Rc::new(shutdown_button.press_on_drop()),
     )
 }
 

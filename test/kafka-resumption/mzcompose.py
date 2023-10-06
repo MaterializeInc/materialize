@@ -8,18 +8,15 @@
 # by the Apache License, Version 2.0.
 
 import random
-from typing import Optional
 
-from materialize.mzcompose import Composition
-from materialize.mzcompose.services import (
-    Clusterd,
-    Kafka,
-    Materialized,
-    SchemaRegistry,
-    Testdrive,
-    Toxiproxy,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.toxiproxy import Toxiproxy
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
     Zookeeper(),
@@ -111,7 +108,7 @@ def workflow_source_resumption(c: Composition) -> None:
         # )
 
 
-def find_source_resume_upper(c: Composition, partition_id: str) -> Optional[int]:
+def find_source_resume_upper(c: Composition, partition_id: str) -> int | None:
     metrics = c.exec("clusterd", "curl", "localhost:6878/metrics", capture=True).stdout
 
     if metrics is None:

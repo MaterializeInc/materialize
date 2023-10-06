@@ -12,18 +12,21 @@
 use std::fmt::{Debug, Display};
 use std::time::Duration;
 
-use mz_compute_client::plan::Plan;
-use mz_compute_client::types::dataflows::DataflowDescription;
+use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::plan::Plan;
 use mz_expr::explain::ExplainContext;
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
-use mz_repr::explain::tracing::{PlanTrace, TraceEntry};
-use mz_repr::explain::{Explain, ExplainConfig, ExplainError, ExplainFormat, UsedIndexes};
+use mz_repr::explain::tracing::{DelegateSubscriber, PlanTrace, TraceEntry};
+use mz_repr::explain::{
+    Explain, ExplainConfig, ExplainError, ExplainFormat, ExprHumanizer, UsedIndexes,
+};
 use mz_sql::plan::{HirRelationExpr, HirScalarExpr};
 use mz_sql_parser::ast::ExplainStage;
-use tracing::dispatcher::{self};
+use mz_transform::dataflow::DataflowMetainfo;
+use mz_transform::optimizer_notices::OptimizerNotice;
+use tracing::dispatcher;
 use tracing_subscriber::prelude::*;
 
-use crate::catalog::ConnCatalog;
 use crate::coord::peek::FastPathPlan;
 use crate::explain::Explainable;
 
@@ -43,38 +46,40 @@ pub(crate) struct OptimizerTrace(dispatcher::Dispatch);
 
 impl OptimizerTrace {
     /// Create a new [`OptimizerTrace`].
-    pub fn new() -> OptimizerTrace {
-        let subscriber = tracing_subscriber::registry()
-            // Collect `explain_plan` types that are not used in the regular explain
-            // path, but are useful when instrumenting code for debugging purpuses.
-            .with(PlanTrace::<String>::new())
-            .with(PlanTrace::<HirScalarExpr>::new())
-            .with(PlanTrace::<MirScalarExpr>::new())
-            // Collect `explain_plan` types that are used in the regular explain path.
-            .with(PlanTrace::<HirRelationExpr>::new())
-            .with(PlanTrace::<MirRelationExpr>::new())
-            .with(PlanTrace::<DataflowDescription<OptimizedMirRelationExpr>>::new())
-            .with(PlanTrace::<DataflowDescription<Plan>>::new());
+    ///
+    /// The instance will will only accumulate [`TraceEntry`] instances along
+    /// the prefix of the given `path` if `path` is present, or it will
+    /// accumulate all [`TraceEntry`] instances otherwise.
+    pub fn new(broken: bool, path: Option<&'static str>) -> OptimizerTrace {
+        if broken {
+            let subscriber = DelegateSubscriber::default()
+                // Collect `explain_plan` types that are not used in the regular explain
+                // path, but are useful when instrumenting code for debugging purpuses.
+                .with(PlanTrace::<String>::new(path))
+                .with(PlanTrace::<HirScalarExpr>::new(path))
+                .with(PlanTrace::<MirScalarExpr>::new(path))
+                // Collect `explain_plan` types that are used in the regular explain path.
+                .with(PlanTrace::<HirRelationExpr>::new(path))
+                .with(PlanTrace::<MirRelationExpr>::new(path))
+                .with(PlanTrace::<DataflowDescription<OptimizedMirRelationExpr>>::new(path))
+                .with(PlanTrace::<DataflowDescription<Plan>>::new(path));
 
-        OptimizerTrace(dispatcher::Dispatch::new(subscriber))
-    }
+            OptimizerTrace(dispatcher::Dispatch::new(subscriber))
+        } else {
+            let subscriber = tracing_subscriber::registry()
+                // Collect `explain_plan` types that are not used in the regular explain
+                // path, but are useful when instrumenting code for debugging purpuses.
+                .with(PlanTrace::<String>::new(path))
+                .with(PlanTrace::<HirScalarExpr>::new(path))
+                .with(PlanTrace::<MirScalarExpr>::new(path))
+                // Collect `explain_plan` types that are used in the regular explain path.
+                .with(PlanTrace::<HirRelationExpr>::new(path))
+                .with(PlanTrace::<MirRelationExpr>::new(path))
+                .with(PlanTrace::<DataflowDescription<OptimizedMirRelationExpr>>::new(path))
+                .with(PlanTrace::<DataflowDescription<Plan>>::new(path));
 
-    /// Create a new [`OptimizerTrace`] that will only accumulate [`TraceEntry`]
-    /// instances along the prefix of the given `path`.
-    pub fn find(path: &'static str) -> OptimizerTrace {
-        let subscriber = tracing_subscriber::registry()
-            // Collect `explain_plan` types that are not used in the regular explain
-            // path, but are useful when instrumenting code for debugging purpuses.
-            .with(PlanTrace::<String>::find(path))
-            .with(PlanTrace::<HirScalarExpr>::find(path))
-            .with(PlanTrace::<MirScalarExpr>::find(path))
-            // Collect `explain_plan` types that are used in the regular explain path.
-            .with(PlanTrace::<HirRelationExpr>::find(path))
-            .with(PlanTrace::<MirRelationExpr>::find(path))
-            .with(PlanTrace::<DataflowDescription<OptimizedMirRelationExpr>>::find(path))
-            .with(PlanTrace::<DataflowDescription<Plan>>::find(path));
-
-        OptimizerTrace(dispatcher::Dispatch::new(subscriber))
+            OptimizerTrace(dispatcher::Dispatch::new(subscriber))
+        }
     }
 
     /// Collect all traced plans for all plan types `T` that are available in
@@ -82,20 +87,27 @@ impl OptimizerTrace {
     pub fn drain_all(
         self,
         format: ExplainFormat,
-        config: ExplainConfig,
-        catalog: ConnCatalog,
+        config: &ExplainConfig,
+        humanizer: &dyn ExprHumanizer,
         row_set_finishing: Option<RowSetFinishing>,
         used_indexes: UsedIndexes,
         fast_path_plan: Option<FastPathPlan>,
+        dataflow_metainfo: DataflowMetainfo,
     ) -> Result<Vec<TraceEntry<String>>, ExplainError> {
         let mut results = vec![];
 
+        // First, create an ExplainContext without `used_indexes`. We'll use this to, e.g., drain
+        // HIR plans.
         let mut context = ExplainContext {
-            config: &config,
-            humanizer: &catalog,
-            used_indexes: UsedIndexes::new(vec![]),
+            config,
+            humanizer,
+            used_indexes: UsedIndexes::default(),
             finishing: row_set_finishing.clone(),
             duration: Duration::default(),
+            optimizer_notices: OptimizerNotice::explain(
+                &dataflow_metainfo.optimizer_notices,
+                humanizer,
+            )?,
         };
 
         // Drain trace entries of types produced by local optimizer stages.
@@ -106,11 +118,15 @@ impl OptimizerTrace {
 
         // Drain trace entries of types produced by global optimizer stages.
         let mut context = ExplainContext {
-            config: &config,
-            humanizer: &catalog,
+            config,
+            humanizer,
             used_indexes,
             finishing: row_set_finishing,
             duration: Duration::default(),
+            optimizer_notices: OptimizerNotice::explain(
+                &dataflow_metainfo.optimizer_notices,
+                humanizer,
+            )?,
         };
         let fast_path_plan = match fast_path_plan {
             Some(mut plan) if !context.config.no_fast_path => {
@@ -170,8 +186,8 @@ impl OptimizerTrace {
                         Some(fast_path_plan)
                             if !context.config.no_fast_path && {
                                 [
-                                    ExplainStage::OptimizedPlan.path(),
-                                    ExplainStage::PhysicalPlan.path(),
+                                    ExplainStage::OptimizedPlan.path().expect("path"),
+                                    ExplainStage::PhysicalPlan.path().expect("path"),
                                 ]
                                 .contains(&entry.path.as_str())
                             } =>

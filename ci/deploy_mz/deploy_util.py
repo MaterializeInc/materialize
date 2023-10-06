@@ -13,16 +13,20 @@ import tempfile
 import time
 from pathlib import Path
 
+try:
+    from semver.version import Version
+except ImportError:
+    from semver import VersionInfo as Version  # type: ignore
+
 import boto3
 import humanize
-import semver
 
 from materialize import git
 
 APT_BUCKET = "materialize-apt"
 BINARIES_BUCKET = "materialize-binaries"
 TAG = os.environ["BUILDKITE_TAG"]
-VERSION = semver.VersionInfo.parse(TAG.removeprefix("mz-v"))
+VERSION = Version.parse(TAG.removeprefix("mz-v"))
 
 
 def _tardir(name: str) -> tarfile.TarInfo:

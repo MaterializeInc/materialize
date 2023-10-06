@@ -11,7 +11,7 @@ from itertools import chain
 from os import environ
 from textwrap import dedent
 from time import sleep
-from typing import Any, List, Optional
+from typing import Any
 from uuid import uuid1
 
 import launchdarkly_api  # type: ignore
@@ -26,12 +26,10 @@ from launchdarkly_api.model.patch_operation import PatchOperation  # type: ignor
 from launchdarkly_api.model.patch_with_comment import PatchWithComment  # type: ignore
 from launchdarkly_api.model.variation import Variation  # type: ignore
 
-from materialize.mzcompose import Composition
-from materialize.mzcompose.services import (
-    DEFAULT_MZ_ENVIRONMENT_ID,
-    Materialized,
-    Testdrive,
-)
+from materialize.mzcompose import DEFAULT_MZ_ENVIRONMENT_ID, DEFAULT_ORG_ID
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.ui import UIError
 
 # Access keys required for interacting with LaunchDarkly.
@@ -135,22 +133,7 @@ def workflow_default(c: Composition) -> None:
         # Restart Materialized with the parameter sync loop running.
         c.up("materialized")
 
-        # Add a rule that targets the current user with the 3GiB variant.
-        ld_client.update_targeting(
-            LD_FEATURE_FLAG_KEY,
-            contextTargets=[
-                {
-                    "contextKind": "environment",
-                    "values": [LD_CONTEXT_KEY],
-                    "variation": 2,
-                }
-            ],
-        )
-
-        # Assert that max_result_size is 3 GiB.
-        c.testdrive("\n".join(["> SHOW max_result_size", "3221225472"]))
-
-        # Add a rule that targets the current user with the 4GiB - 1 byte variant.
+        # Add a rule that targets the current environment with the 4GiB - 1 byte variant.
         ld_client.update_targeting(
             LD_FEATURE_FLAG_KEY,
             contextTargets=[
@@ -165,6 +148,30 @@ def workflow_default(c: Composition) -> None:
         # Assert that max_result_size is 4 GiB - 1 byte.
         c.testdrive("\n".join(["> SHOW max_result_size", "4294967295"]))
 
+        # Add a rule that targets the current organization with the 3GiB
+        # variant. Even though we don't delete the above rule (replicated as
+        # first entry in the contextTargets list below), the evaluation order is
+        # based on the definition order of flag variants.
+        ld_client.update_targeting(
+            LD_FEATURE_FLAG_KEY,
+            contextTargets=[
+                {
+                    "contextKind": "environment",
+                    "values": [LD_CONTEXT_KEY],
+                    "variation": 3,
+                },
+                {
+                    "contextKind": "organization",
+                    "values": [DEFAULT_ORG_ID],
+                    "variation": 2,
+                },
+            ],
+        )
+
+        # Assert that max_result_size is 3 GiB.
+        c.testdrive("\n".join(["> SHOW max_result_size", "3221225472"]))
+
+        # Assert that we can turn off synchronization
         def sys(command: str) -> None:
             c.testdrive(
                 "\n".join(
@@ -175,8 +182,6 @@ def workflow_default(c: Composition) -> None:
                     ]
                 )
             )
-
-        # Assert that we can turn off synchronization
 
         # (1) The logs should report that the frontend was not stopped until now
         logs = c.invoke("logs", "materialized", capture=True)
@@ -194,7 +199,7 @@ def workflow_default(c: Composition) -> None:
         c.testdrive("\n".join(["> SHOW max_result_size", "1234"]))
         # (5) The value should be reset after we turn the kill switch back off
         sys("ALTER SYSTEM SET enable_launchdarkly=on")
-        c.testdrive("\n".join(["> SHOW max_result_size", "4294967295"]))
+        c.testdrive("\n".join(["> SHOW max_result_size", "3221225472"]))
 
         # Remove custom targeting.
         ld_client.update_targeting(
@@ -249,7 +254,7 @@ class LaunchDarklyClient:
         self.project_key = project_key
         self.environment_key = environment_key
 
-    def create_flag(self, feature_flag_key: str, tags: List[str] = []) -> Any:
+    def create_flag(self, feature_flag_key: str, tags: list[str] = []) -> Any:
         with launchdarkly_api.ApiClient(self.configuration) as api_client:
             api = feature_flags_api.FeatureFlagsApi(api_client)
             return api.post_feature_flag(
@@ -279,8 +284,8 @@ class LaunchDarklyClient:
     def update_targeting(
         self,
         feature_flag_key: str,
-        on: Optional[bool] = None,
-        contextTargets: Optional[List[Any]] = None,
+        on: bool | None = None,
+        contextTargets: list[Any] | None = None,
     ) -> Any:
         with launchdarkly_api.ApiClient(self.configuration) as api_client:
             api = feature_flags_api.FeatureFlagsApi(api_client)

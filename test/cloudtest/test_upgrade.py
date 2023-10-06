@@ -7,7 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import List, Optional
+
+import logging
 
 import pytest
 
@@ -22,6 +23,8 @@ from materialize.cloudtest.util.wait import wait
 from materialize.util import MzVersion
 from materialize.version_list import VersionsFromDocs
 
+LOGGER = logging.getLogger(__name__)
+
 LAST_RELEASED_VERSION = VersionsFromDocs().minor_versions()[-1]
 
 
@@ -31,7 +34,7 @@ class CloudtestUpgrade(Scenario):
     def base_version(self) -> MzVersion:
         return LAST_RELEASED_VERSION
 
-    def actions(self) -> List[Action]:
+    def actions(self) -> list[Action]:
         return [
             Initialize(self),
             Manipulate(self, phase=1),
@@ -42,11 +45,9 @@ class CloudtestUpgrade(Scenario):
 
 
 @pytest.mark.long
-def test_upgrade(
-    aws_region: Optional[str], log_filter: Optional[str], dev: bool
-) -> None:
+def test_upgrade(aws_region: str | None, log_filter: str | None, dev: bool) -> None:
     """Test upgrade from the last released verison to the current source by running all the Platform Checks"""
-    print(
+    LOGGER.info(
         f"Testing upgrade from base version {LAST_RELEASED_VERSION} to current version"
     )
 
@@ -56,7 +57,11 @@ def test_upgrade(
         log_filter=log_filter,
         release_mode=(not dev),
     )
-    wait(condition="condition=Ready", resource="pod/cluster-u1-replica-1-0")
+    wait(
+        condition="condition=Ready",
+        resource="pod",
+        label="cluster.environmentd.materialize.cloud/cluster-id=u1",
+    )
 
     executor = CloudtestExecutor(application=mz, version=LAST_RELEASED_VERSION)
     scenario = CloudtestUpgrade(checks=Check.__subclasses__(), executor=executor)

@@ -22,6 +22,7 @@ from dbt.dataclass_schema import StrEnum
 from dbt.utils import classproperty
 
 
+# types in ./misc/dbt-materialize need to import generic types from typing
 class MaterializeRelationType(StrEnum):
     # Built-in materialization types.
     Table = "table"

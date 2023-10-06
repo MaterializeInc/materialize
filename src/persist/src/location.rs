@@ -10,6 +10,7 @@
 //! Abstractions over files, cloud storage, etc used in persistence.
 
 use std::fmt;
+use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::anyhow;
@@ -17,6 +18,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::u64_to_usize;
+use mz_postgres_client::error::PostgresError;
 use mz_proto::RustType;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -198,6 +200,15 @@ impl PartialEq for ExternalError {
     }
 }
 
+impl From<PostgresError> for ExternalError {
+    fn from(x: PostgresError) -> Self {
+        match x {
+            PostgresError::Determinate(e) => ExternalError::Determinate(Determinate::new(e)),
+            PostgresError::Indeterminate(e) => ExternalError::Indeterminate(Indeterminate::new(e)),
+        }
+    }
+}
+
 impl From<Indeterminate> for ExternalError {
     fn from(x: Indeterminate) -> Self {
         ExternalError::Indeterminate(x)
@@ -320,6 +331,18 @@ pub enum CaSResult {
     ExpectationMismatch,
 }
 
+/// Wraps all calls to a backing store in a new tokio task. This adds extra overhead,
+/// but insulates the system from callers who fail to drive futures promptly to completion,
+/// which can cause timeouts or resource exhaustion in a store.
+#[derive(Debug)]
+pub struct Tasked<A>(pub Arc<A>);
+
+impl<A> Tasked<A> {
+    fn clone_backing(&self) -> Arc<A> {
+        Arc::clone(&self.0)
+    }
+}
+
 /// An abstraction for [VersionedData] held in a location in persistent storage
 /// where the data are conditionally updated by version.
 ///
@@ -372,6 +395,56 @@ pub trait Consensus: std::fmt::Debug {
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError>;
 }
 
+#[async_trait]
+impl<A: Consensus + Sync + Send + 'static> Consensus for Tasked<A> {
+    async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
+        let backing = self.clone_backing();
+        let key = key.to_owned();
+        mz_ore::task::spawn(
+            || "persist::task::head",
+            async move { backing.head(&key).await },
+        )
+        .await?
+    }
+
+    async fn compare_and_set(
+        &self,
+        key: &str,
+        expected: Option<SeqNo>,
+        new: VersionedData,
+    ) -> Result<CaSResult, ExternalError> {
+        let backing = self.clone_backing();
+        let key = key.to_owned();
+        mz_ore::task::spawn(|| "persist::task::cas", async move {
+            backing.compare_and_set(&key, expected, new).await
+        })
+        .await?
+    }
+
+    async fn scan(
+        &self,
+        key: &str,
+        from: SeqNo,
+        limit: usize,
+    ) -> Result<Vec<VersionedData>, ExternalError> {
+        let backing = self.clone_backing();
+        let key = key.to_owned();
+        mz_ore::task::spawn(|| "persist::task::scan", async move {
+            backing.scan(&key, from, limit).await
+        })
+        .await?
+    }
+
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
+        let backing = self.clone_backing();
+        let key = key.to_owned();
+        mz_ore::task::spawn(|| "persist::task::truncate", async move {
+            backing.truncate(&key, seqno).await
+        })
+        .await?
+    }
+}
+
 /// Metadata about a particular blob stored by persist
 #[derive(Debug)]
 pub struct BlobMetadata<'a> {
@@ -421,6 +494,59 @@ pub trait Blob: std::fmt::Debug {
     /// Returns Some and the size of the deleted blob if if exists. Succeeds and
     /// returns None if it does not exist.
     async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError>;
+}
+
+#[async_trait]
+impl<A: Blob + Sync + Send + 'static> Blob for Tasked<A> {
+    async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
+        let backing = self.clone_backing();
+        let key = key.to_owned();
+        mz_ore::task::spawn(
+            || "persist::task::get",
+            async move { backing.get(&key).await },
+        )
+        .await?
+    }
+
+    /// List all of the keys in the map with metadata about the entry.
+    ///
+    /// Can be optionally restricted to only list keys starting with a
+    /// given prefix.
+    async fn list_keys_and_metadata(
+        &self,
+        key_prefix: &str,
+        f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
+    ) -> Result<(), ExternalError> {
+        // TODO: No good way that I can see to make this one a task because of
+        // the closure and Blob needing to be object-safe.
+        self.0.list_keys_and_metadata(key_prefix, f).await
+    }
+
+    /// Inserts a key-value pair into the map.
+    ///
+    /// When atomicity is required, writes must be atomic and either succeed or
+    /// leave the previous value intact.
+    async fn set(&self, key: &str, value: Bytes, atomic: Atomicity) -> Result<(), ExternalError> {
+        let backing = self.clone_backing();
+        let key = key.to_owned();
+        mz_ore::task::spawn(|| "persist::task::set", async move {
+            backing.set(&key, value, atomic).await
+        })
+        .await?
+    }
+
+    /// Remove a key from the map.
+    ///
+    /// Returns Some and the size of the deleted blob if if exists. Succeeds and
+    /// returns None if it does not exist.
+    async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
+        let backing = self.clone_backing();
+        let key = key.to_owned();
+        mz_ore::task::spawn(|| "persist::task::delete", async move {
+            backing.delete(&key).await
+        })
+        .await?
+    }
 }
 
 #[cfg(test)]

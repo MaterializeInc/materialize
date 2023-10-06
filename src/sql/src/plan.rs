@@ -36,7 +36,8 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use enum_kinds::EnumKind;
-use mz_controller::clusters::{ClusterId, ReplicaId};
+use maplit::btreeset;
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{CollectionPlan, ColumnOrder, MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
@@ -48,8 +49,9 @@ use mz_sql_parser::ast::{
     AlterSourceAddSubsourceOption, CreateSourceSubsource, QualifiedReplica,
     TransactionIsolationLevel, TransactionMode, WithOptionValue,
 };
-use mz_storage_client::types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
-use mz_storage_client::types::sources::{SourceDesc, Timeline};
+use mz_storage_types::connections::inline::ReferencedConnection;
+use mz_storage_types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
+use mz_storage_types::sources::{SourceDesc, Timeline};
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{
@@ -61,8 +63,8 @@ use crate::catalog::{
     RoleAttributes,
 };
 use crate::names::{
-    Aug, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
-    SystemObjectId,
+    Aug, CommentObjectId, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier,
+    ResolvedIds, SystemObjectId,
 };
 
 pub(crate) mod error;
@@ -93,7 +95,7 @@ pub use optimize::OptimizerConfig;
 pub use query::{ExprContext, QueryContext, QueryLifetime};
 pub use scope::Scope;
 pub use side_effecting_func::SideEffectingFunc;
-pub use statement::ddl::PlannedRoleAttributes;
+pub use statement::ddl::{PlannedAlterRoleOption, PlannedRoleVariable};
 pub use statement::{describe, plan, plan_copy_from, StatementContext, StatementDesc};
 
 /// Instructions for executing a SQL query.
@@ -115,6 +117,7 @@ pub enum Plan {
     CreateMaterializedView(CreateMaterializedViewPlan),
     CreateIndex(CreateIndexPlan),
     CreateType(CreateTypePlan),
+    Comment(CommentPlan),
     DiscardTemp,
     DiscardAll,
     DropObjects(DropObjectsPlan),
@@ -122,6 +125,7 @@ pub enum Plan {
     EmptyQuery,
     ShowAllVariables,
     ShowCreate(ShowCreatePlan),
+    ShowColumns(ShowColumnsPlan),
     ShowVariable(ShowVariablePlan),
     InspectShard(InspectShardPlan),
     SetVariable(SetVariablePlan),
@@ -133,10 +137,11 @@ pub enum Plan {
     Select(SelectPlan),
     Subscribe(SubscribePlan),
     CopyFrom(CopyFromPlan),
-    CopyRows(CopyRowsPlan),
-    Explain(ExplainPlan),
+    ExplainPlan(ExplainPlanPlan),
+    ExplainTimestamp(ExplainTimestampPlan),
     Insert(InsertPlan),
     AlterCluster(AlterClusterPlan),
+    AlterClusterSwap(AlterClusterSwapPlan),
     AlterNoop(AlterNoopPlan),
     AlterIndexSetOptions(AlterIndexSetOptionsPlan),
     AlterIndexResetOptions(AlterIndexResetOptionsPlan),
@@ -152,6 +157,7 @@ pub enum Plan {
     AlterClusterRename(AlterClusterRenamePlan),
     AlterClusterReplicaRename(AlterClusterReplicaRenamePlan),
     AlterItemRename(AlterItemRenamePlan),
+    AlterItemSwap(AlterItemSwapPlan),
     AlterSecret(AlterSecretPlan),
     AlterSystemSet(AlterSystemSetPlan),
     AlterSystemReset(AlterSystemResetPlan),
@@ -200,6 +206,13 @@ impl Plan {
                     PlanKind::AlterNoop,
                 ]
             }
+            StatementKind::AlterObjectSwap => {
+                vec![
+                    PlanKind::AlterClusterSwap,
+                    PlanKind::AlterItemSwap,
+                    PlanKind::AlterNoop,
+                ]
+            }
             StatementKind::AlterRole => vec![PlanKind::AlterRole],
             StatementKind::AlterSecret => vec![PlanKind::AlterNoop, PlanKind::AlterSecret],
             StatementKind::AlterSetCluster => {
@@ -216,6 +229,7 @@ impl Plan {
             StatementKind::AlterSystemSet => vec![PlanKind::AlterNoop, PlanKind::AlterSystemSet],
             StatementKind::AlterOwner => vec![PlanKind::AlterNoop, PlanKind::AlterOwner],
             StatementKind::Close => vec![PlanKind::Close],
+            StatementKind::Comment => vec![PlanKind::Comment],
             StatementKind::Commit => vec![PlanKind::CommitTransaction],
             StatementKind::Copy => vec![PlanKind::CopyFrom, PlanKind::Select, PlanKind::Subscribe],
             StatementKind::CreateCluster => vec![PlanKind::CreateCluster],
@@ -243,7 +257,8 @@ impl Plan {
             StatementKind::DropObjects => vec![PlanKind::DropObjects],
             StatementKind::DropOwned => vec![PlanKind::DropOwned],
             StatementKind::Execute => vec![PlanKind::Execute],
-            StatementKind::Explain => vec![PlanKind::Explain],
+            StatementKind::ExplainPlan => vec![PlanKind::ExplainPlan],
+            StatementKind::ExplainTimestamp => vec![PlanKind::ExplainTimestamp],
             StatementKind::Fetch => vec![PlanKind::Fetch],
             StatementKind::GrantPrivileges => vec![PlanKind::GrantPrivileges],
             StatementKind::GrantRole => vec![PlanKind::GrantRole],
@@ -262,6 +277,7 @@ impl Plan {
                 PlanKind::Select,
                 PlanKind::ShowVariable,
                 PlanKind::ShowCreate,
+                PlanKind::ShowColumns,
                 PlanKind::ShowAllVariables,
                 PlanKind::InspectShard,
             ],
@@ -290,6 +306,7 @@ impl Plan {
             Plan::CreateMaterializedView(_) => "create materialized view",
             Plan::CreateIndex(_) => "create index",
             Plan::CreateType(_) => "create type",
+            Plan::Comment(_) => "comment",
             Plan::DiscardTemp => "discard temp",
             Plan::DiscardAll => "discard all",
             Plan::DropObjects(plan) => match plan.object_type {
@@ -313,6 +330,7 @@ impl Plan {
             Plan::EmptyQuery => "do nothing",
             Plan::ShowAllVariables => "show all variables",
             Plan::ShowCreate(_) => "show create",
+            Plan::ShowColumns(_) => "show columns",
             Plan::ShowVariable(_) => "show variable",
             Plan::InspectShard(_) => "inspect shard",
             Plan::SetVariable(_) => "set variable",
@@ -323,9 +341,9 @@ impl Plan {
             Plan::AbortTransaction(_) => "abort",
             Plan::Select(_) => "select",
             Plan::Subscribe(_) => "subscribe",
-            Plan::CopyRows(_) => "copy rows",
             Plan::CopyFrom(_) => "copy from",
-            Plan::Explain(_) => "explain",
+            Plan::ExplainPlan(_) => "explain plan",
+            Plan::ExplainTimestamp(_) => "explain timestamp",
             Plan::Insert(_) => "insert",
             Plan::AlterNoop(plan) => match plan.object_type {
                 ObjectType::Table => "alter table",
@@ -346,6 +364,7 @@ impl Plan {
             },
             Plan::AlterCluster(_) => "alter cluster",
             Plan::AlterClusterRename(_) => "alter cluster rename",
+            Plan::AlterClusterSwap(_) => "alter cluster swap",
             Plan::AlterClusterReplicaRename(_) => "alter cluster replica rename",
             Plan::AlterSetCluster(_) => "alter set cluster",
             Plan::AlterIndexSetOptions(_) => "alter index",
@@ -353,6 +372,7 @@ impl Plan {
             Plan::AlterSink(_) => "alter sink",
             Plan::AlterSource(_) | Plan::PurifiedAlterSource { .. } => "alter source",
             Plan::AlterItemRename(_) => "rename item",
+            Plan::AlterItemSwap(_) => "swap item",
             Plan::AlterSecret(_) => "alter secret",
             Plan::AlterSystemSet(_) => "alter system",
             Plan::AlterSystemReset(_) => "alter system",
@@ -514,6 +534,8 @@ pub enum ReplicaConfig {
         availability_zone: Option<String>,
         compute: ComputeReplicaConfig,
         disk: bool,
+        internal: bool,
+        billed_as: Option<String>,
     },
 }
 
@@ -550,7 +572,15 @@ pub enum SourceSinkClusterConfig {
         /// The size of the replica to create in the linked cluster.
         size: String,
     },
-    /// The user did not specify a cluster behavior, so use the default.
+    /// The user did not specify a cluster behavior, so the actual behavior depends on
+    /// the context. For sources the behavior depends on the data source:
+    ///
+    ///   - Ingestion: Use the default behavior.
+    ///   - Source: Use the same cluster as the data source source.
+    ///   - Progress: Use the same cluster as the non-progress source.
+    ///   - Webhook: Does not allow undefined configs.
+    ///
+    /// For sinks, always use the default behavior.
     ///
     /// NOTE(benesch): we plan to remove this variant in the future by having
     /// the planner bind a source or sink with no `SIZE` or `IN CLUSTER` option
@@ -560,8 +590,7 @@ pub enum SourceSinkClusterConfig {
 }
 
 impl SourceSinkClusterConfig {
-    /// Returns the ID of the cluster that this source/sink will be created on, if one exists. If
-    /// one doesn't exist, then a new cluster will be created.
+    /// Returns the ID of the cluster that this source/sink will be created on, if one exists.
     pub fn cluster_id(&self) -> Option<&ClusterId> {
         match self {
             SourceSinkClusterConfig::Existing { id } => Some(id),
@@ -582,7 +611,7 @@ pub struct CreateConnectionPlan {
 pub struct ValidateConnectionPlan {
     pub id: GlobalId,
     /// The connection to validate.
-    pub connection: mz_storage_client::types::connections::Connection,
+    pub connection: mz_storage_types::connections::Connection<ReferencedConnection>,
 }
 
 #[derive(Debug)]
@@ -775,28 +804,139 @@ pub struct ShowCreatePlan {
 }
 
 #[derive(Debug)]
+pub struct ShowColumnsPlan {
+    pub id: GlobalId,
+    pub select_plan: SelectPlan,
+    pub new_resolved_ids: ResolvedIds,
+}
+
+#[derive(Debug)]
 pub struct CopyFromPlan {
     pub id: GlobalId,
     pub columns: Vec<usize>,
     pub params: CopyFormatParams<'static>,
 }
 
-#[derive(Debug)]
-pub struct CopyRowsPlan {
-    pub id: GlobalId,
-    pub columns: Vec<usize>,
-    pub rows: Vec<Row>,
-}
-
 #[derive(Clone, Debug)]
-pub struct ExplainPlan {
-    pub raw_plan: HirRelationExpr,
-    pub row_set_finishing: Option<RowSetFinishing>,
+pub struct ExplainPlanPlan {
     pub stage: ExplainStage,
     pub format: ExplainFormat,
     pub config: ExplainConfig,
-    pub no_errors: bool,
-    pub explainee: mz_repr::explain::Explainee,
+    pub explainee: Explainee,
+}
+
+/// The type of object to be explained
+#[derive(Clone, Debug)]
+pub enum Explainee {
+    /// An existing materialized view.
+    MaterializedView(GlobalId),
+    /// An existing index.
+    Index(GlobalId),
+    /// A SQL statement.
+    Statement(ExplaineeStatement),
+}
+
+/// Explainee types that are statements.
+#[derive(Clone, Debug, EnumKind)]
+#[enum_kind(ExplaineeStatementKind)]
+pub enum ExplaineeStatement {
+    /// The object to be explained is a SELECT statement.
+    Query {
+        raw_plan: HirRelationExpr,
+        row_set_finishing: Option<RowSetFinishing>,
+        /// Broken flag (see [`ExplaineeStatement::broken()`]).
+        broken: bool,
+    },
+    /// The object to be explained is a CREATE MATERIALIZED VIEW.
+    CreateMaterializedView {
+        name: QualifiedItemName,
+        raw_plan: HirRelationExpr,
+        column_names: Vec<ColumnName>,
+        cluster_id: ClusterId,
+        /// Broken flag (see [`ExplaineeStatement::broken()`]).
+        broken: bool,
+    },
+    /// The object to be explained is a CREATE INDEX.
+    CreateIndex {
+        name: QualifiedItemName,
+        index: Index,
+        /// Broken flag (see [`ExplaineeStatement::broken()`]).
+        broken: bool,
+    },
+}
+
+impl ExplaineeStatement {
+    pub fn depends_on(&self) -> BTreeSet<GlobalId> {
+        match self {
+            Self::Query { raw_plan, .. } => raw_plan.depends_on(),
+            Self::CreateMaterializedView { raw_plan, .. } => raw_plan.depends_on(),
+            Self::CreateIndex { index, .. } => btreeset! {index.on},
+        }
+    }
+
+    /// Statements that have their `broken` flag set are expected to cause a
+    /// panic in the optimizer code. In this case:
+    ///
+    /// 1. The optimizer pipeline execution will stop, but the panic will be
+    ///    intercepted and will not propagate to the caller. The partial
+    ///    optimizer trace collected until this point will be available.
+    /// 2. The optimizer trace tracing subscriber will delegate regular tracing
+    ///    spans and events to the default subscriber.
+    ///
+    /// This is useful when debugging queries that cause panics.
+    pub fn broken(&self) -> bool {
+        match self {
+            Self::Query { broken, .. } => *broken,
+            Self::CreateMaterializedView { broken, .. } => *broken,
+            Self::CreateIndex { broken, .. } => *broken,
+        }
+    }
+
+    pub fn row_set_finishing(&self) -> Option<RowSetFinishing> {
+        match self {
+            Self::Query {
+                row_set_finishing, ..
+            } => {
+                // Use the optional finishing extracted in the plan_query call.
+                row_set_finishing.clone()
+            }
+            Self::CreateMaterializedView { .. } => {
+                // Trivial finishing asserted in plan_create_materialized_view.
+                None
+            }
+            Self::CreateIndex { .. } => {
+                // Trivial finishing for indexes on views asserted in plan_view.
+                None
+            }
+        }
+    }
+}
+
+impl ExplaineeStatementKind {
+    pub fn supports(&self, stage: &ExplainStage) -> bool {
+        use ExplainStage::*;
+        match self {
+            Self::Query => true,
+            Self::CreateMaterializedView => true,
+            Self::CreateIndex => ![RawPlan, DecorrelatedPlan].contains(stage),
+        }
+    }
+}
+
+impl std::fmt::Display for ExplaineeStatementKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Query => write!(f, "QUERY"),
+            Self::CreateMaterializedView => write!(f, "CREATE MATERIALIZED VIEW"),
+            Self::CreateIndex => write!(f, "CREATE INDEX"),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ExplainTimestampPlan {
+    pub format: ExplainFormat,
+    pub raw_plan: HirRelationExpr,
 }
 
 #[derive(Debug)]
@@ -913,6 +1053,23 @@ pub struct AlterItemRenamePlan {
 }
 
 #[derive(Debug)]
+pub struct AlterClusterSwapPlan {
+    pub id_a: ClusterId,
+    pub id_b: ClusterId,
+    pub name_a: String,
+    pub name_b: String,
+}
+
+#[derive(Debug)]
+pub struct AlterItemSwapPlan {
+    pub id_a: GlobalId,
+    pub id_b: GlobalId,
+    pub full_name_a: FullItemName,
+    pub full_name_b: FullItemName,
+    pub object_type: ObjectType,
+}
+
+#[derive(Debug)]
 pub struct AlterSecretPlan {
     pub id: GlobalId,
     pub secret_as: MirScalarExpr,
@@ -936,7 +1093,7 @@ pub struct AlterSystemResetAllPlan {}
 pub struct AlterRolePlan {
     pub id: RoleId,
     pub name: String,
-    pub attributes: PlannedRoleAttributes,
+    pub option: PlannedAlterRoleOption,
 }
 
 #[derive(Debug)]
@@ -956,6 +1113,7 @@ pub struct DeclarePlan {
     pub name: String,
     pub stmt: Statement<Raw>,
     pub sql: String,
+    pub params: Params,
 }
 
 #[derive(Debug)]
@@ -1059,6 +1217,18 @@ pub struct ReassignOwnedPlan {
     pub reassign_ids: Vec<ObjectId>,
 }
 
+#[derive(Debug)]
+pub struct CommentPlan {
+    /// The object that this comment is associated with.
+    pub object_id: CommentObjectId,
+    /// A sub-component of the object that this comment is associated with, e.g. a column.
+    ///
+    /// TODO(parkmycar): Make this a newtype ColumnPos that accounts for SQL's 1-indexing.
+    pub sub_component: Option<usize>,
+    /// The comment itself. If `None` that indicates we should clear the existing comment.
+    pub comment: Option<String>,
+}
+
 #[derive(Clone, Debug)]
 pub struct Table {
     pub create_sql: String,
@@ -1083,12 +1253,15 @@ pub enum DataSourceDesc {
     /// Receives data from the source's reclocking/remapping operations.
     Progress,
     /// Receives data from HTTP post requests.
-    Webhook(Option<WebhookValidation>),
+    Webhook {
+        validate_using: Option<WebhookValidation>,
+        headers: WebhookHeaders,
+    },
 }
 
 #[derive(Clone, Debug)]
 pub struct Ingestion {
-    pub desc: SourceDesc,
+    pub desc: SourceDesc<ReferencedConnection>,
     pub source_imports: BTreeSet<GlobalId>,
     pub subsource_exports: BTreeMap<GlobalId, usize>,
     pub progress_subsource: GlobalId,
@@ -1108,6 +1281,30 @@ pub struct WebhookValidation {
     pub secrets: Vec<WebhookValidationSecret>,
 }
 
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct WebhookHeaders {
+    /// Optionally include a column named `headers` whose content is possibly filtered.
+    pub header_column: Option<WebhookHeaderFilters>,
+    /// The column index to provide the specific request header, and whether to provide it as bytes.
+    pub mapped_headers: BTreeMap<usize, (String, bool)>,
+}
+
+impl WebhookHeaders {
+    /// Returns the number of columns needed to represent our headers.
+    pub fn num_columns(&self) -> usize {
+        let header_column = self.header_column.as_ref().map(|_| 1).unwrap_or(0);
+        let mapped_headers = self.mapped_headers.len();
+
+        header_column + mapped_headers
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct WebhookHeaderFilters {
+    pub block: BTreeSet<String>,
+    pub allow: BTreeSet<String>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct WebhookValidationSecret {
     /// Identifies the secret by [`GlobalId`].
@@ -1121,7 +1318,7 @@ pub struct WebhookValidationSecret {
 #[derive(Clone, Debug)]
 pub struct Connection {
     pub create_sql: String,
-    pub connection: mz_storage_client::types::connections::Connection,
+    pub connection: mz_storage_types::connections::Connection<ReferencedConnection>,
 }
 
 #[derive(Clone, Debug)]
@@ -1134,14 +1331,14 @@ pub struct Secret {
 pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
-    pub connection_builder: StorageSinkConnectionBuilder,
+    pub connection_builder: StorageSinkConnectionBuilder<ReferencedConnection>,
     pub envelope: SinkEnvelope,
 }
 
 #[derive(Clone, Debug)]
 pub struct View {
     pub create_sql: String,
-    pub expr: mz_expr::MirRelationExpr,
+    pub expr: HirRelationExpr,
     pub column_names: Vec<ColumnName>,
     pub temporary: bool,
 }
@@ -1149,7 +1346,7 @@ pub struct View {
 #[derive(Clone, Debug)]
 pub struct MaterializedView {
     pub create_sql: String,
-    pub expr: mz_expr::MirRelationExpr,
+    pub expr: HirRelationExpr,
     pub column_names: Vec<ColumnName>,
     pub cluster_id: ClusterId,
 }
@@ -1243,7 +1440,7 @@ impl QueryWhen {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum MutationKind {
     Insert,
     Update,

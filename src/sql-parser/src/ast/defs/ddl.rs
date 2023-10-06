@@ -139,6 +139,7 @@ impl_display_t!(ProtobufSchema);
 pub enum CsrConfigOptionName {
     AvroKeyFullname,
     AvroValueFullname,
+    NullDefaults,
 }
 
 impl AstDisplay for CsrConfigOptionName {
@@ -146,6 +147,7 @@ impl AstDisplay for CsrConfigOptionName {
         f.write_str(match self {
             CsrConfigOptionName::AvroKeyFullname => "AVRO KEY FULLNAME",
             CsrConfigOptionName::AvroValueFullname => "AVRO VALUE FULLNAME",
+            CsrConfigOptionName::NullDefaults => "NULL DEFAULTS",
         })
     }
 }
@@ -374,7 +376,6 @@ pub enum SourceIncludeMetadataType {
     Key,
     Timestamp,
     Partition,
-    Topic,
     Offset,
     Headers,
 }
@@ -385,7 +386,6 @@ impl AstDisplay for SourceIncludeMetadataType {
             SourceIncludeMetadataType::Key => f.write_str("KEY"),
             SourceIncludeMetadataType::Timestamp => f.write_str("TIMESTAMP"),
             SourceIncludeMetadataType::Partition => f.write_str("PARTITION"),
-            SourceIncludeMetadataType::Topic => f.write_str("TOPIC"),
             SourceIncludeMetadataType::Offset => f.write_str("OFFSET"),
             SourceIncludeMetadataType::Headers => f.write_str("HEADERS"),
         }

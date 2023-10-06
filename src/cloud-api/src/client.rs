@@ -17,10 +17,11 @@
 //! Frontegg client is used to request and manage the access token.
 use std::sync::Arc;
 
-use reqwest::{Method, RequestBuilder, StatusCode, Url};
+use reqwest::{header::HeaderMap, Method, RequestBuilder, StatusCode, Url};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
+use crate::config::API_VERSION_HEADER;
 use crate::error::{ApiError, Error};
 
 use self::cloud_provider::CloudProvider;
@@ -57,33 +58,39 @@ impl Client {
         P: IntoIterator,
         P::Item: AsRef<str>,
     {
-        let mut endpoint = self.endpoint.clone();
-        endpoint.set_host(Some(&format!(
-            "api.{}",
-            self.endpoint
-                .domain()
-                .ok_or_else(|| Error::InvalidEndpointDomain)?
-        )))?;
-
-        self.build_request(method, path, endpoint).await
+        self.build_request(method, path, self.endpoint.clone(), None)
+            .await
     }
 
     /// Builds a request towards the `Client`'s endpoint
     /// The function requires a [CloudProvider] as parameter
     /// since it contains the api url (Region API url)
     /// to interact with the region.
+    /// Specify an api_version corresponding to the request/response
+    /// schema your code will handle. Refer to the Region API docs
+    /// for schema information.
     async fn build_region_request<P>(
         &self,
         method: Method,
         path: P,
         cloud_provider: &CloudProvider,
+        api_version: Option<u16>,
     ) -> Result<RequestBuilder, Error>
     where
         P: IntoIterator,
         P::Item: AsRef<str>,
     {
-        self.build_request(method, path, cloud_provider.url.clone())
-            .await
+        self.build_request(
+            method,
+            path,
+            cloud_provider.url.clone(),
+            api_version.and_then(|api_ver| {
+                let mut headers = HeaderMap::with_capacity(1);
+                headers.insert(API_VERSION_HEADER, api_ver.into());
+                Some(headers)
+            }),
+        )
+        .await
     }
 
     /// Builds a request towards the `Client`'s endpoint
@@ -92,6 +99,7 @@ impl Client {
         method: Method,
         path: P,
         mut domain: Url,
+        headers: Option<HeaderMap>,
     ) -> Result<RequestBuilder, Error>
     where
         P: IntoIterator,
@@ -103,7 +111,10 @@ impl Client {
             .clear()
             .extend(path);
 
-        let req = self.inner.request(method, domain);
+        let mut req = self.inner.request(method, domain);
+        if let Some(header_map) = headers {
+            req = req.headers(header_map);
+        }
         let token = self.auth_client.auth().await?;
 
         Ok(req.bearer_auth(token))

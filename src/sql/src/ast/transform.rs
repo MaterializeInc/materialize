@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use mz_ore::str::StrExt;
 use mz_repr::GlobalId;
+use mz_sql_parser::ast::CreateWebhookSourceStatement;
 
 use crate::ast::visit::{self, Visit};
 use crate::ast::visit_mut::{self, VisitMut};
@@ -52,6 +53,10 @@ pub fn create_stmt_rename(create_stmt: &mut Statement<Raw>, to_item_name: String
             name.0[item_name_len] = Ident::new(to_item_name);
         }
         Statement::CreateConnection(CreateConnectionStatement { name, .. }) => {
+            let item_name_len = name.0.len() - 1;
+            name.0[item_name_len] = Ident::new(to_item_name);
+        }
+        Statement::CreateWebhookSource(CreateWebhookSourceStatement { name, .. }) => {
             let item_name_len = name.0.len() - 1;
             name.0[item_name_len] = Ident::new(to_item_name);
         }
@@ -105,7 +110,8 @@ pub fn create_stmt_rename_refs(
         Statement::CreateSource(_)
         | Statement::CreateTable(_)
         | Statement::CreateSecret(_)
-        | Statement::CreateConnection(_) => {}
+        | Statement::CreateConnection(_)
+        | Statement::CreateWebhookSource(_) => {}
         _ => unreachable!("Internal error: only catalog items need to update item refs"),
     }
 

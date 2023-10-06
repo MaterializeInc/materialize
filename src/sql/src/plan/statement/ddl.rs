@@ -17,10 +17,11 @@ use std::fmt::Write;
 use std::iter;
 
 use itertools::Itertools;
-use mz_controller::clusters::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS};
+use mz_controller_types::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS};
 use mz_expr::CollectionPlan;
-use mz_interchange::avro::AvroSchemaGenerator;
+use mz_interchange::avro::{AvroSchemaGenerator, AvroSchemaOptions};
 use mz_ore::cast::{self, CastFrom, TryCastFrom};
+use mz_ore::collections::HashSet;
 use mz_ore::str::StrExt;
 use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
@@ -30,29 +31,31 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{strconv, ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType};
 use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
-    AlterClusterAction, AlterClusterStatement, AlterRoleStatement, AlterSetClusterStatement,
-    AlterSinkAction, AlterSinkStatement, AlterSourceAction, AlterSourceAddSubsourceOption,
-    AlterSourceAddSubsourceOptionName, AlterSourceStatement, AlterSystemResetAllStatement,
-    AlterSystemResetStatement, AlterSystemSetStatement, CreateConnectionOption,
-    CreateConnectionOptionName, CreateTypeListOption, CreateTypeListOptionName,
-    CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName, DropOwnedStatement,
-    SshConnectionOption, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
+    AlterClusterAction, AlterClusterStatement, AlterRoleOption, AlterRoleStatement,
+    AlterSetClusterStatement, AlterSinkAction, AlterSinkStatement, AlterSourceAction,
+    AlterSourceAddSubsourceOption, AlterSourceAddSubsourceOptionName, AlterSourceStatement,
+    AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement,
+    CommentObjectType, CommentStatement, CreateConnectionOption, CreateConnectionOptionName,
+    CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
+    DeferredItemName, DropOwnedStatement, SetRoleVar, SshConnectionOption, UnresolvedItemName,
+    UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
-use mz_storage_client::types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
-use mz_storage_client::types::connections::{
+use mz_storage_types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
+use mz_storage_types::connections::inline::ReferencedConnection;
+use mz_storage_types::connections::{
     AwsPrivatelink, AwsPrivatelinkConnection, Connection, CsrConnectionHttpAuth, KafkaConnection,
     KafkaSecurity, KafkaTlsConfig, SaslConfig, SshTunnel, StringOrSecret, TlsIdentity, Tunnel,
 };
-use mz_storage_client::types::sinks::{
+use mz_storage_types::sinks::{
     KafkaConsistencyConfig, KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention,
     KafkaSinkFormat, SinkEnvelope, StorageSinkConnectionBuilder,
 };
-use mz_storage_client::types::sources::encoding::{
+use mz_storage_types::sources::encoding::{
     included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, DataEncodingInner,
     ProtobufEncoding, RegexEncoding, SourceDataEncoding, SourceDataEncodingInner,
 };
-use mz_storage_client::types::sources::{
-    GenericSourceConnection, IncludedColumnPos, KafkaSourceConnection, KeyEnvelope, LoadGenerator,
+use mz_storage_types::sources::{
+    GenericSourceConnection, KafkaMetadataKind, KafkaSourceConnection, KeyEnvelope, LoadGenerator,
     LoadGeneratorSourceConnection, PostgresSourceConnection, PostgresSourcePublicationDetails,
     ProtoPostgresSourcePublicationDetails, SourceConnection, SourceDesc, SourceEnvelope,
     TestScriptSourceConnection, Timeline, UnplannedSourceEnvelope, UpsertStyle,
@@ -62,14 +65,15 @@ use prost::Message;
 use crate::ast::display::AstDisplay;
 use crate::ast::{
     AlterConnectionStatement, AlterIndexAction, AlterIndexStatement, AlterObjectRenameStatement,
-    AlterSecretStatement, AvroSchema, AvroSchemaOption, AvroSchemaOptionName, AwsConnectionOption,
-    AwsConnectionOptionName, AwsPrivatelinkConnectionOption, AwsPrivatelinkConnectionOptionName,
-    ClusterOption, ClusterOptionName, ColumnOption, CreateClusterReplicaStatement,
-    CreateClusterStatement, CreateConnection, CreateConnectionStatement, CreateDatabaseStatement,
-    CreateIndexStatement, CreateMaterializedViewStatement, CreateRoleStatement,
-    CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection, CreateSinkOption,
-    CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection, CreateSourceFormat,
-    CreateSourceOption, CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
+    AlterObjectSwapStatement, AlterSecretStatement, AvroSchema, AvroSchemaOption,
+    AvroSchemaOptionName, AwsConnectionOption, AwsConnectionOptionName,
+    AwsPrivatelinkConnectionOption, AwsPrivatelinkConnectionOptionName, ClusterOption,
+    ClusterOptionName, ColumnOption, CreateClusterReplicaStatement, CreateClusterStatement,
+    CreateConnection, CreateConnectionStatement, CreateDatabaseStatement, CreateIndexStatement,
+    CreateMaterializedViewStatement, CreateRoleStatement, CreateSchemaStatement,
+    CreateSecretStatement, CreateSinkConnection, CreateSinkOption, CreateSinkOptionName,
+    CreateSinkStatement, CreateSourceConnection, CreateSourceFormat, CreateSourceOption,
+    CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
     CreateSubsourceOptionName, CreateSubsourceStatement, CreateTableStatement, CreateTypeAs,
     CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement, CsrConfigOption,
     CsrConfigOptionName, CsrConnection, CsrConnectionAvro, CsrConnectionOption,
@@ -85,19 +89,19 @@ use crate::ast::{
     UnresolvedDatabaseName, ViewDefinition,
 };
 use crate::catalog::{
-    CatalogCluster, CatalogDatabase, CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails,
-    ObjectType,
+    CatalogCluster, CatalogDatabase, CatalogItem, CatalogItemType, CatalogRecordField, CatalogType,
+    CatalogTypeDetails, ObjectType, SystemObjectType,
 };
 use crate::kafka_util::{self, KafkaConfigOptionExtracted, KafkaStartOffsetType};
 use crate::names::{
-    Aug, DatabaseId, ObjectId, PartialItemName, QualifiedItemName, RawDatabaseSpecifier,
-    ResolvedClusterName, ResolvedDataType, ResolvedDatabaseSpecifier, ResolvedItemName,
-    SchemaSpecifier, SystemObjectId,
+    Aug, CommentObjectId, DatabaseId, ObjectId, PartialItemName, QualifiedItemName,
+    RawDatabaseSpecifier, ResolvedClusterName, ResolvedDataType, ResolvedDatabaseSpecifier,
+    ResolvedItemName, SchemaSpecifier, SystemObjectId,
 };
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
 use crate::plan::expr::ColumnRef;
-use crate::plan::query::{ExprContext, QueryLifetime};
+use crate::plan::query::{scalar_type_from_catalog, ExprContext, QueryLifetime};
 use crate::plan::scope::Scope;
 use crate::plan::statement::{scl, StatementContext, StatementDesc};
 use crate::plan::typeconv::{plan_cast, CastContext};
@@ -107,7 +111,7 @@ use crate::plan::{
     AlterClusterReplicaRenamePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
     AlterItemRenamePlan, AlterNoopPlan, AlterOptionParameter, AlterRolePlan, AlterSecretPlan,
     AlterSetClusterPlan, AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan,
-    AlterSystemResetPlan, AlterSystemSetPlan, ComputeReplicaConfig,
+    AlterSystemResetPlan, AlterSystemSetPlan, CommentPlan, ComputeReplicaConfig,
     ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan, CreateClusterPlan,
     CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
     CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
@@ -115,9 +119,19 @@ use crate::plan::{
     CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
     DropOwnedPlan, FullItemName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan,
     PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, RotateKeysPlan, Secret, Sink,
-    Source, SourceSinkClusterConfig, Table, Type, View, WebhookValidation,
+    Source, SourceSinkClusterConfig, Table, Type, VariableValue, View, WebhookHeaderFilters,
+    WebhookHeaders, WebhookValidation,
 };
 use crate::session::vars;
+
+// TODO: Figure out what the maximum number of columns we can actually support is, and set that.
+//
+// The real max is probably higher than this, but it's easier to relax a constraint than make it
+// more strict.
+const MAX_NUM_COLUMNS: usize = 256;
+
+const MANAGED_REPLICA_PATTERN: once_cell::sync::Lazy<regex::Regex> =
+    once_cell::sync::Lazy::new(|| regex::Regex::new(r"^r(\d)+$").unwrap());
 
 pub fn describe_create_database(
     _: &StatementContext,
@@ -436,10 +450,12 @@ pub fn plan_create_webhook_source(
             nullable: false,
         },
     ];
-    let mut column_names = vec!["body"];
+    let mut column_names = vec!["body".to_string()];
 
-    if include_headers {
-        // Optionally include the headers of the request as a second column.
+    let mut headers = WebhookHeaders::default();
+
+    // Include a `headers` column, possibly filtered.
+    if let Some(filters) = include_headers.column {
         column_ty.push(ColumnType {
             scalar_type: ScalarType::Map {
                 value_type: Box::new(ScalarType::String),
@@ -447,7 +463,55 @@ pub fn plan_create_webhook_source(
             },
             nullable: false,
         });
-        column_names.push("headers");
+        column_names.push("headers".to_string());
+
+        let (allow, block): (BTreeSet<_>, BTreeSet<_>) =
+            filters.into_iter().partition_map(|filter| {
+                if filter.block {
+                    itertools::Either::Right(filter.header_name)
+                } else {
+                    itertools::Either::Left(filter.header_name)
+                }
+            });
+        headers.header_column = Some(WebhookHeaderFilters { allow, block });
+    }
+
+    // Map headers to specific columns.
+    for header in include_headers.mappings {
+        let scalar_type = header
+            .use_bytes
+            .then_some(ScalarType::Bytes)
+            .unwrap_or(ScalarType::String);
+        column_ty.push(ColumnType {
+            scalar_type,
+            nullable: true,
+        });
+        column_names.push(header.column_name.into_string());
+
+        let column_idx = column_ty.len() - 1;
+        // Double check we're consistent with column names.
+        assert_eq!(
+            column_idx,
+            column_names.len() - 1,
+            "header column names and types don't match"
+        );
+        headers
+            .mapped_headers
+            .insert(column_idx, (header.header_name, header.use_bytes));
+    }
+
+    // Validate our columns.
+    let mut unique_check = HashSet::with_capacity(column_names.len());
+    for name in &column_names {
+        if !unique_check.insert(name) {
+            return Err(PlanError::AmbiguousColumn(name.clone().into()));
+        }
+    }
+    if column_names.len() > MAX_NUM_COLUMNS {
+        return Err(PlanError::TooManyColumns {
+            max_num_columns: MAX_NUM_COLUMNS,
+            req_num_columns: column_names.len(),
+        });
     }
 
     let typ = RelationType::new(column_ty);
@@ -474,7 +538,10 @@ pub fn plan_create_webhook_source(
         name,
         source: Source {
             create_sql,
-            data_source: DataSourceDesc::Webhook(validate_using),
+            data_source: DataSourceDesc::Webhook {
+                validate_using,
+                headers,
+            },
             desc,
         },
         if_not_exists,
@@ -504,7 +571,10 @@ pub fn plan_create_source(
 
     let envelope = envelope.clone().unwrap_or(Envelope::None);
 
-    let allowed_with_options = vec![CreateSourceOptionName::Size];
+    let allowed_with_options = vec![
+        CreateSourceOptionName::Size,
+        CreateSourceOptionName::TimestampInterval,
+    ];
     if let Some(op) = with_options
         .iter()
         .find(|op| !allowed_with_options.contains(&op.name))
@@ -609,65 +679,65 @@ pub fn plan_create_source(
 
             let encoding = get_encoding(scx, format, &envelope, Some(connection))?;
 
-            let mut connection = KafkaSourceConnection {
-                connection: kafka_connection,
+            if !include_metadata.is_empty()
+                && !matches!(
+                    envelope,
+                    Envelope::Upsert | Envelope::None | Envelope::Debezium(DbzMode::Plain)
+                )
+            {
+                // TODO(guswynn): should this be `bail_unsupported!`?
+                sql_bail!("INCLUDE <metadata> requires ENVELOPE (NONE|UPSERT|DEBEZIUM)");
+            }
+
+            let metadata_columns = include_metadata
+                .into_iter()
+                .flat_map(|item| match item.ty {
+                    SourceIncludeMetadataType::Timestamp => {
+                        let name = match item.alias.as_ref() {
+                            Some(name) => name.to_string(),
+                            None => "timestamp".to_owned(),
+                        };
+                        Some((name, KafkaMetadataKind::Timestamp))
+                    }
+                    SourceIncludeMetadataType::Partition => {
+                        let name = match item.alias.as_ref() {
+                            Some(name) => name.to_string(),
+                            None => "partition".to_owned(),
+                        };
+                        Some((name, KafkaMetadataKind::Partition))
+                    }
+                    SourceIncludeMetadataType::Offset => {
+                        let name = match item.alias.as_ref() {
+                            Some(name) => name.to_string(),
+                            None => "offset".to_owned(),
+                        };
+                        Some((name, KafkaMetadataKind::Offset))
+                    }
+                    SourceIncludeMetadataType::Headers => {
+                        let name = match item.alias.as_ref() {
+                            Some(name) => name.to_string(),
+                            None => "headers".to_owned(),
+                        };
+                        Some((name, KafkaMetadataKind::Headers))
+                    }
+                    SourceIncludeMetadataType::Key => {
+                        // handled below
+                        None
+                    }
+                })
+                .collect();
+
+            let connection = KafkaSourceConnection::<ReferencedConnection> {
+                connection: connection_item.id(),
                 connection_id: connection_item.id(),
                 topic,
                 start_offsets,
                 group_id_prefix,
                 environment_id: scx.catalog.config().environment_id.to_string(),
-                include_timestamp: None,
-                include_partition: None,
-                include_topic: None,
-                include_offset: None,
-                include_headers: None,
+                metadata_columns,
             };
 
-            let unwrap_name = |alias: Option<Ident>, default, pos| {
-                Some(IncludedColumnPos {
-                    name: alias
-                        .map(|a| a.to_string())
-                        .unwrap_or_else(|| String::from(default)),
-                    pos,
-                })
-            };
-
-            if !matches!(envelope, Envelope::Upsert | Envelope::None)
-                && include_metadata
-                    .iter()
-                    .any(|sic| sic.ty == SourceIncludeMetadataType::Headers)
-            {
-                // TODO(guswynn): should this be `bail_unsupported!`?
-                sql_bail!("INCLUDE HEADERS requires ENVELOPE UPSERT or no ENVELOPE");
-            }
-
-            for (pos, item) in include_metadata.iter().cloned().enumerate() {
-                match item.ty {
-                    SourceIncludeMetadataType::Timestamp => {
-                        connection.include_timestamp = unwrap_name(item.alias, "timestamp", pos);
-                    }
-                    SourceIncludeMetadataType::Partition => {
-                        connection.include_partition = unwrap_name(item.alias, "partition", pos);
-                    }
-                    SourceIncludeMetadataType::Topic => {
-                        // TODO(bwm): This requires deeper thought, the current structure of the
-                        // code requires us to clone the topic name around all over the place
-                        // whether or not anyone ever uses it. Considering we expect the
-                        // overwhelming majority of people will *not* want topics in dataflows that
-                        // is an unnacceptable cost.
-                        bail_unsupported!("INCLUDE TOPIC");
-                    }
-                    SourceIncludeMetadataType::Offset => {
-                        connection.include_offset = unwrap_name(item.alias, "offset", pos);
-                    }
-                    SourceIncludeMetadataType::Headers => {
-                        connection.include_headers = unwrap_name(item.alias, "headers", pos);
-                    }
-                    SourceIncludeMetadataType::Key => {} // handled below
-                }
-            }
-
-            let connection = GenericSourceConnection::from(connection);
+            let connection = GenericSourceConnection::Kafka(connection);
 
             (connection, encoding, None)
         }
@@ -754,7 +824,7 @@ pub fn plan_create_source(
                 // of the types are text
                 let mut cast_scx = scx.clone();
                 cast_scx.param_types = Default::default();
-                let cast_qcx = QueryContext::root(&cast_scx, QueryLifetime::Static);
+                let cast_qcx = QueryContext::root(&cast_scx, QueryLifetime::Source);
                 let mut column_types = vec![];
                 for column in table.columns.iter() {
                     column_types.push(ColumnType {
@@ -888,13 +958,14 @@ pub fn plan_create_source(
             let publication_details = PostgresSourcePublicationDetails::from_proto(details)
                 .map_err(|e| sql_err!("{}", e))?;
 
-            let connection = GenericSourceConnection::from(PostgresSourceConnection {
-                connection,
-                connection_id: connection_item.id(),
-                table_casts,
-                publication: publication.expect("validated exists during purification"),
-                publication_details,
-            });
+            let connection =
+                GenericSourceConnection::<ReferencedConnection>::from(PostgresSourceConnection {
+                    connection: connection_item.id(),
+                    connection_id: connection_item.id(),
+                    table_casts,
+                    publication: publication.expect("validated exists during purification"),
+                    publication_details,
+                });
             // The postgres source only outputs data to its subsources. The catalog object
             // representing the source itself is just an empty relation with no columns
             let encoding = SourceDataEncoding::Single(DataEncoding::new(
@@ -1073,7 +1144,6 @@ pub fn plan_create_source(
     };
 
     let metadata_columns = external_connection.metadata_columns();
-    let metadata_column_types = external_connection.metadata_column_types();
     let metadata_desc = included_column_desc(metadata_columns.clone());
     let (envelope, mut desc) = envelope.desc(key_desc, value_desc, metadata_desc)?;
 
@@ -1130,15 +1200,26 @@ pub fn plan_create_source(
     let cluster_config = source_sink_cluster_config(scx, "source", in_cluster.as_ref(), size)?;
 
     let timestamp_interval = match timestamp_interval {
-        Some(timestamp_interval) => timestamp_interval.duration()?,
+        Some(timestamp_interval) => {
+            let duration = timestamp_interval.duration()?;
+            let min = scx.catalog.system_vars().min_timestamp_interval();
+            let max = scx.catalog.system_vars().max_timestamp_interval();
+            if duration < min || duration > max {
+                return Err(PlanError::InvalidTimestampInterval {
+                    min,
+                    max,
+                    requested: duration,
+                });
+            }
+            duration
+        }
         None => scx.catalog.config().timestamp_interval,
     };
 
-    let source_desc = SourceDesc {
+    let source_desc = SourceDesc::<ReferencedConnection> {
         connection: external_connection,
         encoding,
         envelope: envelope.clone(),
-        metadata_columns: metadata_column_types,
         timestamp_interval,
     };
 
@@ -1374,7 +1455,7 @@ generate_extracted_config!(
     LoadGeneratorOption,
     (TickInterval, Interval),
     (ScaleFactor, f64),
-    (MaxCardinality, i64)
+    (MaxCardinality, u64)
 );
 
 pub(crate) fn load_generator_ast_to_generator(
@@ -1393,11 +1474,6 @@ pub(crate) fn load_generator_ast_to_generator(
             let LoadGeneratorOptionExtracted {
                 max_cardinality, ..
             } = options.to_vec().try_into()?;
-            if let Some(max_cardinality) = max_cardinality {
-                if max_cardinality < 0 {
-                    sql_bail!("unsupported max cardinality {max_cardinality}");
-                }
-            }
             LoadGenerator::Counter { max_cardinality }
         }
         mz_sql_parser::ast::LoadGenerator::Marketing => LoadGenerator::Marketing,
@@ -1492,7 +1568,7 @@ fn get_encoding(
     format: &CreateSourceFormat<Aug>,
     envelope: &Envelope,
     connection: Option<&CreateSourceConnection<Aug>>,
-) -> Result<SourceDataEncoding, PlanError> {
+) -> Result<SourceDataEncoding<ReferencedConnection>, PlanError> {
     let encoding = match format {
         CreateSourceFormat::None => sql_bail!("Source format must be specified"),
         CreateSourceFormat::Bare(format) => get_encoding_inner(scx, format)?,
@@ -1534,17 +1610,11 @@ fn source_sink_cluster_config(
     match (in_cluster, size) {
         (None, None) => Ok(SourceSinkClusterConfig::Undefined),
         (Some(in_cluster), None) => {
-            let cluster = scx.catalog.get_cluster(in_cluster.id);
-            if cluster.replica_ids().len() > 1 {
-                sql_bail!("cannot create {ty} in cluster with more than one replica")
-            }
-            if !is_storage_cluster(scx, cluster) {
-                sql_bail!("cannot create {ty} in cluster containing indexes or materialized views");
-            }
+            ensure_cluster_can_host_storage_item(scx, in_cluster.id, ty)?;
 
             // We also don't allow more objects to be added to a cluster that is already
-            // linked to another object or managed.
-            ensure_cluster_is_not_linked(scx, cluster.id())?;
+            // linked to another object.
+            ensure_cluster_is_not_linked(scx, in_cluster.id)?;
 
             Ok(SourceSinkClusterConfig::Existing { id: in_cluster.id })
         }
@@ -1559,14 +1629,14 @@ generate_extracted_config!(AvroSchemaOption, (ConfluentWireFormat, bool, Default
 pub struct Schema {
     pub key_schema: Option<String>,
     pub value_schema: String,
-    pub csr_connection: Option<mz_storage_client::types::connections::CsrConnection>,
+    pub csr_connection: Option<mz_storage_types::connections::CsrConnection<ReferencedConnection>>,
     pub confluent_wire_format: bool,
 }
 
 fn get_encoding_inner(
     scx: &StatementContext,
     format: &Format<Aug>,
-) -> Result<SourceDataEncodingInner, PlanError> {
+) -> Result<SourceDataEncodingInner<ReferencedConnection>, PlanError> {
     // Avro/CSR can return a `SourceDataEncoding::KeyValue`
     Ok(SourceDataEncodingInner::Single(match format {
         Format::Bytes => DataEncodingInner::Bytes,
@@ -1747,7 +1817,7 @@ fn get_encoding_inner(
 fn get_key_envelope(
     included_items: &[SourceIncludeMetadata],
     envelope: &Envelope,
-    encoding: &SourceDataEncoding,
+    encoding: &SourceDataEncoding<ReferencedConnection>,
 ) -> Result<KeyEnvelope, PlanError> {
     let key_definition = included_items
         .iter()
@@ -1780,7 +1850,9 @@ fn get_key_envelope(
 
 /// Gets the key envelope for a given key encoding when no name for the key has
 /// been requested by the user.
-fn get_unnamed_key_envelope(key: &DataEncoding) -> Result<KeyEnvelope, PlanError> {
+fn get_unnamed_key_envelope(
+    key: &DataEncoding<ReferencedConnection>,
+) -> Result<KeyEnvelope, PlanError> {
     // If the key is requested but comes from an unnamed type then it gets the name "key"
     //
     // Otherwise it gets the names of the columns in the type
@@ -1835,12 +1907,15 @@ pub fn plan_view(
         mut desc,
         finishing,
         scope: _,
-    } = query::plan_root_query(scx, query.clone(), QueryLifetime::Static)?;
+    } = query::plan_root_query(scx, query.clone(), QueryLifetime::View)?;
+    // We get back a trivial finishing, because `plan_root_query` applies the given finishing.
+    // Note: Earlier, we were thinking to maybe persist the finishing information with the view
+    // here to help with materialize#724. However, in the meantime, there might be a better
+    // approach to solve materialize#724:
+    // https://github.com/MaterializeInc/materialize/issues/724#issuecomment-1688293709
+    assert!(finishing.is_trivial(expr.arity()));
 
     expr.bind_parameters(params)?;
-    //TODO: materialize#724 - persist finishing information with the view?
-    expr.finish(finishing);
-    let relation_expr = expr.optimize_and_lower(&scx.into())?;
 
     let name = if temporary {
         scx.allocate_temporary_qualified_name(normalize::unresolved_item_name(name.to_owned())?)?
@@ -1861,7 +1936,7 @@ pub fn plan_view(
 
     let view = View {
         create_sql,
-        expr: relation_expr,
+        expr,
         column_names: names,
         temporary,
     };
@@ -1976,11 +2051,11 @@ pub fn plan_create_materialized_view(
         mut desc,
         finishing,
         scope: _,
-    } = query::plan_root_query(scx, stmt.query, QueryLifetime::Static)?;
+    } = query::plan_root_query(scx, stmt.query, QueryLifetime::MaterializedView)?;
+    // We get back a trivial finishing, see comment in `plan_view`.
+    assert!(finishing.is_trivial(expr.arity()));
 
     expr.bind_parameters(params)?;
-    expr.finish(finishing);
-    let expr = expr.optimize_and_lower(&scx.into())?;
 
     plan_utils::maybe_rename_columns(
         format!("materialized view {}", scx.catalog.resolve_full_name(&name)),
@@ -2265,7 +2340,8 @@ fn key_constraint_err(desc: &RelationDesc, user_keys: &[ColumnName]) -> PlanErro
 generate_extracted_config!(
     CsrConfigOption,
     (AvroKeyFullname, String),
-    (AvroValueFullname, String)
+    (AvroValueFullname, String),
+    (NullDefaults, bool, Default(false))
 );
 
 fn kafka_sink_builder(
@@ -2279,7 +2355,7 @@ fn kafka_sink_builder(
     key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     value_desc: RelationDesc,
     envelope: SinkEnvelope,
-) -> Result<StorageSinkConnectionBuilder, PlanError> {
+) -> Result<StorageSinkConnectionBuilder<ReferencedConnection>, PlanError> {
     let item = scx.get_item_by_resolved_name(&connection)?;
     // Get Kafka connection
     let mut connection = match item.connection()? {
@@ -2365,6 +2441,7 @@ fn kafka_sink_builder(
             let CsrConfigOptionExtracted {
                 avro_key_fullname,
                 avro_value_fullname,
+                null_defaults,
                 ..
             } = options.try_into()?;
 
@@ -2378,14 +2455,19 @@ fn kafka_sink_builder(
                 sql_bail!("Must specify both AVRO KEY FULLNAME and AVRO VALUE FULLNAME when specifying generated schema names");
             }
 
+            let options = AvroSchemaOptions {
+                avro_key_fullname,
+                avro_value_fullname,
+                set_null_defaults: null_defaults,
+                is_debezium: matches!(envelope, SinkEnvelope::Debezium),
+            };
+
             let schema_generator = AvroSchemaGenerator::new(
-                avro_key_fullname.as_deref(),
-                avro_value_fullname.as_deref(),
                 key_desc_and_indices
                     .as_ref()
                     .map(|(desc, _indices)| desc.clone()),
                 value_desc.clone(),
-                matches!(envelope, SinkEnvelope::Debezium),
+                options,
             )?;
             let value_schema = schema_generator.value_writer_schema().to_string();
             let key_schema = schema_generator
@@ -2608,28 +2690,12 @@ pub fn plan_create_type(
 
     fn validate_data_type(
         scx: &StatementContext,
-        data_type: &ResolvedDataType,
+        data_type: ResolvedDataType,
         as_type: &str,
         key: &str,
-    ) -> Result<GlobalId, PlanError> {
-        let item = match data_type {
-            ResolvedDataType::Named {
-                id,
-                full_name,
-                modifiers,
-                ..
-            } => {
-                if !modifiers.is_empty() {
-                    sql_bail!(
-                        "CREATE TYPE ... AS {}option {} cannot accept type modifier on \
-                                {}, you must use the default type",
-                        as_type,
-                        key,
-                        full_name
-                    );
-                }
-                scx.catalog.get_item(id)
-            }
+    ) -> Result<(GlobalId, Vec<i64>), PlanError> {
+        let (id, modifiers) = match data_type {
+            ResolvedDataType::Named { id, modifiers, .. } => (id, modifiers),
             _ => sql_bail!(
                 "CREATE TYPE ... AS {}option {} can only use named data types, but \
                         found unnamed data type {}. Use CREATE TYPE to create a named type first",
@@ -2639,7 +2705,8 @@ pub fn plan_create_type(
             ),
         };
 
-        match scx.catalog.get_item(&item.id()).type_details() {
+        let item = scx.catalog.get_item(&id);
+        match item.type_details() {
             None => sql_bail!(
                 "{} must be of class type, but received {} which is of class {}",
                 key,
@@ -2652,7 +2719,12 @@ pub fn plan_create_type(
             }) => {
                 bail_unsupported!("embedding char type in a list or map")
             }
-            _ => Ok(item.id()),
+            _ => {
+                // Validate that the modifiers are actually valid.
+                scalar_type_from_catalog(scx, id, &modifiers)?;
+
+                Ok((id, modifiers))
+            }
         }
     }
 
@@ -2664,8 +2736,10 @@ pub fn plan_create_type(
             } = CreateTypeListOptionExtracted::try_from(options)?;
             let element_type =
                 element_type.ok_or_else(|| sql_err!("ELEMENT TYPE option is required"))?;
+            let (id, modifiers) = validate_data_type(scx, element_type, "LIST ", "ELEMENT TYPE")?;
             CatalogType::List {
-                element_reference: validate_data_type(scx, &element_type, "LIST ", "ELEMENT TYPE")?,
+                element_reference: id,
+                element_modifiers: modifiers,
             }
         }
         CreateTypeAs::Map { options } => {
@@ -2676,18 +2750,27 @@ pub fn plan_create_type(
             } = CreateTypeMapOptionExtracted::try_from(options)?;
             let key_type = key_type.ok_or_else(|| sql_err!("KEY TYPE option is required"))?;
             let value_type = value_type.ok_or_else(|| sql_err!("VALUE TYPE option is required"))?;
+            let (key_id, key_modifiers) = validate_data_type(scx, key_type, "MAP ", "KEY TYPE")?;
+            let (value_id, value_modifiers) =
+                validate_data_type(scx, value_type, "MAP ", "VALUE TYPE")?;
             CatalogType::Map {
-                key_reference: validate_data_type(scx, &key_type, "MAP ", "KEY TYPE")?,
-                value_reference: validate_data_type(scx, &value_type, "MAP ", "VALUE TYPE")?,
+                key_reference: key_id,
+                key_modifiers,
+                value_reference: value_id,
+                value_modifiers,
             }
         }
-        CreateTypeAs::Record { ref column_defs } => {
+        CreateTypeAs::Record { column_defs } => {
             let mut fields = vec![];
             for column_def in column_defs {
-                let data_type = &column_def.data_type;
+                let data_type = column_def.data_type;
                 let key = ident(column_def.name.clone());
-                let id = validate_data_type(scx, data_type, "", &key)?;
-                fields.push((ColumnName::from(key.clone()), id));
+                let (id, modifiers) = validate_data_type(scx, data_type, "", &key)?;
+                fields.push(CatalogRecordField {
+                    name: ColumnName::from(key.clone()),
+                    type_reference: id,
+                    type_modifiers: modifiers,
+                });
             }
             CatalogType::Record { fields }
         }
@@ -2718,6 +2801,12 @@ generate_extracted_config!(
     (KeyType, ResolvedDataType),
     (ValueType, ResolvedDataType)
 );
+
+#[derive(Debug)]
+pub enum PlannedAlterRoleOption {
+    Attributes(PlannedRoleAttributes),
+    Variable(PlannedRoleVariable),
+}
 
 #[derive(Debug)]
 pub struct PlannedRoleAttributes {
@@ -2771,6 +2860,34 @@ fn plan_role_attributes(options: Vec<RoleAttribute>) -> Result<PlannedRoleAttrib
     }
 
     Ok(planned_attributes)
+}
+
+#[derive(Debug)]
+pub enum PlannedRoleVariable {
+    Set { name: String, value: VariableValue },
+    Reset { name: String },
+}
+
+impl PlannedRoleVariable {
+    pub fn name(&self) -> &str {
+        match self {
+            PlannedRoleVariable::Set { name, .. } => name,
+            PlannedRoleVariable::Reset { name } => name,
+        }
+    }
+}
+
+fn plan_role_variable(variable: SetRoleVar) -> Result<PlannedRoleVariable, PlanError> {
+    let plan = match variable {
+        SetRoleVar::Set { name, value } => PlannedRoleVariable::Set {
+            name: name.to_string(),
+            value: scl::plan_set_variable_to(value)?,
+        },
+        SetRoleVar::Reset { name } => PlannedRoleVariable::Reset {
+            name: name.to_string(),
+        },
+    };
+    Ok(plan)
 }
 
 pub fn describe_create_role(
@@ -2912,17 +3029,19 @@ const DEFAULT_REPLICA_INTROSPECTION_INTERVAL: Interval = Interval {
 
 generate_extracted_config!(
     ReplicaOption,
-    (Size, String),
     (AvailabilityZone, String),
-    (StoragectlAddresses, Vec<String>),
-    (StorageAddresses, Vec<String>),
-    (ComputectlAddresses, Vec<String>),
+    (BilledAs, String),
     (ComputeAddresses, Vec<String>),
-    (Workers, u16),
-    (IntrospectionInterval, OptionalInterval),
-    (IntrospectionDebugging, bool, Default(false)),
+    (ComputectlAddresses, Vec<String>),
+    (Disk, bool),
     (IdleArrangementMergeEffort, u32),
-    (Disk, bool)
+    (Internal, bool, Default(false)),
+    (IntrospectionDebugging, bool, Default(false)),
+    (IntrospectionInterval, OptionalInterval),
+    (Size, String),
+    (StorageAddresses, Vec<String>),
+    (StoragectlAddresses, Vec<String>),
+    (Workers, u16)
 );
 
 fn plan_replica_config(
@@ -2930,17 +3049,19 @@ fn plan_replica_config(
     options: Vec<ReplicaOption<Aug>>,
 ) -> Result<ReplicaConfig, PlanError> {
     let ReplicaOptionExtracted {
-        size,
         availability_zone,
-        storagectl_addresses,
-        storage_addresses,
-        computectl_addresses,
+        billed_as,
         compute_addresses,
-        workers,
-        introspection_interval,
-        introspection_debugging,
-        idle_arrangement_merge_effort,
+        computectl_addresses,
         disk,
+        idle_arrangement_merge_effort,
+        internal,
+        introspection_debugging,
+        introspection_interval,
+        size,
+        storage_addresses,
+        storagectl_addresses,
+        workers,
         ..
     }: ReplicaOptionExtracted = options.try_into()?;
 
@@ -2957,6 +3078,7 @@ fn plan_replica_config(
     match (
         size,
         availability_zone,
+        billed_as,
         storagectl_addresses,
         storage_addresses,
         computectl_addresses,
@@ -2964,12 +3086,12 @@ fn plan_replica_config(
         workers,
     ) {
         // Common cases we expect end users to hit.
-        (None, _, None, None, None, None, None) => {
+        (None, _, None, None, None, None, None, None) => {
             // We don't mention the unmanaged options in the error message
             // because they are only available in unsafe mode.
             sql_bail!("SIZE option must be specified");
         }
-        (Some(size), availability_zone, None, None, None, None, None) => {
+        (Some(size), availability_zone, billed_as, None, None, None, None, None) => {
             let disk_default = scx.catalog.system_vars().disk_cluster_replicas_default();
             let disk = disk.unwrap_or(disk_default);
 
@@ -2978,10 +3100,13 @@ fn plan_replica_config(
                 availability_zone,
                 compute,
                 disk,
+                billed_as,
+                internal,
             })
         }
 
         (
+            None,
             None,
             None,
             storagectl_addresses,
@@ -3088,18 +3213,25 @@ pub fn plan_create_cluster_replica(
     let cluster = scx
         .catalog
         .resolve_cluster(Some(&normalize::ident(of_cluster)))?;
-    if is_storage_cluster(scx, cluster)
-        && cluster.bound_objects().len() > 0
-        && cluster.replica_ids().len() > 0
-    {
+    if is_storage_cluster(scx, cluster) && cluster.replica_ids().len() > 0 {
         sql_bail!("cannot create more than one replica of a cluster containing sources or sinks");
     }
     ensure_cluster_is_not_linked(scx, cluster.id())?;
-    ensure_cluster_is_not_managed(scx, cluster.id())?;
+
+    let config = plan_replica_config(scx, options)?;
+
+    if let ReplicaConfig::Managed { internal: true, .. } = &config {
+        if MANAGED_REPLICA_PATTERN.is_match(name.as_str()) {
+            return Err(PlanError::MangedReplicaName(name.into_string()));
+        }
+    } else {
+        ensure_cluster_is_not_managed(scx, cluster.id())?;
+    }
+
     Ok(Plan::CreateClusterReplica(CreateClusterReplicaPlan {
         name: normalize::ident(name),
         cluster_id: cluster.id(),
-        config: plan_replica_config(scx, options)?,
+        config,
     }))
 }
 
@@ -3164,7 +3296,8 @@ impl KafkaConnectionOptionExtracted {
     pub fn get_brokers(
         &self,
         scx: &StatementContext,
-    ) -> Result<Vec<mz_storage_client::types::connections::KafkaBroker>, PlanError> {
+    ) -> Result<Vec<mz_storage_types::connections::KafkaBroker<ReferencedConnection>>, PlanError>
+    {
         let mut brokers = match (&self.broker, &self.brokers) {
             (Some(_), Some(_)) => sql_bail!("invalid CONNECTION: cannot set BROKER and BROKERS"),
             (None, None) => sql_bail!("invalid CONNECTION: must set either BROKER or BROKERS"),
@@ -3230,9 +3363,9 @@ Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'ka
                     };
                     let ssh_tunnel = scx.catalog.get_item(id);
                     match ssh_tunnel.connection()? {
-                        Connection::Ssh(connection) => Tunnel::Ssh(SshTunnel {
+                        Connection::Ssh(_connection) => Tunnel::Ssh(SshTunnel {
                             connection_id: *id,
-                            connection: connection.clone(),
+                            connection: *id,
                         }),
                         _ => {
                             sql_bail!("{} is not an SSH connection", ssh_tunnel.name().item)
@@ -3241,7 +3374,7 @@ Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'ka
                 }
             };
 
-            out.push(mz_storage_client::types::connections::KafkaBroker {
+            out.push(mz_storage_types::connections::KafkaBroker {
                 address: broker.address.clone(),
                 tunnel,
             });
@@ -3279,18 +3412,19 @@ impl TryFrom<&KafkaConnectionOptionExtracted> for Option<SaslConfig> {
     type Error = PlanError;
     fn try_from(k: &KafkaConnectionOptionExtracted) -> Result<Self, Self::Error> {
         let res = if k.sasl_config().iter().all(|config| k.seen.contains(config)) {
-            let sasl_mechanism = k.sasl_mechanisms.clone().unwrap();
-            if sasl_mechanism
-                .chars()
-                .any(|c| c.is_ascii_alphabetic() && !c.is_uppercase())
-            {
-                sql_bail!(
-                    "invalid SASL MECHANISM {}: must be uppercase",
-                    sasl_mechanism.quoted()
-                );
-            }
+            // librdkafka requires SASL mechanisms to be upper case (PLAIN,
+            // SCRAM-SHA-256). For usability, we automatically uppercase the
+            // mechanism that user provides. This avoids a frustrating
+            // interaction with identifier case folding. Consider `SASL
+            // MECHANISMS = PLAIN`. Identifier case folding results in a SASL
+            // mechanism of `plain` (note the lowercase), which Materialize
+            // previously rejected with an error of "SASL mechanism must be
+            // uppercase." This was deeply frustarting for users who were not
+            // familiar with identifier case folding rules. See #22205.
+            let sasl_mechanism = k.sasl_mechanisms.clone().unwrap().to_uppercase();
+
             Some(SaslConfig {
-                mechanisms: sasl_mechanism,
+                sasl_mechanism,
                 username: k.sasl_username.clone().unwrap(),
                 password: k.sasl_password.unwrap().into(),
                 tls_root_cert: k.ssl_certificate_authority.clone(),
@@ -3336,7 +3470,8 @@ impl KafkaConnectionOptionExtracted {
     fn to_connection(
         self,
         scx: &StatementContext,
-    ) -> Result<mz_storage_client::types::connections::KafkaConnection, PlanError> {
+    ) -> Result<mz_storage_types::connections::KafkaConnection<ReferencedConnection>, PlanError>
+    {
         Ok(KafkaConnection {
             brokers: self.get_brokers(scx)?,
             security: Option::<KafkaSecurity>::try_from(&self)?,
@@ -3369,7 +3504,7 @@ impl CsrConnectionOptionExtracted {
     fn to_connection(
         self,
         scx: &StatementContext,
-    ) -> Result<mz_storage_client::types::connections::CsrConnection, PlanError> {
+    ) -> Result<mz_storage_types::connections::CsrConnection<ReferencedConnection>, PlanError> {
         let url: reqwest::Url = match self.url {
             Some(url) => url
                 .parse()
@@ -3398,7 +3533,7 @@ impl CsrConnectionOptionExtracted {
 
         let tunnel = scx.build_tunnel_definition(self.ssh_tunnel, self.aws_privatelink)?;
 
-        Ok(mz_storage_client::types::connections::CsrConnection {
+        Ok(mz_storage_types::connections::CsrConnection {
             url,
             tls_root_cert: self.ssl_certificate_authority,
             tls_identity,
@@ -3427,7 +3562,8 @@ impl PostgresConnectionOptionExtracted {
     fn to_connection(
         self,
         scx: &StatementContext,
-    ) -> Result<mz_storage_client::types::connections::PostgresConnection, PlanError> {
+    ) -> Result<mz_storage_types::connections::PostgresConnection<ReferencedConnection>, PlanError>
+    {
         let cert = self.ssl_certificate;
         let key = self.ssl_key.map(|secret| secret.into());
         let tls_identity = match (cert, key) {
@@ -3449,7 +3585,7 @@ impl PostgresConnectionOptionExtracted {
 
         let tunnel = scx.build_tunnel_definition(self.ssh_tunnel, self.aws_privatelink)?;
 
-        Ok(mz_storage_client::types::connections::PostgresConnection {
+        Ok(mz_storage_types::connections::PostgresConnection {
             database: self
                 .database
                 .ok_or_else(|| sql_err!("DATABASE option is required"))?,
@@ -3476,13 +3612,11 @@ generate_extracted_config!(
     (User, String)
 );
 
-impl TryFrom<SshConnectionOptionExtracted>
-    for mz_storage_client::types::connections::SshConnection
-{
+impl TryFrom<SshConnectionOptionExtracted> for mz_storage_types::connections::SshConnection {
     type Error = PlanError;
 
     fn try_from(options: SshConnectionOptionExtracted) -> Result<Self, Self::Error> {
-        Ok(mz_storage_client::types::connections::SshConnection {
+        Ok(mz_storage_types::connections::SshConnection {
             host: options
                 .host
                 .ok_or_else(|| sql_err!("HOST option is required"))?,
@@ -3603,7 +3737,7 @@ pub fn plan_create_connection(
         }
         CreateConnection::Ssh { options } => {
             let c = SshConnectionOptionExtracted::try_from(options)?;
-            let connection = mz_storage_client::types::connections::SshConnection::try_from(c)?;
+            let connection = mz_storage_types::connections::SshConnection::try_from(c)?;
             Connection::Ssh(connection)
         }
     };
@@ -3805,13 +3939,40 @@ fn plan_drop_cluster(
     })
 }
 
+/// Returns `true` if the cluster has any storage object. Return `false` if the cluster has no
+/// objects.
 fn is_storage_cluster(scx: &StatementContext, cluster: &dyn CatalogCluster) -> bool {
-    cluster.bound_objects().iter().all(|id| {
+    cluster.bound_objects().iter().any(|id| {
         matches!(
             scx.catalog.get_item(id).item_type(),
             CatalogItemType::Source | CatalogItemType::Sink
         )
     })
+}
+
+/// Check that the cluster can host storage items.
+fn ensure_cluster_can_host_storage_item(
+    scx: &StatementContext,
+    cluster_id: ClusterId,
+    ty: &'static str,
+) -> Result<(), PlanError> {
+    let cluster = scx.catalog.get_cluster(cluster_id);
+    // At most 1 replica
+    if cluster.replica_ids().len() > 1 {
+        sql_bail!("cannot create {ty} in cluster with more than one replica")
+    }
+    let enable_unified_cluster = scx.catalog.system_vars().enable_unified_clusters();
+    let only_storage_objects = cluster.bound_objects().iter().all(|id| {
+        matches!(
+            scx.catalog.get_item(id).item_type(),
+            CatalogItemType::Source | CatalogItemType::Sink
+        )
+    });
+    // unified clusters or only storage objects on cluster
+    if !enable_unified_cluster && !only_storage_objects {
+        sql_bail!("cannot create {ty} in cluster containing indexes or materialized views");
+    }
+    Ok(())
 }
 
 fn plan_drop_cluster_replica(
@@ -3822,7 +3983,6 @@ fn plan_drop_cluster_replica(
     let cluster = resolve_cluster_replica(scx, name, if_exists)?;
     if let Some((cluster, _)) = &cluster {
         ensure_cluster_is_not_linked(scx, cluster.id())?;
-        ensure_cluster_is_not_managed(scx, cluster.id())?;
     }
     Ok(cluster.map(|(cluster, replica_id)| (cluster.id(), replica_id)))
 }
@@ -4348,10 +4508,7 @@ pub fn plan_alter_cluster(
                         sql_bail!("REPLICAS not supported for managed clusters");
                     }
                     if let Some(replication_factor) = replication_factor {
-                        if is_storage_cluster(scx, cluster)
-                            && !cluster.bound_objects().is_empty()
-                            && replication_factor > 1
-                        {
+                        if is_storage_cluster(scx, cluster) && replication_factor > 1 {
                             sql_bail!("cannot create more than one replica of a cluster containing sources or sinks");
                         }
                     }
@@ -4666,6 +4823,23 @@ pub fn plan_alter_cluster_replica_rename(
             Ok(Plan::AlterNoop(AlterNoopPlan { object_type }))
         }
     }
+}
+
+pub fn describe_alter_object_swap(
+    _: &StatementContext,
+    _: AlterObjectSwapStatement,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_alter_object_swap(
+    _: &mut StatementContext,
+    _: AlterObjectSwapStatement,
+) -> Result<Plan, PlanError> {
+    Err(PlanError::Unsupported {
+        feature: "ALTER ... SWAP ...".to_string(),
+        issue_no: Some(12972),
+    })
 }
 
 pub fn describe_alter_secret_options(
@@ -5022,15 +5196,187 @@ pub fn describe_alter_role(
 }
 
 pub fn plan_alter_role(
-    _: &StatementContext,
-    AlterRoleStatement { name, options }: AlterRoleStatement<Aug>,
+    scx: &StatementContext,
+    AlterRoleStatement { name, option }: AlterRoleStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let attributes = plan_role_attributes(options)?;
+    let option = match option {
+        AlterRoleOption::Attributes(attrs) => {
+            let attrs = plan_role_attributes(attrs)?;
+            PlannedAlterRoleOption::Attributes(attrs)
+        }
+        AlterRoleOption::Variable(variable) => {
+            // Make sure the LaunchDarkly flag is enabled.
+            scx.require_feature_flag(&vars::ENABLE_ROLE_VARS)?;
+
+            let var = plan_role_variable(variable)?;
+            PlannedAlterRoleOption::Variable(var)
+        }
+    };
 
     Ok(Plan::AlterRole(AlterRolePlan {
         id: name.id,
         name: name.name,
-        attributes,
+        option,
+    }))
+}
+
+pub fn describe_comment(
+    _: &StatementContext,
+    _: CommentStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_comment(
+    scx: &mut StatementContext,
+    stmt: CommentStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    const MAX_COMMENT_LENGTH: usize = 1024;
+
+    scx.require_feature_flag(&vars::ENABLE_COMMENT)?;
+
+    let CommentStatement { object, comment } = stmt;
+
+    // TODO(parkmycar): Make max comment length configurable.
+    if let Some(c) = &comment {
+        if c.len() > 1024 {
+            return Err(PlanError::CommentTooLong {
+                length: c.len(),
+                max_size: MAX_COMMENT_LENGTH,
+            });
+        }
+    }
+
+    let (object_id, column_pos) = match &object {
+        com_ty @ CommentObjectType::Table { name }
+        | com_ty @ CommentObjectType::View { name }
+        | com_ty @ CommentObjectType::MaterializedView { name }
+        | com_ty @ CommentObjectType::Index { name }
+        | com_ty @ CommentObjectType::Func { name }
+        | com_ty @ CommentObjectType::Connection { name }
+        | com_ty @ CommentObjectType::Source { name }
+        | com_ty @ CommentObjectType::Sink { name }
+        | com_ty @ CommentObjectType::Type { name }
+        | com_ty @ CommentObjectType::Secret { name } => {
+            let name = normalize::unresolved_item_name(name.clone())?;
+            let item = scx.catalog.resolve_item(&name)?;
+
+            match (com_ty, item.item_type()) {
+                (CommentObjectType::Table { .. }, CatalogItemType::Table) => {
+                    (CommentObjectId::Table(item.id()), None)
+                }
+                (CommentObjectType::View { .. }, CatalogItemType::View) => {
+                    (CommentObjectId::View(item.id()), None)
+                }
+                (CommentObjectType::MaterializedView { .. }, CatalogItemType::MaterializedView) => {
+                    (CommentObjectId::MaterializedView(item.id()), None)
+                }
+                (CommentObjectType::Index { .. }, CatalogItemType::Index) => {
+                    (CommentObjectId::Index(item.id()), None)
+                }
+                (CommentObjectType::Func { .. }, CatalogItemType::Func) => {
+                    (CommentObjectId::Func(item.id()), None)
+                }
+                (CommentObjectType::Connection { .. }, CatalogItemType::Connection) => {
+                    (CommentObjectId::Connection(item.id()), None)
+                }
+                (CommentObjectType::Source { .. }, CatalogItemType::Source) => {
+                    (CommentObjectId::Source(item.id()), None)
+                }
+                (CommentObjectType::Sink { .. }, CatalogItemType::Sink) => {
+                    (CommentObjectId::Sink(item.id()), None)
+                }
+                (CommentObjectType::Type { .. }, CatalogItemType::Type) => {
+                    (CommentObjectId::Type(item.id()), None)
+                }
+                (CommentObjectType::Secret { .. }, CatalogItemType::Secret) => {
+                    (CommentObjectId::Secret(item.id()), None)
+                }
+                (com_ty, cat_ty) => {
+                    let expected_type = match com_ty {
+                        CommentObjectType::Table { .. } => ObjectType::Table,
+                        CommentObjectType::View { .. } => ObjectType::View,
+                        CommentObjectType::MaterializedView { .. } => ObjectType::MaterializedView,
+                        CommentObjectType::Index { .. } => ObjectType::Index,
+                        CommentObjectType::Func { .. } => ObjectType::Func,
+                        CommentObjectType::Connection { .. } => ObjectType::Connection,
+                        CommentObjectType::Source { .. } => ObjectType::Source,
+                        CommentObjectType::Sink { .. } => ObjectType::Sink,
+                        CommentObjectType::Type { .. } => ObjectType::Type,
+                        CommentObjectType::Secret { .. } => ObjectType::Secret,
+                        _ => unreachable!("these are the only types we match on"),
+                    };
+
+                    return Err(PlanError::InvalidObjectType {
+                        expected_type: SystemObjectType::Object(expected_type),
+                        actual_type: SystemObjectType::Object(cat_ty.into()),
+                        object_name: item.name().item.clone(),
+                    });
+                }
+            }
+        }
+        CommentObjectType::Column {
+            relation_name,
+            column_name,
+        } => {
+            let name = normalize::unresolved_item_name(relation_name.clone())?;
+            let item = scx.catalog.resolve_item(&name)?;
+
+            let column_name = normalize::column_name(column_name.clone());
+            let desc = item.desc(&scx.catalog.resolve_full_name(item.name()))?;
+
+            // Check to make sure this column exists.
+            let Some((pos, _ty)) = desc.get_by_name(&column_name) else {
+                return Err(PlanError::UnknownColumn {
+                    table: Some(name),
+                    column: column_name,
+                });
+            };
+
+            match item.item_type() {
+                CatalogItemType::Table => (CommentObjectId::Table(item.id()), Some(pos + 1)),
+                CatalogItemType::Source => (CommentObjectId::Source(item.id()), Some(pos + 1)),
+                CatalogItemType::View => (CommentObjectId::View(item.id()), Some(pos + 1)),
+                CatalogItemType::MaterializedView => {
+                    (CommentObjectId::MaterializedView(item.id()), Some(pos + 1))
+                }
+                r => {
+                    return Err(PlanError::Unsupported {
+                        feature: format!("Specifying comments on a column of {r}"),
+                        issue_no: Some(21465),
+                    });
+                }
+            }
+        }
+        CommentObjectType::Role { name } => {
+            let role = scx.catalog.resolve_role(name.as_str())?;
+            (CommentObjectId::Role(role.id()), None)
+        }
+        CommentObjectType::Database { name } => {
+            let database = scx.resolve_database(name)?;
+            (CommentObjectId::Database(database.id()), None)
+        }
+        CommentObjectType::Schema { name } => {
+            let schema = scx.resolve_schema(name.clone())?;
+            (
+                CommentObjectId::Schema((*schema.database(), *schema.id())),
+                None,
+            )
+        }
+        CommentObjectType::Cluster { name } => (CommentObjectId::Cluster(name.id), None),
+        CommentObjectType::ClusterReplica { name } => {
+            let replica = scx.catalog.resolve_cluster_replica(name)?;
+            (
+                CommentObjectId::ClusterReplica((replica.cluster_id(), replica.replica_id())),
+                None,
+            )
+        }
+    };
+
+    Ok(Plan::Comment(CommentPlan {
+        object_id,
+        sub_component: column_pos,
+        comment,
     }))
 }
 

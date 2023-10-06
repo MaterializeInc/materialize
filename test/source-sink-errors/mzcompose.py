@@ -8,21 +8,20 @@
 # by the Apache License, Version 2.0.
 
 import random
+from collections.abc import Callable
 from dataclasses import dataclass
 from textwrap import dedent
-from typing import Callable, List, Optional, Protocol
+from typing import Protocol
 
-from materialize.mzcompose import Composition
-from materialize.mzcompose.services import (
-    Clusterd,
-    Kafka,
-    Materialized,
-    Postgres,
-    Redpanda,
-    SchemaRegistry,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.redpanda import Redpanda
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
     Redpanda(),
@@ -80,6 +79,7 @@ class KafkaTransactionLogGreaterThan1:
             self.assert_error(
                 c, "retriable transaction error", "running a single Kafka broker"
             )
+            c.down(sanity_restart_mz=False)
 
     def populate(self, c: Composition) -> None:
         # Create a source and a sink
@@ -126,13 +126,13 @@ class KafkaDisruption:
     name: str
     breakage: Callable
     expected_error: str
-    fixage: Optional[Callable]
+    fixage: Callable | None
 
     def run_test(self, c: Composition) -> None:
         print(f"+++ Running disruption scenario {self.name}")
         seed = random.randint(0, 256**4)
 
-        c.down(destroy_volumes=True)
+        c.down(destroy_volumes=True, sanity_restart_mz=False)
         c.up("testdrive", persistent=True)
         c.up("redpanda", "materialized", "clusterd")
 
@@ -179,6 +179,12 @@ class KafkaDisruption:
                   FORMAT BYTES
                   ENVELOPE NONE
                 # WITH ( REMOTE 'clusterd:2100' ) https://github.com/MaterializeInc/materialize/issues/16582
+
+                # Ensure the source makes _real_ progress before we disrupt it. This also
+                # ensures the sink makes progress, which is required to hit certain stalls.
+                # As of implementing correctness property #2, this is required.
+                > SELECT count(*) from source1
+                1
 
                 > CREATE SINK sink1 FROM source1
                   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-topic-${testdrive.seed}')
@@ -239,13 +245,13 @@ class PgDisruption:
     name: str
     breakage: Callable
     expected_error: str
-    fixage: Optional[Callable]
+    fixage: Callable | None
 
     def run_test(self, c: Composition) -> None:
         print(f"+++ Running disruption scenario {self.name}")
         seed = random.randint(0, 256**4)
 
-        c.down(destroy_volumes=True)
+        c.down(destroy_volumes=True, sanity_restart_mz=False)
         c.up("testdrive", persistent=True)
         c.up("postgres", "materialized", "clusterd")
 
@@ -335,7 +341,7 @@ class PgDisruption:
         )
 
 
-disruptions: List[Disruption] = [
+disruptions: list[Disruption] = [
     KafkaDisruption(
         name="delete-topic",
         breakage=lambda c, seed: redpanda_topics(c, "delete", seed),

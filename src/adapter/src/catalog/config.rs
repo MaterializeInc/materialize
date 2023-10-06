@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use bytesize::ByteSize;
 use mz_build_info::BuildInfo;
+use mz_catalog;
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_controller::clusters::ReplicaAllocation;
 use mz_orchestrator::MemoryLimit;
@@ -25,14 +26,13 @@ use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
 use serde::{Deserialize, Serialize};
 
-use crate::catalog::storage;
 use crate::config::SystemParameterSyncConfig;
 
 /// Configures a catalog.
 #[derive(Debug)]
 pub struct Config<'a> {
     /// The connection to the stash.
-    pub storage: storage::Connection,
+    pub storage: Box<dyn mz_catalog::DurableCatalogState>,
     /// Whether to enable unsafe mode.
     pub unsafe_mode: bool,
     /// Whether the build is a local dev build.
@@ -69,19 +69,28 @@ pub struct Config<'a> {
     pub system_parameter_sync_config: Option<SystemParameterSyncConfig>,
     /// How long to retain storage usage records
     pub storage_usage_retention_period: Option<Duration>,
+    /// Host name or URL for connecting to the HTTP server of this instance.
+    pub http_host_name: Option<String>,
     /// Needed only for migrating PG source column metadata. If `None`, will
     /// skip any migrations that require it, which will likely cause tests to
     /// fail.
     ///
     /// TODO(migration): delete in version v.51 (released in v0.49 + 1
     /// additional release)
-    pub connection_context: Option<mz_storage_client::types::connections::ConnectionContext>,
+    pub connection_context: Option<mz_storage_types::connections::ConnectionContext>,
     /// Global connection limit and count
     pub active_connection_count: Arc<std::sync::Mutex<ConnectionCounter>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ClusterReplicaSizeMap(pub BTreeMap<String, ReplicaAllocation>);
+
+impl ClusterReplicaSizeMap {
+    /// Iterate all enabled (not disabled) replica allocations, with their name.
+    pub fn enabled_allocations(&self) -> impl Iterator<Item = (&String, &ReplicaAllocation)> {
+        self.0.iter().filter(|(_, a)| !a.disabled)
+    }
+}
 
 impl Default for ClusterReplicaSizeMap {
     // Used for testing and local purposes. This default value should not be used in production.
@@ -122,6 +131,7 @@ impl Default for ClusterReplicaSizeMap {
                         scale: 1,
                         workers: workers.into(),
                         credits_per_hour: 1.into(),
+                        disabled: false,
                     },
                 )
             })
@@ -138,6 +148,7 @@ impl Default for ClusterReplicaSizeMap {
                     scale,
                     workers: 1,
                     credits_per_hour: scale.into(),
+                    disabled: false,
                 },
             );
 
@@ -150,6 +161,7 @@ impl Default for ClusterReplicaSizeMap {
                     scale,
                     workers: scale.into(),
                     credits_per_hour: scale.into(),
+                    disabled: false,
                 },
             );
 
@@ -162,6 +174,7 @@ impl Default for ClusterReplicaSizeMap {
                     scale: 1,
                     workers: 8,
                     credits_per_hour: 1.into(),
+                    disabled: false,
                 },
             );
         }
@@ -175,6 +188,20 @@ impl Default for ClusterReplicaSizeMap {
                 scale: 2,
                 workers: 4,
                 credits_per_hour: 2.into(),
+                disabled: false,
+            },
+        );
+
+        inner.insert(
+            "free".to_string(),
+            ReplicaAllocation {
+                memory_limit: None,
+                cpu_limit: None,
+                disk_limit: None,
+                scale: 0,
+                workers: 0,
+                credits_per_hour: 0.into(),
+                disabled: true,
             },
         );
         Self(inner)

@@ -8,9 +8,8 @@
 # by the Apache License, Version 2.0.
 
 from textwrap import dedent
-from typing import Set, Type
 
-from materialize.mzcompose import Composition
+from materialize.mzcompose.composition import Composition
 from materialize.zippy.framework import Action, Capability
 from materialize.zippy.mz_capabilities import MzIsRunning
 
@@ -19,7 +18,7 @@ class PeekCancellation(Action):
     """Perfoms a peek cancellation."""
 
     @classmethod
-    def requires(self) -> Set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {MzIsRunning}
 
     def run(self, c: Composition) -> None:

@@ -9,27 +9,44 @@
 
 use mz_compute_client::metrics::{CommandMetrics, HistoryMetrics};
 use mz_ore::metric;
-use mz_ore::metrics::{raw, DeleteOnDropGauge, GaugeVec, GaugeVecExt, MetricsRegistry, UIntGauge};
-use mz_repr::GlobalId;
+use mz_ore::metrics::{raw, MetricsRegistry, UIntGauge};
 use prometheus::core::{AtomicF64, GenericCounter};
+use prometheus::Histogram;
 
 /// Metrics exposed by compute replicas.
+//
+// Most of the metrics here use the `raw` implementations, rather than the `DeleteOnDrop` wrappers
+// because their labels are fixed throughout the lifetime of the replica process. For example, any
+// metric labeled only by `worker_id` can be `raw` since the number of workers cannot change.
+//
+// Metrics that are labelled by a dimension that can change throughout the lifetime of the process
+// (such as `collection_id`) MUST NOT use the `raw` metric types and must use the `DeleteOnDrop`
+// types instead, to avoid memory leaks.
 #[derive(Clone, Debug)]
 pub struct ComputeMetrics {
     // command history
     history_command_count: raw::UIntGaugeVec,
-    history_dataflow_count: UIntGauge,
+    history_dataflow_count: raw::UIntGaugeVec,
 
     // reconciliation
     reconciliation_reused_dataflows_count_total: raw::IntCounterVec,
     reconciliation_replaced_dataflows_count_total: raw::IntCounterVec,
 
-    // dataflow state
-    dataflow_initial_output_duration_seconds: GaugeVec,
-
     // arrangements
     arrangement_maintenance_seconds_total: raw::CounterVec,
     arrangement_maintenance_active_info: raw::UIntGaugeVec,
+
+    // timely step timings
+    //
+    // Note that this particular metric unfortunately takes some care to
+    // interpret. It measures the duration of step_or_park calls, which
+    // undesirably includes the parking. This is probably fine because we
+    // regularly send progress information through persist sources, which likely
+    // means the parking is capped at a second or two in practice. It also
+    // doesn't do anything to let you pinpoint _which_ operator or worker isn't
+    // yielding, but it should hopefully alert us when there is something to
+    // look at.
+    pub(crate) timely_step_duration_seconds: Histogram,
 }
 
 impl ComputeMetrics {
@@ -38,11 +55,12 @@ impl ComputeMetrics {
             history_command_count: registry.register(metric!(
                 name: "mz_compute_replica_history_command_count",
                 help: "The number of commands in the replica's command history.",
-                var_labels: ["command_type"],
+                var_labels: ["worker_id", "command_type"],
             )),
             history_dataflow_count: registry.register(metric!(
                 name: "mz_compute_replica_history_dataflow_count",
                 help: "The number of dataflows in the replica's command history.",
+                var_labels: ["worker_id"],
             )),
             reconciliation_reused_dataflows_count_total: registry.register(metric!(
                 name: "mz_compute_reconciliation_reused_dataflows_count_total",
@@ -54,11 +72,6 @@ impl ComputeMetrics {
                 help: "The total number of dataflows that were replaced during compute reconciliation.",
                 var_labels: ["worker_id", "reason"],
             )),
-            dataflow_initial_output_duration_seconds: registry.register(metric!(
-                name: "mz_dataflow_initial_output_duration_seconds",
-                help: "The time from dataflow installation up to when the first output was produced.",
-                var_labels: ["worker_id", "collection_id"],
-            )),
             arrangement_maintenance_seconds_total: registry.register(metric!(
                 name: "mz_arrangement_maintenance_seconds_total",
                 help: "The total time spent maintaining arrangements.",
@@ -69,16 +82,22 @@ impl ComputeMetrics {
                 help: "Whether maintenance is currently occuring.",
                 var_labels: ["worker_id"],
             )),
+            timely_step_duration_seconds: registry.register(metric!(
+                name: "mz_timely_step_duration_seconds",
+                help: "The time spent in each compute step_or_park call",
+                const_labels: {"cluster" => "compute"},
+                buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 32.0),
+            ))
         }
     }
 
-    pub fn for_history(&self) -> HistoryMetrics<UIntGauge> {
+    pub fn for_history(&self, worker_id: usize) -> HistoryMetrics<UIntGauge> {
+        let worker = worker_id.to_string();
         let command_counts = CommandMetrics::build(|typ| {
             self.history_command_count
-                .get_metric_with_label_values(&[typ])
-                .unwrap()
+                .with_label_values(&[&worker, typ])
         });
-        let dataflow_count = self.history_dataflow_count.clone();
+        let dataflow_count = self.history_dataflow_count.with_label_values(&[&worker]);
 
         HistoryMetrics {
             command_counts,
@@ -99,29 +118,6 @@ impl ComputeMetrics {
             maintenance_seconds_total,
             maintenance_active_info,
         }
-    }
-
-    pub fn for_collection(
-        &self,
-        collection_id: GlobalId,
-        worker_id: usize,
-    ) -> Option<CollectionMetrics> {
-        // In an effort to reduce the cardinality of timeseries created, we collect metrics only
-        // for non-transient dataflows. This is roughly equivalent to "long-lived" dataflows,
-        // with the exception of subscribes which may or may not be long-lived. We might want to
-        // change this policy in the future to track subscribes as well.
-        if collection_id.is_transient() {
-            return None;
-        }
-
-        let labels = vec![worker_id.to_string(), collection_id.to_string()];
-        let initial_output_duration_seconds = self
-            .dataflow_initial_output_duration_seconds
-            .get_delete_on_drop_gauge(labels);
-
-        Some(CollectionMetrics {
-            initial_output_duration_seconds,
-        })
     }
 
     /// Record the reconciliation result for a single dataflow.
@@ -155,11 +151,6 @@ impl ComputeMetrics {
                 .inc();
         }
     }
-}
-
-/// Metrics maintained per compute collection.
-pub struct CollectionMetrics {
-    pub initial_output_duration_seconds: DeleteOnDropGauge<'static, AtomicF64, Vec<String>>,
 }
 
 /// Metrics maintained by the trace manager.

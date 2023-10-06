@@ -33,7 +33,7 @@ explain with(arity, join_impls) select b, c from foo where a = 5
 Explained Query:
   Project (#1, #2) // { arity: 2 }
     Filter (#0 = 5) // { arity: 3 }
-      Get materialize.public.foo // { arity: 3 }
+      ReadStorage materialize.public.foo // { arity: 3 }
 
 Source materialize.public.foo
   filter=((#0 = 5))
@@ -54,7 +54,7 @@ explain with(arity, join_impls) select b, c from foo, (select 5 as a) const wher
 Explained Query:
   Project (#1, #2) // { arity: 2 }
     Filter (#0 = 5) // { arity: 3 }
-      Get materialize.public.foo // { arity: 3 }
+      ReadStorage materialize.public.foo // { arity: 3 }
 
 Source materialize.public.foo
   filter=((#0 = 5))
@@ -78,10 +78,10 @@ Explained Query:
       %0:foo[×]ef » %1:bar[×]ef
     ArrangeBy keys=[[]] // { arity: 3 }
       Filter (#0 = 3) // { arity: 3 }
-        Get materialize.public.foo // { arity: 3 }
+        ReadStorage materialize.public.foo // { arity: 3 }
     ArrangeBy keys=[[]] // { arity: 3 }
       Filter (3 = abs(#0)) // { arity: 3 }
-        Get materialize.public.bar // { arity: 3 }
+        ReadStorage materialize.public.bar // { arity: 3 }
 
 Source materialize.public.foo
   filter=((#0 = 3))

@@ -7,9 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import textwrap
 import time
 from inspect import getframeinfo, stack
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from materialize.checks.executors import Executor
 
@@ -30,9 +31,9 @@ class Testdrive(Action):
     # Instruct pytest this class does not contain actual tests
     __test__ = False
 
-    def __init__(self, input: str) -> None:
-        self.input = input
-        self.handle: Optional[Any] = None
+    def __init__(self, input: str, dedent: bool = True) -> None:
+        self.input = textwrap.dedent(input) if dedent else input
+        self.handle: Any | None = None
         self.caller = getframeinfo(stack()[1][0])
 
     def execute(self, e: Executor) -> None:
@@ -73,7 +74,7 @@ class Manipulate(Action):
     def __init__(
         self,
         scenario: "Scenario",
-        phase: Optional[int] = None,
+        phase: int | None = None,
     ) -> None:
         assert phase is not None
         self.phase = phase - 1

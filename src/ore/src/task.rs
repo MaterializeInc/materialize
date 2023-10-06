@@ -41,14 +41,24 @@
 //! naming closures like above.
 
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
+use futures::FutureExt;
 use tokio::runtime::{Handle, Runtime};
-use tokio::task::{self, JoinHandle};
+use tokio::task::{self, JoinError, JoinHandle};
 
 /// Wraps a [`JoinHandle`] to abort the underlying task when dropped.
 #[derive(Debug)]
 pub struct AbortOnDropHandle<T>(JoinHandle<T>);
+
+impl<T> AbortOnDropHandle<T> {
+    /// Checks if the task associated with this [`AbortOnDropHandle`] has finished.a
+    pub fn is_finished(&self) -> bool {
+        self.0.is_finished()
+    }
+}
 
 impl<T> Drop for AbortOnDropHandle<T> {
     fn drop(&mut self) {
@@ -56,15 +66,79 @@ impl<T> Drop for AbortOnDropHandle<T> {
     }
 }
 
+impl<T> Future for AbortOnDropHandle<T> {
+    type Output = Result<T, JoinError>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.0.poll_unpin(cx)
+    }
+}
+
 /// Extension methods for [`JoinHandle`].
+#[async_trait::async_trait]
 pub trait JoinHandleExt<T> {
     /// Converts a [`JoinHandle`] into a [`AbortOnDropHandle`].
     fn abort_on_drop(self) -> AbortOnDropHandle<T>;
+
+    /// Awaits the `JoinHandle`, resuming the unwind if the task panicked,
+    /// and panicking if the task was cancelled.
+    ///
+    /// If abort-on-drop is on, then this method will only
+    /// panic on cancelled tasks.
+    ///
+    /// This method will also yield to the runtime
+    async fn wait_and_assert_finished(self) -> T;
 }
 
-impl<T> JoinHandleExt<T> for JoinHandle<T> {
+async fn unpack_join_result<T>(res: Result<T, JoinError>) -> T {
+    match res {
+        Ok(val) => val,
+        Err(err) => match err.try_into_panic() {
+            Ok(panic) => std::panic::resume_unwind(panic),
+            Err(e) => {
+                // Yield explicitly to the tokio runtime. The runtime
+                // can only shutdown each core thread when the running
+                // task yields. This means we could panic here if the `JoinHandle`
+                // is cancelled because it is owned by a separate core thread,
+                // which is already shutdown. We don't want to panic
+                // spuriously when we are already shutting down.
+                tokio::task::yield_now().await;
+                panic!("task expected to complete was cancelled: {}", e);
+            }
+        },
+    }
+}
+
+#[async_trait::async_trait]
+impl<T: Send> JoinHandleExt<T> for JoinHandle<T> {
     fn abort_on_drop(self) -> AbortOnDropHandle<T> {
         AbortOnDropHandle(self)
+    }
+
+    async fn wait_and_assert_finished(self) -> T {
+        unpack_join_result(self.await).await
+    }
+}
+
+#[async_trait::async_trait]
+impl<T: Send> JoinHandleExt<T> for tracing::instrument::Instrumented<JoinHandle<T>> {
+    fn abort_on_drop(self) -> AbortOnDropHandle<T> {
+        panic!("not yet supported");
+    }
+
+    async fn wait_and_assert_finished(self) -> T {
+        unpack_join_result(self.await).await
+    }
+}
+
+#[async_trait::async_trait]
+impl<T: Send> JoinHandleExt<T> for AbortOnDropHandle<T> {
+    fn abort_on_drop(self) -> AbortOnDropHandle<T> {
+        self
+    }
+
+    async fn wait_and_assert_finished(self) -> T {
+        unpack_join_result(self.await).await
     }
 }
 
@@ -100,7 +174,7 @@ where
 {
     #[allow(clippy::disallowed_methods)]
     task::Builder::new()
-        .name(nc().as_ref())
+        .name(&format!("{}:{}", Handle::current().id(), nc().as_ref()))
         .spawn(future)
         .expect("task spawning cannot fail")
 }
@@ -145,7 +219,7 @@ where
     Output: Send + 'static,
 {
     task::Builder::new()
-        .name(nc().as_ref())
+        .name(&format!("{}:{}", Handle::current().id(), nc().as_ref()))
         .spawn_blocking(function)
         .expect("task spawning cannot fail")
 }
@@ -279,5 +353,82 @@ impl RuntimeExt for Handle {
     {
         let _g = self.enter();
         spawn(nc, future)
+    }
+}
+
+/// Extension methods for [`tokio::task::JoinSet`].
+///
+/// See the [module][`self`] docs for more information.
+pub trait JoinSetExt<T> {
+    /// Spawns a new asynchronous task with a name.
+    ///
+    /// See [`tokio::task::spawn`] and the [module][`self`] docs for more
+    /// information.
+    #[track_caller]
+    fn spawn_named<Fut, Name, NameClosure>(
+        &mut self,
+        nc: NameClosure,
+        future: Fut,
+    ) -> tokio::task::AbortHandle
+    where
+        Name: AsRef<str>,
+        NameClosure: FnOnce() -> Name,
+        Fut: Future<Output = T> + Send + 'static,
+        T: Send + 'static;
+}
+
+impl<T> JoinSetExt<T> for tokio::task::JoinSet<T> {
+    // Allow unused variables until everything in ci uses `tokio_unstable`.
+    #[allow(unused_variables)]
+    fn spawn_named<Fut, Name, NameClosure>(
+        &mut self,
+        nc: NameClosure,
+        future: Fut,
+    ) -> tokio::task::AbortHandle
+    where
+        Name: AsRef<str>,
+        NameClosure: FnOnce() -> Name,
+        Fut: Future<Output = T> + Send + 'static,
+        T: Send + 'static,
+    {
+        #[cfg(tokio_unstable)]
+        #[allow(clippy::disallowed_methods)]
+        {
+            self.build_task()
+                .name(&format!("{}:{}", Handle::current().id(), nc().as_ref()))
+                .spawn(future)
+                .expect("task spawning cannot fail")
+        }
+        #[cfg(not(tokio_unstable))]
+        #[allow(clippy::disallowed_methods)]
+        {
+            self.spawn(future)
+        }
+    }
+}
+
+/// Wraps a [`tokio::task::AbortHandle`] to abort the underlying task when dropped.
+// Tokio `AbortHandle`'s can't be polled to completion so this is separate from
+// `AbortOnDropHandle`.
+#[derive(Debug)]
+pub struct AbortOnDropAbortHandle(tokio::task::AbortHandle);
+
+impl Drop for AbortOnDropAbortHandle {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Extension methods for [`tokio::task::AbortHandle`].
+#[async_trait::async_trait]
+pub trait AbortHandleExt {
+    /// Converts an [`tokio::task::AbortHandle`] into a [`AbortOnDropAbortHandle`].
+    fn abort_on_drop(self) -> AbortOnDropAbortHandle;
+}
+
+#[async_trait::async_trait]
+impl AbortHandleExt for tokio::task::AbortHandle {
+    fn abort_on_drop(self) -> AbortOnDropAbortHandle {
+        AbortOnDropAbortHandle(self)
     }
 }

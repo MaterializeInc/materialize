@@ -7,21 +7,20 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::future::Future;
 use std::time::Duration;
 
-use mz_ore::retry::Retry;
-use tracing::warn;
-
-use crate::Error;
+use reqwest_retry::policies::ExponentialBackoff;
+use reqwest_retry::RetryTransientMiddleware;
 
 pub mod tokens;
 
+/// Client for Frontegg auth requests.
+///
+/// Internally the client will attempt to de-dupe requests, e.g. if a single user tries to connect
+/// many clients at once, we'll de-dupe the authentication requests.
 #[derive(Clone, Debug)]
 pub struct Client {
-    pub client: reqwest::Client,
-    pub retry_backoff: Duration,
-    pub max_retry: Duration,
+    pub client: reqwest_middleware::ClientWithMiddleware,
 }
 
 impl Default for Client {
@@ -36,35 +35,19 @@ impl Default for Client {
 impl Client {
     /// The environmentd Client. Do not change these without a review from the surfaces team.
     pub fn environmentd_default() -> Self {
-        Self {
-            client: reqwest::Client::builder()
-                .timeout(Duration::from_secs(5))
-                .build()
-                .expect("must build Client"),
-            retry_backoff: Duration::from_secs(1),
-            max_retry: Duration::from_secs(30),
-        }
-    }
+        let retry_policy = ExponentialBackoff::builder()
+            .retry_bounds(Duration::from_millis(200), Duration::from_secs(2))
+            .backoff_exponent(2)
+            .build_with_total_retry_duration(Duration::from_secs(30));
 
-    async fn request<T, F, U>(&self, f: F) -> Result<T, Error>
-    where
-        F: Copy + Fn(reqwest::Client) -> U,
-        U: Future<Output = Result<T, Error>>,
-    {
-        Retry::default()
-            .clamp_backoff(self.retry_backoff.clone())
-            .max_duration(self.max_retry.clone())
-            .retry_async_canceling(|state| async move {
-                // Return a Result<Result<T, Error>, Error> so we can
-                // differentiate a retryable or not error.
-                match f(self.client.clone()).await {
-                    Err(Error::ReqwestError(err)) if err.is_timeout() => {
-                        warn!("frontegg timeout, attempt {}: {}", state.i, err);
-                        Err(Error::from(err))
-                    }
-                    v => Ok(v),
-                }
-            })
-            .await?
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .expect("must build Client");
+        let client = reqwest_middleware::ClientBuilder::new(client)
+            .with(RetryTransientMiddleware::new_with_policy(retry_policy))
+            .build();
+
+        Self { client }
     }
 }

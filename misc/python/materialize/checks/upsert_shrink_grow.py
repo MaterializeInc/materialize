@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 from textwrap import dedent
-from typing import List
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
@@ -50,7 +49,7 @@ class ShrinkGrow:
             )
         )
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         name = self.name()
         pads = self.pads()
         return [
@@ -82,7 +81,7 @@ class ShrinkGrow:
     def name(self) -> str:
         raise NotImplementedError
 
-    def pads(self) -> List[str]:
+    def pads(self) -> list[str]:
         raise NotImplementedError
 
 
@@ -92,7 +91,7 @@ class UpsertUpdateShrink(ShrinkGrow, Check):
     def name(self) -> str:
         return "shrink"
 
-    def pads(self) -> List[str]:
+    def pads(self) -> list[str]:
         return ["x" * 1024, "x" * 512, "x" * 256]
 
 
@@ -102,5 +101,5 @@ class UpsertUpdateGrow(ShrinkGrow, Check):
     def name(self) -> str:
         return "grow"
 
-    def pads(self) -> List[str]:
+    def pads(self) -> list[str]:
         return ["x" * 256, "x" * 512, "x" * 1024]
