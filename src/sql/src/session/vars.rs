@@ -1711,7 +1711,7 @@ feature_flags!(
     ),
     (
         enable_comment,
-        "Enables the COMMENT ON feature for objects in the database (Materialize).",
+        "the COMMENT ON feature for objects",
         false, // default false
         false  // internal false
     )
