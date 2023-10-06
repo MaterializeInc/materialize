@@ -199,6 +199,13 @@ impl MemConsensus {
 
 #[async_trait]
 impl Consensus for MemConsensus {
+    async fn list_keys(&self) -> Result<Vec<String>, ExternalError> {
+        // Yield to maximize our chances for getting interesting orderings.
+        let () = yield_now().await;
+        let store = self.data.lock().map_err(Error::from)?;
+        Ok(store.keys().cloned().collect())
+    }
+
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
         // Yield to maximize our chances for getting interesting orderings.
         let () = yield_now().await;

@@ -88,6 +88,10 @@ impl MaelstromConsensus {
 
 #[async_trait]
 impl Consensus for MaelstromConsensus {
+    async fn list_keys(&self) -> Result<Vec<String>, ExternalError> {
+        unimplemented!("TODO")
+    }
+
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
         let value = match self
             .handle

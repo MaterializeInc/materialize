@@ -220,6 +220,19 @@ impl PostgresConsensus {
 
 #[async_trait]
 impl Consensus for PostgresConsensus {
+    async fn list_keys(&self) -> Result<Vec<String>, ExternalError> {
+        let q = "SELECT DISTINCT shard FROM consensus";
+        let client = self.get_connection().await?;
+        let statement = client.prepare_cached(q).await?;
+        let rows = client.query(&statement, &[]).await?;
+        let mut results = Vec::with_capacity(rows.len());
+        for row in rows {
+            let shard: String = row.try_get("shard")?;
+            results.push(shard)
+        }
+        Ok(results)
+    }
+
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
         let q = "SELECT sequence_number, data FROM consensus
              WHERE shard = $1 ORDER BY sequence_number DESC LIMIT 1";

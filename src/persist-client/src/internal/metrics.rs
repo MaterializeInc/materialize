@@ -2248,6 +2248,11 @@ impl MetricsConsensus {
 
 #[async_trait]
 impl Consensus for MetricsConsensus {
+    async fn list_keys(&self) -> Result<Vec<String>, ExternalError> {
+        // TODO: metrics!
+        self.consensus.list_keys().await
+    }
+
     #[instrument(name = "consensus::head", skip_all, fields(shard=key))]
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
         let res = self

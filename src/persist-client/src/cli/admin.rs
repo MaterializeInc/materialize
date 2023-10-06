@@ -323,6 +323,10 @@ impl Blob for ReadOnly<Arc<dyn Blob + Sync + Send>> {
 
 #[async_trait]
 impl Consensus for ReadOnly<Arc<dyn Consensus + Sync + Send>> {
+    async fn list_keys(&self) -> Result<Vec<String>, ExternalError> {
+        self.0.list_keys().await
+    }
+
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
         self.0.head(key).await
     }

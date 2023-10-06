@@ -353,6 +353,9 @@ impl<A> Tasked<A> {
 /// range [0, i64::MAX].
 #[async_trait]
 pub trait Consensus: std::fmt::Debug {
+    /// Returns all the keys ever created in the consensus store.
+    async fn list_keys(&self) -> Result<Vec<String>, ExternalError>;
+
     /// Returns a recent version of `data`, and the corresponding sequence number, if
     /// one exists at this location.
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError>;
@@ -397,6 +400,14 @@ pub trait Consensus: std::fmt::Debug {
 
 #[async_trait]
 impl<A: Consensus + Sync + Send + 'static> Consensus for Tasked<A> {
+    async fn list_keys(&self) -> Result<Vec<String>, ExternalError> {
+        let backing = self.clone_backing();
+        mz_ore::task::spawn(|| "persist::task::list_keys", async move {
+            backing.list_keys().await
+        })
+        .await?
+    }
+
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
         let backing = self.clone_backing();
         let key = key.to_owned();
@@ -832,6 +843,9 @@ pub mod tests {
             consensus.compare_and_set(&key, None, state.clone()).await,
             Ok(CaSResult::Committed),
         );
+
+        // The new key is visible in state.
+        assert_eq!(consensus.list_keys().await?, vec![key.to_owned()]);
 
         // We can observe the a recent value on successful update.
         assert_eq!(consensus.head(&key).await, Ok(Some(state.clone())));

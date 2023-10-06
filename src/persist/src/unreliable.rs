@@ -190,6 +190,12 @@ impl UnreliableConsensus {
 
 #[async_trait]
 impl Consensus for UnreliableConsensus {
+    async fn list_keys(&self) -> Result<Vec<String>, ExternalError> {
+        self.handle
+            .run_op("list_keys", || self.consensus.list_keys())
+            .await
+    }
+
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
         self.handle
             .run_op("head", || self.consensus.head(key))
