@@ -110,6 +110,9 @@ Materialize can connect to a PostgreSQL database through an [AWS PrivateLink](ht
 
     Note the **service name** that is generated for the endpoint service.
 
+    **Remarks**:
+    By disabling [Acceptance Required](https://docs.aws.amazon.com/vpc/latest/privatelink/configure-endpoint-service.html#accept-reject-connection-requests), while still strictly managing who can view your endpoint via IAM, Materialze will be able to seamlessly recreate and migrate endpoints as we work to stabilize this feature.
+
 1. #### Create an AWS PrivateLink Connection
      In Materialize, create a [`AWS PRIVATELINK`](/sql/create-connection/#aws-privatelink) connection that references the endpoint service that you created in the previous step.
 

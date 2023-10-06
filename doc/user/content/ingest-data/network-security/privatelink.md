@@ -76,7 +76,7 @@ the TCP listeners (step 3) and the VPC endpoint service (step 5).
 
     Note the **service name** that is generated for the endpoint service.
 
-    **Remarks**
+    **Remarks**:
     By disabling [Acceptance Required](https://docs.aws.amazon.com/vpc/latest/privatelink/configure-endpoint-service.html#accept-reject-connection-requests), while still strictly managing who can view your endpoint via IAM, Materialze will be able to seamlessly recreate and migrate endpoints as we work to stabilize this feature.
 
 1. #### Create an AWS PrivateLink Connection
@@ -131,7 +131,7 @@ the TCP listeners (step 3) and the VPC endpoint service (step 5).
 
     Note the **service name** that is generated for the endpoint service.
 
-    **Remarks**
+    **Remarks**:
     By disabling [Acceptance Required](https://docs.aws.amazon.com/vpc/latest/privatelink/configure-endpoint-service.html#accept-reject-connection-requests), while still strictly managing who can view your endpoint via IAM, Materialze will be able to seamlessly recreate and migrate endpoints as we work to stabilize this feature.
 
 1. #### Create an AWS PrivateLink Connection

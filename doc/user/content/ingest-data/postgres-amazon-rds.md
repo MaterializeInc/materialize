@@ -163,6 +163,9 @@ Materialize provides a Terraform module that automates the creation and configur
 
     - After creating the VPC endpoint service, note its **Service name**. You'll use this service name when connecting Materialize later.
 
+    **Remarks**:
+    By disabling [Acceptance Required](https://docs.aws.amazon.com/vpc/latest/privatelink/configure-endpoint-service.html#accept-reject-connection-requests), while still strictly managing who can view your endpoint via IAM, Materialze will be able to seamlessly recreate and migrate endpoints as we work to stabilize this feature.
+
 1. Go back to the target group you created for the network load balancer and make sure that the [health checks](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-health-checks.html) are reporting the targets as healthy.
 
 {{< /tab >}}
