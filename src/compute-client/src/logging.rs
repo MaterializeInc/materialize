@@ -229,6 +229,7 @@ pub enum ComputeLog {
     ArrangementHeapCapacity,
     ArrangementHeapAllocations,
     ShutdownDuration,
+    FrontierDelayAvg,
 }
 
 impl RustType<ProtoComputeLog> for ComputeLog {
@@ -246,6 +247,7 @@ impl RustType<ProtoComputeLog> for ComputeLog {
                 ComputeLog::ArrangementHeapCapacity => ArrangementHeapCapacity(()),
                 ComputeLog::ArrangementHeapAllocations => ArrangementHeapAllocations(()),
                 ComputeLog::ShutdownDuration => ShutdownDuration(()),
+                ComputeLog::FrontierDelayAvg => FrontierDelayAvg(()),
             }),
         }
     }
@@ -263,6 +265,7 @@ impl RustType<ProtoComputeLog> for ComputeLog {
             Some(ArrangementHeapCapacity(())) => Ok(ComputeLog::ArrangementHeapCapacity),
             Some(ArrangementHeapAllocations(())) => Ok(ComputeLog::ArrangementHeapAllocations),
             Some(ShutdownDuration(())) => Ok(ComputeLog::ShutdownDuration),
+            Some(FrontierDelayAvg(())) => Ok(ComputeLog::FrontierDelayAvg),
             None => Err(TryFromProtoError::missing_field("ProtoComputeLog::kind")),
         }
     }
@@ -433,6 +436,10 @@ impl LogVariant {
             LogVariant::Compute(ComputeLog::ShutdownDuration) => RelationDesc::empty()
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("duration_ns", ScalarType::UInt64.nullable(false)),
+
+            LogVariant::Compute(ComputeLog::FrontierDelayAvg) => RelationDesc::empty()
+                .with_column("export_id", ScalarType::String.nullable(false))
+                .with_column("avg_ns", ScalarType::UInt64.nullable(false)),
         }
     }
 
@@ -476,6 +483,7 @@ impl LogVariant {
             Compute(ComputeLog::PeekCurrent) => vec![],
             Compute(ComputeLog::PeekDuration) => vec![],
             Compute(ComputeLog::ShutdownDuration) => vec![],
+            Compute(ComputeLog::FrontierDelayAvg) => vec![],
         }
     }
 }

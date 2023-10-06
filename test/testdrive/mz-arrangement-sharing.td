@@ -840,6 +840,7 @@ CREATE CLUSTER REPLICA default.replica SIZE = '2', INTROSPECTION DEBUGGING = tru
 "ArrangeByKey Compute(DataflowCurrent)"
 "ArrangeByKey Compute(FrontierCurrent)"
 "ArrangeByKey Compute(FrontierDelay)"
+"ArrangeByKey Compute(FrontierDelayAvg)"
 "ArrangeByKey Compute(ImportFrontierCurrent)"
 "ArrangeByKey Compute(PeekCurrent)"
 "ArrangeByKey Compute(PeekDuration)"
