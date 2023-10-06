@@ -17,9 +17,9 @@ ALTER SYSTEM SET enable_comment = true;
 > CREATE TABLE t (c1 point, c2 text NOT NULL, c3 custom_map, c4 point list);
 > INSERT INTO t SELECT ROW(1, 1)::point AS c1, 'text' AS c2, '{a=>true}'::custom_map as c3, LIST[ROW(1, 1)::point] as c4;
 
-> COMMENT ON TABLE t IS 'comment on table t';
-> COMMENT ON COLUMN t.c3 IS 'comment on column t.c3';
-> COMMENT ON COLUMN t.c4 IS 'comment on column t.c4';
+> COMMENT ON TABLE t IS 'comment on table t with a \\ \';
+> COMMENT ON COLUMN t.c3 IS 'comment on column t.c3 with a ''';
+> COMMENT ON COLUMN t.c4 IS 'comment on column t.c4 with an äöü';
 > COMMENT ON TYPE point IS 'comment on type point';
 
 > CREATE CONNECTION kafka_conn
@@ -47,10 +47,10 @@ ALTER SYSTEM SET enable_comment = true;
 > SHOW CREATE SINK sink1;
 name                            create_sql
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
- "materialize.public.sink1"  "CREATE SINK \"materialize\".\"public\".\"sink1\" FROM \"materialize\".\"public\".\"t\" INTO KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-sink1-${testdrive.seed}') KEY (\"c2\") NOT ENFORCED FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION \"materialize\".\"public\".\"csr_conn\" (DOC ON COLUMN \"materialize\".\"public\".\"t\".c1 = 'doc on t.c1', VALUE DOC ON COLUMN \"materialize\".\"public\".\"t\".c2 = 'value doc on t.c2', KEY DOC ON COLUMN \"materialize\".\"public\".\"t\".c2 = 'key doc on t.c2', DOC ON COLUMN \"materialize\".\"public\".\"t\".c4 = 'doc on t.c4', KEY DOC ON TYPE \"materialize\".\"public\".\"point\" = 'key doc on point', VALUE DOC ON TYPE \"materialize\".\"public\".\"point\" = 'value doc on point', KEY DOC ON TYPE \"materialize\".\"public\".\"t\" = 'key doc on t', DOC ON TYPE \"materialize\".\"public\".\"point\" = 'comment on type point', DOC ON TYPE \"materialize\".\"public\".\"t\" = 'comment on table t', DOC ON COLUMN \"materialize\".\"public\".\"t\".c3 = 'comment on column t.c3') ENVELOPE UPSERT"
+ "materialize.public.sink1"  "CREATE SINK \"materialize\".\"public\".\"sink1\" FROM \"materialize\".\"public\".\"t\" INTO KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-sink1-${testdrive.seed}') KEY (\"c2\") NOT ENFORCED FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION \"materialize\".\"public\".\"csr_conn\" (DOC ON COLUMN \"materialize\".\"public\".\"t\".c1 = 'doc on t.c1', VALUE DOC ON COLUMN \"materialize\".\"public\".\"t\".c2 = 'value doc on t.c2', KEY DOC ON COLUMN \"materialize\".\"public\".\"t\".c2 = 'key doc on t.c2', DOC ON COLUMN \"materialize\".\"public\".\"t\".c4 = 'doc on t.c4', KEY DOC ON TYPE \"materialize\".\"public\".\"point\" = 'key doc on point', VALUE DOC ON TYPE \"materialize\".\"public\".\"point\" = 'value doc on point', KEY DOC ON TYPE \"materialize\".\"public\".\"t\" = 'key doc on t', DOC ON TYPE \"materialize\".\"public\".\"point\" = 'comment on type point', DOC ON TYPE \"materialize\".\"public\".\"t\" = 'comment on table t with a \\\\ \\', DOC ON COLUMN \"materialize\".\"public\".\"t\".c3 = 'comment on column t.c3 with a ''') ENVELOPE UPSERT"
 
 $ schema-registry-verify schema-type=avro subject=testdrive-sink1-${testdrive.seed}-value
-{"type":"record","name":"envelope","doc":"comment on table t","fields":[{"name":"c1","type":["null",{"type":"record","name":"record0","namespace":"com.materialize.sink","doc":"value doc on point","fields":[{"name":"x","type":["null","int"]},{"name":"y","type":["null","int"]}]}],"doc":"doc on t.c1"},{"name":"c2","type":"string","doc":"value doc on t.c2"},{"name":"c3","type":["null",{"type":"map","values":["null","boolean"]}],"doc":"comment on column t.c3"},{"name":"c4","type":["null",{"type":"array","items":["null",{"type":"record","name":"record1","namespace":"com.materialize.sink","doc":"value doc on point","fields":[{"name":"x","type":["null","int"]},{"name":"y","type":["null","int"]}]}]}],"doc":"doc on t.c4"}]}
+{"type":"record","name":"envelope","doc":"comment on table t with a \\\\ \\","fields":[{"name":"c1","type":["null",{"type":"record","name":"record0","namespace":"com.materialize.sink","doc":"value doc on point","fields":[{"name":"x","type":["null","int"]},{"name":"y","type":["null","int"]}]}],"doc":"doc on t.c1"},{"name":"c2","type":"string","doc":"value doc on t.c2"},{"name":"c3","type":["null",{"type":"map","values":["null","boolean"]}],"doc":"comment on column t.c3 with a '"},{"name":"c4","type":["null",{"type":"array","items":["null",{"type":"record","name":"record1","namespace":"com.materialize.sink","doc":"value doc on point","fields":[{"name":"x","type":["null","int"]},{"name":"y","type":["null","int"]}]}]}],"doc":"doc on t.c4"}]}
 
 $ schema-registry-verify schema-type=avro subject=testdrive-sink1-${testdrive.seed}-key
 {"type":"record","name":"row","doc":"key doc on t","fields":[{"name":"c2","type":"string","doc":"key doc on t.c2"}]}
@@ -62,7 +62,7 @@ $ schema-registry-verify schema-type=avro subject=testdrive-sink1-${testdrive.se
   ENVELOPE UPSERT;
 
 $ schema-registry-verify schema-type=avro subject=testdrive-sink2-${testdrive.seed}-value
-{"type":"record","name":"envelope","doc":"comment on table t","fields":[{"name":"c1","type":["null",{"type":"record","name":"record0","namespace":"com.materialize.sink","doc":"comment on type point","fields":[{"name":"x","type":["null","int"]},{"name":"y","type":["null","int"]}]}]},{"name":"c2","type":"string"},{"name":"c3","type":["null",{"type":"map","values":["null","boolean"]}],"doc":"comment on column t.c3"},{"name":"c4","type":["null",{"type":"array","items":["null",{"type":"record","name":"record1","namespace":"com.materialize.sink","doc":"comment on type point","fields":[{"name":"x","type":["null","int"]},{"name":"y","type":["null","int"]}]}]}],"doc":"comment on column t.c4"}]}
+{"type":"record","name":"envelope","doc":"comment on table t with a \\\\ \\","fields":[{"name":"c1","type":["null",{"type":"record","name":"record0","namespace":"com.materialize.sink","doc":"comment on type point","fields":[{"name":"x","type":["null","int"]},{"name":"y","type":["null","int"]}]}]},{"name":"c2","type":"string"},{"name":"c3","type":["null",{"type":"map","values":["null","boolean"]}],"doc":"comment on column t.c3 with a '"},{"name":"c4","type":["null",{"type":"array","items":["null",{"type":"record","name":"record1","namespace":"com.materialize.sink","doc":"comment on type point","fields":[{"name":"x","type":["null","int"]},{"name":"y","type":["null","int"]}]}]}],"doc":"comment on column t.c4 with an äöü"}]}
 
 # errors
 ! CREATE SINK bad_sink FROM t
@@ -114,3 +114,13 @@ contains: option value: cannot be empty
   )
   ENVELOPE UPSERT
 contains: need to specify an object and a column
+
+! CREATE SINK bad_sink FROM t
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink1-${testdrive.seed}')
+  KEY (c2) NOT ENFORCED
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  (
+   DOC ON COLUMN t.c1 = NULL
+  )
+  ENVELOPE UPSERT;
+contains: cannot use value as string

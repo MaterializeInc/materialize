@@ -72,6 +72,8 @@ class Identifiers(Check):
             "sink2": "17",
             "alias": "18",
             "role": "19",
+            "comment_table": "20",
+            "comment_column": "21",
         },
         {
             "db": "-1.0",
@@ -95,6 +97,8 @@ class Identifiers(Check):
             "sink2": "17.0",
             "alias": "18.0",
             "role": "19.0",
+            "comment_table": "20.0",
+            "comment_column": "21.0",
         },
         {
             "db": "\u0001\u0002\u0003\u0004\u0005\u0006\u0007\b\u000e\u000f\u0010\u0011\u0012\u0013\u0014\u0015\u0016\u0017\u0018\u0019\u001a\u001b\u001c\u001d\u001e\u001f^?",
@@ -118,6 +122,8 @@ class Identifiers(Check):
             "sink2": "﻿",
             "alias": "₀₁₂",
             "role": "⁰⁴⁵₀₁₂",
+            "comment_table": "ด้้้้้็็็็็้้้้้็็็็็้้้้้้้้็็็็็้้้้้็็็็็้้้้้้้้็็็็็้้้้้็็็็็้้้้้้้้็็็็็้้้้้็็็็ ด้้้้้็็็็็้้้้้็็็็็้้้้้้้้็็็็็้้้้้็็็็็้้้้้้้้็็็็็้้้้้็็็็็้้้้้้้้็็็็็้้้้้็็็็ ด้้้้้็็็็็้้้้้็็็็็้้้้้้้้็็็็็้้้้้็็็็็้้้้้้้้็็็็็้้้้้็็็็็้้้้้้้้็็็็็้้้้้็็็็",
+            "comment_column": "٠١٢٣٤٥٦٧٨٩",
         },
         {
             "db": "찦차를 타고 온 펲시맨과 쑛다리 똠방각하",
@@ -141,6 +147,8 @@ class Identifiers(Check):
             "sink2": "｀ｨ(´∀｀∩",
             "alias": "⅛⅜⅝⅞",
             "role": "ЁЂЃЄЅІЇЈЉЊЋЌЍЎЏАБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдежзийклмнопрстуфхцчшщъыьэюя",
+            "comment_table": "`⁄€‹›ﬁﬂ‡°·‚—±",
+            "comment_column": "Œ„´‰ˇÁ¨ˆØ∏”’",
         },
         {
             "db": "❤️ 💔 💌 💕 💞 💓 💗 💖 💘 💝 💟 💜 💛 💚 💙",
@@ -164,6 +172,8 @@ class Identifiers(Check):
             "sink2": "‫test‫",
             "alias": "1#INF",
             "role": "0xffffffffffffffff",
+            "comment_table": "0xabad1dea",
+            "comment_column": "123456789012345678901234567890123456789",
         },
         {
             "db": "ﺍﻺﻃﻼﻗ ﻊﻟ ﺈﻳﻭ.",
@@ -186,7 +196,9 @@ class Identifiers(Check):
             "sink1": "⁦test⁧",
             "sink2": "‪‪᚛                 ᚜‪",
             "alias": "0xabad1dea",
-            "role": "0xffffffffffffffff",
+            "role": "1.000.000,00",
+            "comment_table": "2.2250738585072011e-308",
+            "comment_column": "09",
         },
     ]
 
@@ -229,6 +241,12 @@ class Identifiers(Check):
         if self.base_version >= MzVersion(0, 44, 0):
             cmds += f"""
             > CREATE SECRET {dq(self.ident["secret"])} as {sq(self.ident["secret_value"])};
+            """
+        if self.base_version >= MzVersion(0, 72, 0):
+            cmds += f"""
+            > COMMENT ON TABLE {dq(self.ident["schema"])}.{dq(self.ident["table"])} IS {sq(self.ident["comment_table"])};
+
+            > COMMENT ON COLUMN {dq(self.ident["schema"])}.{dq(self.ident["table"])}.{dq(self.ident["column"])} IS {sq(self.ident["comment_column"])};
             """
 
         return Testdrive(schemas() + cluster() + dedent(cmds))
@@ -292,6 +310,12 @@ class Identifiers(Check):
 
         > SELECT * FROM {dq(self.ident["source_view"])};
         U2 A 1000
+        """
+        if self.base_version >= MzVersion(0, 72, 0):
+            cmds += f"""
+        > SELECT object_sub_id, comment FROM mz_internal.mz_comments JOIN mz_tables ON mz_internal.mz_comments.id = mz_tables.id WHERE name = {sq(self.ident["table"])};
+        <null> {dq_print(self.ident["comment_table"])}
+        1 {dq_print(self.ident["comment_column"])}
         """
         if self.base_version >= MzVersion(0, 44, 0):
             cmds += f"""
