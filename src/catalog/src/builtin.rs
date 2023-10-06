@@ -2862,51 +2862,43 @@ LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
 WHERE s.database_id IS NULL OR d.name = current_database()",
 };
 
-// Note: Databases, Roles, Clusters, Cluster Replicas, Secrets, and Connections are excluded from
-// this view.
+/// Note: Databases, Roles, Clusters, Cluster Replicas, Secrets, and Connections are excluded from
+/// this view for Postgres compatibility. Specifically, there is no classoid for these objects,
+/// which is required for this view.
 pub const PG_DESCRIPTION: BuiltinView = BuiltinView {
     name: "pg_description",
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_catalog.pg_description AS
-SELECT
-	pg_obj.objoid,
-	pg_obj.classoid,
-	COALESCE(cmt.object_sub_id::pg_catalog.int4, 0) AS objsubid,
-	cmt.comment AS description
-FROM
-	(
-		SELECT
-			oid, (SELECT oid FROM mz_catalog.mz_objects WHERE name = 'pg_class')
-		FROM
-			pg_catalog.pg_class
-		UNION ALL
-			SELECT
-				oid,
-				(SELECT oid FROM mz_catalog.mz_objects WHERE name = 'pg_type')
-			FROM
-				pg_catalog.pg_type
-		UNION ALL
-			SELECT
-				oid,
-				(
-					SELECT
-						oid
-					FROM
-						mz_catalog.mz_objects
-					WHERE
-						name = 'pg_namespace'
-				)
-			FROM
-				pg_catalog.pg_namespace
-	)
-		AS pg_obj (objoid, classoid)
-	JOIN (
-			SELECT id, oid, type FROM mz_catalog.mz_objects
-			UNION ALL SELECT id, oid, 'schema' FROM mz_catalog.mz_schemas
-		)
-			AS mz_obj (id, oid, type) ON pg_obj.objoid = mz_obj.oid
-	JOIN mz_internal.mz_comments AS cmt ON
-			mz_obj.id = cmt.id AND lower(mz_obj.type) = lower(cmt.object_type)",
+    (
+        -- Gather all of the class oid's for objects that can have comments.
+        WITH pg_classoids AS (
+            SELECT oid, (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'pg_class') AS classoid
+            FROM pg_catalog.pg_class
+            UNION ALL
+            SELECT oid, (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'pg_type') AS classoid
+            FROM pg_catalog.pg_type
+            UNION ALL
+            SELECT oid, (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'pg_namespace') AS classoid
+            FROM pg_catalog.pg_namespace
+        ),
+        -- Gather all of the MZ ids for objects that can have comments.
+        mz_objects AS (
+            SELECT id, oid, type FROM mz_catalog.mz_objects
+            UNION ALL
+            SELECT id, oid, 'schema' AS type FROM mz_catalog.mz_schemas
+        )
+        SELECT
+            pg_classoids.oid AS objoid,
+            pg_classoids.classoid as classoid,
+            COALESCE(cmt.object_sub_id::pg_catalog.int4, 0) AS objsubid,
+            cmt.comment AS description
+        FROM
+            pg_classoids
+        JOIN
+            mz_objects ON pg_classoids.oid = mz_objects.oid
+        JOIN
+            mz_internal.mz_comments AS cmt ON mz_objects.id = cmt.id AND lower(mz_objects.type) = lower(cmt.object_type)
+    )",
 };
 
 pub const PG_TYPE: BuiltinView = BuiltinView {
