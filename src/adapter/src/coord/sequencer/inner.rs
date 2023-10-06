@@ -957,6 +957,7 @@ impl Coordinator {
                     expr: raw_expr,
                     column_names,
                     cluster_id,
+                    force_not_null,
                 },
             replace: _,
             drop_ids,
@@ -997,7 +998,11 @@ impl Coordinator {
         let internal_view_id = self.allocate_transient_id()?;
         let decorrelated_expr = raw_expr.optimize_and_lower(&plan::OptimizerConfig {})?;
         let optimized_expr = self.view_optimizer.optimize(decorrelated_expr)?;
-        let desc = RelationDesc::new(optimized_expr.typ(), column_names);
+        let mut typ = optimized_expr.typ();
+        for &i in &force_not_null {
+            typ.column_types[i].nullable = false;
+        }
+        let desc = RelationDesc::new(typ, column_names);
         let debug_name = self.catalog().resolve_full_name(&name, None).to_string();
 
         // Pick the least valid read timestamp as the as-of for the view
@@ -1024,6 +1029,7 @@ impl Coordinator {
                 desc: desc.clone(),
                 resolved_ids,
                 cluster_id,
+                force_not_null,
             }),
             owner_id: *session.current_role_id(),
         });
@@ -1043,6 +1049,7 @@ impl Coordinator {
                     debug_name,
                     &mv.optimized_expr,
                     &mv.desc,
+                    &mv.force_not_null,
                 )?;
 
                 Ok((df, df_metainfo))
@@ -2830,6 +2837,8 @@ impl Coordinator {
                     connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection::default()),
                     with_snapshot,
                     up_to,
+                    // No `FORCE NOT NULL` for subscribes
+                    null_assertions: vec![],
                 };
                 let sink_name = format!("subscribe-{}", sink_id);
                 self.dataflow_builder(cluster_id)
@@ -2845,6 +2854,8 @@ impl Coordinator {
                     connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection::default()),
                     with_snapshot,
                     up_to,
+                    // No `FORCE NOT NULL` for subscribes
+                    null_assertions: vec![],
                 };
                 let mut dataflow = DataflowDesc::new(format!("subscribe-{}", id));
                 let mut dataflow_builder = self.dataflow_builder(cluster_id);
@@ -3528,6 +3539,7 @@ impl Coordinator {
                 debug_name,
                 &optimized_plan,
                 &RelationDesc::new(optimized_plan.typ(), column_names),
+                todo!("XXX [btv]"),
             )
         })?;
 

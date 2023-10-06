@@ -748,6 +748,7 @@ where
                 connection,
                 with_snapshot: se.with_snapshot,
                 up_to: se.up_to,
+                null_assertions: se.null_assertions,
             };
             sink_exports.insert(id, desc);
         }

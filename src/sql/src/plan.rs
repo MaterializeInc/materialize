@@ -1349,6 +1349,7 @@ pub struct MaterializedView {
     pub expr: HirRelationExpr,
     pub column_names: Vec<ColumnName>,
     pub cluster_id: ClusterId,
+    pub force_not_null: Vec<usize>,
 }
 
 #[derive(Clone, Debug)]

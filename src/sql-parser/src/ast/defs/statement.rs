@@ -1231,12 +1231,27 @@ impl<T: AstInfo> AstDisplay for CreateViewStatement<T> {
 }
 impl_display_t!(CreateViewStatement);
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct MaterializedViewColumnSpecifier {
+    pub ident: Ident,
+    pub force_not_null: bool,
+}
+
+impl AstDisplay for MaterializedViewColumnSpecifier {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.ident);
+        if self.force_not_null {
+            f.write_str(" FORCE NOT NULL");
+        }
+    }
+}
+
 /// `CREATE MATERIALIZED VIEW`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateMaterializedViewStatement<T: AstInfo> {
     pub if_exists: IfExistsBehavior,
     pub name: UnresolvedItemName,
-    pub columns: Vec<Ident>,
+    pub columns: Vec<MaterializedViewColumnSpecifier>,
     pub in_cluster: Option<T::ClusterName>,
     pub query: Query<T>,
 }

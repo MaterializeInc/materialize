@@ -3420,13 +3420,18 @@ impl Catalog {
                 let raw_expr = materialized_view.expr;
                 let decorrelated_expr = raw_expr.optimize_and_lower(&plan::OptimizerConfig {})?;
                 let optimized_expr = optimizer.optimize(decorrelated_expr)?;
-                let desc = RelationDesc::new(optimized_expr.typ(), materialized_view.column_names);
+                let mut typ = optimized_expr.typ();
+                for &i in &materialized_view.force_not_null {
+                    typ.column_types[i].nullable = false;
+                }
+                let desc = RelationDesc::new(typ, materialized_view.column_names);
                 CatalogItem::MaterializedView(MaterializedView {
                     create_sql: materialized_view.create_sql,
                     optimized_expr,
                     desc,
                     resolved_ids,
                     cluster_id: materialized_view.cluster_id,
+                    force_not_null: materialized_view.force_not_null,
                 })
             }
             Plan::CreateIndex(CreateIndexPlan { index, .. }) => CatalogItem::Index(Index {

@@ -495,6 +495,7 @@ impl<'a> DataflowBuilder<'a> {
         debug_name: String,
         optimized_expr: &OptimizedMirRelationExpr,
         desc: &RelationDesc,
+        force_not_null: &[usize],
     ) -> Result<(DataflowDesc, DataflowMetainfo), AdapterError> {
         let mut dataflow = DataflowDesc::new(debug_name);
 
@@ -513,6 +514,7 @@ impl<'a> DataflowBuilder<'a> {
             }),
             with_snapshot: true,
             up_to: Antichain::default(),
+            null_assertions: force_not_null.to_vec(),
         };
 
         let dataflow_metainfo =

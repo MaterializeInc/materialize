@@ -15,10 +15,13 @@ use std::rc::Rc;
 
 use differential_dataflow::Collection;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc};
-use mz_expr::{permutation_for_arrangement, MapFilterProject};
+use mz_expr::{permutation_for_arrangement, EvalError, MapFilterProject};
+use mz_ore::soft_assert;
+use mz_ore::vec::PartialOrdVecExt;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
+use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::probe;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
@@ -44,6 +47,7 @@ where
         sink: &ComputeSinkDesc<CollectionMetadata>,
         probes: Vec<probe::Handle<mz_repr::Timestamp>>,
     ) {
+        soft_assert!(sink.null_assertions.is_strictly_sorted());
         // put together tokens that belong to the export
         let mut needed_tokens = Vec::new();
         for dep_id in dependency_ids {
@@ -78,10 +82,32 @@ where
         if let Some(logger) = compute_state.compute_logger.clone() {
             err_collection = err_collection.log_dataflow_errors(logger, sink_id);
         }
+        
+        let mut ok_collection = ok_collection.leave();
+        let mut err_collection = err_collection.leave();
 
-        let ok_collection = ok_collection.leave();
-        let err_collection = err_collection.leave();
-
+        let null_assertions = sink.null_assertions.clone();
+        if !null_assertions.is_empty() {
+            let (oks, null_errs) =
+                ok_collection.map_fallible("NullAssertions({sink_id:?})", move |row| {
+                    let mut idx = 0;
+                    let mut iter = row.iter();
+                    for &i in &null_assertions {
+                        let skip = i - idx;
+                        let datum = iter.nth(skip).unwrap();
+                        idx += skip + 1;
+                        if datum.is_null() {
+                            return Err(DataflowError::EvalError(Box::new(EvalError::Internal(
+                                "XXX [btv]".to_string(),
+                            ))));
+                        }
+                    }
+                    Ok(row)
+                });
+            ok_collection = oks;
+            err_collection = err_collection.concat(&null_errs);
+        }
+        
         let region_name = match sink.connection {
             ComputeSinkConnection::Subscribe(_) => format!("SubscribeSink({:?})", sink_id),
             ComputeSinkConnection::Persist(_) => format!("PersistSink({:?})", sink_id),

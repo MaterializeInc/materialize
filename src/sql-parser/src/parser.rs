@@ -3282,7 +3282,7 @@ impl<'a> Parser<'a> {
         }
 
         let name = self.parse_item_name()?;
-        let columns = self.parse_parenthesized_column_list(Optional)?;
+        let columns = self.parse_parenthesized_mv_column_list()?;
         let in_cluster = self.parse_optional_in_cluster()?;
 
         self.expect_keyword(AS)?;
@@ -5580,6 +5580,26 @@ impl<'a> Parser<'a> {
         Ok(idents)
     }
 
+    fn parse_mv_column(&mut self) -> Result<MaterializedViewColumnSpecifier, ParserError> {
+        match self.consume_identifier() {
+            Some(ident) => {
+                if ident.as_str().is_empty() {
+                    return parser_err!(
+                        self,
+                        self.peek_prev_pos(),
+                        "zero-length delimited identifier",
+                    );
+                }
+                let force_not_null = self.parse_keywords(&[FORCE, NOT, NULL]);
+                Ok(MaterializedViewColumnSpecifier {
+                    ident,
+                    force_not_null,
+                })
+            }
+            None => self.expected(self.peek_pos(), "identifier", self.peek_token()),
+        }
+    }
+
     /// Parse a simple one-word identifier (possibly quoted, possibly a keyword)
     fn parse_identifier(&mut self) -> Result<Ident, ParserError> {
         match self.consume_identifier() {
@@ -5644,6 +5664,22 @@ impl<'a> Parser<'a> {
                 }
             }
             _ => Ok(Expr::Identifier(id_parts)),
+        }
+    }
+
+    fn parse_parenthesized_mv_column_list(
+        &mut self,
+    ) -> Result<Vec<MaterializedViewColumnSpecifier>, ParserError> {
+        if self.consume_token(&Token::LParen) {
+            let cols = self.parse_comma_separated(Parser::parse_mv_column)?;
+            self.expect_token(&Token::RParen)?;
+            Ok(cols)
+        } else {
+            self.expected(
+                self.peek_pos(),
+                "a list of columns in parentheses",
+                self.peek_token(),
+            )
         }
     }
 

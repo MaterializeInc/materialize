@@ -15,7 +15,10 @@
 
 //! Vector utilities.
 
-use std::mem::{align_of, size_of};
+use std::{
+    cmp::Ordering,
+    mem::{align_of, size_of},
+};
 
 #[cfg(feature = "smallvec")]
 use smallvec::SmallVec;
@@ -77,7 +80,7 @@ where
     }
 }
 
-/// Extention methods for `std::vec::Vec`
+/// Extension methods for `std::vec::Vec`
 pub trait VecExt<T> {
     /// Creates an iterator which uses a closure to determine if an element should be removed.
     ///
@@ -135,6 +138,15 @@ pub trait VecExt<T> {
         F: FnMut(&mut T) -> bool;
 }
 
+/// Extension methods for `Vec<T>` where `T: PartialOrd`
+pub trait PartialOrdVecExt {
+    /// Returns whether the vector is sorted.
+    // Remove once https://github.com/rust-lang/rust/issues/53485 is stabilized
+    fn is_sorted(&self) -> bool;
+    /// Returns whether the vector is sorted with strict inequality.
+    fn is_strictly_sorted(&self) -> bool;
+}
+
 impl<T> VecExt<T> for Vec<T> {
     fn drain_filter_swapping<F>(&mut self, filter: F) -> DrainFilterSwapping<'_, T, F>
     where
@@ -145,6 +157,22 @@ impl<T> VecExt<T> for Vec<T> {
             idx: 0,
             pred: filter,
         }
+    }
+}
+
+impl<T> PartialOrdVecExt for Vec<T>
+where
+    T: PartialOrd,
+{
+    // implementation is from Vec::is_sorted_by, but with `windows` instead of
+    // the unstable `array_windows`
+    fn is_sorted(&self) -> bool {
+        self.windows(2)
+            .all(|win| win[0].partial_cmp(&win[1]).map_or(false, Ordering::is_le))
+    }
+    fn is_strictly_sorted(&self) -> bool {
+        self.windows(2)
+            .all(|win| win[0].partial_cmp(&win[1]).map_or(false, Ordering::is_lt))
     }
 }
 

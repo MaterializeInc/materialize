@@ -2025,6 +2025,13 @@ pub fn plan_create_materialized_view(
     mut stmt: CreateMaterializedViewStatement<Aug>,
     params: &Params,
 ) -> Result<Plan, PlanError> {
+    let columns: Vec<_> = stmt.columns.iter().map(|col| col.ident.clone()).collect();
+    let force_not_null: Vec<_> = stmt
+        .columns
+        .iter()
+        .enumerate()
+        .filter_map(|(i, column)| column.force_not_null.then_some(i))
+        .collect();
     let cluster_id = match &stmt.in_cluster {
         None => scx.resolve_cluster(None)?.id(),
         Some(in_cluster) => in_cluster.id,
@@ -2061,7 +2068,7 @@ pub fn plan_create_materialized_view(
     plan_utils::maybe_rename_columns(
         format!("materialized view {}", scx.catalog.resolve_full_name(&name)),
         &mut desc,
-        &stmt.columns,
+        &columns,
     )?;
     let column_names: Vec<ColumnName> = desc.iter_names().cloned().collect();
 
@@ -2125,6 +2132,7 @@ pub fn plan_create_materialized_view(
             expr,
             column_names,
             cluster_id,
+            force_not_null,
         },
         replace,
         drop_ids,
