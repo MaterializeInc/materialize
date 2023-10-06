@@ -1504,29 +1504,6 @@ pub const MZ_ARRANGEMENT_RECORDS_RAW: BuiltinLog = BuiltinLog {
     variant: LogVariant::Differential(DifferentialLog::ArrangementRecords),
 };
 
-pub static MZ_VIEW_KEYS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
-    name: "mz_view_keys",
-    schema: MZ_INTERNAL_SCHEMA,
-    desc: RelationDesc::empty()
-        .with_column("object_id", ScalarType::String.nullable(false))
-        .with_column("column", ScalarType::UInt64.nullable(false))
-        .with_column("key_group", ScalarType::UInt64.nullable(false)),
-    is_retained_metrics_object: false,
-});
-pub static MZ_VIEW_FOREIGN_KEYS: Lazy<BuiltinTable> = Lazy::new(|| {
-    BuiltinTable {
-        name: "mz_view_foreign_keys",
-        schema: MZ_INTERNAL_SCHEMA,
-        desc: RelationDesc::empty()
-            .with_column("child_id", ScalarType::String.nullable(false))
-            .with_column("child_column", ScalarType::UInt64.nullable(false))
-            .with_column("parent_id", ScalarType::String.nullable(false))
-            .with_column("parent_column", ScalarType::UInt64.nullable(false))
-            .with_column("key_group", ScalarType::UInt64.nullable(false))
-            .with_key(vec![0, 1, 4]), // TODO: explain why this is a key.
-        is_retained_metrics_object: false,
-    }
-});
 pub static MZ_KAFKA_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_kafka_sinks",
     schema: MZ_CATALOG_SCHEMA,
@@ -5198,8 +5175,6 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Log(&MZ_COMPUTE_FRONTIERS_PER_WORKER),
         Builtin::Log(&MZ_COMPUTE_IMPORT_FRONTIERS_PER_WORKER),
         Builtin::Log(&MZ_COMPUTE_DELAYS_HISTOGRAM_RAW),
-        Builtin::Table(&MZ_VIEW_KEYS),
-        Builtin::Table(&MZ_VIEW_FOREIGN_KEYS),
         Builtin::Table(&MZ_KAFKA_SINKS),
         Builtin::Table(&MZ_KAFKA_CONNECTIONS),
         Builtin::Table(&MZ_KAFKA_SOURCES),

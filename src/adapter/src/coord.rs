@@ -87,7 +87,6 @@ use mz_controller::clusters::{ClusterConfig, ClusterEvent, CreateReplicaConfig};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_orchestrator::ServiceProcessMetrics;
-use mz_ore::cast::CastFrom;
 use mz_ore::metrics::{MetricsFutureExt, MetricsRegistry};
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::retry::Retry;
@@ -98,7 +97,7 @@ use mz_ore::{soft_assert_or_log, stack, task};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::ExplainFormat;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Datum, GlobalId, RelationType, Row, Timestamp};
+use mz_repr::{GlobalId, RelationType, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::SecretsController;
 use mz_sql::ast::{CreateSubsourceStatement, Raw, Statement};
@@ -147,7 +146,7 @@ use crate::statement_logging::StatementEndedExecutionReason;
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, ResultExt};
 use crate::{flags, AdapterNotice, TimestampProvider};
-use mz_catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
+use mz_catalog::builtin::BUILTINS;
 
 pub(crate) mod dataflows;
 use self::statement_logging::{StatementLogging, StatementLoggingId};
@@ -1618,61 +1617,6 @@ impl Coordinator {
         debug!("coordinator init: announcing completion of initialization to controller");
         // Announce the completion of initialization.
         self.controller.initialization_complete();
-
-        // Announce primary and foreign key relationships.
-        debug!("coordinator init: announcing primary and foreign key relationships");
-        let mz_view_keys = self.catalog().resolve_builtin_table(&MZ_VIEW_KEYS);
-        for log in BUILTINS::logs() {
-            let log_id = &self.catalog().resolve_builtin_log(log).to_string();
-            builtin_table_updates.extend(
-                log.variant
-                    .desc()
-                    .typ()
-                    .keys
-                    .iter()
-                    .enumerate()
-                    .flat_map(move |(index, key)| {
-                        key.iter().map(move |k| {
-                            let row = Row::pack_slice(&[
-                                Datum::String(log_id),
-                                Datum::UInt64(u64::cast_from(*k)),
-                                Datum::UInt64(u64::cast_from(index)),
-                            ]);
-                            BuiltinTableUpdate {
-                                id: mz_view_keys,
-                                row,
-                                diff: 1,
-                            }
-                        })
-                    }),
-            );
-
-            let mz_foreign_keys = self.catalog().resolve_builtin_table(&MZ_VIEW_FOREIGN_KEYS);
-            builtin_table_updates.extend(
-                log.variant.foreign_keys().into_iter().enumerate().flat_map(
-                    |(index, (parent, pairs))| {
-                        let parent_log = BUILTINS::logs()
-                            .find(|src| src.variant == parent)
-                            .expect("log foreign key variant is invalid");
-                        let parent_id = self.catalog().resolve_builtin_log(parent_log).to_string();
-                        pairs.into_iter().map(move |(c, p)| {
-                            let row = Row::pack_slice(&[
-                                Datum::String(log_id),
-                                Datum::UInt64(u64::cast_from(c)),
-                                Datum::String(&parent_id),
-                                Datum::UInt64(u64::cast_from(p)),
-                                Datum::UInt64(u64::cast_from(index)),
-                            ]);
-                            BuiltinTableUpdate {
-                                id: mz_foreign_keys,
-                                row,
-                                diff: 1,
-                            }
-                        })
-                    },
-                ),
-            )
-        }
 
         // Expose mapping from T-shirt sizes to actual sizes
         builtin_table_updates.extend(self.catalog().state().pack_all_replica_size_updates());
