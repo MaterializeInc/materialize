@@ -180,6 +180,12 @@ class KafkaDisruption:
                   ENVELOPE NONE
                 # WITH ( REMOTE 'clusterd:2100' ) https://github.com/MaterializeInc/materialize/issues/16582
 
+                # Ensure the source makes _real_ progress before we disrupt it. This also
+                # ensures the sink makes progress, which is required to hit certain stalls.
+                # As of implementing correctness property #2, this is required.
+                > SELECT count(*) from source1
+                1
+
                 > CREATE SINK sink1 FROM source1
                   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-topic-${testdrive.seed}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
