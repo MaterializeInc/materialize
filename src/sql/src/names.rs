@@ -2303,6 +2303,12 @@ impl<'ast, 'a> VisitMut<'ast, Aug> for NameSimplifier<'a> {
         }
     }
 
+    fn visit_column_name_mut(&mut self, name: &mut ResolvedColumnName) {
+        if let ResolvedColumnName::Column { relation, .. } = name {
+            self.visit_item_name_mut(relation);
+        }
+    }
+
     fn visit_data_type_mut(&mut self, name: &mut ResolvedDataType) {
         if let ResolvedDataType::Named {
             id,

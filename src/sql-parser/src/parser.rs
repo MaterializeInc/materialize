@@ -2084,37 +2084,9 @@ impl<'a> Parser<'a> {
     fn parse_avro_doc_on_option_name(&mut self) -> Result<DocOnIdentifier<Raw>, ParserError> {
         match self.expect_one_of_keywords(&[TYPE, COLUMN])? {
             TYPE => Ok(DocOnIdentifier::Type(self.parse_raw_name()?)),
-            COLUMN => {
-                let (item_name, column_name) = self.parse_column_name()?;
-                Ok(DocOnIdentifier::Column {
-                    item_name,
-                    column_name,
-                })
-            }
+            COLUMN => Ok(DocOnIdentifier::Column(self.parse_column_name()?)),
             _ => unreachable!(),
         }
-    }
-
-    fn parse_column_name(&mut self) -> Result<(RawItemName, Ident), ParserError> {
-        let start = self.peek_pos();
-        let mut item_name = self.parse_raw_name()?;
-        let column_name = match &mut item_name {
-            RawItemName::Name(UnresolvedItemName(identifiers)) => {
-                if identifiers.len() < 2 {
-                    return Err(ParserError::new(
-                        start,
-                        "need to specify an object and a column",
-                    ));
-                }
-                identifiers.pop().unwrap()
-            }
-            RawItemName::Id(_, _) => {
-                self.expect_token(&Token::Dot)?;
-                self.parse_identifier()?
-            }
-        };
-
-        Ok((item_name, column_name))
     }
 
     fn parse_csr_connection_avro(&mut self) -> Result<CsrConnectionAvro<Raw>, ParserError> {

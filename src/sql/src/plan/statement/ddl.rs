@@ -96,8 +96,8 @@ use crate::catalog::{
 use crate::kafka_util::{self, KafkaConfigOptionExtracted, KafkaStartOffsetType};
 use crate::names::{
     Aug, CommentObjectId, DatabaseId, ObjectId, PartialItemName, QualifiedItemName,
-    RawDatabaseSpecifier, ResolvedClusterName, ResolvedDataType, ResolvedDatabaseSpecifier,
-    ResolvedItemName, SchemaSpecifier, SystemObjectId,
+    RawDatabaseSpecifier, ResolvedClusterName, ResolvedColumnName, ResolvedDataType,
+    ResolvedDatabaseSpecifier, ResolvedItemName, SchemaSpecifier, SystemObjectId,
 };
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
@@ -2348,29 +2348,6 @@ fn update_avro_format_with_comments(
             })
             .collect::<BTreeSet<_>>();
 
-        // validate column names exist
-        for avro_doc_on in user_provided_comments.iter() {
-            match &avro_doc_on.identifier {
-                DocOnIdentifier::Column {
-                    item_name: ResolvedItemName::Item { id, full_name, .. },
-                    column_name,
-                } => {
-                    let item = scx.catalog.get_item(id);
-                    let column_name = normalize::column_name(column_name.clone());
-                    let desc = item.desc(&scx.catalog.resolve_full_name(item.name()))?;
-
-                    // Check to make sure mentioned column exists.
-                    let _ =
-                        desc.get_by_name(&column_name)
-                            .ok_or_else(|| PlanError::UnknownColumn {
-                                table: Some(full_name.clone().into()),
-                                column: column_name,
-                            })?;
-                }
-                _ => {}
-            }
-        }
-
         // Adding existing comments if not already provided by user
         for object_id in object_ids {
             let item = scx.catalog.get_item(&object_id);
@@ -2413,10 +2390,13 @@ fn update_avro_format_with_comments(
                             let comment = comments_map.get(&Some(pos + 1));
                             if let Some(comment_str) = comment {
                                 let doc_on_column_key = AvroDocOn {
-                                    identifier: DocOnIdentifier::Column {
-                                        item_name: full_resolved_name.clone(),
-                                        column_name: column_name.as_str().into(),
-                                    },
+                                    identifier: DocOnIdentifier::Column(
+                                        ResolvedColumnName::Column {
+                                            relation: full_resolved_name.clone(),
+                                            name: column_name.to_owned(),
+                                            index: pos,
+                                        },
+                                    ),
                                     for_schema: DocOnSchema::All,
                                 };
                                 if !user_provided_comments.contains(&doc_on_column_key) {
@@ -2511,12 +2491,13 @@ impl std::convert::TryFrom<Vec<CsrConfigOption<Aug>>> for CsrConfigOptionExtract
                     })?)
                     .map_err(better_error)?;
                     let key = match doc_on.identifier {
-                        DocOnIdentifier::Column {
-                            item_name: ResolvedItemName::Item { id, .. },
-                            column_name,
-                        } => DocTarget::Field {
+                        DocOnIdentifier::Column(ResolvedColumnName::Column {
+                            relation: ResolvedItemName::Item { id, .. },
+                            name,
+                            index: _,
+                        }) => DocTarget::Field {
                             object_id: id,
-                            column_name: column_name.to_string().into(),
+                            column_name: name,
                         },
                         DocOnIdentifier::Type(ResolvedItemName::Item { id, .. }) => {
                             DocTarget::Type(id)

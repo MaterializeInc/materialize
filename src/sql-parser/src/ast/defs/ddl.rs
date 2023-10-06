@@ -156,10 +156,7 @@ pub enum DocOnSchema {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum DocOnIdentifier<T: AstInfo> {
-    Column {
-        item_name: T::ItemName,
-        column_name: Ident,
-    },
+    Column(T::ColumnName),
     Type(T::ItemName),
 }
 
@@ -171,14 +168,9 @@ impl<T: AstInfo> AstDisplay for AvroDocOn<T> {
             DocOnSchema::All => {}
         }
         match &self.identifier {
-            DocOnIdentifier::Column {
-                item_name,
-                column_name,
-            } => {
+            DocOnIdentifier::Column(name) => {
                 f.write_str("DOC ON COLUMN ");
-                f.write_node(item_name);
-                f.write_str(".");
-                f.write_str(column_name);
+                f.write_node(name);
             }
             DocOnIdentifier::Type(name) => {
                 f.write_str("DOC ON TYPE ");
