@@ -3911,47 +3911,47 @@ impl_display_t!(CommentStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CommentObjectType<T: AstInfo> {
     Table {
-        name: UnresolvedItemName,
+        name: T::ItemName,
     },
     View {
-        name: UnresolvedItemName,
+        name: T::ItemName,
     },
     Column {
-        relation_name: UnresolvedItemName,
+        relation_name: T::ItemName,
         column_name: Ident,
     },
     MaterializedView {
-        name: UnresolvedItemName,
+        name: T::ItemName,
     },
     Source {
-        name: UnresolvedItemName,
+        name: T::ItemName,
     },
     Sink {
-        name: UnresolvedItemName,
+        name: T::ItemName,
     },
     Index {
-        name: UnresolvedItemName,
+        name: T::ItemName,
     },
     Func {
-        name: UnresolvedItemName,
+        name: T::ItemName,
     },
     Connection {
-        name: UnresolvedItemName,
+        name: T::ItemName,
     },
     Type {
-        name: UnresolvedItemName,
+        name: T::ItemName,
     },
     Secret {
-        name: UnresolvedItemName,
+        name: T::ItemName,
     },
     Role {
-        name: Ident,
+        name: T::RoleName,
     },
     Database {
-        name: UnresolvedDatabaseName,
+        name: T::DatabaseName,
     },
     Schema {
-        name: UnresolvedSchemaName,
+        name: T::SchemaName,
     },
     Cluster {
         name: T::ClusterName,

@@ -7698,44 +7698,44 @@ impl<'a> Parser<'a> {
             CLUSTER,
         ])? {
             TABLE => {
-                let name = self.parse_item_name()?;
+                let name = self.parse_raw_name()?;
                 CommentObjectType::Table { name }
             }
             VIEW => {
-                let name = self.parse_item_name()?;
+                let name = self.parse_raw_name()?;
                 CommentObjectType::View { name }
             }
             MATERIALIZED => {
                 self.expect_keyword(VIEW)?;
-                let name = self.parse_item_name()?;
+                let name = self.parse_raw_name()?;
                 CommentObjectType::MaterializedView { name }
             }
             SOURCE => {
-                let name = self.parse_item_name()?;
+                let name = self.parse_raw_name()?;
                 CommentObjectType::Source { name }
             }
             SINK => {
-                let name = self.parse_item_name()?;
+                let name = self.parse_raw_name()?;
                 CommentObjectType::Sink { name }
             }
             INDEX => {
-                let name = self.parse_item_name()?;
+                let name = self.parse_raw_name()?;
                 CommentObjectType::Index { name }
             }
             FUNCTION => {
-                let name = self.parse_item_name()?;
+                let name = self.parse_raw_name()?;
                 CommentObjectType::Func { name }
             }
             CONNECTION => {
-                let name = self.parse_item_name()?;
+                let name = self.parse_raw_name()?;
                 CommentObjectType::Connection { name }
             }
             TYPE => {
-                let name = self.parse_item_name()?;
+                let name = self.parse_raw_name()?;
                 CommentObjectType::Type { name }
             }
             SECRET => {
-                let name = self.parse_item_name()?;
+                let name = self.parse_raw_name()?;
                 CommentObjectType::Secret { name }
             }
             ROLE => {
@@ -7772,7 +7772,7 @@ impl<'a> Parser<'a> {
                 // The last identifier specifies the column of a relation.
                 let column_name = identifiers.pop().expect("checked length above");
                 CommentObjectType::Column {
-                    relation_name: UnresolvedItemName(identifiers),
+                    relation_name: RawItemName::Name(UnresolvedItemName(identifiers)),
                     column_name,
                 }
             }

@@ -5262,9 +5262,7 @@ pub fn plan_comment(
         | com_ty @ CommentObjectType::Sink { name }
         | com_ty @ CommentObjectType::Type { name }
         | com_ty @ CommentObjectType::Secret { name } => {
-            let name = normalize::unresolved_item_name(name.clone())?;
-            let item = scx.catalog.resolve_item(&name)?;
-
+            let item = scx.get_item_by_resolved_name(name)?;
             match (com_ty, item.item_type()) {
                 (CommentObjectType::Table { .. }, CatalogItemType::Table) => {
                     (CommentObjectId::Table(item.id()), None)
@@ -5323,16 +5321,15 @@ pub fn plan_comment(
             relation_name,
             column_name,
         } => {
-            let name = normalize::unresolved_item_name(relation_name.clone())?;
-            let item = scx.catalog.resolve_item(&name)?;
-
+            let item = scx.get_item_by_resolved_name(relation_name)?;
             let column_name = normalize::column_name(column_name.clone());
             let desc = item.desc(&scx.catalog.resolve_full_name(item.name()))?;
 
             // Check to make sure this column exists.
             let Some((pos, _ty)) = desc.get_by_name(&column_name) else {
+                let name = relation_name.full_item_name().clone();
                 return Err(PlanError::UnknownColumn {
-                    table: Some(name),
+                    table: Some(name.into()),
                     column: column_name,
                 });
             };
@@ -5352,21 +5349,14 @@ pub fn plan_comment(
                 }
             }
         }
-        CommentObjectType::Role { name } => {
-            let role = scx.catalog.resolve_role(name.as_str())?;
-            (CommentObjectId::Role(role.id()), None)
-        }
+        CommentObjectType::Role { name } => (CommentObjectId::Role(name.id), None),
         CommentObjectType::Database { name } => {
-            let database = scx.resolve_database(name)?;
-            (CommentObjectId::Database(database.id()), None)
+            (CommentObjectId::Database(*name.database_id()), None)
         }
-        CommentObjectType::Schema { name } => {
-            let schema = scx.resolve_schema(name.clone())?;
-            (
-                CommentObjectId::Schema((*schema.database(), *schema.id())),
-                None,
-            )
-        }
+        CommentObjectType::Schema { name } => (
+            CommentObjectId::Schema((*name.database_spec(), *name.schema_spec())),
+            None,
+        ),
         CommentObjectType::Cluster { name } => (CommentObjectId::Cluster(name.id), None),
         CommentObjectType::ClusterReplica { name } => {
             let replica = scx.catalog.resolve_cluster_replica(name)?;
