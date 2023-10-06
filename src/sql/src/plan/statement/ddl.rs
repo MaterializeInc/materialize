@@ -5317,23 +5317,8 @@ pub fn plan_comment(
                 }
             }
         }
-        CommentObjectType::Column {
-            relation_name,
-            column_name,
-        } => {
-            let item = scx.get_item_by_resolved_name(relation_name)?;
-            let column_name = normalize::column_name(column_name.clone());
-            let desc = item.desc(&scx.catalog.resolve_full_name(item.name()))?;
-
-            // Check to make sure this column exists.
-            let Some((pos, _ty)) = desc.get_by_name(&column_name) else {
-                let name = relation_name.full_item_name().clone();
-                return Err(PlanError::UnknownColumn {
-                    table: Some(name.into()),
-                    column: column_name,
-                });
-            };
-
+        CommentObjectType::Column { name } => {
+            let (item, pos) = scx.get_column_by_resolved_name(name)?;
             match item.item_type() {
                 CatalogItemType::Table => (CommentObjectId::Table(item.id()), Some(pos + 1)),
                 CatalogItemType::Source => (CommentObjectId::Source(item.id()), Some(pos + 1)),

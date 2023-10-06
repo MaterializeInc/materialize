@@ -5466,6 +5466,31 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_column_name(&mut self) -> Result<RawColumnName, ParserError> {
+        let start = self.peek_pos();
+        let mut item_name = self.parse_raw_name()?;
+        let column_name = match &mut item_name {
+            RawItemName::Name(UnresolvedItemName(identifiers)) => {
+                if identifiers.len() < 2 {
+                    return Err(ParserError::new(
+                        start,
+                        "need to specify an object and a column",
+                    ));
+                }
+                identifiers.pop().unwrap()
+            }
+            RawItemName::Id(_, _) => {
+                self.expect_token(&Token::Dot)?;
+                self.parse_identifier()?
+            }
+        };
+
+        Ok(RawColumnName {
+            relation: item_name,
+            column: column_name,
+        })
+    }
+
     /// Parse a possibly quoted database identifier, e.g.
     /// `foo` or `"mydatabase"`
     fn parse_database_name(&mut self) -> Result<UnresolvedDatabaseName, ParserError> {
@@ -7760,21 +7785,8 @@ impl<'a> Parser<'a> {
                 }
             }
             COLUMN => {
-                let start = self.peek_pos();
-                let mut identifiers = self.parse_identifiers()?;
-                if identifiers.len() < 2 {
-                    return Err(ParserError::new(
-                        start,
-                        "need to specify a relation and a column",
-                    ));
-                }
-
-                // The last identifier specifies the column of a relation.
-                let column_name = identifiers.pop().expect("checked length above");
-                CommentObjectType::Column {
-                    relation_name: RawItemName::Name(UnresolvedItemName(identifiers)),
-                    column_name,
-                }
+                let name = self.parse_column_name()?;
+                CommentObjectType::Column { name }
             }
             _ => unreachable!(),
         };

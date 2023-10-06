@@ -20,6 +20,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
 use mz_proto::{IntoRustIfSome, ProtoType};
 use mz_repr::role_id::RoleId;
+use mz_repr::ColumnName;
 use mz_repr::GlobalId;
 use mz_sql_parser::ast::{MutRecBlock, UnresolvedObjectName};
 use mz_stash::objects::{proto, RustType, TryFromProtoError};
@@ -520,6 +521,35 @@ impl std::fmt::Display for ResolvedItemName {
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ResolvedColumnName {
+    Column {
+        relation: ResolvedItemName,
+        name: ColumnName,
+        index: usize,
+    },
+    Error,
+}
+
+impl AstDisplay for ResolvedColumnName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            ResolvedColumnName::Column { relation, name, .. } => {
+                f.write_node(relation);
+                f.write_str(".");
+                f.write_str(name);
+            }
+            ResolvedColumnName::Error => {}
+        }
+    }
+}
+
+impl std::fmt::Display for ResolvedColumnName {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(self.to_ast_string().as_str())
+    }
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ResolvedSchemaName {
     Schema {
         database_spec: ResolvedDatabaseSpecifier,
@@ -802,6 +832,7 @@ impl AstDisplay for ResolvedObjectName {
 impl AstInfo for Aug {
     type NestedStatement = Statement<Raw>;
     type ItemName = ResolvedItemName;
+    type ColumnName = ResolvedColumnName;
     type SchemaName = ResolvedSchemaName;
     type DatabaseName = ResolvedDatabaseName;
     type ClusterName = ResolvedClusterName;
@@ -1704,6 +1735,46 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
         }
     }
 
+    fn fold_column_name(
+        &mut self,
+        column_name: <Raw as AstInfo>::ColumnName,
+    ) -> <Aug as AstInfo>::ColumnName {
+        let item_name = self.fold_item_name(column_name.relation);
+        match &item_name {
+            ResolvedItemName::Item { id, full_name, .. } => {
+                let item = self.catalog.get_item(id);
+
+                let desc = match item.desc(full_name) {
+                    Ok(desc) => desc,
+                    Err(e) => {
+                        if self.status.is_ok() {
+                            self.status = Err(e.into());
+                        }
+                        return ResolvedColumnName::Error;
+                    }
+                };
+
+                let name = normalize::column_name(column_name.column);
+                let Some((index, _typ)) = desc.get_by_name(&name) else {
+                    if self.status.is_ok() {
+                        self.status = Err(PlanError::UnknownColumn {
+                            table: Some(full_name.clone().into()),
+                            column: name,
+                        })
+                    }
+                    return ResolvedColumnName::Error;
+                };
+
+                ResolvedColumnName::Column {
+                    relation: item_name,
+                    name,
+                    index,
+                }
+            }
+            ResolvedItemName::Cte { .. } | ResolvedItemName::Error => ResolvedColumnName::Error,
+        }
+    }
+
     fn fold_data_type(
         &mut self,
         data_type: <Raw as AstInfo>::DataType,
@@ -2088,6 +2159,24 @@ impl Fold<Aug, Aug> for TransientResolver<'_> {
                     qualifiers,
                     full_name,
                     print_id,
+                }
+            }
+            other => other,
+        }
+    }
+    fn fold_column_name(&mut self, column_name: ResolvedColumnName) -> ResolvedColumnName {
+        match column_name {
+            ResolvedColumnName::Column {
+                relation,
+                name,
+                index,
+            } => {
+                let final_relation = self.fold_item_name(relation);
+
+                ResolvedColumnName::Column {
+                    relation: final_relation,
+                    name,
+                    index,
                 }
             }
             other => other,
