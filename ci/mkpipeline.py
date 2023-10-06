@@ -59,8 +59,6 @@ so it is executed.""",
 
     parser.add_argument("--coverage", action="store_true")
     parser.add_argument("pipeline", type=str)
-    # TODO Empty argument, used in tests pipeline, remove
-    parser.add_argument("rest", nargs=argparse.REMAINDER)
     args = parser.parse_args()
 
     # Make sure we have an up to date view of main.
