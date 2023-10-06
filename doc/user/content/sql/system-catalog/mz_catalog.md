@@ -45,6 +45,8 @@ Field           | Type                         | Meaning
 
 ### `mz_aws_privatelink_connections`
 
+{{< public-preview />}}
+
 The `mz_aws_privatelink_connections` table contains a row for each AWS PrivateLink connection in the system.
 
 <!-- RELATION_SPEC mz_catalog.mz_aws_privatelink_connections -->

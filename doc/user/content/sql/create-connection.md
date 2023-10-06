@@ -116,6 +116,8 @@ connection through an AWS PrivateLink service or an SSH bastion host.
 {{< tabs >}}
 {{< tab "AWS PrivateLink">}}
 
+{{< public-preview />}}
+
 ##### Syntax {#kafka-privatelink-syntax}
 
 {{< warning >}}

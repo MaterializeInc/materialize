@@ -59,6 +59,8 @@ Select the option that works best for you.
 
 {{< tab "Use AWS PrivateLink">}}
 
+{{< public-preview />}}
+
 [AWS PrivateLink](https://aws.amazon.com/privatelink/) lets you connect Materialize to your Aurora instance without exposing traffic to the public internet. To use AWS PrivateLink, you create a network load balancer in the same VPC as your Aurora instance and a VPC endpoint service that Materialize connects to. The VPC endpoint service then routes requests from Materialize to Aurora via the network load balancer.
 
 {{< note >}}
