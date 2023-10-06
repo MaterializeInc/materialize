@@ -310,14 +310,19 @@ impl LogVariant {
     }
 
     pub fn desc(&self) -> RelationDesc {
+        use ComputeLog::*;
+        use DifferentialLog::*;
+        use LogVariant::*;
+        use TimelyLog::*;
+
         match self {
-            LogVariant::Timely(TimelyLog::Operates) => RelationDesc::empty()
+            Timely(Operates) => RelationDesc::empty()
                 .with_column("id", ScalarType::UInt64.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("name", ScalarType::String.nullable(false))
                 .with_key(vec![0, 1]),
 
-            LogVariant::Timely(TimelyLog::Channels) => RelationDesc::empty()
+            Timely(Channels) => RelationDesc::empty()
                 .with_column("id", ScalarType::UInt64.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("from_index", ScalarType::UInt64.nullable(false))
@@ -326,16 +331,16 @@ impl LogVariant {
                 .with_column("to_port", ScalarType::UInt64.nullable(false))
                 .with_key(vec![0, 1]),
 
-            LogVariant::Timely(TimelyLog::Elapsed) => RelationDesc::empty()
+            Timely(Elapsed) => RelationDesc::empty()
                 .with_column("id", ScalarType::UInt64.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false)),
 
-            LogVariant::Timely(TimelyLog::Histogram) => RelationDesc::empty()
+            Timely(Histogram) => RelationDesc::empty()
                 .with_column("id", ScalarType::UInt64.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("duration_ns", ScalarType::UInt64.nullable(false)),
 
-            LogVariant::Timely(TimelyLog::Addresses) => RelationDesc::empty()
+            Timely(Addresses) => RelationDesc::empty()
                 .with_column("id", ScalarType::UInt64.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column(
@@ -348,32 +353,32 @@ impl LogVariant {
                 )
                 .with_key(vec![0, 1]),
 
-            LogVariant::Timely(TimelyLog::Parks) => RelationDesc::empty()
+            Timely(Parks) => RelationDesc::empty()
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("slept_for_ns", ScalarType::UInt64.nullable(false))
                 .with_column("requested_ns", ScalarType::UInt64.nullable(false)),
 
-            LogVariant::Timely(TimelyLog::BatchesReceived) => RelationDesc::empty()
+            Timely(BatchesReceived) => RelationDesc::empty()
                 .with_column("channel_id", ScalarType::UInt64.nullable(false))
                 .with_column("from_worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("to_worker_id", ScalarType::UInt64.nullable(false)),
 
-            LogVariant::Timely(TimelyLog::BatchesSent) => RelationDesc::empty()
+            Timely(BatchesSent) => RelationDesc::empty()
                 .with_column("channel_id", ScalarType::UInt64.nullable(false))
                 .with_column("from_worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("to_worker_id", ScalarType::UInt64.nullable(false)),
 
-            LogVariant::Timely(TimelyLog::MessagesReceived) => RelationDesc::empty()
+            Timely(MessagesReceived) => RelationDesc::empty()
                 .with_column("channel_id", ScalarType::UInt64.nullable(false))
                 .with_column("from_worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("to_worker_id", ScalarType::UInt64.nullable(false)),
 
-            LogVariant::Timely(TimelyLog::MessagesSent) => RelationDesc::empty()
+            Timely(MessagesSent) => RelationDesc::empty()
                 .with_column("channel_id", ScalarType::UInt64.nullable(false))
                 .with_column("from_worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("to_worker_id", ScalarType::UInt64.nullable(false)),
 
-            LogVariant::Timely(TimelyLog::Reachability) => RelationDesc::empty()
+            Timely(Reachability) => RelationDesc::empty()
                 .with_column(
                     "address",
                     ScalarType::List {
@@ -387,50 +392,52 @@ impl LogVariant {
                 .with_column("update_type", ScalarType::String.nullable(false))
                 .with_column("time", ScalarType::MzTimestamp.nullable(true)),
 
-            LogVariant::Differential(DifferentialLog::ArrangementBatches)
-            | LogVariant::Differential(DifferentialLog::ArrangementRecords)
-            | LogVariant::Differential(DifferentialLog::Sharing)
-            | LogVariant::Compute(ComputeLog::ArrangementHeapSize)
-            | LogVariant::Compute(ComputeLog::ArrangementHeapCapacity)
-            | LogVariant::Compute(ComputeLog::ArrangementHeapAllocations) => RelationDesc::empty()
+            Differential(ArrangementBatches)
+            | Differential(ArrangementRecords)
+            | Differential(Sharing)
+            | Compute(ArrangementHeapSize)
+            | Compute(ArrangementHeapCapacity)
+            | Compute(ArrangementHeapAllocations) => RelationDesc::empty()
                 .with_column("operator_id", ScalarType::UInt64.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false)),
 
-            LogVariant::Compute(ComputeLog::DataflowCurrent) => RelationDesc::empty()
+            Compute(DataflowCurrent) => RelationDesc::empty()
                 .with_column("export_id", ScalarType::String.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("dataflow_id", ScalarType::UInt64.nullable(false))
                 .with_key(vec![0, 1]),
 
-            LogVariant::Compute(ComputeLog::FrontierCurrent) => RelationDesc::empty()
+            Compute(FrontierCurrent) => RelationDesc::empty()
                 .with_column("export_id", ScalarType::String.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
-                .with_column("time", ScalarType::MzTimestamp.nullable(false)),
+                .with_column("time", ScalarType::MzTimestamp.nullable(false))
+                .with_key(vec![0, 1]),
 
-            LogVariant::Compute(ComputeLog::ImportFrontierCurrent) => RelationDesc::empty()
+            Compute(ImportFrontierCurrent) => RelationDesc::empty()
                 .with_column("export_id", ScalarType::String.nullable(false))
                 .with_column("import_id", ScalarType::String.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
-                .with_column("time", ScalarType::MzTimestamp.nullable(false)),
+                .with_column("time", ScalarType::MzTimestamp.nullable(false))
+                .with_key(vec![0, 1, 2]),
 
-            LogVariant::Compute(ComputeLog::FrontierDelay) => RelationDesc::empty()
+            Compute(FrontierDelay) => RelationDesc::empty()
                 .with_column("export_id", ScalarType::String.nullable(false))
                 .with_column("import_id", ScalarType::String.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("delay_ns", ScalarType::UInt64.nullable(false)),
 
-            LogVariant::Compute(ComputeLog::PeekCurrent) => RelationDesc::empty()
+            Compute(PeekCurrent) => RelationDesc::empty()
                 .with_column("id", ScalarType::Uuid.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("index_id", ScalarType::String.nullable(false))
                 .with_column("time", ScalarType::MzTimestamp.nullable(false))
                 .with_key(vec![0, 1]),
 
-            LogVariant::Compute(ComputeLog::PeekDuration) => RelationDesc::empty()
+            Compute(PeekDuration) => RelationDesc::empty()
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("duration_ns", ScalarType::UInt64.nullable(false)),
 
-            LogVariant::Compute(ComputeLog::ShutdownDuration) => RelationDesc::empty()
+            Compute(ShutdownDuration) => RelationDesc::empty()
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
                 .with_column("duration_ns", ScalarType::UInt64.nullable(false)),
         }
@@ -441,41 +448,53 @@ impl LogVariant {
     /// The result is a list of other variants, and for each a list of local
     /// and other column identifiers that can be equated.
     pub fn foreign_keys(&self) -> Vec<(LogVariant, Vec<(usize, usize)>)> {
-        use LogVariant::{Compute, Differential, Timely};
+        use ComputeLog::*;
+        use DifferentialLog::*;
+        use LogVariant::*;
+        use TimelyLog::*;
+
         match self {
-            Timely(TimelyLog::Operates) => vec![],
-            Timely(TimelyLog::Channels) => vec![],
-            Timely(TimelyLog::Elapsed) => vec![(Timely(TimelyLog::Operates), vec![(0, 0), (1, 1)])],
-            Timely(TimelyLog::Histogram) => {
-                vec![(Timely(TimelyLog::Operates), vec![(0, 0), (1, 1)])]
+            Timely(Operates) => vec![],
+            Timely(Channels) => vec![],
+            Timely(Elapsed) | Timely(Histogram) => {
+                vec![(Timely(Operates), vec![(0, 0), (1, 1)])]
             }
-            Timely(TimelyLog::Addresses) => {
-                vec![(Timely(TimelyLog::Operates), vec![(0, 0), (1, 1)])]
-            }
-            Timely(TimelyLog::Parks) => vec![],
-            Timely(TimelyLog::BatchesReceived)
-            | Timely(TimelyLog::BatchesSent)
-            | Timely(TimelyLog::MessagesReceived)
-            | Timely(TimelyLog::MessagesSent) => vec![
-                (Timely(TimelyLog::Channels), vec![(0, 0), (1, 1)]),
-                (Timely(TimelyLog::Channels), vec![(0, 0), (2, 2)]),
+            // `Addresses` has a foreign key into either `Operates` or `Channels`, which is not
+            // something we can express currently.
+            Timely(Addresses) => vec![],
+            Timely(Parks) => vec![],
+            Timely(BatchesReceived)
+            | Timely(BatchesSent)
+            | Timely(MessagesReceived)
+            | Timely(MessagesSent) => vec![
+                (Timely(Channels), vec![(0, 0), (1, 1)]),
+                (Timely(Channels), vec![(0, 0), (2, 1)]),
             ],
-            Timely(TimelyLog::Reachability) => vec![],
-            Differential(DifferentialLog::ArrangementBatches)
-            | Differential(DifferentialLog::ArrangementRecords)
-            | Differential(DifferentialLog::Sharing)
-            | Compute(ComputeLog::ArrangementHeapSize)
-            | Compute(ComputeLog::ArrangementHeapCapacity)
-            | Compute(ComputeLog::ArrangementHeapAllocations) => {
-                vec![(Timely(TimelyLog::Operates), vec![(0, 0), (1, 1)])]
+            Timely(Reachability) => vec![],
+
+            Differential(ArrangementBatches)
+            | Differential(ArrangementRecords)
+            | Differential(Sharing) => {
+                vec![(Timely(Operates), vec![(0, 0), (1, 1)])]
             }
-            Compute(ComputeLog::DataflowCurrent) => vec![],
-            Compute(ComputeLog::FrontierCurrent) => vec![],
-            Compute(ComputeLog::ImportFrontierCurrent) => vec![],
-            Compute(ComputeLog::FrontierDelay) => vec![],
-            Compute(ComputeLog::PeekCurrent) => vec![],
-            Compute(ComputeLog::PeekDuration) => vec![],
-            Compute(ComputeLog::ShutdownDuration) => vec![],
+
+            Compute(DataflowCurrent) => {
+                vec![(Timely(Operates), vec![(2, 0), (1, 1)])]
+            }
+            Compute(FrontierCurrent) => {
+                vec![(Compute(DataflowCurrent), vec![(0, 0), (1, 1)])]
+            }
+            Compute(ImportFrontierCurrent) | Compute(FrontierDelay) => {
+                vec![(Compute(DataflowCurrent), vec![(0, 0), (2, 1)])]
+            }
+            Compute(PeekCurrent) => vec![],
+            Compute(PeekDuration) => vec![],
+            Compute(ArrangementHeapSize)
+            | Compute(ArrangementHeapCapacity)
+            | Compute(ArrangementHeapAllocations) => {
+                vec![(Timely(Operates), vec![(0, 0), (1, 1)])]
+            }
+            Compute(ShutdownDuration) => vec![],
         }
     }
 }
