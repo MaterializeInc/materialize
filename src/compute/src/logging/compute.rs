@@ -12,6 +12,7 @@
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::fmt::{Display, Write};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -232,43 +233,60 @@ pub(super) fn construct<A: Allocate + 'static>(
         });
 
         // Encode the contents of each logging stream into its expected `Row` format.
-        let dataflow_current = export.as_collection().map(move |datum| {
-            Row::pack_slice(&[
-                Datum::String(&datum.id.to_string()),
-                Datum::UInt64(u64::cast_from(worker_id)),
-                Datum::UInt64(u64::cast_from(datum.dataflow_id)),
-            ])
+        let dataflow_current = export.as_collection().map({
+            let mut scratch = String::new();
+            move |datum| {
+                Row::pack_slice(&[
+                    make_string_datum(datum.id, &mut scratch),
+                    Datum::UInt64(u64::cast_from(worker_id)),
+                    Datum::UInt64(u64::cast_from(datum.dataflow_id)),
+                ])
+            }
         });
-        let frontier_current = frontier.as_collection().map(move |datum| {
-            Row::pack_slice(&[
-                Datum::String(&datum.export_id.to_string()),
-                Datum::UInt64(u64::cast_from(worker_id)),
-                Datum::MzTimestamp(datum.frontier),
-            ])
+        let frontier_current = frontier.as_collection().map({
+            let mut scratch = String::new();
+            move |datum| {
+                Row::pack_slice(&[
+                    make_string_datum(datum.export_id, &mut scratch),
+                    Datum::UInt64(u64::cast_from(worker_id)),
+                    Datum::MzTimestamp(datum.frontier),
+                ])
+            }
         });
-        let import_frontier_current = import_frontier.as_collection().map(move |datum| {
-            Row::pack_slice(&[
-                Datum::String(&datum.export_id.to_string()),
-                Datum::String(&datum.import_id.to_string()),
-                Datum::UInt64(u64::cast_from(worker_id)),
-                Datum::MzTimestamp(datum.frontier),
-            ])
+        let import_frontier_current = import_frontier.as_collection().map({
+            let mut scratch1 = String::new();
+            let mut scratch2 = String::new();
+            move |datum| {
+                Row::pack_slice(&[
+                    make_string_datum(datum.export_id, &mut scratch1),
+                    make_string_datum(datum.import_id, &mut scratch2),
+                    Datum::UInt64(u64::cast_from(worker_id)),
+                    Datum::MzTimestamp(datum.frontier),
+                ])
+            }
         });
-        let frontier_delay = frontier_delay.as_collection().map(move |datum| {
-            Row::pack_slice(&[
-                Datum::String(&datum.export_id.to_string()),
-                Datum::String(&datum.import_id.to_string()),
-                Datum::UInt64(u64::cast_from(worker_id)),
-                Datum::UInt64(datum.delay_pow.try_into().expect("pow too big")),
-            ])
+        let frontier_delay = frontier_delay.as_collection().map({
+            let mut scratch1 = String::new();
+            let mut scratch2 = String::new();
+            move |datum| {
+                Row::pack_slice(&[
+                    make_string_datum(datum.export_id, &mut scratch1),
+                    make_string_datum(datum.import_id, &mut scratch2),
+                    Datum::UInt64(u64::cast_from(worker_id)),
+                    Datum::UInt64(datum.delay_pow.try_into().expect("pow too big")),
+                ])
+            }
         });
-        let peek_current = peek.as_collection().map(move |datum| {
-            Row::pack_slice(&[
-                Datum::Uuid(datum.uuid),
-                Datum::UInt64(u64::cast_from(worker_id)),
-                Datum::String(&datum.id.to_string()),
-                Datum::MzTimestamp(datum.time),
-            ])
+        let peek_current = peek.as_collection().map({
+            let mut scratch = String::new();
+            move |datum| {
+                Row::pack_slice(&[
+                    Datum::Uuid(datum.uuid),
+                    Datum::UInt64(u64::cast_from(worker_id)),
+                    make_string_datum(datum.id, &mut scratch),
+                    Datum::MzTimestamp(datum.time),
+                ])
+            }
         });
         let peek_duration = peek_duration.as_collection().map(move |bucket| {
             Row::pack_slice(&[
@@ -353,6 +371,20 @@ pub(super) fn construct<A: Allocate + 'static>(
 
         traces
     })
+}
+
+/// Format the given value and pack it into a `Datum::String`.
+///
+/// The `scratch` buffer is used to perform the string conversion without an allocation.
+/// Callers should not assume anything about the contents of this buffer after this function
+/// returns.
+fn make_string_datum<V>(value: V, scratch: &mut String) -> Datum<'_>
+where
+    V: Display,
+{
+    scratch.clear();
+    write!(scratch, "{}", value).expect("writing to a `String` can't fail");
+    Datum::String(scratch)
 }
 
 /// State maintained by the demux operator.
