@@ -166,6 +166,12 @@ impl Blob for UnreliableBlob {
     async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
         self.handle.run_op("delete", || self.blob.delete(key)).await
     }
+
+    async fn restore(&self, key: &str) -> Result<(), ExternalError> {
+        self.handle
+            .run_op("restore", || self.blob.restore(key))
+            .await
+    }
 }
 
 /// An unreliable delegate to [Consensus].

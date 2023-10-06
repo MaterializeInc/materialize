@@ -72,7 +72,10 @@ impl BlobConfig {
 
         let config = match url.scheme() {
             "file" => {
-                let config = FileBlobConfig::from(url.path());
+                let mut config = FileBlobConfig::from(url.path());
+                if query_params.remove("tombstone").is_some() {
+                    config.tombstone = true;
+                }
                 Ok(BlobConfig::File(config))
             }
             "s3" => {

@@ -314,6 +314,11 @@ impl Blob for ReadOnly<Arc<dyn Blob + Sync + Send>> {
         warn!("ignoring delete({key}) in read-only mode");
         Ok(None)
     }
+
+    async fn restore(&self, key: &str) -> Result<(), ExternalError> {
+        warn!("ignoring restore({key}) in read-only mode");
+        Ok(())
+    }
 }
 
 #[async_trait]

@@ -2208,6 +2208,11 @@ impl Blob for MetricsBlob {
         }
         Ok(bytes)
     }
+
+    async fn restore(&self, key: &str) -> Result<(), ExternalError> {
+        // TODO: metrics!
+        self.blob.restore(key).await
+    }
 }
 
 #[derive(Debug)]

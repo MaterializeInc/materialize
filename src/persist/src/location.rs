@@ -111,7 +111,7 @@ impl Determinate {
     /// Return a new Determinate wrapping the given error.
     ///
     /// Exposed for testing via [crate::unreliable].
-    pub(crate) fn new(inner: anyhow::Error) -> Self {
+    pub fn new(inner: anyhow::Error) -> Self {
         Determinate { inner }
     }
 }
@@ -494,6 +494,17 @@ pub trait Blob: std::fmt::Debug {
     /// Returns Some and the size of the deleted blob if if exists. Succeeds and
     /// returns None if it does not exist.
     async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError>;
+
+    /// Restores a previously-deleted key to the map, if possible.
+    ///
+    /// Returns successfully if the key exists after this call: perhaps because it already existed
+    /// or was restored. (In particular, this makes restore idempotent.)
+    /// Fails if we were unable to restore any value for that key:
+    /// perhaps the key was never written, or was permanently deleted.
+    ///
+    /// It is acceptable for [Blob::restore] to be unable
+    /// to restore keys, in which case this method should succeed iff the key exists.
+    async fn restore(&self, key: &str) -> Result<(), ExternalError>;
 }
 
 #[async_trait]
@@ -544,6 +555,15 @@ impl<A: Blob + Sync + Send + 'static> Blob for Tasked<A> {
         let key = key.to_owned();
         mz_ore::task::spawn(|| "persist::task::delete", async move {
             backing.delete(&key).await
+        })
+        .await?
+    }
+
+    async fn restore(&self, key: &str) -> Result<(), ExternalError> {
+        let backing = self.clone_backing();
+        let key = key.to_owned();
+        mz_ore::task::spawn(|| "persist::task::restore", async move {
+            backing.restore(&key).await
         })
         .await?
     }
@@ -686,6 +706,22 @@ pub mod tests {
         // no bytes.
         blob0.set("empty", Bytes::new(), AllowNonAtomic).await?;
         assert_eq!(blob0.delete("empty").await, Ok(Some(0)));
+
+        // Attempt to restore a key. Not all backends will be able to restore, but
+        // we can confirm that our data is visible iff restore reported success.
+        blob0
+            .set("undelete", Bytes::from("data"), AllowNonAtomic)
+            .await?;
+        // Restoring should always succeed when the key exists.
+        blob0.restore("undelete").await?;
+        assert_eq!(blob0.delete("undelete").await?, Some("data".len()));
+        let expected = match blob0.restore("undelete").await {
+            Ok(()) => Some(Bytes::from("data").into()),
+            Err(ExternalError::Determinate(_)) => None,
+            Err(other) => return Err(other),
+        };
+        assert_eq!(blob0.get("undelete").await?, expected);
+        blob0.delete("undelete").await?;
 
         // Empty blob contains no keys.
         blob0.delete("k0a").await?;

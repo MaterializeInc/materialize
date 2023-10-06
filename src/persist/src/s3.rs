@@ -43,7 +43,7 @@ use uuid::Uuid;
 
 use crate::cfg::BlobKnobs;
 use crate::error::Error;
-use crate::location::{Atomicity, Blob, BlobMetadata, ExternalError};
+use crate::location::{Atomicity, Blob, BlobMetadata, Determinate, ExternalError};
 use crate::metrics::S3BlobMetrics;
 
 /// Configuration for opening an [S3Blob].
@@ -573,6 +573,68 @@ impl Blob for S3Blob {
             .await
             .map_err(|err| Error::from(err.to_string()))?;
         Ok(Some(usize::cast_from(size_bytes)))
+    }
+
+    async fn restore(&self, key: &str) -> Result<(), ExternalError> {
+        let path = self.get_path(key);
+        // Fetch the latest version of the object. If it's a normal version, return true;
+        // if it's a delete marker, delete it and loop; if there is no such version,
+        // return false.
+        // TODO: limit the number of delete markers we'll peel back?
+        loop {
+            // S3 only lets us fetch the versions of an object with a list requests.
+            // Seems a bit wasteful to just fetch one at a time, but otherwise we can only
+            // guess the order of versions via the timestamp, and that feels brittle.
+            let list_res = self
+                .client
+                .list_object_versions()
+                .bucket(&self.bucket)
+                .prefix(&path)
+                .max_keys(1)
+                .send()
+                .await
+                .map_err(|err| Error::from(err.to_string()))?;
+
+            let current_delete = list_res
+                .delete_markers()
+                .unwrap_or(&[])
+                .into_iter()
+                .filter(|d| {
+                    // We need to check that any versions we're looking at have the right key,
+                    // not just a key with our key as a prefix.
+                    d.key() == Some(path.as_str())
+                })
+                .find(|d| d.is_latest())
+                .and_then(|d| d.version_id());
+
+            if let Some(version) = current_delete {
+                let deleted = self
+                    .client
+                    .delete_object()
+                    .bucket(&self.bucket)
+                    .key(&path)
+                    .version_id(version)
+                    .send()
+                    .await
+                    .map_err(|err| Error::from(err.to_string()))?;
+                assert!(deleted.delete_marker(), "deleting a delete marker");
+            } else {
+                let has_current_version = list_res
+                    .versions()
+                    .unwrap_or(&[])
+                    .into_iter()
+                    .filter(|d| d.key() == Some(path.as_str()))
+                    .any(|v| v.is_latest());
+
+                if !has_current_version {
+                    return Err(Determinate::new(anyhow!(
+                        "unable to restore {key} in s3: no valid version exists"
+                    ))
+                    .into());
+                }
+                return Ok(());
+            }
+        }
     }
 }
 

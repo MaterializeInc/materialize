@@ -17,7 +17,8 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use mz_ore::bytes::SegmentedBytes;
 use mz_persist::location::{
-    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, ExternalError, SeqNo, VersionedData,
+    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, Determinate, ExternalError, SeqNo,
+    VersionedData,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -224,6 +225,20 @@ impl Blob for MaelstromBlob {
         // it's okay if its wrong in Maelstrom.
         Ok(Some(0))
     }
+
+    async fn restore(&self, key: &str) -> Result<(), ExternalError> {
+        let read = self
+            .handle
+            .lin_kv_read(Value::from(format!("blob/{}", key)))
+            .await
+            .map_err(anyhow::Error::new)?;
+        if read.is_none() {
+            return Err(
+                Determinate::new(anyhow!("key {key} not present in the maelstrom store")).into(),
+            );
+        }
+        Ok(())
+    }
 }
 
 /// Implementation of [Blob] that caches get calls.
@@ -288,6 +303,10 @@ impl Blob for CachingBlob {
     async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
         self.cache.lock().await.remove(key);
         self.blob.delete(key).await
+    }
+
+    async fn restore(&self, key: &str) -> Result<(), ExternalError> {
+        self.blob.restore(key).await
     }
 }
 

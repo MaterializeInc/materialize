@@ -21,7 +21,8 @@ use tokio::task::yield_now;
 
 use crate::error::Error;
 use crate::location::{
-    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, ExternalError, SeqNo, VersionedData,
+    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, Determinate, ExternalError, SeqNo,
+    VersionedData,
 };
 
 /// An in-memory representation of a set of [Log]s and [Blob]s that can be reused
@@ -148,6 +149,16 @@ impl Blob for MemBlob {
         // Yield to maximize our chances for getting interesting orderings.
         let () = yield_now().await;
         self.core.lock().await.delete(key)
+    }
+
+    async fn restore(&self, key: &str) -> Result<(), ExternalError> {
+        if !self.core.lock().await.dataz.contains_key(key) {
+            return Err(
+                Determinate::new(anyhow!("unable to restore {key} from in-memory state")).into(),
+            );
+        }
+
+        Ok(())
     }
 }
 
