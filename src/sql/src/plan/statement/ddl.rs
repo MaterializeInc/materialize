@@ -5232,12 +5232,7 @@ pub fn plan_comment(
 ) -> Result<Plan, PlanError> {
     const MAX_COMMENT_LENGTH: usize = 1024;
 
-    if !scx.catalog.system_vars().enable_comment() {
-        return Err(PlanError::Unsupported {
-            feature: "COMMENT ON".to_string(),
-            issue_no: Some(20218),
-        });
-    }
+    scx.require_feature_flag(&vars::ENABLE_COMMENT)?;
 
     let CommentStatement { object, comment } = stmt;
 
