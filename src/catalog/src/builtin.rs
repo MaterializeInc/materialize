@@ -2281,7 +2281,7 @@ pub static MZ_COMMENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("object_type", ScalarType::String.nullable(false))
-        .with_column("object_sub_id", ScalarType::UInt64.nullable(true))
+        .with_column("object_sub_id", ScalarType::Int32.nullable(true))
         .with_column("comment", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
 });
@@ -2890,7 +2890,7 @@ pub const PG_DESCRIPTION: BuiltinView = BuiltinView {
         SELECT
             pg_classoids.oid AS objoid,
             pg_classoids.classoid as classoid,
-            COALESCE(cmt.object_sub_id::pg_catalog.int4, 0) AS objsubid,
+            COALESCE(cmt.object_sub_id, 0) AS objsubid,
             cmt.comment AS description
         FROM
             pg_classoids

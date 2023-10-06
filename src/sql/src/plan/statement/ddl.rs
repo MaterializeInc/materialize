@@ -5377,6 +5377,18 @@ pub fn plan_comment(
         }
     };
 
+    // Note: the `mz_comments` table uses an `Int4` for the column position, but in the Stash we
+    // store a `usize` which would be a `Uint8`. We guard against a safe conversion here because
+    // it's the easiest place to raise an error.
+    //
+    // TODO(parkmycar): https://github.com/MaterializeInc/materialize/issues/22246.
+    if let Some(p) = column_pos {
+        i32::try_from(p).map_err(|_| PlanError::TooManyColumns {
+            max_num_columns: MAX_NUM_COLUMNS,
+            req_num_columns: p,
+        })?;
+    }
+
     Ok(Plan::Comment(CommentPlan {
         object_id,
         sub_component: column_pos,

@@ -145,8 +145,8 @@ COMMENT ON COLUMN c.col_1 IS 'this_works';
 query TTT
 SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
-view  NULL  this_is_a_view
 view  1  this_works
+view  NULL  this_is_a_view
 
 query IT
 SELECT objsubid, description FROM pg_description;
@@ -166,8 +166,8 @@ COMMENT ON MATERIALIZED VIEW mv IS 'mat_foo';
 query TTT
 SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
-view  NULL  this_is_a_view
 view  1  this_works
+view  NULL  this_is_a_view
 materialized-view  NULL  mat_foo
 materialized-view  1  comment_mat_view_col
 
@@ -227,9 +227,9 @@ COMMENT ON COLUMN my_webhook.body IS 'json_blob';
 query TTT
 SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
+source  1  json_blob
 source  NULL  all_the_data
 cluster  NULL  careful_now
-source  1  json_blob
 
 query IT
 SELECT objsubid, description FROM pg_description;
@@ -246,10 +246,10 @@ COMMENT ON TYPE int4_list IS 'supercool_list';
 query TTT
 SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
+source  1  json_blob
 type  NULL  supercool_list
 source  NULL  all_the_data
 cluster  NULL  careful_now
-source  1  json_blob
 
 query IT
 SELECT objsubid, description FROM pg_description;
