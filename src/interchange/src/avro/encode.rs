@@ -10,6 +10,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+use anyhow::Ok;
 use byteorder::{NetworkEndian, WriteBytesExt};
 use chrono::Timelike;
 use itertools::Itertools;
@@ -23,7 +24,7 @@ use once_cell::sync::Lazy;
 use serde_json::json;
 
 use crate::encode::{column_names_and_types, Encode, TypedDatum};
-use crate::envelopes::{self, ENVELOPE_CUSTOM_NAMES};
+use crate::envelopes::{self, DBZ_ROW_TYPE_ID, ENVELOPE_CUSTOM_NAMES};
 use crate::json::{build_row_schema_json, SchemaOptions};
 
 // TODO(rkhaitan): this schema intentionally omits the data_collections field
@@ -140,6 +141,15 @@ pub enum DocTarget {
     },
 }
 
+impl DocTarget {
+    fn id(&self) -> GlobalId {
+        match self {
+            DocTarget::Type(object_id) => *object_id,
+            DocTarget::Field { object_id, .. } => *object_id,
+        }
+    }
+}
+
 /// Generates key and value Avro schemas
 pub struct AvroSchemaGenerator {
     value_columns: Vec<(ColumnName, ColumnType)>,
@@ -157,13 +167,39 @@ impl AvroSchemaGenerator {
             avro_key_fullname,
             set_null_defaults,
             sink_from,
-            value_doc_options,
+            mut value_doc_options,
             key_doc_options,
         }: AvroSchemaOptions,
     ) -> Result<Self, anyhow::Error> {
         let mut value_columns = column_names_and_types(value_desc);
         if is_debezium {
             value_columns = envelopes::dbz_envelope(value_columns);
+            // With DEBEZIUM envelope the message is wrapped into "before" and "after"
+            // with `DBZ_ROW_TYPE_ID` instead of `sink_from`.
+            // Replacing comments for the columns and type in `sink_from` to `DBZ_ROW_TYPE_ID`.
+            if let Some(sink_from_id) = sink_from {
+                let mut new_column_docs = BTreeMap::new();
+                value_doc_options.iter().for_each(|(k, v)| {
+                    if k.id() == sink_from_id {
+                        match k {
+                            DocTarget::Field { column_name, .. } => {
+                                new_column_docs.insert(
+                                    DocTarget::Field {
+                                        object_id: DBZ_ROW_TYPE_ID,
+                                        column_name: column_name.clone(),
+                                    },
+                                    v.clone(),
+                                );
+                            }
+                            DocTarget::Type(_) => {
+                                new_column_docs.insert(DocTarget::Type(DBZ_ROW_TYPE_ID), v.clone());
+                            }
+                        }
+                    }
+                });
+                value_doc_options.append(&mut new_column_docs);
+                value_doc_options.retain(|k, _v| k.id() != sink_from_id);
+            }
         }
         let row_schema = build_row_schema_json(
             &value_columns,
