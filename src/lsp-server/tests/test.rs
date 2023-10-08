@@ -120,79 +120,82 @@ mod tests {
     async fn test_lsp() {
         let (mut req_client, mut resp_client) = start_server();
         test_initialize(&mut req_client, &mut resp_client).await;
-        test_parser(&mut req_client, &mut resp_client).await;
+
+        // Test a simple query
+        test_query(
+            "SELECT 100;",
+            Some(vec![]),
+            &mut req_client,
+            &mut resp_client,
+        )
+        .await;
+        test_jinja_query(&mut req_client, &mut resp_client).await;
+    }
+
+    async fn test_jinja_query(req_client: &mut DuplexStream, resp_client: &mut DuplexStream) {
+        // This is not Jinja code but it is a tricky case.
+        let query = r#"
+            SELECT '{{ col }}';
+            -- This is a SQL comment, containing Jinja delimiters {# source #}
+            SELECT a as "{% column %}";
+        "#;
+        test_query(query, Some(vec![]), req_client, resp_client).await;
+
+        // This is Jinja code and should not be parsed..
+        let info_message =
+            "Jinja code will not be parsed by the Materialize extension.".to_string();
+        let query = "CREATE TABLE {{ model }} (A INT);";
+        let diagnostic = Some(vec![Diagnostic::new_with_code_number(
+            Range {
+                start: Position::new(0, 13),
+                end: Position::new(0, 13),
+            },
+            DiagnosticSeverity::INFORMATION,
+            1,
+            None,
+            info_message.clone(),
+        )]);
+        test_query(query, diagnostic, req_client, resp_client).await;
+
+        let query = r#"
+            {% if True %}
+                SELECT 100;
+            {% endif %}
+        "#;
+        let diagnostic = Some(vec![Diagnostic::new_with_code_number(
+            Range {
+                start: Position::new(1, 12),
+                end: Position::new(1, 12),
+            },
+            DiagnosticSeverity::INFORMATION,
+            1,
+            None,
+            info_message.clone(),
+        )]);
+        test_query(query, diagnostic, req_client, resp_client).await;
+
+        let query = r#"
+            {%+ if True %}
+                SELECT 100;
+            {% endif %}
+        "#;
+        let diagnostic = Some(vec![Diagnostic::new_with_code_number(
+            Range {
+                start: Position::new(1, 12),
+                end: Position::new(1, 12),
+            },
+            DiagnosticSeverity::INFORMATION,
+            1,
+            None,
+            info_message.clone(),
+        )]);
+        test_query(query, diagnostic, req_client, resp_client).await;
     }
 
     /// Asserts that the server can parse a single SQL statement `SELECT 100;`.
-    async fn test_parser(req_client: &mut DuplexStream, resp_client: &mut DuplexStream) {
-        // Test "did_open". Triggers "on_change" and the parser.
-        let did_open = r#"{
-                "jsonrpc": "2.0",
-                "method": "textDocument/didOpen",
-                "params": {
-                    "textDocument": {
-                        "uri": "file:///foo.rs",
-                        "languageId": "sql",
-                        "version": 1,
-                        "text": "SELECT 100;"
-                    }
-                }
-            }
-        "#;
-
-        let did_open_response: Vec<LspMessage<serde_json::Value, String>> = vec![
-            LspMessage {
-                jsonrpc: "2.0".to_string(),
-                method: Some("window/logMessage".to_string()),
-                params: Some(json!(LogMessageParams {
-                    message: "file opened!".to_string(),
-                    typ: MessageType::INFO,
-                })),
-                result: None,
-                id: None,
-            },
-            LspMessage {
-                jsonrpc: "2.0".to_string(),
-                method: Some("window/logMessage".to_string()),
-                params: Some(json!(json!(LogMessageParams {
-                    message: r#"on_change Url { scheme: "file", cannot_be_a_base: false, username: "", password: None, host: None, port: None, path: "/foo.rs", query: None, fragment: None }"#.to_string(),
-                    typ: MessageType::INFO
-                }))),
-                result: None,
-                id: None,
-            },
-            LspMessage {
-                jsonrpc: "2.0".to_string(),
-                method: Some("window/logMessage".to_string()),
-                params: Some(json!(json!(LogMessageParams {
-                    message: r#"Results: [StatementParseResult { ast: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("100")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }), sql: "SELECT 100" }]"#.to_string(),
-                    typ: MessageType::INFO
-                }))),
-                result: None,
-                id: None,
-            },
-            LspMessage {
-                jsonrpc: "2.0".to_string(),
-                method: Some("textDocument/publishDiagnostics".to_string()),
-                params: Some(json!(json!(PublishDiagnosticsParams {
-                    uri: "file:///foo.rs".parse().unwrap(),
-                    diagnostics: vec![],
-                    version: Some(1),
-                }))),
-                result: None,
-                id: None,
-            },
-        ];
-
-        write_and_assert(
-            req_client,
-            resp_client,
-            &mut [0; 1024],
-            did_open,
-            did_open_response,
-        )
-        .await;
-    }
+    // async fn test_simple_query(req_client: &mut DuplexStream, resp_client: &mut DuplexStream) {
+    //     test_query("SELECT 100;", Some(vec![]), req_client, resp_client);
+    // }
 
     /// Asserts that the server initialize correctly.
     ///
@@ -200,8 +203,8 @@ mod tests {
     /// Every time a new capability to the server is added,
     /// the response for this test will change.
     async fn test_initialize(req_client: &mut DuplexStream, resp_client: &mut DuplexStream) {
-        let initialize = r#"{"jsonrpc":"2.0","method":"initialize","params":{"capabilities":{"textDocumentSync":1}},"id":1}"#;
-        let initialize_response: Vec<LspMessage<bool, InitializeResult>> = vec![LspMessage {
+        let request = r#"{"jsonrpc":"2.0","method":"initialize","params":{"capabilities":{"textDocumentSync":1}},"id":1}"#;
+        let expected_response: Vec<LspMessage<bool, InitializeResult>> = vec![LspMessage {
             jsonrpc: "2.0".to_string(),
             method: None,
             params: None,
@@ -232,8 +235,8 @@ mod tests {
             req_client,
             resp_client,
             &mut [0; 1024],
-            initialize,
-            initialize_response,
+            request,
+            expected_response,
         )
         .await;
     }
@@ -259,6 +262,26 @@ mod tests {
 
         let messages = parse_response::<T, R>(buf_as.clone());
         assert_eq!(messages, expected_output_message)
+    }
+
+    /// A utility function to test a query and assert
+    /// that the diagnostic is as expected.
+    async fn test_query(
+        query: &str,
+        diagnostics: Option<Vec<Diagnostic>>,
+        req_client: &mut DuplexStream,
+        resp_client: &mut DuplexStream,
+    ) {
+        // This is not Jinja code but it is a tricky case.
+        let (request, expected_response) = build_query_and_diagnostics(query, diagnostics);
+        write_and_assert(
+            req_client,
+            resp_client,
+            &mut [0; 1024],
+            request.as_str(),
+            expected_response,
+        )
+        .await;
     }
 
     /// Parses the response from the server.
@@ -320,7 +343,65 @@ mod tests {
         (req_client, resp_client)
     }
 
+    /// Appends a message's content length header.
     fn req(msg: &str) -> String {
         format!("Content-Length: {}\r\n\r\n{}", msg.len(), msg)
+    }
+
+    /// Returns a valid log message structure
+    fn build_log_message(message: &str) -> LspMessage<serde_json::Value, String> {
+        LspMessage {
+            jsonrpc: "2.0".to_string(),
+            method: Some("window/logMessage".to_string()),
+            params: Some(json!(json!(LogMessageParams {
+                message: message.to_string(),
+                typ: MessageType::INFO
+            }))),
+            result: None,
+            id: None,
+        }
+    }
+
+    /// Returns the action of open a new SQL file
+    fn build_query_and_diagnostics(
+        sql: &str,
+        diagnostics: Option<Vec<Diagnostic>>,
+    ) -> (String, Vec<LspMessage<serde_json::Value, String>>) {
+        let did_open_message = json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didOpen",
+            "params": {
+                "textDocument": {
+                    "uri": "file:///foo.rs",
+                    "languageId": "sql",
+                    "version": 1,
+                    "text": sql
+                }
+            }
+        })
+        .to_string();
+
+        let mut did_open_response: Vec<LspMessage<serde_json::Value, String>> = vec![
+            build_log_message("file opened!"),
+            build_log_message(
+                r#"on_change Url { scheme: "file", cannot_be_a_base: false, username: "", password: None, host: None, port: None, path: "/foo.rs", query: None, fragment: None }"#,
+            ),
+        ];
+
+        if let Some(diagnostics) = diagnostics {
+            did_open_response.push(LspMessage {
+                jsonrpc: "2.0".to_string(),
+                method: Some("textDocument/publishDiagnostics".to_string()),
+                params: Some(json!(json!(PublishDiagnosticsParams {
+                    uri: "file:///foo.rs".parse().unwrap(),
+                    diagnostics,
+                    version: Some(1),
+                }))),
+                result: None,
+                id: None,
+            });
+        }
+
+        (did_open_message, did_open_response)
     }
 }
