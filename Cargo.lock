@@ -100,6 +100,12 @@ checksum = "bf7d0a018de4f6aa429b9d33d69edf69072b1c5b1cb8d3e4a5f7ef898fc3eb76"
 
 [[package]]
 name = "arrayvec"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23b62fc65de8e4e7f52534fb52b0f3ed04746ae267519eef2a83941e8085068b"
+
+[[package]]
+name = "arrayvec"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8da52d66c7071e2e3fa2a1e5c6d088fec47b593032b254f5e980de8ea54454d6"
@@ -5181,12 +5187,24 @@ dependencies = [
  "itertools",
  "mz-ore",
  "mz-sql-lexer",
+ "mz-sql-parser",
  "mz-walkabout",
  "phf",
  "serde",
  "tracing",
  "uncased",
  "unicode-width",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-sql-pretty"
+version = "0.0.0"
+dependencies = [
+ "datadriven",
+ "mz-ore",
+ "mz-sql-parser",
+ "pretty",
  "workspace-hack",
 ]
 
@@ -6590,6 +6608,17 @@ checksum = "8e63c4859013b38a76eca2414c64911fba30def9e3202ac461a2d22831220124"
 dependencies = [
  "predicates-core",
  "treeline",
+]
+
+[[package]]
+name = "pretty"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b55c4d17d994b637e2f4daf6e5dc5d660d209d5642377d675d7a1c3ab69fa579"
+dependencies = [
+ "arrayvec 0.5.2",
+ "typed-arena",
+ "unicode-width",
 ]
 
 [[package]]
@@ -8809,6 +8838,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "typed-arena"
+version = "2.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6af6ae20167a9ece4bcb41af5b80f8a1f1df981f6391189ce00fd257af04126a"
+
+[[package]]
 name = "typed-builder"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8989,7 +9024,7 @@ name = "vte"
 version = "0.10.1"
 source = "git+https://github.com/MaterializeInc/vte?rev=45670c47cebd7af050def2f80a307bdeec7caba3#45670c47cebd7af050def2f80a307bdeec7caba3"
 dependencies = [
- "arrayvec",
+ "arrayvec 0.7.2",
  "utf8parse",
  "vte_generate_state_changes",
 ]

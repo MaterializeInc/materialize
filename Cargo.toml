@@ -69,6 +69,7 @@ members = [
     "src/sql",
     "src/sql-lexer",
     "src/sql-parser",
+    "src/sql-pretty",
     "src/sqllogictest",
     "src/stash",
     "src/stash-debug",
