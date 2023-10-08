@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import math
+import re
 from decimal import Decimal
 from typing import Any
 
@@ -16,6 +17,8 @@ from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter im
 )
 from materialize.output_consistency.query.query_result import QueryExecution
 from materialize.output_consistency.validation.result_comparator import ResultComparator
+
+TIMESTAMP_PATTERN = re.compile(r"\d{4,}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+")
 
 
 class PostgresResultComparator(ResultComparator):
@@ -61,5 +64,22 @@ class PostgresResultComparator(ResultComparator):
         return math.isclose(value1, value2, rel_tol=self.floating_precision)
 
     def is_str_equal(self, value1: str, value2: str) -> bool:
+        if self.is_timestamp(value1):
+            return self.is_timestamp_equal(value1, value2)
+
         # Postgres uses 'mons' instead of 'months'
         return value1.replace(" mons", " months") == value2.replace(" mons", " months")
+
+    def is_timestamp(self, value1: str) -> bool:
+        return TIMESTAMP_PATTERN.match(value1) is not None
+
+    def is_timestamp_equal(self, value1: str, value2: str) -> bool:
+        # a timezone might be at the end, do not discard that
+        milliseconds_pattern = re.compile(r"\.\d+")
+
+        if milliseconds_pattern.search(value1) and milliseconds_pattern.search(value2):
+            # drop milliseconds
+            value1 = milliseconds_pattern.sub(value1, "")
+            value2 = milliseconds_pattern.sub(value2, "")
+
+        return value1 == value2
