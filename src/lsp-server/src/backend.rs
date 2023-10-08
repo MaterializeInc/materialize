@@ -251,7 +251,7 @@ impl Backend {
     /// - {{ ... }} for Expressions to print to the template output
     /// - {# ... #} for Comments not included in the template output
     ///
-    /// Reference: (https://jinja.palletsprojects.com/en/3.0.x/templates/#synopsis)
+    /// Reference: <https://jinja.palletsprojects.com/en/3.0.x/templates/#synopsis>
     ///
     /// The trade-off is that the regex is simple, but it may detect some code as Jinja
     /// when it is not actually Jinja. For example: `SELECT '{{ 100 }}';`.
