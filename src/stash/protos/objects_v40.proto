@@ -15,6 +15,7 @@
 // migration using these two files, and no matter how they types change in the future, we'll always
 // have these snapshots to facilitate the migration.
 
+// buf breaking: ignore (does currently not require backward-compatibility)
 
 syntax = "proto3";
 
