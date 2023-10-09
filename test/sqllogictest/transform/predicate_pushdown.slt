@@ -925,6 +925,35 @@ Source materialize.public.t
 
 EOF
 
+# Regression test for https://github.com/MaterializeInc/materialize/issues/22257
+# The transitive closure computation in `inline_if_not_too_big` has to do more than one step here. For this, later map
+# expressions should mention only the previous map expression, but not earlier ones. Also, there has to be at least
+# 3 map expressions, so that adding the support of the last one doesn't immediately cover all of the map expressions.
+query T multiline
+EXPLAIN
+SELECT * FROM (
+  SELECT z2 * 4 AS z3
+  FROM (
+    SELECT z1 + 1 AS z2
+    FROM (
+      SELECT x, y, x*y AS z1
+      FROM t
+    )
+  )
+)
+WHERE z3 > 5;
+----
+Explained Query:
+  Project (#2)
+    Filter (#2 > 5)
+      Map ((((#0 * #1) + 1) * 4))
+        ReadStorage materialize.public.t
+
+Source materialize.public.t
+  filter=(((((#0 * #1) + 1) * 4) > 5))
+
+EOF
+
 # Test when `push_filters_through_map` runs into the inlining limit: The source shouldn't have the filter pushed down
 # into it.
 query T multiline
