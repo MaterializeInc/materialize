@@ -79,14 +79,15 @@ mod app_password;
 mod auth;
 mod client;
 mod error;
+mod metrics;
 
 pub use auth::{
-    Authentication, AuthenticationConfig, Claims, ValidatedApiTokenResponse, REFRESH_SUFFIX,
+    Authentication, AuthenticationConfig, Claims, ExchangePasswordForTokenResponse,
+    ValidatedApiTokenResponse, REFRESH_SUFFIX,
 };
 pub use client::tokens::{ApiTokenArgs, ApiTokenResponse, RefreshToken};
 pub use client::Client;
 pub use error::Error;
-use jsonwebtoken::DecodingKey;
 use uuid::Uuid;
 
 pub use crate::app_password::{AppPassword, AppPasswordParseError};
@@ -112,31 +113,4 @@ pub struct FronteggCliArgs {
     /// The name of the admin role in Frontegg.
     #[clap(long, env = "FRONTEGG_ADMIN_ROLE", requires = "frontegg-tenant")]
     frontegg_admin_role: Option<String>,
-}
-
-impl FronteggCliArgs {
-    pub fn into_auth(self) -> Result<Option<Authentication>, Error> {
-        match (
-            self.frontegg_tenant,
-            self.frontegg_api_token_url,
-            self.frontegg_jwk,
-            self.frontegg_admin_role,
-        ) {
-            (None, None, None, None) => Ok(None),
-            (Some(tenant_id), Some(admin_api_token_url), Some(jwk), Some(admin_role)) => {
-                Ok(Some(Authentication::new(
-                    AuthenticationConfig {
-                        admin_api_token_url,
-                        decoding_key: DecodingKey::from_rsa_pem(jwk.as_bytes())?,
-                        tenant_id: Some(tenant_id),
-                        now: mz_ore::now::SYSTEM_TIME.clone(),
-                        refresh_before_secs: 60,
-                        admin_role,
-                    },
-                    Client::environmentd_default(),
-                )))
-            }
-            _ => unreachable!("clap enforced"),
-        }
-    }
 }

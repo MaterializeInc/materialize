@@ -3412,18 +3412,19 @@ impl TryFrom<&KafkaConnectionOptionExtracted> for Option<SaslConfig> {
     type Error = PlanError;
     fn try_from(k: &KafkaConnectionOptionExtracted) -> Result<Self, Self::Error> {
         let res = if k.sasl_config().iter().all(|config| k.seen.contains(config)) {
-            let sasl_mechanism = k.sasl_mechanisms.clone().unwrap();
-            if sasl_mechanism
-                .chars()
-                .any(|c| c.is_ascii_alphabetic() && !c.is_uppercase())
-            {
-                sql_bail!(
-                    "invalid SASL MECHANISM {}: must be uppercase",
-                    sasl_mechanism.quoted()
-                );
-            }
+            // librdkafka requires SASL mechanisms to be upper case (PLAIN,
+            // SCRAM-SHA-256). For usability, we automatically uppercase the
+            // mechanism that user provides. This avoids a frustrating
+            // interaction with identifier case folding. Consider `SASL
+            // MECHANISMS = PLAIN`. Identifier case folding results in a SASL
+            // mechanism of `plain` (note the lowercase), which Materialize
+            // previously rejected with an error of "SASL mechanism must be
+            // uppercase." This was deeply frustarting for users who were not
+            // familiar with identifier case folding rules. See #22205.
+            let sasl_mechanism = k.sasl_mechanisms.clone().unwrap().to_uppercase();
+
             Some(SaslConfig {
-                mechanisms: sasl_mechanism,
+                sasl_mechanism,
                 username: k.sasl_username.clone().unwrap(),
                 password: k.sasl_password.unwrap().into(),
                 tls_root_cert: k.ssl_certificate_authority.clone(),
@@ -5232,12 +5233,7 @@ pub fn plan_comment(
 ) -> Result<Plan, PlanError> {
     const MAX_COMMENT_LENGTH: usize = 1024;
 
-    if !scx.catalog.system_vars().enable_comment() {
-        return Err(PlanError::Unsupported {
-            feature: "COMMENT ON".to_string(),
-            issue_no: Some(20218),
-        });
-    }
+    scx.require_feature_flag(&vars::ENABLE_COMMENT)?;
 
     let CommentStatement { object, comment } = stmt;
 
@@ -5262,9 +5258,7 @@ pub fn plan_comment(
         | com_ty @ CommentObjectType::Sink { name }
         | com_ty @ CommentObjectType::Type { name }
         | com_ty @ CommentObjectType::Secret { name } => {
-            let name = normalize::unresolved_item_name(name.clone())?;
-            let item = scx.catalog.resolve_item(&name)?;
-
+            let item = scx.get_item_by_resolved_name(name)?;
             match (com_ty, item.item_type()) {
                 (CommentObjectType::Table { .. }, CatalogItemType::Table) => {
                     (CommentObjectId::Table(item.id()), None)
@@ -5319,24 +5313,8 @@ pub fn plan_comment(
                 }
             }
         }
-        CommentObjectType::Column {
-            relation_name,
-            column_name,
-        } => {
-            let name = normalize::unresolved_item_name(relation_name.clone())?;
-            let item = scx.catalog.resolve_item(&name)?;
-
-            let column_name = normalize::column_name(column_name.clone());
-            let desc = item.desc(&scx.catalog.resolve_full_name(item.name()))?;
-
-            // Check to make sure this column exists.
-            let Some((pos, _ty)) = desc.get_by_name(&column_name) else {
-                return Err(PlanError::UnknownColumn {
-                    table: Some(name),
-                    column: column_name,
-                });
-            };
-
+        CommentObjectType::Column { name } => {
+            let (item, pos) = scx.get_column_by_resolved_name(name)?;
             match item.item_type() {
                 CatalogItemType::Table => (CommentObjectId::Table(item.id()), Some(pos + 1)),
                 CatalogItemType::Source => (CommentObjectId::Source(item.id()), Some(pos + 1)),
@@ -5352,21 +5330,14 @@ pub fn plan_comment(
                 }
             }
         }
-        CommentObjectType::Role { name } => {
-            let role = scx.catalog.resolve_role(name.as_str())?;
-            (CommentObjectId::Role(role.id()), None)
-        }
+        CommentObjectType::Role { name } => (CommentObjectId::Role(name.id), None),
         CommentObjectType::Database { name } => {
-            let database = scx.resolve_database(name)?;
-            (CommentObjectId::Database(database.id()), None)
+            (CommentObjectId::Database(*name.database_id()), None)
         }
-        CommentObjectType::Schema { name } => {
-            let schema = scx.resolve_schema(name.clone())?;
-            (
-                CommentObjectId::Schema((*schema.database(), *schema.id())),
-                None,
-            )
-        }
+        CommentObjectType::Schema { name } => (
+            CommentObjectId::Schema((*name.database_spec(), *name.schema_spec())),
+            None,
+        ),
         CommentObjectType::Cluster { name } => (CommentObjectId::Cluster(name.id), None),
         CommentObjectType::ClusterReplica { name } => {
             let replica = scx.catalog.resolve_cluster_replica(name)?;

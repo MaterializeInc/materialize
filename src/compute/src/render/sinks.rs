@@ -25,6 +25,7 @@ use timely::dataflow::Scope;
 use timely::progress::Antichain;
 
 use crate::compute_state::SinkToken;
+use crate::logging::compute::LogDataflowErrors;
 use crate::render::context::Context;
 use crate::render::RenderTimestamp;
 
@@ -58,7 +59,7 @@ where
         let bundle = self
             .lookup_id(mz_expr::Id::Global(sink.from))
             .expect("Sink source collection not loaded");
-        let (ok_collection, err_collection) = if let Some(collection) = &bundle.collection {
+        let (ok_collection, mut err_collection) = if let Some(collection) = &bundle.collection {
             collection.clone()
         } else {
             let (key, _arrangement) = bundle
@@ -72,6 +73,11 @@ where
             mfp.permute(permutation, thinning.len() + key.len());
             bundle.as_collection_core(mfp, Some((key.clone(), None)), self.until.clone())
         };
+
+        // Attach logging of dataflow errors.
+        if let Some(logger) = compute_state.compute_logger.clone() {
+            err_collection = err_collection.log_dataflow_errors(logger, sink_id);
+        }
 
         let ok_collection = ok_collection.leave();
         let err_collection = err_collection.leave();

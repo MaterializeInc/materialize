@@ -8,9 +8,6 @@
 # by the Apache License, Version 2.0.
 
 
-from materialize.mzcompose import (
-    DEFAULT_DEBEZIUM_VERSION,
-)
 from materialize.mzcompose.service import (
     Service,
     ServiceDependency,
@@ -21,18 +18,21 @@ class Debezium(Service):
     def __init__(
         self,
         name: str = "debezium",
-        image: str = f"debezium/connect:{DEFAULT_DEBEZIUM_VERSION}",
         port: int = 8083,
         redpanda: bool = False,
         environment: list[str] = [
-            "BOOTSTRAP_SERVERS=kafka:9092",
-            "CONFIG_STORAGE_TOPIC=connect_configs",
-            "OFFSET_STORAGE_TOPIC=connect_offsets",
-            "STATUS_STORAGE_TOPIC=connect_statuses",
-            # We don't support JSON, so ensure that connect uses AVRO to encode messages and CSR to
-            # record the schema
-            "KEY_CONVERTER=io.confluent.connect.avro.AvroConverter",
-            "VALUE_CONVERTER=io.confluent.connect.avro.AvroConverter",
+            "CONNECT_BOOTSTRAP_SERVERS=kafka:9092",
+            "CONNECT_GROUP_ID=connect",
+            "CONNECT_CONFIG_STORAGE_TOPIC=connect_configs",
+            "CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR=1",
+            "CONNECT_OFFSET_STORAGE_TOPIC=connect_offsets",
+            "CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR=1",
+            "CONNECT_STATUS_STORAGE_TOPIC=connect_statuses",
+            "CONNECT_STATUS_STORAGE_REPLICATION_FACTOR=1",
+            # We don't support JSON, so ensure that connect uses Avro to encode
+            # messages and CSR to record the schema.
+            "CONNECT_KEY_CONVERTER=io.confluent.connect.avro.AvroConverter",
+            "CONNECT_VALUE_CONVERTER=io.confluent.connect.avro.AvroConverter",
             "CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL=http://schema-registry:8081",
             "CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL=http://schema-registry:8081",
             "CONNECT_OFFSET_COMMIT_POLICY=AlwaysCommitOffsetPolicy",
@@ -44,12 +44,13 @@ class Debezium(Service):
             "kafka": {"condition": "service_healthy"},
             "schema-registry": {"condition": "service_healthy"},
         }
+        environment.append(f"CONNECT_REST_ADVERTISED_HOST_NAME={name}")
         if redpanda:
             depends_on = {"redpanda": {"condition": "service_healthy"}}
         super().__init__(
             name=name,
             config={
-                "image": image,
+                "mzbuild": "debezium",
                 "init": True,
                 "ports": [port],
                 "environment": environment,

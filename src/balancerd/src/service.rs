@@ -61,6 +61,7 @@ pub struct Args {
 }
 
 pub async fn run(args: Args) -> Result<(), anyhow::Error> {
+    let metrics_registry = MetricsRegistry::new();
     let resolver = match (args.static_resolver_addr, args.frontegg_resolver_template) {
         (None, Some(addr_template)) => {
             let auth = Authentication::new(
@@ -71,10 +72,10 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
                     )?,
                     tenant_id: None,
                     now: mz_ore::now::SYSTEM_TIME.clone(),
-                    refresh_before_secs: 60,
                     admin_role: args.frontegg_admin_role.expect("clap enforced"),
                 },
                 mz_frontegg_auth::Client::environmentd_default(),
+                &metrics_registry,
             );
             Resolver::Frontegg(FronteggResolver {
                 auth,
@@ -93,7 +94,7 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
         resolver,
         args.tls.into_config()?,
     );
-    let metrics = Metrics::new(&config, &MetricsRegistry::new());
+    let metrics = Metrics::new(&config, &metrics_registry);
     let service = BalancerService::new(config, metrics);
     service.serve().await?;
     info!("balancer service safely exited");

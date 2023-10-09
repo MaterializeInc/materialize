@@ -59,8 +59,6 @@ so it is executed.""",
 
     parser.add_argument("--coverage", action="store_true")
     parser.add_argument("pipeline", type=str)
-    # TODO Empty argument, used in tests pipeline, remove
-    parser.add_argument("rest", nargs=argparse.REMAINDER)
     args = parser.parse_args()
 
     # Make sure we have an up to date view of main.
@@ -103,7 +101,7 @@ so it is executed.""",
         for step in pipeline["steps"]:
             # Coverage runs are slower
             if "timeout_in_minutes" in step:
-                step["timeout_in_minutes"] *= 2
+                step["timeout_in_minutes"] *= 3
 
             if step.get("coverage") == "skip":
                 step["skip"] = True

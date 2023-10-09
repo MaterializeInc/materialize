@@ -385,6 +385,8 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
     c.up("materialized")
 
     # Verify that we have fewer events now
+    # 7 because the truncation default is 5, and the restarted
+    # objects produce a new starting and running event.
     c.testdrive(
         service="testdrive_no_reset",
         input=dedent(

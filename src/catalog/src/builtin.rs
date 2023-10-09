@@ -1396,6 +1396,12 @@ pub const MZ_SCHEDULING_PARKS_HISTOGRAM_RAW: BuiltinLog = BuiltinLog {
     variant: LogVariant::Timely(TimelyLog::Parks),
 };
 
+pub const MZ_ARRANGEMENT_RECORDS_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_arrangement_records_raw",
+    schema: MZ_INTERNAL_SCHEMA,
+    variant: LogVariant::Differential(DifferentialLog::ArrangementRecords),
+};
+
 pub const MZ_ARRANGEMENT_BATCHES_RAW: BuiltinLog = BuiltinLog {
     name: "mz_arrangement_batches_raw",
     schema: MZ_INTERNAL_SCHEMA,
@@ -1430,6 +1436,12 @@ pub const MZ_COMPUTE_DELAYS_HISTOGRAM_RAW: BuiltinLog = BuiltinLog {
     name: "mz_compute_delays_histogram_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::FrontierDelay),
+};
+
+pub const MZ_COMPUTE_ERROR_COUNTS_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_compute_error_counts_raw",
+    schema: MZ_INTERNAL_SCHEMA,
+    variant: LogVariant::Compute(ComputeLog::ErrorCount),
 };
 
 pub const MZ_ACTIVE_PEEKS_PER_WORKER: BuiltinLog = BuiltinLog {
@@ -1498,35 +1510,6 @@ pub const MZ_DATAFLOW_OPERATOR_REACHABILITY_RAW: BuiltinLog = BuiltinLog {
     variant: LogVariant::Timely(TimelyLog::Reachability),
 };
 
-pub const MZ_ARRANGEMENT_RECORDS_RAW: BuiltinLog = BuiltinLog {
-    name: "mz_arrangement_records_raw",
-    schema: MZ_INTERNAL_SCHEMA,
-    variant: LogVariant::Differential(DifferentialLog::ArrangementRecords),
-};
-
-pub static MZ_VIEW_KEYS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
-    name: "mz_view_keys",
-    schema: MZ_INTERNAL_SCHEMA,
-    desc: RelationDesc::empty()
-        .with_column("object_id", ScalarType::String.nullable(false))
-        .with_column("column", ScalarType::UInt64.nullable(false))
-        .with_column("key_group", ScalarType::UInt64.nullable(false)),
-    is_retained_metrics_object: false,
-});
-pub static MZ_VIEW_FOREIGN_KEYS: Lazy<BuiltinTable> = Lazy::new(|| {
-    BuiltinTable {
-        name: "mz_view_foreign_keys",
-        schema: MZ_INTERNAL_SCHEMA,
-        desc: RelationDesc::empty()
-            .with_column("child_id", ScalarType::String.nullable(false))
-            .with_column("child_column", ScalarType::UInt64.nullable(false))
-            .with_column("parent_id", ScalarType::String.nullable(false))
-            .with_column("parent_column", ScalarType::UInt64.nullable(false))
-            .with_column("key_group", ScalarType::UInt64.nullable(false))
-            .with_key(vec![0, 1, 4]), // TODO: explain why this is a key.
-        is_retained_metrics_object: false,
-    }
-});
 pub static MZ_KAFKA_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_kafka_sinks",
     schema: MZ_CATALOG_SCHEMA,
@@ -3267,6 +3250,51 @@ FROM mz_internal.mz_compute_delays_histogram_per_worker
 GROUP BY export_id, import_id, delay_ns",
 };
 
+pub const MZ_COMPUTE_ERROR_COUNTS_PER_WORKER: BuiltinView = BuiltinView {
+    name: "mz_compute_error_counts_per_worker",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_compute_error_counts_per_worker AS
+WITH MUTUALLY RECURSIVE
+    -- Indexes that reuse existing indexes rather than maintaining separate dataflows.
+    -- For these we don't log error counts separately, so we need to forward the error counts from
+    -- their dependencies instead.
+    index_reuses(reuse_id text, index_id text) AS (
+        SELECT d.object_id, d.dependency_id
+        FROM mz_internal.mz_compute_dependencies d
+        JOIN mz_internal.mz_compute_exports e ON (e.export_id = d.object_id)
+        WHERE NOT EXISTS (
+            SELECT 1 FROM mz_internal.mz_dataflows
+            WHERE id = e.dataflow_id
+        )
+    ),
+    -- Error counts that were directly logged on compute exports.
+    direct_errors(export_id text, worker_id uint8, count int8) AS (
+        SELECT export_id, worker_id, count
+        FROM mz_internal.mz_compute_error_counts_raw
+    ),
+    -- Error counts propagated to index reused.
+    all_errors(export_id text, worker_id uint8, count int8) AS (
+        SELECT * FROM direct_errors
+        UNION
+        SELECT r.reuse_id, e.worker_id, e.count
+        FROM all_errors e
+        JOIN index_reuses r ON (r.index_id = e.export_id)
+    )
+SELECT * FROM all_errors",
+};
+
+pub const MZ_COMPUTE_ERROR_COUNTS: BuiltinView = BuiltinView {
+    name: "mz_compute_error_counts",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_compute_error_counts AS
+SELECT
+    export_id,
+    pg_catalog.sum(count) AS count
+FROM mz_internal.mz_compute_error_counts_per_worker
+GROUP BY export_id
+HAVING pg_catalog.sum(count) != 0",
+};
+
 pub const MZ_MESSAGE_COUNTS_PER_WORKER: BuiltinView = BuiltinView {
     name: "mz_message_counts_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
@@ -4831,6 +4859,60 @@ ON mz_catalog.mz_clusters (id)",
     is_retained_metrics_object: false,
 };
 
+pub const MZ_INDEXES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_indexes_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_indexes_ind
+IN CLUSTER mz_introspection
+ON mz_catalog.mz_indexes (id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_ROLES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_roles_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_roles_ind
+IN CLUSTER mz_introspection
+ON mz_catalog.mz_roles (id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_SOURCES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_sources_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_sources_ind
+IN CLUSTER mz_introspection
+ON mz_catalog.mz_sources (id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_SINKS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_sinks_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_sinks_ind
+IN CLUSTER mz_introspection
+ON mz_catalog.mz_sinks (id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_MATERIALIZED_VIEWS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_materialized_views_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_materialized_views_ind
+IN CLUSTER mz_introspection
+ON mz_catalog.mz_materialized_views (id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_CLUSTER_LINKS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_cluster_links_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_cluster_links_ind
+IN CLUSTER mz_introspection
+ON mz_internal.mz_cluster_links (cluster_id)",
+    is_retained_metrics_object: false,
+};
+
 pub const MZ_SOURCE_STATUSES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_source_statuses_ind",
     schema: MZ_INTERNAL_SCHEMA,
@@ -4921,12 +5003,39 @@ ON mz_internal.mz_cluster_replica_metrics (replica_id)",
     is_retained_metrics_object: true,
 };
 
+pub const MZ_CLUSTER_REPLICA_HISTORY_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_cluster_replica_history_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_cluster_replica_history_ind
+IN CLUSTER mz_introspection
+ON mz_internal.mz_cluster_replica_history (dropped_at)",
+    is_retained_metrics_object: true,
+};
+
 pub const MZ_OBJECT_LIFETIMES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_object_lifetimes_ind",
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE INDEX mz_object_lifetimes_ind
 IN CLUSTER mz_introspection
 ON mz_internal.mz_object_lifetimes (id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_OBJECT_DEPENDENCIES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_object_dependencies_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_object_dependencies_ind
+IN CLUSTER mz_introspection
+ON mz_internal.mz_object_dependencies (object_id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_COMPUTE_DEPENDENCIES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_compute_dependencies_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_compute_dependencies_ind
+IN CLUSTER mz_introspection
+ON mz_internal.mz_compute_dependencies (dependency_id)",
     is_retained_metrics_object: false,
 };
 
@@ -5117,8 +5226,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Log(&MZ_COMPUTE_FRONTIERS_PER_WORKER),
         Builtin::Log(&MZ_COMPUTE_IMPORT_FRONTIERS_PER_WORKER),
         Builtin::Log(&MZ_COMPUTE_DELAYS_HISTOGRAM_RAW),
-        Builtin::Table(&MZ_VIEW_KEYS),
-        Builtin::Table(&MZ_VIEW_FOREIGN_KEYS),
+        Builtin::Log(&MZ_COMPUTE_ERROR_COUNTS_RAW),
         Builtin::Table(&MZ_KAFKA_SINKS),
         Builtin::Table(&MZ_KAFKA_CONNECTIONS),
         Builtin::Table(&MZ_KAFKA_SOURCES),
@@ -5215,6 +5323,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_SCHEDULING_PARKS_HISTOGRAM),
         Builtin::View(&MZ_COMPUTE_DELAYS_HISTOGRAM_PER_WORKER),
         Builtin::View(&MZ_COMPUTE_DELAYS_HISTOGRAM),
+        Builtin::View(&MZ_COMPUTE_ERROR_COUNTS_PER_WORKER),
+        Builtin::View(&MZ_COMPUTE_ERROR_COUNTS),
         Builtin::View(&MZ_SHOW_SOURCES),
         Builtin::View(&MZ_SHOW_SINKS),
         Builtin::View(&MZ_SHOW_MATERIALIZED_VIEWS),
@@ -5315,6 +5425,12 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Index(&MZ_SHOW_CLUSTER_REPLICAS_IND),
         Builtin::Index(&MZ_SHOW_SECRETS_IND),
         Builtin::Index(&MZ_CLUSTERS_IND),
+        Builtin::Index(&MZ_INDEXES_IND),
+        Builtin::Index(&MZ_ROLES_IND),
+        Builtin::Index(&MZ_SOURCES_IND),
+        Builtin::Index(&MZ_SINKS_IND),
+        Builtin::Index(&MZ_MATERIALIZED_VIEWS_IND),
+        Builtin::Index(&MZ_CLUSTER_LINKS_IND),
         Builtin::Index(&MZ_SOURCE_STATUSES_IND),
         Builtin::Index(&MZ_SOURCE_STATUS_HISTORY_IND),
         Builtin::Index(&MZ_SINK_STATUSES_IND),
@@ -5325,7 +5441,10 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Index(&MZ_CLUSTER_REPLICA_SIZES_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICA_STATUSES_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICA_METRICS_IND),
+        Builtin::Index(&MZ_CLUSTER_REPLICA_HISTORY_IND),
         Builtin::Index(&MZ_OBJECT_LIFETIMES_IND),
+        Builtin::Index(&MZ_OBJECT_DEPENDENCIES_IND),
+        Builtin::Index(&MZ_COMPUTE_DEPENDENCIES_IND),
     ]);
 
     builtins

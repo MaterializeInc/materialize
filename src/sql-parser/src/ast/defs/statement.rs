@@ -3910,55 +3910,22 @@ impl_display_t!(CommentStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CommentObjectType<T: AstInfo> {
-    Table {
-        name: UnresolvedItemName,
-    },
-    View {
-        name: UnresolvedItemName,
-    },
-    Column {
-        relation_name: UnresolvedItemName,
-        column_name: Ident,
-    },
-    MaterializedView {
-        name: UnresolvedItemName,
-    },
-    Source {
-        name: UnresolvedItemName,
-    },
-    Sink {
-        name: UnresolvedItemName,
-    },
-    Index {
-        name: UnresolvedItemName,
-    },
-    Func {
-        name: UnresolvedItemName,
-    },
-    Connection {
-        name: UnresolvedItemName,
-    },
-    Type {
-        name: UnresolvedItemName,
-    },
-    Secret {
-        name: UnresolvedItemName,
-    },
-    Role {
-        name: Ident,
-    },
-    Database {
-        name: UnresolvedDatabaseName,
-    },
-    Schema {
-        name: UnresolvedSchemaName,
-    },
-    Cluster {
-        name: T::ClusterName,
-    },
-    ClusterReplica {
-        name: QualifiedReplica,
-    },
+    Table { name: T::ItemName },
+    View { name: T::ItemName },
+    Column { name: T::ColumnName },
+    MaterializedView { name: T::ItemName },
+    Source { name: T::ItemName },
+    Sink { name: T::ItemName },
+    Index { name: T::ItemName },
+    Func { name: T::ItemName },
+    Connection { name: T::ItemName },
+    Type { name: T::ItemName },
+    Secret { name: T::ItemName },
+    Role { name: T::RoleName },
+    Database { name: T::DatabaseName },
+    Schema { name: T::SchemaName },
+    Cluster { name: T::ClusterName },
+    ClusterReplica { name: QualifiedReplica },
 }
 
 impl<T: AstInfo> AstDisplay for CommentObjectType<T> {
@@ -3974,14 +3941,9 @@ impl<T: AstInfo> AstDisplay for CommentObjectType<T> {
                 f.write_str("VIEW ");
                 f.write_node(name);
             }
-            Column {
-                relation_name,
-                column_name,
-            } => {
+            Column { name } => {
                 f.write_str("COLUMN ");
-                f.write_node(relation_name);
-                f.write_str(".");
-                f.write_node(column_name);
+                f.write_node(name);
             }
             MaterializedView { name } => {
                 f.write_str("MATERIALIZED VIEW ");

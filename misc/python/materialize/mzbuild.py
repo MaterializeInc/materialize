@@ -557,7 +557,7 @@ class Image:
 
     def sync_description(self) -> None:
         """Sync the description to Docker Hub if the image is publishable
-        and either a description or a README.md file exists."""
+        and a README.md file exists."""
 
         if not self.publish:
             ui.say(f"{self.name} is not publishable")
@@ -565,7 +565,7 @@ class Image:
 
         readme_path = self.path / "README.md"
         has_readme = readme_path.exists()
-        if not (self.description or has_readme):
+        if not has_readme:
             ui.say(f"{self.name} has no README.md or description")
             return
 

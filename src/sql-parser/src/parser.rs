@@ -5466,6 +5466,31 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_column_name(&mut self) -> Result<RawColumnName, ParserError> {
+        let start = self.peek_pos();
+        let mut item_name = self.parse_raw_name()?;
+        let column_name = match &mut item_name {
+            RawItemName::Name(UnresolvedItemName(identifiers)) => {
+                if identifiers.len() < 2 {
+                    return Err(ParserError::new(
+                        start,
+                        "need to specify an object and a column",
+                    ));
+                }
+                identifiers.pop().unwrap()
+            }
+            RawItemName::Id(_, _) => {
+                self.expect_token(&Token::Dot)?;
+                self.parse_identifier()?
+            }
+        };
+
+        Ok(RawColumnName {
+            relation: item_name,
+            column: column_name,
+        })
+    }
+
     /// Parse a possibly quoted database identifier, e.g.
     /// `foo` or `"mydatabase"`
     fn parse_database_name(&mut self) -> Result<UnresolvedDatabaseName, ParserError> {
@@ -7698,44 +7723,44 @@ impl<'a> Parser<'a> {
             CLUSTER,
         ])? {
             TABLE => {
-                let name = self.parse_item_name()?;
+                let name = self.parse_raw_name()?;
                 CommentObjectType::Table { name }
             }
             VIEW => {
-                let name = self.parse_item_name()?;
+                let name = self.parse_raw_name()?;
                 CommentObjectType::View { name }
             }
             MATERIALIZED => {
                 self.expect_keyword(VIEW)?;
-                let name = self.parse_item_name()?;
+                let name = self.parse_raw_name()?;
                 CommentObjectType::MaterializedView { name }
             }
             SOURCE => {
-                let name = self.parse_item_name()?;
+                let name = self.parse_raw_name()?;
                 CommentObjectType::Source { name }
             }
             SINK => {
-                let name = self.parse_item_name()?;
+                let name = self.parse_raw_name()?;
                 CommentObjectType::Sink { name }
             }
             INDEX => {
-                let name = self.parse_item_name()?;
+                let name = self.parse_raw_name()?;
                 CommentObjectType::Index { name }
             }
             FUNCTION => {
-                let name = self.parse_item_name()?;
+                let name = self.parse_raw_name()?;
                 CommentObjectType::Func { name }
             }
             CONNECTION => {
-                let name = self.parse_item_name()?;
+                let name = self.parse_raw_name()?;
                 CommentObjectType::Connection { name }
             }
             TYPE => {
-                let name = self.parse_item_name()?;
+                let name = self.parse_raw_name()?;
                 CommentObjectType::Type { name }
             }
             SECRET => {
-                let name = self.parse_item_name()?;
+                let name = self.parse_raw_name()?;
                 CommentObjectType::Secret { name }
             }
             ROLE => {
@@ -7760,21 +7785,8 @@ impl<'a> Parser<'a> {
                 }
             }
             COLUMN => {
-                let start = self.peek_pos();
-                let mut identifiers = self.parse_identifiers()?;
-                if identifiers.len() < 2 {
-                    return Err(ParserError::new(
-                        start,
-                        "need to specify a relation and a column",
-                    ));
-                }
-
-                // The last identifier specifies the column of a relation.
-                let column_name = identifiers.pop().expect("checked length above");
-                CommentObjectType::Column {
-                    relation_name: UnresolvedItemName(identifiers),
-                    column_name,
-                }
+                let name = self.parse_column_name()?;
+                CommentObjectType::Column { name }
             }
             _ => unreachable!(),
         };

@@ -7,16 +7,13 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# This test is broken and therefore disabled.
-# See: https://github.com/MaterializeInc/materialize/issues/13629
-
 $ schema-registry-wait subject=mysql.test.t1-value
 
 $ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-password}
 
 $ mysql-execute name=mysql
 USE test;
-INSERT INTO t1 VALUES (345, 345);
+INSERT INTO t1 VALUES (345, 345, 345);
 COMMIT;
 
 $ schema-registry-wait subject=mysql.transaction-value
@@ -27,42 +24,35 @@ $ schema-registry-wait subject=mysql.transaction-value
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE SOURCE mysql_tx_metadata
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'mysql.transaction')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE NONE;
-
 > CREATE SOURCE t1
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'mysql.test.t1')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE DEBEZIUM (
-      TRANSACTION METADATA (SOURCE mysql_tx_metadata, COLLECTION 'test.t1')
-  );
+  ENVELOPE DEBEZIUM;
 
 > SELECT * FROM t1;
-123 123
-234 234
-345 345
+123 123 123
+234 234 234
+345 345 345
 
 $ mysql-execute name=mysql
-INSERT INTO t1 VALUES (456, 456);
+INSERT INTO t1 VALUES (456, 456, 456);
 COMMIT;
 
 > SELECT * FROM t1;
-123 123
-234 234
-345 345
-456 456
+123 123 123
+234 234 234
+345 345 345
+456 456 456
 
 $ mysql-execute name=mysql
 UPDATE t1 SET f2 = f2 * 100
 COMMIT;
 
 > SELECT * FROM t1;
-123 12300
-234 23400
-345 34500
-456 45600
+123 12300 123
+234 23400 234
+345 34500 345
+456 45600 456
 
 $ mysql-execute name=mysql
 DELETE FROM t1;
