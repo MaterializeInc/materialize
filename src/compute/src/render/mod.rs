@@ -134,7 +134,7 @@ use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
-use crate::logging::compute::LogImportFrontiers;
+use crate::logging::compute::{LogDataflowErrors, LogImportFrontiers};
 use crate::render::context::{ArrangementFlavor, Context, ShutdownToken};
 use crate::typedefs::{ErrSpine, RowKeySpine};
 
@@ -526,6 +526,12 @@ where
             Some(ArrangementFlavor::Local(oks, errs)) => {
                 // Set up probes to notify on index frontier advancement.
                 oks.stream.probe_notify_with(probes);
+
+                // Attach logging of dataflow errors.
+                if let Some(logger) = compute_state.compute_logger.clone() {
+                    errs.stream.log_dataflow_errors(logger, idx_id);
+                }
+
                 compute_state.traces.set(
                     idx_id,
                     TraceBundle::new(oks.trace, errs.trace).with_drop(needed_tokens),
@@ -595,7 +601,10 @@ where
                         "Arrange export iterative",
                         self.enable_arrangement_size_logging,
                     );
+
+                // Set up probes to notify on index frontier advancement.
                 oks.stream.probe_notify_with(probes);
+
                 let errs = errs
                     .as_collection(|k, v| (k.clone(), v.clone()))
                     .leave()
@@ -603,6 +612,12 @@ where
                         "Arrange export iterative err",
                         self.enable_arrangement_size_logging,
                     );
+
+                // Attach logging of dataflow errors.
+                if let Some(logger) = compute_state.compute_logger.clone() {
+                    errs.stream.log_dataflow_errors(logger, idx_id);
+                }
+
                 compute_state.traces.set(
                     idx_id,
                     TraceBundle::new(oks.trace, errs.trace).with_drop(needed_tokens),

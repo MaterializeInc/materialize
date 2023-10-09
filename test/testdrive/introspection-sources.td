@@ -328,6 +328,8 @@ ALTER SYSTEM SET enable_arrangement_size_logging = true
 > SELECT records, (size/1024/1024)::int FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%vt5_idx'
 10000 1
 
+> DROP TABLE t5 CASCADE
+
 # Test that `mz_dataflow_arrangement_sizes` shows dataflows not contained in the catalog.
 
 > CREATE TABLE t6 (a int)
@@ -340,3 +342,115 @@ ALTER SYSTEM SET enable_arrangement_size_logging = true
 > SELECT name, records > 0 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t6%'
 "Dataflow: materialize.public.ii_t6"        true
 "Dataflow: materialize.public.ii_t6_plus_1" true
+
+# Test dataflow error introspection.
+
+> CREATE TABLE zeros (a int)
+> CREATE VIEW v_div_by_zero AS SELECT 1 / a AS x FROM zeros
+> CREATE INDEX idx1_div_by_zero ON v_div_by_zero (x)
+> CREATE MATERIALIZED VIEW mv_div_by_zero AS SELECT 1 / a AS x FROM zeros
+> CREATE INDEX idx2_div_by_zero ON mv_div_by_zero (x)
+
+> SELECT name, count
+  FROM mz_internal.mz_compute_error_counts c
+  JOIN mz_objects o ON (c.export_id = o.id)
+  ORDER BY name
+
+> INSERT INTO zeros VALUES (0)
+
+> SELECT name, count
+  FROM mz_internal.mz_compute_error_counts c
+  JOIN mz_objects o ON (c.export_id = o.id)
+  ORDER BY name
+idx1_div_by_zero 1
+idx2_div_by_zero 1
+mv_div_by_zero   1
+
+> INSERT INTO zeros VALUES (0), (0)
+
+> SELECT name, count
+  FROM mz_internal.mz_compute_error_counts c
+  JOIN mz_objects o ON (c.export_id = o.id)
+  ORDER BY name
+idx1_div_by_zero 3
+idx2_div_by_zero 3
+mv_div_by_zero   3
+
+> DELETE FROM zeros
+
+> SELECT name, count
+  FROM mz_internal.mz_compute_error_counts c
+  JOIN mz_objects o ON (c.export_id = o.id)
+  ORDER BY name
+
+# Test that error logging is retracted when objects are dropped.
+
+> INSERT INTO zeros VALUES (0), (0)
+
+> SELECT name, count
+  FROM mz_internal.mz_compute_error_counts c
+  JOIN mz_objects o ON (c.export_id = o.id)
+  ORDER BY name
+idx1_div_by_zero 2
+idx2_div_by_zero 2
+mv_div_by_zero   2
+
+> DROP INDEX idx1_div_by_zero
+
+> SELECT name, count
+  FROM mz_internal.mz_compute_error_counts c
+  JOIN mz_objects o ON (c.export_id = o.id)
+  ORDER BY name
+idx2_div_by_zero 2
+mv_div_by_zero   2
+
+> DROP MATERIALIZED VIEW mv_div_by_zero
+
+> SELECT name, count
+  FROM mz_internal.mz_compute_error_counts c
+  JOIN mz_objects o ON (c.export_id = o.id)
+  ORDER BY name
+
+# Test logging of errors in things that advance to the empty frontier.
+
+> CREATE MATERIALIZED VIEW mv_zero AS SELECT 0 AS x
+> CREATE MATERIALIZED VIEW mv2_div_by_zero AS SELECT 1 / x FROM mv_zero
+
+> SELECT name, count
+  FROM mz_internal.mz_compute_error_counts c
+  JOIN mz_objects o ON (c.export_id = o.id)
+  ORDER BY name
+mv2_div_by_zero 1
+
+> DROP MATERIALIZED VIEW mv_zero CASCADE
+
+# Test logging of errors in reused indexes.
+
+> CREATE INDEX idx1_div_by_zero ON v_div_by_zero (x)
+> CREATE INDEX idx2_div_by_zero ON v_div_by_zero (x)
+> CREATE INDEX idx3_div_by_zero ON v_div_by_zero (x)
+
+> SELECT name, count
+  FROM mz_internal.mz_compute_error_counts c
+  JOIN mz_objects o ON (c.export_id = o.id)
+  ORDER BY name
+idx1_div_by_zero 2
+idx2_div_by_zero 2
+idx3_div_by_zero 2
+
+> INSERT INTO zeros VALUES (0)
+
+> SELECT name, count
+  FROM mz_internal.mz_compute_error_counts c
+  JOIN mz_objects o ON (c.export_id = o.id)
+  ORDER BY name
+idx1_div_by_zero 3
+idx2_div_by_zero 3
+idx3_div_by_zero 3
+
+> DROP TABLE zeros CASCADE
+
+> SELECT name, count
+  FROM mz_internal.mz_compute_error_counts c
+  JOIN mz_objects o ON (c.export_id = o.id)
+  ORDER BY name

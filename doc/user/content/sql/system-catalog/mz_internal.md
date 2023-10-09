@@ -797,6 +797,21 @@ The `mz_compute_delays_histogram` view describes a histogram of the wall-clock d
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_delays_histogram_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_delays_histogram_raw -->
 
+### `mz_compute_error_counts`
+
+The `mz_compute_error_counts` view describes the counts of errors in objects exported by [dataflows][dataflow] in the system.
+
+Dataflow exports that don't have any errors are not included in this view.
+
+<!-- RELATION_SPEC mz_internal.mz_compute_error_counts -->
+| Field        | Type        | Meaning                                                                                              |
+| ------------ |-------------| --------                                                                                             |
+| `export_id`  | [`text`]    | The ID of the dataflow export. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports). |
+| `count`      | [`numeric`] | The count of errors present in this dataflow export.                                                 |
+
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_error_counts_per_worker -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_error_counts_raw -->
+
 ### `mz_compute_exports`
 
 The `mz_compute_exports` view describes the objects exported by [dataflows][dataflow] in the system.
