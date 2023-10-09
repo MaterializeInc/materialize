@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 from enum import Enum
+from typing import Any
 
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
@@ -77,8 +78,8 @@ class ValidationError(ValidationMessage):
         message: str,
         strategy1: EvaluationStrategy,
         strategy2: EvaluationStrategy,
-        value1: str,
-        value2: str,
+        value1: Any,
+        value2: Any,
         sql1: str | None = None,
         sql2: str | None = None,
         description: str | None = None,
