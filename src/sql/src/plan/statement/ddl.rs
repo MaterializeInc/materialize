@@ -2025,13 +2025,6 @@ pub fn plan_create_materialized_view(
     mut stmt: CreateMaterializedViewStatement<Aug>,
     params: &Params,
 ) -> Result<Plan, PlanError> {
-    let columns: Vec<_> = stmt.columns.iter().map(|col| col.ident.clone()).collect();
-    let force_not_null: Vec<_> = stmt
-        .columns
-        .iter()
-        .enumerate()
-        .filter_map(|(i, column)| column.force_not_null.then_some(i))
-        .collect();
     let cluster_id = match &stmt.in_cluster {
         None => scx.resolve_cluster(None)?.id(),
         Some(in_cluster) => in_cluster.id,
@@ -2068,9 +2061,25 @@ pub fn plan_create_materialized_view(
     plan_utils::maybe_rename_columns(
         format!("materialized view {}", scx.catalog.resolve_full_name(&name)),
         &mut desc,
-        &columns,
+        &stmt.columns,
     )?;
     let column_names: Vec<ColumnName> = desc.iter_names().cloned().collect();
+    let non_null_assertions = stmt
+        .non_null_assertions
+        .into_iter()
+        .map(normalize::column_name)
+        .map(|assertion_name| {
+            column_names
+                .iter()
+                .position(|col| col == &assertion_name)
+                .ok_or_else(|| {
+                    sql_err!(
+                        "column {} in ASSERT NOT NULL option not found",
+                        assertion_name.as_str().quoted()
+                    )
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
     if let Some(dup) = column_names.iter().duplicates().next() {
         sql_bail!("column {} specified more than once", dup.as_str().quoted());
@@ -2132,7 +2141,7 @@ pub fn plan_create_materialized_view(
             expr,
             column_names,
             cluster_id,
-            force_not_null,
+            force_not_null: non_null_assertions,
         },
         replace,
         drop_ids,

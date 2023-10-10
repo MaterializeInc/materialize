@@ -3282,8 +3282,20 @@ impl<'a> Parser<'a> {
         }
 
         let name = self.parse_item_name()?;
-        let columns = self.parse_parenthesized_mv_column_list()?;
+        let columns = self.parse_parenthesized_column_list(Optional)?;
         let in_cluster = self.parse_optional_in_cluster()?;
+
+        let non_null_assertions = if self.parse_keyword(WITH) {
+            self.expect_token(&Token::LParen)?;
+            let assertions = self.parse_comma_separated(|self_| {
+                self_.expect_keywords(&[ASSERT, NOT, NULL])?;
+                self_.parse_identifier()
+            })?;
+            self.expect_token(&Token::RParen)?;
+            assertions
+        } else {
+            vec![]
+        };
 
         self.expect_keyword(AS)?;
         let query = self.parse_query()?;
@@ -3295,6 +3307,7 @@ impl<'a> Parser<'a> {
                 columns,
                 in_cluster,
                 query,
+                non_null_assertions,
             },
         ))
     }
@@ -5580,26 +5593,6 @@ impl<'a> Parser<'a> {
         Ok(idents)
     }
 
-    fn parse_mv_column(&mut self) -> Result<MaterializedViewColumnSpecifier, ParserError> {
-        match self.consume_identifier() {
-            Some(ident) => {
-                if ident.as_str().is_empty() {
-                    return parser_err!(
-                        self,
-                        self.peek_prev_pos(),
-                        "zero-length delimited identifier",
-                    );
-                }
-                let force_not_null = self.parse_keywords(&[FORCE, NOT, NULL]);
-                Ok(MaterializedViewColumnSpecifier {
-                    ident,
-                    force_not_null,
-                })
-            }
-            None => self.expected(self.peek_pos(), "identifier", self.peek_token()),
-        }
-    }
-
     /// Parse a simple one-word identifier (possibly quoted, possibly a keyword)
     fn parse_identifier(&mut self) -> Result<Ident, ParserError> {
         match self.consume_identifier() {
@@ -5664,22 +5657,6 @@ impl<'a> Parser<'a> {
                 }
             }
             _ => Ok(Expr::Identifier(id_parts)),
-        }
-    }
-
-    fn parse_parenthesized_mv_column_list(
-        &mut self,
-    ) -> Result<Vec<MaterializedViewColumnSpecifier>, ParserError> {
-        if self.consume_token(&Token::LParen) {
-            let cols = self.parse_comma_separated(Parser::parse_mv_column)?;
-            self.expect_token(&Token::RParen)?;
-            Ok(cols)
-        } else {
-            self.expected(
-                self.peek_pos(),
-                "a list of columns in parentheses",
-                self.peek_token(),
-            )
         }
     }
 
