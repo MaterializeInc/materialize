@@ -103,7 +103,8 @@ use tokio_postgres::error::SqlState;
 use tokio_postgres::types::PgLsn;
 use tokio_postgres::{Client, SimpleQueryMessage, SimpleQueryRow};
 
-use crate::source::types::{HealthStatus, HealthStatusUpdate, SourceRender};
+use crate::healthcheck::HealthStatusUpdate;
+use crate::source::types::SourceRender;
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 
 mod metrics;
@@ -193,23 +194,14 @@ impl SourceRender for PostgresSourceConnection {
         });
 
         let health = snapshot_err.concat(&repl_err).flat_map(move |err| {
-            let update = HealthStatus::StalledWithError {
-                error: err.display_with_causes().to_string(),
-                hint: None,
-            };
             // This update will cause the dataflow to restart
-            let halt_status = HealthStatusUpdate {
-                update: update.clone(),
-                should_halt: true,
-            };
-            let mut statuses = vec![(0, halt_status)];
+            let err_string = err.display_with_causes().to_string();
+            let update = HealthStatusUpdate::halting(err_string.clone(), None);
+            let mut statuses = vec![(0, update)];
 
             // But we still want to report the transient error for all subsources
             statuses.extend(subsource_outputs.iter().map(|index| {
-                let status = HealthStatusUpdate {
-                    update: update.clone(),
-                    should_halt: false,
-                };
+                let status = HealthStatusUpdate::stalled(err_string.clone(), None);
                 (*index, status)
             }));
             statuses

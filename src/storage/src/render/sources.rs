@@ -39,8 +39,9 @@ use timely::dataflow::Stream;
 use timely::progress::{Antichain, Timestamp as _};
 
 use crate::decode::{render_decode_cdcv2, render_decode_delimited};
+use crate::healthcheck::HealthStatusUpdate;
 use crate::render::upsert::UpsertKey;
-use crate::source::types::{DecodeResult, HealthStatusUpdate, SourceOutput};
+use crate::source::types::{DecodeResult, SourceOutput};
 use crate::source::{self, RawSourceCreationConfig, SourceCreationParams};
 
 /// A type-level enum that holds one of two types of sources depending on their message type

@@ -39,12 +39,13 @@ use timely::dataflow::{Scope, ScopeParent, Stream};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::{Antichain, Timestamp};
 
+use crate::healthcheck::HealthStatusUpdate;
 use crate::render::sources::OutputIndex;
 use crate::render::upsert::types::{
     upsert_bincode_opts, AutoSpillBackend, InMemoryHashMap, RocksDBParams, UpsertState,
     UpsertStateBackend,
 };
-use crate::source::types::{HealthStatus, HealthStatusUpdate, UpsertMetrics};
+use crate::source::types::UpsertMetrics;
 use crate::storage_state::StorageInstanceContext;
 
 mod rocksdb;
@@ -728,13 +729,7 @@ async fn process_upsert_state_error<G: Scope>(
     >,
     health_cap: &Capability<<G as ScopeParent>::Timestamp>,
 ) {
-    let update = HealthStatusUpdate {
-        update: HealthStatus::StalledWithError {
-            error: e.context(context).to_string_with_causes(),
-            hint: None,
-        },
-        should_halt: true,
-    };
+    let update = HealthStatusUpdate::halting(e.context(context).to_string_with_causes(), None);
     health_output.give(health_cap, (0, update)).await;
     std::future::pending::<()>().await;
     unreachable!("pending future never returns");

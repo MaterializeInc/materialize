@@ -25,7 +25,8 @@ use timely::dataflow::operators::ToStream;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
-use crate::source::types::{HealthStatus, HealthStatusUpdate, SourceRender};
+use crate::healthcheck::HealthStatusUpdate;
+use crate::source::types::SourceRender;
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 
 mod auction;
@@ -157,7 +158,7 @@ impl SourceRender for LoadGeneratorSourceConnection {
             }
         });
 
-        let status = [(0, HealthStatusUpdate::status(HealthStatus::Running))].to_stream(scope);
+        let status = [(0, HealthStatusUpdate::running())].to_stream(scope);
         (
             stream.as_collection(),
             None,

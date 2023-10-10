@@ -211,7 +211,8 @@ use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 
-use crate::source::types::{HealthStatus, HealthStatusUpdate, SourcePersistSinkMetrics};
+use crate::healthcheck::HealthStatusUpdate;
+use crate::source::types::SourcePersistSinkMetrics;
 use crate::storage_state::StorageState;
 
 mod debezium;
@@ -297,13 +298,8 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 tokens.push(token);
 
                 let sink_health = errors.map(|err: Rc<anyhow::Error>| {
-                    let halt_status = HealthStatusUpdate {
-                        update: HealthStatus::StalledWithError {
-                            error: err.display_with_causes().to_string(),
-                            hint: None,
-                        },
-                        should_halt: true,
-                    };
+                    let halt_status =
+                        HealthStatusUpdate::halting(err.display_with_causes().to_string(), None);
                     (0, halt_status)
                 });
                 health_streams.push(sink_health.leave());

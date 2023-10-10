@@ -32,7 +32,7 @@ use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
 use tracing::warn;
 
-use crate::sink::SinkStatus;
+use crate::healthcheck::HealthStatusUpdate;
 use crate::storage_state::StorageState;
 
 /// _Renders_ complete _differential_ [`Collection`]s
@@ -44,7 +44,7 @@ pub(crate) fn render_sink<'g, G: Scope<Timestamp = ()>>(
     tokens: &mut Vec<Rc<dyn std::any::Any>>,
     sink_id: GlobalId,
     sink: &StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>,
-) -> Stream<G, (usize, SinkStatus)> {
+) -> Stream<G, (usize, HealthStatusUpdate)> {
     let sink_render = get_sink_render_for(&sink.connection);
 
     let (ok_collection, err_collection, source_token) = persist_source::persist_source(
@@ -245,7 +245,7 @@ where
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
-    ) -> (Stream<G, SinkStatus>, Option<Rc<dyn Any>>)
+    ) -> (Stream<G, HealthStatusUpdate>, Option<Rc<dyn Any>>)
     where
         G: Scope<Timestamp = Timestamp>;
 }

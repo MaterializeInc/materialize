@@ -75,12 +75,12 @@ use timely::PartialOrder;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::{info, trace};
 
+use crate::healthcheck::HealthStatusUpdate;
 use crate::render::sources::OutputIndex;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::reclock::{ReclockBatch, ReclockError, ReclockFollower, ReclockOperator};
 use crate::source::types::{
-    HealthStatus, HealthStatusUpdate, MaybeLength, SourceMessage, SourceMetrics, SourceOutput,
-    SourceReaderError, SourceRender,
+    MaybeLength, SourceMessage, SourceMetrics, SourceOutput, SourceReaderError, SourceRender,
 };
 use crate::statistics::{SourceStatisticsMetrics, StorageStatistics};
 
@@ -304,11 +304,8 @@ where
             };
             for ((output_index, message), _, _) in data.iter() {
                 let status = match message {
-                    Ok(_) => HealthStatusUpdate::status(HealthStatus::Running),
-                    Err(ref error) => HealthStatusUpdate::status(HealthStatus::StalledWithError {
-                        error: error.inner.to_string(),
-                        hint: None,
-                    }),
+                    Ok(_) => HealthStatusUpdate::running(),
+                    Err(ref error) => HealthStatusUpdate::stalled(error.inner.to_string(), None),
                 };
 
                 let statuses: &mut Vec<_> = statuses_by_idx.entry(*output_index).or_default();

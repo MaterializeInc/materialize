@@ -118,16 +118,16 @@ pub(crate) struct ObjectHealthConfig {
     pub(crate) persist_location: PersistLocation,
 }
 
-struct HealthState<'a, O> {
+struct HealthState<'a> {
     id: GlobalId,
     persist_details: Option<(ShardId, &'a PersistClient)>,
-    healths: Vec<Option<O>>,
+    healths: Vec<Option<HealthStatusUpdate>>,
     schema: &'static RelationDesc,
-    last_reported_status: Option<O>,
-    halt_with: Option<O>,
+    last_reported_status: Option<HealthStatusUpdate>,
+    halt_with: Option<HealthStatusUpdate>,
 }
 
-impl<'a, O: Clone> HealthState<'a, O> {
+impl<'a> HealthState<'a> {
     fn new(
         id: GlobalId,
         status_shard: Option<ShardId>,
@@ -135,7 +135,7 @@ impl<'a, O: Clone> HealthState<'a, O> {
         persist_clients: &'a BTreeMap<PersistLocation, PersistClient>,
         schema: &'static RelationDesc,
         worker_count: usize,
-    ) -> HealthState<'a, O> {
+    ) -> HealthState<'a> {
         let persist_details = match (status_shard, persist_clients.get(&persist_location)) {
             (Some(shard), Some(persist_client)) => Some((shard, persist_client)),
             _ => None,
@@ -152,34 +152,6 @@ impl<'a, O: Clone> HealthState<'a, O> {
     }
 }
 
-/// A trait that lets a user of the `health_operator` specify a health status object.
-///
-/// In addition to these methods, heath statuses should:
-/// - Be cloneable/exhangeable so they can be moved around in timely.
-/// - `Debug`-printable.
-/// - `Ord`, where the order increases in severity. The state returned by `starting()` should
-/// be the minimum.
-// TODO(guswynn): the implementors of this trait are probably merge-able.
-pub(crate) trait HealthStatus: timely::ExchangeData + Debug + Ord {
-    /// The user-readable name of the status state.
-    fn name(&self) -> &'static str;
-    /// The user-readable error string, if there is one.
-    fn error(&self) -> Option<&str>;
-    /// A hint for solving the error, if there is one.
-    fn hint(&self) -> Option<&str>;
-    /// Whether or not we should halt the dataflow instances and restart it.
-    fn should_halt(&self) -> bool;
-    /// Whether or not we can transition from a state (or lack of one).
-    ///
-    /// Each time this returns `true`, a new status message will be communicated to the user.
-    /// Note that messages that are identical except for `should_halt` don't need to be
-    /// able to transition between each other, that is handled separately.
-    fn can_transition_from(&self, other: Option<&Self>) -> bool;
-    /// A instance of a status that specifies that the object is starting. Used when the dataflow
-    /// starts up.
-    fn starting() -> Self;
-}
-
 /// Writes updates that come across `health_stream` to the collection's status shards, as identified
 /// by their `CollectionMetadata`.
 ///
@@ -187,7 +159,7 @@ pub(crate) trait HealthStatus: timely::ExchangeData + Debug + Ord {
 ///
 /// The `OutputIndex` values that come across `health_stream` must be a strict subset of thosema,
 /// `configs`'s keys.
-pub(crate) fn health_operator<'g, G, O>(
+pub(crate) fn health_operator<'g, G>(
     scope: &Child<'g, G, mz_repr::Timestamp>,
     storage_state: &crate::storage_state::StorageState,
     // A set of id's that should be marked as `HealthStatus::starting()` during startup.
@@ -198,7 +170,7 @@ pub(crate) fn health_operator<'g, G, O>(
     // A description of the object type we are writing status updates about. Used in log lines.
     object_type: &'static str,
     // An indexed stream of health updates. Indexes are configured in `configs`.
-    health_stream: &Stream<G, (usize, O)>,
+    health_stream: &Stream<G, (usize, HealthStatusUpdate)>,
     // A configuration per _index_. Indexes support things like subsources, and allow the
     // `health_operator` to understand where each sub-object should have its status written down
     // at.
@@ -206,7 +178,6 @@ pub(crate) fn health_operator<'g, G, O>(
 ) -> Rc<dyn Any>
 where
     G: Scope<Timestamp = ()>,
-    O: HealthStatus,
 {
     // Derived config options
     let healthcheck_worker_id = scope.index();
@@ -291,7 +262,7 @@ where
                 )| {
                     (
                         output_idx,
-                        HealthState::<O>::new(
+                        HealthState::new(
                             id,
                             status_shard,
                             persist_location,
@@ -309,7 +280,7 @@ where
             for state in health_states.values_mut() {
                 if mark_starting.contains(&state.id) {
                     if let Some((status_shard, persist_client)) = state.persist_details {
-                        let status = O::starting();
+                        let status = HealthStatusUpdate::starting();
                         write_to_persist(
                             state.id,
                             status.name(),
@@ -446,4 +417,181 @@ where
     });
 
     Rc::new(button.press_on_drop())
+}
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct HealthStatusUpdate {
+    pub update: HealthStatus,
+    pub should_halt: bool,
+}
+
+/// NB: we derive Ord here, so the enum order matters. Generally, statuses later in the list
+/// take precedence over earlier ones: so if one worker is stalled, we'll consider the entire
+/// source to be stalled.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub enum HealthStatus {
+    Starting,
+    Running,
+    StalledWithError { error: String, hint: Option<String> },
+}
+
+impl HealthStatus {
+    pub fn name(&self) -> &'static str {
+        match self {
+            HealthStatus::Starting => "starting",
+            HealthStatus::Running => "running",
+            HealthStatus::StalledWithError { .. } => "stalled",
+        }
+    }
+
+    pub fn error(&self) -> Option<&str> {
+        match self {
+            HealthStatus::Starting | HealthStatus::Running => None,
+            HealthStatus::StalledWithError { error, .. } => Some(error),
+        }
+    }
+
+    pub fn hint(&self) -> Option<&str> {
+        match self {
+            HealthStatus::Starting | HealthStatus::Running => None,
+            HealthStatus::StalledWithError { error: _, hint } => hint.as_deref(),
+        }
+    }
+}
+
+impl HealthStatusUpdate {
+    /// Generates a starting [`HealthStatusUpdate`].
+    pub(crate) fn starting() -> Self {
+        HealthStatusUpdate {
+            update: HealthStatus::Starting,
+            should_halt: true,
+        }
+    }
+
+    /// Generates a running [`HealthStatusUpdate`].
+    pub(crate) fn running() -> Self {
+        HealthStatusUpdate {
+            update: HealthStatus::Running,
+            should_halt: true,
+        }
+    }
+
+    /// Generates a non-halting [`HealthStatusUpdate`] with `update`.
+    pub(crate) fn stalled(error: String, hint: Option<String>) -> Self {
+        HealthStatusUpdate {
+            update: HealthStatus::StalledWithError { error, hint },
+            should_halt: false,
+        }
+    }
+
+    /// Generates a halting [`HealthStatusUpdate`] with `update`.
+    pub(crate) fn halting(error: String, hint: Option<String>) -> Self {
+        HealthStatusUpdate {
+            update: HealthStatus::StalledWithError { error, hint },
+            should_halt: true,
+        }
+    }
+
+    /// The user-readable name of the status state.
+    pub(crate) fn name(&self) -> &'static str {
+        self.update.name()
+    }
+
+    /// The user-readable error string, if there is one.
+    pub(crate) fn error(&self) -> Option<&str> {
+        self.update.error()
+    }
+
+    /// A hint for solving the error, if there is one.
+    pub(crate) fn hint(&self) -> Option<&str> {
+        self.update.hint()
+    }
+
+    /// Whether or not we should halt the dataflow instances and restart it.
+    pub(crate) fn should_halt(&self) -> bool {
+        self.should_halt
+    }
+
+    /// Whether or not we can transition from a state (or lack of one).
+    ///
+    /// Each time this returns `true`, a new status message will be communicated to the user.
+    /// Note that messages that are identical except for `should_halt` don't need to be
+    /// able to transition between each other, that is handled separately.
+    pub(crate) fn can_transition_from(&self, other: Option<&Self>) -> bool {
+        if let Some(other) = other {
+            self.update != other.update
+        } else {
+            true
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn starting() -> HealthStatusUpdate {
+        HealthStatusUpdate::starting()
+    }
+
+    fn running() -> HealthStatusUpdate {
+        HealthStatusUpdate::running()
+    }
+
+    fn stalled() -> HealthStatusUpdate {
+        HealthStatusUpdate::stalled("".into(), None)
+    }
+
+    fn should_halt() -> HealthStatusUpdate {
+        HealthStatusUpdate::halting("".into(), None)
+    }
+
+    #[mz_ore::test]
+    fn test_can_transition() {
+        let test_cases = [
+            // Allowed transitions
+            (
+                Some(starting()),
+                vec![running(), stalled(), should_halt()],
+                true,
+            ),
+            (
+                Some(running()),
+                vec![starting(), stalled(), should_halt()],
+                true,
+            ),
+            (Some(stalled()), vec![starting(), running()], true),
+            (Some(should_halt()), vec![starting(), running()], true),
+            (
+                None,
+                vec![starting(), running(), stalled(), should_halt()],
+                true,
+            ),
+            // Forbidden transitions
+            (Some(starting()), vec![starting()], false),
+            (Some(running()), vec![running()], false),
+            (Some(stalled()), vec![stalled()], false),
+            (Some(should_halt()), vec![should_halt()], false),
+            // In practice these can't happen, so they are disallowed.
+            (Some(should_halt()), vec![stalled()], false),
+            (Some(stalled()), vec![should_halt()], false),
+        ];
+
+        for test_case in test_cases {
+            run_test(test_case)
+        }
+
+        fn run_test(test_case: (Option<HealthStatusUpdate>, Vec<HealthStatusUpdate>, bool)) {
+            let (from_status, to_status, allowed) = test_case;
+            for status in to_status {
+                assert_eq!(
+                    allowed,
+                    status.can_transition_from(from_status.as_ref()),
+                    "Bad can_transition: {from_status:?} -> {status:?}; expected allowed: {allowed:?}"
+                );
+            }
+        }
+    }
 }
