@@ -99,6 +99,29 @@ steps:
           composition: feature-benchmark
           args: [--other-tag=latest, --scale=+1]
 
+  - id: sqlsmith-long
+    label: "SQLsmith"
+    artifact_paths: junit_*.xml
+    timeout_in_minutes: 120
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sqlsmith
+          args: [--max-joins=1, --runtime=6000]
+
+  - id: sqlsmith-explain-long
+    label: "SQLsmith explain"
+    artifact_paths: junit_*.xml
+    timeout_in_minutes: 120
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sqlsmith
+          args: [--max-joins=15, --explain-only, --runtime=6000]
+
+
   - wait: ~
     continue_on_failure: true
 
