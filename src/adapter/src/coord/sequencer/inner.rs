@@ -3144,6 +3144,7 @@ impl Coordinator {
                 column_names,
                 cluster_id,
                 broken,
+                force_not_null,
             } => {
                 // Please see the docs on `explain_query_optimizer_pipeline` above.
                 self.explain_create_materialized_view_optimizer_pipeline(
@@ -3153,6 +3154,7 @@ impl Coordinator {
                     cluster_id,
                     broken,
                     root_dispatch,
+                    &force_not_null,
                 )
                 .with_subscriber(&optimizer_trace)
                 .await
@@ -3464,6 +3466,7 @@ impl Coordinator {
         target_cluster_id: ClusterId,
         broken: bool,
         _root_dispatch: tracing::Dispatch,
+        force_not_null: &[usize],
     ) -> Result<
         (
             UsedIndexes,
@@ -3539,7 +3542,7 @@ impl Coordinator {
                 debug_name,
                 &optimized_plan,
                 &RelationDesc::new(optimized_plan.typ(), column_names),
-                todo!("XXX [btv]"),
+                force_not_null,
             )
         })?;
 

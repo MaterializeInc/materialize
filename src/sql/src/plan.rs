@@ -855,6 +855,7 @@ pub enum ExplaineeStatement {
         cluster_id: ClusterId,
         /// Broken flag (see [`ExplaineeStatement::broken()`]).
         broken: bool,
+        force_not_null: Vec<usize>,
     },
     /// The object to be explained is a CREATE INDEX.
     CreateIndex {
