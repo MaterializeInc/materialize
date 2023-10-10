@@ -29,7 +29,7 @@ use axum::extract::{DefaultBodyLimit, FromRequestParts, Query, State};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::{routing, Extension, Json, Router};
-use futures::future::{FutureExt, Shared, TryFutureExt};
+use futures::future::{BoxFuture, FutureExt, Shared, TryFutureExt};
 use headers::authorization::{Authorization, Basic, Bearer};
 use headers::{HeaderMapExt, HeaderName};
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
@@ -55,8 +55,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
-use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::TryRecvError;
+use tokio::sync::{oneshot, watch};
 use tokio_openssl::SslStream;
 use tower::ServiceBuilder;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
@@ -672,7 +672,13 @@ async fn http_auth<B>(
         }
     };
 
-    let user = auth(frontegg, creds).await?;
+    // Note: HTTP requests are "one-shot", unlike websockets, so we do not need to continuously
+    // validate the authentication.
+    let AuthItems {
+        user,
+        valid_until: _,
+        user_updates: _,
+    } = auth(frontegg, creds).await?;
 
     // Add the authenticated user as an extension so downstream handlers can
     // inspect it if necessary.
@@ -689,7 +695,7 @@ async fn init_ws(
         active_connection_count,
     }: &WsState,
     ws: &mut WebSocket,
-) -> Result<AuthedClient, anyhow::Error> {
+) -> Result<(AuthedClient, BoxFuture<'static, ()>), anyhow::Error> {
     // TODO: Add a timeout here to prevent resource leaks by clients that
     // connect then never send a message.
     let init_msg = ws.recv().await.ok_or_else(|| anyhow::anyhow!("closed"))??;
@@ -732,9 +738,13 @@ async fn init_ws(
     } else {
         anyhow::bail!("unexpected")
     };
-    let user = auth(frontegg, creds).await?;
+    let AuthItems {
+        user,
+        valid_until,
+        user_updates,
+    } = auth(frontegg, creds).await?;
 
-    let client = AuthedClient::new(
+    let mut client = AuthedClient::new(
         adapter_client,
         user,
         Arc::clone(active_connection_count),
@@ -742,7 +752,15 @@ async fn init_ws(
     )
     .await?;
 
-    Ok(client)
+    if let Some(updates_rx) = user_updates {
+        client
+            .client
+            .session()
+            .register_external_metadata_transmitter(updates_rx)
+            .map_err(|_| anyhow::anyhow!("double register of external metadata channel"))?;
+    }
+
+    Ok((client, valid_until))
 }
 
 enum Credentials {
@@ -752,10 +770,19 @@ enum Credentials {
     Token { token: String },
 }
 
+struct AuthItems {
+    /// Successfully authenticated user.
+    user: AuthedUser,
+    /// Future that resolves when the auth is no longer valid.
+    valid_until: BoxFuture<'static, ()>,
+    /// Channel that receives updates for the authenticated user's metadata.
+    user_updates: Option<watch::Receiver<ExternalUserMetadata>>,
+}
+
 async fn auth(
     frontegg: &Option<FronteggAuthentication>,
     creds: Credentials,
-) -> Result<AuthedUser, AuthError> {
+) -> Result<AuthItems, AuthError> {
     // There are three places a username may be specified:
     //
     //   - certificate common name
@@ -766,17 +793,29 @@ async fn auth(
     // that is also present.
 
     // Then, handle Frontegg authentication if required.
-    let user = match (frontegg, creds) {
+    let (user, valid_until, user_updates) = match (frontegg, creds) {
         // If no Frontegg authentication, allow the default user.
-        (None, Credentials::DefaultUser) => User {
-            name: HTTP_DEFAULT_USER.name.to_string(),
-            external_metadata: None,
-        },
+        (None, Credentials::DefaultUser) => {
+            let user = User {
+                name: HTTP_DEFAULT_USER.name.to_string(),
+                external_metadata: None,
+            };
+            // We're not using auth, so we never become invalid.
+            let forever_fut: BoxFuture<'static, ()> = Box::pin(futures::future::pending());
+
+            (user, forever_fut, None)
+        }
         // If no Frontegg authentication, allow a protocol-specified user.
-        (None, Credentials::User(name)) => User {
-            name,
-            external_metadata: None,
-        },
+        (None, Credentials::User(name)) => {
+            let user = User {
+                name,
+                external_metadata: None,
+            };
+            // We're not using auth, so we never become invalid.
+            let forever_fut: BoxFuture<'static, ()> = Box::pin(futures::future::pending());
+
+            (user, forever_fut, None)
+        }
         // With frontegg disabled, specifying credentials is an error.
         (None, _) => return Err(AuthError::UnexpectedCredentials),
         // If we require Frontegg auth, fetch credentials from the HTTP auth
@@ -785,35 +824,50 @@ async fn auth(
         // be validated. In either case, if a username was specified in the
         // client cert, it must match that of the JWT.
         (Some(frontegg), creds) => {
-            let claims = match creds {
+            let (claims, valid_until, user_updates) = match creds {
                 Credentials::Password { username, password } => {
-                    let ExchangePasswordForTokenResponse { claims, .. } = frontegg
+                    let ExchangePasswordForTokenResponse {
+                        claims,
+                        valid_until_fut,
+                        refresh_updates,
+                    } = frontegg
                         .exchange_password_for_token(&password, username)
                         .await?;
-                    claims
+
+                    (claims, valid_until_fut, Some(refresh_updates))
                 }
                 Credentials::Token { token } => {
                     let claims = frontegg.validate_access_token(&token, None)?;
-                    claims
+                    let valid_until = frontegg.valid_until(&claims);
+
+                    (claims, valid_until, None)
                 }
                 Credentials::DefaultUser | Credentials::User(_) => {
                     return Err(AuthError::MissingHttpAuthentication)
                 }
             };
-            User {
+
+            let user = User {
                 external_metadata: Some(ExternalUserMetadata {
                     user_id: claims.user_id,
                     admin: claims.is_admin,
                 }),
                 name: claims.email,
-            }
+            };
+
+            (user, valid_until, user_updates)
         }
     };
 
     if mz_adapter::catalog::is_reserved_role_name(user.name.as_str()) {
         return Err(AuthError::InvalidLogin(user.name));
     }
-    Ok(AuthedUser(user))
+
+    Ok(AuthItems {
+        user: AuthedUser(user),
+        valid_until,
+        user_updates,
+    })
 }
 
 /// Configuration for [`base_router`].

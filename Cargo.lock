@@ -4028,6 +4028,7 @@ dependencies = [
  "hyper-openssl",
  "hyper-tls",
  "include_dir",
+ "insta",
  "itertools",
  "jsonwebtoken",
  "libc",

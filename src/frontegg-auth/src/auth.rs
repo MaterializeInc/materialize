@@ -308,6 +308,12 @@ impl Authentication {
     ) -> Result<ValidatedClaims, Error> {
         validate_access_token(&self.validation_config, token, expected_email)
     }
+
+    /// Returns a [`Future`] that resolves when the provided claims have expired.
+    pub fn valid_until(&self, claims: &ValidatedClaims) -> BoxFuture<'static, ()> {
+        let valid_for = valid_for(&self.validation_config.now, claims);
+        Box::pin(tokio::time::sleep(valid_for))
+    }
 }
 
 #[derive(Clone, Derivative)]

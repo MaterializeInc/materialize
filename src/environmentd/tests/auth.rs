@@ -901,6 +901,170 @@ fn test_auth_expiry() {
     assert!(pg_client.query_one("SELECT current_user", &[]).is_err());
 }
 
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+fn test_auth_expiry_websocket() {
+    // This function verifies that the background expiry refresh task runs. This
+    // is done by starting a web server that awaits the refresh request, which the
+    // test waits for.
+
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+    let metrics_registry = MetricsRegistry::new();
+
+    let tenant_id = Uuid::new_v4();
+    let client_id = Uuid::new_v4();
+    let secret = Uuid::new_v4();
+    let users = BTreeMap::from([(
+        (client_id.to_string(), secret.to_string()),
+        "user@_.com".to_string(),
+    )]);
+    let roles = BTreeMap::from([("user@_.com".to_string(), Vec::new())]);
+    let encoding_key =
+        EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+
+    let (_role_tx, role_rx) = tokio::sync::mpsc::unbounded_channel();
+    let frontegg_server = start_mzcloud(
+        encoding_key,
+        tenant_id,
+        users,
+        roles,
+        role_rx,
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+        None,
+    )
+    .unwrap();
+    let frontegg_auth = FronteggAuthentication::new(
+        FronteggConfig {
+            admin_api_token_url: frontegg_server.url.clone(),
+            decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
+            tenant_id: Some(tenant_id),
+            now: SYSTEM_TIME.clone(),
+            admin_role: "mzadmin".to_string(),
+        },
+        mz_frontegg_auth::Client::default(),
+        &metrics_registry,
+    );
+    let frontegg_user = "user@_.com";
+    let frontegg_password = &format!("mzp_{client_id}{secret}");
+
+    let config = util::Config::default()
+        .with_tls(server_cert, server_key)
+        .with_frontegg(&frontegg_auth)
+        .with_metrics_registry(metrics_registry);
+    let server = util::start_server(config).unwrap();
+
+    // Connect to the server.
+    let uri: Uri = server.ws_addr().to_string().parse().expect("valid uri");
+    let stream = make_ws_tls(&uri, |b| Ok(b.set_verify(SslVerifyMode::NONE)));
+    let (mut ws, _resp) = tungstenite::client(uri, stream).unwrap();
+
+    // Authenticate with the server.
+    let auth = WebSocketAuth::Basic {
+        user: frontegg_user.to_string(),
+        password: frontegg_password.to_string(),
+        options: BTreeMap::default(),
+    };
+    ws.send(Message::Text(serde_json::to_string(&auth).unwrap()))
+        .unwrap();
+
+    // Drain all starting messages.
+    for _ in 0..14 {
+        ws.read().expect("should be able to read");
+    }
+
+    // Make sure we can query.
+    ws.send(Message::Text(
+        r#"{"query": "SELECT pg_catalog.current_user()"}"#.into(),
+    ))
+    .unwrap();
+    let mut msgs = Vec::new();
+    for _ in 0..5 {
+        let msg = ws.read().expect("the ability to read");
+        msgs.push(msg);
+    }
+    insta::assert_debug_snapshot!(msgs, @r###"
+    [
+        Text(
+            "{\"type\":\"CommandStarting\",\"payload\":{\"has_rows\":true,\"is_streaming\":false}}",
+        ),
+        Text(
+            "{\"type\":\"Rows\",\"payload\":{\"columns\":[{\"name\":\"current_user\",\"type_oid\":25,\"type_len\":-1,\"type_mod\":-1}]}}",
+        ),
+        Text(
+            "{\"type\":\"Row\",\"payload\":[\"user@_.com\"]}",
+        ),
+        Text(
+            "{\"type\":\"CommandComplete\",\"payload\":\"SELECT 1\"}",
+        ),
+        Text(
+            "{\"type\":\"ReadyForQuery\",\"payload\":\"I\"}",
+        ),
+    ]
+    "###);
+
+    // Wait for a couple refreshes to happen.
+    wait_for_refresh(&frontegg_server, EXPIRES_IN_SECS);
+    wait_for_refresh(&frontegg_server, EXPIRES_IN_SECS);
+
+    // Make sure we can still query after the refreshes.
+    ws.send(Message::Text(
+        r#"{"query": "SELECT pg_catalog.current_user()"}"#.into(),
+    ))
+    .unwrap();
+    let mut msgs = Vec::new();
+    for _ in 0..5 {
+        let msg = ws.read().expect("the ability to read");
+        msgs.push(msg);
+    }
+    insta::assert_debug_snapshot!(msgs, @r###"
+    [
+        Text(
+            "{\"type\":\"CommandStarting\",\"payload\":{\"has_rows\":true,\"is_streaming\":false}}",
+        ),
+        Text(
+            "{\"type\":\"Rows\",\"payload\":{\"columns\":[{\"name\":\"current_user\",\"type_oid\":25,\"type_len\":-1,\"type_mod\":-1}]}}",
+        ),
+        Text(
+            "{\"type\":\"Row\",\"payload\":[\"user@_.com\"]}",
+        ),
+        Text(
+            "{\"type\":\"CommandComplete\",\"payload\":\"SELECT 1\"}",
+        ),
+        Text(
+            "{\"type\":\"ReadyForQuery\",\"payload\":\"I\"}",
+        ),
+    ]
+    "###);
+
+    // Disable giving out more refresh tokens.
+    frontegg_server
+        .enable_refresh
+        .store(false, Ordering::Relaxed);
+    wait_for_refresh(&frontegg_server, EXPIRES_IN_SECS);
+
+    // Sleep until the expiry future should resolve.
+    std::thread::sleep(Duration::from_secs(EXPIRES_IN_SECS + 1));
+
+    // Send one final request, which will trigger the socket to close.
+    ws.send(Message::Text(
+        r#"{"query": "SELECT pg_catalog.current_user()"}"#.into(),
+    ))
+    .unwrap();
+
+    // Read the final error message.
+    let final_msg = ws.read().expect("one last message");
+    assert!(ws.read().is_err());
+    insta::assert_debug_snapshot!(final_msg, @r###"
+    Text(
+        "{\"type\":\"Error\",\"payload\":{\"message\":\"authentication expired\",\"code\":\"28000\"}}",
+    )
+    "###);
+}
+
 #[allow(clippy::unit_arg)]
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`

@@ -90,8 +90,8 @@ pub enum WebSocketAuth {
 }
 
 async fn run_ws(state: &WsState, mut ws: WebSocket) {
-    let mut client = match init_ws(state, &mut ws).await {
-        Ok(client) => client,
+    let (mut client, mut valid_until) = match init_ws(state, &mut ws).await {
+        Ok(state) => state,
         Err(e) => {
             // We omit most detail from the error message we send to the client, to
             // avoid giving attackers unnecessary information during auth. AdapterErrors
@@ -147,15 +147,17 @@ async fn run_ws(state: &WsState, mut ws: WebSocket) {
         let msg = select! {
             biased;
 
+            // `valid_until` is designed to be polled in a select loop, thus is cancel safe.
+            () = &mut valid_until => {
+                tracing::info!("authentication is no longer valid, closing websocket");
+                let err = SqlError::new(SqlState::INVALID_AUTHORIZATION_SPECIFICATION, "authentication expired");
+                terminate_with_error(client, ws, err).await;
+                return;
+            },
             // `recv_timeout()` is cancel-safe as per it's docs.
             Some(timeout) = client.client.recv_timeout() => {
-                client.client.terminate().await;
-                // We must wait for the client to send a request before we can send the error
-                // response. Although this isn't the PG wire protocol, we choose to mirror it by
-                // only sending errors as responses to requests.
-                let _ = ws.recv().await;
                 let err = AdapterError::from(timeout);
-                let _ = send_ws_response(&mut ws, WebSocketResponse::Error(err.into())).await;
+                terminate_with_error(client, ws, err.into()).await;
                 return;
             },
             message = ws.recv() => message,
@@ -264,6 +266,16 @@ async fn forward_notices(
     }
 
     Ok(())
+}
+
+/// Terminates the underlying Session and sends an error over the [`WebSocket`].
+async fn terminate_with_error(mut client: AuthedClient, mut ws: WebSocket, error: SqlError) {
+    client.client.terminate().await;
+    // We must wait for the client to send a request before we can send the error
+    // response. Although this isn't the PG wire protocol, we choose to mirror it by
+    // only sending errors as responses to requests.
+    let _ = ws.recv().await;
+    let _ = send_ws_response(&mut ws, WebSocketResponse::Error(error)).await;
 }
 
 /// A request to execute SQL over HTTP.
@@ -389,6 +401,20 @@ pub struct SqlError {
     pub detail: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
+}
+
+impl SqlError {
+    pub fn new<S>(code: SqlState, message: S) -> SqlError
+    where
+        S: Into<String>,
+    {
+        SqlError {
+            code: code.code().to_string(),
+            message: message.into(),
+            detail: None,
+            hint: None,
+        }
+    }
 }
 
 impl From<AdapterError> for SqlError {
