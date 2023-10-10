@@ -20,10 +20,10 @@ from dbt.tests.adapter.constraints.fixtures import (
 from dbt.tests.adapter.constraints.test_constraints import (
     BaseConstraintQuotedColumn,
     BaseConstraintsRuntimeDdlEnforcement,
-    BaseIncrementalContractSqlHeader,
     BaseIncrementalConstraintsColumnsEqual,
     BaseIncrementalConstraintsRollback,
     BaseIncrementalConstraintsRuntimeDdlEnforcement,
+    BaseIncrementalContractSqlHeader,
     BaseModelConstraintsRuntimeEnforcement,
     BaseTableConstraintsColumnsEqual,
     BaseTableContractSqlHeader,
