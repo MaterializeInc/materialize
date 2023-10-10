@@ -67,8 +67,12 @@ macro_rules! rbac_preamble {
             ));
         };
 
-        // Skip RBAC checks if RBAC is disabled.
-        if !is_rbac_enabled_for_session($catalog.system_vars(), $session_vars) {
+        // Skip RBAC checks if RBAC is disabled. However, we never skip RBAC checks for system
+        // roles. This allows us to limit access of system users even when RBAC is off.
+        if !is_rbac_enabled_for_session($catalog.system_vars(), $session_vars)
+            && !$role_metadata.current_role.is_system()
+            && !$role_metadata.session_role.is_system()
+        {
             return Ok(());
         }
 
