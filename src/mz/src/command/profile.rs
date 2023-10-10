@@ -37,6 +37,7 @@ use crate::{
     config_file::TomlProfile,
     context::{Context, ProfileContext},
     error::Error,
+    error::Error::ProfileNameAlreadyExistsError,
     server::server,
 };
 
@@ -154,9 +155,21 @@ pub async fn init_without_browser(admin_endpoint: Option<Url>) -> Result<AppPass
 pub async fn init(
     scx: &mut Context,
     no_browser: bool,
+    force: bool,
     admin_endpoint: Option<Url>,
     cloud_endpoint: Option<Url>,
 ) -> Result<(), Error> {
+    let config_file = scx.config_file();
+    let profile = scx
+        .get_global_profile()
+        .map_or(config_file.profile().to_string(), |n| n);
+
+    if let Some(profiles) = scx.config_file().profiles() {
+        if profiles.contains_key(&profile) && !force {
+            return Err(ProfileNameAlreadyExistsError(profile));
+        }
+    }
+
     let app_password = match no_browser {
         true => init_without_browser(admin_endpoint.clone()).await?,
         false => init_with_browser(cloud_endpoint.clone()).await?,
@@ -170,14 +183,7 @@ pub async fn init(
         cloud_endpoint: cloud_endpoint.map(|url| url.to_string()),
     };
 
-    let config_file = scx.config_file();
-    config_file
-        .add_profile(
-            scx.get_global_profile()
-                .map_or(config_file.profile().to_string(), |n| n),
-            new_profile,
-        )
-        .await?;
+    config_file.add_profile(profile, new_profile).await?;
 
     Ok(())
 }

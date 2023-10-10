@@ -126,4 +126,7 @@ pub enum Error {
     /// Error that occurs when attempting to find the home directory.
     #[error("An error occurred while trying to find the home directory.")]
     HomeDirNotFoundError,
+    /// Error that raises when the user tries to create a new profile with a name that already exists.
+    #[error("The profile name '{0}' already exists. You can either use 'mz profile init -f' to replace it or 'mz profile init --profile <PROFILE>' to choose another name.")]
+    ProfileNameAlreadyExistsError(String),
 }
