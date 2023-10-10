@@ -12,9 +12,9 @@ use crate::objects::{
     AuditLogKey, Cluster, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
     ClusterKey, ClusterReplica, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, CommentKey,
     CommentValue, ConfigKey, ConfigValue, Database, DatabaseKey, DatabaseValue,
-    DefaultPrivilegesKey, DefaultPrivilegesValue, GidMappingKey, GidMappingValue, IdAllocKey,
-    IdAllocValue, Item, ItemKey, ItemValue, ReplicaConfig, Role, RoleKey, RoleValue, Schema,
-    SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey,
+    DefaultPrivilegesKey, DefaultPrivilegesValue, DurableType, GidMappingKey, GidMappingValue,
+    IdAllocKey, IdAllocValue, Item, ItemKey, ItemValue, ReplicaConfig, Role, RoleKey, RoleValue,
+    Schema, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey,
     SettingValue, StorageUsageKey, SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue,
     TimestampKey, TimestampValue,
 };
@@ -35,10 +35,7 @@ use mz_repr::{Diff, GlobalId};
 use mz_sql::catalog::{
     CatalogError as SqlCatalogError, ObjectType, RoleAttributes, RoleMembership, RoleVars,
 };
-use mz_sql::names::{
-    CommentObjectId, DatabaseId, ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier,
-    SchemaId, SchemaSpecifier,
-};
+use mz_sql::names::{CommentObjectId, DatabaseId, SchemaId};
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_stash::TableTransaction;
@@ -220,45 +217,9 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn loaded_items(&self) -> Vec<Item> {
-        let databases = self.databases.items();
-        let schemas = self.schemas.items();
         let mut items = Vec::new();
         self.items.for_values(|k, v| {
-            let schema_key = SchemaKey { id: v.schema_id };
-            let schema = match schemas.get(&schema_key) {
-                Some(schema) => schema,
-                None => panic!(
-                    "corrupt stash! unknown schema id {}, for item with key \
-                        {k:?} and value {v:?}",
-                    v.schema_id
-                ),
-            };
-            let database_spec = match schema.database_id {
-                Some(id) => {
-                    let key = DatabaseKey { id };
-                    if databases.get(&key).is_none() {
-                        panic!(
-                            "corrupt stash! unknown database id {key:?}, for item with key \
-                        {k:?} and value {v:?}"
-                        );
-                    }
-                    ResolvedDatabaseSpecifier::from(id)
-                }
-                None => ResolvedDatabaseSpecifier::Ambient,
-            };
-            items.push(Item {
-                id: k.gid,
-                name: QualifiedItemName {
-                    qualifiers: ItemQualifiers {
-                        database_spec,
-                        schema_spec: SchemaSpecifier::from(v.schema_id),
-                    },
-                    item: v.name.clone(),
-                },
-                create_sql: v.create_sql.clone(),
-                owner_id: v.owner_id,
-                privileges: v.privileges.clone(),
-            });
+            items.push(Item::from_key_value(k.clone(), v.clone()));
         });
         items.sort_by_key(|Item { id, .. }| *id);
         items
@@ -773,17 +734,9 @@ impl<'a> Transaction<'a> {
             if k.gid == id {
                 let item = item.clone();
                 // Schema IDs cannot change.
-                assert_eq!(
-                    SchemaId::from(item.name.qualifiers.schema_spec),
-                    v.schema_id
-                );
-                Some(ItemValue {
-                    schema_id: v.schema_id,
-                    name: item.name.item,
-                    create_sql: item.create_sql,
-                    owner_id: item.owner_id,
-                    privileges: item.privileges,
-                })
+                assert_eq!(item.schema_id, v.schema_id);
+                let (_, new_value) = item.into_key_value();
+                Some(new_value)
             } else {
                 None
             }
@@ -807,17 +760,9 @@ impl<'a> Transaction<'a> {
         let n = self.items.update(|k, v| {
             if let Some(item) = items.get(&k.gid) {
                 // Schema IDs cannot change.
-                assert_eq!(
-                    SchemaId::from(item.name.qualifiers.schema_spec),
-                    v.schema_id
-                );
-                Some(ItemValue {
-                    schema_id: v.schema_id,
-                    name: item.name.item.clone(),
-                    create_sql: item.create_sql.clone(),
-                    owner_id: item.owner_id.clone(),
-                    privileges: item.privileges.clone(),
-                })
+                assert_eq!(item.schema_id, v.schema_id);
+                let (_, new_value) = item.clone().into_key_value();
+                Some(new_value)
             } else {
                 None
             }
@@ -844,7 +789,8 @@ impl<'a> Transaction<'a> {
         let n = self.roles.update(move |k, _v| {
             if k.id == id {
                 let role = role.clone();
-                Some(RoleValue::from(role))
+                let (_, new_value) = role.into_key_value();
+                Some(new_value)
             } else {
                 None
             }
@@ -867,15 +813,8 @@ impl<'a> Transaction<'a> {
     ) -> Result<(), Error> {
         let n = self.system_gid_mapping.update(|_k, v| {
             if let Some(mapping) = mappings.get(&GlobalId::System(v.id)) {
-                let id = if let GlobalId::System(id) = mapping.unique_identifier.id {
-                    id
-                } else {
-                    panic!("non-system id provided")
-                };
-                Some(GidMappingValue {
-                    id,
-                    fingerprint: mapping.unique_identifier.fingerprint.clone(),
-                })
+                let (_, new_value) = mapping.clone().into_key_value();
+                Some(new_value)
             } else {
                 None
             }
@@ -898,14 +837,8 @@ impl<'a> Transaction<'a> {
     pub fn update_cluster(&mut self, id: ClusterId, cluster: Cluster) -> Result<(), Error> {
         let n = self.clusters.update(|k, _v| {
             if k.id == id {
-                let cluster = cluster.clone();
-                Some(ClusterValue {
-                    name: cluster.name,
-                    linked_object_id: cluster.linked_object_id,
-                    owner_id: cluster.owner_id,
-                    privileges: cluster.privileges,
-                    config: cluster.config,
-                })
+                let (_, new_value) = cluster.clone().into_key_value();
+                Some(new_value)
             } else {
                 None
             }
@@ -926,19 +859,13 @@ impl<'a> Transaction<'a> {
     /// DO NOT call this function in a loop.
     pub fn update_cluster_replica(
         &mut self,
-        cluster_id: ClusterId,
         replica_id: ReplicaId,
         replica: ClusterReplica,
     ) -> Result<(), Error> {
         let n = self.cluster_replicas.update(|k, _v| {
             if k.id == replica_id {
-                let replica = replica.clone();
-                Some(ClusterReplicaValue {
-                    cluster_id,
-                    name: replica.name,
-                    config: replica.config,
-                    owner_id: replica.owner_id,
-                })
+                let (_, new_value) = replica.clone().into_key_value();
+                Some(new_value)
             } else {
                 None
             }
@@ -960,12 +887,8 @@ impl<'a> Transaction<'a> {
     pub fn update_database(&mut self, id: DatabaseId, database: Database) -> Result<(), Error> {
         let n = self.databases.update(|k, _v| {
             if id == k.id {
-                let database = database.clone();
-                Some(DatabaseValue {
-                    name: database.name,
-                    owner_id: database.owner_id,
-                    privileges: database.privileges,
-                })
+                let (_, new_value) = database.clone().into_key_value();
+                Some(new_value)
             } else {
                 None
             }
@@ -984,21 +907,12 @@ impl<'a> Transaction<'a> {
     ///
     /// Runtime is linear with respect to the total number of schemas in the stash.
     /// DO NOT call this function in a loop.
-    pub fn update_schema(
-        &mut self,
-        database_id: Option<DatabaseId>,
-        schema_id: SchemaId,
-        schema: Schema,
-    ) -> Result<(), Error> {
+    pub fn update_schema(&mut self, schema_id: SchemaId, schema: Schema) -> Result<(), Error> {
         let n = self.schemas.update(|k, _v| {
             if schema_id == k.id {
                 let schema = schema.clone();
-                Some(SchemaValue {
-                    database_id,
-                    name: schema.name,
-                    owner_id: schema.owner_id,
-                    privileges: schema.privileges,
-                })
+                let (_, new_value) = schema.clone().into_key_value();
+                Some(new_value)
             } else {
                 None
             }

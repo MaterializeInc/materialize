@@ -30,9 +30,7 @@ use mz_proto::{ProtoType, RustType};
 use mz_repr::adt::mz_acl_item::MzAclItem;
 use mz_repr::role_id::RoleId;
 use mz_repr::{GlobalId, Timestamp};
-use mz_sql::catalog::{
-    CatalogError as SqlCatalogError, DefaultPrivilegeAclItem, DefaultPrivilegeObject,
-};
+use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_stash::{AppendBatch, DebugStashFactory, Stash, StashFactory, TypedCollection};
 use mz_stash_types::objects::proto;
 use mz_stash_types::StashError;
@@ -41,13 +39,9 @@ use mz_storage_types::sources::Timeline;
 use crate::initialize::DEPLOY_GENERATION;
 use crate::objects::{
     AuditLogKey, Cluster, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
-    ClusterKey, ClusterReplica, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, Comment,
-    CommentKey, CommentValue, Database, DatabaseKey, DatabaseValue, DefaultPrivilege,
-    DefaultPrivilegesKey, DefaultPrivilegesValue, GidMappingKey, GidMappingValue, IdAllocKey,
-    IdAllocValue, ReplicaConfig, Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue,
-    Snapshot, StorageUsageKey, SystemConfiguration, SystemObjectDescription, SystemObjectMapping,
-    SystemObjectUniqueIdentifier, SystemPrivilegesKey, SystemPrivilegesValue, TimelineTimestamp,
-    TimestampKey, TimestampValue,
+    ClusterReplica, ClusterReplicaKey, ClusterReplicaValue, Comment, Database, DefaultPrivilege,
+    DurableType, IdAllocKey, IdAllocValue, ReplicaConfig, Role, Schema, Snapshot, StorageUsageKey,
+    SystemConfiguration, SystemObjectMapping, TimelineTimestamp, TimestampValue,
 };
 use crate::transaction::{
     add_new_builtin_cluster_replicas_migration, add_new_builtin_clusters_migration, Transaction,
@@ -439,14 +433,7 @@ impl ReadOnlyDurableCatalogState for Connection {
         let clusters = entries
             .into_iter()
             .map(RustType::from_proto)
-            .map_ok(|(k, v): (ClusterKey, ClusterValue)| Cluster {
-                id: k.id,
-                name: v.name,
-                linked_object_id: v.linked_object_id,
-                owner_id: v.owner_id,
-                privileges: v.privileges,
-                config: v.config,
-            })
+            .map_ok(|(k, v)| Cluster::from_key_value(k, v))
             .collect::<Result<_, _>>()?;
 
         Ok(clusters)
@@ -458,15 +445,7 @@ impl ReadOnlyDurableCatalogState for Connection {
         let replicas = entries
             .into_iter()
             .map(RustType::from_proto)
-            .map_ok(
-                |(k, v): (ClusterReplicaKey, ClusterReplicaValue)| ClusterReplica {
-                    cluster_id: v.cluster_id,
-                    replica_id: k.id,
-                    name: v.name,
-                    config: v.config,
-                    owner_id: v.owner_id,
-                },
-            )
+            .map_ok(|(k, v)| ClusterReplica::from_key_value(k, v))
             .collect::<Result<_, _>>()?;
 
         Ok(replicas)
@@ -478,12 +457,7 @@ impl ReadOnlyDurableCatalogState for Connection {
         let databases = entries
             .into_iter()
             .map(RustType::from_proto)
-            .map_ok(|(k, v): (DatabaseKey, DatabaseValue)| Database {
-                id: k.id,
-                name: v.name,
-                owner_id: v.owner_id,
-                privileges: v.privileges,
-            })
+            .map_ok(|(k, v)| Database::from_key_value(k, v))
             .collect::<Result<_, _>>()?;
 
         Ok(databases)
@@ -495,13 +469,7 @@ impl ReadOnlyDurableCatalogState for Connection {
         let schemas = entries
             .into_iter()
             .map(RustType::from_proto)
-            .map_ok(|(k, v): (SchemaKey, SchemaValue)| Schema {
-                id: k.id,
-                name: v.name,
-                database_id: v.database_id,
-                owner_id: v.owner_id,
-                privileges: v.privileges,
-            })
+            .map_ok(|(k, v)| Schema::from_key_value(k, v))
             .collect::<Result<_, _>>()?;
 
         Ok(schemas)
@@ -515,19 +483,7 @@ impl ReadOnlyDurableCatalogState for Connection {
         let system_item = entries
             .into_iter()
             .map(RustType::from_proto)
-            .map_ok(
-                |(k, v): (GidMappingKey, GidMappingValue)| SystemObjectMapping {
-                    description: SystemObjectDescription {
-                        schema_name: k.schema_name,
-                        object_type: k.object_type,
-                        object_name: k.object_name,
-                    },
-                    unique_identifier: SystemObjectUniqueIdentifier {
-                        id: GlobalId::System(v.id),
-                        fingerprint: v.fingerprint,
-                    },
-                },
-            )
+            .map_ok(|(k, v)| SystemObjectMapping::from_key_value(k, v))
             .collect::<Result<_, _>>()?;
         Ok(system_item)
     }
@@ -566,13 +522,7 @@ impl ReadOnlyDurableCatalogState for Connection {
         let roles = entries
             .into_iter()
             .map(RustType::from_proto)
-            .map_ok(|(k, v): (RoleKey, RoleValue)| Role {
-                id: k.id,
-                name: v.name,
-                attributes: v.attributes,
-                membership: v.membership,
-                vars: v.vars,
-            })
+            .map_ok(|(k, v)| Role::from_key_value(k, v))
             .collect::<Result<_, _>>()?;
 
         Ok(roles)
@@ -585,17 +535,7 @@ impl ReadOnlyDurableCatalogState for Connection {
             .await?
             .into_iter()
             .map(RustType::from_proto)
-            .map_ok(
-                |(k, v): (DefaultPrivilegesKey, DefaultPrivilegesValue)| DefaultPrivilege {
-                    object: DefaultPrivilegeObject::new(
-                        k.role_id,
-                        k.database_id,
-                        k.schema_id,
-                        k.object_type,
-                    ),
-                    acl_item: DefaultPrivilegeAclItem::new(k.grantee, v.privileges),
-                },
-            )
+            .map_ok(|(k, v)| DefaultPrivilege::from_key_value(k, v))
             .collect::<Result<_, _>>()?)
     }
 
@@ -606,29 +546,19 @@ impl ReadOnlyDurableCatalogState for Connection {
             .await?
             .into_iter()
             .map(RustType::from_proto)
-            .map_ok(
-                |(k, v): (SystemPrivilegesKey, SystemPrivilegesValue)| MzAclItem {
-                    grantee: k.grantee,
-                    grantor: k.grantor,
-                    acl_mode: v.acl_mode,
-                },
-            )
+            .map_ok(|(k, v)| MzAclItem::from_key_value(k, v))
             .collect::<Result<_, _>>()?)
     }
 
     #[tracing::instrument(level = "info", skip_all)]
     async fn get_system_configurations(&mut self) -> Result<Vec<SystemConfiguration>, Error> {
-        SYSTEM_CONFIGURATION_COLLECTION
+        Ok(SYSTEM_CONFIGURATION_COLLECTION
             .peek_one(&mut self.stash)
             .await?
             .into_iter()
-            .map(|(k, v)| {
-                Ok(SystemConfiguration {
-                    name: k.name,
-                    value: v.value,
-                })
-            })
-            .collect()
+            .map(RustType::from_proto)
+            .map_ok(|(k, v)| SystemConfiguration::from_key_value(k, v))
+            .collect::<Result<_, _>>()?)
     }
 
     #[tracing::instrument(level = "info", skip_all)]
@@ -638,11 +568,7 @@ impl ReadOnlyDurableCatalogState for Connection {
             .await?
             .into_iter()
             .map(RustType::from_proto)
-            .map_ok(|(k, v): (CommentKey, CommentValue)| Comment {
-                object_id: k.object_id,
-                sub_component: k.sub_component,
-                comment: v.comment,
-            })
+            .map_ok(|(k, v)| Comment::from_key_value(k, v))
             .collect::<Result<_, _>>()?;
 
         Ok(comments)
@@ -654,10 +580,7 @@ impl ReadOnlyDurableCatalogState for Connection {
         let timestamps = entries
             .into_iter()
             .map(RustType::from_proto)
-            .map_ok(|(k, v): (TimestampKey, TimestampValue)| TimelineTimestamp {
-                timeline: k.id.parse().expect("invalid timeline persisted"),
-                ts: v.ts,
-            })
+            .map_ok(|(k, v)| TimelineTimestamp::from_key_value(k, v))
             .collect::<Result<_, _>>()?;
 
         Ok(timestamps)
@@ -1073,24 +996,7 @@ impl DurableCatalogState for Connection {
 
         let mappings = mappings
             .into_iter()
-            .map(|mapping| {
-                let id = if let GlobalId::System(id) = mapping.unique_identifier.id {
-                    id
-                } else {
-                    panic!("non-system id provided")
-                };
-                (
-                    GidMappingKey {
-                        schema_name: mapping.description.schema_name,
-                        object_type: mapping.description.object_type,
-                        object_name: mapping.description.object_name,
-                    },
-                    GidMappingValue {
-                        id,
-                        fingerprint: mapping.unique_identifier.fingerprint,
-                    },
-                )
-            })
+            .map(|mapping| mapping.into_key_value())
             .map(|e| RustType::into_proto(&e));
         SYSTEM_GID_MAPPING_COLLECTION
             .upsert(&mut self.stash, mappings)

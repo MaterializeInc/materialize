@@ -1239,6 +1239,13 @@ impl CatalogState {
         }
     }
 
+    pub(super) fn find_schema(&self, schema_id: &SchemaId) -> &Schema {
+        self.database_by_id
+            .values()
+            .filter_map(|database| database.schemas_by_id.get(schema_id))
+            .into_first()
+    }
+
     pub fn get_mz_catalog_schema_id(&self) -> &SchemaId {
         &self.ambient_schemas_by_name[MZ_CATALOG_SCHEMA]
     }

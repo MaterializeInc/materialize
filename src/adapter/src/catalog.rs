@@ -2523,7 +2523,6 @@ impl Catalog {
                                     ResolvedDatabaseSpecifier::Id(id) => Some(*id),
                                 };
                                 tx.update_schema(
-                                    database_id,
                                     schema_id,
                                     schema.clone().into_durable_schema(database_id),
                                 )?;
@@ -2904,11 +2903,7 @@ impl Catalog {
                                 .replica_mut(*replica_id)
                                 .expect("catalog out of sync");
                             replica.owner_id = new_owner;
-                            tx.update_cluster_replica(
-                                *cluster_id,
-                                *replica_id,
-                                replica.clone().into(),
-                            )?;
+                            tx.update_cluster_replica(*replica_id, replica.clone().into())?;
                             builtin_table_updates.extend(state.pack_cluster_replica_update(
                                 *cluster_id,
                                 &replica_name,
@@ -2948,7 +2943,6 @@ impl Catalog {
                                 ResolvedDatabaseSpecifier::Id(id) => Some(id),
                             };
                             tx.update_schema(
-                                database_id.copied(),
                                 schema_id,
                                 schema.clone().into_durable_schema(database_id.copied()),
                             )?;

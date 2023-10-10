@@ -342,7 +342,8 @@ impl From<CatalogEntry> for mz_catalog::Item {
     fn from(entry: CatalogEntry) -> mz_catalog::Item {
         mz_catalog::Item {
             id: entry.id,
-            name: entry.name,
+            schema_id: entry.name.qualifiers.schema_spec.into(),
+            name: entry.name.item,
             create_sql: entry.item.into_serialized(),
             owner_id: entry.owner_id,
             privileges: entry.privileges.into_all_values().collect(),
