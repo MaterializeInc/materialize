@@ -68,7 +68,6 @@ where
             let mut row_buf = Row::default();
             let mut row_mfp = Row::default();
             let mut datums = DatumVec::new();
-            let mut row_datums = DatumVec::new();
             let (key_val_input, err_input): (
                 timely::dataflow::Stream<_, (Result<(Row, Row), DataflowError>, _, _)>,
                 _,
@@ -90,10 +89,8 @@ where
                     key_plan.permute(demand_map.clone(), demand_map_len);
                     val_plan.permute(demand_map, demand_map_len);
                     let skips = mz_compute_types::plan::reduce::convert_indexes_to_skips(demand);
-                    move |row_parts, time, diff| {
+                    move |row_datums, time, diff| {
                         let temp_storage = RowArena::new();
-
-                        let mut row_datums = row_datums.borrow_with_many(row_parts);
 
                         let mut row_iter = row_datums.drain(..);
                         let mut datums_local = datums.borrow();

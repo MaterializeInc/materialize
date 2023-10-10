@@ -15,6 +15,7 @@
 //! or fixed-length containers standing in for them.
 
 use std::borrow::Borrow;
+use std::iter;
 use std::mem::size_of;
 
 use chrono::{DateTime, Utc};
@@ -538,7 +539,7 @@ pub(super) fn fixed_length(typ: &ScalarType) -> Option<usize> {
 }
 
 impl<const N: usize> BytesN<N> {
-    /// Evaluates whether the provided schema can be represented by a BytesN instance.
+    /// Evaluates whether the provided schema can be represented by a `BytesN`` instance.
     pub fn valid_schema(types: &[ColumnType]) -> bool {
         if types.len() == 1 {
             let typ = types.first().expect("must contain one element");
@@ -548,16 +549,13 @@ impl<const N: usize> BytesN<N> {
         }
         false
     }
-}
 
-impl<const N: usize> IntoRowByTypes for BytesN<N> {
-    /// This implementation employs the schema provided by `types` to decode
-    /// the N-byte value into `row_buf`, returning a reference to it.
-    ///
-    /// Presently, the implementation panics if more than one `ColumnType` is found
-    /// in `types` or if the one column has a byte length greater than N-1 (due to one
-    /// byte being reserved for nullability encoding).
-    fn into_row<'a>(&'a self, row_buf: &'a mut Row, types: Option<&[ColumnType]>) -> &'a Row {
+    /// A helper function that constructs an iterator of datums from the `BytesN` instance
+    /// given by `self`.
+    pub fn into_datum_iter<'a>(
+        &'a self,
+        types: Option<&[ColumnType]>,
+    ) -> impl Iterator<Item = Datum<'a>> {
         // TODO (vmarcos): The implementation should be extended in the future to support
         // multiple columns in `types` and to panic if the multi-column schema that ends up
         // being too wide for a fixed-length N-byte pattern (MaterializeInc/materialize#22102).
@@ -566,7 +564,6 @@ impl<const N: usize> IntoRowByTypes for BytesN<N> {
         assert_eq!(types.len(), 1);
 
         let typ = &types[0];
-        let mut packer = row_buf.packer();
         let mut offset = 0;
 
         // Decode fixed-length representation into a Datum.
@@ -578,9 +575,9 @@ impl<const N: usize> IntoRowByTypes for BytesN<N> {
             );
         }
         let is_null = nullability == 1u8;
-        if is_null {
+        let datum = if is_null {
             debug_assert!(typ.nullable);
-            packer.push(Datum::Null)
+            Datum::Null
         } else {
             // Non-null datums must be constructable from the remaining bytes.
             let typ_len = fixed_length(&typ.scalar_type).unwrap_or_else(|| {
@@ -595,7 +592,7 @@ impl<const N: usize> IntoRowByTypes for BytesN<N> {
                     typ.scalar_type, N
                 );
             }
-            let datum = match typ.scalar_type {
+            match typ.scalar_type {
                 ScalarType::Bool => decode_bool(&self.data, &mut offset),
                 ScalarType::Int16 => decode_int16(&self.data, &mut offset),
                 ScalarType::Int32 => decode_int32(&self.data, &mut offset),
@@ -621,9 +618,22 @@ impl<const N: usize> IntoRowByTypes for BytesN<N> {
                     "Unexpected type {:?} for fixed-length decoding",
                     typ.scalar_type
                 ),
-            };
-            packer.push(datum);
-        }
+            }
+        };
+        iter::once(datum)
+    }
+}
+
+impl<const N: usize> IntoRowByTypes for BytesN<N> {
+    /// This implementation employs the schema provided by `types` to decode
+    /// the N-byte value into `row_buf`, returning a reference to it.
+    ///
+    /// Presently, the implementation panics if more than one `ColumnType` is found
+    /// in `types` or if the one column has a byte length greater than N-1 (due to one
+    /// byte being reserved for nullability encoding).
+    fn into_row<'a>(&'a self, row_buf: &'a mut Row, types: Option<&[ColumnType]>) -> &'a Row {
+        let mut packer = row_buf.packer();
+        packer.extend(self.into_datum_iter(types));
         row_buf
     }
 }

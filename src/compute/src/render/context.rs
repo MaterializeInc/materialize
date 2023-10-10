@@ -23,7 +23,7 @@ use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::AvailableCollections;
 use mz_expr::{Id, MapFilterProject, MirScalarExpr};
 use mz_repr::fixed_length::{Bytes9, FromRowByTypes, IntoRowByTypes};
-use mz_repr::{ColumnType, DatumVec, Diff, GlobalId, Row, RowArena};
+use mz_repr::{ColumnType, DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
@@ -267,21 +267,22 @@ where
     /// Extracts the underlying arrangement as a stream of updates.
     pub fn as_collection<L>(&self, mut logic: L) -> Collection<S, Row, Diff>
     where
-        L: FnMut(&Row, &Row) -> Row + 'static,
+        L: for<'a, 'b> FnMut(&'a DatumVecBorrow<'b>) -> Row + 'static,
     {
+        let mut datums = DatumVec::new();
         match self {
             SpecializedArrangement::Bytes9Row(key_types, inner) => {
                 let key_types = key_types.clone();
-                let mut key_buf = Row::default();
-                let mut val_buf = Row::default();
-
                 inner.as_collection(move |k, v| {
-                    let k = k.into_row(&mut key_buf, Some(&key_types));
-                    let v = v.into_row(&mut val_buf, None);
-                    logic(k, v)
+                    let datums_borrow =
+                        datums.borrow_with_iter(k.into_datum_iter(Some(&key_types)), &v);
+                    logic(&datums_borrow)
                 })
             }
-            SpecializedArrangement::RowRow(inner) => inner.as_collection(logic),
+            SpecializedArrangement::RowRow(inner) => inner.as_collection(move |k, v| {
+                let datums_borrow = datums.borrow_with_many(&[k, v]);
+                logic(&datums_borrow)
+            }),
         }
     }
 
@@ -297,22 +298,19 @@ where
         <S as ScopeParent>::Timestamp: Lattice + Refines<T>,
         I: IntoIterator,
         I::Item: Data,
-        L: for<'a, 'b> FnMut(&'a [&'b RefOrMut<'b, Row>], &'a S::Timestamp, &'a Diff) -> I
-            + 'static,
+        L: for<'a, 'b> FnMut(&'a mut DatumVecBorrow<'b>, &'a S::Timestamp, &'a Diff) -> I + 'static,
     {
+        let mut datums = DatumVec::new();
         match self {
             SpecializedArrangement::Bytes9Row(key_types, inner) => {
                 let key_types = key_types.clone();
-                let mut key_buf = Row::default();
-                let mut val_buf = Row::default();
-
                 CollectionBundle::<S, T>::flat_map_core(
                     inner,
                     key.map(|k| Bytes9::from_row(k, Some(&key_types))),
                     move |k, v, t, d| {
-                        let k = k.into_row(&mut key_buf, Some(&key_types));
-                        let v = v.into_row(&mut val_buf, None);
-                        logic(&[&RefOrMut::Ref(k), &RefOrMut::Ref(v)], t, d)
+                        let mut datums_borrow =
+                            datums.borrow_with_iter(k.into_datum_iter(Some(&key_types)), &v);
+                        logic(&mut datums_borrow, t, d)
                     },
                     refuel,
                 )
@@ -320,7 +318,10 @@ where
             SpecializedArrangement::RowRow(inner) => CollectionBundle::<S, T>::flat_map_core(
                 inner,
                 key,
-                move |k, v, t, d| logic(&[&k, &v], t, d),
+                move |k, v, t, d| {
+                    let mut datums_borrow = datums.borrow_with_many(&[&k, &v]);
+                    logic(&mut datums_borrow, t, d)
+                },
                 refuel,
             ),
         }
@@ -420,21 +421,22 @@ where
     /// Extracts the underlying trace as a stream of updates.
     pub fn as_collection<L>(&self, mut logic: L) -> Collection<S, Row, Diff>
     where
-        L: FnMut(&Row, &Row) -> Row + 'static,
+        L: for<'a, 'b> FnMut(&'a DatumVecBorrow<'b>) -> Row + 'static,
     {
+        let mut datums = DatumVec::new();
         match self {
             SpecializedArrangementImport::Bytes9Row(key_types, inner) => {
                 let key_types = key_types.clone();
-                let mut key_buf = Row::default();
-                let mut val_buf = Row::default();
-
                 inner.as_collection(move |k, v| {
-                    let k = k.into_row(&mut key_buf, Some(&key_types));
-                    let v = v.into_row(&mut val_buf, None);
-                    logic(k, v)
+                    let datums_borrow =
+                        datums.borrow_with_iter(k.into_datum_iter(Some(&key_types)), &v);
+                    logic(&datums_borrow)
                 })
             }
-            SpecializedArrangementImport::RowRow(inner) => inner.as_collection(logic),
+            SpecializedArrangementImport::RowRow(inner) => inner.as_collection(move |k, v| {
+                let datums_borrow = datums.borrow_with_many(&[k, v]);
+                logic(&datums_borrow)
+            }),
         }
     }
 
@@ -448,22 +450,19 @@ where
     where
         I: IntoIterator,
         I::Item: Data,
-        L: for<'a, 'b> FnMut(&'a [&'b RefOrMut<'b, Row>], &'a S::Timestamp, &'a Diff) -> I
-            + 'static,
+        L: for<'a, 'b> FnMut(&'a mut DatumVecBorrow<'b>, &'a S::Timestamp, &'a Diff) -> I + 'static,
     {
+        let mut datums = DatumVec::new();
         match self {
             SpecializedArrangementImport::Bytes9Row(key_types, inner) => {
                 let key_types = key_types.clone();
-                let mut key_buf = Row::default();
-                let mut val_buf = Row::default();
-
                 CollectionBundle::<S, T>::flat_map_core(
                     inner,
                     key.map(|k| Bytes9::from_row(k, Some(&key_types))),
                     move |k, v, t, d| {
-                        let k = k.into_row(&mut key_buf, Some(&key_types));
-                        let v = v.into_row(&mut val_buf, None);
-                        logic(&[&RefOrMut::Ref(k), &RefOrMut::Ref(v)], t, d)
+                        let mut datums_borrow =
+                            datums.borrow_with_iter(k.into_datum_iter(Some(&key_types)), &v);
+                        logic(&mut datums_borrow, t, d)
                     },
                     refuel,
                 )
@@ -471,7 +470,10 @@ where
             SpecializedArrangementImport::RowRow(inner) => CollectionBundle::<S, T>::flat_map_core(
                 inner,
                 key,
-                move |k, v, t, d| logic(&[&k, &v], t, d),
+                move |k, v, t, d| {
+                    let mut datums_borrow = datums.borrow_with_many(&[&k, &v]);
+                    logic(&mut datums_borrow, t, d)
+                },
                 refuel,
             ),
         }
@@ -527,21 +529,18 @@ where
     /// If you have logic that could be applied to each record, consider using the
     /// `flat_map` methods which allows this and can reduce the work done.
     pub fn as_collection(&self) -> (Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>) {
-        let mut datum_vec = DatumVec::new();
         let mut row_buf = Row::default();
         match &self {
             ArrangementFlavor::Local(oks, errs) => (
-                oks.as_collection(move |k, v| {
-                    let borrow = datum_vec.borrow_with_many(&[k, v]);
-                    row_buf.packer().extend(&*borrow);
+                oks.as_collection(move |borrow| {
+                    row_buf.packer().extend(&**borrow);
                     row_buf.clone()
                 }),
                 errs.as_collection(|k, &()| k.clone()),
             ),
             ArrangementFlavor::Trace(_, oks, errs) => (
-                oks.as_collection(move |k, v| {
-                    let borrow = datum_vec.borrow_with_many(&[k, v]);
-                    row_buf.packer().extend(&*borrow);
+                oks.as_collection(move |borrow| {
+                    row_buf.packer().extend(&**borrow);
                     row_buf.clone()
                 }),
                 errs.as_collection(|k, &()| k.clone()),
@@ -570,8 +569,7 @@ where
         I: IntoIterator,
         I::Item: Data,
         C: FnOnce() -> L,
-        L: for<'a, 'b> FnMut(&'a [&'b RefOrMut<'b, Row>], &'a S::Timestamp, &'a Diff) -> I
-            + 'static,
+        L: for<'a, 'b> FnMut(&'a mut DatumVecBorrow<'b>, &'a S::Timestamp, &'a Diff) -> I + 'static,
     {
         // Set a number of tuples after which the operator should yield.
         // This allows us to remain responsive even when enumerating a substantial
@@ -807,8 +805,7 @@ where
         I: IntoIterator,
         I::Item: Data,
         C: FnOnce() -> L,
-        L: for<'a, 'b> FnMut(&'a [&'b RefOrMut<'b, Row>], &'a S::Timestamp, &'a Diff) -> I
-            + 'static,
+        L: for<'a, 'b> FnMut(&'a mut DatumVecBorrow<'b>, &'a S::Timestamp, &'a Diff) -> I + 'static,
     {
         // If `key_val` is set, we should have use the corresponding arrangement.
         // If there isn't one, that implies an error in the contract between
@@ -825,9 +822,10 @@ where
                 .clone()
                 .expect("Invariant violated: CollectionBundle contains no collection.");
             let mut logic = constructor();
+            let mut datums = DatumVec::new();
             (
                 oks.inner
-                    .flat_map(move |(mut v, t, d)| logic(&[&RefOrMut::Mut(&mut v)], &t, &d)),
+                    .flat_map(move |(v, t, d)| logic(&mut datums.borrow_with(&v), &t, &d)),
                 errs,
             )
         }
@@ -958,12 +956,14 @@ where
             let mut datum_vec = DatumVec::new();
             // Wrap in an `Rc` so that lifetimes work out.
             let until = std::rc::Rc::new(until);
-            move |row_parts, time, diff| {
+            move |row_datums, time, diff| {
                 use crate::render::RenderTimestamp;
 
                 let until = std::rc::Rc::clone(&until);
                 let temp_storage = RowArena::new();
-                let mut datums_local = datum_vec.borrow_with_many(row_parts);
+                let row_iter = row_datums.iter();
+                let mut datums_local = datum_vec.borrow();
+                datums_local.extend(row_iter);
                 let time = time.clone();
                 let event_time: mz_repr::Timestamp = *time.clone().event_time();
                 mfp_plan

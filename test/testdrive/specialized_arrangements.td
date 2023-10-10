@@ -165,6 +165,10 @@ Used Indexes:
 > SELECT * FROM t_bigint WHERE a = 42;
 42
 
+# Similar to the above, but with a full scan.
+> SELECT * FROM t_bigint WHERE a <> 43;
+42
+
 # Illustrates joins among non-nullable vs. nullable columns of the same type.
 ? EXPLAIN PHYSICAL PLAN FOR
   CREATE MATERIALIZED VIEW null_nonnull_join AS

@@ -756,6 +756,8 @@ impl PendingPeek {
                     match current_literal {
                         None => return Ok(results),
                         Some(current_literal) => {
+                            // NOTE(vmarcos): We expect the extra allocations below to be manageable
+                            // since we only perform as many of them as there are literals.
                             let current_literal = K::from_row(current_literal.clone(), key_types);
                             cursor.seek_key(&storage, &current_literal);
                             if !cursor.key_valid(&storage) {
@@ -782,6 +784,10 @@ impl PendingPeek {
                 // This choice is conservative, and not the end of the world
                 // from a performance perspective.
                 let arena = RowArena::new();
+                // TODO(vmarcos): We could think of not transiting through `Row` below,
+                // but rather create another type-sensitive dispatch to obtain the borrow
+                // on the key and value datums. The complexity does not seem worth the payoff
+                // if all we are doing here is returning a naturally limited number of results.
                 let key = cursor.key(&storage).into_row(&mut key_buf, key_types);
                 let row = cursor.val(&storage).into_row(&mut val_buf, val_types);
                 // TODO: We could unpack into a re-used allocation, except
