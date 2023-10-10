@@ -1368,6 +1368,13 @@ impl CommentsMap {
             })
             .flatten()
     }
+
+    pub fn get_object_comments(
+        &self,
+        object_id: CommentObjectId,
+    ) -> Option<&BTreeMap<Option<usize>, String>> {
+        self.map.get(&object_id)
+    }
 }
 
 impl Serialize for CommentsMap {
