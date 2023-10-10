@@ -219,6 +219,7 @@ impl Authentication {
                         // If the request failed then notify and bail.
                         let (api_resp, claims) = match validated_result {
                             Err(err) => {
+                                tracing::warn!(?err, "failed to exchange secret for token");
                                 for tx in waiters {
                                     let _ = tx.send(Err(err.clone()));
                                 }

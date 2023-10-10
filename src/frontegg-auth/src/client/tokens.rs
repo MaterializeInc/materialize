@@ -68,10 +68,7 @@ impl Client {
             .with_label_values(&[name, &status])
             .inc();
 
-        let result = response
-            .error_for_status()?
-            .json::<ApiTokenResponse>()
-            .await?;
+        let result = response.error_for_status()?.json().await?;
         Ok(result)
     }
 }
