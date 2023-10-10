@@ -162,7 +162,7 @@ impl<'a> HealthState<'a> {
 pub(crate) fn health_operator<'g, G>(
     scope: &Child<'g, G, mz_repr::Timestamp>,
     storage_state: &crate::storage_state::StorageState,
-    // A set of id's that should be marked as `HealthStatus::starting()` during startup.
+    // A set of id's that should be marked as `HealthStatusUpdate::starting()` during startup.
     mark_starting: BTreeSet<GlobalId>,
     // An id that is allowed to halt the dataflow. Others are ignored, and panic during debug
     // mode.
@@ -421,97 +421,79 @@ where
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-pub struct HealthStatusUpdate {
-    pub update: HealthStatus,
-    pub should_halt: bool,
-}
-
 /// NB: we derive Ord here, so the enum order matters. Generally, statuses later in the list
 /// take precedence over earlier ones: so if one worker is stalled, we'll consider the entire
 /// source to be stalled.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-pub enum HealthStatus {
+pub enum HealthStatusUpdate {
     Starting,
     Running,
-    StalledWithError { error: String, hint: Option<String> },
+    Stalled {
+        error: String,
+        hint: Option<String>,
+        should_halt: bool,
+    },
 }
-
-impl HealthStatus {
-    pub fn name(&self) -> &'static str {
-        match self {
-            HealthStatus::Starting => "starting",
-            HealthStatus::Running => "running",
-            HealthStatus::StalledWithError { .. } => "stalled",
-        }
-    }
-
-    pub fn error(&self) -> Option<&str> {
-        match self {
-            HealthStatus::Starting | HealthStatus::Running => None,
-            HealthStatus::StalledWithError { error, .. } => Some(error),
-        }
-    }
-
-    pub fn hint(&self) -> Option<&str> {
-        match self {
-            HealthStatus::Starting | HealthStatus::Running => None,
-            HealthStatus::StalledWithError { error: _, hint } => hint.as_deref(),
-        }
-    }
-}
-
 impl HealthStatusUpdate {
     /// Generates a starting [`HealthStatusUpdate`].
     pub(crate) fn starting() -> Self {
-        HealthStatusUpdate {
-            update: HealthStatus::Starting,
-            should_halt: true,
-        }
+        HealthStatusUpdate::Starting
     }
 
     /// Generates a running [`HealthStatusUpdate`].
     pub(crate) fn running() -> Self {
-        HealthStatusUpdate {
-            update: HealthStatus::Running,
-            should_halt: true,
-        }
+        HealthStatusUpdate::Running
     }
 
     /// Generates a non-halting [`HealthStatusUpdate`] with `update`.
     pub(crate) fn stalled(error: String, hint: Option<String>) -> Self {
-        HealthStatusUpdate {
-            update: HealthStatus::StalledWithError { error, hint },
+        HealthStatusUpdate::Stalled {
+            error,
+            hint,
             should_halt: false,
         }
     }
 
     /// Generates a halting [`HealthStatusUpdate`] with `update`.
     pub(crate) fn halting(error: String, hint: Option<String>) -> Self {
-        HealthStatusUpdate {
-            update: HealthStatus::StalledWithError { error, hint },
+        HealthStatusUpdate::Stalled {
+            error,
+            hint,
             should_halt: true,
         }
     }
 
     /// The user-readable name of the status state.
     pub(crate) fn name(&self) -> &'static str {
-        self.update.name()
+        match self {
+            HealthStatusUpdate::Starting => "starting",
+            HealthStatusUpdate::Running => "running",
+            HealthStatusUpdate::Stalled { .. } => "stalled",
+        }
     }
 
     /// The user-readable error string, if there is one.
     pub(crate) fn error(&self) -> Option<&str> {
-        self.update.error()
+        match self {
+            HealthStatusUpdate::Starting | HealthStatusUpdate::Running => None,
+            HealthStatusUpdate::Stalled { error, .. } => Some(error),
+        }
     }
 
     /// A hint for solving the error, if there is one.
     pub(crate) fn hint(&self) -> Option<&str> {
-        self.update.hint()
+        match self {
+            HealthStatusUpdate::Starting | HealthStatusUpdate::Running => None,
+            HealthStatusUpdate::Stalled { hint, .. } => hint.as_deref(),
+        }
     }
 
     /// Whether or not we should halt the dataflow instances and restart it.
     pub(crate) fn should_halt(&self) -> bool {
-        self.should_halt
+        match self {
+            HealthStatusUpdate::Starting | HealthStatusUpdate::Running => false,
+            HealthStatusUpdate::Stalled { should_halt, .. } => *should_halt,
+        }
     }
 
     /// Whether or not we can transition from a state (or lack of one).
@@ -520,10 +502,24 @@ impl HealthStatusUpdate {
     /// Note that messages that are identical except for `should_halt` don't need to be
     /// able to transition between each other, that is handled separately.
     pub(crate) fn can_transition_from(&self, other: Option<&Self>) -> bool {
-        if let Some(other) = other {
-            self.update != other.update
-        } else {
-            true
+        match (self, other) {
+            (_, None) => true,
+            (
+                HealthStatusUpdate::Stalled {
+                    hint: to_hint,
+                    error: to_error,
+                    ..
+                },
+                Some(HealthStatusUpdate::Stalled {
+                    hint: from_hint,
+                    error: from_error,
+                    ..
+                }),
+            ) => {
+                // We ignore `should_halt` while checking if we can transition.
+                to_hint != from_hint || to_error != from_error
+            }
+            (to, Some(from)) => from != to,
         }
     }
 }
@@ -543,9 +539,15 @@ mod tests {
     fn stalled() -> HealthStatusUpdate {
         HealthStatusUpdate::stalled("".into(), None)
     }
+    fn stalled2() -> HealthStatusUpdate {
+        HealthStatusUpdate::stalled("other".into(), None)
+    }
 
     fn should_halt() -> HealthStatusUpdate {
         HealthStatusUpdate::halting("".into(), None)
+    }
+    fn should_halt2() -> HealthStatusUpdate {
+        HealthStatusUpdate::halting("other".into(), None)
     }
 
     #[mz_ore::test]
@@ -562,8 +564,16 @@ mod tests {
                 vec![starting(), stalled(), should_halt()],
                 true,
             ),
-            (Some(stalled()), vec![starting(), running()], true),
-            (Some(should_halt()), vec![starting(), running()], true),
+            (
+                Some(stalled()),
+                vec![starting(), running(), stalled2(), should_halt2()],
+                true,
+            ),
+            (
+                Some(should_halt()),
+                vec![starting(), running(), stalled2(), should_halt2()],
+                true,
+            ),
             (
                 None,
                 vec![starting(), running(), stalled(), should_halt()],
