@@ -14,48 +14,93 @@
 # limitations under the License.
 
 import pytest
-
+from dbt.tests.adapter.constraints.fixtures import (
+    model_contract_header_schema_yml,
+)
 from dbt.tests.adapter.constraints.test_constraints import (
-    BaseTableConstraintsColumnsEqual,
-    BaseViewConstraintsColumnsEqual,
-    BaseTableContractSqlHeader,
+    BaseConstraintQuotedColumn,
+    BaseConstraintsRuntimeDdlEnforcement,
     BaseIncrementalContractSqlHeader,
     BaseIncrementalConstraintsColumnsEqual,
-    BaseConstraintsRuntimeDdlEnforcement,
-    BaseConstraintsRollback,
-    BaseIncrementalConstraintsRuntimeDdlEnforcement,
     BaseIncrementalConstraintsRollback,
+    BaseIncrementalConstraintsRuntimeDdlEnforcement,
     BaseModelConstraintsRuntimeEnforcement,
-    BaseConstraintQuotedColumn,
+    BaseTableConstraintsColumnsEqual,
+    BaseTableContractSqlHeader,
+    BaseViewConstraintsColumnsEqual,
 )
 
-class MaterializeTableConstraintsColumnsEqual(BaseTableConstraintsColumnsEqual):
+# Materialize does not support time zones or materializing session variables, so
+# override the original fixture.
+override_model_contract_sql_header_sql = """
+{{
+  config(
+    materialized = "table"
+  )
+}}
+
+{% call set_sql_header(config) %}
+set session time zone 'UTC';
+{%- endcall %}
+select 'UTC' as column_name
+"""
+
+
+class TestTableConstraintsColumnsEqualMaterialize(BaseTableConstraintsColumnsEqual):
     pass
 
-class MaterializeViewConstraintsColumnsEqual(BaseViewConstraintsColumnsEqual):
+
+class TestViewConstraintsColumnsEqualMaterialize(BaseViewConstraintsColumnsEqual):
     pass
 
-class MaterializeViewConstraintsColumnsEqual(BaseViewConstraintsColumnsEqual):
+
+@pytest.mark.skip(reason="dbt-materialize does not support constraints")
+class TestConstraintQuotedColumnMaterialize(BaseConstraintQuotedColumn):
     pass
 
-class MaterializeModelConstraintsRuntimeEnforcement(BaseModelConstraintsRuntimeEnforcement):
-    pass
-
-class MaterializeConstraintQuotedColumn(BaseConstraintQuotedColumn):
-    pass
 
 @pytest.mark.skip(reason="dbt-materialize does not support incremental models")
-class TestIncrementalContractSqlHeader(BaseIncrementalContractSqlHeader):
+class TestIncrementalContractSqlHeaderMaterialize(BaseIncrementalContractSqlHeader):
     pass
 
-@pytest.mark.skip(reason="dbt-materialize does not support incremental models")
-class TestIncrementalConstraintsColumnsEqual(BaseIncrementalConstraintsColumnsEqual):
-    pass
 
 @pytest.mark.skip(reason="dbt-materialize does not support incremental models")
-class TestIncrementalConstraintsRuntimeDdlEnforcement(BaseIncrementalConstraintsRuntimeDdlEnforcement):
+class TestIncrementalConstraintsColumnsEqualMaterialize(
+    BaseIncrementalConstraintsColumnsEqual
+):
     pass
 
+
 @pytest.mark.skip(reason="dbt-materialize does not support incremental models")
-class TestIncrementalConstraintsRuntimeDdlEnforcement(BaseIncrementalConstraintsRuntimeDdlEnforcement):
+class TestIncrementalConstraintsRollbackMaterialize(BaseIncrementalConstraintsRollback):
     pass
+
+
+@pytest.mark.skip(reason="dbt-materialize does not support incremental models")
+class TestIncrementalConstraintsRuntimeDdlEnforcementMaterialize(
+    BaseIncrementalConstraintsRuntimeDdlEnforcement
+):
+    pass
+
+
+@pytest.mark.skip(reason="dbt-materialize does not support constraints")
+class TestConstraintsRuntimeDdlEnforcementMaterialize(
+    BaseConstraintsRuntimeDdlEnforcement
+):
+    pass
+
+
+@pytest.mark.skip(reason="dbt-materialize does not support constraints")
+class TestModelConstraintsRuntimeEnforcementMaterialize(
+    BaseModelConstraintsRuntimeEnforcement
+):
+    pass
+
+
+class TestTableContractSqlHeaderMaterialize(BaseTableContractSqlHeader):
+    @pytest.fixture(scope="class")
+    def models(self):
+        return {
+            "my_model_contract_sql_header.sql": override_model_contract_sql_header_sql,
+            "constraints_schema.yml": model_contract_header_schema_yml,
+        }

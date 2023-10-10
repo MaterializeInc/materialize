@@ -36,6 +36,10 @@
     {% set contract_config = config.get('contract') %}
     {% if contract_config.enforced %}
       {{ get_assert_columns_equivalent(sql) }}
+      -- Explicitly throw a warning rather than silently ignore configured
+      -- constraints for tables and materialized views.
+      -- See /relations/columns_spec_ddl.sql for details.
+      {{ get_table_columns_and_constraints() }}
     {%- endif %}
   {% if cluster %}
     in cluster {{ cluster }}
