@@ -43,6 +43,9 @@ from materialize.mzcompose.composition import Composition
 class Workload:
     cycle: list[TransactionDef]
 
+    def __init__(self, composition: Composition | None) -> None:
+        raise NotImplementedError
+
     def generate(self, fields: list[Field]) -> Iterator[Transaction]:
         while True:
             for transaction_def in self.cycle:
@@ -52,7 +55,7 @@ class Workload:
 
 
 class SingleSensorUpdating(Workload):
-    def __init__(self, composition: Composition) -> None:
+    def __init__(self, composition: Composition | None) -> None:
         self.cycle = [
             TransactionDef(
                 [
@@ -67,7 +70,7 @@ class SingleSensorUpdating(Workload):
 
 
 class SingleSensorUpdatingDisruptions(Workload):
-    def __init__(self, composition: Composition) -> None:
+    def __init__(self, composition: Composition | None) -> None:
         self.cycle = [
             TransactionDef(
                 [
@@ -78,12 +81,13 @@ class SingleSensorUpdatingDisruptions(Workload):
                     ),
                 ]
             ),
-            RestartMz(composition, probability=0.1),
         ]
+        if composition:
+            self.cycle.append(RestartMz(composition, probability=0.1))
 
 
 class DeleteDataAtEndOfDay(Workload):
-    def __init__(self, composition: Composition) -> None:
+    def __init__(self, composition: Composition | None) -> None:
         insert = Insert(
             count=Records.SOME,
             record_size=RecordSize.SMALL,
@@ -109,7 +113,7 @@ class DeleteDataAtEndOfDay(Workload):
 
 
 class DeleteDataAtEndOfDayDisruptions(Workload):
-    def __init__(self, composition: Composition) -> None:
+    def __init__(self, composition: Composition | None) -> None:
         insert = Insert(
             count=Records.SOME,
             record_size=RecordSize.SMALL,
@@ -131,8 +135,10 @@ class DeleteDataAtEndOfDayDisruptions(Workload):
         self.cycle = [
             insert_phase,
             delete_phase,
-            RestartMz(composition, probability=0.1),
         ]
+
+        if composition:
+            self.cycle.append(RestartMz(composition, probability=0.1))
 
 
 # TODO: Implement
@@ -140,6 +146,9 @@ class DeleteDataAtEndOfDayDisruptions(Workload):
 #    def __init__(self) -> None:
 #        self.cycle: list[Definition] = [
 #        ]
+
+
+WORKLOADS = Workload.__subclasses__()
 
 
 def execute_workload(
@@ -161,7 +170,7 @@ def execute_workload(
     print(f"With fields: {fields}")
 
     executors = [
-        executor_class(num, ports, fields)
+        executor_class(num, ports, fields, "materialize")
         for executor_class in [PgExecutor] + executor_classes
     ]
     pg_executor = executors[0]
@@ -169,6 +178,8 @@ def execute_workload(
     start = time.time()
 
     run_executors = ([PrintExecutor(ports)] if verbose else []) + executors
+    for exe in run_executors:
+        exe.create()
     for i, transaction in enumerate(workload.generate(fields)):
         duration = time.time() - start
         if duration > runtime:

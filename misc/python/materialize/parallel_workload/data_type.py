@@ -10,6 +10,8 @@
 import random
 from typing import Any
 
+import materialize.data_ingest.data_type
+
 
 class DataType:
     @staticmethod
@@ -73,6 +75,34 @@ class Bigint(DataType):
         return rng.randint(-9223372036854775808, 9223372036854775807)
 
 
+class Float4(DataType):
+    @staticmethod
+    def name() -> str:
+        return "float4"
+
+    @staticmethod
+    def value(rng: random.Random, in_query: bool = False) -> Any:
+        if rng.randrange(10) == 0:
+            return 1.0
+        if rng.randrange(10) == 0:
+            return 0.0
+        return rng.uniform(-1000, 1000)
+
+
+class Float8(DataType):
+    @staticmethod
+    def name() -> str:
+        return "float8"
+
+    @staticmethod
+    def value(rng: random.Random, in_query: bool = False) -> Any:
+        if rng.randrange(10) == 0:
+            return 1.0
+        if rng.randrange(10) == 0:
+            return 0.0
+        return rng.uniform(-1000, 1000)
+
+
 class Text(DataType):
     @staticmethod
     def name() -> str:
@@ -131,3 +161,19 @@ class TextTextMap(DataType):
 
 
 DATA_TYPES = DataType.__subclasses__()
+
+
+def to_pw_type(
+    di_type: type[materialize.data_ingest.data_type.DataType],
+) -> type[DataType]:
+    if di_type == materialize.data_ingest.data_type.StringType:
+        return Text
+    if di_type == materialize.data_ingest.data_type.IntType:
+        return Int
+    if di_type == materialize.data_ingest.data_type.LongType:
+        return Bigint
+    if di_type == materialize.data_ingest.data_type.FloatType:
+        return Float4
+    if di_type == materialize.data_ingest.data_type.DoubleType:
+        return Float8
+    raise ValueError(f"Unknown type {di_type}")

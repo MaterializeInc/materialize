@@ -41,9 +41,7 @@ REPORT_TIME = 10
 
 def run(
     host: str,
-    port: int,
-    system_port: int,
-    http_port: int,
+    ports: dict[str, int],
     seed: str,
     runtime: int,
     complexity: Complexity,
@@ -55,12 +53,12 @@ def run(
     random.seed(seed)
 
     print(
-        f"--- Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity.value} --scenario={scenario.value} (--host={host} --port={port})"
+        f"--- Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity.value} --scenario={scenario.value} (--host={host})"
     )
     initialize_logging()
 
     system_conn = pg8000.connect(
-        host=host, port=system_port, user="mz_system", database="materialize"
+        host=host, port=ports["mz_system"], user="mz_system", database="materialize"
     )
     system_conn.autocommit = True
     with system_conn.cursor() as cur:
@@ -80,17 +78,18 @@ def run(
     ).timestamp()
 
     rng = random.Random(random.randrange(SEED_RANGE))
-    database = Database(
-        rng, seed, host, port, system_port, http_port, complexity, scenario
-    )
-    conn = pg8000.connect(host=host, port=port, user="materialize")
+    database = Database(rng, seed, host, ports, complexity, scenario)
+    conn = pg8000.connect(host=host, port=ports["materialized"], user="materialize")
     conn.autocommit = True
     with conn.cursor() as cur:
         database.create(Executor(rng, cur))
     conn.close()
 
     conn = pg8000.connect(
-        host=host, port=port, user="materialize", database=str(database)
+        host=host,
+        port=ports["materialized"],
+        user="materialize",
+        database=str(database),
     )
     conn.autocommit = True
     with conn.cursor() as cur:
@@ -141,7 +140,7 @@ def run(
         thread = threading.Thread(
             name=thread_name,
             target=worker.run,
-            args=(host, port, "materialize", str(database)),
+            args=(host, ports["materialized"], "materialize", str(database)),
         )
         thread.start()
         threads.append(thread)
@@ -159,7 +158,7 @@ def run(
         thread = threading.Thread(
             name="cancel",
             target=worker.run,
-            args=(host, system_port, "mz_system", str(database)),
+            args=(host, ports["mz_system"], "mz_system", str(database)),
         )
         thread.start()
         threads.append(thread)
@@ -177,7 +176,7 @@ def run(
         thread = threading.Thread(
             name="kill",
             target=worker.run,
-            args=(host, port, "materialize", str(database)),
+            args=(host, ports["materialized"], "materialize", str(database)),
         )
         thread.start()
         threads.append(thread)
@@ -212,7 +211,7 @@ def run(
     for thread in threads:
         thread.join()
 
-    conn = pg8000.connect(host=host, port=port, user="materialize")
+    conn = pg8000.connect(host=host, port=ports["materialized"], user="materialize")
     conn.autocommit = True
     with conn.cursor() as cur:
         print(f"Dropping database {database}")
@@ -276,8 +275,19 @@ def main() -> int:
 
     args = parser.parse_args()
 
+    ports: dict[str, int] = {
+        "materialized": 6875,
+        "mz_system": 6877,
+        "http": 6876,
+        "kafka": 9092,
+        "schema-registry": 8081,
+    }
+
     system_conn = pg8000.connect(
-        host=args.host, port=args.system_port, user="mz_system", database="materialize"
+        host=args.host,
+        port=ports["mz_system"],
+        user="mz_system",
+        database="materialize",
     )
     system_conn.autocommit = True
     with system_conn.cursor() as cur:
@@ -289,9 +299,7 @@ def main() -> int:
 
     run(
         args.host,
-        args.port,
-        args.system_port,
-        args.http_port,
+        ports,
         args.seed,
         args.runtime,
         Complexity(args.complexity),
