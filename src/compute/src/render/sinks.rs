@@ -97,9 +97,10 @@ where
                         let datum = iter.nth(skip).unwrap();
                         idx += skip + 1;
                         if datum.is_null() {
-                            return Err(DataflowError::EvalError(Box::new(EvalError::Internal(
-                                "XXX [btv]".to_string(),
-                            ))));
+                            // TODO[btv] can we plumb the column name through to here?
+                            return Err(DataflowError::EvalError(Box::new(
+                                EvalError::MustNotBeNull(format!("column at position {i}")),
+                            )));
                         }
                     }
                     Ok(row)
