@@ -2141,7 +2141,7 @@ pub fn plan_create_materialized_view(
             expr,
             column_names,
             cluster_id,
-            force_not_null: non_null_assertions,
+            non_null_assertions,
         },
         replace,
         drop_ids,

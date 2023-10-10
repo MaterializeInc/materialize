@@ -1483,7 +1483,7 @@ impl Coordinator {
                         debug_name,
                         &mview.optimized_expr,
                         &mview.desc,
-                        &mview.force_not_null,
+                        &mview.non_null_assertions,
                     )?;
 
                     // Note: ideally, the optimized_plan should be computed and

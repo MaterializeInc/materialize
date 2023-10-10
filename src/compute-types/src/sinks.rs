@@ -27,7 +27,7 @@ pub struct ComputeSinkDesc<S: 'static = (), T = mz_repr::Timestamp> {
     pub connection: ComputeSinkConnection<S>,
     pub with_snapshot: bool,
     pub up_to: Antichain<T>,
-    pub null_assertions: Vec<usize>,
+    pub non_null_assertions: Vec<usize>,
 }
 
 impl Arbitrary for ComputeSinkDesc<CollectionMetadata, mz_repr::Timestamp> {
@@ -44,14 +44,21 @@ impl Arbitrary for ComputeSinkDesc<CollectionMetadata, mz_repr::Timestamp> {
             proptest::collection::vec(any::<usize>(), 0..4),
         )
             .prop_map(
-                |(from, from_desc, connection, with_snapshot, up_to_frontier, null_assertions)| {
+                |(
+                    from,
+                    from_desc,
+                    connection,
+                    with_snapshot,
+                    up_to_frontier,
+                    non_null_assertions,
+                )| {
                     ComputeSinkDesc {
                         from,
                         from_desc,
                         connection,
                         with_snapshot,
                         up_to: Antichain::from(up_to_frontier),
-                        null_assertions,
+                        non_null_assertions,
                     }
                 },
             )
@@ -67,7 +74,7 @@ impl RustType<ProtoComputeSinkDesc> for ComputeSinkDesc<CollectionMetadata, mz_r
             from_desc: Some(self.from_desc.into_proto()),
             with_snapshot: self.with_snapshot,
             up_to: Some(self.up_to.into_proto()),
-            null_assertions: self.null_assertions.into_proto(),
+            non_null_assertions: self.non_null_assertions.into_proto(),
         }
     }
 
@@ -84,7 +91,7 @@ impl RustType<ProtoComputeSinkDesc> for ComputeSinkDesc<CollectionMetadata, mz_r
             up_to: proto
                 .up_to
                 .into_rust_if_some("ProtoComputeSinkDesc::up_to")?,
-            null_assertions: proto.null_assertions.into_rust()?,
+            non_null_assertions: proto.non_null_assertions.into_rust()?,
         })
     }
 }

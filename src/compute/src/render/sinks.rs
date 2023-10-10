@@ -47,7 +47,7 @@ where
         sink: &ComputeSinkDesc<CollectionMetadata>,
         probes: Vec<probe::Handle<mz_repr::Timestamp>>,
     ) {
-        soft_assert!(sink.null_assertions.is_strictly_sorted());
+        soft_assert!(sink.non_null_assertions.is_strictly_sorted());
         // put together tokens that belong to the export
         let mut needed_tokens = Vec::new();
         for dep_id in dependency_ids {
@@ -86,13 +86,13 @@ where
         let mut ok_collection = ok_collection.leave();
         let mut err_collection = err_collection.leave();
 
-        let null_assertions = sink.null_assertions.clone();
-        if !null_assertions.is_empty() {
+        let non_null_assertions = sink.non_null_assertions.clone();
+        if !non_null_assertions.is_empty() {
             let (oks, null_errs) =
                 ok_collection.map_fallible("NullAssertions({sink_id:?})", move |row| {
                     let mut idx = 0;
                     let mut iter = row.iter();
-                    for &i in &null_assertions {
+                    for &i in &non_null_assertions {
                         let skip = i - idx;
                         let datum = iter.nth(skip).unwrap();
                         idx += skip + 1;

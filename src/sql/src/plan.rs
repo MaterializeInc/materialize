@@ -855,7 +855,7 @@ pub enum ExplaineeStatement {
         cluster_id: ClusterId,
         /// Broken flag (see [`ExplaineeStatement::broken()`]).
         broken: bool,
-        force_not_null: Vec<usize>,
+        non_null_assertions: Vec<usize>,
     },
     /// The object to be explained is a CREATE INDEX.
     CreateIndex {
@@ -1350,7 +1350,7 @@ pub struct MaterializedView {
     pub expr: HirRelationExpr,
     pub column_names: Vec<ColumnName>,
     pub cluster_id: ClusterId,
-    pub force_not_null: Vec<usize>,
+    pub non_null_assertions: Vec<usize>,
 }
 
 #[derive(Clone, Debug)]

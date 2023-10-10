@@ -957,7 +957,7 @@ impl Coordinator {
                     expr: raw_expr,
                     column_names,
                     cluster_id,
-                    force_not_null,
+                    non_null_assertions,
                 },
             replace: _,
             drop_ids,
@@ -999,7 +999,7 @@ impl Coordinator {
         let decorrelated_expr = raw_expr.optimize_and_lower(&plan::OptimizerConfig {})?;
         let optimized_expr = self.view_optimizer.optimize(decorrelated_expr)?;
         let mut typ = optimized_expr.typ();
-        for &i in &force_not_null {
+        for &i in &non_null_assertions {
             typ.column_types[i].nullable = false;
         }
         let desc = RelationDesc::new(typ, column_names);
@@ -1029,7 +1029,7 @@ impl Coordinator {
                 desc: desc.clone(),
                 resolved_ids,
                 cluster_id,
-                force_not_null,
+                non_null_assertions,
             }),
             owner_id: *session.current_role_id(),
         });
@@ -1049,7 +1049,7 @@ impl Coordinator {
                     debug_name,
                     &mv.optimized_expr,
                     &mv.desc,
-                    &mv.force_not_null,
+                    &mv.non_null_assertions,
                 )?;
 
                 Ok((df, df_metainfo))
@@ -2838,7 +2838,7 @@ impl Coordinator {
                     with_snapshot,
                     up_to,
                     // No `FORCE NOT NULL` for subscribes
-                    null_assertions: vec![],
+                    non_null_assertions: vec![],
                 };
                 let sink_name = format!("subscribe-{}", sink_id);
                 self.dataflow_builder(cluster_id)
@@ -2855,7 +2855,7 @@ impl Coordinator {
                     with_snapshot,
                     up_to,
                     // No `FORCE NOT NULL` for subscribes
-                    null_assertions: vec![],
+                    non_null_assertions: vec![],
                 };
                 let mut dataflow = DataflowDesc::new(format!("subscribe-{}", id));
                 let mut dataflow_builder = self.dataflow_builder(cluster_id);
@@ -3144,7 +3144,7 @@ impl Coordinator {
                 column_names,
                 cluster_id,
                 broken,
-                force_not_null,
+                non_null_assertions,
             } => {
                 // Please see the docs on `explain_query_optimizer_pipeline` above.
                 self.explain_create_materialized_view_optimizer_pipeline(
@@ -3154,7 +3154,7 @@ impl Coordinator {
                     cluster_id,
                     broken,
                     root_dispatch,
-                    &force_not_null,
+                    &non_null_assertions,
                 )
                 .with_subscriber(&optimizer_trace)
                 .await
@@ -3466,7 +3466,7 @@ impl Coordinator {
         target_cluster_id: ClusterId,
         broken: bool,
         _root_dispatch: tracing::Dispatch,
-        force_not_null: &[usize],
+        non_null_assertions: &[usize],
     ) -> Result<
         (
             UsedIndexes,
@@ -3542,7 +3542,7 @@ impl Coordinator {
                 debug_name,
                 &optimized_plan,
                 &RelationDesc::new(optimized_plan.typ(), column_names),
-                force_not_null,
+                non_null_assertions,
             )
         })?;
 
