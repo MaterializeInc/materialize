@@ -114,7 +114,7 @@ pub const STASH_VERSION: u64 = 40;
 /// The minimum [`Stash`] version number that we support migrating from.
 ///
 /// After bumping this we can delete the old migrations.
-pub(crate) const MIN_STASH_VERSION: u64 = 25;
+pub(crate) const MIN_STASH_VERSION: u64 = 35;
 
 // TODO(jkosh44) There's some circular logic going on with this key across crates.
 // mz_catalog::stash initializes uses this value to initialize
