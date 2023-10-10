@@ -2147,7 +2147,10 @@ pub fn plan_create_sink(
     mut stmt: CreateSinkStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     // updating avro format with comments so that they are frozen in the `create_sql`
-    update_avro_format_with_comments(scx, &mut stmt)?;
+    // only if the feature is enabled
+    if scx.catalog.system_vars().enable_sink_doc_on_option() {
+        update_avro_format_with_comments(scx, &mut stmt)?;
+    }
 
     let create_sql = normalize::create_statement(scx, Statement::CreateSink(stmt.clone()))?;
 
@@ -2644,6 +2647,10 @@ fn kafka_sink_builder(
                 && (avro_key_fullname.is_some() ^ avro_value_fullname.is_some())
             {
                 sql_bail!("Must specify both AVRO KEY FULLNAME and AVRO VALUE FULLNAME when specifying generated schema names");
+            }
+
+            if !value_doc_options.is_empty() || !key_doc_options.is_empty() {
+                scx.require_feature_flag(&vars::ENABLE_SINK_DOC_ON_OPTION)?;
             }
 
             let options = AvroSchemaOptions {

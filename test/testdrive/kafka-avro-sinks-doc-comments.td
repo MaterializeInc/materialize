@@ -11,6 +11,7 @@
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_comment = true;
+ALTER SYSTEM SET enable_sink_doc_on_option = true;
 
 > CREATE TYPE point AS (x integer, y integer);
 > CREATE TYPE custom_map AS MAP (KEY TYPE = text, VALUE TYPE = bool)
@@ -139,3 +140,28 @@ contains: need to specify an object and a column
   )
   ENVELOPE UPSERT;
 contains: cannot use value as string
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_sink_doc_on_option = false;
+
+! CREATE SINK not_enabled FROM t
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink1-${testdrive.seed}')
+  KEY (c2) NOT ENFORCED
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  (
+    DOC ON COLUMN t.c1 = 'comments'
+  )
+  ENVELOPE UPSERT
+contains: DOC ON option for sinks is not supported
+
+# If feature flag is off, automatic doc on options from comments will not be added
+> CREATE SINK doc_on_disabled FROM t
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-doc_on_disabled-${testdrive.seed}')
+  KEY (c2) NOT ENFORCED
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE UPSERT;
+
+> SHOW CREATE SINK doc_on_disabled;
+name                            create_sql
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ "materialize.public.doc_on_disabled"  "CREATE SINK \"materialize\".\"public\".\"doc_on_disabled\" FROM \"materialize\".\"public\".\"t\" INTO KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-doc_on_disabled-${testdrive.seed}') KEY (\"c2\") NOT ENFORCED FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION \"materialize\".\"public\".\"csr_conn\" ENVELOPE UPSERT"

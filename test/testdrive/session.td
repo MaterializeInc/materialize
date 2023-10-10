@@ -70,6 +70,7 @@ statement_timeout                   "10 s"                  "Sets the maximum al
 TimeZone                            UTC                     "Sets the time zone for displaying and interpreting time stamps (PostgreSQL)."
 transaction_isolation               "strict serializable"   "Sets the current transaction's isolation level (PostgreSQL)."
 enable_consolidate_after_union_negate on                    "consolidation after Unions that have a Negated input (Materialize)."
+enable_sink_doc_on_option           on                     "Whether DOC ON option for sinks is allowed (Materialize)."
 
 > SET application_name = 'foo'
 

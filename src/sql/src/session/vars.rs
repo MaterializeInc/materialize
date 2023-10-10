@@ -1714,6 +1714,12 @@ feature_flags!(
         "the COMMENT ON feature for objects",
         false, // default false
         false  // internal false
+    ),
+    (
+        enable_sink_doc_on_option,
+        "DOC ON option for sinks",
+        false, // default false
+        false  // internal false
     )
 );
 

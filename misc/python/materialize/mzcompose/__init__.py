@@ -70,6 +70,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_unified_clusters": "true",
     "enable_jemalloc_profiling": "true",
     "enable_comment": "true",
+    "enable_sink_doc_on_option": "true",
 }
 
 DEFAULT_CRDB_ENVIRONMENT = [
