@@ -43,6 +43,8 @@ class PostgresResultComparator(ResultComparator):
                 return self.is_float_equal(value1, value2)
             if isinstance(value2, Decimal):
                 return self.is_decimal_equal(Decimal(value1), value2)
+        if isinstance(value1, str) and isinstance(value2, str):
+            return self.is_str_equal(value1, value2)
 
         return False
 
@@ -57,3 +59,7 @@ class PostgresResultComparator(ResultComparator):
             return math.isnan(value2)
 
         return math.isclose(value1, value2, rel_tol=self.floating_precision)
+
+    def is_str_equal(self, value1: str, value2: str) -> bool:
+        # Postgres uses 'mons' instead of 'months'
+        return value1.replace(" mons", " months") == value2.replace(" mons", " months")
