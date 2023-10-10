@@ -19,7 +19,7 @@ use differential_dataflow::collection::AsCollection;
 use mz_compute_client::logging::LoggingConfig;
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use mz_ore::cast::CastFrom;
-use mz_repr::{datum_list_size, datum_size, Datum, DatumVec, Diff, Row, Timestamp};
+use mz_repr::{Datum, DatumVec, Diff, Row, Timestamp};
 use mz_timely_util::buffer::ConsolidateBuffer;
 use mz_timely_util::replay::MzReplay;
 use serde::{Deserialize, Serialize};
@@ -179,13 +179,23 @@ pub(super) fn construct<A: Allocate>(
                     Datum::UInt64(u64::cast_from(target_port)),
                 ])
             });
+
+        let mut address_row = Row::default();
+
         let addresses = addresses
             .as_collection()
             .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
                 Exchange::new(move |_| u64::cast_from(worker_id)),
                 "PreArrange Timely addresses",
             )
-            .as_collection(move |id, address| create_address_row(*id, address, worker_id));
+            .as_collection(move |id, address| {
+                let mut packer = address_row.packer();
+                packer.push(Datum::UInt64(u64::cast_from(*id)));
+                packer.push(Datum::UInt64(u64::cast_from(worker_id)));
+                packer.push_list(address.iter().map(|i| Datum::UInt64(u64::cast_from(*i))));
+
+                address_row.clone()
+            });
         let parks = parks
             .as_collection()
             .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
@@ -329,29 +339,6 @@ pub(super) fn construct<A: Allocate>(
 
         traces
     })
-}
-
-fn create_address_row(id: usize, address: &[usize], worker_id: usize) -> Row {
-    let id_datum = Datum::UInt64(u64::cast_from(id));
-    let worker_datum = Datum::UInt64(u64::cast_from(worker_id));
-    // We're collecting into a Vec because we need to iterate over the Datums
-    // twice: once for determining the size of the row, then again for pushing
-    // them.
-    let address_datums: Vec<_> = address
-        .iter()
-        .map(|i| Datum::UInt64(u64::cast_from(*i)))
-        .collect();
-
-    let row_capacity =
-        datum_size(&id_datum) + datum_size(&worker_datum) + datum_list_size(&address_datums);
-
-    let mut address_row = Row::with_capacity(row_capacity);
-    let mut packer = address_row.packer();
-    packer.push(id_datum);
-    packer.push(worker_datum);
-    packer.push_list(address_datums);
-
-    address_row
 }
 
 /// State maintained by the demux operator.
