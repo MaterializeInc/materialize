@@ -75,7 +75,7 @@ name         nullable  type
 objoid       false     oid
 classoid     true      oid
 objsubid     false     integer
-description  true      text
+description  false     text
 
 > SHOW COLUMNS FROM pg_attribute
 name         nullable  type

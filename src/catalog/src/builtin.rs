@@ -2264,7 +2264,7 @@ pub static MZ_COMMENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("object_type", ScalarType::String.nullable(false))
-        .with_column("object_sub_id", ScalarType::UInt64.nullable(true))
+        .with_column("object_sub_id", ScalarType::Int32.nullable(true))
         .with_column("comment", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
 });
@@ -2845,15 +2845,43 @@ LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
 WHERE s.database_id IS NULL OR d.name = current_database()",
 };
 
+/// Note: Databases, Roles, Clusters, Cluster Replicas, Secrets, and Connections are excluded from
+/// this view for Postgres compatibility. Specifically, there is no classoid for these objects,
+/// which is required for this view.
 pub const PG_DESCRIPTION: BuiltinView = BuiltinView {
     name: "pg_description",
     schema: PG_CATALOG_SCHEMA,
-    sql: "CREATE VIEW pg_catalog.pg_description AS SELECT
-    c.oid as objoid,
-    NULL::pg_catalog.oid as classoid,
-    0::pg_catalog.int4 as objsubid,
-    NULL::pg_catalog.text as description
-FROM pg_catalog.pg_class c",
+    sql: "CREATE VIEW pg_catalog.pg_description AS
+    (
+        -- Gather all of the class oid's for objects that can have comments.
+        WITH pg_classoids AS (
+            SELECT oid, (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'pg_class') AS classoid
+            FROM pg_catalog.pg_class
+            UNION ALL
+            SELECT oid, (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'pg_type') AS classoid
+            FROM pg_catalog.pg_type
+            UNION ALL
+            SELECT oid, (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'pg_namespace') AS classoid
+            FROM pg_catalog.pg_namespace
+        ),
+        -- Gather all of the MZ ids for objects that can have comments.
+        mz_objects AS (
+            SELECT id, oid, type FROM mz_catalog.mz_objects
+            UNION ALL
+            SELECT id, oid, 'schema' AS type FROM mz_catalog.mz_schemas
+        )
+        SELECT
+            pg_classoids.oid AS objoid,
+            pg_classoids.classoid as classoid,
+            COALESCE(cmt.object_sub_id, 0) AS objsubid,
+            cmt.comment AS description
+        FROM
+            pg_classoids
+        JOIN
+            mz_objects ON pg_classoids.oid = mz_objects.oid
+        JOIN
+            mz_internal.mz_comments AS cmt ON mz_objects.id = cmt.id AND lower(mz_objects.type) = lower(cmt.object_type)
+    )",
 };
 
 pub const PG_TYPE: BuiltinView = BuiltinView {
@@ -5336,8 +5364,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&PG_DEPEND),
         Builtin::View(&PG_DATABASE),
         Builtin::View(&PG_INDEX),
-        Builtin::View(&PG_DESCRIPTION),
         Builtin::View(&PG_TYPE),
+        Builtin::View(&PG_DESCRIPTION),
         Builtin::View(&PG_ATTRIBUTE),
         Builtin::View(&PG_PROC),
         Builtin::View(&PG_OPERATOR),
