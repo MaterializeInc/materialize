@@ -35,6 +35,7 @@ members = [
     "src/metabase",
     "src/mz",
     "src/lsp-server",
+    "src/metrics",
     "src/npm",
     "src/orchestrator",
     "src/orchestrator-kubernetes",

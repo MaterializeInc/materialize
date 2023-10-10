@@ -19,6 +19,7 @@ mz-compute = { path = "../compute" }
 mz-cluster = { path = "../cluster" }
 mz-compute-client = { path = "../compute-client" }
 mz-http-util = { path = "../http-util" }
+mz-metrics = { path = "../metrics" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 mz-ore = { path = "../ore", features = ["async", "tracing_"] }
 mz-persist-client = { path = "../persist-client" }
