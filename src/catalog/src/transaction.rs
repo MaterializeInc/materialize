@@ -41,8 +41,8 @@ use mz_sql::names::{
 };
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql_parser::ast::QualifiedReplica;
-use mz_stash::objects::proto;
 use mz_stash::TableTransaction;
+use mz_stash_types::objects::proto;
 use mz_storage_types::sources::Timeline;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;

@@ -28,9 +28,9 @@ breaking:
     # reason: still under active development
     - persist-types/src/stats.proto
     # reason: does currently not require backward-compatibility
-    - stash/protos/objects.proto
+    - stash-types/protos/objects.proto
     # reason: does currently not require backward-compatibility
-    - stash/protos/objects_v40.proto
+    - stash-types/protos/objects_v40.proto
     # reason: does currently not require backward-compatibility
     - storage-client/src/client.proto
     # reason: Ignored until #21887 is reverted

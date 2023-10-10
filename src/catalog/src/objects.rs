@@ -20,7 +20,7 @@ use mz_sql::catalog::{
     RoleMembership, RoleVars,
 };
 use mz_sql::names::{CommentObjectId, DatabaseId, QualifiedItemName, SchemaId};
-use mz_stash::objects::{proto, RustType, TryFromProtoError};
+use mz_stash_types::objects::{proto, RustType, TryFromProtoError};
 use mz_storage_types::sources::Timeline;
 use proptest_derive::Arbitrary;
 use std::collections::BTreeMap;

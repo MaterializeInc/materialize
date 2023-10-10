@@ -88,7 +88,8 @@ use std::time::Duration;
 
 use mz_proto::TryFromProtoError;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
-use mz_stash::{DebugStashFactory, StashError};
+use mz_stash::DebugStashFactory;
+use mz_stash_types::StashError;
 
 use crate::objects::Snapshot;
 pub use crate::objects::{
@@ -165,7 +166,7 @@ impl From<StashError> for Error {
 
 impl From<TryFromProtoError> for Error {
     fn from(e: TryFromProtoError) -> Error {
-        Error::Stash(mz_stash::StashError::from(e))
+        Error::Stash(mz_stash_types::StashError::from(e))
     }
 }
 

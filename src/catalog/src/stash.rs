@@ -33,8 +33,9 @@ use mz_repr::{GlobalId, Timestamp};
 use mz_sql::catalog::{
     CatalogError as SqlCatalogError, DefaultPrivilegeAclItem, DefaultPrivilegeObject,
 };
-use mz_stash::objects::proto;
-use mz_stash::{AppendBatch, DebugStashFactory, Stash, StashError, StashFactory, TypedCollection};
+use mz_stash::{AppendBatch, DebugStashFactory, Stash, StashFactory, TypedCollection};
+use mz_stash_types::objects::proto;
+use mz_stash_types::StashError;
 use mz_storage_types::sources::Timeline;
 
 use crate::initialize::DEPLOY_GENERATION;
