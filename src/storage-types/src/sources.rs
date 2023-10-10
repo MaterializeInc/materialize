@@ -17,6 +17,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
+use async_trait::async_trait;
 use bytes::BufMut;
 use dec::OrderedDecimal;
 use itertools::EitherOrBoth::Both;
@@ -2525,9 +2526,10 @@ impl LoadGenerator {
     }
 }
 
+#[async_trait]
 pub trait Generator {
     /// Returns a function that produces rows and batch information.
-    fn by_seed(
+    async fn by_seed(
         &self,
         now: NowFn,
         seed: Option<u64>,

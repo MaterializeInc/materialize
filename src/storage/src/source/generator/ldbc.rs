@@ -11,6 +11,8 @@ use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::PathBuf;
 
+use async_compression::tokio::bufread::ZstdDecoder;
+use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use csv::{ReaderBuilder, StringRecord};
 use flate2::read::GzDecoder;
@@ -18,6 +20,8 @@ use mz_ore::now::NowFn;
 use mz_repr::{Datum, RelationDesc, Row, RowArena};
 use mz_storage_types::sources::{Generator, MzOffset, LDBC_DESCS, LDBC_PERSON_KNOWS_PERSON_OUTPUT};
 use timely::dataflow::operators::to_stream::Event;
+use tokio_stream::StreamExt;
+use tokio_util::io::StreamReader;
 use tracing::error;
 
 #[derive(Clone, Debug)]
@@ -25,14 +29,16 @@ pub struct Ldbc {
     pub urls: Vec<String>,
 }
 
+#[async_trait]
 impl Generator for Ldbc {
-    fn by_seed(
+    async fn by_seed(
         &self,
         _: NowFn,
         _seed: Option<u64>,
         _resume_offset: MzOffset,
     ) -> Box<(dyn Iterator<Item = (usize, Event<Option<MzOffset>, (Row, i64)>)>)> {
-        let bytes = match fetch_urls_compressed(&self.urls) {
+        // TODO: Stream this into the tar reader instead of accumulating all the bytes first.
+        let bytes = match fetch_urls_compressed(&self.urls).await {
             Ok(bytes) => bytes,
             Err(err) => {
                 error!("could not download file: {err}");
@@ -220,11 +226,17 @@ impl Iterator for Context {
 
 /// Fetches URLs whose bodies are zstd compressed and returns their response body uncompressed and
 /// concatenated.
-fn fetch_urls_compressed(urls: &[String]) -> Result<Vec<u8>, anyhow::Error> {
+async fn fetch_urls_compressed(urls: &[String]) -> Result<Vec<u8>, anyhow::Error> {
     let mut buf = Vec::new();
     for url in urls {
-        let resp = reqwest::blocking::get(url)?.error_for_status()?;
-        zstd::stream::copy_decode(resp, &mut buf)?;
+        let resp = reqwest::get(url).await?.error_for_status()?;
+        let stream = resp.bytes_stream();
+        let stream = stream.map(|result| {
+            result.map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))
+        });
+        let reader = StreamReader::new(stream);
+        let mut decoder = ZstdDecoder::new(reader);
+        tokio::io::copy(&mut decoder, &mut buf).await?;
     }
     Ok(buf)
 }

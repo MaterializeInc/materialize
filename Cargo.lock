@@ -218,6 +218,8 @@ dependencies = [
  "memchr",
  "pin-project-lite",
  "tokio",
+ "zstd",
+ "zstd-safe",
 ]
 
 [[package]]
@@ -5376,6 +5378,7 @@ name = "mz-storage"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-compression",
  "async-stream",
  "async-trait",
  "axum",
@@ -5457,7 +5460,6 @@ dependencies = [
  "url",
  "uuid",
  "workspace-hack",
- "zstd",
 ]
 
 [[package]]
@@ -5564,6 +5566,7 @@ name = "mz-storage-types"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "aws-config",
  "aws-credential-types",
  "aws-types",
@@ -7116,6 +7119,7 @@ dependencies = [
  "serde_urlencoded",
  "tokio",
  "tokio-native-tls",
+ "tokio-util",
  "tower-service",
  "url",
  "wasm-bindgen",
@@ -9409,6 +9413,7 @@ version = "0.0.0"
 dependencies = [
  "ahash",
  "anyhow",
+ "async-compression",
  "aws-credential-types",
  "aws-sdk-sts",
  "aws-sig-auth",
@@ -9573,18 +9578,18 @@ dependencies = [
 
 [[package]]
 name = "zstd"
-version = "0.12.4"
+version = "0.11.2+zstd.1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a27595e173641171fc74a1232b7b1c7a7cb6e18222c11e9dfb9888fa424c53c"
+checksum = "20cc960326ece64f010d2d2107537f26dc589a6573a316bd5b1dba685fa5fde4"
 dependencies = [
  "zstd-safe",
 ]
 
 [[package]]
 name = "zstd-safe"
-version = "6.0.6"
+version = "5.0.2+zstd.1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee98ffd0b48ee95e6c5168188e44a54550b1564d9d530ee21d5f0eaed1069581"
+checksum = "1d2a5585e04f9eea4b2a3d1eca508c4dee9592a89ef6f450c11719da0726f4db"
 dependencies = [
  "libc",
  "zstd-sys",

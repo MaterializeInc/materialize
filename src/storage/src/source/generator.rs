@@ -117,11 +117,9 @@ impl SourceRender for LoadGeneratorSourceConnection {
                 return;
             };
 
-            let mut rows = as_generator(&self.load_generator, self.tick_micros).by_seed(
-                mz_ore::now::SYSTEM_TIME.clone(),
-                None,
-                resume_offset,
-            );
+            let mut rows = as_generator(&self.load_generator, self.tick_micros)
+                .by_seed(mz_ore::now::SYSTEM_TIME.clone(), None, resume_offset)
+                .await;
 
             let tick = Duration::from_micros(self.tick_micros.unwrap_or(1_000_000));
 

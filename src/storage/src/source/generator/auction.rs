@@ -10,6 +10,7 @@
 use std::collections::VecDeque;
 use std::iter;
 
+use async_trait::async_trait;
 use mz_ore::now::{to_datetime, NowFn};
 use mz_repr::{Datum, Row};
 use mz_storage_types::sources::{Generator, MzOffset};
@@ -70,8 +71,9 @@ const BIDS_OUTPUT: usize = 5;
 // Note that this generator never issues retractions; if you change this,
 // `mz_storage_types::sources::LoadGenerator::is_monotonic`
 // must be updated.
+#[async_trait]
 impl Generator for Auction {
-    fn by_seed(
+    async fn by_seed(
         &self,
         now: NowFn,
         seed: Option<u64>,
