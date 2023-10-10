@@ -26,7 +26,7 @@ pub async fn run_verify_slot(
     let active: bool = cmd.args.parse("active")?;
     cmd.args.done()?;
 
-    let (client, conn_handle) = postgres_client(&connection).await?;
+    let (client, conn_handle) = postgres_client(&connection, state.default_timeout).await?;
 
     Retry::default()
         .initial_backoff(Duration::from_millis(50))
