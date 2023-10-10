@@ -183,7 +183,6 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             "--orchestrator-kubernetes-image-pull-policy=if-not-present",
             f"--persist-consensus-url=postgres://root@cockroach.{self.cockroach_namespace}:26257?options=--search_path=consensus",
             f"--adapter-stash-url=postgres://root@cockroach.{self.cockroach_namespace}:26257?options=--search_path=adapter",
-            f"--timestamp-oracle-url=postgres://root@cockroach.{self.cockroach_namespace}:26257?options=--search_path=timestamp_oracle",
             f"--storage-stash-url=postgres://root@cockroach.{self.cockroach_namespace}:26257?options=--search_path=storage",
             "--internal-sql-listen-addr=0.0.0.0:6877",
             "--internal-http-listen-addr=0.0.0.0:6878",
@@ -234,6 +233,11 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             ]
         if self._meets_minimum_version("0.63.0-dev"):
             args += ["--secrets-controller=kubernetes"]
+
+        if self._meets_minimum_version("0.78.0-dev"):
+            args += [
+                f"--timestamp-oracle-url=postgres://root@cockroach.{self.cockroach_namespace}:26257?options=--search_path=tsoracle"
+            ]
 
         return args
 

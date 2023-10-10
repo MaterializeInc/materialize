@@ -145,9 +145,11 @@ class Materialized(Service):
             depends_graph["cockroach"] = {"condition": "service_healthy"}
             command += [
                 "--adapter-stash-url=postgres://root@cockroach:26257?options=--search_path=adapter",
-                "--timestamp-oracle-url=postgres://root@cockroach:26257?options=--search_path=timestamp_oracle",
                 "--storage-stash-url=postgres://root@cockroach:26257?options=--search_path=storage",
                 "--persist-consensus-url=postgres://root@cockroach:26257?options=--search_path=consensus",
+            ]
+            environment += [
+                "MZ_TIMESTAMP_ORACLE_URL=postgres://root@cockroach:26257?options=--search_path=tsoracle"
             ]
 
         command += [
