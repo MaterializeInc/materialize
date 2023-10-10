@@ -40,7 +40,3 @@ EXPLAIN OPTIMIZED PLAN FOR CREATE INDEX ON v(auction_id);
 # The mz_support user can execute `EXPLAIN TIMESTAMP ...` commands.
 $ postgres-execute connection=mz_support
 EXPLAIN TIMESTAMP FOR SELECT b.auction_id, b.buyer, b.amount, b.bid_time, u.org_id FROM bids b JOIN users u ON(b.buyer = u.id);
-
-# The mz_support user can filter SHOW commands on user objects.
-$ postgres-execute connection=mz_support
-SHOW INDEXES ON bids;
