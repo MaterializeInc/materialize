@@ -23,11 +23,18 @@ use std::path::PathBuf;
 use maplit::btreemap;
 use mz_ore::str::StrExt;
 use once_cell::sync::Lazy;
+use security_framework::passwords::{get_generic_password, set_generic_password};
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 use toml_edit::{value, Document};
 
 use crate::error::Error;
+
+#[cfg(target_os = "macos")]
+static DEFAULT_VAULT_VALUE: Option<&str> = Some("keychain");
+
+#[cfg(not(target_os = "macos"))]
+static DEFAULT_VAULT_VALUE: Option<&str> = Some("inline");
 
 static GLOBAL_PARAMS: Lazy<BTreeMap<&'static str, GlobalParam>> = Lazy::new(|| {
     btreemap! {
@@ -38,7 +45,7 @@ static GLOBAL_PARAMS: Lazy<BTreeMap<&'static str, GlobalParam>> = Lazy::new(|| {
         },
         "vault" => GlobalParam {
             get: |config_file| {
-                config_file.vault.as_deref().or(None)
+                config_file.vault.as_deref().or(DEFAULT_VAULT_VALUE)
             },
         }
     }
@@ -112,7 +119,8 @@ impl ConfigFile {
 
         let profiles = editable.entry("profiles").or_insert(toml_edit::table());
         let mut new_profile = toml_edit::Table::new();
-        new_profile["app-password"] = value(profile.app_password.ok_or(Error::AppPasswordMissing)?);
+
+        self.add_app_password(&mut new_profile, &name, profile.clone())?;
         new_profile["region"] = value(profile.region.unwrap_or("aws/us-east-1".to_string()));
 
         if let Some(admin_endpoint) = profile.admin_endpoint {
@@ -135,6 +143,38 @@ impl ConfigFile {
 
         // TODO: I don't know why it creates an empty [profiles] table
         fs::write(&self.path, editable.to_string()).await?;
+
+        Ok(())
+    }
+
+    /// Adds an app-password to the configuration file or
+    /// to the keychain if the vault is enabled.
+    #[cfg(target_os = "macos")]
+    pub fn add_app_password(
+        &self,
+        new_profile: &mut toml_edit::Table,
+        name: &str,
+        profile: TomlProfile,
+    ) -> Result<(), Error> {
+        if self.vault() == "keychain" {
+            let app_password = profile.app_password.ok_or(Error::AppPasswordMissing)?;
+            set_generic_password("Materialize mz CLI", name, app_password.as_bytes())?;
+        } else {
+            new_profile["app-password"] =
+                value(profile.app_password.ok_or(Error::AppPasswordMissing)?);
+        }
+
+        Ok(())
+    }
+
+    /// Adds an app-password to the configuration file.
+    #[cfg(not(target_os = "macos"))]
+    pub fn add_app_password(
+        &self,
+        new_profile: &mut toml_edit::Table,
+        profile: TomlProfile,
+    ) -> Result<(), Error> {
+        new_profile["app-password"] = value(profile.app_password.ok_or(Error::AppPasswordMissing)?);
 
         Ok(())
     }
@@ -304,8 +344,38 @@ impl Profile<'_> {
     }
 
     /// Returns the app password in the profile configuration.
-    pub fn app_password(&self) -> Option<&str> {
-        (PROFILE_PARAMS["app-password"].get)(self.parsed)
+    #[cfg(target_os = "macos")]
+    pub fn app_password(&self, global_vault: &str) -> Option<String> {
+        if let Some(vault) = self.vault().or(Some(global_vault)) {
+            if vault == "keychain" {
+                let password = get_generic_password("Materialize mz CLI", self.name);
+
+                match password {
+                    Ok(generic_password) => {
+                        let parsed_password = String::from_utf8(generic_password.to_vec());
+                        match parsed_password {
+                            Ok(app_password) => return Some(app_password),
+                            Err(err) => {
+                                eprintln!("{}", err);
+                                return None;
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        eprintln!("{}", err);
+                        return None;
+                    }
+                }
+            }
+        }
+
+        (PROFILE_PARAMS["app-password"].get)(self.parsed).map(|x| x.to_string())
+    }
+
+    /// Returns the app password in the profile configuration.
+    #[cfg(not(target_os = "macos"))]
+    pub fn app_password(&self, _global_vault: &str) -> Option<String> {
+        (PROFILE_PARAMS["app-password"].get)(self.parsed).map(|x| x.to_string())
     }
 
     /// Returns the region in the profile configuration.

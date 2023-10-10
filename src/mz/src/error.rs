@@ -126,4 +126,8 @@ pub enum Error {
     /// Error that occurs when attempting to find the home directory.
     #[error("An error occurred while trying to find the home directory.")]
     HomeDirNotFoundError,
+    /// Error that raises when the security framework for macOS
+    /// to retrieve or set passwords to  the keychain fails.
+    #[error(transparent)]
+    MacOsSecurityError(#[from] security_framework::base::Error),
 }

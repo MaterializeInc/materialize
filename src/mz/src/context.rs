@@ -149,7 +149,7 @@ impl Context {
             admin_client_builder.build(AdminClientConfig {
                 authentication: Authentication::AppPassword(
                     profile
-                        .app_password()
+                        .app_password(config_file.vault())
                         .ok_or(Error::AppPasswordMissing)?
                         .parse()?,
                 ),
@@ -170,7 +170,7 @@ impl Context {
         // this happens because profile is 'a static, and adding it to the profile context would make also the context 'a, etc.
         let sql_client = SqlClient::new(SqlClientConfig {
             app_password: profile
-                .app_password()
+                .app_password(config_file.vault())
                 .ok_or(Error::AppPasswordMissing)?
                 .parse()?,
         });

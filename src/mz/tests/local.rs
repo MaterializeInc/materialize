@@ -77,12 +77,7 @@
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        fs,
-        io::Read,
-        path::{Path, PathBuf},
-        time::Duration,
-    };
+    use std::{fs, path::PathBuf, time::Duration};
 
     use assert_cmd::{assert::Assert, Command};
     use mz::ui::OptionalStr;
@@ -115,16 +110,6 @@ mod tests {
             .to_string();
         }
         std::env::var("CI_PASSWORD").unwrap()
-    }
-
-    /// Returns the admin endpoint for the testing environment.
-    fn get_admin_endpoint() -> String {
-        std::env::var("CI_ADMIN_ENDPOINT").unwrap()
-    }
-
-    /// Returns the cloud endpoint for the testing environment.
-    fn get_cloud_endpoint() -> String {
-        std::env::var("CI_CLOUD_ENDPOINT").unwrap()
     }
 
     /// Returns a command to execute mz.
@@ -161,14 +146,17 @@ mod tests {
         let main_config_file = format!(
             r#"
             "profile" = "default"
+            "vault" = "inline"
 
             [profiles.default]
             app-password = "{}"
             region = "aws/us-east-1"
+            vault = "keychain"
 
             [profiles.alternative]
             app-password = "{}"
             region = "aws/eu-west-1"
+            vault = "inline"
         "#,
             get_password(mock),
             get_password(mock)
@@ -293,7 +281,7 @@ mod tests {
             },
             ConfigParam {
                 name: "vault",
-                value: mz::ui::OptionalStr(Some("<unset>")),
+                value: mz::ui::OptionalStr(Some("inline")),
             },
         ];
         let expected_command_output = Table::new(vec).with(Style::psql()).to_string();
@@ -396,7 +384,7 @@ mod tests {
             },
             ProfileConfigParam {
                 name: "vault",
-                value: "<unset>",
+                value: "keychain",
             },
         ];
         let expected_command_output = Table::new(vec).with(Style::psql()).to_string();
@@ -453,261 +441,5 @@ mod tests {
             let output = String::from_utf8_lossy(&binding.get_output().stderr).to_string();
             assert!(output.contains("The profile name must consist of only ASCII letters, ASCII digits, underscores, and dashes."));
         });
-    }
-
-    /// TODO: Re-enable after understanding how to get an CI app-password, admin endpoint and cloud endpoint.
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `pipe2` on OS `linux`
-    #[ignore]
-    fn test_e2e() {
-        init_config_file(false);
-
-        // Set the cloud-endpoint first, and later the admin-endpoint
-        cmd()
-            .arg("profile")
-            .arg("config")
-            .arg("set")
-            .arg("cloud-endpoint")
-            .arg(get_cloud_endpoint())
-            .assert()
-            .success();
-
-        // Assert `mz profile config get region`
-        let binding = cmd()
-            .arg("profile")
-            .arg("config")
-            .arg("get")
-            .arg("region")
-            .assert()
-            .success();
-
-        let output = output_to_string(binding);
-
-        assert!(output.trim() == "aws/us-east-1");
-
-        // Set the admin-endpoint
-        cmd()
-            .arg("profile")
-            .arg("config")
-            .arg("set")
-            .arg("admin-endpoint")
-            .arg(get_admin_endpoint())
-            .assert()
-            .success();
-
-        // Assert `mz profile config set region`
-        cmd()
-            .arg("profile")
-            .arg("config")
-            .arg("set")
-            .arg("region")
-            .arg("aws/eu-west-1")
-            .assert()
-            .success();
-
-        let binding = cmd()
-            .arg("profile")
-            .arg("config")
-            .arg("get")
-            .arg("region")
-            .assert()
-            .success();
-
-        let output = output_to_string(binding);
-
-        assert!(output.trim() == "aws/eu-west-1");
-
-        // Test - `mz app-password`
-        //
-        // Assert `mz app-password create`
-        let description = uuid::Uuid::new_v4();
-
-        let binding = cmd()
-            .arg("app-password")
-            .arg("create")
-            .arg(&description.to_string())
-            .assert()
-            .success();
-        let output = output_to_string(binding);
-
-        assert!(output.starts_with("mzp_"));
-
-        // Assert `mz app-password list`
-
-        let binding = cmd().arg("app-password").arg("list").assert().success();
-        let output = output_to_string(binding);
-
-        assert!(output.contains(&description.to_string()));
-
-        // Test - `mz secrets`
-        //
-        // Assert `mz secret create`
-        let description = format!("SAFE_TO_DELETE_{}", uuid::Uuid::new_v4());
-
-        // Secrets
-        cmd()
-            .arg("secret")
-            .arg("create")
-            .arg(description.clone())
-            .write_stdin("decode('c2VjcmV0Cg==', 'base64')")
-            .assert()
-            .success();
-
-        // Assert `mz secret create -f`
-        cmd()
-            .arg("secret")
-            .arg("create")
-            .arg(description)
-            .arg("force")
-            .write_stdin("decode('c2VjcmV0Cg==', 'base64')")
-            .assert()
-            .success();
-
-        // Test - `mz user`
-        //
-        // Assert `mz user create` + `mz user list`
-        let name = format!("SAFE_TO_DELETE_+{}", uuid::Uuid::new_v4());
-        let email = format!("{}@materialize.com", name);
-
-        cmd()
-            .arg("user")
-            .arg("create")
-            .arg(email.clone())
-            .arg(name)
-            .assert()
-            .success();
-
-        let binding = cmd()
-            .arg("user")
-            .arg("list")
-            .args(vec!["--format", "json"])
-            .assert()
-            .success();
-        let output = output_to_string(binding);
-
-        assert!(output.contains(&email));
-
-        // Assert `mz user remove` + `mz user list`
-        cmd()
-            .arg("user")
-            .arg("remove")
-            .arg(email.clone())
-            .assert()
-            .success();
-
-        let binding = cmd()
-            .arg("user")
-            .arg("list")
-            .args(vec!["--format", "json"])
-            .assert()
-            .success();
-
-        let output = output_to_string(binding);
-
-        assert!(!output.contains(&email));
-
-        // Test - `mz region`
-        //
-        // Assert `mz region list`
-        #[derive(Clone, Copy, Deserialize, Serialize, Tabled)]
-        pub struct Region<'a> {
-            #[tabled(rename = "Region")]
-            region: &'a str,
-            #[tabled(rename = "Status")]
-            status: &'a str,
-        }
-
-        let vec = vec![
-            Region {
-                region: "aws/eu-west-1",
-                status: "enabled",
-            },
-            Region {
-                region: "aws/us-east-1",
-                status: "enabled",
-            },
-        ];
-        let expected_command_output = Table::new(vec.clone()).with(Style::psql()).to_string();
-
-        let binding = cmd().arg("region").arg("list").assert().success();
-        let output = output_to_string(binding);
-
-        assert!(output.trim() == expected_command_output.trim());
-
-        // Assert `mz region list` using JSON
-        let binding = cmd()
-            .args(vec!["--format", "json"])
-            .arg("region")
-            .arg("list")
-            .assert()
-            .success();
-        let output = output_to_string(binding);
-        let expected_command_output = serde_json::to_string(&vec).unwrap();
-
-        assert!(output.trim() == expected_command_output.trim());
-
-        // TODO:
-        // Assert `mz region list` using CSV
-        // let binding = cmd().args(vec!["--format", "CSV"]).arg("region").arg("list").assert().success();
-        // let output = output_to_string(binding);
-
-        // Assert `mz region show`
-        // The path does not always contains the pg_isready binary.
-        // let binding = cmd().arg("region").arg("show").env("PATH", "/opt/homebrew/bin/").assert().success();
-        // cmd()
-        //     .arg("region")
-        //     .arg("enable")
-        //     // .env("PATH", "/opt/homebrew/bin/")
-        //     .assert()
-        //     .success();
-
-        let binding = cmd().arg("region").arg("show").assert().success();
-        let output = output_to_string(binding);
-
-        assert!(output.trim().starts_with("Healthy: \tyes"));
-
-        let binding = cmd()
-            .arg("region")
-            .arg("show")
-            .arg("--region")
-            .arg("aws/us-east-1")
-            .assert()
-            .success();
-        let output = output_to_string(binding);
-
-        assert!(output.trim().starts_with("Healthy: \tyes"));
-        // Test - `mz sql`
-        //
-        // Assert `mz sql -- -q -c "SELECT 1"
-        cmd()
-            .arg("sql")
-            .arg("--")
-            .arg("-q")
-            .arg("-c")
-            .arg("\"SELECT 1\"")
-            .assert()
-            .success();
-
-        // Look for the '.psqlrc' file in the home dir.
-        let mut path = dirs::home_dir().expect("Error retrieving the home dir.");
-        path.push(".psqlrc-mz");
-
-        // Verify the content is ok
-        if Path::new(&path).exists() {
-            let mut file = fs::File::open(&path).expect("Error opening the '.psqlrc-mz' file.");
-            let mut content = String::new();
-            file.read_to_string(&mut content)
-                .expect("Error reading the '.psqlrc-mz' file.");
-
-            if content != "\\timing\n\\include ~/.psqlrc" {
-                panic!("Incorrect content in the '.psqlrc-mz' file.")
-            }
-        } else {
-            panic!("The configuration file '.psqlrc-mz', does not exists.")
-        }
-
-        // TODO: Remove an app-password. Breaks the CLI config. The same if the app-password is invalid.
-        // TODO: Add more tests for config_set and config_remove when you implement the actual commands.
-        // TODO: Profile init + Profile remove
     }
 }
