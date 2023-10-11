@@ -20,12 +20,14 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use futures_util::StreamExt;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist::location::{
-    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, ExternalError, SeqNo, VersionedData,
+    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, ExternalError, ResultStream, SeqNo,
+    VersionedData,
 };
 use mz_persist_types::codec_impls::TodoSchema;
 use mz_persist_types::{Codec, Codec64};
@@ -143,11 +145,17 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
             let metrics = Arc::new(Metrics::new(&cfg, &metrics_registry));
             let consensus =
                 make_consensus(&cfg, &consensus_uri, commit, Arc::clone(&metrics)).await?;
-            let shards = consensus.list_keys().await?;
             let blob = make_blob(&cfg, &blob_uri, commit, Arc::clone(&metrics)).await?;
-            let versions = StateVersions::new(cfg.clone(), consensus, Arc::clone(&blob), metrics);
+            let versions = StateVersions::new(
+                cfg.clone(),
+                Arc::clone(&consensus),
+                Arc::clone(&blob),
+                metrics,
+            );
 
-            for shard_id in shards {
+            let mut shards = consensus.list_keys();
+            while let Some(shard) = shards.next().await {
+                let shard_id = shard?;
                 let shard_id = ShardId::from_str(&shard_id).expect("invalid shard id");
 
                 let diffs = versions.fetch_all_live_diffs(&shard_id).await;
@@ -415,8 +423,8 @@ impl Blob for ReadOnly<Arc<dyn Blob + Sync + Send>> {
 
 #[async_trait]
 impl Consensus for ReadOnly<Arc<dyn Consensus + Sync + Send>> {
-    async fn list_keys(&self) -> Result<Vec<String>, ExternalError> {
-        self.0.list_keys().await
+    fn list_keys(&self) -> ResultStream<String> {
+        self.0.list_keys()
     }
 
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {

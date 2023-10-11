@@ -22,8 +22,8 @@ use rand::{Rng, SeedableRng};
 use tracing::trace;
 
 use crate::location::{
-    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, Determinate, ExternalError, SeqNo,
-    VersionedData,
+    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, Determinate, ExternalError, ResultStream,
+    SeqNo, VersionedData,
 };
 
 #[derive(Debug)]
@@ -190,10 +190,9 @@ impl UnreliableConsensus {
 
 #[async_trait]
 impl Consensus for UnreliableConsensus {
-    async fn list_keys(&self) -> Result<Vec<String>, ExternalError> {
-        self.handle
-            .run_op("list_keys", || self.consensus.list_keys())
-            .await
+    fn list_keys(&self) -> ResultStream<String> {
+        // TODO: run_op for streams
+        self.consensus.list_keys()
     }
 
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {

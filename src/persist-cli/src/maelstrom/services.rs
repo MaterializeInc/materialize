@@ -17,8 +17,8 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use mz_ore::bytes::SegmentedBytes;
 use mz_persist::location::{
-    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, Determinate, ExternalError, SeqNo,
-    VersionedData,
+    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, Determinate, ExternalError, ResultStream,
+    SeqNo, VersionedData,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -88,7 +88,7 @@ impl MaelstromConsensus {
 
 #[async_trait]
 impl Consensus for MaelstromConsensus {
-    async fn list_keys(&self) -> Result<Vec<String>, ExternalError> {
+    fn list_keys(&self) -> ResultStream<String> {
         unimplemented!("TODO")
     }
 

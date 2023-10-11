@@ -15,14 +15,15 @@ use std::sync::{Arc, Mutex};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures_util::{stream, StreamExt};
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use tokio::task::yield_now;
 
 use crate::error::Error;
 use crate::location::{
-    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, Determinate, ExternalError, SeqNo,
-    VersionedData,
+    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, Determinate, ExternalError, ResultStream,
+    SeqNo, VersionedData,
 };
 
 /// An in-memory representation of a set of [Log]s and [Blob]s that can be reused
@@ -199,11 +200,11 @@ impl MemConsensus {
 
 #[async_trait]
 impl Consensus for MemConsensus {
-    async fn list_keys(&self) -> Result<Vec<String>, ExternalError> {
+    fn list_keys(&self) -> ResultStream<String> {
         // Yield to maximize our chances for getting interesting orderings.
-        let () = yield_now().await;
-        let store = self.data.lock().map_err(Error::from)?;
-        Ok(store.keys().cloned().collect())
+        let store = self.data.lock().expect("lock poisoned");
+        let keys: Vec<_> = store.keys().cloned().collect();
+        Box::pin(stream::iter(keys).map(Ok))
     }
 
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {

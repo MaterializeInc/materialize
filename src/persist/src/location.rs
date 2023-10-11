@@ -10,12 +10,15 @@
 //! Abstractions over files, cloud storage, etc used in persistence.
 
 use std::fmt;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
+
+use futures_util::Stream;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::u64_to_usize;
 use mz_postgres_client::error::PostgresError;
@@ -343,6 +346,10 @@ impl<A> Tasked<A> {
     }
 }
 
+/// A boxed stream, similar to what `async_trait` desugars async functions to, but hardcoded
+/// to our standard result type.
+pub type ResultStream<'a, T> = Pin<Box<dyn Stream<Item = Result<T, ExternalError>> + Send + 'a>>;
+
 /// An abstraction for [VersionedData] held in a location in persistent storage
 /// where the data are conditionally updated by version.
 ///
@@ -354,7 +361,7 @@ impl<A> Tasked<A> {
 #[async_trait]
 pub trait Consensus: std::fmt::Debug {
     /// Returns all the keys ever created in the consensus store.
-    async fn list_keys(&self) -> Result<Vec<String>, ExternalError>;
+    fn list_keys(&self) -> ResultStream<String>;
 
     /// Returns a recent version of `data`, and the corresponding sequence number, if
     /// one exists at this location.
@@ -400,12 +407,13 @@ pub trait Consensus: std::fmt::Debug {
 
 #[async_trait]
 impl<A: Consensus + Sync + Send + 'static> Consensus for Tasked<A> {
-    async fn list_keys(&self) -> Result<Vec<String>, ExternalError> {
-        let backing = self.clone_backing();
-        mz_ore::task::spawn(|| "persist::task::list_keys", async move {
-            backing.list_keys().await
-        })
-        .await?
+    fn list_keys(&self) -> ResultStream<String> {
+        // Similarly to Blob::list_keys_and_metadata, this is difficult to make into a task.
+        // (If we use an unbounded channel between the task and the caller, we can buffer forever;
+        // if we use a bounded channel, we lose the isolation benefits of Tasked.)
+        // However, this should only be called in administrative contexts
+        // and not in the main state-machine impl.
+        self.0.list_keys()
     }
 
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
@@ -585,6 +593,7 @@ pub mod tests {
     use std::future::Future;
 
     use anyhow::anyhow;
+    use futures_util::TryStreamExt;
     use uuid::Uuid;
 
     use crate::location::Atomicity::{AllowNonAtomic, RequireAtomic};
@@ -845,7 +854,8 @@ pub mod tests {
         );
 
         // The new key is visible in state.
-        assert_eq!(consensus.list_keys().await?, vec![key.to_owned()]);
+        let keys: Vec<_> = consensus.list_keys().try_collect().await?;
+        assert_eq!(keys, vec![key.to_owned()]);
 
         // We can observe the a recent value on successful update.
         assert_eq!(consensus.head(&key).await, Ok(Some(state.clone())));

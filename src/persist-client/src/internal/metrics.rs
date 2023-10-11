@@ -9,12 +9,14 @@
 
 //! Prometheus monitoring metrics.
 
+use async_stream::stream;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures_util::StreamExt;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::metric;
@@ -24,7 +26,8 @@ use mz_ore::metrics::{
 };
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_persist::location::{
-    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, ExternalError, SeqNo, VersionedData,
+    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, ExternalError, ResultStream, SeqNo,
+    VersionedData,
 };
 use mz_persist::metrics::S3BlobMetrics;
 use mz_persist::retry::RetryStream;
@@ -476,6 +479,7 @@ impl MetricsVecs {
 
     fn consensus_metrics(&self) -> ConsensusMetrics {
         ConsensusMetrics {
+            list_keys: self.external_op_metrics("consensus_list_keys", false),
             head: self.external_op_metrics("consensus_head", false),
             compare_and_set: self.external_op_metrics("consensus_cas", true),
             scan: self.external_op_metrics("consensus_scan", false),
@@ -2092,6 +2096,41 @@ impl ExternalOpMetrics {
         };
         res
     }
+
+    fn run_stream<'a, R: 'a, S, OpFn, ErrFn>(
+        &'a self,
+        op_fn: OpFn,
+        mut on_err_fn: ErrFn,
+    ) -> impl futures::Stream<Item = Result<R, ExternalError>> + 'a
+    where
+        S: futures::Stream<Item = Result<R, ExternalError>> + Unpin + 'a,
+        OpFn: FnOnce() -> S,
+        ErrFn: FnMut(&AlertsMetrics, &ExternalError) + 'a,
+    {
+        self.started.inc();
+        let start = Instant::now();
+        let mut stream = op_fn();
+        stream! {
+            let mut succeeded = true;
+            while let Some(res) = stream.next().await {
+                if let Err(err) = res.as_ref() {
+                    on_err_fn(&self.alerts_metrics, err);
+                    succeeded = false;
+                }
+                yield res;
+            }
+            if succeeded {
+                self.succeeded.inc()
+            } else {
+                self.failed.inc()
+            }
+            let elapsed_seconds = start.elapsed().as_secs_f64();
+            self.seconds.inc_by(elapsed_seconds);
+            if let Some(h) = &self.seconds_histogram {
+                h.observe(elapsed_seconds);
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -2217,6 +2256,7 @@ impl Blob for MetricsBlob {
 
 #[derive(Debug)]
 pub struct ConsensusMetrics {
+    list_keys: ExternalOpMetrics,
     head: ExternalOpMetrics,
     compare_and_set: ExternalOpMetrics,
     scan: ExternalOpMetrics,
@@ -2248,9 +2288,13 @@ impl MetricsConsensus {
 
 #[async_trait]
 impl Consensus for MetricsConsensus {
-    async fn list_keys(&self) -> Result<Vec<String>, ExternalError> {
-        // TODO: metrics!
-        self.consensus.list_keys().await
+    fn list_keys(&self) -> ResultStream<String> {
+        Box::pin(
+            self.metrics
+                .consensus
+                .list_keys
+                .run_stream(|| self.consensus.list_keys(), Self::on_err),
+        )
     }
 
     #[instrument(name = "consensus::head", skip_all, fields(shard=key))]

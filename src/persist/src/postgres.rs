@@ -18,13 +18,14 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use deadpool_postgres::tokio_postgres::types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
 use deadpool_postgres::{Object, PoolError};
+use futures_util::TryStreamExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_postgres_client::metrics::PostgresClientMetrics;
 use mz_postgres_client::{PostgresClient, PostgresClientConfig, PostgresClientKnobs};
 
 use crate::error::Error;
-use crate::location::{CaSResult, Consensus, ExternalError, SeqNo, VersionedData};
+use crate::location::{CaSResult, Consensus, ExternalError, ResultStream, SeqNo, VersionedData};
 
 // These `sql_stats_automatic_collection_enabled` are for the cost-based
 // optimizer but all the queries against this table are single-table and very
@@ -220,17 +221,25 @@ impl PostgresConsensus {
 
 #[async_trait]
 impl Consensus for PostgresConsensus {
-    async fn list_keys(&self) -> Result<Vec<String>, ExternalError> {
+    fn list_keys(&self) -> ResultStream<String> {
         let q = "SELECT DISTINCT shard FROM consensus";
-        let client = self.get_connection().await?;
-        let statement = client.prepare_cached(q).await?;
-        let rows = client.query(&statement, &[]).await?;
-        let mut results = Vec::with_capacity(rows.len());
-        for row in rows {
-            let shard: String = row.try_get("shard")?;
-            results.push(shard)
-        }
-        Ok(results)
+
+        let rows = futures_util::stream::once(async {
+            let client = self.get_connection().await?;
+            let statement = client.prepare_cached(q).await?;
+            let params: &[String] = &[];
+            client
+                .query_raw(&statement, params)
+                .await
+                .map_err(ExternalError::from)
+        });
+        let shards = rows
+            .map_ok(|rows| {
+                rows.and_then(|row| async move { row.try_get("shard") })
+                    .map_err(ExternalError::from)
+            })
+            .try_flatten();
+        Box::pin(shards)
     }
 
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
