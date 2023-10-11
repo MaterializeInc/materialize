@@ -23,7 +23,7 @@ use mz_repr::role_id::RoleId;
 use mz_repr::ColumnName;
 use mz_repr::GlobalId;
 use mz_sql_parser::ast::{MutRecBlock, UnresolvedObjectName};
-use mz_stash::objects::{proto, RustType, TryFromProtoError};
+use mz_stash_types::objects::{proto, RustType, TryFromProtoError};
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -2300,6 +2300,12 @@ impl<'ast, 'a> VisitMut<'ast, Aug> for NameSimplifier<'a> {
             if catalog_full_name == *full_name {
                 *print_id = false;
             }
+        }
+    }
+
+    fn visit_column_name_mut(&mut self, name: &mut ResolvedColumnName) {
+        if let ResolvedColumnName::Column { relation, .. } = name {
+            self.visit_item_name_mut(relation);
         }
     }
 

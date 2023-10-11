@@ -156,7 +156,7 @@ The `mz_comments` table stores optional comments (descriptions) for objects in t
 | -------------- |-------------| --------                                                                                     |
 | `id`           | [`text`]    | The ID of the object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).           |
 | `object_type`  | [`text`]    | The type of object the comment is associated with.                                           |
-| `object_sub_id`| [`uint8`]   | For a comment on a column of a relation, this is the column number. For all other object types this column is `NULL`. |
+| `object_sub_id`| [`integer`] | For a comment on a column of a relation, this is the column number. For all other object types this column is `NULL`. |
 | `comment`      | [`text`]    | The comment itself.                                                                          |
 
 ### `mz_compute_dependencies`
@@ -796,6 +796,21 @@ The `mz_compute_delays_histogram` view describes a histogram of the wall-clock d
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_delays_histogram_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_delays_histogram_raw -->
+
+### `mz_compute_error_counts`
+
+The `mz_compute_error_counts` view describes the counts of errors in objects exported by [dataflows][dataflow] in the system.
+
+Dataflow exports that don't have any errors are not included in this view.
+
+<!-- RELATION_SPEC mz_internal.mz_compute_error_counts -->
+| Field        | Type        | Meaning                                                                                              |
+| ------------ |-------------| --------                                                                                             |
+| `export_id`  | [`text`]    | The ID of the dataflow export. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports). |
+| `count`      | [`numeric`] | The count of errors present in this dataflow export.                                                 |
+
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_error_counts_per_worker -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_error_counts_raw -->
 
 ### `mz_compute_exports`
 

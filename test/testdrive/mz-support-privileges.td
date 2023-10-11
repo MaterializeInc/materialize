@@ -19,7 +19,7 @@ $ postgres-connect name=mz_support url=postgres://mz_support:materialize@${testd
 
 # The mz_support user can list database sources.
 $ postgres-execute connection=mz_support
-SHOW SOURCEs;
+SHOW SOURCES;
 
 # The mz_support user can execute `SHOW CREATE ...` commands.
 $ postgres-execute connection=mz_support
@@ -41,7 +41,6 @@ EXPLAIN OPTIMIZED PLAN FOR CREATE INDEX ON v(auction_id);
 $ postgres-execute connection=mz_support
 EXPLAIN TIMESTAMP FOR SELECT b.auction_id, b.buyer, b.amount, b.bid_time, u.org_id FROM bids b JOIN users u ON(b.buyer = u.id);
 
-# The mz_support user cannot execute `SELECT ...` commands.
-# We can uncomment this test once all regular commands are executed from `mz_support`
-# ! SELECT * FROM bids
-# contains:permission denied for SOURCE "materialize.public.bids"
+# The mz_support user can filter SHOW commands on user objects.
+$ postgres-execute connection=mz_support
+SHOW INDEXES ON bids;

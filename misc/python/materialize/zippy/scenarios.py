@@ -290,7 +290,6 @@ class UserTablesLarge(Scenario):
             ): 10,
             CreateSinkParameterized(max_sinks=10): 10,
             ValidateView: 10,
-            Ingest: 50,
             DML: 50,
         }
 

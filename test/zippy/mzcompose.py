@@ -153,6 +153,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             default_size=args.size or Materialized.Size.DEFAULT_SIZE,
             external_minio=True,
             external_cockroach=True,
+            sanity_restart=False,
         ),
     ):
         c.up("materialized")

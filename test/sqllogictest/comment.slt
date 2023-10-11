@@ -29,19 +29,30 @@ CREATE TABLE a ( x int8, y text, z jsonb );
 statement ok
 COMMENT ON TABLE a IS 'foo_table';
 
-query TTTT
-SELECT * FROM mz_internal.mz_comments;
+query TTT
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
-u1  table  NULL  foo_table
+table  NULL  foo_table
+
+query IT
+SELECT objsubid, description FROM pg_description;
+----
+0  foo_table
 
 statement ok
 COMMENT ON COLUMN a.y IS 'load_bearing';
 
-query TTTT
-SELECT * FROM mz_internal.mz_comments;
+query TTT
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
-u1  table  NULL  foo_table
-u1  table  2  load_bearing
+table  NULL  foo_table
+table  2  load_bearing
+
+query IT
+SELECT objsubid, description FROM pg_description;
+----
+0  foo_table
+2  load_bearing
 
 statement ok
 CREATE TABLE b ( ts timestamptz );
@@ -49,12 +60,19 @@ CREATE TABLE b ( ts timestamptz );
 statement ok
 COMMENT ON COLUMN b.ts IS 'utc_timestamp';
 
-query TTTT
-SELECT * FROM mz_internal.mz_comments;
+query TTT
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
-u1  table  NULL  foo_table
-u1  table  2  load_bearing
-u2  table  1  utc_timestamp
+table  NULL  foo_table
+table  2  load_bearing
+table  1  utc_timestamp
+
+query IT
+SELECT objsubid, description FROM pg_description;
+----
+0  foo_table
+2  load_bearing
+1  utc_timestamp
 
 statement ok
 COMMENT ON TABLE b IS 'foo_table';
@@ -62,11 +80,17 @@ COMMENT ON TABLE b IS 'foo_table';
 statement ok
 DROP TABLE a;
 
-query TTTT
-SELECT * FROM mz_internal.mz_comments;
+query TTT
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
-u2  table  NULL foo_table
-u2  table  1  utc_timestamp
+table  NULL foo_table
+table  1  utc_timestamp
+
+query IT
+SELECT objsubid, description FROM pg_description;
+----
+0  foo_table
+1  utc_timestamp
 
 statement ok
 COMMENT ON TABLE b IS NULL
@@ -74,8 +98,12 @@ COMMENT ON TABLE b IS NULL
 statement ok
 COMMENT ON COLUMN b.ts IS NULL
 
-query TTTT
-SELECT * FROM mz_internal.mz_comments;
+query TTT
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+----
+
+query IT
+SELECT objsubid, description FROM pg_description;
 ----
 
 statement error unknown catalog item 'c'
@@ -96,11 +124,17 @@ CREATE VIEW c (col_1, col_2) AS VALUES ('a', 'b');
 statement ok
 COMMENT ON VIEW c IS 'this_is_a_view';
 
-query TTTT
-SELECT * FROM mz_internal.mz_comments;
+query TTT
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
-u3  index NULL  speed_up
-u4  view  NULL  this_is_a_view
+index NULL  speed_up
+view  NULL  this_is_a_view
+
+query IT
+SELECT objsubid, description FROM pg_description;
+----
+0  speed_up
+0  this_is_a_view
 
 statement ok
 DROP TABLE b CASCADE;
@@ -108,11 +142,17 @@ DROP TABLE b CASCADE;
 statement ok
 COMMENT ON COLUMN c.col_1 IS 'this_works';
 
-query TTTT
-SELECT * FROM mz_internal.mz_comments;
+query TTT
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
-u4  view  NULL  this_is_a_view
-u4  view  1  this_works
+view  1  this_works
+view  NULL  this_is_a_view
+
+query IT
+SELECT objsubid, description FROM pg_description;
+----
+1  this_works
+0  this_is_a_view
 
 statement ok
 CREATE MATERIALIZED VIEW mv ( x ) AS SELECT 1
@@ -123,13 +163,21 @@ COMMENT ON COLUMN mv.x IS 'comment_mat_view_col';
 statement ok
 COMMENT ON MATERIALIZED VIEW mv IS 'mat_foo';
 
-query TTTT
-SELECT * FROM mz_internal.mz_comments;
+query TTT
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
-u4  view  NULL  this_is_a_view
-u4  view  1  this_works
-u5  materialized-view  NULL  mat_foo
-u5  materialized-view  1  comment_mat_view_col
+view  1  this_works
+view  NULL  this_is_a_view
+materialized-view  NULL  mat_foo
+materialized-view  1  comment_mat_view_col
+
+query IT
+SELECT objsubid, description FROM pg_description;
+----
+0  mat_foo
+1  this_works
+0  this_is_a_view
+1  comment_mat_view_col
 
 statement ok
 DROP VIEW c;
@@ -137,8 +185,12 @@ DROP VIEW c;
 statement ok
 DROP MATERIALIZED VIEW mv;
 
-query TTTT
-SELECT * FROM mz_internal.mz_comments;
+query TTT
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+----
+
+query IT
+SELECT objsubid, description FROM pg_description;
 ----
 
 statement ok
@@ -150,11 +202,15 @@ COMMENT ON CLUSTER comment_cluster IS 'careful_now';
 statement ok
 COMMENT ON CLUSTER REPLICA comment_cluster.r2 IS 'second_replicator';
 
-query TTTT
-SELECT * FROM mz_internal.mz_comments;
+query TTT
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
-u2 cluster NULL careful_now
-u3 cluster-replica NULL second_replicator
+cluster NULL careful_now
+cluster-replica NULL second_replicator
+
+query IT
+SELECT objsubid, description FROM pg_description;
+----
 
 statement ok
 DROP CLUSTER REPLICA comment_cluster.r2;
@@ -168,12 +224,18 @@ COMMENT ON SOURCE my_webhook IS 'all_the_data';
 statement ok
 COMMENT ON COLUMN my_webhook.body IS 'json_blob';
 
-query TTTT
-SELECT * FROM mz_internal.mz_comments;
+query TTT
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
-u2 cluster NULL careful_now
-u6 source NULL all_the_data
-u6 source 1 json_blob
+source  1  json_blob
+source  NULL  all_the_data
+cluster  NULL  careful_now
+
+query IT
+SELECT objsubid, description FROM pg_description;
+----
+1  json_blob
+0  all_the_data
 
 statement ok
 CREATE TYPE int4_list AS LIST (ELEMENT TYPE = int4);
@@ -181,13 +243,20 @@ CREATE TYPE int4_list AS LIST (ELEMENT TYPE = int4);
 statement ok
 COMMENT ON TYPE int4_list IS 'supercool_list';
 
-query TTTT
-SELECT * FROM mz_internal.mz_comments;
+query TTT
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
-u2 cluster NULL careful_now
-u6 source NULL all_the_data
-u7 type NULL supercool_list
-u6 source 1 json_blob
+source  1  json_blob
+type  NULL  supercool_list
+source  NULL  all_the_data
+cluster  NULL  careful_now
+
+query IT
+SELECT objsubid, description FROM pg_description;
+----
+1 json_blob
+0 all_the_data
+0 supercool_list
 
 statement ok
 DROP CLUSTER comment_cluster CASCADE;
@@ -198,11 +267,16 @@ CREATE SECRET my_secret AS 'foobar';
 statement ok
 COMMENT ON SECRET my_secret IS 'supersecret';
 
-query TTTT
-SELECT * FROM mz_internal.mz_comments;
+query TTT
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
-u8 secret NULL supersecret
-u7 type NULL supercool_list
+secret NULL supersecret
+type NULL supercool_list
+
+query IT
+SELECT objsubid, description FROM pg_description;
+----
+0  supercool_list
 
 statement ok
 CREATE DATABASE comment_on_db;
@@ -222,11 +296,16 @@ DROP SECRET my_secret;
 statement ok
 DROP TYPE int4_list;
 
-query TTTT
-SELECT * FROM mz_internal.mz_comments;
+query TTT
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
-u2 database NULL this_is_my_db
-u7 schema NULL this_is_my_schema
+database NULL this_is_my_db
+schema NULL this_is_my_schema
+
+query IT
+SELECT objsubid, description FROM pg_description;
+----
+0  this_is_my_schema
 
 statement ok
 DROP DATABASE comment_on_db;
@@ -242,10 +321,14 @@ CREATE ROLE student;
 statement ok
 COMMENT ON ROLE student IS 'limited_role';
 
-query TTTT
-SELECT * FROM mz_internal.mz_comments;
+query TTT
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
-u2 role NULL limited_role
+role NULL limited_role
+
+query IT
+SELECT objsubid, description FROM pg_description;
+----
 
 statement ok
 CREATE TABLE foo ( x int8 );
@@ -268,11 +351,15 @@ COMMENT ON ROLE teacher IS 'foo';
 ----
 COMPLETE 0
 
-query TTTT
-SELECT * FROM mz_internal.mz_comments;
+query TTT
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
-u3 role NULL foo
-u2 role NULL limited_role
+role NULL foo
+role NULL limited_role
+
+query IT
+SELECT objsubid, description FROM pg_description;
+----
 
 simple conn=mz_system,user=mz_system
 REVOKE CREATEROLE ON SYSTEM FROM student;
@@ -291,8 +378,12 @@ DROP ROLE student;
 statement ok
 DROP ROLE teacher;
 
-query TTTT
-SELECT * FROM mz_internal.mz_comments;
+query TTT
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+----
+
+query IT
+SELECT objsubid, description FROM pg_description;
 ----
 
 statement error must be owner of DATABASE materialize
@@ -306,7 +397,11 @@ COMMENT ON DATABASE materialize IS 'main_db';
 ----
 COMPLETE 0
 
-query TTTT
-SELECT * FROM mz_internal.mz_comments;
+query TTT
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
-u1 database NULL main_db
+database  NULL  main_db
+
+query IT
+SELECT objsubid, description FROM pg_description;
+----

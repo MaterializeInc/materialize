@@ -90,14 +90,6 @@ impl Coordinator {
 
         let session_catalog = self.catalog.for_session(ctx.session());
 
-        if let Err(e) = introspection::user_privilege_hack(
-            &session_catalog,
-            ctx.session(),
-            &plan,
-            &resolved_ids,
-        ) {
-            return ctx.retire(Err(e));
-        }
         if let Err(e) = introspection::check_cluster_restrictions(&session_catalog, &plan) {
             return ctx.retire(Err(e));
         }

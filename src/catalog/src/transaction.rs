@@ -41,8 +41,8 @@ use mz_sql::names::{
 };
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql_parser::ast::QualifiedReplica;
-use mz_stash::objects::proto;
 use mz_stash::TableTransaction;
+use mz_stash_types::objects::proto;
 use mz_storage_types::sources::Timeline;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
@@ -112,7 +112,7 @@ pub(crate) fn add_new_builtin_cluster_replicas_migration(
                 *cluster_id,
                 replica_id,
                 builtin_replica.name,
-                &config,
+                config,
                 MZ_SYSTEM_ROLE_ID,
             )?;
         }
@@ -281,19 +281,28 @@ impl<'a> Transaction<'a> {
         privileges: Vec<MzAclItem>,
     ) -> Result<DatabaseId, Error> {
         let id = self.get_and_increment_id(DATABASE_ID_ALLOC_KEY.to_string())?;
+        // TODO(parkertimmerman): Support creating databases in the System namespace.
+        let id = DatabaseId::User(id);
+        self.insert_database(id, database_name, owner_id, privileges)?;
+        Ok(id)
+    }
+
+    pub(crate) fn insert_database(
+        &mut self,
+        id: DatabaseId,
+        database_name: &str,
+        owner_id: RoleId,
+        privileges: Vec<MzAclItem>,
+    ) -> Result<(), Error> {
         match self.databases.insert(
-            DatabaseKey {
-                // TODO(parkertimmerman): Support creating databases in the System namespace.
-                id: DatabaseId::User(id),
-            },
+            DatabaseKey { id },
             DatabaseValue {
                 name: database_name.to_string(),
                 owner_id,
                 privileges,
             },
         ) {
-            // TODO(parkertimmerman): Support creating databases in the System namespace.
-            Ok(_) => Ok(DatabaseId::User(id)),
+            Ok(_) => Ok(()),
             Err(_) => Err(SqlCatalogError::DatabaseAlreadyExists(database_name.to_owned()).into()),
         }
     }
@@ -306,21 +315,37 @@ impl<'a> Transaction<'a> {
         privileges: Vec<MzAclItem>,
     ) -> Result<SchemaId, Error> {
         let id = self.get_and_increment_id(SCHEMA_ID_ALLOC_KEY.to_string())?;
+        // TODO(parkertimmerman): Support creating schemas in the System namespace.
+        let id = SchemaId::User(id);
+        self.insert_schema(
+            id,
+            Some(database_id),
+            schema_name.to_string(),
+            owner_id,
+            privileges,
+        )?;
+        Ok(id)
+    }
+
+    pub(crate) fn insert_schema(
+        &mut self,
+        schema_id: SchemaId,
+        database_id: Option<DatabaseId>,
+        schema_name: String,
+        owner_id: RoleId,
+        privileges: Vec<MzAclItem>,
+    ) -> Result<(), Error> {
         match self.schemas.insert(
-            SchemaKey {
-                // TODO(parkertimmerman): Support creating schemas in the System namespace.
-                id: SchemaId::User(id),
-            },
+            SchemaKey { id: schema_id },
             SchemaValue {
-                database_id: Some(database_id),
-                name: schema_name.to_string(),
+                database_id,
+                name: schema_name.clone(),
                 owner_id,
                 privileges,
             },
         ) {
-            // TODO(parkertimmerman): Support creating schemas in the System namespace.
-            Ok(_) => Ok(SchemaId::User(id)),
-            Err(_) => Err(SqlCatalogError::SchemaAlreadyExists(schema_name.to_owned()).into()),
+            Ok(_) => Ok(()),
+            Err(_) => Err(SqlCatalogError::SchemaAlreadyExists(schema_name).into()),
         }
     }
 
@@ -333,6 +358,18 @@ impl<'a> Transaction<'a> {
     ) -> Result<RoleId, Error> {
         let id = self.get_and_increment_id(USER_ROLE_ID_ALLOC_KEY.to_string())?;
         let id = RoleId::User(id);
+        self.insert_role(id, name, attributes, membership, vars)?;
+        Ok(id)
+    }
+
+    pub(crate) fn insert_role(
+        &mut self,
+        id: RoleId,
+        name: String,
+        attributes: RoleAttributes,
+        membership: RoleMembership,
+        vars: RoleVars,
+    ) -> Result<(), Error> {
         match self.roles.insert(
             RoleKey { id },
             RoleValue {
@@ -342,7 +379,7 @@ impl<'a> Transaction<'a> {
                 vars,
             },
         ) {
-            Ok(_) => Ok(id),
+            Ok(_) => Ok(()),
             Err(_) => Err(SqlCatalogError::RoleAlreadyExists(name).into()),
         }
     }
@@ -505,7 +542,7 @@ impl<'a> Transaction<'a> {
         cluster_id: ClusterId,
         replica_id: ReplicaId,
         replica_name: &str,
-        config: &ReplicaConfig,
+        config: ReplicaConfig,
         owner_id: RoleId,
     ) -> Result<(), Error> {
         if let Err(_) = self.cluster_replicas.insert(
@@ -513,7 +550,7 @@ impl<'a> Transaction<'a> {
             ClusterReplicaValue {
                 cluster_id,
                 name: replica_name.into(),
-                config: config.clone(),
+                config,
                 owner_id,
             },
         ) {
@@ -583,6 +620,22 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    pub fn insert_timestamp(
+        &mut self,
+        timeline: Timeline,
+        ts: mz_repr::Timestamp,
+    ) -> Result<(), Error> {
+        match self.timestamps.insert(
+            TimestampKey {
+                id: timeline.to_string(),
+            },
+            TimestampValue { ts },
+        ) {
+            Ok(_) => Ok(()),
+            Err(_) => Err(SqlCatalogError::TimelineAlreadyExists(timeline.to_string()).into()),
+        }
+    }
+
     pub fn get_and_increment_id(&mut self, key: String) -> Result<u64, Error> {
         let id = self
             .id_allocator
@@ -596,6 +649,16 @@ impl<'a> Transaction<'a> {
             .set(IdAllocKey { name: key }, Some(IdAllocValue { next_id }))?;
         assert!(prev.is_some());
         Ok(id)
+    }
+
+    pub(crate) fn insert_id_allocator(&mut self, name: String, next_id: u64) -> Result<(), Error> {
+        match self
+            .id_allocator
+            .insert(IdAllocKey { name: name.clone() }, IdAllocValue { next_id })
+        {
+            Ok(_) => Ok(()),
+            Err(_) => Err(SqlCatalogError::IdAllocatorAlreadyExists(name).into()),
+        }
     }
 
     pub fn remove_database(&mut self, id: &DatabaseId) -> Result<(), Error> {
@@ -1045,6 +1108,16 @@ impl<'a> Transaction<'a> {
             .set(TimestampKey { id: timeline_str }, None)
             .expect("cannot have uniqueness violation");
         assert!(prev.is_some());
+    }
+
+    pub(crate) fn insert_config(&mut self, key: String, value: u64) -> Result<(), Error> {
+        match self
+            .configs
+            .insert(ConfigKey { key: key.clone() }, ConfigValue { value })
+        {
+            Ok(_) => Ok(()),
+            Err(_) => Err(SqlCatalogError::ConfigAlreadyExists(key).into()),
+        }
     }
 
     /// Commits the storage transaction to the stash. Any error returned indicates the stash may be

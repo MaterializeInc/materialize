@@ -88,7 +88,8 @@ use std::time::Duration;
 
 use mz_proto::TryFromProtoError;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
-use mz_stash::{DebugStashFactory, StashError};
+use mz_stash::DebugStashFactory;
+use mz_stash_types::StashError;
 
 use crate::objects::Snapshot;
 pub use crate::objects::{
@@ -97,17 +98,16 @@ pub use crate::objects::{
     SystemConfiguration, SystemObjectMapping, TimelineTimestamp,
 };
 use crate::stash::{Connection, DebugOpenableConnection, OpenableConnection};
-pub use crate::stash::{StashConfig, ALL_COLLECTIONS};
+pub use crate::stash::{
+    StashConfig, ALL_COLLECTIONS, AUDIT_LOG_COLLECTION, CLUSTER_COLLECTION,
+    CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION, CLUSTER_REPLICA_COLLECTION, COMMENTS_COLLECTION,
+    CONFIG_COLLECTION, DATABASES_COLLECTION, DEFAULT_PRIVILEGES_COLLECTION,
+    ID_ALLOCATOR_COLLECTION, ITEM_COLLECTION, ROLES_COLLECTION, SCHEMAS_COLLECTION,
+    SETTING_COLLECTION, STORAGE_USAGE_COLLECTION, SYSTEM_CONFIGURATION_COLLECTION,
+    SYSTEM_GID_MAPPING_COLLECTION, SYSTEM_PRIVILEGES_COLLECTION, TIMESTAMP_COLLECTION,
+};
 pub use crate::transaction::Transaction;
 use crate::transaction::TransactionBatch;
-pub use initialize::{
-    AUDIT_LOG_COLLECTION, CLUSTER_COLLECTION, CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION,
-    CLUSTER_REPLICA_COLLECTION, COMMENTS_COLLECTION, CONFIG_COLLECTION, DATABASES_COLLECTION,
-    DEFAULT_PRIVILEGES_COLLECTION, ID_ALLOCATOR_COLLECTION, ITEM_COLLECTION, ROLES_COLLECTION,
-    SCHEMAS_COLLECTION, SETTING_COLLECTION, STORAGE_USAGE_COLLECTION,
-    SYSTEM_CONFIGURATION_COLLECTION, SYSTEM_GID_MAPPING_COLLECTION, SYSTEM_PRIVILEGES_COLLECTION,
-    TIMESTAMP_COLLECTION,
-};
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::CollectionExt;
@@ -166,7 +166,7 @@ impl From<StashError> for Error {
 
 impl From<TryFromProtoError> for Error {
     fn from(e: TryFromProtoError) -> Error {
-        Error::Stash(mz_stash::StashError::from(e))
+        Error::Stash(mz_stash_types::StashError::from(e))
     }
 }
 

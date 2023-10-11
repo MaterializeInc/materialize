@@ -125,7 +125,7 @@ use mz_secrets::SecretsController;
 use mz_service::emit_boot_diagnostics;
 use mz_service::secrets::{SecretsControllerKind, SecretsReaderCliArgs};
 use mz_sql::catalog::EnvironmentId;
-use mz_stash::StashFactory;
+use mz_stash_types::metrics::Metrics as StashMetrics;
 use mz_storage_types::connections::ConnectionContext;
 use once_cell::sync::Lazy;
 use opentelemetry::trace::TraceContextExt;
@@ -857,7 +857,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         clusterd_image: args.clusterd_image.expect("clap enforced"),
         init_container_image: args.orchestrator_kubernetes_init_container_image,
         now: SYSTEM_TIME.clone(),
-        postgres_factory: StashFactory::new(&metrics_registry),
+        stash_metrics: Arc::new(StashMetrics::register_into(&metrics_registry)),
         metrics_registry: metrics_registry.clone(),
         persist_pubsub_url: args.persist_pubsub_url,
         // When serialized to args in the controller, only the relevant flags will be passed

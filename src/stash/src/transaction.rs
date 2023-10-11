@@ -18,16 +18,14 @@ use futures::{
 };
 use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::{cast::CastFrom, collections::CollectionExt};
+use mz_stash_types::{InternalStashError, StashError};
 use timely::progress::Antichain;
 use timely::PartialOrder;
 use tokio::sync::mpsc;
 use tokio_postgres::{types::ToSql, Client};
 
 use crate::postgres::{ConsolidateRequest, CountedStatements};
-use crate::{
-    AntichainFormatter, AppendBatch, Data, Diff, Id, InternalStashError, Stash, StashCollection,
-    StashError, Timestamp,
-};
+use crate::{AntichainFormatter, AppendBatch, Data, Diff, Id, Stash, StashCollection, Timestamp};
 
 /// The limit AFTER which to split an update batch (that is, we will ship an update that
 /// exceeds this number, but then start another batch).

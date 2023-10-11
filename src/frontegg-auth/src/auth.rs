@@ -17,7 +17,7 @@ use futures::future::BoxFuture;
 use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use mz_ore::cast::{CastLossy, ReinterpretCast};
 use mz_ore::collections::HashMap;
-use mz_ore::metrics::{MetricsFutureExt, MetricsRegistry};
+use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_repr::user::ExternalUserMetadata;
 use serde::{Deserialize, Serialize};
@@ -191,18 +191,12 @@ impl Authentication {
                     let url = self.admin_api_token_url.clone();
                     let validate_config = self.validation_config.clone();
                     let metrics = self.metrics.clone();
-                    let request_hist = self
-                        .metrics
-                        .request_duration_seconds
-                        .with_label_values(&["exchange_secret_for_token"]);
 
                     let name = format!("frontegg-auth-request-{}", req.client_id);
                     mz_ore::task::spawn(move || name, async move {
                         // Make the actual request.
                         let result = client
-                            .exchange_client_secret_for_token(req_, &url)
-                            .wall_time()
-                            .observe(request_hist)
+                            .exchange_client_secret_for_token(req_, &url, &metrics)
                             .await;
 
                         // Validate the returned JWT.
@@ -225,6 +219,7 @@ impl Authentication {
                         // If the request failed then notify and bail.
                         let (api_resp, claims) = match validated_result {
                             Err(err) => {
+                                tracing::warn!(?err, "failed to exchange secret for token");
                                 for tx in waiters {
                                     let _ = tx.send(Err(err.clone()));
                                 }
@@ -479,13 +474,8 @@ fn continuously_refresh(
                 },
             }
 
-            let request_hist = metrics
-                .request_duration_seconds
-                .with_label_values(&["refresh"]);
             let current_response = client
-                .refresh_token(&refresh_url, &latest_response.refresh_token)
-                .wall_time()
-                .observe(request_hist)
+                .refresh_token(&refresh_url, &latest_response.refresh_token, &metrics)
                 .await;
 
             // If we failed to refresh, then close the channel.
@@ -495,18 +485,7 @@ fn continuously_refresh(
                     resp
                 }
                 Err(err) => {
-                    // Maintain metrics of our success rates.
-                    let status = match &err {
-                        Error::ReqwestError(e) => e
-                            .status()
-                            .map(|s| s.to_string())
-                            .unwrap_or("other".to_string()),
-                        _ => "other".to_string(),
-                    };
-                    metrics
-                        .request_count
-                        .with_label_values(&["refresh", &status])
-                        .inc();
+                    tracing::warn!(?id, ?err, "failed to refresh");
 
                     // Dropping the channel will close it.
                     drop(refresh_tx);

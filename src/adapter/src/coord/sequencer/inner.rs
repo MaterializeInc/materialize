@@ -3232,30 +3232,33 @@ impl Coordinator {
         Ok(Self::send_immediate_rows(rows))
     }
 
-    /// WARNING, ENTERING SPOOKY ZONE 3.0
-    ///
-    /// This method is ALWAYS called within the context of a specialized `tracing` `Subscriber` (set as
-    /// the thread-local default `Dispatch` using `.with_subscriber` at call-sites.
-    ///
-    /// In general, this should be considered safe, but `tracing` has limitations that mean that
-    /// any `Span` created under the specialized `Subscriber` that _leaves_ this function will
-    /// almost assuredly cause a panic inside `tracing`. This is because `Span`s track the
-    /// `Subscriber` they were created under, but certain actions (like an ordinary `Span` exit)
-    /// will call a method on the _thread-local_ `Subscriber`, which may be backed with a different
-    /// `Registry`.
-    ///
-    /// At first glance, there is no obvious way this method leaks `Span`s, but ANY tokio
-    /// resource (like `oneshot` channels) create `Span`s if tokio is built with `tokio_unstable`
-    /// and the `tracing` feature. This method has been audited to make sure ALL such
-    /// cases are dispatched inside the global `root_dispatch`, and **any change to this method
-    /// needs to ensure this invariant is upheld.**
-    ///
-    /// It is a bit wonky to have this method under a specialized `Dispatch`, but ensuring
-    /// all `.await` points inside it use the passed `root_dispatch`, but splitting the method
-    /// into pieces to allow us to control the `Dispatch` for various pieces at a higher-level
-    /// would be very hard to read. Additionally, once the issues with `broken` are resolved
-    /// (as discussed in <https://github.com/MaterializeInc/materialize/pull/21809>), this
-    /// can be simplified, as only a _singular_ `Registry` will be in use.
+    /// Run the query optimization explanation pipeline. This function must be called with
+    /// an `OptimizerTrace` `tracing` subscriber, using `.with_subscriber(...)`.
+    /// The `root_dispatch` should be the global `tracing::Dispatch`.
+    //
+    // WARNING, ENTERING SPOOKY ZONE 3.0
+    //
+    // You must be careful when altering this function. Any async call (so, anything that uses
+    // `.await` should be wrapped with `.with_subscriber(root_dispatch)`.
+    //
+    // `tracing` has limitations that mean that any `Span` created under the `OptimizerTrace`
+    // subscriber that _leaves_ this function will almost assuredly cause a panic inside `tracing`.
+    // This is because `Span`s track the `Subscriber` they were created under, but certain actions
+    // (like an ordinary `Span` exit) will call a method on the _thread-local_ `Subscriber`, which
+    // may be backed with a different `Registry`.
+    //
+    // At first glance, there is no obvious way this method leaks `Span`s, but ANY tokio
+    // resource (like `oneshot` channels) create `Span`s if tokio is built with `tokio_unstable`
+    // and the `tracing` feature. This method has been audited to make sure ALL such
+    // cases are dispatched inside the global `root_dispatch`, and **any change to this method
+    // needs to ensure this invariant is upheld.**
+    //
+    // It is a bit wonky to have this method under a specialized `Dispatch`, but ensuring
+    // all `.await` points inside it use the passed `root_dispatch`, but splitting the method
+    // into pieces to allow us to control the `Dispatch` for various pieces at a higher-level
+    // would be very hard to read. Additionally, once the issues with `broken` are resolved
+    // (as discussed in <https://github.com/MaterializeInc/materialize/pull/21809>), this
+    // can be simplified, as only a _singular_ `Registry` will be in use.
     #[tracing::instrument(target = "optimizer", level = "trace", name = "optimize", skip_all)]
     async fn explain_query_optimizer_pipeline(
         &mut self,
@@ -3430,13 +3433,17 @@ impl Coordinator {
         Ok((used_indexes, fast_path_plan, df_metainfo, BTreeMap::new()))
     }
 
-    /// WARNING, ENTERING SPOOKY ZONE 3.0
-    ///
-    /// Please read the docs on `explain_query_optimizer_pipeline`.
-    ///
-    /// Currently this method does not need to use the global `Dispatch` like
-    /// `explain_query_optimizer_pipeline`, but it is passed in case changes to this function
-    /// require it.
+    /// Run the MV optimization explanation pipeline. This function must be called with
+    /// an `OptimizerTrace` `tracing` subscriber, using `.with_subscriber(...)`.
+    /// The `root_dispatch` should be the global `tracing::Dispatch`.
+    //
+    // WARNING, ENTERING SPOOKY ZONE 3.0
+    //
+    // Please read the docs on `explain_query_optimizer_pipeline` before changing this function.
+    //
+    // Currently this method does not need to use the global `Dispatch` like
+    // `explain_query_optimizer_pipeline`, but it is passed in case changes to this function
+    // require it.
     #[tracing::instrument(target = "optimizer", level = "trace", name = "optimize", skip_all)]
     async fn explain_create_materialized_view_optimizer_pipeline(
         &mut self,
@@ -3569,13 +3576,17 @@ impl Coordinator {
         Ok((used_indexes, None, df_metainfo, transient_items))
     }
 
-    /// WARNING, ENTERING SPOOKY ZONE 3.0
-    ///
-    /// Please read the docs on `explain_query_optimizer_pipeline`.
-    ///
-    /// Currently this method does not need to use the global `Dispatch` like
-    /// `explain_query_optimizer_pipeline`, but it is passed in case changes to this function
-    /// require it.
+    /// Run the index optimization explanation pipeline. This function must be called with
+    /// an `OptimizerTrace` `tracing` subscriber, using `.with_subscriber(...)`.
+    /// The `root_dispatch` should be the global `tracing::Dispatch`.
+    //
+    // WARNING, ENTERING SPOOKY ZONE 3.0
+    //
+    // Please read the docs on `explain_query_optimizer_pipeline` before changing this function.
+    //
+    // Currently this method does not need to use the global `Dispatch` like
+    // `explain_query_optimizer_pipeline`, but it is passed in case changes to this function
+    // require it.
     #[tracing::instrument(target = "optimizer", level = "trace", name = "optimize", skip_all)]
     async fn explain_create_index_optimizer_pipeline(
         &mut self,

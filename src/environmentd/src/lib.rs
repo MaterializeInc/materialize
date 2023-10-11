@@ -347,7 +347,9 @@ impl Listeners {
         });
 
         let mut openable_adapter_storage = mz_catalog::stash_backed_catalog_state(StashConfig {
-            stash_factory: config.controller.postgres_factory.clone(),
+            stash_factory: mz_stash::StashFactory::from_metrics(Arc::clone(
+                &config.controller.stash_metrics,
+            )),
             stash_url: config.adapter_stash_url.clone(),
             schema: stash_schema.clone(),
             tls: tls.clone(),

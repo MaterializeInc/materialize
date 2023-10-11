@@ -20,6 +20,7 @@ name = "mz-transform"
 dependencies = [
     "mz-compute-client",
     "mz-storage-client",
+    "mz-stash",
 ]
 
 [[deny]]
@@ -27,6 +28,7 @@ name = "mz-sql"
 dependencies = [
     "mz-compute-client",
     "mz-storage-client",
+    "mz-stash",
 ]
 
 [[deny]]
@@ -34,6 +36,7 @@ name = "mz-compute"
 dependencies = [
     "mz-storage-controller",
     "mz-storage",
+    "mz-stash",
 ]
 
 [[deny]]
@@ -41,6 +44,7 @@ name = "mz-storage"
 dependencies = [
     "mz-storage-controller",
     "mz-compute",
+    "mz-stash",
 ]
 
 # Keep various crates in only one of environmentd or clusterd.
@@ -57,6 +61,7 @@ dependencies = [
 name = "mz-clusterd"
 dependencies = [
     "mz-storage-controller",
+    "mz-stash",
 ]
 
 # Persist is meant to be a strong enough abstraction that it doesn't depend on

@@ -55,7 +55,7 @@ steps:
           args: [--scenario=DataflowsLarge, --actions=35000]
 
   - id: zippy-pg-cdc-large
-    label: "Longer Zippy PogresCdc"
+    label: "Large Zippy PogresCdc"
     timeout_in_minutes: 2880
     agents:
       queue: linux-x86_64-large
@@ -65,7 +65,7 @@ steps:
           composition: zippy
           args: [--scenario=PostgresCdcLarge, --actions=200000]
 
-  - id: zippy-cluster-replicas-large
+  - id: zippy-cluster-replicas-long
     label: "Longer Zippy ClusterReplicas"
     timeout_in_minutes: 2880
     agents:
@@ -78,7 +78,7 @@ steps:
           args: [--scenario=ClusterReplicas, --actions=10000, --max-execution-time=4h]
 
   - id: zippy-user-tables-large
-    label: "Long Zippy w/ user tables"
+    label: "Large Zippy w/ user tables"
     timeout_in_minutes: 2880
     agents:
       queue: linux-x86_64-large
@@ -88,6 +88,27 @@ steps:
           composition: zippy
           args: [--scenario=UserTablesLarge, --actions=200000]
 
+  - id: zippy-debezium-postgres-long
+    label: "Longer Zippy Debezium Postgres"
+    timeout_in_minutes: 2880
+    agents:
+      queue: linux-x86_64
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: zippy
+          args: [--scenario=DebeziumPostgres, --actions=1000000]
+
+  - id: zippy-kafka-parallel-insert
+    label: "Longer Zippy Kafka Parallel Insert"
+    timeout_in_minutes: 2880
+    agents:
+      queue: linux-x86_64-large
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: zippy
+          args: [--scenario=KafkaParallelInsert, --transaction-isolation=serializable, --actions=100000, --max-execution-time=8h]
 
   - id: feature-benchmark-scale-plus-one
     label: "Feature benchmark against 'latest' with --scale=+1"
@@ -98,6 +119,29 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: feature-benchmark
           args: [--other-tag=latest, --scale=+1]
+
+  - id: sqlsmith-long
+    label: "SQLsmith"
+    artifact_paths: junit_*.xml
+    timeout_in_minutes: 120
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sqlsmith
+          args: [--max-joins=1, --runtime=6000]
+
+  - id: sqlsmith-explain-long
+    label: "SQLsmith explain"
+    artifact_paths: junit_*.xml
+    timeout_in_minutes: 120
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sqlsmith
+          args: [--max-joins=15, --explain-only, --runtime=6000]
+
 
   - wait: ~
     continue_on_failure: true

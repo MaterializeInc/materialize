@@ -28,7 +28,7 @@ DateStyle                           "ISO, MDY"              "Sets the display fo
 emit_introspection_query_notice     on                      "Whether to print a notice when querying per-replica introspection sources."
 emit_timestamp_notice               off                     "Boolean flag indicating whether to send a NOTICE with timestamp explanations of queries (Materialize)."
 emit_trace_id_notice                off                     "Boolean flag indicating whether to send a NOTICE specifying the trace id when available (Materialize)."
-enable_comment                      off                     "Whether the COMMENT ON feature for objects is allowed (Materialize)."
+enable_comment                      on                      "Whether the COMMENT ON feature for objects is allowed (Materialize)."
 enable_rbac_checks                  on                      "User facing global boolean flag indicating whether to apply RBAC checks before executing statements (Materialize)."
 enable_session_rbac_checks          off                     "User facing session boolean flag indicating whether to apply RBAC checks before executing statements (Materialize)."
 extra_float_digits                  3                       "Adjusts the number of digits displayed for floating-point values (PostgreSQL)."
@@ -70,6 +70,7 @@ statement_timeout                   "10 s"                  "Sets the maximum al
 TimeZone                            UTC                     "Sets the time zone for displaying and interpreting time stamps (PostgreSQL)."
 transaction_isolation               "strict serializable"   "Sets the current transaction's isolation level (PostgreSQL)."
 enable_consolidate_after_union_negate on                    "consolidation after Unions that have a Negated input (Materialize)."
+enable_sink_doc_on_option           on                     "Whether DOC ON option for sinks is allowed (Materialize)."
 
 > SET application_name = 'foo'
 

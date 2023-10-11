@@ -572,6 +572,28 @@ CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT AVRO
 CreateSink(CreateSinkStatement { name: UnresolvedItemName([Ident("foo")]), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: None }, format: Some(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("conn2")])), options: [CsrConfigOption { name: NullDefaults, value: Some(Value(Boolean(false))) }] }, key_strategy: None, value_strategy: None, seed: None } })), envelope: Some(Upsert), with_options: [] })
 
 parse-statement
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (DOC ON bar) ENVELOPE UPSERT
+----
+error: Expected one of TYPE or COLUMN, found identifier "bar"
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (DOC ON bar) ENVELOPE UPSERT
+                                                                                                                                        ^
+
+
+parse-statement
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (DOC ON COLUMN c = 'comment') ENVELOPE UPSERT
+----
+error: need to specify an object and a column
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (DOC ON COLUMN c = 'comment') ENVELOPE UPSERT
+                                                                                                                                               ^
+
+parse-statement
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (DOC ON TYPE bar = 'bar comment', KEY DOC ON COLUMN bar.a = 'a comment', VALUE DOC ON COLUMN bar.b = 'b comment') ENVELOPE UPSERT
+----
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (DOC ON TYPE bar = 'bar comment', KEY DOC ON COLUMN bar.a = 'a comment', VALUE DOC ON COLUMN bar.b = 'b comment') ENVELOPE UPSERT
+=>
+CreateSink(CreateSinkStatement { name: UnresolvedItemName([Ident("foo")]), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: None }, format: Some(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("conn2")])), options: [CsrConfigOption { name: AvroDocOn(AvroDocOn { identifier: Type(Name(UnresolvedItemName([Ident("bar")]))), for_schema: All }), value: Some(Value(String("bar comment"))) }, CsrConfigOption { name: AvroDocOn(AvroDocOn { identifier: Column(RawColumnName { relation: Name(UnresolvedItemName([Ident("bar")])), column: Ident("a") }), for_schema: KeyOnly }), value: Some(Value(String("a comment"))) }, CsrConfigOption { name: AvroDocOn(AvroDocOn { identifier: Column(RawColumnName { relation: Name(UnresolvedItemName([Ident("bar")])), column: Ident("b") }), for_schema: ValueOnly }), value: Some(Value(String("b comment"))) }] }, key_strategy: None, value_strategy: None, seed: None } })), envelope: Some(Upsert), with_options: [] })
+
+parse-statement
 CREATE INDEX foo ON myschema.bar (a, b)
 ----
 CREATE INDEX foo ON myschema.bar (a, b)

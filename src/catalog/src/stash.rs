@@ -25,6 +25,7 @@ use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::now::NowFn;
 use mz_ore::result::ResultExt;
 use mz_ore::retry::Retry;
+use mz_ore::soft_assert_eq;
 use mz_proto::{ProtoType, RustType};
 use mz_repr::adt::mz_acl_item::MzAclItem;
 use mz_repr::role_id::RoleId;
@@ -32,8 +33,9 @@ use mz_repr::{GlobalId, Timestamp};
 use mz_sql::catalog::{
     CatalogError as SqlCatalogError, DefaultPrivilegeAclItem, DefaultPrivilegeObject,
 };
-use mz_stash::objects::proto;
-use mz_stash::{AppendBatch, DebugStashFactory, Stash, StashError, StashFactory, TypedCollection};
+use mz_stash::{AppendBatch, DebugStashFactory, Stash, StashFactory, TypedCollection};
+use mz_stash_types::objects::proto;
+use mz_stash_types::StashError;
 use mz_storage_types::sources::Timeline;
 
 use crate::initialize::DEPLOY_GENERATION;
@@ -53,13 +55,60 @@ use crate::transaction::{
 };
 use crate::{
     initialize, BootstrapArgs, DurableCatalogState, Error, OpenableDurableCatalogState,
-    ReadOnlyDurableCatalogState, AUDIT_LOG_COLLECTION, CLUSTER_COLLECTION,
-    CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION, CLUSTER_REPLICA_COLLECTION, COMMENTS_COLLECTION,
-    CONFIG_COLLECTION, DATABASES_COLLECTION, DEFAULT_PRIVILEGES_COLLECTION,
-    ID_ALLOCATOR_COLLECTION, ITEM_COLLECTION, ROLES_COLLECTION, SCHEMAS_COLLECTION,
-    SETTING_COLLECTION, STORAGE_USAGE_COLLECTION, SYSTEM_CONFIGURATION_COLLECTION,
-    SYSTEM_GID_MAPPING_COLLECTION, SYSTEM_PRIVILEGES_COLLECTION, TIMESTAMP_COLLECTION,
+    ReadOnlyDurableCatalogState,
 };
+
+pub const SETTING_COLLECTION: TypedCollection<proto::SettingKey, proto::SettingValue> =
+    TypedCollection::new("setting");
+pub const SYSTEM_GID_MAPPING_COLLECTION: TypedCollection<
+    proto::GidMappingKey,
+    proto::GidMappingValue,
+> = TypedCollection::new("system_gid_mapping");
+pub const CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION: TypedCollection<
+    proto::ClusterIntrospectionSourceIndexKey,
+    proto::ClusterIntrospectionSourceIndexValue,
+> = TypedCollection::new("compute_introspection_source_index"); // historical name
+pub const ROLES_COLLECTION: TypedCollection<proto::RoleKey, proto::RoleValue> =
+    TypedCollection::new("role");
+pub const DATABASES_COLLECTION: TypedCollection<proto::DatabaseKey, proto::DatabaseValue> =
+    TypedCollection::new("database");
+pub const SCHEMAS_COLLECTION: TypedCollection<proto::SchemaKey, proto::SchemaValue> =
+    TypedCollection::new("schema");
+pub const ITEM_COLLECTION: TypedCollection<proto::ItemKey, proto::ItemValue> =
+    TypedCollection::new("item");
+pub const COMMENTS_COLLECTION: TypedCollection<proto::CommentKey, proto::CommentValue> =
+    TypedCollection::new("comments");
+pub const TIMESTAMP_COLLECTION: TypedCollection<proto::TimestampKey, proto::TimestampValue> =
+    TypedCollection::new("timestamp");
+pub const SYSTEM_CONFIGURATION_COLLECTION: TypedCollection<
+    proto::ServerConfigurationKey,
+    proto::ServerConfigurationValue,
+> = TypedCollection::new("system_configuration");
+pub const CLUSTER_COLLECTION: TypedCollection<proto::ClusterKey, proto::ClusterValue> =
+    TypedCollection::new("compute_instance");
+pub const CLUSTER_REPLICA_COLLECTION: TypedCollection<
+    proto::ClusterReplicaKey,
+    proto::ClusterReplicaValue,
+> = TypedCollection::new("compute_replicas");
+pub const AUDIT_LOG_COLLECTION: TypedCollection<proto::AuditLogKey, ()> =
+    TypedCollection::new("audit_log");
+pub const CONFIG_COLLECTION: TypedCollection<proto::ConfigKey, proto::ConfigValue> =
+    TypedCollection::new("config");
+pub const ID_ALLOCATOR_COLLECTION: TypedCollection<proto::IdAllocKey, proto::IdAllocValue> =
+    TypedCollection::new("id_alloc");
+pub const STORAGE_USAGE_COLLECTION: TypedCollection<proto::StorageUsageKey, ()> =
+    TypedCollection::new("storage_usage");
+pub const DEFAULT_PRIVILEGES_COLLECTION: TypedCollection<
+    proto::DefaultPrivilegesKey,
+    proto::DefaultPrivilegesValue,
+> = TypedCollection::new("default_privileges");
+pub const SYSTEM_PRIVILEGES_COLLECTION: TypedCollection<
+    proto::SystemPrivilegesKey,
+    proto::SystemPrivilegesValue,
+> = TypedCollection::new("system_privileges");
+// If you add a new collection, then don't forget to write a migration that initializes the
+// collection either with some initial values or as empty. See
+// [`mz_stash::upgrade::v17_to_v18`] as an example.
 
 /// Configuration needed to connect to the stash.
 #[derive(Derivative)]
@@ -267,18 +316,20 @@ async fn open_inner(
 
         // Initialize the Stash
         let args = bootstrap_args.clone();
-        match stash
-            .with_transaction(move |mut tx| {
-                Box::pin(async move {
-                    initialize::initialize(&mut tx, &args, boot_ts, deploy_generation).await
-                })
-            })
-            .await
-        {
-            Ok(()) => {}
-            Err(e) => return Err((stash, e.into())),
+        let mut conn = Connection { stash };
+        let mut tx = match Transaction::new(&mut conn, Snapshot::empty()) {
+            Ok(txn) => txn,
+            Err(e) => return Err((conn.stash, e)),
         };
-        Connection { stash }
+        match initialize::initialize(&mut tx, &args, boot_ts, deploy_generation).await {
+            Ok(()) => {}
+            Err(e) => return Err((conn.stash, e)),
+        }
+        match tx.commit().await {
+            Ok(()) => {}
+            Err(e) => return Err((conn.stash, e)),
+        }
+        conn
     } else {
         if !stash.is_readonly() {
             // Before we do anything with the Stash, we need to run any pending upgrades and
@@ -765,15 +816,23 @@ impl DurableCatalogState for Connection {
             batches: &mut Vec<AppendBatch>,
             typed: &'tx TypedCollection<K, V>,
             changes: &[(K, V, mz_stash::Diff)],
+            is_initialized: bool,
         ) -> Result<(), StashError>
         where
             K: mz_stash::Data + 'tx,
             V: mz_stash::Data + 'tx,
         {
-            if changes.is_empty() {
+            // During initialization we want to commit empty batches to all collections.
+            if changes.is_empty() && is_initialized {
                 return Ok(());
             }
             let collection = typed.from_tx(tx).await?;
+            soft_assert_eq!(
+                is_initialized,
+                collection.is_initialized(tx).await?,
+                "stash initialization status should match collection '{}' initialization status",
+                collection.id
+            );
             let mut batch = collection.make_batch_tx(tx).await?;
             for (k, v, diff) in changes {
                 collection.append_to_batch(&mut batch, k, v, *diff);
@@ -789,6 +848,7 @@ impl DurableCatalogState for Connection {
         // (which would happen at least one time when the txn starts), and
         // instead only clone the Arc.
         let txn_batch = Arc::new(txn_batch);
+        let is_initialized = self.stash.is_initialized().await?;
 
         self.stash
             .with_transaction(move |tx| {
@@ -800,18 +860,55 @@ impl DurableCatalogState for Connection {
                         &mut batches,
                         &DATABASES_COLLECTION,
                         &txn_batch.databases,
+                        is_initialized,
                     )
                     .await?;
-                    add_batch(&tx, &mut batches, &SCHEMAS_COLLECTION, &txn_batch.schemas).await?;
-                    add_batch(&tx, &mut batches, &ITEM_COLLECTION, &txn_batch.items).await?;
-                    add_batch(&tx, &mut batches, &COMMENTS_COLLECTION, &txn_batch.comments).await?;
-                    add_batch(&tx, &mut batches, &ROLES_COLLECTION, &txn_batch.roles).await?;
-                    add_batch(&tx, &mut batches, &CLUSTER_COLLECTION, &txn_batch.clusters).await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &SCHEMAS_COLLECTION,
+                        &txn_batch.schemas,
+                        is_initialized,
+                    )
+                    .await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &ITEM_COLLECTION,
+                        &txn_batch.items,
+                        is_initialized,
+                    )
+                    .await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &COMMENTS_COLLECTION,
+                        &txn_batch.comments,
+                        is_initialized,
+                    )
+                    .await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &ROLES_COLLECTION,
+                        &txn_batch.roles,
+                        is_initialized,
+                    )
+                    .await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &CLUSTER_COLLECTION,
+                        &txn_batch.clusters,
+                        is_initialized,
+                    )
+                    .await?;
                     add_batch(
                         &tx,
                         &mut batches,
                         &CLUSTER_REPLICA_COLLECTION,
                         &txn_batch.cluster_replicas,
+                        is_initialized,
                     )
                     .await?;
                     add_batch(
@@ -819,6 +916,7 @@ impl DurableCatalogState for Connection {
                         &mut batches,
                         &CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION,
                         &txn_batch.introspection_sources,
+                        is_initialized,
                     )
                     .await?;
                     add_batch(
@@ -826,15 +924,31 @@ impl DurableCatalogState for Connection {
                         &mut batches,
                         &ID_ALLOCATOR_COLLECTION,
                         &txn_batch.id_allocator,
+                        is_initialized,
                     )
                     .await?;
-                    add_batch(&tx, &mut batches, &CONFIG_COLLECTION, &txn_batch.configs).await?;
-                    add_batch(&tx, &mut batches, &SETTING_COLLECTION, &txn_batch.settings).await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &CONFIG_COLLECTION,
+                        &txn_batch.configs,
+                        is_initialized,
+                    )
+                    .await?;
+                    add_batch(
+                        &tx,
+                        &mut batches,
+                        &SETTING_COLLECTION,
+                        &txn_batch.settings,
+                        is_initialized,
+                    )
+                    .await?;
                     add_batch(
                         &tx,
                         &mut batches,
                         &TIMESTAMP_COLLECTION,
                         &txn_batch.timestamps,
+                        is_initialized,
                     )
                     .await?;
                     add_batch(
@@ -842,6 +956,7 @@ impl DurableCatalogState for Connection {
                         &mut batches,
                         &SYSTEM_GID_MAPPING_COLLECTION,
                         &txn_batch.system_gid_mapping,
+                        is_initialized,
                     )
                     .await?;
                     add_batch(
@@ -849,6 +964,7 @@ impl DurableCatalogState for Connection {
                         &mut batches,
                         &SYSTEM_CONFIGURATION_COLLECTION,
                         &txn_batch.system_configurations,
+                        is_initialized,
                     )
                     .await?;
                     add_batch(
@@ -856,6 +972,7 @@ impl DurableCatalogState for Connection {
                         &mut batches,
                         &DEFAULT_PRIVILEGES_COLLECTION,
                         &txn_batch.default_privileges,
+                        is_initialized,
                     )
                     .await?;
                     add_batch(
@@ -863,6 +980,7 @@ impl DurableCatalogState for Connection {
                         &mut batches,
                         &SYSTEM_PRIVILEGES_COLLECTION,
                         &txn_batch.system_privileges,
+                        is_initialized,
                     )
                     .await?;
                     add_batch(
@@ -870,6 +988,7 @@ impl DurableCatalogState for Connection {
                         &mut batches,
                         &AUDIT_LOG_COLLECTION,
                         &txn_batch.audit_log_updates,
+                        is_initialized,
                     )
                     .await?;
                     add_batch(
@@ -877,6 +996,7 @@ impl DurableCatalogState for Connection {
                         &mut batches,
                         &STORAGE_USAGE_COLLECTION,
                         &txn_batch.storage_usage_updates,
+                        is_initialized,
                     )
                     .await?;
                     tx.append(batches).await?;

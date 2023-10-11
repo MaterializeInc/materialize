@@ -20,7 +20,7 @@ use mz_sql::catalog::{
     RoleMembership, RoleVars,
 };
 use mz_sql::names::{CommentObjectId, DatabaseId, QualifiedItemName, SchemaId};
-use mz_stash::objects::{proto, RustType, TryFromProtoError};
+use mz_stash_types::objects::{proto, RustType, TryFromProtoError};
 use mz_storage_types::sources::Timeline;
 use proptest_derive::Arbitrary;
 use std::collections::BTreeMap;
@@ -430,6 +430,29 @@ pub struct Snapshot {
         BTreeMap<proto::ServerConfigurationKey, proto::ServerConfigurationValue>,
     pub default_privileges: BTreeMap<proto::DefaultPrivilegesKey, proto::DefaultPrivilegesValue>,
     pub system_privileges: BTreeMap<proto::SystemPrivilegesKey, proto::SystemPrivilegesValue>,
+}
+
+impl Snapshot {
+    pub fn empty() -> Snapshot {
+        Snapshot {
+            databases: BTreeMap::new(),
+            schemas: BTreeMap::new(),
+            roles: BTreeMap::new(),
+            items: BTreeMap::new(),
+            comments: BTreeMap::new(),
+            clusters: BTreeMap::new(),
+            cluster_replicas: BTreeMap::new(),
+            introspection_sources: BTreeMap::new(),
+            id_allocator: BTreeMap::new(),
+            configs: BTreeMap::new(),
+            settings: BTreeMap::new(),
+            timestamps: BTreeMap::new(),
+            system_object_mappings: BTreeMap::new(),
+            system_configurations: BTreeMap::new(),
+            default_privileges: BTreeMap::new(),
+            system_privileges: BTreeMap::new(),
+        }
+    }
 }
 
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]

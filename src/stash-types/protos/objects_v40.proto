@@ -15,10 +15,11 @@
 // migration using these two files, and no matter how they types change in the future, we'll always
 // have these snapshots to facilitate the migration.
 
+// buf breaking: ignore (does currently not require backward-compatibility)
 
 syntax = "proto3";
 
-package objects_v34;
+package objects_v40;
 
 message ConfigKey {
     string key = 1;
@@ -128,6 +129,7 @@ message RoleValue {
     string name = 1;
     RoleAttributes attributes = 2;
     RoleMembership membership = 3;
+    RoleVars vars = 4;
 }
 
 message TimestampKey {
@@ -180,6 +182,33 @@ message DurableCollectionMetadata {
 
 message DurableExportMetadata {
     SinkAsOf initial_as_of = 1;
+}
+
+message CommentKey {
+    oneof object {
+        GlobalId table = 1;
+        GlobalId view = 2;
+        GlobalId materialized_view = 4;
+        GlobalId source = 5;
+        GlobalId sink = 6;
+        GlobalId index = 7;
+        GlobalId func = 8;
+        GlobalId connection = 9;
+        GlobalId type = 10;
+        GlobalId secret = 11;
+        RoleId role = 12;
+        DatabaseId database = 13;
+        ResolvedSchema schema = 14;
+        ClusterId cluster = 15;
+        ClusterReplicaId cluster_replica = 16;
+    }
+    oneof sub_component {
+        uint64 column_pos = 3;
+    }
+}
+
+message CommentValue {
+    string comment = 1;
 }
 
 // ---- Common Types
@@ -256,6 +285,13 @@ message DatabaseId {
     }
 }
 
+message ResolvedDatabaseSpecifier {
+    oneof spec {
+        Empty ambient = 1;
+        DatabaseId id = 2;
+    }
+}
+
 message SchemaId {
     oneof value {
         uint64 system = 1;
@@ -263,11 +299,28 @@ message SchemaId {
     }
 }
 
+message SchemaSpecifier {
+    oneof spec {
+        Empty temporary = 1;
+        SchemaId id = 2;
+    }
+}
+
+message ResolvedSchema {
+    ResolvedDatabaseSpecifier database = 1;
+    SchemaSpecifier schema = 2;
+}
+
 message ReplicaId {
     oneof value {
         uint64 system = 1;
         uint64 user = 2;
     }
+}
+
+message ClusterReplicaId {
+    ClusterId cluster_id = 1;
+    ReplicaId replica_id = 2;
 }
 
 message ReplicaLogging {
@@ -308,6 +361,8 @@ message ReplicaConfig {
         string size = 1;
         optional string availability_zone = 2;
         bool disk = 4;
+        bool internal = 5;
+        optional string billed_as = 6;
     }
 
     oneof location {
@@ -337,6 +392,22 @@ message RoleMembership {
     }
 
     repeated Entry map = 1;
+}
+
+message RoleVars {
+    message SqlSet {
+        repeated string entries = 1;
+    }
+
+    message Entry {
+        string key = 1;
+        oneof val {
+            string flat = 2;
+            SqlSet sql_set = 3;
+        }
+    }
+
+    repeated Entry entries = 1;
 }
 
 message AclMode {
@@ -466,6 +537,8 @@ message AuditLogEventV1 {
         string replica_name = 4;
         string logical_size = 5;
         bool disk = 6;
+        optional string billed_as = 7;
+        bool internal = 8;
     }
 
     message DropClusterReplicaV1 {

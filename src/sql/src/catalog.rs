@@ -32,7 +32,7 @@ use mz_repr::explain::ExprHumanizer;
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, GlobalId, RelationDesc};
 use mz_sql_parser::ast::{Expr, QualifiedReplica, UnresolvedItemName};
-use mz_stash::objects::{proto, RustType, TryFromProtoError};
+use mz_stash_types::objects::{proto, RustType, TryFromProtoError};
 use mz_storage_types::connections::inline::{ConnectionResolver, ReferencedConnection};
 use mz_storage_types::connections::Connection;
 use mz_storage_types::sources::SourceDesc;
@@ -324,6 +324,9 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     /// Adds a [`PlanNotice`] that will be displayed to the user if the plan
     /// successfully executes.
     fn add_notice(&self, notice: PlanNotice);
+
+    /// Returns the associated comments for the given `id`
+    fn get_item_comments(&self, id: &GlobalId) -> Option<&BTreeMap<Option<usize>, String>>;
 }
 
 /// Configuration associated with a catalog.
@@ -1175,6 +1178,12 @@ pub enum CatalogError {
     },
     /// Ran out of unique IDs.
     IdExhaustion,
+    /// Timeline already exists.
+    TimelineAlreadyExists(String),
+    /// Id Allocator already exists.
+    IdAllocatorAlreadyExists(String),
+    /// Config already exists.
+    ConfigAlreadyExists(String),
     /// Builtin migrations failed.
     FailedBuiltinSchemaMigration(String),
 }
@@ -1217,6 +1226,9 @@ impl fmt::Display for CatalogError {
                 typ,
             ),
             Self::IdExhaustion => write!(f, "id counter overflows i64"),
+            Self::TimelineAlreadyExists(name) => write!(f, "timeline '{name}' already exists"),
+            Self::IdAllocatorAlreadyExists(name) => write!(f, "ID allocator '{name}' already exists"),
+            Self::ConfigAlreadyExists(key) => write!(f, "config '{key}' already exists"),
             Self::FailedBuiltinSchemaMigration(objects) => write!(f, "failed to migrate schema of builtin objects: {objects}"),
         }
     }
