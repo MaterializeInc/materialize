@@ -15,10 +15,8 @@
 
 //! Vector utilities.
 
-use std::{
-    cmp::Ordering,
-    mem::{align_of, size_of},
-};
+use std::cmp::Ordering;
+use std::mem::{align_of, size_of};
 
 #[cfg(feature = "smallvec")]
 use smallvec::SmallVec;
