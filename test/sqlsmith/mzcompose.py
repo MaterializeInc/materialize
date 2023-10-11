@@ -159,6 +159,7 @@ known_errors = [
     "csv_extract number of columns too large",
     "target replica failed or was dropped",  # expected on replica OoMs with #21587
     "cannot materialize call to",  # create materialized view on some internal views
+    "arrays must not contain null values",  # aclexplode, mz_aclexplode
 ]
 
 
