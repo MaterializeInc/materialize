@@ -322,10 +322,13 @@ impl State {
     }
 
     pub async fn reset_materialize(&mut self) -> Result<(), anyhow::Error> {
-        let (inner_client, _) = postgres_client(&format!(
-            "postgres://mz_system:materialize@{}",
-            self.materialize_internal_sql_addr
-        ))
+        let (inner_client, _) = postgres_client(
+            &format!(
+                "postgres://mz_system:materialize@{}",
+                self.materialize_internal_sql_addr
+            ),
+            self.default_timeout,
+        )
         .await?;
         inner_client
             .batch_execute("ALTER SYSTEM RESET ALL")
