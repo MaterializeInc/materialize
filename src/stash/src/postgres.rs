@@ -474,7 +474,7 @@ impl Stash {
         let (client, connection) = tokio_postgres::connect(url, tls).await?;
         mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
             if let Err(e) = connection.await {
-                tracing::error!("postgres stash connection error: {}", e);
+                tracing::warn!("postgres stash connection error: {}", e);
             }
         });
         client
@@ -541,7 +541,7 @@ impl Stash {
         let (mut client, connection) = self.config.lock().await.connect(self.tls.clone()).await?;
         mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
             if let Err(e) = connection.await {
-                tracing::error!("postgres stash connection error: {}", e);
+                tracing::warn!("postgres stash connection error: {}", e);
             }
         });
         // The Config is shared with the Consolidator, so we update the application name in the
@@ -1281,7 +1281,7 @@ impl Consolidator {
             || "tokio-postgres stash consolidation connection",
             async move {
                 if let Err(e) = connection.await {
-                    tracing::error!("postgres stash connection error: {}", e);
+                    tracing::warn!("postgres stash connection error: {}", e);
                 }
             },
         );
@@ -1356,7 +1356,7 @@ impl DebugStashFactory {
         let (client, connection) = tokio_postgres::connect(&url, tls.clone()).await?;
         mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
             if let Err(e) = connection.await {
-                tracing::error!("postgres stash connection error: {e}");
+                tracing::warn!("postgres stash connection error: {e}");
             }
         });
         client
