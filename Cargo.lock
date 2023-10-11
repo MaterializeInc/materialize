@@ -3831,6 +3831,7 @@ dependencies = [
  "mz-compute",
  "mz-compute-client",
  "mz-http-util",
+ "mz-metrics",
  "mz-orchestrator-tracing",
  "mz-ore",
  "mz-persist-client",
@@ -4051,6 +4052,7 @@ dependencies = [
  "mz-frontegg-auth",
  "mz-http-util",
  "mz-interchange",
+ "mz-metrics",
  "mz-npm",
  "mz-orchestrator",
  "mz-orchestrator-kubernetes",
@@ -4390,6 +4392,17 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tracing",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-metrics"
+version = "0.0.0"
+dependencies = [
+ "libc",
+ "mz-ore",
+ "prometheus",
+ "tokio",
  "workspace-hack",
 ]
 

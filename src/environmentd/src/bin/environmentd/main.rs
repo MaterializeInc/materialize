@@ -642,6 +642,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let metrics = Metrics::register_into(&metrics_registry, BUILD_INFO);
 
     runtime.block_on(mz_alloc::register_metrics_into(&metrics_registry));
+    runtime.block_on(mz_metrics::rusage::register_metrics_into(&metrics_registry));
 
     // Initialize fail crate for failpoint support
     let _failpoint_scenario = FailScenario::setup();
