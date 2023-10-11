@@ -300,21 +300,6 @@ true true true true true
 
 > SELECT records, batches, size, capacity, allocations FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
 
-# Test arrangement size logging disabled works
-
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_arrangement_size_logging = false
-
-> CREATE INDEX ii_t4 ON t4(c)
-
-> SELECT records >= 1000 AND records <= 1001, batches > 0, size, capacity, allocations FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
-true true 0 0 0
-
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_arrangement_size_logging = true
-
-> DROP INDEX ii_t4
-
 # Test arrangement size logging for error dataflows
 
 > CREATE TABLE t5(a int)

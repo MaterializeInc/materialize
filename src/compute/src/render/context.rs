@@ -96,7 +96,6 @@ where
     pub(super) shutdown_token: ShutdownToken,
     /// The implementation to use for rendering linear joins.
     pub(super) linear_join_impl: LinearJoinImpl,
-    pub(super) enable_arrangement_size_logging: bool,
 }
 
 impl<S: Scope, V: Data + columnation::Columnation> Context<S, V>
@@ -124,7 +123,6 @@ where
             bindings: BTreeMap::new(),
             shutdown_token: Default::default(),
             linear_join_impl: Default::default(),
-            enable_arrangement_size_logging: Default::default(),
         }
     }
 }
@@ -736,7 +734,6 @@ where
         input_key: Option<Vec<MirScalarExpr>>,
         input_mfp: MapFilterProject,
         until: Antichain<mz_repr::Timestamp>,
-        enable_arrangement_size_logging: bool,
     ) -> Self {
         if collections == Default::default() {
             return self;
@@ -785,13 +782,9 @@ where
                     Ok::<(Row, Row), DataflowError>((key_row, val_row))
                 });
 
-                let oks = oks_keyed
-                    .mz_arrange::<RowSpine<Row, Row, _, _>>(&name, enable_arrangement_size_logging);
+                let oks = oks_keyed.mz_arrange::<RowSpine<Row, Row, _, _>>(&name);
                 let errs: KeyCollection<_, _, _> = errs.concat(&errs_keyed).into();
-                let errs = errs.mz_arrange::<ErrSpine<_, _, _>>(
-                    &format!("{}-errors", name),
-                    enable_arrangement_size_logging,
-                );
+                let errs = errs.mz_arrange::<ErrSpine<_, _, _>>(&format!("{}-errors", name));
                 self.arranged
                     .insert(key, ArrangementFlavor::Local(oks, errs));
             }

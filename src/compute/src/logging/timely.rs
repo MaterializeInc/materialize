@@ -35,7 +35,6 @@ use timely::logging::{
 };
 use tracing::error;
 
-use crate::compute_state::ComputeState;
 use crate::extensions::arrange::MzArrange;
 use crate::logging::compute::ComputeEvent;
 use crate::logging::{EventQueue, LogVariant, SharedLoggingState, TimelyLog};
@@ -54,7 +53,6 @@ pub(super) fn construct<A: Allocate>(
     config: &LoggingConfig,
     event_queue: EventQueue<TimelyEvent>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
-    compute_state: &ComputeState,
 ) -> BTreeMap<LogVariant, (KeysValsHandle, Rc<dyn Any>)> {
     let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
     let worker_id = worker.index();
@@ -155,7 +153,6 @@ pub(super) fn construct<A: Allocate>(
             .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
                 Exchange::new(move |_| u64::cast_from(worker_id)),
                 "PreArrange Timely operates",
-                compute_state.enable_arrangement_size_logging,
             )
             .as_collection(move |id, name| {
                 Row::pack_slice(&[
@@ -169,7 +166,6 @@ pub(super) fn construct<A: Allocate>(
             .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
                 Exchange::new(move |_| u64::cast_from(worker_id)),
                 "PreArrange Timely operates",
-                compute_state.enable_arrangement_size_logging,
             )
             .as_collection(move |datum, ()| {
                 let (source_node, source_port) = datum.source;
@@ -188,7 +184,6 @@ pub(super) fn construct<A: Allocate>(
             .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
                 Exchange::new(move |_| u64::cast_from(worker_id)),
                 "PreArrange Timely addresses",
-                compute_state.enable_arrangement_size_logging,
             )
             .as_collection(move |id, address| create_address_row(*id, address, worker_id));
         let parks = parks
@@ -196,7 +191,6 @@ pub(super) fn construct<A: Allocate>(
             .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
                 Exchange::new(move |_| u64::cast_from(worker_id)),
                 "PreArrange Timely parks",
-                compute_state.enable_arrangement_size_logging,
             )
             .as_collection(move |datum, ()| {
                 Row::pack_slice(&[
@@ -213,7 +207,6 @@ pub(super) fn construct<A: Allocate>(
             .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
                 Exchange::new(move |_| u64::cast_from(worker_id)),
                 "PreArrange Timely batches sent",
-                compute_state.enable_arrangement_size_logging,
             )
             .as_collection(move |datum, ()| {
                 Row::pack_slice(&[
@@ -227,7 +220,6 @@ pub(super) fn construct<A: Allocate>(
             .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
                 Exchange::new(move |_| u64::cast_from(worker_id)),
                 "PreArrange Timely batches received",
-                compute_state.enable_arrangement_size_logging,
             )
             .as_collection(move |datum, ()| {
                 Row::pack_slice(&[
@@ -241,7 +233,6 @@ pub(super) fn construct<A: Allocate>(
             .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
                 Exchange::new(move |_| u64::cast_from(worker_id)),
                 "PreArrange Timely messages sent",
-                compute_state.enable_arrangement_size_logging,
             )
             .as_collection(move |datum, ()| {
                 Row::pack_slice(&[
@@ -255,7 +246,6 @@ pub(super) fn construct<A: Allocate>(
             .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
                 Exchange::new(move |_| u64::cast_from(worker_id)),
                 "PreArrange Timely messages received",
-                compute_state.enable_arrangement_size_logging,
             )
             .as_collection(move |datum, ()| {
                 Row::pack_slice(&[
@@ -269,7 +259,6 @@ pub(super) fn construct<A: Allocate>(
             .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
                 Exchange::new(move |_| u64::cast_from(worker_id)),
                 "PreArrange Timely duration",
-                compute_state.enable_arrangement_size_logging,
             )
             .as_collection(move |operator, _| {
                 Row::pack_slice(&[
@@ -282,7 +271,6 @@ pub(super) fn construct<A: Allocate>(
             .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
                 Exchange::new(move |_| u64::cast_from(worker_id)),
                 "PreArrange Timely histogram",
-                compute_state.enable_arrangement_size_logging,
             )
             .as_collection(move |datum, _| {
                 let row = Row::pack_slice(&[
@@ -333,10 +321,7 @@ pub(super) fn construct<A: Allocate>(
                             (row_key, row_val)
                         }
                     })
-                    .mz_arrange::<RowSpine<_, _, _, _>>(
-                        &format!("ArrangeByKey {:?}", variant),
-                        compute_state.enable_arrangement_size_logging,
-                    )
+                    .mz_arrange::<RowSpine<_, _, _, _>>(&format!("ArrangeByKey {:?}", variant))
                     .trace;
                 traces.insert(variant.clone(), (trace, Rc::clone(&token)));
             }
