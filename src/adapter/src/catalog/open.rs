@@ -35,7 +35,8 @@ use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{
-    CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogItemType, CatalogType,
+    CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogItemType, CatalogSchema,
+    CatalogType,
 };
 use mz_sql::func::OP_IMPLS;
 use mz_sql::names::{
@@ -1539,7 +1540,15 @@ impl Catalog {
                     continue;
                 }
                 Err(e) => {
-                    let name = c.resolve_full_name(&item.name, None);
+                    let schema = c.state().find_non_temp_schema(&item.schema_id);
+                    let name = QualifiedItemName {
+                        qualifiers: ItemQualifiers {
+                            database_spec: schema.database().clone(),
+                            schema_spec: schema.id().clone(),
+                        },
+                        item: item.name,
+                    };
+                    let name = c.resolve_full_name(&name, None);
                     return Err(Error::new(ErrorKind::Corruption {
                         detail: format!("failed to deserialize item {} ({}): {}", item.id, name, e),
                     }));
@@ -1551,7 +1560,15 @@ impl Catalog {
             if let Some(dependent_items) = awaiting_id_dependencies.remove(&item.id) {
                 items.extend(dependent_items);
             }
-            let full_name = c.resolve_full_name(&item.name, None);
+            let schema = c.state().find_non_temp_schema(&item.schema_id);
+            let name = QualifiedItemName {
+                qualifiers: ItemQualifiers {
+                    database_spec: schema.database().clone(),
+                    schema_spec: schema.id().clone(),
+                },
+                item: item.name,
+            };
+            let full_name = c.resolve_full_name(&name, None);
             if let Some(dependent_items) = awaiting_name_dependencies.remove(&full_name.to_string())
             {
                 items.extend(dependent_items);
@@ -1560,7 +1577,7 @@ impl Catalog {
             c.state.insert_item(
                 item.id,
                 oid,
-                item.name,
+                name,
                 catalog_item,
                 item.owner_id,
                 PrivilegeMap::from_mz_acl_items(item.privileges),
@@ -1571,11 +1588,20 @@ impl Catalog {
         if let Some((missing_dep, mut dependents)) = awaiting_id_dependencies.into_iter().next() {
             let mz_catalog::Item {
                 id,
+                schema_id,
                 name,
                 create_sql: _,
                 owner_id: _,
                 privileges: _,
             } = dependents.remove(0);
+            let schema = c.state().find_non_temp_schema(&schema_id);
+            let name = QualifiedItemName {
+                qualifiers: ItemQualifiers {
+                    database_spec: schema.database().clone(),
+                    schema_spec: schema.id().clone(),
+                },
+                item: name,
+            };
             let name = c.resolve_full_name(&name, None);
             return Err(Error::new(ErrorKind::Corruption {
                 detail: format!(
@@ -1590,11 +1616,20 @@ impl Catalog {
         if let Some((missing_dep, mut dependents)) = awaiting_name_dependencies.into_iter().next() {
             let mz_catalog::Item {
                 id,
+                schema_id,
                 name,
                 create_sql: _,
                 owner_id: _,
                 privileges: _,
             } = dependents.remove(0);
+            let schema = c.state().find_non_temp_schema(&schema_id);
+            let name = QualifiedItemName {
+                qualifiers: ItemQualifiers {
+                    database_spec: schema.database().clone(),
+                    schema_spec: schema.id().clone(),
+                },
+                item: name,
+            };
             let name = c.resolve_full_name(&name, None);
             return Err(Error::new(ErrorKind::Corruption {
                 detail: format!(
