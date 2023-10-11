@@ -29,8 +29,6 @@ class JsonSource(Check):
                 $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=format-json
                 "object":{"a":"b","c":"d"}
 
-                > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
-
                 > CREATE SOURCE format_jsonA
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-json-${testdrive.seed}')
                   KEY FORMAT JSON

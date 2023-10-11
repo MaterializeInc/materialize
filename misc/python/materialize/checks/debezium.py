@@ -49,10 +49,6 @@ class DebeziumPostgres(Check):
 
                 $ schema-registry-wait subject=postgres.public.debezium_table-value
 
-                > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
-
-                > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
-
                 # UPSERT is requred due to https://github.com/MaterializeInc/materialize/issues/14211
                 > CREATE SOURCE debezium_source1
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.debezium_table')

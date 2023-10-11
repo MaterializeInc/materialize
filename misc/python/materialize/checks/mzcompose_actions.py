@@ -129,6 +129,14 @@ class ConfigureMz(MzcomposeAction):
                 + "\n".join(system_settings)
             )
 
+        input += dedent(
+            """
+            > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
+            > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
+            """
+        )
+
         self.handle = e.testdrive(input=input)
         e.system_settings.update(system_settings)
 
