@@ -82,7 +82,7 @@ where
         if let Some(logger) = compute_state.compute_logger.clone() {
             err_collection = err_collection.log_dataflow_errors(logger, sink_id);
         }
-        
+
         let mut ok_collection = ok_collection.leave();
         let mut err_collection = err_collection.leave();
 
@@ -108,7 +108,7 @@ where
             ok_collection = oks;
             err_collection = err_collection.concat(&null_errs);
         }
-        
+
         let region_name = match sink.connection {
             ComputeSinkConnection::Subscribe(_) => format!("SubscribeSink({:?})", sink_id),
             ComputeSinkConnection::Persist(_) => format!("PersistSink({:?})", sink_id),
