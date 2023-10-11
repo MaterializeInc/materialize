@@ -23,10 +23,12 @@ use std::{collections::BTreeMap, str::FromStr};
 use maplit::btreemap;
 use mz_ore::str::StrExt;
 use once_cell::sync::Lazy;
-use security_framework::passwords::{get_generic_password, set_generic_password};
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 use toml_edit::{value, Document};
+
+#[cfg(target_os = "macos")]
+use security_framework::passwords::{get_generic_password, set_generic_password};
 
 use crate::error::Error;
 
@@ -158,7 +160,8 @@ impl ConfigFile {
     ) -> Result<(), Error> {
         if Vault::Keychain == self.vault() {
             let app_password = profile.app_password.ok_or(Error::AppPasswordMissing)?;
-            set_generic_password("Materialize mz CLI", name, app_password.as_bytes())?;
+            set_generic_password("Materialize mz CLI", name, app_password.as_bytes())
+                .map_err(|e| Error::MacOsSecurityError(e.message().unwrap_or("".to_owned())))?;
         } else {
             new_profile["app-password"] =
                 value(profile.app_password.ok_or(Error::AppPasswordMissing)?);
@@ -345,7 +348,7 @@ impl Profile<'_> {
 
     /// Returns the app password in the profile configuration.
     #[cfg(target_os = "macos")]
-    pub fn app_password(&self, global_vault: &str) -> Option<String> {
+    pub fn app_password(&self, global_vault: &str) -> Result<String, Error> {
         if let Some(vault) = self.vault().or(Some(global_vault)) {
             if vault == Vault::Keychain {
                 let password = get_generic_password("Materialize mz CLI", self.name);
@@ -354,22 +357,22 @@ impl Profile<'_> {
                     Ok(generic_password) => {
                         let parsed_password = String::from_utf8(generic_password.to_vec());
                         match parsed_password {
-                            Ok(app_password) => return Some(app_password),
-                            Err(err) => {
-                                eprintln!("{}", err);
-                                return None;
-                            }
+                            Ok(app_password) => return Ok(app_password),
+                            Err(err) => return Err(Error::MacOsSecurityError(err.to_string())),
                         }
                     }
                     Err(err) => {
-                        eprintln!("{}", err);
-                        return None;
+                        return Err(Error::MacOsSecurityError(
+                            err.message().unwrap_or("".to_owned()),
+                        ));
                     }
                 }
             }
         }
 
-        (PROFILE_PARAMS["app-password"].get)(self.parsed).map(|x| x.to_string())
+        (PROFILE_PARAMS["app-password"].get)(self.parsed)
+            .map(|x| x.to_string())
+            .ok_or(Error::AppPasswordMissing)
     }
 
     /// Returns the app password in the profile configuration.

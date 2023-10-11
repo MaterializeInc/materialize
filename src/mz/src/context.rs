@@ -145,16 +145,12 @@ impl Context {
             admin_client_builder = admin_client_builder.endpoint(admin_endpoint);
         }
 
-        let admin_client: Arc<AdminClient> = Arc::new(
-            admin_client_builder.build(AdminClientConfig {
+        let admin_client: Arc<AdminClient> =
+            Arc::new(admin_client_builder.build(AdminClientConfig {
                 authentication: Authentication::AppPassword(
-                    profile
-                        .app_password(config_file.vault())
-                        .ok_or(Error::AppPasswordMissing)?
-                        .parse()?,
+                    profile.app_password(config_file.vault())?.parse()?,
                 ),
-            }),
-        );
+            }));
 
         let mut cloud_client_builder = CloudClientBuilder::default();
 
@@ -169,10 +165,7 @@ impl Context {
         // The sql client is created here to avoid having to handle the config around. E.g. reading config from config_file
         // this happens because profile is 'a static, and adding it to the profile context would make also the context 'a, etc.
         let sql_client = SqlClient::new(SqlClientConfig {
-            app_password: profile
-                .app_password(config_file.vault())
-                .ok_or(Error::AppPasswordMissing)?
-                .parse()?,
+            app_password: profile.app_password(config_file.vault())?.parse()?,
         });
 
         Ok(ProfileContext {
