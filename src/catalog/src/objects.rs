@@ -28,17 +28,22 @@ use std::time::Duration;
 
 // Structs used to pass information to outside modules.
 
-/// A trait for representing `Self` as a key (`K`) value (`V`) pair for the purpose of storing this
-/// value durably.
+/// A trait for representing `Self` as a key-value pair of type
+/// `(K, V)` for the purpose of storing this value durably.
 ///
 /// To encode a key-value pair, use [`DurableType::into_key_value`].
 ///
 /// To decode a key-value pair, use [`DurableType::from_key_value`].
+///
+/// This trait is based on [`RustType`], however it is meant to
+/// convert the types used in [`RustType`] to a more consumable and
+/// condensed type.
 pub(crate) trait DurableType<K, V>: Sized {
-    /// Consume and convert `Self` into a key (`K`) value (`V`) pair.
+    /// Consume and convert `Self` into a `(K, V)` key-value pair.
     fn into_key_value(self) -> (K, V);
 
-    /// Consume and convert a key (`K`) value (`V`) pair back into a `Self` value.
+    /// Consume and convert a `(K, V)` key-value pair back into a
+    /// `Self` value.
     fn from_key_value(key: K, value: V) -> Self;
 }
 
