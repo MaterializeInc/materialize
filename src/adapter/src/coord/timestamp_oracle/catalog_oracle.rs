@@ -219,8 +219,10 @@ where
     async fn read_ts(&self) -> T {
         let ts = self.timestamp_oracle.read_ts();
         assert!(
-            ts.less_than(&self.durable_timestamp),
-            "read_ts should not advance the global timestamp"
+            ts.less_equal(&self.durable_timestamp),
+            "read_ts should not advance the global timestamp, ts: {:?}, durable_timestamp: {:?}",
+            ts,
+            self.durable_timestamp
         );
         ts
     }
@@ -306,4 +308,45 @@ pub(crate) fn monotonic_now(now: NowFn, previous_now: mz_repr::Timestamp) -> mz_
         upper_bound = catalog_oracle::upper_bound(&mz_repr::Timestamp::from(now_ts));
     }
     monotonic_now
+}
+
+#[cfg(test)]
+mod tests {
+
+    use crate::coord::timestamp_oracle;
+
+    use super::*;
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_in_memory_timestamp_oracle() -> Result<(), anyhow::Error> {
+        timestamp_oracle::tests::timestamp_oracle_impl_test(
+            move |_timeline, now_fn, initial_ts| {
+                let persistence = NoopTimestampPersistence::new();
+                let oracle =
+                    CatalogTimestampOracle::new(initial_ts, now_fn, 0u64.into(), persistence);
+
+                oracle
+            },
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    /// A [`TimestampPersistence`] for use in tests.
+    struct NoopTimestampPersistence {}
+
+    impl NoopTimestampPersistence {
+        fn new() -> Self {
+            Self {}
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl TimestampPersistence<mz_repr::Timestamp> for NoopTimestampPersistence {
+        async fn persist_timestamp(&self, _timestamp: mz_repr::Timestamp) -> Result<(), Error> {
+            // Yay!
+            Ok(())
+        }
+    }
 }

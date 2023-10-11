@@ -17,6 +17,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use deadpool_postgres::{Object, PoolError};
 use dec::Decimal;
+use mz_ore::metrics::MetricsRegistry;
 use mz_pgrepr::Numeric;
 use mz_postgres_client::{PostgresClient, PostgresClientConfig, PostgresClientKnobs};
 use mz_repr::Timestamp;
@@ -101,6 +102,8 @@ impl From<PostgresTimestampOracleConfig> for PostgresClientConfig {
 }
 
 impl PostgresTimestampOracleConfig {
+    const EXTERNAL_TESTS_POSTGRES_URL: &'static str = "COCKROACH_URL";
+
     /// Returns a new instance of [`PostgresTimestampOracleConfig`] with default tuning.
     pub fn new(url: &str, metrics: Arc<Metrics>) -> Self {
         PostgresTimestampOracleConfig {
@@ -118,6 +121,39 @@ impl PostgresTimestampOracleConfig {
             connect_timeout: Duration::from_secs(5),
             tcp_user_timout: Duration::from_secs(30),
         }
+    }
+
+    /// Returns a new [`PostgresTimestampOracleConfig`] for use in unit tests.
+    ///
+    /// By default, postgres oracle tests are no-ops so that `cargo test` works
+    /// on new environments without any configuration. To activate the tests for
+    /// [`PostgresTimestampOracle`] set the `COCKROACH_URL` environment variable
+    /// with a valid connection url [1].
+    ///
+    /// [1]: https://docs.rs/tokio-postgres/latest/tokio_postgres/config/struct.Config.html#url
+    pub fn new_for_test() -> Option<Self> {
+        let url = match std::env::var(Self::EXTERNAL_TESTS_POSTGRES_URL) {
+            Ok(url) => url,
+            Err(_) => {
+                if mz_ore::env::is_var_truthy("CI") {
+                    panic!("CI is supposed to run this test but something has gone wrong!");
+                }
+                return None;
+            }
+        };
+
+        let config = PostgresTimestampOracleConfig {
+            url: url.to_string(),
+            metrics: Arc::new(Metrics::new(&MetricsRegistry::new())),
+            connection_pool_max_size: 2,
+            connection_pool_max_wait: None,
+            connection_pool_ttl: Duration::MAX,
+            connection_pool_ttl_stagger: Duration::MAX,
+            connect_timeout: Duration::MAX,
+            tcp_user_timout: Duration::ZERO,
+        };
+
+        Some(config)
     }
 }
 
@@ -443,5 +479,54 @@ where
             .run_op(|| self.fallible_apply_write(write_ts))
             .await
             .expect("todo: add retries")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use crate::coord::timestamp_oracle;
+
+    use super::*;
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn test_postgres_timestamp_oracle() -> Result<(), anyhow::Error> {
+        let config = match PostgresTimestampOracleConfig::new_for_test() {
+            Some(config) => config,
+            None => {
+                info!(
+                    "{} env not set: skipping test that uses external service",
+                    PostgresTimestampOracleConfig::EXTERNAL_TESTS_POSTGRES_URL
+                );
+                return Ok(());
+            }
+        };
+
+        cleanup(config.clone()).await?;
+
+        timestamp_oracle::tests::timestamp_oracle_impl_test(|timeline, now_fn, initial_ts| {
+            let oracle =
+                PostgresTimestampOracle::open(config.clone(), timeline, initial_ts, now_fn);
+
+            oracle
+        })
+        .await?;
+
+        cleanup(config).await?;
+
+        Ok(())
+    }
+
+    // Best-effort cleanup!
+    async fn cleanup(config: PostgresTimestampOracleConfig) -> Result<(), anyhow::Error> {
+        let postgres_client = PostgresClient::open(config.into())?;
+        let client = postgres_client.get_connection().await?;
+
+        client
+            .execute("DROP TABLE IF EXISTS timestamp_oracle", &[])
+            .await?;
+
+        Ok(())
     }
 }
