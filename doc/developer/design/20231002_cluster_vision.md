@@ -1,6 +1,8 @@
 # Cluster UX Long Term Vision
 
-- Associated: [Epic](https://github.com/MaterializeInc/materialize/issues/22120)
+Associated: [Epic](https://github.com/MaterializeInc/materialize/issues/22120)
+
+Authors: @chaas, @antiguru, @benesch
 
 ## The Problem
 We need a documented vision for the cluster UX in the long term which covers both
@@ -39,6 +41,38 @@ Imperative is like `CREATE/DROP CLUSTER REPLICA`.
 This means deprecating manual cluster replica management. \
 We believe this is easier to use and manage.
 
+We can classify actions that users take in managing clusters into two categories:
+_development workflows_ and _production workflow_.
+
+#### Development workflows
+In a development workflow, the underlying set of objects being configured are not being used yet
+in a production system, and the user is rapidly changing things.\
+In this workflow, downtime is acceptable.\
+A command like `ALTER <object> ... SET CLUSTER` (moving an object between clusters) would fall
+under this category.
+
+For development workflows, since downtime is acceptable, the primary work items is to
+**expose rehydration status**.\
+Users need an easy way to detect that rehydration is complete and they can resume querying against
+the object.
+
+#### Production workflows
+In a production workflow, the underlying set of objects are actively depended on by a production
+system.\
+In this workflow, downtime is not acceptable.\
+A command like `ALTER CLUSTER ... SET (SIZE = <>)` (resizing a cluster) would fall under this
+category.
+
+If a user wants to do a development workflow on a production system, they must use **blue/green
+deployments**. For example, if the user wants to move an object between clusters, they must use
+blue/green to set up another version of the object/cluster and cutover the production system
+to it once the object is rehydrated and ready.\
+Again, for this workflow, exposing hydration status is the primary work item.
+
+For production workflows, like resizing an active cluster, blue/green is an acceptable intermediate
+solution, but is an overkill amount of work for such a simple action.
+
+In an ideal state, we could provide a simple declarative interface for seamlessly resizing.\
 The primary work item for this is **graceful reconfiguration**. At the moment, a change in size causes downtime until the new replicas are hydrated. As such, customers still want the flexibility to create their own replicas for graceful resizing. We can avoid this by leaving a subset of the original replicas around until the new replicas are hydrated. \
 This requires us to 1) detect when hydration is complete and 2) trigger database object changes based on this event (without/based on an earlier DDL statement).
 
@@ -66,22 +100,28 @@ We believe this will make it clearer how to achieve appropriate fault tolerance 
 ### Support & testing
 Support is able to create create unbilled or partially billed cluster resources for resolving customer issues. This is soon to be possible via unbilled replicas [#20317](https://github.com/MaterializeInc/materialize/issues/20317).
 
+Engineering may also want the ability to create unbilled shadow replicas for testing new features and
+query plan changes, which do not serve customers' production workflows, if they can be made safe.
+
 ### Roadmap
 **Now**
 * @antiguru to complete `ALTER...SET CLUSTER` [#20841](https://github.com/MaterializeInc/materialize/issues/20841), without graceful rehydration.
 * @antiguru to continue in-flight work on multipurpose clusters [#17413](https://github.com/MaterializeInc/materialize/issues/17413) - TODO(@antiguru): fill in details.
 * @ggnall to do discovery on the prescriptive data model as part of Blue/Green deployments project [#19748](https://github.com/MaterializeInc/materialize/issues/19748)
+* Expose rehydration status [#22166](https://github.com/MaterializeInc/materialize/issues/22166)
 
 **Next**
-* Graceful rehydration, to support graceful manual execution of `ALTER...SET CLUSTER` and `ALTER...SET SIZE`.
+* Graceful reconfiguration, to support graceful manual execution of `ALTER...SET CLUSTER` and
+`ALTER...SET SIZE`.
 * Deprecate `CREATE/DROP CLUSTER REPLICA` for users.
 
 **Later**
 * Auto-shutdown of clusters.
 * Shadow replicas.
+* Autoscaling clusters.
 
 **Much Later**
-* Autoscaling clusters / clusterless.
+* Clusterless.
 
 ## Minimal Viable Prototype
 
