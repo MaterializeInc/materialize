@@ -121,7 +121,7 @@ steps:
           args: [--other-tag=latest, --scale=+1]
 
   - id: sqlsmith-long
-    label: "SQLsmith"
+    label: "Longer SQLsmith"
     artifact_paths: junit_*.xml
     timeout_in_minutes: 120
     agents:
@@ -129,10 +129,10 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqlsmith
-          args: [--max-joins=1, --runtime=6000]
+          args: [--max-joins=2, --runtime=6000]
 
   - id: sqlsmith-explain-long
-    label: "SQLsmith explain"
+    label: "Longer SQLsmith explain"
     artifact_paths: junit_*.xml
     timeout_in_minutes: 120
     agents:
