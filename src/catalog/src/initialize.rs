@@ -469,7 +469,6 @@ pub async fn initialize(
         DEFAULT_USER_CLUSTER_ID,
         DEFAULT_USER_CLUSTER_NAME,
         None,
-        // TODO(jkosh44) is this right?
         Vec::new(),
         MZ_SYSTEM_ROLE_ID,
         cluster_privileges,
