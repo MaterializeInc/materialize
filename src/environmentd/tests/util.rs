@@ -594,6 +594,14 @@ impl Server {
         ))
         .unwrap()
     }
+
+    pub fn internal_ws_addr(&self) -> Url {
+        Url::parse(&format!(
+            "ws://{}/api/experimental/sql",
+            self.inner.internal_http_local_addr()
+        ))
+        .unwrap()
+    }
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
