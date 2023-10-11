@@ -1540,7 +1540,7 @@ impl Catalog {
                     continue;
                 }
                 Err(e) => {
-                    let schema = c.state().find_schema(&item.schema_id);
+                    let schema = c.state().find_non_temp_schema(&item.schema_id);
                     let name = QualifiedItemName {
                         qualifiers: ItemQualifiers {
                             database_spec: schema.database().clone(),
@@ -1560,7 +1560,7 @@ impl Catalog {
             if let Some(dependent_items) = awaiting_id_dependencies.remove(&item.id) {
                 items.extend(dependent_items);
             }
-            let schema = c.state().find_schema(&item.schema_id);
+            let schema = c.state().find_non_temp_schema(&item.schema_id);
             let name = QualifiedItemName {
                 qualifiers: ItemQualifiers {
                     database_spec: schema.database().clone(),
@@ -1594,7 +1594,7 @@ impl Catalog {
                 owner_id: _,
                 privileges: _,
             } = dependents.remove(0);
-            let schema = c.state().find_schema(&schema_id);
+            let schema = c.state().find_non_temp_schema(&schema_id);
             let name = QualifiedItemName {
                 qualifiers: ItemQualifiers {
                     database_spec: schema.database().clone(),
@@ -1622,7 +1622,7 @@ impl Catalog {
                 owner_id: _,
                 privileges: _,
             } = dependents.remove(0);
-            let schema = c.state().find_schema(&schema_id);
+            let schema = c.state().find_non_temp_schema(&schema_id);
             let name = QualifiedItemName {
                 qualifiers: ItemQualifiers {
                     database_spec: schema.database().clone(),

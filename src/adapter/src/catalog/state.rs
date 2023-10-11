@@ -1239,10 +1239,12 @@ impl CatalogState {
         }
     }
 
-    pub(super) fn find_schema(&self, schema_id: &SchemaId) -> &Schema {
+    pub(super) fn find_non_temp_schema(&self, schema_id: &SchemaId) -> &Schema {
         self.database_by_id
             .values()
             .filter_map(|database| database.schemas_by_id.get(schema_id))
+            .chain(self.ambient_schemas_by_id.values())
+            .filter(|schema| schema.id() == &SchemaSpecifier::from(*schema_id))
             .into_first()
     }
 
