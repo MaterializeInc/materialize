@@ -148,7 +148,7 @@ pub(super) fn construct<A: Allocate>(
                 );
 
                 let trace = updates
-                    .mz_arrange::<RowSpine<_, _, _, _>>(&format!("Arrange {:?}", variant))
+                    .mz_arrange::<RowSpine<_, _, _, _>>(&format!("Arrange {variant:?}"))
                     .trace;
                 result.insert(variant.clone(), (trace, Rc::clone(&token)));
             }

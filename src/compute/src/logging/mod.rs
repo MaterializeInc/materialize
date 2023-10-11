@@ -24,7 +24,8 @@ use ::timely::logging::WorkerIdentifier;
 use ::timely::progress::Timestamp as TimelyTimestamp;
 use ::timely::scheduling::Activator;
 use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
-use mz_repr::Timestamp;
+use mz_expr::{permutation_for_arrangement, MirScalarExpr};
+use mz_repr::{Datum, Row, RowPacker, Timestamp};
 use mz_timely_util::activator::RcActivator;
 
 use crate::logging::compute::Logger as ComputeLogger;
@@ -154,4 +155,54 @@ struct SharedLoggingState {
     arrangement_size_activators: BTreeMap<usize, Activator>,
     /// Shared compute logger.
     compute_logger: Option<ComputeLogger>,
+}
+
+/// Helper to pack collections of [`Datum`]s into key and value row.
+pub(crate) struct PermutedRowPacker {
+    key_row: Row,
+    value_row: Row,
+    key: Vec<usize>,
+    value: Vec<usize>,
+}
+
+impl PermutedRowPacker {
+    /// Construct based on the information within the log variant.
+    pub(crate) fn new<V: Into<LogVariant>>(variant: V) -> Self {
+        let variant = variant.into();
+        let key = variant.index_by();
+        let (_, value) = permutation_for_arrangement(
+            &key.iter()
+                .cloned()
+                .map(MirScalarExpr::Column)
+                .collect::<Vec<_>>(),
+            variant.desc().arity(),
+        );
+        let key_row = Row::default();
+        let value_row = Row::default();
+        Self {
+            key_row,
+            value_row,
+            key,
+            value,
+        }
+    }
+
+    /// Pack a slice of datums suitable for the key columns in the log variant.
+    pub(crate) fn pack_slice(&mut self, datums: &[Datum]) -> (Row, Row) {
+        self.pack_by_index(|packer, index| packer.push(datums[index]))
+    }
+
+    /// Pack using a callback suitable for the key columns in the log variant.
+    pub(crate) fn pack_by_index<F: Fn(&mut RowPacker, usize)>(&mut self, logic: F) -> (Row, Row) {
+        let mut packer = self.key_row.packer();
+        for index in &self.key {
+            logic(&mut packer, *index);
+        }
+        let mut packer = self.value_row.packer();
+        for index in &self.value {
+            logic(&mut packer, *index);
+        }
+
+        (self.key_row.clone(), self.value_row.clone())
+    }
 }
