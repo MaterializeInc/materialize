@@ -126,4 +126,11 @@ pub enum Error {
     /// Error that occurs when attempting to find the home directory.
     #[error("An error occurred while trying to find the home directory.")]
     HomeDirNotFoundError,
+    /// Error that raises when the security framework for macOS
+    /// to retrieve or set passwords to  the keychain fails.
+    #[error("Error using keychain. {0}")]
+    MacOsSecurityError(String),
+    /// Error that raises when the vault value from the config is invalid.
+    #[error("Vault value for the profile is invalid.")]
+    InvalidVaultError,
 }
