@@ -51,6 +51,7 @@ mod file;
 mod http;
 mod kafka;
 mod mysql;
+mod nop;
 mod persist;
 mod postgres;
 mod protobuf;
@@ -566,6 +567,7 @@ impl Run for PosCommand {
                     "kafka-verify-commit" => kafka::run_verify_commit(builtin, state).await,
                     "mysql-connect" => mysql::run_connect(builtin, state).await,
                     "mysql-execute" => mysql::run_execute(builtin, state).await,
+                    "nop" => nop::run_nop(),
                     "postgres-connect" => postgres::run_connect(builtin, state).await,
                     "postgres-execute" => postgres::run_execute(builtin, state).await,
                     "postgres-verify-slot" => postgres::run_verify_slot(builtin, state).await,
