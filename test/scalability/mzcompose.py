@@ -38,7 +38,10 @@ from materialize.scalability.workloads import *  # noqa: F401 F403
 from materialize.scalability.workloads_test import *  # noqa: F401 F403
 
 RESULTS_DIR = MZ_ROOT / "test" / "scalability" / "results"
-SERVICES = [Materialized(image="materialize/materialized:latest"), Postgres()]
+SERVICES = [
+    Materialized(image="materialize/materialized:latest", sanity_restart=False),
+    Postgres(),
+]
 
 
 def initialize_worker(local: threading.local, lock: threading.Lock):

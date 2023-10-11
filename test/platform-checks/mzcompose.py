@@ -36,7 +36,7 @@ SERVICES = [
     Clusterd(
         name="clusterd_compute_1"
     ),  # Started by some Scenarios, defined here only for the teardown
-    Materialized(external_cockroach=True),
+    Materialized(external_cockroach=True, sanity_restart=False),
     TestdriveService(
         default_timeout="300s",
         no_reset=True,

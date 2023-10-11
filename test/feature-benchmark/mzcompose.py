@@ -141,6 +141,7 @@ def run_one_scenario(
             additional_system_parameter_defaults=additional_system_parameter_defaults,
             external_cockroach=True,
             external_minio=True,
+            sanity_restart=False,
         )
 
         with c.override(mz):
