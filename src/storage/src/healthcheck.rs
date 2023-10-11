@@ -10,6 +10,7 @@
 //! Healthcheck common
 
 use std::any::Any;
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::rc::Rc;
@@ -20,6 +21,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
+use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::PersistLocation;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
@@ -33,7 +35,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use tracing::{info, trace, warn};
 
-use crate::internal_control::InternalStorageCommand;
+use crate::internal_control::{InternalCommandSender, InternalStorageCommand};
 
 pub async fn write_to_persist(
     collection_id: GlobalId,
@@ -152,6 +154,77 @@ impl<'a> HealthState<'a> {
     }
 }
 
+/// A trait that lets a user configure the `health_operator` with custom
+/// behavior. This is mostly useful for testing, and the [`DefaultWriter`]
+/// should be the correct implementation for everyone.
+#[async_trait::async_trait(?Send)]
+pub trait HealthOperator {
+    /// Record a new status.
+    async fn record_new_status(
+        &self,
+        collection_id: GlobalId,
+        new_status: &str,
+        new_error: Option<&str>,
+        now: NowFn,
+        // TODO(guswynn): not urgent:
+        // Ideally this would be entirely included in the `DefaultWriter`, but that
+        // requires a fairly heavy change to the `health_operator`, which hardcodes
+        // some use of persist. For now we just leave it and ignore it in tests.
+        client: &PersistClient,
+        status_shard: ShardId,
+        relation_desc: &RelationDesc,
+        hint: Option<&str>,
+    );
+    async fn send_halt(&self, id: GlobalId, error: Option<HealthStatusUpdate>);
+
+    /// Optionally override the chosen worker index. Default is semi-random.
+    /// Only useful for tests.
+    fn chosen_worker(&self) -> Option<usize> {
+        None
+    }
+}
+
+/// A default `HealthOperator` for use in normal cases.
+pub struct DefaultWriter(pub Rc<RefCell<dyn InternalCommandSender>>);
+
+#[async_trait::async_trait(?Send)]
+impl HealthOperator for DefaultWriter {
+    async fn record_new_status(
+        &self,
+        collection_id: GlobalId,
+        new_status: &str,
+        new_error: Option<&str>,
+        now: NowFn,
+        client: &PersistClient,
+        status_shard: ShardId,
+        relation_desc: &RelationDesc,
+        hint: Option<&str>,
+    ) {
+        write_to_persist(
+            collection_id,
+            new_status,
+            new_error,
+            now,
+            client,
+            status_shard,
+            relation_desc,
+            hint,
+        )
+        .await
+    }
+
+    async fn send_halt(&self, id: GlobalId, error: Option<HealthStatusUpdate>) {
+        self.0
+            .borrow_mut()
+            .broadcast(InternalStorageCommand::SuspendAndRestart {
+                // Suspend and restart is expected to operate on the primary object and
+                // not any of the sub-objects
+                id,
+                reason: format!("{:?}", error),
+            });
+    }
+}
+
 /// Writes updates that come across `health_stream` to the collection's status shards, as identified
 /// by their `CollectionMetadata`.
 ///
@@ -159,9 +232,10 @@ impl<'a> HealthState<'a> {
 ///
 /// The `OutputIndex` values that come across `health_stream` must be a strict subset of thosema,
 /// `configs`'s keys.
-pub(crate) fn health_operator<'g, G>(
+pub(crate) fn health_operator<'g, G, P>(
     scope: &Child<'g, G, mz_repr::Timestamp>,
-    storage_state: &crate::storage_state::StorageState,
+    persist_clients: Arc<PersistClientCache>,
+    now: NowFn,
     // A set of id's that should be marked as `HealthStatusUpdate::starting()` during startup.
     mark_starting: BTreeSet<GlobalId>,
     // An id that is allowed to halt the dataflow. Others are ignored, and panic during debug
@@ -175,23 +249,28 @@ pub(crate) fn health_operator<'g, G>(
     // `health_operator` to understand where each sub-object should have its status written down
     // at.
     configs: BTreeMap<usize, ObjectHealthConfig>,
+    // An impl of `HealthOperator` that configures the output behavior of this operator.
+    health_operator_impl: P,
 ) -> Rc<dyn Any>
 where
     G: Scope<Timestamp = ()>,
+    P: HealthOperator + 'static,
 {
     // Derived config options
     let healthcheck_worker_id = scope.index();
     let worker_count = scope.peers();
-    let now = storage_state.now.clone();
-    let persist_clients = Arc::clone(&storage_state.persist_clients);
-    let internal_cmd_tx = Rc::clone(&storage_state.internal_cmd_tx);
 
     // Inject the originating worker id to each item before exchanging to the chosen worker
     let health_stream = health_stream.map(move |status| (healthcheck_worker_id, status));
 
-    // We'll route all the work to a single arbitrary worker;
-    // there's not much to do, and we need a global view.
-    let chosen_worker_id = usize::cast_from(configs.keys().next().hashed()) % worker_count;
+    let chosen_worker_id = if let Some(index) = health_operator_impl.chosen_worker() {
+        index
+    } else {
+        // We'll route all the work to a single arbitrary worker;
+        // there's not much to do, and we need a global view.
+        usize::cast_from(configs.keys().next().hashed()) % worker_count
+    };
+
     let is_active_worker = chosen_worker_id == healthcheck_worker_id;
 
     let operator_name = format!("healthcheck({})", healthcheck_worker_id);
@@ -281,17 +360,18 @@ where
                 if mark_starting.contains(&state.id) {
                     if let Some((status_shard, persist_client)) = state.persist_details {
                         let status = HealthStatusUpdate::starting();
-                        write_to_persist(
-                            state.id,
-                            status.name(),
-                            status.error(),
-                            now.clone(),
-                            persist_client,
-                            status_shard,
-                            state.schema,
-                            status.hint(),
-                        )
-                        .await;
+                        health_operator_impl
+                            .record_new_status(
+                                state.id,
+                                status.name(),
+                                status.error(),
+                                now.clone(),
+                                persist_client,
+                                status_shard,
+                                state.schema,
+                                status.hint(),
+                            )
+                            .await;
 
                         state.last_reported_status = Some(status);
                     }
@@ -360,17 +440,18 @@ where
                                   {last_reported_status:?} -> {new_status:?}"
                             );
                             if let Some((status_shard, persist_client)) = persist_details {
-                                write_to_persist(
-                                    *id,
-                                    new_status.name(),
-                                    new_status.error(),
-                                    now.clone(),
-                                    persist_client,
-                                    *status_shard,
-                                    schema,
-                                    new_status.hint(),
-                                )
-                                .await;
+                                health_operator_impl
+                                    .record_new_status(
+                                        *id,
+                                        new_status.name(),
+                                        new_status.error(),
+                                        now.clone(),
+                                        persist_client,
+                                        *status_shard,
+                                        schema,
+                                        new_status.hint(),
+                                    )
+                                    .await;
                             }
 
                             *last_reported_status = Some(new_status.clone());
@@ -403,14 +484,7 @@ where
                         halt_with, SUSPEND_AND_RESTART_DELAY
                     );
                     tokio::time::sleep(SUSPEND_AND_RESTART_DELAY).await;
-                    internal_cmd_tx.borrow_mut().broadcast(
-                        InternalStorageCommand::SuspendAndRestart {
-                            // Suspend and restart is expected to operate on the primary object and
-                            // not any of the sub-objects
-                            id,
-                            reason: format!("{:?}", halt_with),
-                        },
-                    );
+                    health_operator_impl.send_halt(id, halt_with).await;
                 }
             }
         }
@@ -603,5 +677,284 @@ mod tests {
                 );
             }
         }
+    }
+
+    // Actual timely tests for `health_operator`.
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // Reports undefined behavior
+    fn test_health_operator_basic() {
+        use Step::*;
+
+        // Test 2 inputs across 2 workers.
+        health_operator_runner(
+            2,
+            2,
+            vec![
+                AssertStatus(vec![
+                    // Assert both inputs started.
+                    StatusToAssert {
+                        collection_index: 0,
+                        status: "starting".to_string(),
+                        ..Default::default()
+                    },
+                    StatusToAssert {
+                        collection_index: 1,
+                        status: "starting".to_string(),
+                        ..Default::default()
+                    },
+                ]),
+                // Update and assert one is running.
+                Update(TestUpdate {
+                    worker_id: 1,
+                    input_index: 0,
+                    update: HealthStatusUpdate::running(),
+                }),
+                AssertStatus(vec![StatusToAssert {
+                    collection_index: 0,
+                    status: "running".to_string(),
+                    ..Default::default()
+                }]),
+                // Assert the other can be stalled by 1 worker.
+                Update(TestUpdate {
+                    worker_id: 0,
+                    input_index: 1,
+                    update: HealthStatusUpdate::stalled("uhoh".to_string(), None),
+                }),
+                Update(TestUpdate {
+                    worker_id: 1,
+                    input_index: 1,
+                    update: HealthStatusUpdate::running(),
+                }),
+                AssertStatus(vec![StatusToAssert {
+                    collection_index: 1,
+                    status: "stalled".to_string(),
+                    error: Some("uhoh".to_string()),
+                    ..Default::default()
+                }]),
+                // And that it can recover.
+                Update(TestUpdate {
+                    worker_id: 0,
+                    input_index: 1,
+                    update: HealthStatusUpdate::running(),
+                }),
+                AssertStatus(vec![StatusToAssert {
+                    collection_index: 1,
+                    status: "running".to_string(),
+                    ..Default::default()
+                }]),
+            ],
+        );
+    }
+
+    // The below is ALL test infrastructure for the above
+
+    use timely::dataflow::operators::exchange::Exchange;
+    use timely::dataflow::Scope;
+    use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+    // Doesn't really matter which we use
+    use mz_storage_client::healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC;
+
+    /// A status to assert.
+    #[derive(Debug, Clone, Default, PartialEq, Eq)]
+    struct StatusToAssert {
+        collection_index: usize,
+        status: String,
+        error: Option<String>,
+        hint: Option<String>,
+    }
+
+    /// An update to push into the operator.
+    /// Can come from any worker, and from any input.
+    #[derive(Debug, Clone)]
+    struct TestUpdate {
+        worker_id: u64,
+        input_index: usize,
+        update: HealthStatusUpdate,
+    }
+
+    #[derive(Debug, Clone)]
+    enum Step {
+        /// Insert a new health update.
+        Update(TestUpdate),
+        /// Assert a set of outputs. Note that these should
+        /// have unique `collection_index`'s
+        AssertStatus(Vec<StatusToAssert>),
+    }
+
+    struct TestWriter {
+        sender: UnboundedSender<StatusToAssert>,
+        input_mapping: BTreeMap<GlobalId, usize>,
+    }
+
+    #[async_trait::async_trait(?Send)]
+    impl HealthOperator for TestWriter {
+        async fn record_new_status(
+            &self,
+            collection_id: GlobalId,
+            new_status: &str,
+            new_error: Option<&str>,
+            _now: NowFn,
+            _client: &PersistClient,
+            _status_shard: ShardId,
+            _relation_desc: &RelationDesc,
+            hint: Option<&str>,
+        ) {
+            let _ = self.sender.send(StatusToAssert {
+                collection_index: *self.input_mapping.get(&collection_id).unwrap(),
+                status: new_status.to_string(),
+                error: new_error.map(str::to_string),
+                hint: hint.map(str::to_string),
+            });
+        }
+
+        async fn send_halt(&self, _id: GlobalId, _error: Option<HealthStatusUpdate>) {
+            // Not yet unit-tested
+            unimplemented!()
+        }
+
+        fn chosen_worker(&self) -> Option<usize> {
+            // We input and assert outputs on the first worker.
+            Some(0)
+        }
+    }
+
+    /// Setup a `health_operator` with a set number of workers and inputs, and the
+    /// steps on the first worker.
+    fn health_operator_runner(workers: usize, inputs: usize, steps: Vec<Step>) {
+        let tokio_runtime = tokio::runtime::Runtime::new().unwrap();
+        let tokio_handle = tokio_runtime.handle().clone();
+
+        let inputs: BTreeMap<GlobalId, usize> = (0..inputs)
+            .map(|index| (GlobalId::User(u64::cast_from(index)), index))
+            .collect();
+
+        timely::execute::execute(
+            timely::execute::Config {
+                communication: timely::CommunicationConfig::Process(workers),
+                worker: Default::default(),
+            },
+            move |worker| {
+                let steps = steps.clone();
+                let inputs = inputs.clone();
+
+                let _tokio_guard = tokio_handle.enter();
+                let (in_tx, in_rx) = unbounded_channel();
+                let (out_tx, mut out_rx) = unbounded_channel();
+
+                worker.dataflow::<(), _, _>(|root_scope| {
+                    root_scope
+                        .clone()
+                        .scoped::<mz_repr::Timestamp, _, _>("gus", |scope| {
+                            let input = producer(root_scope.clone(), in_rx);
+                            Box::leak(Box::new(health_operator(
+                                scope,
+                                Arc::new(PersistClientCache::new_no_metrics()),
+                                mz_ore::now::SYSTEM_TIME.clone(),
+                                inputs.keys().copied().collect(),
+                                *inputs.first_key_value().unwrap().0,
+                                "source_test",
+                                &input,
+                                inputs
+                                    .iter()
+                                    .map(|(id, index)| {
+                                        (
+                                            *index,
+                                            ObjectHealthConfig {
+                                                id: *id,
+                                                schema: &*MZ_SOURCE_STATUS_HISTORY_DESC,
+                                                status_shard: Some(ShardId::new()),
+                                                persist_location: PersistLocation::new_in_mem(),
+                                            },
+                                        )
+                                    })
+                                    .collect(),
+                                TestWriter {
+                                    sender: out_tx,
+                                    input_mapping: inputs,
+                                },
+                            )));
+                        });
+                });
+
+                // We arbitrarily do all the testing on the first worker.
+                if worker.index() == 0 {
+                    use Step::*;
+                    for step in steps {
+                        match step {
+                            Update(update) => {
+                                let _ = in_tx.send(update);
+                            }
+                            AssertStatus(mut statuses) => loop {
+                                match out_rx.try_recv() {
+                                    Err(_) => {
+                                        worker.step();
+                                        // This makes testing easier.
+                                        std::thread::sleep(std::time::Duration::from_millis(50));
+                                    }
+                                    Ok(update) => {
+                                        let pos = statuses
+                                            .iter()
+                                            .position(|s| {
+                                                s.collection_index == update.collection_index
+                                            })
+                                            .unwrap();
+
+                                        let status_to_assert = &statuses[pos];
+                                        assert_eq!(&update, status_to_assert);
+
+                                        statuses.remove(pos);
+                                        if statuses.is_empty() {
+                                            break;
+                                        }
+                                    }
+                                }
+                            },
+                        }
+                    }
+
+                    // Assert that nothing is left in the channel.
+                    assert!(out_rx.try_recv().is_err());
+                }
+            },
+        )
+        .unwrap();
+    }
+
+    /// Produces (input_index, HealthStatusUpdate)'s based on the input channel.
+    ///
+    /// Only the first worker is used, all others immediately drop their capabilities and channels.
+    /// After the channel is empty on the first worker, then the frontier will go to [].
+    /// Also ensures that updates are routed to the correct worker based on the `TestUpdate`
+    /// using an exchange.
+    fn producer<G: Scope<Timestamp = ()>>(
+        scope: G,
+        mut input: UnboundedReceiver<TestUpdate>,
+    ) -> Stream<G, (usize, HealthStatusUpdate)> {
+        let mut iterator = AsyncOperatorBuilder::new("iterator".to_string(), scope.clone());
+        let (mut output_handle, output) = iterator.new_output();
+
+        let index = scope.index();
+        iterator.build(|mut caps| async move {
+            // We input and assert outputs on the first worker.
+            if index != 0 {
+                return;
+            }
+            let mut capability = Some(caps.pop().unwrap());
+            while let Some(element) = input.recv().await {
+                output_handle
+                    .give(
+                        capability.as_ref().unwrap(),
+                        (element.worker_id, element.input_index, element.update),
+                    )
+                    .await;
+            }
+
+            capability.take();
+        });
+
+        let output = output.exchange(|d| d.0).map(|d| (d.1, d.2));
+
+        output
     }
 }

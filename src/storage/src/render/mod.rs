@@ -199,6 +199,7 @@
 
 use std::collections::BTreeMap;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use mz_ore::error::ErrorExt;
 use mz_repr::{GlobalId, Row};
@@ -322,7 +323,8 @@ pub fn build_ingestion_dataflow<A: Allocate>(
             let health_stream = root_scope.concatenate(health_streams);
             let health_token = crate::healthcheck::health_operator(
                 into_time_scope,
-                storage_state,
+                Arc::clone(&storage_state.persist_clients),
+                storage_state.now.clone(),
                 resume_uppers
                     .iter()
                     .filter_map(|(id, frontier)| {
@@ -335,6 +337,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 "source",
                 &health_stream,
                 health_configs,
+                crate::healthcheck::DefaultWriter(Rc::clone(&storage_state.internal_cmd_tx)),
             );
             tokens.push(health_token);
 
@@ -393,12 +396,14 @@ pub fn build_export_dataflow<A: Allocate>(
             // `health_operator` has to do internally.
             let health_token = crate::healthcheck::health_operator(
                 scope,
-                storage_state,
+                Arc::clone(&storage_state.persist_clients),
+                storage_state.now.clone(),
                 [id].into_iter().collect(),
                 id,
                 "sink",
                 &health_stream,
                 health_configs,
+                crate::healthcheck::DefaultWriter(Rc::clone(&storage_state.internal_cmd_tx)),
             );
             tokens.push(health_token);
 
