@@ -130,4 +130,7 @@ pub enum Error {
     /// to retrieve or set passwords to  the keychain fails.
     #[error(transparent)]
     MacOsSecurityError(#[from] security_framework::base::Error),
+    /// Error that raises when the vault value from the config is invalid.
+    #[error("Vault value for the profile is invalid.")]
+    InvalidVaultError,
 }
