@@ -19,6 +19,8 @@ from pathlib import Path
 
 from setuptools import find_packages
 
+README = Path(__file__).parent / "README.md"
+
 setup(
     name="dbt-materialize",
     # This adapter's minor version should match the required dbt-postgres version,
