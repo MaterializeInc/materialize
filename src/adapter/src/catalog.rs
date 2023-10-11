@@ -52,9 +52,9 @@ use mz_sql::ast::display::AstDisplay;
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError as SqlCatalogError,
     CatalogItem as SqlCatalogItem, CatalogItemType as SqlCatalogItemType, CatalogItemType,
-    CatalogRecordField, CatalogRole, CatalogSchema, CatalogType, CatalogTypeDetails,
-    DefaultPrivilegeAclItem, DefaultPrivilegeObject, EnvironmentId, IdReference, NameReference,
-    RoleAttributes, RoleMembership, RoleVars, SessionCatalog, SystemObjectType,
+    CatalogRole, CatalogSchema, CatalogType, CatalogTypeDetails, DefaultPrivilegeAclItem,
+    DefaultPrivilegeObject, EnvironmentId, IdReference, NameReference, RoleAttributes,
+    RoleMembership, RoleVars, SessionCatalog, SystemObjectType,
 };
 use mz_sql::names::{
     CommentObjectId, DatabaseId, FullItemName, FullSchemaName, ItemQualifiers, ObjectId,
@@ -360,14 +360,7 @@ impl Catalog {
                 element_reference: name_to_id_map[element_reference],
             },
             CatalogType::Record { fields } => CatalogType::Record {
-                fields: fields
-                    .into_iter()
-                    .map(|f| CatalogRecordField {
-                        name: f.name.clone(),
-                        type_reference: name_to_id_map[f.type_reference],
-                        type_modifiers: f.type_modifiers.clone(),
-                    })
-                    .collect(),
+                fields: fields.clone(),
             },
             CatalogType::Bool => CatalogType::Bool,
             CatalogType::Bytes => CatalogType::Bytes,
@@ -4021,7 +4014,6 @@ impl ExprHumanizer for ConnCatalog<'_> {
             .try_map(|entry| {
                 Ok::<_, SqlCatalogError>(
                     entry
-                        .item()
                         .desc(&self.resolve_full_name(entry.name()))?
                         .iter_names()
                         .cloned()

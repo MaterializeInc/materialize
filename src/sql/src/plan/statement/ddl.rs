@@ -2411,39 +2411,29 @@ fn update_avro_format_with_comments(
                 }
 
                 // Getting comments on columns in the item
-                match item.item_type() {
-                    CatalogItemType::Source
-                    | CatalogItemType::Table
-                    | CatalogItemType::View
-                    | CatalogItemType::MaterializedView => {
-                        let desc = item.desc(&full_name)?;
-                        for (pos, column_name) in desc.iter_names().enumerate() {
-                            let comment = comments_map.get(&Some(pos + 1));
-                            if let Some(comment_str) = comment {
-                                let doc_on_column_key = AvroDocOn {
-                                    identifier: DocOnIdentifier::Column(
-                                        ResolvedColumnName::Column {
-                                            relation: full_resolved_name.clone(),
-                                            name: column_name.to_owned(),
-                                            index: pos,
-                                        },
-                                    ),
-                                    for_schema: DocOnSchema::All,
-                                };
-                                if !user_provided_comments.contains(&doc_on_column_key) {
-                                    options.push(CsrConfigOption {
-                                        name: CsrConfigOptionName::AvroDocOn(doc_on_column_key),
-                                        value: Some(mz_sql_parser::ast::WithOptionValue::Value(
-                                            Value::String(comment_str.clone()),
-                                        )),
-                                    });
-                                }
+                if let Ok(desc) = item.desc(&full_name) {
+                    for (pos, column_name) in desc.iter_names().enumerate() {
+                        let comment = comments_map.get(&Some(pos + 1));
+                        if let Some(comment_str) = comment {
+                            let doc_on_column_key = AvroDocOn {
+                                identifier: DocOnIdentifier::Column(ResolvedColumnName::Column {
+                                    relation: full_resolved_name.clone(),
+                                    name: column_name.to_owned(),
+                                    index: pos,
+                                }),
+                                for_schema: DocOnSchema::All,
+                            };
+                            if !user_provided_comments.contains(&doc_on_column_key) {
+                                options.push(CsrConfigOption {
+                                    name: CsrConfigOptionName::AvroDocOn(doc_on_column_key),
+                                    value: Some(mz_sql_parser::ast::WithOptionValue::Value(
+                                        Value::String(comment_str.clone()),
+                                    )),
+                                });
                             }
                         }
                     }
-                    // the other types don't support comments on columns
-                    _ => {}
-                };
+                }
             }
         }
     }
@@ -2995,10 +2985,11 @@ pub fn plan_create_type(
                 let data_type = column_def.data_type;
                 let key = ident(column_def.name.clone());
                 let (id, modifiers) = validate_data_type(scx, data_type, "", &key)?;
+                let scalar_type =
+                    crate::plan::query::scalar_type_from_catalog(scx, id, &modifiers)?;
                 fields.push(CatalogRecordField {
                     name: ColumnName::from(key.clone()),
-                    type_reference: id,
-                    type_modifiers: modifiers,
+                    typ: scalar_type.nullable(true),
                 });
             }
             CatalogType::Record { fields }
@@ -5551,6 +5542,7 @@ pub fn plan_comment(
                 CatalogItemType::MaterializedView => {
                     (CommentObjectId::MaterializedView(item.id()), Some(pos + 1))
                 }
+                CatalogItemType::Type => (CommentObjectId::Type(item.id()), Some(pos + 1)),
                 r => {
                     return Err(PlanError::Unsupported {
                         feature: format!("Specifying comments on a column of {r}"),

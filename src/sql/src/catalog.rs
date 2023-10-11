@@ -30,7 +30,7 @@ use mz_proto::IntoRustIfSome;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::role_id::RoleId;
-use mz_repr::{ColumnName, GlobalId, RelationDesc};
+use mz_repr::{ColumnName, ColumnType, GlobalId, RelationDesc};
 use mz_sql_parser::ast::{Expr, QualifiedReplica, UnresolvedItemName};
 use mz_stash_types::objects::{proto, RustType, TryFromProtoError};
 use mz_storage_types::connections::inline::{ConnectionResolver, ReferencedConnection};
@@ -619,6 +619,9 @@ pub trait CatalogItem {
     /// an index), it returns an error.
     fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, CatalogError>;
 
+    /// Reports whether this catalog item has columns.
+    fn has_columns(&self) -> bool;
+
     /// Returns the resolved function.
     ///
     /// If the catalog item is not of a type that produces functions (i.e.,
@@ -855,7 +858,7 @@ pub enum CatalogType<T: TypeReference> {
         element_reference: T::Reference,
     },
     Record {
-        fields: Vec<CatalogRecordField<T>>,
+        fields: Vec<CatalogRecordField>,
     },
     RegClass,
     RegProc,
@@ -872,13 +875,11 @@ pub enum CatalogType<T: TypeReference> {
 
 /// A description of a field in a [`CatalogType::Record`].
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CatalogRecordField<T: TypeReference> {
+pub struct CatalogRecordField {
     /// The name of the field.
     pub name: ColumnName,
-    /// The ID of the type of the field.
-    pub type_reference: T::Reference,
-    /// Modifiers to apply to the type.
-    pub type_modifiers: Vec<i64>,
+    /// The type of column
+    pub typ: ColumnType,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

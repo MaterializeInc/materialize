@@ -219,7 +219,7 @@ impl CatalogState {
                         Some(entry) => {
                             // TODO: Refactor this to use if-let chains, once they're stable.
                             #[allow(clippy::unnecessary_unwrap)]
-                            if !entry.is_relation() && col_pos.is_some() {
+                            if !entry.has_columns() && col_pos.is_some() {
                                 let col_pos = col_pos.expect("checked above");
                                 comment_inconsistencies.push(CommentInconsistency::NonRelation(
                                     comment_object_id,

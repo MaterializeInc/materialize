@@ -34,9 +34,9 @@ use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Expr;
 use mz_sql::catalog::{
     CatalogClusterReplica, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
-    CatalogItemType as SqlCatalogItemType, CatalogItemType, CatalogSchema, CatalogTypeDetails,
-    DefaultPrivilegeAclItem, DefaultPrivilegeObject, IdReference, RoleAttributes, RoleMembership,
-    RoleVars, SystemObjectType,
+    CatalogItemType as SqlCatalogItemType, CatalogItemType, CatalogSchema, CatalogType,
+    CatalogTypeDetails, DefaultPrivilegeAclItem, DefaultPrivilegeObject, IdReference,
+    RoleAttributes, RoleMembership, RoleVars, SystemObjectType,
 };
 use mz_sql::names::{
     Aug, CommentObjectId, DatabaseId, FullItemName, QualifiedItemName, QualifiedSchemaName,
@@ -708,6 +708,26 @@ pub struct Type {
     pub resolved_ids: ResolvedIds,
 }
 
+impl Type {
+    pub fn desc(&self, name: String) -> Result<RelationDesc, SqlCatalogError> {
+        match &self.details {
+            CatalogTypeDetails {
+                typ: CatalogType::Record { fields },
+                ..
+            } => {
+                let columns = fields
+                    .iter()
+                    .map(|field| (field.name.clone(), field.typ.clone()));
+                Ok(RelationDesc::from_names_and_types(columns))
+            }
+            _ => Err(SqlCatalogError::InvalidDependency {
+                name,
+                typ: CatalogItemType::Type,
+            }),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Func {
     #[serde(skip)]
@@ -744,20 +764,20 @@ impl CatalogItem {
         }
     }
 
-    pub fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, SqlCatalogError> {
+    pub fn desc(&self, name: String) -> Result<Cow<RelationDesc>, SqlCatalogError> {
         match &self {
             CatalogItem::Source(src) => Ok(Cow::Borrowed(&src.desc)),
             CatalogItem::Log(log) => Ok(Cow::Owned(log.variant.desc())),
             CatalogItem::Table(tbl) => Ok(Cow::Borrowed(&tbl.desc)),
             CatalogItem::View(view) => Ok(Cow::Borrowed(&view.desc)),
             CatalogItem::MaterializedView(mview) => Ok(Cow::Borrowed(&mview.desc)),
+            CatalogItem::Type(typ) => Ok(Cow::Owned(typ.desc(name)?)),
             CatalogItem::Func(_)
             | CatalogItem::Index(_)
             | CatalogItem::Sink(_)
-            | CatalogItem::Type(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_) => Err(SqlCatalogError::InvalidDependency {
-                name: name.to_string(),
+                name,
                 typ: self.typ(),
             }),
         }
@@ -1087,7 +1107,15 @@ impl CatalogItem {
 impl CatalogEntry {
     /// Reports the description of the datums produced by this catalog item.
     pub fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, SqlCatalogError> {
-        self.item.desc(name)
+        self.item.desc(name.to_string())
+    }
+
+    /// Reports if the item has columns.
+    pub fn has_columns(&self) -> bool {
+        // The name passed to `desc` is only used to create the
+        // SqlCatalogError object in case it errors which we don't
+        // care for in this case.
+        self.item.desc("".to_string()).is_ok()
     }
 
     /// Returns the [`mz_sql::func::Func`] associated with this `CatalogEntry`.
@@ -1819,6 +1847,10 @@ impl mz_sql::catalog::CatalogClusterReplica<'_> for ClusterReplica {
 impl mz_sql::catalog::CatalogItem for CatalogEntry {
     fn name(&self) -> &QualifiedItemName {
         self.name()
+    }
+
+    fn has_columns(&self) -> bool {
+        self.has_columns()
     }
 
     fn id(&self) -> GlobalId {

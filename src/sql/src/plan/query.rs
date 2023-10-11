@@ -5378,17 +5378,7 @@ pub fn scalar_type_from_catalog(
                 CatalogType::Record { fields } => {
                     let scalars: Vec<(ColumnName, ColumnType)> = fields
                         .iter()
-                        .map(|f| {
-                            let scalar_type =
-                                scalar_type_from_catalog(scx, f.type_reference, &f.type_modifiers)?;
-                            Ok((
-                                f.name.clone(),
-                                ColumnType {
-                                    scalar_type,
-                                    nullable: true,
-                                },
-                            ))
-                        })
+                        .map(|f| Ok((f.name.clone(), f.typ.clone())))
                         .collect::<Result<Vec<_>, PlanError>>()?;
                     Ok(ScalarType::Record {
                         fields: scalars,
