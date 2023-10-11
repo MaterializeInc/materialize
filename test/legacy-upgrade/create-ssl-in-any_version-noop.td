@@ -9,5 +9,4 @@
 
 # no-op to keep the upgrade test glob simple
 
-> SELECT 1
-1
+$ nop

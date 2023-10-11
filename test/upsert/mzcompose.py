@@ -402,8 +402,7 @@ def workflow_rocksdb_cleanup(c: Composition) -> None:
         c.testdrive(
             dedent(
                 """
-            > SELECT 1
-            1
+            $ nop
 
             # this is to reset testdrive
             """

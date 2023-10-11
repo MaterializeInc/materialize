@@ -8,18 +8,12 @@
 # by the Apache License, Version 2.0.
 
 from random import Random
-from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.executors import Executor
 from materialize.util import MzVersion
 
-TESTDRIVE_NOP = dedent(
-    """
-    > SELECT 1
-    1
-    """
-)
+TESTDRIVE_NOP = "$ nop"
 
 
 class Check:

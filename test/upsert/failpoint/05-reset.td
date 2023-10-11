@@ -9,5 +9,4 @@
 
 # Empty testdrive file to reset
 
-> SELECT 1
-1
+$ nop

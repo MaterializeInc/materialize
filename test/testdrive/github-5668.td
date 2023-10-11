@@ -13,8 +13,7 @@
 # metadata. This test uses that new sequence field to show that we can now handle messages
 # that seem to go backwards in time (by LSN).
 
-> SELECT 1
-1
+$ nop
 
 # [btv] uncomment if we bring back classic debezium mode
 # $ set pg-dbz-schema={
