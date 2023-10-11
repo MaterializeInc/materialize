@@ -812,6 +812,8 @@ pub async fn create_state(
                 kafka_config.set("ssl.keystore.password", cert_password);
             }
         }
+        kafka_config.set("message.max.bytes", "15728640");
+
         for (key, value) in &config.kafka_opts {
             kafka_config.set(key, value);
         }
@@ -822,7 +824,6 @@ pub async fn create_state(
 
         let admin_opts = AdminOptions::new().operation_timeout(Some(config.default_timeout));
 
-        kafka_config.set("message.max.bytes", "15728640");
         let producer: FutureProducer<_> = kafka_config
             .create_with_context(MzClientContext::default())
             .with_context(|| format!("opening Kafka producer connection: {}", config.kafka_addr))?;
