@@ -175,6 +175,8 @@ impl ConfigFile {
     pub fn add_app_password(
         &self,
         new_profile: &mut toml_edit::Table,
+        // Compatibility param.
+        _name: &str,
         profile: TomlProfile,
     ) -> Result<(), Error> {
         new_profile["app-password"] = value(profile.app_password.ok_or(Error::AppPasswordMissing)?);
@@ -377,8 +379,10 @@ impl Profile<'_> {
 
     /// Returns the app password in the profile configuration.
     #[cfg(not(target_os = "macos"))]
-    pub fn app_password(&self, _global_vault: &str) -> Option<String> {
-        (PROFILE_PARAMS["app-password"].get)(self.parsed).map(|x| x.to_string())
+    pub fn app_password(&self, _global_vault: &str) -> Result<String, Error> {
+        (PROFILE_PARAMS["app-password"].get)(self.parsed)
+            .map(|x| x.to_string())
+            .ok_or(Error::AppPasswordMissing)
     }
 
     /// Returns the region in the profile configuration.
