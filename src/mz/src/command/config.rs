@@ -31,13 +31,13 @@ pub struct GetArgs<'a> {
 }
 
 /// Shows the value of a *global* configuration field.
-pub fn get(cx: &mut Context, GetArgs { name }: GetArgs<'_>) -> Result<(), Error> {
+pub fn get(cx: &Context, GetArgs { name }: GetArgs<'_>) -> Result<(), Error> {
     let value = cx.config_file().get_param(name)?;
     cx.output_formatter().output_scalar(value)
 }
 
 /// Shows all the possible field and its values in the *global* configuration.
-pub fn list(cx: &mut Context) -> Result<(), Error> {
+pub fn list(cx: &Context) -> Result<(), Error> {
     #[derive(Deserialize, Serialize, Tabled)]
     pub struct ConfigParam<'a> {
         #[tabled(rename = "Name")]
@@ -66,7 +66,7 @@ pub struct SetArgs<'a> {
 }
 
 /// Sets the value of a global configuration field.
-pub async fn set(cx: &mut Context, SetArgs { name, value }: SetArgs<'_>) -> Result<(), Error> {
+pub async fn set(cx: &Context, SetArgs { name, value }: SetArgs<'_>) -> Result<(), Error> {
     cx.config_file().set_param(name, Some(value)).await
 }
 
@@ -77,6 +77,6 @@ pub struct RemoveArgs<'a> {
 }
 
 /// Removes the value from a *global* configuration field.
-pub async fn remove(cx: &mut Context, RemoveArgs { name }: RemoveArgs<'_>) -> Result<(), Error> {
+pub async fn remove(cx: &Context, RemoveArgs { name }: RemoveArgs<'_>) -> Result<(), Error> {
     cx.config_file().set_param(name, None).await
 }

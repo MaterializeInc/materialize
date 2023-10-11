@@ -4465,8 +4465,8 @@ pub(crate) fn resolve_desc_and_nulls_last<T: AstInfo>(
     ColumnOrder {
         column,
         desc,
-        /// https://www.postgresql.org/docs/14/queries-order.html
-        ///   "NULLS FIRST is the default for DESC order, and NULLS LAST otherwise"
+        // https://www.postgresql.org/docs/14/queries-order.html
+        //   "NULLS FIRST is the default for DESC order, and NULLS LAST otherwise"
         nulls_last: obe.nulls_last.unwrap_or(!desc),
     }
 }

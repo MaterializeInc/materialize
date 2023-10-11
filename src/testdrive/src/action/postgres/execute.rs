@@ -15,7 +15,7 @@ use crate::util::postgres::postgres_client;
 
 pub async fn run_execute(
     mut cmd: BuiltinCommand,
-    state: &mut State,
+    state: &State,
 ) -> Result<ControlFlow, anyhow::Error> {
     let connection = cmd.args.string("connection")?;
     cmd.args.done()?;

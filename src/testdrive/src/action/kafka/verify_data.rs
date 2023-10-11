@@ -41,11 +41,7 @@ struct Record<A> {
     value: Option<A>,
 }
 
-async fn get_topic(
-    sink: &str,
-    topic_field: &str,
-    state: &mut State,
-) -> Result<String, anyhow::Error> {
+async fn get_topic(sink: &str, topic_field: &str, state: &State) -> Result<String, anyhow::Error> {
     let query = format!(
         "SELECT {} FROM mz_sinks JOIN mz_kafka_sinks \
         ON mz_sinks.id = mz_kafka_sinks.id \
@@ -71,7 +67,7 @@ async fn get_topic(
 
 pub async fn run_verify_data(
     mut cmd: BuiltinCommand,
-    state: &mut State,
+    state: &State,
 ) -> Result<ControlFlow, anyhow::Error> {
     let format = match cmd.args.string("format")?.as_str() {
         "avro" => Format::Avro,

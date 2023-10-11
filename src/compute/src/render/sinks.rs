@@ -38,7 +38,7 @@ where
     pub(crate) fn export_sink(
         &mut self,
         compute_state: &mut crate::compute_state::ComputeState,
-        tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
+        tokens: &BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
         dependency_ids: BTreeSet<GlobalId>,
         sink_id: GlobalId,
         sink: &ComputeSinkDesc<CollectionMetadata>,

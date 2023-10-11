@@ -14,7 +14,7 @@ use crate::parser::BuiltinCommand;
 
 pub async fn run_append(
     mut cmd: BuiltinCommand,
-    state: &mut State,
+    state: &State,
 ) -> Result<ControlFlow, anyhow::Error> {
     let database = cmd
         .args
