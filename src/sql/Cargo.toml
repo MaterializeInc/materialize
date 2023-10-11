@@ -68,6 +68,7 @@ tokio-postgres = { version = "0.7.8", features = ["serde"] }
 tracing = "0.1.37"
 tracing-subscriber = "0.3.16"
 uncased = "0.9.7"
+url = "2.3.1"
 uuid = { version = "1.2.2", features = ["serde", "v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 

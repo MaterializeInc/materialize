@@ -69,6 +69,7 @@ impl Generator for Ldbc {
             arena: RowArena::new(),
             offset: 0.into(),
             pending: None,
+            progress_outputs: Vec::new(),
         };
         Box::new(ctx)
     }
@@ -87,6 +88,7 @@ struct Context {
     arena: RowArena,
     offset: MzOffset,
     pending: Option<(usize, Row)>,
+    progress_outputs: Vec<usize>,
 }
 
 impl Context {
@@ -209,12 +211,15 @@ impl Iterator for Context {
                 None => {
                     // If we're out of records for this file, close the current file and its data.
                     if let Some(csv) = self.rdr.take() {
-                        return Some((csv.output, Event::Progress(Some(self.offset))));
+                        self.progress_outputs.push(csv.output);
                     }
                     // Otherwise open the next file.
                     self.next_file();
                     // No more files.
                     if self.rdr.is_none() {
+                        if let Some(output) = self.progress_outputs.pop() {
+                            return Some((output, Event::Progress(None)));
+                        }
                         return None;
                     }
                     continue;

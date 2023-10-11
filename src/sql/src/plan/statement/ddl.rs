@@ -62,6 +62,7 @@ use mz_storage_types::sources::{
     TestScriptSourceConnection, Timeline, UnplannedSourceEnvelope, UpsertStyle,
 };
 use prost::Message;
+use url::Url;
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
@@ -975,8 +976,11 @@ pub fn plan_create_source(
             (connection, encoding, Some(available_subsources))
         }
         CreateSourceConnection::LoadGenerator { generator, options } => {
-            let (load_generator, available_subsources) =
-                load_generator_ast_to_generator(generator, options)?;
+            let (load_generator, available_subsources) = load_generator_ast_to_generator(
+                generator,
+                options,
+                scx.catalog.system_vars().ldbc_url(),
+            )?;
             let available_subsources = available_subsources
                 .map(|a| BTreeMap::from_iter(a.into_iter().map(|(k, v)| (k, v.0))));
 
@@ -1462,6 +1466,7 @@ generate_extracted_config!(
 pub(crate) fn load_generator_ast_to_generator(
     loadgen: &mz_sql_parser::ast::LoadGenerator,
     options: &[LoadGeneratorOption<Aug>],
+    url_prefix: &str,
 ) -> Result<
     (
         LoadGenerator,
@@ -1485,13 +1490,13 @@ pub(crate) fn load_generator_ast_to_generator(
             // Default to 0.01 scale factor (=10MB).
             let sf: f64 = scale_factor.unwrap_or(0.01);
             if !sf.is_finite() || sf < 0.0 {
-                sql_bail!("unsupported scale factor {sf}");
+                return Err(PlanError::UnsupportedLdbcScaleFactor);
             }
 
             let f_to_i = |multiplier: f64| -> Result<i64, PlanError> {
                 let total = (sf * multiplier).floor();
                 let mut i = i64::try_cast_from(total)
-                    .ok_or_else(|| sql_err!("unsupported scale factor {sf}"))?;
+                    .ok_or_else(|| PlanError::UnsupportedLdbcScaleFactor)?;
                 if i < 1 {
                     i = 1;
                 }
@@ -1520,17 +1525,21 @@ pub(crate) fn load_generator_ast_to_generator(
                 None => 1,
                 Some(sf) => match i64::try_cast_from(sf) {
                     Some(i) => i,
-                    None => sql_bail!("unsupported scale factor: {sf}"),
+                    None => return Err(PlanError::UnsupportedLdbcScaleFactor),
                 },
             };
             // See https://github.com/ldbc/ldbc_snb_bi/blob/main/snb-bi-pre-generated-data-sets.md
             // for valid scale factors and URLs.
             match sf {
                 1 | 3 | 10 | 30 | 100 | 300 => {}
-                _ => sql_bail!("unsupported scale factor: {sf}"),
+                _ => return Err(PlanError::UnsupportedLdbcScaleFactor),
             }
-            let urls = vec![format!("https://pub-383410a98aef4cb686f0c7601eddd25f.r2.dev/bi-pre-audit/bi-sf{}-composite-merged-fk.tar.zst", sf)];
-            LoadGenerator::Ldbc { urls }
+            let url = Url::parse(url_prefix)
+                .and_then(|u| u.join(&format!("bi-sf{sf}-composite-merged-fk.tar.zst")))
+                .map_err(|e| sql_err!("could not generate LDBC url: {e}"))?;
+            LoadGenerator::Ldbc {
+                urls: vec![url.to_string()],
+            }
         }
     };
 

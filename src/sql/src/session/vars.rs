@@ -1186,6 +1186,20 @@ static REAL_TIME_RECENCY: ServerVar<bool> = ServerVar {
     internal: false,
 };
 
+pub static DEFAULT_LDBC_URL: Lazy<String> =
+    Lazy::new(|| "https://pub-383410a98aef4cb686f0c7601eddd25f.r2.dev/bi-pre-audit/".to_string());
+
+/// Feature flag indicating whether real time recency is enabled. Not that
+/// unlike other feature flags, this is made available at the session level, so
+/// is additionally gated by a feature flag.
+static LDBC_URL: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
+    name: UncasedStr::new("ldbc_url"),
+    value: &DEFAULT_LDBC_URL,
+    description:
+        "URL prefix that must end with `/` (`https://HOST/DIR/`) of LDBC files (Materialize).",
+    internal: true,
+});
+
 static EMIT_TIMESTAMP_NOTICE: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("emit_timestamp_notice"),
     value: &false,
@@ -2453,7 +2467,8 @@ impl SystemVars {
             .with_var(&TRUNCATE_STATEMENT_LOG)
             .with_var(&STATEMENT_LOGGING_RETENTION)
             .with_var(&OPTIMIZER_STATS_TIMEOUT)
-            .with_var(&OPTIMIZER_ONESHOT_STATS_TIMEOUT);
+            .with_var(&OPTIMIZER_ONESHOT_STATS_TIMEOUT)
+            .with_var(&LDBC_URL);
 
         for flag in PersistFeatureFlag::ALL {
             vars = vars.with_var(&flag.into())
@@ -3196,6 +3211,10 @@ impl SystemVars {
     /// Returns the `optimizer_oneshot_stats_timeout` configuration parameter.
     pub fn optimizer_oneshot_stats_timeout(&self) -> Duration {
         *self.expect_value(&OPTIMIZER_ONESHOT_STATS_TIMEOUT)
+    }
+
+    pub fn ldbc_url(&self) -> &String {
+        self.expect_value(&LDBC_URL)
     }
 }
 
