@@ -47,6 +47,7 @@ class StartMz(MzcomposeAction):
             external_cockroach=True,
             environment_extra=self.environment_extra,
             system_parameter_defaults=self.system_parameter_defaults,
+            sanity_restart=False,
         )
 
         with c.override(mz):
