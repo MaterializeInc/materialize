@@ -17,9 +17,8 @@ use std::time::Duration;
 
 use differential_dataflow::collection::AsCollection;
 use mz_compute_client::logging::LoggingConfig;
-use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use mz_ore::cast::CastFrom;
-use mz_repr::{Datum, DatumVec, Diff, Row, Timestamp};
+use mz_repr::{Datum, Diff, Timestamp};
 use mz_timely_util::buffer::ConsolidateBuffer;
 use mz_timely_util::replay::MzReplay;
 use serde::{Deserialize, Serialize};
@@ -37,6 +36,7 @@ use tracing::error;
 
 use crate::extensions::arrange::MzArrange;
 use crate::logging::compute::ComputeEvent;
+use crate::logging::PermutedRowPacker;
 use crate::logging::{EventQueue, LogVariant, SharedLoggingState, TimelyLog};
 use crate::typedefs::{KeysValsHandle, RowSpine};
 
@@ -148,6 +148,7 @@ pub(super) fn construct<A: Allocate>(
         // Encode the contents of each logging stream into its expected `Row` format.
         // We pre-arrange the logging streams to force a consolidation and reduce the amount of
         // updates that reach `Row` encoding.
+        let mut packer = PermutedRowPacker::new(TimelyLog::Operates);
         let operates = operates
             .as_collection()
             .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
@@ -155,12 +156,13 @@ pub(super) fn construct<A: Allocate>(
                 "PreArrange Timely operates",
             )
             .as_collection(move |id, name| {
-                Row::pack_slice(&[
+                packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(*id)),
                     Datum::UInt64(u64::cast_from(worker_id)),
                     Datum::String(name),
                 ])
             });
+        let mut packer = PermutedRowPacker::new(TimelyLog::Channels);
         let channels = channels
             .as_collection()
             .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
@@ -170,7 +172,7 @@ pub(super) fn construct<A: Allocate>(
             .as_collection(move |datum, ()| {
                 let (source_node, source_port) = datum.source;
                 let (target_node, target_port) = datum.target;
-                Row::pack_slice(&[
+                packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(datum.id)),
                     Datum::UInt64(u64::cast_from(worker_id)),
                     Datum::UInt64(u64::cast_from(source_node)),
@@ -180,22 +182,25 @@ pub(super) fn construct<A: Allocate>(
                 ])
             });
 
-        let mut address_row = Row::default();
-
+        let mut packer = PermutedRowPacker::new(TimelyLog::Addresses);
         let addresses = addresses
             .as_collection()
             .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
                 Exchange::new(move |_| u64::cast_from(worker_id)),
                 "PreArrange Timely addresses",
             )
-            .as_collection(move |id, address| {
-                let mut packer = address_row.packer();
-                packer.push(Datum::UInt64(u64::cast_from(*id)));
-                packer.push(Datum::UInt64(u64::cast_from(worker_id)));
-                packer.push_list(address.iter().map(|i| Datum::UInt64(u64::cast_from(*i))));
-
-                address_row.clone()
+            .as_collection({
+                move |id, address| {
+                    packer.pack_by_index(|packer, index| match index {
+                        0 => packer.push(Datum::UInt64(u64::cast_from(*id))),
+                        1 => packer.push(Datum::UInt64(u64::cast_from(worker_id))),
+                        2 => packer
+                            .push_list(address.iter().map(|i| Datum::UInt64(u64::cast_from(*i)))),
+                        _ => unreachable!("Addresses relation has three columns"),
+                    })
+                }
             });
+        let mut packer = PermutedRowPacker::new(TimelyLog::Parks);
         let parks = parks
             .as_collection()
             .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
@@ -203,7 +208,7 @@ pub(super) fn construct<A: Allocate>(
                 "PreArrange Timely parks",
             )
             .as_collection(move |datum, ()| {
-                Row::pack_slice(&[
+                packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(worker_id)),
                     Datum::UInt64(u64::try_from(datum.duration_pow).expect("duration too big")),
                     datum
@@ -212,6 +217,7 @@ pub(super) fn construct<A: Allocate>(
                         .unwrap_or(Datum::Null),
                 ])
             });
+        let mut packer = PermutedRowPacker::new(TimelyLog::BatchesSent);
         let batches_sent = batches_sent
             .as_collection()
             .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
@@ -219,12 +225,13 @@ pub(super) fn construct<A: Allocate>(
                 "PreArrange Timely batches sent",
             )
             .as_collection(move |datum, ()| {
-                Row::pack_slice(&[
+                packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(datum.channel)),
                     Datum::UInt64(u64::cast_from(worker_id)),
                     Datum::UInt64(u64::cast_from(datum.worker)),
                 ])
             });
+        let mut packer = PermutedRowPacker::new(TimelyLog::BatchesReceived);
         let batches_received = batches_received
             .as_collection()
             .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
@@ -232,12 +239,13 @@ pub(super) fn construct<A: Allocate>(
                 "PreArrange Timely batches received",
             )
             .as_collection(move |datum, ()| {
-                Row::pack_slice(&[
+                packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(datum.channel)),
                     Datum::UInt64(u64::cast_from(datum.worker)),
                     Datum::UInt64(u64::cast_from(worker_id)),
                 ])
             });
+        let mut packer = PermutedRowPacker::new(TimelyLog::MessagesSent);
         let messages_sent = messages_sent
             .as_collection()
             .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
@@ -245,12 +253,13 @@ pub(super) fn construct<A: Allocate>(
                 "PreArrange Timely messages sent",
             )
             .as_collection(move |datum, ()| {
-                Row::pack_slice(&[
+                packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(datum.channel)),
                     Datum::UInt64(u64::cast_from(worker_id)),
                     Datum::UInt64(u64::cast_from(datum.worker)),
                 ])
             });
+        let mut packer = PermutedRowPacker::new(TimelyLog::MessagesReceived);
         let messages_received = messages_received
             .as_collection()
             .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
@@ -258,12 +267,13 @@ pub(super) fn construct<A: Allocate>(
                 "PreArrange Timely messages received",
             )
             .as_collection(move |datum, ()| {
-                Row::pack_slice(&[
+                packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(datum.channel)),
                     Datum::UInt64(u64::cast_from(datum.worker)),
                     Datum::UInt64(u64::cast_from(worker_id)),
                 ])
             });
+        let mut packer = PermutedRowPacker::new(TimelyLog::Elapsed);
         let elapsed = schedules_duration
             .as_collection()
             .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
@@ -271,11 +281,12 @@ pub(super) fn construct<A: Allocate>(
                 "PreArrange Timely duration",
             )
             .as_collection(move |operator, _| {
-                Row::pack_slice(&[
+                packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(*operator)),
                     Datum::UInt64(u64::cast_from(worker_id)),
                 ])
             });
+        let mut packer = PermutedRowPacker::new(TimelyLog::Histogram);
         let histogram = schedules_histogram
             .as_collection()
             .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
@@ -283,12 +294,11 @@ pub(super) fn construct<A: Allocate>(
                 "PreArrange Timely histogram",
             )
             .as_collection(move |datum, _| {
-                let row = Row::pack_slice(&[
+                packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(datum.operator)),
                     Datum::UInt64(u64::cast_from(worker_id)),
                     Datum::UInt64(u64::try_from(datum.duration_pow).expect("duration too big")),
-                ]);
-                row
+                ])
             });
 
         use TimelyLog::*;
@@ -310,30 +320,10 @@ pub(super) fn construct<A: Allocate>(
         for (variant, collection) in logs {
             let variant = LogVariant::Timely(variant);
             if config.index_logs.contains_key(&variant) {
-                let key = variant.index_by();
-                let (_, value) = permutation_for_arrangement(
-                    &key.iter()
-                        .cloned()
-                        .map(MirScalarExpr::Column)
-                        .collect::<Vec<_>>(),
-                    variant.desc().arity(),
-                );
                 let trace = collection
-                    .map({
-                        let mut row_buf = Row::default();
-                        let mut datums = DatumVec::new();
-                        move |row| {
-                            let datums = datums.borrow_with(&row);
-                            row_buf.packer().extend(key.iter().map(|k| datums[*k]));
-                            let row_key = row_buf.clone();
-                            row_buf.packer().extend(value.iter().map(|k| datums[*k]));
-                            let row_val = row_buf.clone();
-                            (row_key, row_val)
-                        }
-                    })
                     .mz_arrange::<RowSpine<_, _, _, _>>(&format!("ArrangeByKey {:?}", variant))
                     .trace;
-                traces.insert(variant.clone(), (trace, Rc::clone(&token)));
+                traces.insert(variant, (trace, Rc::clone(&token)));
             }
         }
 

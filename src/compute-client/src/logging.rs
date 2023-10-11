@@ -101,11 +101,31 @@ impl ProtoMapEntry<LogVariant, GlobalId> for ProtoIndexLog {
     }
 }
 
-#[derive(Arbitrary, Hash, Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize)]
+#[derive(
+    Arbitrary, Hash, Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Copy, Serialize, Deserialize,
+)]
 pub enum LogVariant {
     Timely(TimelyLog),
     Differential(DifferentialLog),
     Compute(ComputeLog),
+}
+
+impl From<TimelyLog> for LogVariant {
+    fn from(value: TimelyLog) -> Self {
+        Self::Timely(value)
+    }
+}
+
+impl From<DifferentialLog> for LogVariant {
+    fn from(value: DifferentialLog) -> Self {
+        Self::Differential(value)
+    }
+}
+
+impl From<ComputeLog> for LogVariant {
+    fn from(value: ComputeLog) -> Self {
+        Self::Compute(value)
+    }
 }
 
 impl RustType<ProtoLogVariant> for LogVariant {
@@ -131,7 +151,9 @@ impl RustType<ProtoLogVariant> for LogVariant {
     }
 }
 
-#[derive(Arbitrary, Hash, Eq, Ord, PartialEq, PartialOrd, Debug, Clone, Serialize, Deserialize)]
+#[derive(
+    Arbitrary, Hash, Eq, Ord, PartialEq, PartialOrd, Debug, Clone, Copy, Serialize, Deserialize,
+)]
 pub enum TimelyLog {
     Operates,
     Channels,
@@ -185,7 +207,9 @@ impl RustType<ProtoTimelyLog> for TimelyLog {
     }
 }
 
-#[derive(Arbitrary, Hash, Eq, Ord, PartialEq, PartialOrd, Debug, Clone, Serialize, Deserialize)]
+#[derive(
+    Arbitrary, Hash, Eq, Ord, PartialEq, PartialOrd, Debug, Clone, Copy, Serialize, Deserialize,
+)]
 pub enum DifferentialLog {
     ArrangementBatches,
     ArrangementRecords,
@@ -217,7 +241,9 @@ impl RustType<ProtoDifferentialLog> for DifferentialLog {
     }
 }
 
-#[derive(Arbitrary, Hash, Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize)]
+#[derive(
+    Arbitrary, Hash, Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Copy, Serialize, Deserialize,
+)]
 pub enum ComputeLog {
     DataflowCurrent,
     FrontierCurrent,

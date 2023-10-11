@@ -20,9 +20,8 @@ use differential_dataflow::collection::AsCollection;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::Collection;
-use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use mz_ore::cast::CastFrom;
-use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row, Timestamp};
+use mz_repr::{Datum, Diff, GlobalId, Timestamp};
 use mz_timely_util::replay::MzReplay;
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Pipeline;
@@ -39,7 +38,7 @@ use tracing::error;
 use uuid::Uuid;
 
 use crate::extensions::arrange::MzArrange;
-use crate::logging::{ComputeLog, EventQueue, LogVariant, SharedLoggingState};
+use crate::logging::{ComputeLog, EventQueue, LogVariant, PermutedRowPacker, SharedLoggingState};
 use crate::typedefs::{KeysValsHandle, RowSpine};
 
 /// Type alias for a logger of compute events.
@@ -242,31 +241,34 @@ pub(super) fn construct<A: Allocate + 'static>(
         });
 
         // Encode the contents of each logging stream into its expected `Row` format.
+        let mut packer = PermutedRowPacker::new(ComputeLog::DataflowCurrent);
         let dataflow_current = export.as_collection().map({
             let mut scratch = String::new();
             move |datum| {
-                Row::pack_slice(&[
+                packer.pack_slice(&[
                     make_string_datum(datum.id, &mut scratch),
                     Datum::UInt64(u64::cast_from(worker_id)),
                     Datum::UInt64(u64::cast_from(datum.dataflow_id)),
                 ])
             }
         });
+        let mut packer = PermutedRowPacker::new(ComputeLog::FrontierCurrent);
         let frontier_current = frontier.as_collection().map({
             let mut scratch = String::new();
             move |datum| {
-                Row::pack_slice(&[
+                packer.pack_slice(&[
                     make_string_datum(datum.export_id, &mut scratch),
                     Datum::UInt64(u64::cast_from(worker_id)),
                     Datum::MzTimestamp(datum.frontier),
                 ])
             }
         });
+        let mut packer = PermutedRowPacker::new(ComputeLog::ImportFrontierCurrent);
         let import_frontier_current = import_frontier.as_collection().map({
             let mut scratch1 = String::new();
             let mut scratch2 = String::new();
             move |datum| {
-                Row::pack_slice(&[
+                packer.pack_slice(&[
                     make_string_datum(datum.export_id, &mut scratch1),
                     make_string_datum(datum.import_id, &mut scratch2),
                     Datum::UInt64(u64::cast_from(worker_id)),
@@ -274,11 +276,12 @@ pub(super) fn construct<A: Allocate + 'static>(
                 ])
             }
         });
+        let mut packer = PermutedRowPacker::new(ComputeLog::FrontierDelay);
         let frontier_delay = frontier_delay.as_collection().map({
             let mut scratch1 = String::new();
             let mut scratch2 = String::new();
             move |datum| {
-                Row::pack_slice(&[
+                packer.pack_slice(&[
                     make_string_datum(datum.export_id, &mut scratch1),
                     make_string_datum(datum.import_id, &mut scratch2),
                     Datum::UInt64(u64::cast_from(worker_id)),
@@ -286,10 +289,11 @@ pub(super) fn construct<A: Allocate + 'static>(
                 ])
             }
         });
+        let mut packer = PermutedRowPacker::new(ComputeLog::PeekCurrent);
         let peek_current = peek.as_collection().map({
             let mut scratch = String::new();
             move |datum| {
-                Row::pack_slice(&[
+                packer.pack_slice(&[
                     Datum::Uuid(datum.uuid),
                     Datum::UInt64(u64::cast_from(worker_id)),
                     make_string_datum(datum.id, &mut scratch),
@@ -297,42 +301,49 @@ pub(super) fn construct<A: Allocate + 'static>(
                 ])
             }
         });
+        let mut packer = PermutedRowPacker::new(ComputeLog::PeekDuration);
         let peek_duration = peek_duration.as_collection().map(move |bucket| {
-            Row::pack_slice(&[
+            packer.pack_slice(&[
                 Datum::UInt64(u64::cast_from(worker_id)),
                 Datum::UInt64(bucket.try_into().expect("bucket too big")),
             ])
         });
+        let mut packer = PermutedRowPacker::new(ComputeLog::ShutdownDuration);
         let shutdown_duration = shutdown_duration.as_collection().map(move |bucket| {
-            Row::pack_slice(&[
+            packer.pack_slice(&[
                 Datum::UInt64(u64::cast_from(worker_id)),
                 Datum::UInt64(bucket.try_into().expect("bucket too big")),
             ])
         });
 
-        let arrangement_heap_datum_to_row = move |ArrangementHeapDatum { operator_id }| {
-            Row::pack_slice(&[
-                Datum::UInt64(operator_id.try_into().expect("operator_id too big")),
-                Datum::UInt64(u64::cast_from(worker_id)),
-            ])
-        };
+        let arrangement_heap_datum_to_row =
+            move |packer: &mut PermutedRowPacker, ArrangementHeapDatum { operator_id }| {
+                packer.pack_slice(&[
+                    Datum::UInt64(operator_id.try_into().expect("operator_id too big")),
+                    Datum::UInt64(u64::cast_from(worker_id)),
+                ])
+            };
 
+        let mut packer = PermutedRowPacker::new(ComputeLog::ArrangementHeapSize);
         let arrangement_heap_size = arrangement_heap_size
             .as_collection()
-            .map(arrangement_heap_datum_to_row.clone());
+            .map(move |d| arrangement_heap_datum_to_row(&mut packer, d));
 
+        let mut packer = PermutedRowPacker::new(ComputeLog::ArrangementHeapCapacity);
         let arrangement_heap_capacity = arrangement_heap_capacity
             .as_collection()
-            .map(arrangement_heap_datum_to_row.clone());
+            .map(move |d| arrangement_heap_datum_to_row(&mut packer, d));
 
+        let mut packer = PermutedRowPacker::new(ComputeLog::ArrangementHeapSize);
         let arrangement_heap_allocations = arrangement_heap_allocations
             .as_collection()
-            .map(arrangement_heap_datum_to_row);
+            .map(move |d| arrangement_heap_datum_to_row(&mut packer, d));
 
+        let mut packer = PermutedRowPacker::new(ComputeLog::ErrorCount);
         let error_count = error_count.as_collection().map({
             let mut scratch = String::new();
             move |datum| {
-                Row::pack_slice(&[
+                packer.pack_slice(&[
                     make_string_datum(datum.export_id, &mut scratch),
                     Datum::UInt64(u64::cast_from(worker_id)),
                     Datum::Int64(datum.count),
@@ -360,30 +371,10 @@ pub(super) fn construct<A: Allocate + 'static>(
         for (variant, collection) in logs {
             let variant = LogVariant::Compute(variant);
             if config.index_logs.contains_key(&variant) {
-                let key = variant.index_by();
-                let (_, value) = permutation_for_arrangement(
-                    &key.iter()
-                        .cloned()
-                        .map(MirScalarExpr::Column)
-                        .collect::<Vec<_>>(),
-                    variant.desc().arity(),
-                );
                 let trace = collection
-                    .map({
-                        let mut row_buf = Row::default();
-                        let mut datums = DatumVec::new();
-                        move |row| {
-                            let datums = datums.borrow_with(&row);
-                            row_buf.packer().extend(key.iter().map(|k| datums[*k]));
-                            let row_key = row_buf.clone();
-                            row_buf.packer().extend(value.iter().map(|k| datums[*k]));
-                            let row_val = row_buf.clone();
-                            (row_key, row_val)
-                        }
-                    })
                     .mz_arrange::<RowSpine<_, _, _, _>>(&format!("ArrangeByKey {:?}", variant))
                     .trace;
-                traces.insert(variant.clone(), (trace, Rc::clone(&token)));
+                traces.insert(variant, (trace, Rc::clone(&token)));
             }
         }
 
