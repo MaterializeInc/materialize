@@ -26,7 +26,6 @@ use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Filter;
 
-use crate::compute_state::ComputeState;
 use crate::extensions::arrange::MzArrange;
 use crate::logging::{EventQueue, LogVariant, TimelyLog};
 use crate::typedefs::{KeysValsHandle, RowSpine};
@@ -49,7 +48,6 @@ pub(super) fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &LoggingConfig,
     event_queue: EventQueue<ReachabilityEvent>,
-    compute_state: &ComputeState,
 ) -> BTreeMap<LogVariant, (KeysValsHandle, Rc<dyn Any>)> {
     let interval_ms = std::cmp::max(1, config.interval.as_millis());
 
@@ -110,7 +108,6 @@ pub(super) fn construct<A: Allocate>(
             .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
                 Exchange::new(|(((_, _, _, _, w, _), ()), _, _)| u64::cast_from(*w)),
                 "PreArrange Timely reachability",
-                compute_state.enable_arrangement_size_logging,
             );
 
         let mut result = BTreeMap::new();
@@ -151,10 +148,7 @@ pub(super) fn construct<A: Allocate>(
                 );
 
                 let trace = updates
-                    .mz_arrange::<RowSpine<_, _, _, _>>(
-                        &format!("Arrange {:?}", variant),
-                        compute_state.enable_arrangement_size_logging,
-                    )
+                    .mz_arrange::<RowSpine<_, _, _, _>>(&format!("Arrange {:?}", variant))
                     .trace;
                 result.insert(variant.clone(), (trace, Rc::clone(&token)));
             }
