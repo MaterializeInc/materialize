@@ -45,6 +45,7 @@ class TestdriveBase:
         seed: int | None = None,
         caller: Traceback | None = None,
         default_timeout: str = "300s",
+        kafka_options: str | None = None,
         log_filter: str = "off",
     ) -> None:
         command: list[str] = [
@@ -66,6 +67,7 @@ class TestdriveBase:
             *(["--no-reset"] if no_reset else []),
             *([f"--seed={seed}"] if seed else []),
             *([f"--source={caller.filename}:{caller.lineno}"] if caller else []),
+            *([f"--kafka-option={kafka_options}"] if kafka_options else []),
             *args,
         ]
 
