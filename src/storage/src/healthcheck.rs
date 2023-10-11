@@ -33,7 +33,7 @@ use timely::dataflow::operators::{Enter, Map};
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
-use tracing::{info, trace, warn};
+use tracing::{info, trace, error};
 
 use crate::internal_control::{InternalCommandSender, InternalStorageCommand};
 
@@ -399,7 +399,7 @@ where
                     let new_round = outputs_seen.insert(output_index);
 
                     if !is_active_worker {
-                        warn!(
+                        error!(
                             "Health messages for {object_type} {id} passed to \
                               an unexpected worker id: {healthcheck_worker_id}"
                         )
