@@ -13,6 +13,7 @@
 /.devcontainer                      @mjibson
 /.github                            @benesch
 /bin
+/bin/lint-versions                  @MaterializeInc/testing
 /ci                                 @MaterializeInc/testing
 /ci/test/lint-deps.toml             @danhhz @benesch
 /doc/user                           @MaterializeInc/docs
