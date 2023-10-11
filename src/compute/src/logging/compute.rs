@@ -372,7 +372,7 @@ pub(super) fn construct<A: Allocate + 'static>(
             let variant = LogVariant::Compute(variant);
             if config.index_logs.contains_key(&variant) {
                 let trace = collection
-                    .mz_arrange::<RowSpine<_, _, _, _>>(&format!("ArrangeByKey {:?}", variant))
+                    .mz_arrange::<RowSpine<_, _, _, _>>(&format!("Arrange {variant:?}"))
                     .trace;
                 traces.insert(variant, (trace, Rc::clone(&token)));
             }
