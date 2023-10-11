@@ -105,6 +105,9 @@ pub enum MzKafkaError {
     /// Unsupported broker version
     #[error("Unsupported broker version")]
     UnsupportedBrokerVersion,
+    /// Connection to broker failed
+    #[error("Broker transport failure")]
+    BrokerTransportFailure,
     /// SASL authentication required
     #[error("SASL authentication required")]
     SASLAuthenticationRequired,
@@ -148,6 +151,8 @@ impl FromStr for MzKafkaError {
             Ok(Self::SSLAuthenticationRequired)
         } else if s.contains("probably due to broker version < 0.10") {
             Ok(Self::UnsupportedBrokerVersion)
+        } else if s.contains("Disconnected while requesting ApiVersion") {
+            Ok(Self::BrokerTransportFailure)
         } else {
             Err(())
         }
