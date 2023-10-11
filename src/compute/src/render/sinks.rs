@@ -99,7 +99,7 @@ where
                         if datum.is_null() {
                             // TODO[btv] can we plumb the column name through to here?
                             return Err(DataflowError::EvalError(Box::new(
-                                EvalError::MustNotBeNull(format!("column at position {i}")),
+                                EvalError::MustNotBeNull(format!("column {}", i + 1)),
                             )));
                         }
                     }

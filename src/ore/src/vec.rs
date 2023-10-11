@@ -139,7 +139,7 @@ pub trait VecExt<T> {
 }
 
 /// Extension methods for `Vec<T>` where `T: PartialOrd`
-pub trait PartialOrdVecExt {
+pub trait PartialOrdVecExt<T> {
     /// Returns whether the vector is sorted.
     // Remove once https://github.com/rust-lang/rust/issues/53485 is stabilized
     fn is_sorted(&self) -> bool;
@@ -160,7 +160,7 @@ impl<T> VecExt<T> for Vec<T> {
     }
 }
 
-impl<T> PartialOrdVecExt for Vec<T>
+impl<T> PartialOrdVecExt<T> for Vec<T>
 where
     T: PartialOrd,
 {
@@ -170,6 +170,7 @@ where
         self.windows(2)
             .all(|win| win[0].partial_cmp(&win[1]).map_or(false, Ordering::is_le))
     }
+
     fn is_strictly_sorted(&self) -> bool {
         self.windows(2)
             .all(|win| win[0].partial_cmp(&win[1]).map_or(false, Ordering::is_lt))
