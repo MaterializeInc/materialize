@@ -8,3 +8,6 @@
 # by the Apache License, Version 2.0.
 
 # no-op to keep the upgrade test glob simple
+
+> SELECT 1
+1

@@ -8,3 +8,6 @@
 # by the Apache License, Version 2.0.
 
 # Empty testdrive file to reset
+
+> SELECT 1
+1
