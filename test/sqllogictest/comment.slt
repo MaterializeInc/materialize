@@ -243,13 +243,28 @@ CREATE TYPE int4_list AS LIST (ELEMENT TYPE = int4);
 statement ok
 COMMENT ON TYPE int4_list IS 'supercool_list';
 
+statement ok
+CREATE TYPE custom_type AS (x integer, y int4_list);
+
+statement ok
+COMMENT ON TYPE custom_type IS 'custom_type_comment';
+
+statement ok
+COMMENT ON COLUMN custom_type.x IS 'custom_type_x_comment';
+
+statement ok
+COMMENT ON COLUMN custom_type.y IS 'custom_type_y_comment';
+
 query TTT
 SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
-source  1  json_blob
-type  NULL  supercool_list
-source  NULL  all_the_data
-cluster  NULL  careful_now
+source   1      json_blob
+type     NULL   supercool_list
+source   NULL   all_the_data
+cluster  NULL   careful_now
+type     NULL   custom_type_comment
+type     1      custom_type_x_comment
+type     2      custom_type_y_comment
 
 query IT
 SELECT objsubid, description FROM pg_description;
@@ -257,6 +272,9 @@ SELECT objsubid, description FROM pg_description;
 1 json_blob
 0 all_the_data
 0 supercool_list
+0 custom_type_comment
+1 custom_type_x_comment
+2 custom_type_y_comment
 
 statement ok
 DROP CLUSTER comment_cluster CASCADE;
@@ -272,11 +290,17 @@ SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
 ----
 secret NULL supersecret
 type NULL supercool_list
+type     NULL   custom_type_comment
+type     1      custom_type_x_comment
+type     2      custom_type_y_comment
 
 query IT
 SELECT objsubid, description FROM pg_description;
 ----
 0  supercool_list
+0 custom_type_comment
+1 custom_type_x_comment
+2 custom_type_y_comment
 
 statement ok
 CREATE DATABASE comment_on_db;
@@ -292,6 +316,9 @@ COMMENT ON SCHEMA comment_on_schema IS 'this_is_my_schema';
 
 statement ok
 DROP SECRET my_secret;
+
+statement ok
+DROP TYPE custom_type;
 
 statement ok
 DROP TYPE int4_list;
