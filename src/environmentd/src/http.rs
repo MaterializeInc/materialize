@@ -139,7 +139,7 @@ impl HttpServer {
         let base_router = base_router(BaseRouterConfig { profiling: false })
             .layer(middleware::from_fn(move |req, next| {
                 let base_frontegg = Arc::clone(&base_frontegg);
-                async move { http_auth(req, next, tls_mode, &base_frontegg).await }
+                async move { http_auth(req, next, tls_mode, base_frontegg.as_ref().as_ref()).await }
             }))
             .layer(Extension(adapter_client_rx_shared.clone()))
             .layer(Extension(Arc::clone(&active_connection_count)))
@@ -661,7 +661,7 @@ async fn http_auth<B>(
     mut req: Request<B>,
     next: Next<B>,
     tls_mode: TlsMode,
-    frontegg: &Option<FronteggAuthentication>,
+    frontegg: Option<&FronteggAuthentication>,
 ) -> impl IntoResponse {
     // First, extract the username from the certificate, validating that the
     // connection matches the TLS configuration along the way.
@@ -707,7 +707,7 @@ async fn init_ws(
         adapter_client_rx,
         active_connection_count,
     }: &WsState,
-    existing_user: &Option<AuthedUser>,
+    existing_user: Option<AuthedUser>,
     ws: &mut WebSocket,
 ) -> Result<AuthedClient, anyhow::Error> {
     // TODO: Add a timeout here to prevent resource leaks by clients that
@@ -729,44 +729,53 @@ async fn init_ws(
             }
         }
     };
-    let (user, options) = if frontegg.is_some() {
-        let (creds, options) = match ws_auth {
+    let (user, options) = match (frontegg.as_ref(), existing_user, ws_auth) {
+        (Some(frontegg), None, ws_auth) => {
+            let (creds, options) = match ws_auth {
+                WebSocketAuth::Basic {
+                    user,
+                    password,
+                    options,
+                } => {
+                    let creds = Credentials::Password {
+                        username: user,
+                        password,
+                    };
+                    (creds, options)
+                }
+                WebSocketAuth::Bearer { token, options } => {
+                    let creds = Credentials::Token { token };
+                    (creds, options)
+                }
+                WebSocketAuth::OptionsOnly { options: _ } => {
+                    anyhow::bail!("expected auth information");
+                }
+            };
+            (auth(Some(frontegg), creds).await?, options)
+        }
+        (
+            None,
+            None,
             WebSocketAuth::Basic {
                 user,
-                password,
-                options,
-            } => {
-                let creds = Credentials::Password {
-                    username: user,
-                    password,
-                };
-                (creds, options)
-            }
-            WebSocketAuth::Bearer { token, options } => {
-                let creds = Credentials::Token { token };
-                (creds, options)
-            }
-            WebSocketAuth::OptionsOnly { options: _ } => {
-                anyhow::bail!("Missing auth information!");
-            }
-        };
-        (auth(frontegg, creds).await?, options)
-    } else if let Some(user) = existing_user {
-        // If we're not using frontegg and we have an existing user provided by an
-        // upstream middleware, just use the options field from the auth message
-        match ws_auth {
-            WebSocketAuth::OptionsOnly { options }
-            | WebSocketAuth::Basic {
-                user: _,
                 password: _,
                 options,
-            }
-            | WebSocketAuth::Bearer { token: _, options } => (user.clone(), options),
+            },
+        ) => (auth(None, Credentials::User(user)).await?, options),
+        // No frontegg, specified existing user, we only accept options only.
+        (None, Some(existing_user), WebSocketAuth::OptionsOnly { options }) => {
+            (existing_user, options)
         }
-    } else if let WebSocketAuth::Basic { user, options, .. } = ws_auth {
-        (auth(frontegg, Credentials::User(user)).await?, options)
-    } else {
-        anyhow::bail!("unexpected")
+        // No frontegg, specified existing user, we do not expect basic or bearer auth.
+        (None, Some(_), WebSocketAuth::Basic { .. } | WebSocketAuth::Bearer { .. }) => {
+            anyhow::bail!("unexpected")
+        }
+        // Specifying both frontegg and an existing user should not be possible.
+        (Some(_), Some(_), _) => anyhow::bail!("unexpected"),
+        // No frontegg, no existing user, and no passed username.
+        (None, None, WebSocketAuth::Bearer { .. } | WebSocketAuth::OptionsOnly { .. }) => {
+            anyhow::bail!("unexpected")
+        }
     };
 
     let client = AuthedClient::new(
@@ -788,7 +797,7 @@ enum Credentials {
 }
 
 async fn auth(
-    frontegg: &Option<FronteggAuthentication>,
+    frontegg: Option<&FronteggAuthentication>,
     creds: Credentials,
 ) -> Result<AuthedUser, AuthError> {
     // There are three places a username may be specified:

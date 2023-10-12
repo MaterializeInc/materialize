@@ -73,7 +73,7 @@ pub async fn handle_sql_ws(
     // An upstream middleware may have already provided the user for us
     let user = existing_user.and_then(|Extension(user)| Some(user));
     ws.max_message_size(MAX_REQUEST_SIZE)
-        .on_upgrade(|ws| async move { run_ws(&state, &user, ws).await })
+        .on_upgrade(|ws| async move { run_ws(&state, user, ws).await })
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
@@ -96,7 +96,7 @@ pub enum WebSocketAuth {
     },
 }
 
-async fn run_ws(state: &WsState, user: &Option<AuthedUser>, mut ws: WebSocket) {
+async fn run_ws(state: &WsState, user: Option<AuthedUser>, mut ws: WebSocket) {
     let mut client = match init_ws(state, user, &mut ws).await {
         Ok(client) => client,
         Err(e) => {
