@@ -154,79 +154,93 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
             );
 
             let mut shards = consensus.list_keys();
+            let mut not_restored = vec![];
             while let Some(shard) = shards.next().await {
                 let shard_id = shard?;
                 let shard_id = ShardId::from_str(&shard_id).expect("invalid shard id");
 
-                let diffs = versions.fetch_all_live_diffs(&shard_id).await;
-                let Some(least_seqno) = diffs.0.first().map(|d| d.seqno) else {
-                    info!("No diffs for shard {shard_id}.");
-                    return Ok(());
-                };
+                not_restored.extend(
+                    restore_blob(&versions, blob.as_ref(), &cfg.build_version, shard_id).await?,
+                );
+            }
+            if !not_restored.is_empty() {
+                bail!("referenced blobs were not restored: {not_restored:#?}")
+            }
+        }
+    }
+    Ok(())
+}
 
-                fn after<A>(diff: StateFieldValDiff<A>) -> Option<A> {
-                    match diff {
-                        StateFieldValDiff::Insert(a) => Some(a),
-                        StateFieldValDiff::Update(_, a) => Some(a),
-                        StateFieldValDiff::Delete(_) => None,
-                    }
-                }
+/// Attempt to restore all the blobs referenced by the current state in consensus.
+/// Returns a list of blobs that were not possible to restore.
+async fn restore_blob(
+    versions: &StateVersions,
+    blob: &(dyn Blob + Send + Sync),
+    build_version: &semver::Version,
+    shard_id: ShardId,
+) -> anyhow::Result<Vec<BlobKey>> {
+    let diffs = versions.fetch_all_live_diffs(&shard_id).await;
+    let Some(least_seqno) = diffs.0.first().map(|d| d.seqno) else {
+        info!("No diffs for shard {shard_id}.");
+        return Ok(vec![]);
+    };
 
-                let mut not_restored = vec![];
-                let mut check_restored = |key: &BlobKey, result: Result<(), _>| {
-                    if result.is_err() {
-                        not_restored.push(key.clone());
-                    }
-                };
+    fn after<A>(diff: StateFieldValDiff<A>) -> Option<A> {
+        match diff {
+            StateFieldValDiff::Insert(a) => Some(a),
+            StateFieldValDiff::Update(_, a) => Some(a),
+            StateFieldValDiff::Delete(_) => None,
+        }
+    }
 
-                for diff in diffs.0 {
-                    let diff: StateDiff<u64> = StateDiff::decode(&cfg.build_version, diff.data);
-                    for rollup in diff.rollups {
-                        if rollup.key >= least_seqno {
-                            if let Some(value) = after(rollup.val) {
-                                let key = value.key.complete(&shard_id);
+    let mut not_restored = vec![];
+    let mut check_restored = |key: &BlobKey, result: Result<(), _>| {
+        if result.is_err() {
+            not_restored.push(key.clone());
+        }
+    };
+
+    for diff in diffs.0 {
+        let diff: StateDiff<u64> = StateDiff::decode(build_version, diff.data);
+        for rollup in diff.rollups {
+            if rollup.key >= least_seqno {
+                if let Some(value) = after(rollup.val) {
+                    let key = value.key.complete(&shard_id);
+                    check_restored(&key, blob.restore(&key).await);
+                    if rollup.key == least_seqno {
+                        let rollup_bytes = blob
+                            .get(&key)
+                            .await?
+                            .ok_or_else(|| anyhow!("fetching just-restored rollup"))?;
+                        let rollup_state: State<u64> =
+                            UntypedState::decode(build_version, rollup_bytes)
+                                .check_ts_codec(&shard_id)?;
+                        for (seqno, rollup) in &rollup_state.collections.rollups {
+                            if *seqno >= least_seqno {
+                                let key = rollup.key.complete(&shard_id);
                                 check_restored(&key, blob.restore(&key).await);
-                                if rollup.key == least_seqno {
-                                    let rollup_bytes = blob
-                                        .get(&key)
-                                        .await?
-                                        .ok_or_else(|| anyhow!("fetching just-restored rollup"))?;
-                                    let rollup_state: State<u64> =
-                                        UntypedState::decode(&cfg.build_version, rollup_bytes)
-                                            .check_ts_codec(&shard_id)?;
-                                    for (seqno, rollup) in &rollup_state.collections.rollups {
-                                        if *seqno >= least_seqno {
-                                            let key = rollup.key.complete(&shard_id);
-                                            check_restored(&key, blob.restore(&key).await);
-                                        }
-                                    }
-                                    for batch in rollup_state.collections.trace.batches() {
-                                        for part in &batch.parts {
-                                            let key = part.key.complete(&shard_id);
-                                            check_restored(&key, blob.restore(&key).await);
-                                        }
-                                    }
-                                }
                             }
                         }
-                    }
-                    for batch in diff.spine {
-                        if let Some(_) = after(batch.val) {
-                            for part in batch.key.parts {
+                        for batch in rollup_state.collections.trace.batches() {
+                            for part in &batch.parts {
                                 let key = part.key.complete(&shard_id);
                                 check_restored(&key, blob.restore(&key).await);
                             }
                         }
                     }
                 }
-
-                if !not_restored.is_empty() {
-                    bail!("referenced blobs were not restored: {not_restored:?}")
+            }
+        }
+        for batch in diff.spine {
+            if let Some(_) = after(batch.val) {
+                for part in batch.key.parts {
+                    let key = part.key.complete(&shard_id);
+                    check_restored(&key, blob.restore(&key).await);
                 }
             }
         }
     }
-    Ok(())
+    Ok(not_restored)
 }
 
 pub(crate) fn info_log_non_zero_metrics(metric_families: &[MetricFamily]) {
