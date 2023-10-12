@@ -32,10 +32,10 @@
 
   ```yaml
   tests:
-  example:
-    +store_failures: true
-    +schema: 'dbt_test_schema'
-    +cluster: 'dbt_test_cluster'
+    example:
+      +store_failures: true
+      +schema: 'dbt_test_schema'
+      +cluster: 'dbt_test_cluster'
   ```
 
 * Override the `dbt init` command to generate a project based on the [quickstart](https://materialize.com/docs/get-started/quickstart/),
