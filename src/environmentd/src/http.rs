@@ -135,13 +135,13 @@ impl HttpServer {
         adapter_client_tx
             .send(adapter_client.clone())
             .expect("rx known to be live");
-        let adapter_client_rx_shared = adapter_client_rx.shared();
+        let adapter_client_rx = adapter_client_rx.shared();
         let base_router = base_router(BaseRouterConfig { profiling: false })
             .layer(middleware::from_fn(move |req, next| {
                 let base_frontegg = Arc::clone(&base_frontegg);
                 async move { http_auth(req, next, tls_mode, base_frontegg.as_ref().as_ref()).await }
             }))
-            .layer(Extension(adapter_client_rx_shared.clone()))
+            .layer(Extension(adapter_client_rx.clone()))
             .layer(Extension(Arc::clone(&active_connection_count)))
             .layer(
                 CorsLayer::new()
@@ -160,7 +160,7 @@ impl HttpServer {
             .route("/api/experimental/sql", routing::get(sql::handle_sql_ws))
             .with_state(WsState {
                 frontegg,
-                adapter_client_rx: adapter_client_rx_shared,
+                adapter_client_rx: adapter_client_rx,
                 active_connection_count,
             });
 
@@ -374,7 +374,7 @@ impl InternalHttpServer {
             "/internal-console".to_string(),
         ));
 
-        let adapter_client_rx_shared = adapter_client_rx.shared();
+        let adapter_client_rx = adapter_client_rx.shared();
         let router = base_router(BaseRouterConfig { profiling: true })
             .route(
                 "/metrics",
@@ -439,7 +439,7 @@ impl InternalHttpServer {
                 routing::get(console::handle_internal_console),
             )
             .layer(middleware::from_fn(internal_http_auth))
-            .layer(Extension(adapter_client_rx_shared.clone()))
+            .layer(Extension(adapter_client_rx.clone()))
             .layer(Extension(console_config))
             .layer(Extension(Arc::clone(&active_connection_count)));
 
@@ -452,7 +452,7 @@ impl InternalHttpServer {
             .layer(middleware::from_fn(internal_http_auth))
             .with_state(WsState {
                 frontegg: Arc::new(None),
-                adapter_client_rx: adapter_client_rx_shared,
+                adapter_client_rx: adapter_client_rx,
                 active_connection_count,
             });
 
@@ -768,12 +768,14 @@ async fn init_ws(
         }
         // No frontegg, specified existing user, we do not expect basic or bearer auth.
         (None, Some(_), WebSocketAuth::Basic { .. } | WebSocketAuth::Bearer { .. }) => {
+            warn!("Unexpected bearer or basic auth provided when using user header");
             anyhow::bail!("unexpected")
         }
         // Specifying both frontegg and an existing user should not be possible.
         (Some(_), Some(_), _) => anyhow::bail!("unexpected"),
         // No frontegg, no existing user, and no passed username.
         (None, None, WebSocketAuth::Bearer { .. } | WebSocketAuth::OptionsOnly { .. }) => {
+            warn!("Unexpected auth type when not using frontegg or user header");
             anyhow::bail!("unexpected")
         }
     };
