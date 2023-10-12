@@ -266,6 +266,11 @@ mz_fg_version: 1
                 // in stack traces are actually the return address of
                 // the called function, which is one past the call
                 // itself.
+                //
+                // Of course, the `call` instruction can be more than one byte, so after subtracting
+                // one, we might point somewhere in the middle of it, rather
+                // than to the beginning of the instruction. That's fine; symbolization
+                // tools don't seem to get confused by this.
                 let addr = u64::cast_from(*addr) - 1;
 
                 let loc_id = *location_ids.entry(addr).or_insert_with(|| {
