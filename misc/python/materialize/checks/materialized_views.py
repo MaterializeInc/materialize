@@ -113,6 +113,24 @@ class MaterializedViewsAssertNotNull(Check):
                 ! SELECT * FROM not_null_view3
                 contains: column 3 must not be null
 
+                ! SELECT * FROM not_null_view1 WHERE x IS NOT NULL
+                contains: column 1 must not be null
+
+                ! SELECT * FROM not_null_view2 WHERE y IS NOT NULL
+                contains: column 2 must not be null
+
+                ! SELECT * FROM not_null_view3 WHERE z IS NOT NULL
+                contains: column 3 must not be null
+
+                ! SELECT y FROM not_null_view1
+                contains: column 1 must not be null
+
+                ! SELECT z FROM not_null_view2
+                contains: column 2 must not be null
+
+                ! SELECT x FROM not_null_view3
+                contains: column 3 must not be null
+
                 > DELETE FROM not_null_table WHERE x IS NULL;
 
                 > SELECT * FROM not_null_view1
@@ -132,9 +150,25 @@ class MaterializedViewsAssertNotNull(Check):
 
                 > DELETE FROM not_null_table WHERE z IS NULL;
 
+                ? EXPLAIN SELECT * FROM not_null_view1 WHERE x IS NOT NULL
+                Explained Query:
+                  ReadStorage materialize.public.not_null_view1
+
+                ? EXPLAIN SELECT * FROM not_null_view2 WHERE y IS NOT NULL
+                Explained Query:
+                  ReadStorage materialize.public.not_null_view2
+
+                ? EXPLAIN SELECT * FROM not_null_view3 WHERE z IS NOT NULL
+                Explained Query:
+                  ReadStorage materialize.public.not_null_view3
+
                 > SELECT * FROM not_null_view3
 
                 > INSERT INTO not_null_table VALUES (NULL, 2, 3), (4, NULL, 6), (7, 8, NULL);
+
+                > INSERT INTO not_null_table VALUES (NULL, 12, 13), (14, NULL, 16), (17, 18, NULL);
+
+                > INSERT INTO not_null_table VALUES (NULL, 22, 23), (24, NULL, 26), (27, 28, NULL);
 
                 ! SELECT * FROM not_null_view1
                 contains: column 1 must not be null
