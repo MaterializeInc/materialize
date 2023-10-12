@@ -40,7 +40,7 @@ import sqlparse
 import yaml
 from pg8000 import Connection, Cursor
 
-from materialize import mzbuild, spawn, ui
+from materialize import MZ_ROOT, mzbuild, spawn, ui
 from materialize.mzcompose import loader
 from materialize.mzcompose.service import Service
 from materialize.ui import UIError
@@ -774,6 +774,10 @@ class Composition:
         """
         if sanity_restart_mz:
             self.sanity_restart_mz()
+
+        logs = self.invoke("logs", "--no-color", capture=True).stdout
+        with open(MZ_ROOT / "services.log", "a") as f:
+            f.write(logs)
 
         self.invoke(
             "down",
