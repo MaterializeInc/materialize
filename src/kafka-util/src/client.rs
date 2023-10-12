@@ -9,6 +9,7 @@
 
 //! Helpers for working with Kafka's client API.
 
+use fancy_regex::Regex;
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::str::FromStr;
@@ -105,6 +106,12 @@ pub enum MzKafkaError {
     /// Unsupported broker version
     #[error("Unsupported broker version")]
     UnsupportedBrokerVersion,
+    /// Connection to broker failed
+    #[error("Broker transport failure")]
+    BrokerTransportFailure,
+    /// All brokers down
+    #[error("All brokers down")]
+    AllBrokersDown,
     /// SASL authentication required
     #[error("SASL authentication required")]
     SASLAuthenticationRequired,
@@ -148,6 +155,10 @@ impl FromStr for MzKafkaError {
             Ok(Self::SSLAuthenticationRequired)
         } else if s.contains("probably due to broker version < 0.10") {
             Ok(Self::UnsupportedBrokerVersion)
+        } else if s.contains("Disconnected while requesting ApiVersion") {
+            Ok(Self::BrokerTransportFailure)
+        } else if Regex::new(r"(\d+)/\1 brokers are down").unwrap().is_match(s).unwrap_or_default() {
+            Ok(Self::AllBrokersDown)
         } else {
             Err(())
         }
