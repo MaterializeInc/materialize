@@ -2064,6 +2064,9 @@ pub fn plan_create_materialized_view(
         &stmt.columns,
     )?;
     let column_names: Vec<ColumnName> = desc.iter_names().cloned().collect();
+    if !stmt.non_null_assertions.is_empty() {
+        scx.require_feature_flag(&crate::session::vars::ENABLE_ASSERT_NOT_NULL)?;
+    }
     let mut non_null_assertions = stmt
         .non_null_assertions
         .into_iter()
