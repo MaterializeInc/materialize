@@ -1720,6 +1720,10 @@ feature_flags!(
         enable_unified_optimizer_api,
         "use the new unified optimzier API in bootstrap() and coordinator methods",
         true
+    ),
+    (
+        enable_assert_not_null,
+        "ASSERT NOT NULL for materialized views"
     )
 );
 
