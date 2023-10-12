@@ -684,7 +684,6 @@ use serde::{Deserialize, Serialize};
 /// source to be stalled.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum HealthStatusUpdate {
-    Starting,
     Running,
     Stalled {
         error: String,
@@ -720,7 +719,7 @@ impl HealthStatusUpdate {
     /// Whether or not we should halt the dataflow instances and restart it.
     pub(crate) fn should_halt(&self) -> bool {
         match self {
-            HealthStatusUpdate::Starting | HealthStatusUpdate::Running => false,
+            HealthStatusUpdate::Running => false,
             HealthStatusUpdate::Stalled { should_halt, .. } => *should_halt,
         }
     }
