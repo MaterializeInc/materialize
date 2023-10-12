@@ -1370,7 +1370,7 @@ SELECT now() + null;
 NULL
 
 # Test timestamp precision.
-query error Expected literal unsigned integer
+query error precision for type timestamp or timestamptz must be between 0 and 6
 SELECT '1970-01-01T00:00:00.666666'::timestamp(-1);
 
 query error db error: ERROR: precision for type timestamp or timestamptz must be between 0 and 6
@@ -1562,16 +1562,16 @@ SELECT timestamp(5) '95143-12-31 17:59:59.1235+00' = timestamp(4) '95143-12-31 1
 ----
 true
 
-query error Expected literal unsigned integer
+query error precision for type timestamp or timestamptz must be between 0 and 6
 SELECT timestamp(-1) '95143-12-31 23:59:59.123456789+06';
 
-query error Expected literal unsigned integer
+query error precision for type timestamp or timestamptz must be between 0 and 6
 SELECT timestamp(-1) with time zone '95143-12-31 23:59:59.123456789+06';
 
-query error Expected literal unsigned integer
+query error precision for type timestamp or timestamptz must be between 0 and 6
 SELECT '95143-12-31 23:59:59.123456789+06'::timestamp(-1);
 
-query error Expected literal unsigned integer
+query error precision for type timestamp or timestamptz must be between 0 and 6
 SELECT timestamptz(-1) '95143-12-31 23:59:59.123456789+06';
 
 query error number too large to fit in target type
@@ -1613,3 +1613,24 @@ Map (adjust_timestamp_precision(text_to_timestamp("95143-12-31 23:59:59.12345678
     - ()
 
 EOF
+
+statement ok
+CREATE table t (timestamp string);
+
+statement ok
+INSERT INTO t VALUES('2012-03-05');
+
+query T
+SELECT * from t ORDER BY timestamp;
+----
+2012-03-05
+
+query T
+SELECT * from t ORDER BY t.timestamp;
+----
+2012-03-05
+
+query T
+SELECT timestamp::timestamp from t ORDER BY t.timestamp;
+----
+2012-03-05 00:00:00
