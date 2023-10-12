@@ -26,7 +26,7 @@ from materialize.mzcompose.composition import (
 )
 from materialize.mzcompose.services.mz import Mz
 
-REGION = "aws/us-east-1"
+REGION = "aws/us-west-2"
 ENVIRONMENT = os.getenv("ENVIRONMENT", "production")
 USERNAME = os.getenv("NIGHTLY_MZ_USERNAME", "infra+bot@materialize.com")
 APP_PASSWORD = os.environ["MZ_CLI_APP_PASSWORD"]
@@ -207,10 +207,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         # Enable, disable and show are already tested.
         output = c.run("mz", "region", "list", "--format", "json", capture=True)
         regions = json.loads(output.stdout)
-        us_region = regions[0]
-        if us_region["region"] != "aws/us-east-1":
-            us_region = regions[1]
-        assert "enabled" == us_region["status"]
+        us_region = None
+        for region in regions:
+            if region["region"] == REGION:
+                us_region = region
+        assert us_region is not None and "enabled" == us_region["status"]
 
         # Verify the content is ok
         print(f"Path: {psql_config_path}")

@@ -67,6 +67,7 @@ impl CloudProvider {
         match self.id.as_str() {
             "aws/us-east-1" => Ok(CloudProviderRegion::AwsUsEast1),
             "aws/eu-west-1" => Ok(CloudProviderRegion::AwsEuWest1),
+            "aws/us-west-2" => Ok(CloudProviderRegion::AwsUsWest2),
             _ => Err(Error::CloudProviderRegionParseError),
         }
     }
@@ -83,6 +84,9 @@ pub enum CloudProviderRegion {
     /// Represents `aws/eu-west-1` cloud provider and region
     #[serde(rename = "aws/eu-west-1")]
     AwsEuWest1,
+    /// Represents `aws/us-west-2` cloud provider and region
+    #[serde(rename = "aws/us-west-2")]
+    AwsUsWest2,
 }
 
 impl CloudProviderRegion {
@@ -91,6 +95,7 @@ impl CloudProviderRegion {
         match cloud_provider.id.as_str() {
             "aws/us-east-1" => Ok(CloudProviderRegion::AwsUsEast1),
             "aws/eu-west-1" => Ok(CloudProviderRegion::AwsEuWest1),
+            "aws/us-west-2" => Ok(CloudProviderRegion::AwsUsWest2),
             _ => Err(Error::CloudProviderRegionParseError),
         }
     }
@@ -101,6 +106,7 @@ impl Display for CloudProviderRegion {
         match self {
             CloudProviderRegion::AwsUsEast1 => write!(f, "aws/us-east-1"),
             CloudProviderRegion::AwsEuWest1 => write!(f, "aws/eu-west-1"),
+            CloudProviderRegion::AwsUsWest2 => write!(f, "aws/us-west-2"),
         }
     }
 }
@@ -112,6 +118,7 @@ impl FromStr for CloudProviderRegion {
         match s.to_lowercase().as_str() {
             "aws/us-east-1" => Ok(CloudProviderRegion::AwsUsEast1),
             "aws/eu-west-1" => Ok(CloudProviderRegion::AwsEuWest1),
+            "aws/us-west-2" => Ok(CloudProviderRegion::AwsUsWest2),
             _ => Err(Error::CloudProviderRegionParseError),
         }
     }
