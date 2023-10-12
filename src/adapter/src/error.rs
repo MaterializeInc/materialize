@@ -708,8 +708,8 @@ impl From<catalog::Error> for AdapterError {
     }
 }
 
-impl From<mz_catalog::Error> for AdapterError {
-    fn from(e: mz_catalog::Error) -> Self {
+impl From<mz_catalog::CatalogError> for AdapterError {
+    fn from(e: mz_catalog::CatalogError) -> Self {
         catalog::Error::from(e).into()
     }
 }
