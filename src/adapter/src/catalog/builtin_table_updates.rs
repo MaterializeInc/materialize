@@ -25,7 +25,7 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
-use mz_repr::{Datum, Diff, GlobalId, Row};
+use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker};
 use mz_sql::ast::{CreateIndexStatement, Statement};
 use mz_sql::catalog::{CatalogCluster, CatalogDatabase, CatalogSchema, CatalogType, TypeCategory};
 use mz_sql::func::FuncImplCatalogDetails;
@@ -50,12 +50,12 @@ use mz_catalog::builtin::{
     MZ_CLUSTERS, MZ_CLUSTER_LINKS, MZ_CLUSTER_REPLICAS, MZ_CLUSTER_REPLICA_HEARTBEATS,
     MZ_CLUSTER_REPLICA_METRICS, MZ_CLUSTER_REPLICA_SIZES, MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS,
     MZ_COMMENTS, MZ_COMPUTE_DEPENDENCIES, MZ_CONNECTIONS, MZ_DATABASES, MZ_DEFAULT_PRIVILEGES,
-    MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS,
-    MZ_KAFKA_SINKS, MZ_KAFKA_SOURCES, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS,
-    MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS, MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_ROLES,
-    MZ_ROLE_MEMBERS, MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCES,
-    MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES,
-    MZ_TABLES, MZ_TYPES, MZ_TYPE_PG_METADATA, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
+    MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_INTERNAL_CLUSTER_REPLICAS,
+    MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS, MZ_KAFKA_SOURCES, MZ_LIST_TYPES, MZ_MAP_TYPES,
+    MZ_MATERIALIZED_VIEWS, MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS, MZ_POSTGRES_SOURCES,
+    MZ_PSEUDO_TYPES, MZ_ROLES, MZ_ROLE_MEMBERS, MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS,
+    MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS,
+    MZ_SYSTEM_PRIVILEGES, MZ_TABLES, MZ_TYPES, MZ_TYPE_PG_METADATA, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
 };
 
 /// An update to a built-in table.
@@ -226,12 +226,12 @@ impl CatalogState {
         cluster_id: ClusterId,
         name: &str,
         diff: Diff,
-    ) -> BuiltinTableUpdate {
+    ) -> Vec<BuiltinTableUpdate> {
         let cluster = &self.clusters_by_id[&cluster_id];
-        let id = cluster.replica_id_by_name[name];
-        let replica = &cluster.replicas_by_id[&id];
+        let id = cluster.replica_id(name).expect("Must exist");
+        let replica = cluster.replica(id).expect("Must exist");
 
-        let (size, disk, az) = match &replica.config.location {
+        let (size, disk, az, internal) = match &replica.config.location {
             // TODO(guswynn): The column should be `availability_zones`, not
             // `availability_zone`.
             ReplicaLocation::Managed(ManagedReplicaLocation {
@@ -239,17 +239,21 @@ impl CatalogState {
                 availability_zones: ManagedReplicaAvailabilityZones::FromReplica(Some(az)),
                 allocation: _,
                 disk,
-            }) => (Some(&**size), Some(*disk), Some(az.as_str())),
+                billed_as: _,
+                internal,
+            }) => (Some(&**size), Some(*disk), Some(az.as_str()), *internal),
             ReplicaLocation::Managed(ManagedReplicaLocation {
                 size,
                 availability_zones: _,
                 allocation: _,
                 disk,
-            }) => (Some(&**size), Some(*disk), None),
-            _ => (None, None, None),
+                billed_as: _,
+                internal,
+            }) => (Some(&**size), Some(*disk), None, *internal),
+            _ => (None, None, None, false),
         };
 
-        BuiltinTableUpdate {
+        let cluster_replica_update = BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICAS),
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
@@ -261,7 +265,20 @@ impl CatalogState {
                 Datum::from(disk),
             ]),
             diff,
+        };
+
+        let mut updates = vec![cluster_replica_update];
+
+        if internal {
+            let update = BuiltinTableUpdate {
+                id: self.resolve_builtin_table(&MZ_INTERNAL_CLUSTER_REPLICAS),
+                row: Row::pack_slice(&[Datum::String(&id.to_string())]),
+                diff,
+            };
+            updates.push(update);
         }
+
+        updates
     }
 
     pub(super) fn pack_cluster_link_update(
@@ -893,38 +910,59 @@ impl CatalogState {
             diff,
         });
 
-        let (index_id, update) = match typ.details.typ {
+        let mut row = Row::default();
+        let mut packer = row.packer();
+
+        fn append_modifier(packer: &mut RowPacker<'_>, mods: &[i64]) {
+            if mods.is_empty() {
+                packer.push(Datum::Null);
+            } else {
+                packer.push_list(mods.iter().map(|m| Datum::Int64(*m)));
+            }
+        }
+
+        let index_id = match &typ.details.typ {
             CatalogType::Array {
                 element_reference: element_id,
-            } => (
-                self.resolve_builtin_table(&MZ_ARRAY_TYPES),
-                vec![id.to_string(), element_id.to_string()],
-            ),
+            } => {
+                packer.push(Datum::String(&id.to_string()));
+                packer.push(Datum::String(&element_id.to_string()));
+                self.resolve_builtin_table(&MZ_ARRAY_TYPES)
+            }
             CatalogType::List {
                 element_reference: element_id,
-            } => (
-                self.resolve_builtin_table(&MZ_LIST_TYPES),
-                vec![id.to_string(), element_id.to_string()],
-            ),
+                element_modifiers,
+            } => {
+                packer.push(Datum::String(&id.to_string()));
+                packer.push(Datum::String(&element_id.to_string()));
+                append_modifier(&mut packer, element_modifiers);
+                self.resolve_builtin_table(&MZ_LIST_TYPES)
+            }
             CatalogType::Map {
                 key_reference: key_id,
                 value_reference: value_id,
-            } => (
-                self.resolve_builtin_table(&MZ_MAP_TYPES),
-                vec![id.to_string(), key_id.to_string(), value_id.to_string()],
-            ),
-            CatalogType::Pseudo => (
-                self.resolve_builtin_table(&MZ_PSEUDO_TYPES),
-                vec![id.to_string()],
-            ),
-            _ => (
-                self.resolve_builtin_table(&MZ_BASE_TYPES),
-                vec![id.to_string()],
-            ),
+                key_modifiers,
+                value_modifiers,
+            } => {
+                packer.push(Datum::String(&id.to_string()));
+                packer.push(Datum::String(&key_id.to_string()));
+                packer.push(Datum::String(&value_id.to_string()));
+                append_modifier(&mut packer, key_modifiers);
+                append_modifier(&mut packer, value_modifiers);
+                self.resolve_builtin_table(&MZ_MAP_TYPES)
+            }
+            CatalogType::Pseudo => {
+                packer.push(Datum::String(&id.to_string()));
+                self.resolve_builtin_table(&MZ_PSEUDO_TYPES)
+            }
+            _ => {
+                packer.push(Datum::String(&id.to_string()));
+                self.resolve_builtin_table(&MZ_BASE_TYPES)
+            }
         };
         out.push(BuiltinTableUpdate {
             id: index_id,
-            row: Row::pack_slice(&update.iter().map(|c| Datum::String(c)).collect::<Vec<_>>()[..]),
+            row,
             diff,
         });
 
@@ -1207,6 +1245,7 @@ impl CatalogState {
             .cluster_replica_sizes
             .0
             .iter()
+            .filter(|(_, a)| !a.disabled)
             .map(
                 |(
                     size,
@@ -1217,6 +1256,7 @@ impl CatalogState {
                         scale,
                         workers,
                         credits_per_hour,
+                        disabled: _,
                     },
                 )| {
                     // Just invent something when the limits are `None`,
@@ -1394,7 +1434,12 @@ impl CatalogState {
             CommentObjectId::ClusterReplica((_, replica_id)) => replica_id.to_string(),
         };
         let column_pos_datum = match column_pos {
-            Some(pos) => Datum::UInt64(CastFrom::cast_from(pos)),
+            Some(pos) => {
+                // TODO(parkmycar): https://github.com/MaterializeInc/materialize/issues/22246.
+                let pos =
+                    i32::try_from(pos).expect("we constrain this value in the planning layer");
+                Datum::Int32(pos)
+            }
             None => Datum::Null,
         };
 

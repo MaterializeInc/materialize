@@ -74,6 +74,7 @@ def cargo(
     rustflags += [
         "-Clink-arg=-Wl,--compress-debug-sections=zlib",
         "-Csymbol-mangling-version=v0",
+        "--cfg=tokio_unstable",
     ]
 
     if sys.platform == "darwin":

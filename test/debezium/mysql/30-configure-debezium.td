@@ -24,6 +24,7 @@ $ http-request method=POST url=http://debezium:8083/connectors content-type=appl
 {
     "name": "mysql-connector",
     "config": {
+        "bigint.unsigned.handling.mode": "precise",
         "connector.class": "io.debezium.connector.mysql.MySqlConnector",
         "database.hostname": "mysql",
         "database.port": "3306",
@@ -35,6 +36,9 @@ $ http-request method=POST url=http://debezium:8083/connectors content-type=appl
         "database.history.kafka.bootstrap.servers": "kafka:9092",
         "database.history.kafka.topic": "dbhistory.mysql",
         "include.schema.changes": "true",
-        "provide.transaction.metadata": "true"
+        "schema.history.internal.kafka.bootstrap.servers": "kafka:9092",
+        "schema.history.internal.kafka.topic": "schemahistory.mysql",
+        "provide.transaction.metadata": "true",
+        "topic.prefix": "mysql"
     }
 }

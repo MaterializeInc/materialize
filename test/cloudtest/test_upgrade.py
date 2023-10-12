@@ -8,6 +8,8 @@
 # by the Apache License, Version 2.0.
 
 
+import logging
+
 import pytest
 
 from materialize.checks.actions import Action, Initialize, Manipulate, Validate
@@ -20,6 +22,8 @@ from materialize.cloudtest.app.materialize_application import MaterializeApplica
 from materialize.cloudtest.util.wait import wait
 from materialize.util import MzVersion
 from materialize.version_list import VersionsFromDocs
+
+LOGGER = logging.getLogger(__name__)
 
 LAST_RELEASED_VERSION = VersionsFromDocs().minor_versions()[-1]
 
@@ -43,7 +47,7 @@ class CloudtestUpgrade(Scenario):
 @pytest.mark.long
 def test_upgrade(aws_region: str | None, log_filter: str | None, dev: bool) -> None:
     """Test upgrade from the last released verison to the current source by running all the Platform Checks"""
-    print(
+    LOGGER.info(
         f"Testing upgrade from base version {LAST_RELEASED_VERSION} to current version"
     )
 

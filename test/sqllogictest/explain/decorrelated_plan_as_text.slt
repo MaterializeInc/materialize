@@ -34,6 +34,11 @@ statement error cannot EXPLAIN DECORRELATED PLAN FOR INDEX
 EXPLAIN DECORRELATED PLAN AS TEXT FOR
 INDEX v_a_idx
 
+# EXPLAIN CREATE INDEX is not supported for decorrelated plans
+statement error cannot EXPLAIN DECORRELATED PLAN FOR CREATE INDEX
+EXPLAIN DECORRELATED PLAN AS TEXT FOR
+CREATE INDEX v_a_idx ON v(a)
+
 # Test constant error.
 query T multiline
 EXPLAIN DECORRELATED PLAN AS TEXT FOR

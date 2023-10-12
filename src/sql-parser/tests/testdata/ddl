@@ -344,42 +344,42 @@ CREATE MATERIALIZED VIEW myschema.myview AS SELECT foo FROM bar
 ----
 CREATE MATERIALIZED VIEW myschema.myview AS SELECT foo FROM bar
 =>
-CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("myschema"), Ident("myview")]), columns: [], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } })
+CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("myschema"), Ident("myview")]), columns: [], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, non_null_assertions: [] })
 
 parse-statement
 CREATE OR REPLACE MATERIALIZED VIEW v AS SELECT 1
 ----
 CREATE OR REPLACE MATERIALIZED VIEW v AS SELECT 1
 =>
-CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Replace, name: UnresolvedItemName([Ident("v")]), columns: [], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } })
+CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Replace, name: UnresolvedItemName([Ident("v")]), columns: [], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, non_null_assertions: [] })
 
 parse-statement
 CREATE MATERIALIZED VIEW IF NOT EXISTS v AS SELECT 1
 ----
 CREATE MATERIALIZED VIEW IF NOT EXISTS v AS SELECT 1
 =>
-CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Skip, name: UnresolvedItemName([Ident("v")]), columns: [], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } })
+CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Skip, name: UnresolvedItemName([Ident("v")]), columns: [], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, non_null_assertions: [] })
 
 parse-statement
 CREATE MATERIALIZED VIEW v (has, cols) AS SELECT 1, 2
 ----
 CREATE MATERIALIZED VIEW v (has, cols) AS SELECT 1, 2
 =>
-CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("v")]), columns: [Ident("has"), Ident("cols")], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }, Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } })
+CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("v")]), columns: [Ident("has"), Ident("cols")], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }, Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, non_null_assertions: [] })
 
 parse-statement
 CREATE MATERIALIZED VIEW v IN CLUSTER bar AS SELECT 1
 ----
 CREATE MATERIALIZED VIEW v IN CLUSTER bar AS SELECT 1
 =>
-CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("v")]), columns: [], in_cluster: Some(Unresolved(Ident("bar"))), query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } })
+CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("v")]), columns: [], in_cluster: Some(Unresolved(Ident("bar"))), query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, non_null_assertions: [] })
 
 parse-statement
 CREATE MATERIALIZED VIEW v IN CLUSTER [1] AS SELECT 1
 ----
 CREATE MATERIALIZED VIEW v IN CLUSTER [1] AS SELECT 1
 =>
-CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("v")]), columns: [], in_cluster: Some(Resolved("1")), query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } })
+CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("v")]), columns: [], in_cluster: Some(Resolved("1")), query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, non_null_assertions: [] })
 
 parse-statement
 CREATE CONNECTION awsconn TO AWS (ACCESS KEY ID 'id', ENDPOINT 'endpoint', REGION 'region', ROLE ARN 'role-arn', SECRET ACCESS KEY 'key', TOKEN 'token')
@@ -535,6 +535,63 @@ CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT BYTES 
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT BYTES WITH (SIZE = 'xlarge', SNAPSHOT = true)
 =>
 CreateSink(CreateSinkStatement { name: UnresolvedItemName([Ident("foo")]), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: None }, format: Some(Bytes), envelope: None, with_options: [CreateSinkOption { name: Size, value: Some(Value(String("xlarge"))) }, CreateSinkOption { name: Snapshot, value: Some(Value(Boolean(true))) }] })
+
+parse-statement
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (NULL DEFAULTS = TRUE) ENVELOPE UPSERT
+----
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (NULL DEFAULTS = true) ENVELOPE UPSERT
+=>
+CreateSink(CreateSinkStatement { name: UnresolvedItemName([Ident("foo")]), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: None }, format: Some(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("conn2")])), options: [CsrConfigOption { name: NullDefaults, value: Some(Value(Boolean(true))) }] }, key_strategy: None, value_strategy: None, seed: None } })), envelope: Some(Upsert), with_options: [] })
+
+parse-statement
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (NULL DEFAULTS TRUE) ENVELOPE UPSERT
+----
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (NULL DEFAULTS = true) ENVELOPE UPSERT
+=>
+CreateSink(CreateSinkStatement { name: UnresolvedItemName([Ident("foo")]), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: None }, format: Some(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("conn2")])), options: [CsrConfigOption { name: NullDefaults, value: Some(Value(Boolean(true))) }] }, key_strategy: None, value_strategy: None, seed: None } })), envelope: Some(Upsert), with_options: [] })
+
+parse-statement
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (NULL DEFAULTS) ENVELOPE UPSERT
+----
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (NULL DEFAULTS) ENVELOPE UPSERT
+=>
+CreateSink(CreateSinkStatement { name: UnresolvedItemName([Ident("foo")]), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: None }, format: Some(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("conn2")])), options: [CsrConfigOption { name: NullDefaults, value: None }] }, key_strategy: None, value_strategy: None, seed: None } })), envelope: Some(Upsert), with_options: [] })
+
+parse-statement
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (NULL VALUES) ENVELOPE UPSERT
+----
+error: Expected DEFAULTS, found VALUES
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (NULL VALUES) ENVELOPE UPSERT
+                                                                                                                                      ^
+
+parse-statement
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (NULL DEFAULTS = FALSE) ENVELOPE UPSERT
+----
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (NULL DEFAULTS = false) ENVELOPE UPSERT
+=>
+CreateSink(CreateSinkStatement { name: UnresolvedItemName([Ident("foo")]), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: None }, format: Some(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("conn2")])), options: [CsrConfigOption { name: NullDefaults, value: Some(Value(Boolean(false))) }] }, key_strategy: None, value_strategy: None, seed: None } })), envelope: Some(Upsert), with_options: [] })
+
+parse-statement
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (DOC ON bar) ENVELOPE UPSERT
+----
+error: Expected one of TYPE or COLUMN, found identifier "bar"
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (DOC ON bar) ENVELOPE UPSERT
+                                                                                                                                        ^
+
+
+parse-statement
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (DOC ON COLUMN c = 'comment') ENVELOPE UPSERT
+----
+error: need to specify an object and a column
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (DOC ON COLUMN c = 'comment') ENVELOPE UPSERT
+                                                                                                                                               ^
+
+parse-statement
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (DOC ON TYPE bar = 'bar comment', KEY DOC ON COLUMN bar.a = 'a comment', VALUE DOC ON COLUMN bar.b = 'b comment') ENVELOPE UPSERT
+----
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (DOC ON TYPE bar = 'bar comment', KEY DOC ON COLUMN bar.a = 'a comment', VALUE DOC ON COLUMN bar.b = 'b comment') ENVELOPE UPSERT
+=>
+CreateSink(CreateSinkStatement { name: UnresolvedItemName([Ident("foo")]), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("topic"))) }] }, key: None }, format: Some(Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("conn2")])), options: [CsrConfigOption { name: AvroDocOn(AvroDocOn { identifier: Type(Name(UnresolvedItemName([Ident("bar")]))), for_schema: All }), value: Some(Value(String("bar comment"))) }, CsrConfigOption { name: AvroDocOn(AvroDocOn { identifier: Column(RawColumnName { relation: Name(UnresolvedItemName([Ident("bar")])), column: Ident("a") }), for_schema: KeyOnly }), value: Some(Value(String("a comment"))) }, CsrConfigOption { name: AvroDocOn(AvroDocOn { identifier: Column(RawColumnName { relation: Name(UnresolvedItemName([Ident("bar")])), column: Ident("b") }), for_schema: ValueOnly }), value: Some(Value(String("b comment"))) }] }, key_strategy: None, value_strategy: None, seed: None } })), envelope: Some(Upsert), with_options: [] })
 
 parse-statement
 CREATE INDEX foo ON myschema.bar (a, b)
@@ -1590,6 +1647,34 @@ CREATE CLUSTER REPLICA default.replica SIZE 'small'
 CREATE CLUSTER REPLICA default.replica SIZE = 'small'
 =>
 CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }] } })
+
+parse-statement
+CREATE CLUSTER REPLICA default.replica SIZE 'small', INTERNAL, BILLED AS 'free'
+----
+CREATE CLUSTER REPLICA default.replica SIZE = 'small', INTERNAL, BILLED AS = 'free'
+=>
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }, ReplicaOption { name: Internal, value: None }, ReplicaOption { name: BilledAs, value: Some(Value(String("free"))) }] } })
+
+parse-statement
+CREATE CLUSTER REPLICA default.replica SIZE 'small', INTERNAL = true, BILLED AS 'free'
+----
+CREATE CLUSTER REPLICA default.replica SIZE = 'small', INTERNAL = true, BILLED AS = 'free'
+=>
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }, ReplicaOption { name: Internal, value: Some(Value(Boolean(true))) }, ReplicaOption { name: BilledAs, value: Some(Value(String("free"))) }] } })
+
+parse-statement
+CREATE CLUSTER REPLICA default.replica SIZE 'small', INTERNAL = false, BILLED AS 'free'
+----
+CREATE CLUSTER REPLICA default.replica SIZE = 'small', INTERNAL = false, BILLED AS = 'free'
+=>
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }, ReplicaOption { name: Internal, value: Some(Value(Boolean(false))) }, ReplicaOption { name: BilledAs, value: Some(Value(String("free"))) }] } })
+
+parse-statement
+CREATE CLUSTER REPLICA default.replica SIZE 'small', BILLED AS 'free'
+----
+CREATE CLUSTER REPLICA default.replica SIZE = 'small', BILLED AS = 'free'
+=>
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }, ReplicaOption { name: BilledAs, value: Some(Value(String("free"))) }] } })
 
 parse-statement
 CREATE CLUSTER REPLICA default.replica SIZE 'small', AVAILABILITY ZONE 'a'

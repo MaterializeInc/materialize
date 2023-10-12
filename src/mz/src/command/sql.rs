@@ -41,10 +41,7 @@ pub async fn run(
     let region_info = cx.get_region_info().await?;
     let email = claims.await?.email;
 
-    eprintln!(
-        "Authenticated using profile '{}'.",
-        cx.config_file().profile()
-    );
+    eprintln!("Authenticated using profile '{}'.", cx.get_profile());
     if let Some(cluster) = cluster.clone() {
         eprintln!("Connected to cluster '{}'.", cluster);
     } else {

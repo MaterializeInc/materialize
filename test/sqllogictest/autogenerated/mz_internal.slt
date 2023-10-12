@@ -91,11 +91,16 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 7  credits_per_hour  numeric
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_internal_cluster_replicas' ORDER BY position
+----
+1  id           text
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_comments' ORDER BY position
 ----
 1  id  text
 2  object_type  text
-3  object_sub_id  uint8
+3  object_sub_id  integer
 4  comment  text
 
 query ITT
@@ -419,6 +424,12 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 4  count  numeric
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_compute_error_counts' ORDER BY position
+----
+1  export_id  text
+2  count  numeric
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_compute_exports' ORDER BY position
 ----
 1  export_id  text
@@ -602,6 +613,9 @@ mz_compute_delays_histogram
 mz_compute_delays_histogram_per_worker
 mz_compute_delays_histogram_raw
 mz_compute_dependencies
+mz_compute_error_counts
+mz_compute_error_counts_per_worker
+mz_compute_error_counts_raw
 mz_compute_exports
 mz_compute_exports_per_worker
 mz_compute_frontiers
@@ -635,6 +649,7 @@ mz_dataflows_per_worker
 mz_expected_group_size_advice
 mz_frontiers
 mz_global_frontiers
+mz_internal_cluster_replicas
 mz_kafka_sources
 mz_message_batch_counts_received_raw
 mz_message_batch_counts_sent_raw
@@ -695,6 +710,4 @@ mz_storage_shards
 mz_storage_usage_by_shard
 mz_subscriptions
 mz_type_pg_metadata
-mz_view_foreign_keys
-mz_view_keys
 mz_webhook_sources

@@ -78,14 +78,13 @@ use std::convert::Infallible;
 use std::time::Duration;
 
 use crate::{
-    AppendBatch, Data, Stash, StashCollection, StashError, StashFactory, TableTransaction,
-    Timestamp, TypedCollection, INSERT_BATCH_SPLIT_SIZE,
+    AppendBatch, Data, DebugStashFactory, Stash, StashCollection, StashError, StashFactory,
+    TableTransaction, Timestamp, TypedCollection, INSERT_BATCH_SPLIT_SIZE,
 };
 use futures::Future;
 use mz_ore::assert_contains;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task::spawn;
-use postgres_openssl::MakeTlsConnector;
 use timely::progress::Antichain;
 use tokio::sync::oneshot;
 use tokio_postgres::Config;
@@ -95,214 +94,17 @@ static C_SAVEPOINT: TypedCollection<i64, i64> = TypedCollection::new("c_savepoin
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-async fn test_stash_postgres() {
-    mz_ore::test::init_logging_default("debug");
-
-    let tls = mz_postgres_util::make_tls(&Config::new()).unwrap();
+async fn test_stash_invalid_url() {
+    let tls = mz_tls_util::make_tls(&Config::new()).unwrap();
     let factory = StashFactory::new(&MetricsRegistry::new());
 
-    {
-        // Verify invalid URLs fail on connect.
-        assert!(factory
-            .open("host=invalid".into(), None, tls.clone(),)
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("stash error: postgres: error connecting to server"));
-    }
-
-    let connstr = std::env::var("COCKROACH_URL").expect("COCKROACH_URL must be set");
-    async fn connect(
-        factory: &StashFactory,
-        connstr: &str,
-        tls: MakeTlsConnector,
-        clear: bool,
-    ) -> Stash {
-        if clear {
-            Stash::clear(connstr, tls.clone()).await.unwrap();
-        }
-        factory.open(connstr.to_string(), None, tls).await.unwrap()
-    }
-    {
-        connect(&factory, &connstr, tls.clone(), true).await;
-        let stash =
-            test_stash(|| async { connect(&factory, &connstr, tls.clone(), false).await }).await;
-        stash.verify().await.unwrap();
-    }
-    {
-        connect(&factory, &connstr, tls.clone(), true).await;
-        let stash =
-            test_append(|| async { connect(&factory, &connstr, tls.clone(), false).await }).await;
-        stash.verify().await.unwrap();
-    }
-    // Test the fence.
-    {
-        let mut conn1 = connect(&factory, &connstr, tls.clone(), true).await;
-        // Don't clear the stash tables.
-        let mut conn2 = connect(&factory, &connstr, tls.clone(), false).await;
-        assert!(match collection::<String, String>(&mut conn1, "c").await {
-            Err(e) => e.is_unrecoverable(),
-            _ => panic!("expected error"),
-        });
-        let _: StashCollection<String, String> = collection(&mut conn2, "c").await.unwrap();
-    }
-    // Test failures after commit.
-    {
-        let mut stash = connect(&factory, &connstr, tls.clone(), true).await;
-        let col = collection::<i64, i64>(&mut stash, "c1").await.unwrap();
-        let mut batch = make_batch(&col, &mut stash).await.unwrap();
-        col.append_to_batch(&mut batch, &1, &2, 1);
-        append(&mut stash, vec![batch]).await.unwrap();
-        assert_eq!(
-            C1.peek_one(&mut stash).await.unwrap(),
-            BTreeMap::from([(1, 2)])
-        );
-        let mut batch = make_batch(&col, &mut stash).await.unwrap();
-        col.append_to_batch(&mut batch, &1, &2, -1);
-
-        fail::cfg("stash_commit_pre", "return(commit failpoint)").unwrap();
-        fail::cfg("stash_commit_post", "return(commit failpoint)").unwrap();
-        // Because the commit error will either retry or discover it succeeded,
-        // it never returns an error. Thus, we need to re-enable the failpoint
-        // in another thread. Use both a pre and post commit error to test both
-        // commit success and fail paths. Use a channel to check that we haven't
-        // succeeded unexpectedly.
-        let (tx, mut rx) = oneshot::channel();
-        let handle = spawn(|| "stash_commit_enable", async {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            // Assert no success yet.
-            rx.try_recv().unwrap_err();
-            fail::cfg("stash_commit_post", "off").unwrap();
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            // Assert no success yet.
-            rx.try_recv().unwrap_err();
-            fail::cfg("stash_commit_pre", "off").unwrap();
-            rx.await.unwrap();
-        });
-        append(&mut stash, vec![batch.clone()]).await.unwrap();
-        assert_eq!(C1.peek_one(&mut stash).await.unwrap(), BTreeMap::new());
-        tx.send(()).unwrap();
-        handle.await.unwrap();
-    }
-
-    // Test batches with a large serialized size.
-    {
-        static S: TypedCollection<i64, String> = TypedCollection::new("s");
-        let mut stash = connect(&factory, &connstr, tls.clone(), true).await;
-        let _16mb = "0".repeat(1 << 24);
-        // A too large update will always fail.
-        assert_contains!(
-            S.upsert(&mut stash, vec![(1, _16mb)])
-                .await
-                .unwrap_err()
-                .to_string(),
-            "message size 16 MiB bigger than maximum allowed message size"
-        );
-        // An large but reasonable update will be split into batches.
-        let large = "0".repeat(INSERT_BATCH_SPLIT_SIZE);
-        S.upsert(&mut stash, vec![(1, large.clone()), (2, large)])
-            .await
-            .unwrap();
-        assert_eq!(S.iter(&mut stash).await.unwrap().len(), 2);
-    }
-    // Test batches with a large number of individual updates.
-    {
-        let mut stash = connect(&factory, &connstr, tls.clone(), true).await;
-        let col = collection::<i64, i64>(&mut stash, "c1").await.unwrap();
-        let mut batch = make_batch(&col, &mut stash).await.unwrap();
-        for i in 0..500_000 {
-            col.append_to_batch(&mut batch, &i, &(i + 1), 1);
-        }
-        append(&mut stash, vec![batch]).await.unwrap();
-    }
-    // Test readonly.
-    {
-        Stash::clear(&connstr, tls.clone()).await.unwrap();
-        let mut stash_rw = factory
-            .open(connstr.to_string(), None, tls.clone())
-            .await
-            .unwrap();
-        let col_rw = collection::<i64, i64>(&mut stash_rw, "c1").await.unwrap();
-        let mut batch = make_batch(&col_rw, &mut stash_rw).await.unwrap();
-        col_rw.append_to_batch(&mut batch, &1, &2, 1);
-        append(&mut stash_rw, vec![batch]).await.unwrap();
-
-        // Now make a readonly stash. We should fail to create new collections,
-        // but be able to read existing collections.
-        let mut stash_ro = factory
-            .open_readonly(connstr.to_string(), None, tls.clone())
-            .await
-            .unwrap();
-        let res = collection::<i64, i64>(&mut stash_ro, "c2").await;
-        assert_contains!(
-            res.unwrap_err().to_string(),
-            "cannot execute INSERT in a read-only transaction"
-        );
-        assert_eq!(
-            C1.peek_one(&mut stash_ro).await.unwrap(),
-            BTreeMap::from([(1, 2)])
-        );
-
-        // The previous stash should still be the leader.
-        assert!(stash_rw.confirm_leadership().await.is_ok());
-        stash_rw.verify().await.unwrap();
-    }
-    // Test savepoint.
-    {
-        let mut stash_rw = factory
-            .open(connstr.to_string(), None, tls.clone())
-            .await
-            .unwrap();
-        // Data still present from previous test.
-
-        // Now make a savepoint stash. We should be allowed to create anything
-        // we want, but it shouldn't be viewable to other stashes.
-        let mut stash_sp = factory
-            .open_savepoint(connstr.to_string(), tls)
-            .await
-            .unwrap();
-        let c1_sp = collection::<i64, i64>(&mut stash_rw, "c1").await.unwrap();
-        let mut batch = make_batch(&c1_sp, &mut stash_sp).await.unwrap();
-        c1_sp.append_to_batch(&mut batch, &5, &6, 1);
-        append(&mut stash_sp, vec![batch]).await.unwrap();
-        assert_eq!(
-            C1.peek_one(&mut stash_sp).await.unwrap(),
-            BTreeMap::from([(1, 2), (5, 6)]),
-        );
-        // RW collection can't see the new row.
-        assert_eq!(
-            C1.peek_one(&mut stash_rw).await.unwrap(),
-            BTreeMap::from([(1, 2)])
-        );
-
-        // SP stash can create a new collection, append to it, peek it.
-        let c_savepoint = collection::<i64, i64>(&mut stash_sp, "c_savepoint")
-            .await
-            .unwrap();
-        let mut batch = make_batch(&c_savepoint, &mut stash_sp).await.unwrap();
-        c_savepoint.append_to_batch(&mut batch, &3, &4, 1);
-        append(&mut stash_sp, vec![batch]).await.unwrap();
-        assert_eq!(
-            C_SAVEPOINT.peek_one(&mut stash_sp).await.unwrap(),
-            BTreeMap::from([(3, 4)])
-        );
-        // But the RW collection can't see it.
-        assert_eq!(
-            BTreeSet::from_iter(stash_rw.collections().await.unwrap().into_values()),
-            BTreeSet::from(["c1".to_string()])
-        );
-
-        drop(stash_sp);
-
-        // The previous stash should still be the leader.
-        assert!(stash_rw.confirm_leadership().await.is_ok());
-        // Verify c1 didn't change.
-        assert_eq!(
-            C1.peek_one(&mut stash_rw).await.unwrap(),
-            BTreeMap::from([(1, 2)])
-        );
-        stash_rw.verify().await.unwrap();
-    }
+    // Verify invalid URLs fail on connect.
+    assert!(factory
+        .open("host=invalid".into(), None, tls)
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("stash error: postgres: error connecting to server"));
 }
 
 async fn test_append<F, O>(f: F) -> Stash
@@ -757,6 +559,207 @@ where
         .unwrap();
 
     stash
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_stash_fail_after_commit() {
+    Stash::with_debug_stash(|mut stash| async move {
+        let col = collection::<i64, i64>(&mut stash, "c1").await.unwrap();
+        let mut batch = make_batch(&col, &mut stash).await.unwrap();
+        col.append_to_batch(&mut batch, &1, &2, 1);
+        append(&mut stash, vec![batch]).await.unwrap();
+        assert_eq!(
+            C1.peek_one(&mut stash).await.unwrap(),
+            BTreeMap::from([(1, 2)])
+        );
+        let mut batch = make_batch(&col, &mut stash).await.unwrap();
+        col.append_to_batch(&mut batch, &1, &2, -1);
+
+        fail::cfg("stash_commit_pre", "return(commit failpoint)").unwrap();
+        fail::cfg("stash_commit_post", "return(commit failpoint)").unwrap();
+        // Because the commit error will either retry or discover it succeeded,
+        // it never returns an error. Thus, we need to re-enable the failpoint
+        // in another thread. Use both a pre and post commit error to test both
+        // commit success and fail paths. Use a channel to check that we haven't
+        // succeeded unexpectedly.
+        let (tx, mut rx) = oneshot::channel();
+        let handle = spawn(|| "stash_commit_enable", async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            // Assert no success yet.
+            rx.try_recv().unwrap_err();
+            fail::cfg("stash_commit_post", "off").unwrap();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            // Assert no success yet.
+            rx.try_recv().unwrap_err();
+            fail::cfg("stash_commit_pre", "off").unwrap();
+            rx.await.unwrap();
+        });
+        append(&mut stash, vec![batch.clone()]).await.unwrap();
+        assert_eq!(C1.peek_one(&mut stash).await.unwrap(), BTreeMap::new());
+        tx.send(()).unwrap();
+        handle.await.unwrap();
+    })
+    .await
+    .expect("must succeed");
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_stash_batch_large_serialized_size() {
+    Stash::with_debug_stash(|mut stash| async move {
+        static S: TypedCollection<i64, String> = TypedCollection::new("s");
+        let _16mb = "0".repeat(1 << 24);
+        // A too large update will always fail.
+        assert_contains!(
+            S.upsert(&mut stash, vec![(1, _16mb)])
+                .await
+                .unwrap_err()
+                .to_string(),
+            "message size 16 MiB bigger than maximum allowed message size"
+        );
+        // An large but reasonable update will be split into batches.
+        let large = "0".repeat(INSERT_BATCH_SPLIT_SIZE);
+        S.upsert(&mut stash, vec![(1, large.clone()), (2, large)])
+            .await
+            .unwrap();
+        assert_eq!(S.iter(&mut stash).await.unwrap().len(), 2);
+    })
+    .await
+    .expect("must succeed");
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_stash_batch_large_number_updates() {
+    Stash::with_debug_stash(|mut stash| async move {
+        let col = collection::<i64, i64>(&mut stash, "c1").await.unwrap();
+        let mut batch = make_batch(&col, &mut stash).await.unwrap();
+        for i in 0..500_000 {
+            col.append_to_batch(&mut batch, &i, &(i + 1), 1);
+        }
+        append(&mut stash, vec![batch]).await.unwrap();
+    })
+    .await
+    .expect("must succeed");
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_stash_readonly() {
+    let factory = DebugStashFactory::try_new().await.expect("must succeed");
+    let mut stash_rw = factory.open().await;
+    let col_rw = collection::<i64, i64>(&mut stash_rw, "c1").await.unwrap();
+    let mut batch = make_batch(&col_rw, &mut stash_rw).await.unwrap();
+    col_rw.append_to_batch(&mut batch, &1, &2, 1);
+    append(&mut stash_rw, vec![batch]).await.unwrap();
+
+    // Now make a readonly stash. We should fail to create new collections,
+    // but be able to read existing collections.
+    let mut stash_ro = factory.open_readonly().await;
+    let res = collection::<i64, i64>(&mut stash_ro, "c2").await;
+    assert_contains!(
+        res.unwrap_err().to_string(),
+        "cannot execute INSERT in a read-only transaction"
+    );
+    assert_eq!(
+        C1.peek_one(&mut stash_ro).await.unwrap(),
+        BTreeMap::from([(1, 2)])
+    );
+
+    // The previous stash should still be the leader.
+    assert!(stash_rw.confirm_leadership().await.is_ok());
+    stash_rw.verify().await.unwrap();
+    factory.drop().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_stash_savepoint() {
+    let factory = DebugStashFactory::try_new().await.expect("must succeed");
+    let mut stash_rw = factory.open().await;
+    // Data still present from previous test.
+
+    // Now make a savepoint stash. We should be allowed to create anything
+    // we want, but it shouldn't be viewable to other stashes.
+    let mut stash_sp = factory.open_savepoint().await;
+    let c1 = collection::<i64, i64>(&mut stash_rw, "c1").await.unwrap();
+    let mut batch = make_batch(&c1, &mut stash_rw).await.unwrap();
+    c1.append_to_batch(&mut batch, &1, &2, 1);
+    append(&mut stash_rw, vec![batch]).await.unwrap();
+    let mut batch = make_batch(&c1, &mut stash_sp).await.unwrap();
+    c1.append_to_batch(&mut batch, &5, &6, 1);
+    append(&mut stash_sp, vec![batch]).await.unwrap();
+    assert_eq!(
+        C1.peek_one(&mut stash_sp).await.unwrap(),
+        BTreeMap::from([(1, 2), (5, 6)]),
+    );
+    // RW collection can't see the new row.
+    assert_eq!(
+        C1.peek_one(&mut stash_rw).await.unwrap(),
+        BTreeMap::from([(1, 2)])
+    );
+
+    // SP stash can create a new collection, append to it, peek it.
+    let c_savepoint = collection::<i64, i64>(&mut stash_sp, "c_savepoint")
+        .await
+        .unwrap();
+    let mut batch = make_batch(&c_savepoint, &mut stash_sp).await.unwrap();
+    c_savepoint.append_to_batch(&mut batch, &3, &4, 1);
+    append(&mut stash_sp, vec![batch]).await.unwrap();
+    assert_eq!(
+        C_SAVEPOINT.peek_one(&mut stash_sp).await.unwrap(),
+        BTreeMap::from([(3, 4)])
+    );
+    // But the RW collection can't see it.
+    assert_eq!(
+        BTreeSet::from_iter(stash_rw.collections().await.unwrap().into_values()),
+        BTreeSet::from(["c1".to_string()])
+    );
+
+    drop(stash_sp);
+
+    // The previous stash should still be the leader.
+    assert!(stash_rw.confirm_leadership().await.is_ok());
+    // Verify c1 didn't change.
+    assert_eq!(
+        C1.peek_one(&mut stash_rw).await.unwrap(),
+        BTreeMap::from([(1, 2)])
+    );
+    stash_rw.verify().await.unwrap();
+    factory.drop().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_stash_fence() {
+    let factory = DebugStashFactory::try_new().await.expect("must succeed");
+    let mut conn1 = factory.open().await;
+    let mut conn2 = factory.open().await;
+    assert!(match collection::<String, String>(&mut conn1, "c").await {
+        Err(e) => e.is_unrecoverable(),
+        _ => panic!("expected error"),
+    });
+    let _: StashCollection<String, String> = collection(&mut conn2, "c").await.unwrap();
+    factory.drop().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_stash_append() {
+    let factory = DebugStashFactory::try_new().await.expect("must succeed");
+    test_append(|| async { factory.open().await }).await;
+    factory.open().await.verify().await.unwrap();
+    factory.drop().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_stash_stash() {
+    let factory = DebugStashFactory::try_new().await.expect("must succeed");
+    test_stash(|| async { factory.open().await }).await;
+    factory.open().await.verify().await.unwrap();
+    factory.drop().await;
 }
 
 async fn make_batch<K, V>(

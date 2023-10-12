@@ -90,6 +90,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use async_trait::async_trait;
+use futures::executor::block_on;
 use mz_adapter::catalog::CatalogState;
 use mz_adapter::session::Session;
 use mz_adapter::{CollectionIdBundle, TimelineContext, TimestampProvider};
@@ -156,6 +158,7 @@ impl From<SetFrontier> for Frontier {
     }
 }
 
+#[async_trait(?Send)]
 impl TimestampProvider for Frontiers {
     fn compute_read_frontier<'a>(
         &'a self,
@@ -202,7 +205,7 @@ impl TimestampProvider for Frontiers {
         &self.storage.get(&id).unwrap().write
     }
 
-    fn oracle_read_ts(&self, timeline: &Timeline) -> Option<Timestamp> {
+    async fn oracle_read_ts(&self, timeline: &Timeline) -> Option<Timestamp> {
         matches!(timeline, Timeline::EpochMilliseconds).then(|| self.oracle)
     }
 }
@@ -263,6 +266,11 @@ fn parse_query_when(s: &str) -> QueryWhen {
 /// Transaction isolation can also be set. The `determine` directive runs determine_timestamp and
 /// returns the chosen timestamp. Append `full` as an argument to it to see the entire
 /// TimestampDetermination.
+// TODO(aljoscha): We allow `futures::block_on` for testing because
+// `determine_timestamp_for()` is now async. We will remove async here again
+// once we have sufficiently evolved the TimestampOracle API and are done with
+// adding the new Durable TimestampOracle based on Postgres/CRDB.
+#[allow(clippy::disallowed_methods)]
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
 fn test_timestamp_selection() {
@@ -312,18 +320,18 @@ fn test_timestamp_selection() {
                         Some(isolation),
                     );
 
-                    let ts = f
-                        .determine_timestamp_for(
-                            &catalog,
-                            &session,
-                            &det.id_bundle.into(),
-                            &parse_query_when(&det.when),
-                            det.instance.parse().unwrap(),
-                            &TimelineContext::TimestampDependent,
-                            None,
-                            &IsolationLevel::from(isolation),
-                        )
-                        .unwrap();
+                    let ts = block_on(f.determine_timestamp_for(
+                        &catalog,
+                        &session,
+                        &det.id_bundle.into(),
+                        &parse_query_when(&det.when),
+                        det.instance.parse().unwrap(),
+                        &TimelineContext::TimestampDependent,
+                        None,
+                        &IsolationLevel::from(isolation),
+                    ))
+                    .unwrap();
+
                     if tc.args.contains_key("full") {
                         format!("{}\n", serde_json::to_string_pretty(&ts).unwrap())
                     } else {

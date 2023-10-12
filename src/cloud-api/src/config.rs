@@ -27,6 +27,9 @@ use crate::client::Client;
 pub static DEFAULT_ENDPOINT: Lazy<Url> =
     Lazy::new(|| "https://api.cloud.materialize.com".parse().unwrap());
 
+/// The header used by the Region API to specify which API version this client supports
+pub static API_VERSION_HEADER: &str = "X-Materialize-Api-Version";
+
 /// Configures the required parameters of a [`Client`].
 pub struct ClientConfig {
     /// The authorization client to get the authorization token.

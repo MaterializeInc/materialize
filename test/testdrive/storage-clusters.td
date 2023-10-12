@@ -35,18 +35,25 @@ contains:only one of IN CLUSTER or SIZE can be set
 ! ALTER SOURCE loadgen SET (SIZE = '1')
 contains:cannot change the size of a source or sink created with IN CLUSTER
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_unified_clusters = false
+
 # Create indexes and materialized views in a storage cluster is banned.
 ! CREATE INDEX bad IN CLUSTER storage ON t (a)
 contains:cannot create this kind of item in a cluster that contains sources or sinks
 ! CREATE MATERIALIZED VIEW bad IN CLUSTER storage AS SELECT 1
 contains:cannot create this kind of item in a cluster that contains sources or sinks
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_unified_clusters = true
+
+> CREATE CLUSTER REPLICA storage.r1 SIZE = '1'
+
 # Executing queries on a storage cluster is banned.
-! SELECT generate_series(1, 1)
-contains:cannot execute queries on cluster containing sources or sinks
+> SELECT generate_series(1, 1)
+1
 
 # Only one replica of a storage cluster is permitted.
-> CREATE CLUSTER REPLICA storage.r1 SIZE '1'
 ! CREATE CLUSTER REPLICA storage.r2 SIZE '1'
 contains:cannot create more than one replica of a cluster containing sources or sinks
 
@@ -60,9 +67,15 @@ contains:cannot create more than one replica of a cluster containing sources or 
 > SELECT generate_series(1, 1)
 1
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_unified_clusters = false
+
 # Recreating the source is banned.
 ! CREATE SOURCE loadgen IN CLUSTER storage FROM LOAD GENERATOR COUNTER
 contains:cannot create source in cluster containing indexes or materialized views
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_unified_clusters = true
 
 # Creating a second replica is now allowed.
 > CREATE CLUSTER REPLICA storage.r2 SIZE '1'

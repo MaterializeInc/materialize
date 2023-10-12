@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use mz_controller_types::ClusterId;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
 use uuid::Uuid;
@@ -22,6 +23,9 @@ pub struct StatementBeganExecutionRecord {
     pub sample_rate: f64,
     pub params: Vec<Option<String>>,
     pub began_at: EpochMillis,
+    pub cluster_id: Option<ClusterId>,
+    pub cluster_name: Option<String>,
+    pub application_name: String,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -31,6 +35,9 @@ pub enum StatementExecutionStrategy {
     /// The statement was executed by reading from an existing
     /// arrangement.
     FastPath,
+    /// Experimental: The statement was executed by reading from an existing
+    /// persist collection.
+    PersistFastPath,
     /// The statement was determined to be constant by
     /// environmentd, and not sent to a cluster.
     Constant,
@@ -41,6 +48,7 @@ impl StatementExecutionStrategy {
         match self {
             Self::Standard => "standard",
             Self::FastPath => "fast-path",
+            Self::PersistFastPath => "persist-fast-path",
             Self::Constant => "constant",
         }
     }

@@ -7,22 +7,39 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use mz_ore::metrics::MetricsFutureExt;
 use uuid::Uuid;
 
+use crate::metrics::Metrics;
 use crate::{Client, Error};
 
 impl Client {
     /// Exchanges a client id and secret for a jwt token.
     pub async fn exchange_client_secret_for_token(
         &self,
-        client_id: Uuid,
-        secret: Uuid,
+        request: ApiTokenArgs,
         admin_api_token_url: &str,
+        metrics: &Metrics,
     ) -> Result<ApiTokenResponse, Error> {
-        let args = ApiTokenArgs { client_id, secret };
-        let result = self
-            .make_request(admin_api_token_url.to_string(), args)
+        let name = "exchange_secret_for_token";
+        let histogram = metrics.request_duration_seconds.with_label_values(&[name]);
+
+        let response = self
+            .client
+            .post(admin_api_token_url)
+            .json(&request)
+            .send()
+            .wall_time()
+            .observe(histogram)
             .await?;
+
+        let status = response.status().to_string();
+        metrics
+            .request_count
+            .with_label_values(&[name, &status])
+            .inc();
+
+        let result = response.error_for_status()?.json().await?;
         Ok(result)
     }
 
@@ -31,11 +48,27 @@ impl Client {
         &self,
         refresh_url: &str,
         refresh_token: &str,
+        metrics: &Metrics,
     ) -> Result<ApiTokenResponse, Error> {
-        let args = RefreshToken {
-            refresh_token: refresh_token.to_string(),
-        };
-        let result = self.make_request(refresh_url.to_string(), args).await?;
+        let name = "refresh_token";
+        let histogram = metrics.request_duration_seconds.with_label_values(&[name]);
+
+        let response = self
+            .client
+            .post(refresh_url)
+            .json(&RefreshToken { refresh_token })
+            .send()
+            .wall_time()
+            .observe(histogram)
+            .await?;
+
+        let status = response.status().to_string();
+        metrics
+            .request_count
+            .with_label_values(&[name, &status])
+            .inc();
+
+        let result = response.error_for_status()?.json().await?;
         Ok(result)
     }
 }
@@ -58,22 +91,14 @@ pub struct ApiTokenResponse {
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RefreshToken {
-    pub refresh_token: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RefreshTokenResponse {
-    pub expires: String,
-    pub expires_in: i64,
-    pub access_token: String,
-    pub refresh_token: String,
+pub struct RefreshToken<'a> {
+    pub refresh_token: &'a str,
 }
 
 #[cfg(test)]
 mod tests {
     use axum::{routing::post, Router};
+    use mz_ore::metrics::MetricsRegistry;
     use reqwest::StatusCode;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -81,7 +106,8 @@ mod tests {
     use uuid::Uuid;
 
     use super::ApiTokenResponse;
-    use crate::Client;
+    use crate::metrics::Metrics;
+    use crate::{ApiTokenArgs, Client};
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method` on OS `linux`
@@ -134,12 +160,15 @@ mod tests {
             code: u16,
             should_retry: bool,
         ) -> Result<(), String> {
+            let registry = MetricsRegistry::new();
+            let metrics = Metrics::register_into(&registry);
+
+            let args = ApiTokenArgs {
+                client_id: Uuid::new_v4(),
+                secret: Uuid::new_v4(),
+            };
             let exchange_result = client
-                .exchange_client_secret_for_token(
-                    Uuid::new_v4(),
-                    Uuid::new_v4(),
-                    &format!("http://{addr}/{code}"),
-                )
+                .exchange_client_secret_for_token(args, &format!("http://{addr}/{code}"), &metrics)
                 .await
                 .map(|_| ())
                 .map_err(|e| e.to_string());
@@ -148,7 +177,7 @@ mod tests {
             assert_eq!(prev_count, expected_count);
 
             let refresh_result = client
-                .refresh_token(&format!("http://{addr}/{code}"), "test")
+                .refresh_token(&format!("http://{addr}/{code}"), "test", &metrics)
                 .await
                 .map(|_| ())
                 .map_err(|e| e.to_string());

@@ -26,7 +26,10 @@ ERROR_RE = re.compile(
     r"""
     ( panicked\ at
     | segfault\ at
-    | internal\ error:
+    | has\ overflowed\ its\ stack
+    # broken_statements.slt expects internal errors, but they will always be
+    # prepended with a "forced panic", so ignore that
+    | ^((?!forced\ panic).)* internal\ error:
     | \*\ FATAL:
     | [Oo]ut\ [Oo]f\ [Mm]emory
     | cannot\ migrate\ from\ catalog

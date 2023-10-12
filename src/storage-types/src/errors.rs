@@ -19,6 +19,8 @@ use prost::Message;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
+use crate::shim::ProtoUpsertValueErrorShim;
+
 include!(concat!(env!("OUT_DIR"), "/mz_storage_types.errors.rs"));
 
 /// The underlying data was not decodable in the format we expected: eg.
@@ -163,41 +165,83 @@ pub struct UpsertValueError {
     pub inner: DecodeError,
     /// The (good) key associated with the errored value.
     pub for_key: Row,
+    /// Whether this upsert error got decoded from a legacy format
+    /// Do not touch this field unless your name is Petros
+    pub is_legacy_dont_touch_it: bool,
 }
 
-impl RustType<ProtoUpsertValueError> for UpsertValueError {
-    fn into_proto(&self) -> ProtoUpsertValueError {
-        ProtoUpsertValueError {
-            inner: Some(self.inner.into_proto()),
-            for_key: Some(self.for_key.into_proto()),
+impl RustType<ProtoUpsertValueErrorShim> for UpsertValueError {
+    fn into_proto(&self) -> ProtoUpsertValueErrorShim {
+        if self.is_legacy_dont_touch_it {
+            let inner = ProtoDataflowError {
+                kind: Some(proto_dataflow_error::Kind::DecodeError(
+                    self.inner.into_proto(),
+                )),
+            };
+            let proto = ProtoUpsertValueErrorLegacy {
+                inner: Some(inner),
+                for_key: Some(self.for_key.into_proto()),
+            };
+            ProtoUpsertValueErrorShim::Legacy(Box::new(proto))
+        } else {
+            let proto = ProtoUpsertValueError {
+                inner: Some(self.inner.into_proto()),
+                for_key: Some(self.for_key.into_proto()),
+            };
+            ProtoUpsertValueErrorShim::New(proto)
         }
     }
 
-    fn from_proto(proto: ProtoUpsertValueError) -> Result<Self, TryFromProtoError> {
-        let inner = match proto.inner {
-            Some(inner) => RustType::from_proto(inner)?,
-            None => {
-                return Err(TryFromProtoError::missing_field(
-                    "ProtoUpsertValueError::inner",
-                ))
+    fn from_proto(proto: ProtoUpsertValueErrorShim) -> Result<Self, TryFromProtoError> {
+        Ok(match proto {
+            ProtoUpsertValueErrorShim::New(new) => UpsertValueError {
+                inner: new
+                    .inner
+                    .into_rust_if_some("ProtoUpsertValueError::inner")?,
+                for_key: new
+                    .for_key
+                    .into_rust_if_some("ProtoUpsertValueError::for_key")?,
+                is_legacy_dont_touch_it: false,
+            },
+            ProtoUpsertValueErrorShim::Legacy(legacy) => {
+                let legacy_inner = match legacy.inner {
+                    Some(inner) => inner,
+                    None => {
+                        return Err(TryFromProtoError::missing_field(
+                            "ProtoUpsertValueError::inner",
+                        ))
+                    }
+                };
+                let inner = DataflowError::from_proto(legacy_inner)?;
+                let inner = match inner {
+                    DataflowError::DecodeError(inner) => *inner,
+                    _ => panic!("invalid legacy upsert error"),
+                };
+                UpsertValueError {
+                    inner,
+                    for_key: legacy
+                        .for_key
+                        .into_rust_if_some("ProtoUpsertValueError::for_key")?,
+                    is_legacy_dont_touch_it: true,
+                }
             }
-        };
-        let for_key = match proto.for_key {
-            Some(key) => RustType::from_proto(key)?,
-            None => {
-                return Err(TryFromProtoError::missing_field(
-                    "ProtoUpsertValueError::for_key",
-                ))
-            }
-        };
-        Ok(Self { inner, for_key })
+        })
     }
 }
 
 impl Display for UpsertValueError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let UpsertValueError { inner, for_key } = self;
-        write!(f, "{inner}, decoded key: {for_key:?}")
+        let UpsertValueError {
+            inner,
+            for_key,
+            is_legacy_dont_touch_it,
+        } = self;
+        write!(f, "{inner}, decoded key: {for_key:?}")?;
+        if *is_legacy_dont_touch_it {
+            f.write_str(", legacy: true")
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -511,7 +555,9 @@ mod columnation {
                         | e @ EvalError::InvalidBase64EndSequence
                         | e @ EvalError::InvalidTimezoneInterval
                         | e @ EvalError::InvalidTimezoneConversion
-                        | e @ EvalError::LengthTooLarge => e.clone(),
+                        | e @ EvalError::LengthTooLarge
+                        | e @ EvalError::AclArrayNullElement
+                        | e @ EvalError::MzAclArrayNullElement => e.clone(),
                         EvalError::Unsupported { feature, issue_no } => EvalError::Unsupported {
                             feature: self.string_region.copy(feature),
                             issue_no: *issue_no,
@@ -740,6 +786,7 @@ mod columnation {
                                 UpsertError::Value(err) => UpsertError::Value(UpsertValueError {
                                     inner: self.copy_decode_error(&err.inner),
                                     for_key: self.row_region.copy(&err.for_key),
+                                    is_legacy_dont_touch_it: err.is_legacy_dont_touch_it,
                                 }),
                                 UpsertError::NullKey(err) => UpsertError::NullKey(*err),
                             };
@@ -841,7 +888,7 @@ mod columnation {
             row_region.heap_size(&mut callback);
             source_error_region.heap_size(&mut callback);
             string_region.heap_size(&mut callback);
-            u8_region.heap_size(callback);
+            u8_region.heap_size(&mut callback);
         }
     }
 

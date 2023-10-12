@@ -81,7 +81,9 @@ use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
 use mz_persist_client::batch::UntrimmableColumns;
 use mz_persist_client::cfg::{PersistConfig, PersistFeatureFlag};
+use mz_pgwire_common::Severity;
 use mz_repr::adt::numeric::Numeric;
+use mz_repr::user::ExternalUserMetadata;
 use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_tracing::CloneableEnvFilter;
 use once_cell::sync::Lazy;
@@ -89,7 +91,7 @@ use serde::Serialize;
 use uncased::UncasedStr;
 
 use crate::ast::Ident;
-use crate::session::user::{ExternalUserMetadata, User, SYSTEM_USER};
+use crate::session::user::{User, SYSTEM_USER};
 use crate::DEFAULT_SCHEMA;
 
 /// The action to take during end_transaction.
@@ -641,6 +643,16 @@ const PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP: ServerVar<Duration> = ServerVar {
     value: &PersistConfig::DEFAULT_NEXT_LISTEN_BATCH_RETRYER.clamp,
     description:
         "The backoff clamp duration when polling for new batches from a Listen or Subscribe.",
+    internal: true,
+};
+
+const PERSIST_FAST_PATH_LIMIT: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("persist_fast_path_limit"),
+    value: &0,
+    description:
+        "An exclusive upper bound on the number of results we may return from a Persist fast-path peek; \
+        queries that may return more results will follow the normal / slow path. \
+        Setting this to 0 disables the feature.",
     internal: true,
 };
 
@@ -1222,6 +1234,13 @@ pub const ENABLE_SESSION_RBAC_CHECKS: ServerVar<bool> = ServerVar {
     internal: false,
 };
 
+pub const EMIT_INTROSPECTION_QUERY_NOTICE: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("emit_introspection_query_notice"),
+    value: &true,
+    description: "Whether to print a notice when querying per-replica introspection sources.",
+    internal: false,
+};
+
 // TODO(mgree) change this to a SelectOption
 pub const ENABLE_SESSION_CARDINALITY_ESTIMATES: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_session_cardinality_estimates"),
@@ -1354,13 +1373,6 @@ pub const ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_consolidate_after_union_negate"),
     value: &true,
     description: "consolidation after Unions that have a Negated input (Materialize).",
-    internal: false,
-};
-
-pub const ENABLE_COMMENT: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("enable_comment"),
-    value: &false,
-    description: "Enables the COMMENT ON feature for objects in the database (Materialize).",
     internal: false,
 };
 
@@ -1635,7 +1647,6 @@ feature_flags!(
         enable_disk_cluster_replicas,
         "`WITH (DISK)` for cluster replicas"
     ),
-    (enable_with_mutually_recursive, "WITH MUTUALLY RECURSIVE"),
     (
         enable_within_timestamp_order_by_in_subscribe,
         "`WITHIN TIMESTAMP ORDER BY ..`"
@@ -1666,11 +1677,6 @@ feature_flags!(
         "MANAGED, AVAILABILITY ZONES syntax"
     ),
     (
-        enable_arrangement_size_logging,
-        "arrangement size logging",
-        true
-    ),
-    (
         statement_logging_use_reproducible_rng,
         "statement logging with reproducible RNG"
     ),
@@ -1684,6 +1690,32 @@ feature_flags!(
         "emitting notices for indexes with an empty key (doesn't affect EXPLAIN)",
         true
     ),
+    (enable_explain_broken, "EXPLAIN ... BROKEN <query> syntax"),
+    (
+        enable_role_vars,
+        "setting default session variables for a role"
+    ),
+    (
+        enable_unified_clusters,
+        "unified compute and storage cluster"
+    ),
+    (
+        enable_jemalloc_profiling,
+        "jemalloc heap memory profiling",
+        false
+    ),
+    (
+        enable_comment,
+        "the COMMENT ON feature for objects",
+        false, // default false
+        false  // internal false
+    ),
+    (
+        enable_sink_doc_on_option,
+        "DOC ON option for sinks",
+        false, // default false
+        false  // internal false
+    )
 );
 
 /// Represents the input to a variable.
@@ -1711,7 +1743,7 @@ impl<'a> VarInput<'a> {
 }
 
 /// An owned version of [`VarInput`].
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub enum OwnedVarInput {
     /// See [`VarInput::Flat`].
     Flat(String),
@@ -1785,6 +1817,7 @@ impl SessionVars {
                 &STATEMENT_LOGGING_SAMPLE_RATE,
                 ValueConstraint::Domain(&NumericInRange(0.0..=1.0)),
             )
+            .with_var(&EMIT_INTROSPECTION_QUERY_NOTICE)
     }
 
     fn with_var<V>(mut self, var: &'static ServerVar<V>) -> Self
@@ -1938,24 +1971,32 @@ impl SessionVars {
         local: bool,
     ) -> Result<(), VarError> {
         let name = UncasedStr::new(name);
-        if name == MZ_VERSION_NAME {
-            Err(VarError::ReadOnlyParameter(MZ_VERSION_NAME.as_str()))
-        } else if name == IS_SUPERUSER_NAME {
-            Err(VarError::ReadOnlyParameter(IS_SUPERUSER_NAME.as_str()))
-        } else if name == MAX_IDENTIFIER_LENGTH.name {
-            Err(VarError::ReadOnlyParameter(
-                MAX_IDENTIFIER_LENGTH.name.as_str(),
-            ))
-        } else {
-            self.vars
-                .get_mut(name)
-                .map(|v| {
-                    v.visible(&self.user, system_vars)?;
-                    v.set(input, local)
-                })
-                .transpose()?
-                .ok_or_else(|| VarError::UnknownParameter(name.to_string()))
-        }
+        self.check_read_only(name)?;
+
+        self.vars
+            .get_mut(name)
+            .map(|v| {
+                v.visible(&self.user, system_vars)?;
+                v.set(input, local)
+            })
+            .transpose()?
+            .ok_or_else(|| VarError::UnknownParameter(name.to_string()))
+    }
+
+    /// Sets the "role default" parameter named `name` to the value represented by `value`.
+    ///
+    /// A role default only takes effect at the start of a Session, so running
+    /// `ALTER ROLE ... SET ...` has no visible impact until a new connection is started.
+    pub fn set_role_default(&mut self, name: &str, input: VarInput) -> Result<(), VarError> {
+        let name = UncasedStr::new(name);
+        self.check_read_only(name)?;
+
+        self.vars
+            .get_mut(name)
+            // Note: visibility is checked when persisting a role default.
+            .map(|v| v.set_role_default(input))
+            .transpose()?
+            .ok_or_else(|| VarError::UnknownParameter(name.to_string()))
     }
 
     /// Sets the configuration parameter named `name` to its default value.
@@ -1978,20 +2019,31 @@ impl SessionVars {
         local: bool,
     ) -> Result<(), VarError> {
         let name = UncasedStr::new(name);
+        self.check_read_only(name)?;
+
+        self.vars
+            .get_mut(name)
+            .map(|v| {
+                v.visible(&self.user, system_vars)?;
+                v.reset(local);
+                Ok(())
+            })
+            .transpose()?
+            .ok_or_else(|| VarError::UnknownParameter(name.to_string()))
+    }
+
+    /// Returns an error if the variable corresponding to `name` is read only.
+    fn check_read_only(&self, name: &UncasedStr) -> Result<(), VarError> {
         if name == MZ_VERSION_NAME {
             Err(VarError::ReadOnlyParameter(MZ_VERSION_NAME.as_str()))
         } else if name == IS_SUPERUSER_NAME {
             Err(VarError::ReadOnlyParameter(IS_SUPERUSER_NAME.as_str()))
+        } else if name == MAX_IDENTIFIER_LENGTH.name {
+            Err(VarError::ReadOnlyParameter(
+                MAX_IDENTIFIER_LENGTH.name.as_str(),
+            ))
         } else {
-            self.vars
-                .get_mut(name)
-                .map(|v| {
-                    v.visible(&self.user, system_vars)?;
-                    v.reset(local);
-                    Ok(())
-                })
-                .transpose()?
-                .ok_or_else(|| VarError::UnknownParameter(name.to_string()))
+            Ok(())
         }
     }
 
@@ -2182,6 +2234,11 @@ impl SessionVars {
     pub fn get_statement_logging_sample_rate(&self) -> Numeric {
         *self.expect_value(&STATEMENT_LOGGING_SAMPLE_RATE)
     }
+
+    /// Returns the value of the `emit_introspection_query_notice` configuration parameter.
+    pub fn emit_introspection_query_notice(&self) -> bool {
+        *self.expect_value(&EMIT_INTROSPECTION_QUERY_NOTICE)
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -2338,6 +2395,7 @@ impl SystemVars {
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF)
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER)
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP)
+            .with_var(&PERSIST_FAST_PATH_LIMIT)
             .with_var(&PERSIST_STATS_AUDIT_PERCENT)
             .with_var(&PERSIST_STATS_COLLECTION_ENABLED)
             .with_var(&PERSIST_STATS_FILTER_ENABLED)
@@ -2364,7 +2422,6 @@ impl SystemVars {
             .with_var(&ENABLE_STORAGE_SHARD_FINALIZATION)
             .with_var(&ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE)
             .with_var(&ENABLE_DEFAULT_CONNECTION_VALIDATION)
-            .with_var(&ENABLE_COMMENT)
             .with_var(&MIN_TIMESTAMP_INTERVAL)
             .with_var(&MAX_TIMESTAMP_INTERVAL)
             .with_var(&LOGGING_FILTER)
@@ -2824,6 +2881,10 @@ impl SystemVars {
         *self.expect_value(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP)
     }
 
+    pub fn persist_fast_path_limit(&self) -> usize {
+        *self.expect_value(&PERSIST_FAST_PATH_LIMIT)
+    }
+
     pub fn persist_reader_lease_duration(&self) -> Duration {
         *self.expect_value(&PERSIST_READER_LEASE_DURATION)
     }
@@ -3021,11 +3082,6 @@ impl SystemVars {
     /// Returns the `enable_default_connection_validation` configuration parameter.
     pub fn enable_default_connection_validation(&self) -> bool {
         *self.expect_value(&ENABLE_DEFAULT_CONNECTION_VALIDATION)
-    }
-
-    /// Returns the `enable_comment` configuration parameter.
-    pub fn enable_comment(&self) -> bool {
-        *self.expect_value(&ENABLE_COMMENT)
     }
 
     /// Returns the `min_timestamp_interval` configuration parameter.
@@ -3492,9 +3548,15 @@ struct SessionVar<V>
 where
     V: Value + ToOwned + Debug + PartialEq + 'static,
 {
+    /// Default value.
     default_value: &'static V,
+    /// Value persisted with the current role.
+    role_value: Option<V::Owned>,
+    /// Value `LOCAL` to a transaction, will be unset at the completion of the transaction.
     local_value: Option<V::Owned>,
+    /// Value set during a transaction, will be set if the transaction is committed.
     staged_value: Option<V::Owned>,
+    /// Value that overrides the default.
     session_value: Option<V::Owned>,
     parent: &'static ServerVar<V>,
     feature_flag: Option<&'static FeatureFlag>,
@@ -3565,6 +3627,7 @@ where
     fn new(parent: &'static ServerVar<V>) -> SessionVar<V> {
         SessionVar {
             default_value: parent.value,
+            role_value: None,
             local_value: None,
             staged_value: None,
             session_value: None,
@@ -3606,6 +3669,7 @@ where
             .map(|v| v.borrow())
             .or_else(|| self.staged_value.as_ref().map(|v| v.borrow()))
             .or_else(|| self.session_value.as_ref().map(|v| v.borrow()))
+            .or_else(|| self.role_value.as_ref().map(|v| v.borrow()))
             .unwrap_or(self.parent.value)
     }
 }
@@ -3651,6 +3715,12 @@ pub trait SessionVarMut: Var + Send + Sync {
     /// Parse the input and update the stored value to match.
     fn set(&mut self, input: VarInput, local: bool) -> Result<(), VarError>;
 
+    /// Parse the input and update the default Role value.
+    ///
+    /// Note: these only get set on Session start. Updating the default value for a role will not
+    /// have any effect until your Session restarts, i.e. you reconnect.
+    fn set_role_default(&mut self, input: VarInput) -> Result<(), VarError>;
+
     /// Reset the stored value to the default.
     fn reset(&mut self, local: bool);
 
@@ -3687,9 +3757,21 @@ where
         Ok(())
     }
 
+    /// Parse the input and set the default Role value.
+    fn set_role_default(&mut self, input: VarInput) -> Result<(), VarError> {
+        let v = V::parse(self, input)?;
+        self.check_constraints(&v)?;
+        self.role_value = Some(v);
+        Ok(())
+    }
+
     /// Reset the stored value to the default.
     fn reset(&mut self, local: bool) {
-        let value = self.default_value.to_owned();
+        let value = self
+            .role_value
+            .as_ref()
+            .map(|val| val.borrow().to_owned())
+            .unwrap_or_else(|| self.default_value.to_owned());
         if local {
             self.local_value = Some(value);
         } else {
@@ -4354,6 +4436,70 @@ impl ClientSeverity {
             ClientSeverity::Error.as_str(),
         ]
     }
+
+    /// Checks if a message of a given severity level should be sent to a client.
+    ///
+    /// The ordering of severity levels used for client-level filtering differs from the
+    /// one used for server-side logging in two aspects: INFO messages are always sent,
+    /// and the LOG severity is considered as below NOTICE, while it is above ERROR for
+    /// server-side logs.
+    ///
+    /// Postgres only considers the session setting after the client authentication
+    /// handshake is completed. Since this function is only called after client authentication
+    /// is done, we are not treating this case right now, but be aware if refactoring it.
+    pub fn should_output_to_client(&self, severity: &Severity) -> bool {
+        match (self, severity) {
+            // INFO messages are always sent
+            (_, Severity::Info) => true,
+            (ClientSeverity::Error, Severity::Error | Severity::Fatal | Severity::Panic) => true,
+            (
+                ClientSeverity::Warning,
+                Severity::Error | Severity::Fatal | Severity::Panic | Severity::Warning,
+            ) => true,
+            (
+                ClientSeverity::Notice,
+                Severity::Error
+                | Severity::Fatal
+                | Severity::Panic
+                | Severity::Warning
+                | Severity::Notice,
+            ) => true,
+            (
+                ClientSeverity::Info,
+                Severity::Error
+                | Severity::Fatal
+                | Severity::Panic
+                | Severity::Warning
+                | Severity::Notice,
+            ) => true,
+            (
+                ClientSeverity::Log,
+                Severity::Error
+                | Severity::Fatal
+                | Severity::Panic
+                | Severity::Warning
+                | Severity::Notice
+                | Severity::Log,
+            ) => true,
+            (
+                ClientSeverity::Debug1
+                | ClientSeverity::Debug2
+                | ClientSeverity::Debug3
+                | ClientSeverity::Debug4
+                | ClientSeverity::Debug5,
+                _,
+            ) => true,
+
+            (
+                ClientSeverity::Error,
+                Severity::Warning | Severity::Notice | Severity::Log | Severity::Debug,
+            ) => false,
+            (ClientSeverity::Warning, Severity::Notice | Severity::Log | Severity::Debug) => false,
+            (ClientSeverity::Notice, Severity::Log | Severity::Debug) => false,
+            (ClientSeverity::Info, Severity::Log | Severity::Debug) => false,
+            (ClientSeverity::Log, Severity::Debug) => false,
+        }
+    }
 }
 
 impl Value for ClientSeverity {
@@ -4589,8 +4735,8 @@ pub fn is_tracing_var(name: &str) -> bool {
 pub fn is_compute_config_var(name: &str) -> bool {
     name == MAX_RESULT_SIZE.name()
         || name == DATAFLOW_MAX_INFLIGHT_BYTES.name()
-        || name == ENABLE_ARRANGEMENT_SIZE_LOGGING.name()
         || name == ENABLE_MZ_JOIN_CORE.name()
+        || name == ENABLE_JEMALLOC_PROFILING.name()
         || is_persist_config_var(name)
         || is_tracing_var(name)
 }
@@ -4648,6 +4794,7 @@ fn is_persist_config_var(name: &str) -> bool {
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF.name()
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER.name()
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP.name()
+        || name == PERSIST_FAST_PATH_LIMIT.name()
         || name == PERSIST_STATS_AUDIT_PERCENT.name()
         || name == PERSIST_STATS_COLLECTION_ENABLED.name()
         || name == PERSIST_STATS_FILTER_ENABLED.name()
@@ -4756,5 +4903,47 @@ impl Value for IntervalStyle {
 
     fn format(&self) -> String {
         self.as_str().to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn test_should_output_to_client() {
+        #[rustfmt::skip]
+        let test_cases = [
+            (ClientSeverity::Debug1, vec![Severity::Debug, Severity::Log, Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (ClientSeverity::Debug2, vec![Severity::Debug, Severity::Log, Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (ClientSeverity::Debug3, vec![Severity::Debug, Severity::Log, Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (ClientSeverity::Debug4, vec![Severity::Debug, Severity::Log, Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (ClientSeverity::Debug5, vec![Severity::Debug, Severity::Log, Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (ClientSeverity::Log, vec![Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (ClientSeverity::Log, vec![Severity::Debug], false),
+            (ClientSeverity::Info, vec![Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (ClientSeverity::Info, vec![Severity::Debug, Severity::Log], false),
+            (ClientSeverity::Notice, vec![Severity::Notice, Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (ClientSeverity::Notice, vec![Severity::Debug, Severity::Log], false),
+            (ClientSeverity::Warning, vec![Severity::Warning, Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (ClientSeverity::Warning, vec![Severity::Debug, Severity::Log, Severity::Notice], false),
+            (ClientSeverity::Error, vec![Severity::Error, Severity::Fatal, Severity:: Panic, Severity::Info], true),
+            (ClientSeverity::Error, vec![Severity::Debug, Severity::Log, Severity::Notice, Severity::Warning], false),
+        ];
+
+        for test_case in test_cases {
+            run_test(test_case)
+        }
+
+        fn run_test(test_case: (ClientSeverity, Vec<Severity>, bool)) {
+            let client_min_messages_setting = test_case.0;
+            let expected = test_case.2;
+            for message_severity in test_case.1 {
+                assert!(
+                    client_min_messages_setting.should_output_to_client(&message_severity)
+                        == expected
+                )
+            }
+        }
     }
 }

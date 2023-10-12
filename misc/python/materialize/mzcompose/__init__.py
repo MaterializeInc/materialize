@@ -32,15 +32,8 @@ from materialize.ui import UIError
 T = TypeVar("T")
 say = ui.speaker("C> ")
 
-# Be sure to use a `X.Y.Z.Final` tag here; `X.Y` tags refer to the latest
-# minor version in the release series, and minor versions have been known to
-# introduce breakage.
-DEFAULT_DEBEZIUM_VERSION = "1.9.6.Final"
-
-LINT_DEBEZIUM_VERSIONS = ["1.4", "1.5", "1.6"]
 
 DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.0.5"
-
 
 DEFAULT_MZ_VOLUMES = [
     "mzdata:/mzdata",
@@ -59,7 +52,6 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_ld_rbac_checks": "true",
     "enable_rbac_checks": "true",
     "enable_monotonic_oneshot_selects": "true",
-    "enable_with_mutually_recursive": "true",
     "enable_try_parse_monotonic_iso8601_timestamp": "true",
     "enable_dangerous_functions": "true",
     "enable_disk_cluster_replicas": "true",
@@ -75,6 +67,10 @@ DEFAULT_SYSTEM_PARAMETERS = {
     # Advance coverage on some Persist internals changes
     "persist_streaming_compaction_enabled": "true",
     "persist_streaming_snapshot_and_fetch_enabled": "true",
+    "enable_unified_clusters": "true",
+    "enable_jemalloc_profiling": "true",
+    "enable_comment": "true",
+    "enable_sink_doc_on_option": "true",
 }
 
 DEFAULT_CRDB_ENVIRONMENT = [

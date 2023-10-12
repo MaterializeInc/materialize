@@ -76,5 +76,12 @@
 // END LINT CONFIG
 
 fn main() -> Result<(), anyhow::Error> {
-    mz_npm::ensure()
+    mz_npm::ensure()?;
+
+    std::env::set_var("PROTOC", protobuf_src::protoc());
+    prost_build::Config::new()
+        .btree_map(["."])
+        .compile_protos(&["prof/src/pprof_types.proto"], &[".."])?;
+
+    Ok(())
 }

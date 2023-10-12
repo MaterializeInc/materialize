@@ -78,7 +78,8 @@
 //! Implementation of the storage controller trait.
 
 use std::any::Any;
-use std::collections::{BTreeMap, BTreeSet};
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 use std::fmt::Debug;
 use std::num::NonZeroI64;
 use std::str::FromStr;
@@ -106,16 +107,18 @@ use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec64, Opaque};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{ColumnName, Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
-use mz_stash::objects::proto;
 use mz_stash::{self, AppendBatch, StashFactory, TypedCollection};
+use mz_stash_types::metrics::Metrics as StashMetrics;
+use mz_stash_types::objects::proto;
 use mz_storage_client::client::{
     CreateSinkCommand, ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand,
-    SinkStatisticsUpdate, SourceStatisticsUpdate, StorageCommand, StorageResponse, Update,
+    SinkStatisticsUpdate, SourceStatisticsUpdate, StorageCommand, StorageResponse,
+    TimestamplessUpdate,
 };
 use mz_storage_client::controller::{
     CollectionDescription, CollectionState, CreateExportToken, DataSource, DataSourceOther,
     ExportDescription, ExportState, IntrospectionType, MonotonicAppender, ReadPolicy,
-    StorageController,
+    SnapshotCursor, StorageController,
 };
 use mz_storage_client::healthcheck::{
     self, MZ_PREPARED_STATEMENT_HISTORY_DESC, MZ_SESSION_HISTORY_DESC,
@@ -211,17 +214,17 @@ impl RustType<ProtoDurableExportMetadata> for DurableExportMetadata<mz_repr::Tim
     }
 }
 
-impl RustType<mz_stash::objects::proto::DurableExportMetadata>
+impl RustType<mz_stash_types::objects::proto::DurableExportMetadata>
     for DurableExportMetadata<mz_repr::Timestamp>
 {
-    fn into_proto(&self) -> mz_stash::objects::proto::DurableExportMetadata {
-        mz_stash::objects::proto::DurableExportMetadata {
+    fn into_proto(&self) -> mz_stash_types::objects::proto::DurableExportMetadata {
+        mz_stash_types::objects::proto::DurableExportMetadata {
             initial_as_of: Some(self.initial_as_of.into_proto()),
         }
     }
 
     fn from_proto(
-        proto: mz_stash::objects::proto::DurableExportMetadata,
+        proto: mz_stash_types::objects::proto::DurableExportMetadata,
     ) -> Result<Self, TryFromProtoError> {
         Ok(DurableExportMetadata {
             initial_as_of: proto
@@ -464,6 +467,7 @@ where
     #[tracing::instrument(level = "debug", skip_all)]
     async fn create_collections(
         &mut self,
+        register_ts: Option<Self::Timestamp>,
         mut collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError> {
         // Validate first, to avoid corrupting state.
@@ -580,7 +584,9 @@ where
         // this stream cannot all have exclusive access.
         let this = &*self;
         let to_register: Vec<_> = futures::stream::iter(enriched_with_metadata)
-            .map(|data: Result<_, StorageError>| async move {
+            .map(|data: Result<_, StorageError>| {
+                let register_ts = register_ts.clone();
+                async move {
                 let (id, description, metadata) = data?;
 
                 // should be replaced with real introspection (https://github.com/MaterializeInc/materialize/issues/14266)
@@ -590,7 +596,7 @@ where
                     id, metadata.remap_shard, metadata.data_shard, metadata.status_shard
                 );
 
-                let (write, since_handle) = this
+                let (write, mut since_handle) = this
                     .open_data_handles(
                         &id,
                         metadata.data_shard,
@@ -600,8 +606,32 @@ where
                     )
                     .await;
 
+                // Present tables as springing into existence at the register_ts by advancing
+                // the since. Otherwise, we could end up in a situation where a table with a
+                // long compaction window appears to exist before the environment (and this the
+                // table) existed.
+                //
+                // We could potentially also do the same thing for other sources, in particular
+                // storage's internal sources and perhaps others, but leave them for now.
+                match description.data_source {
+                    DataSource::Introspection(_)
+                    | DataSource::Webhook
+                    | DataSource::Ingestion(_)
+                    | DataSource::Progress
+                    | DataSource::Other(DataSourceOther::Compute)
+                    | DataSource::Other(DataSourceOther::Source) => {},
+                    DataSource::Other(DataSourceOther::TableWrites) => {
+                        let register_ts = register_ts.expect("caller should have provided a register_ts when creating a table");
+                        if since_handle.since().elements() == &[T::minimum()] {
+                            info!("advancing {} to initial since of {:?}", id, register_ts);
+                            let token = since_handle.opaque().clone();
+                            let _ = since_handle.compare_and_downgrade_since(&token, (&token, &Antichain::from_elem(register_ts.clone()))).await;
+                        }
+                    }
+                }
+
                 Ok::<_, StorageError>((id, description, write, since_handle, metadata))
-            })
+            }})
             // Poll each future for each collection concurrently, maximum of 50 at a time.
             .buffer_unordered(50)
             // HERE BE DRAGONS:
@@ -1133,18 +1163,22 @@ where
     #[tracing::instrument(level = "debug", skip_all)]
     fn append_table(
         &mut self,
-        commands: Vec<(GlobalId, Vec<Update<Self::Timestamp>>, Self::Timestamp)>,
+        write_ts: Self::Timestamp,
+        advance_to: Self::Timestamp,
+        commands: Vec<(GlobalId, Vec<TimestamplessUpdate>)>,
     ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError> {
         // TODO(petrosagg): validate appends against the expected RelationDesc of the collection
-        for (id, updates, batch_upper) in commands.iter() {
-            for update in updates.iter() {
-                if !update.timestamp.less_than(batch_upper) {
+        for (id, updates) in commands.iter() {
+            if !updates.is_empty() {
+                if !write_ts.less_than(&advance_to) {
                     return Err(StorageError::UpdateBeyondUpper(*id));
                 }
             }
         }
 
-        Ok(self.persist_table_worker.append(commands))
+        Ok(self
+            .persist_table_worker
+            .append(write_ts, advance_to, commands))
     }
 
     fn monotonic_appender(&self, id: GlobalId) -> Result<MonotonicAppender, StorageError> {
@@ -1176,6 +1210,26 @@ where
             }
             Err(_) => Err(StorageError::ReadBeforeSince(id)),
         }
+    }
+
+    async fn snapshot_cursor(
+        &self,
+        id: GlobalId,
+        as_of: Self::Timestamp,
+    ) -> Result<SnapshotCursor<Self::Timestamp>, StorageError>
+    where
+        Self::Timestamp: Timestamp + Lattice + Codec64,
+    {
+        let mut handle = self.read_handle_for_snapshot(id).await?;
+        let cursor = handle
+            .snapshot_cursor(Antichain::from_elem(as_of))
+            .await
+            .map_err(|_| StorageError::ReadBeforeSince(id))?;
+
+        Ok(SnapshotCursor {
+            _read_handle: handle,
+            cursor,
+        })
     }
 
     async fn snapshot_stats(
@@ -1785,18 +1839,18 @@ where
         persist_location: PersistLocation,
         persist_clients: Arc<PersistClientCache>,
         now: NowFn,
-        factory: &StashFactory,
+        stash_metrics: Arc<StashMetrics>,
         envd_epoch: NonZeroI64,
         metrics_registry: MetricsRegistry,
     ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
-        let tls = mz_postgres_util::make_tls(
+        let tls = mz_tls_util::make_tls(
             &tokio_postgres::config::Config::from_str(&postgres_url)
                 .expect("invalid postgres url for storage stash"),
         )
         .expect("could not make storage TLS connection");
-        let mut stash = factory
+        let mut stash = StashFactory::from_metrics(stash_metrics)
             .open(postgres_url, None, tls)
             .await
             .expect("could not connect to postgres storage stash");
@@ -2345,17 +2399,35 @@ where
     /// Effectively truncates the source status history shard except for the most recent updates
     /// from each ID.
     async fn partially_truncate_status_history(&mut self, collection: IntrospectionType) {
-        let keep_n = match collection {
-            IntrospectionType::SourceStatusHistory => {
-                self.config.keep_n_source_status_history_entries
-            }
-            IntrospectionType::SinkStatusHistory => self.config.keep_n_sink_status_history_entries,
+        let (keep_n, occurred_at_col, id_col) = match collection {
+            IntrospectionType::SourceStatusHistory => (
+                self.config.keep_n_source_status_history_entries,
+                healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC
+                    .get_by_name(&ColumnName::from("occurred_at"))
+                    .expect("schema has not changed")
+                    .0,
+                healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC
+                    .get_by_name(&ColumnName::from("source_id"))
+                    .expect("schema has not changed")
+                    .0,
+            ),
+            IntrospectionType::SinkStatusHistory => (
+                self.config.keep_n_sink_status_history_entries,
+                healthcheck::MZ_SINK_STATUS_HISTORY_DESC
+                    .get_by_name(&ColumnName::from("occurred_at"))
+                    .expect("schema has not changed")
+                    .0,
+                healthcheck::MZ_SINK_STATUS_HISTORY_DESC
+                    .get_by_name(&ColumnName::from("sink_id"))
+                    .expect("schema has not changed")
+                    .0,
+            ),
             _ => unreachable!(),
         };
 
         let id = self.introspection_ids[&collection];
 
-        let rows = match self.collections[&id].write_frontier.as_option() {
+        let mut rows = match self.collections[&id].write_frontier.as_option() {
             Some(f) if f > &T::minimum() => {
                 let as_of = f.step_back().unwrap();
 
@@ -2366,44 +2438,53 @@ where
             _ => return,
         };
 
-        let (occurred_at, _) = healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC
-            .get_by_name(&ColumnName::from("occurred_at"))
-            .expect("schema has not changed");
-
-        let (source_id, _) = healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC
-            .get_by_name(&ColumnName::from("source_id"))
-            .expect("schema has not changed");
-
-        // BTreeMap<SourceId, BTreeMap<OccurredAt, Row>>
-        let mut last_n_entries_per_id: BTreeMap<Datum, BTreeMap<Datum, Vec<Datum>>> =
+        // BTreeMap<Id, MinHeap<(OccurredAt, Row)>>, to track the
+        // earliest events for each id.
+        let mut last_n_entries_per_id: BTreeMap<Datum, BinaryHeap<Reverse<(Datum, Vec<Datum>)>>> =
             BTreeMap::new();
+
+        // Consolidate the snapshot, so we can process it correctly below.
+        differential_dataflow::consolidation::consolidate(&mut rows);
 
         let mut deletions = vec![];
 
         for (row, diff) in rows.iter() {
-            mz_ore::soft_assert!(
-                *diff == 1,
-                "only know how to operate over consolidated data"
+            let status_row = row.unpack();
+            let id = status_row[id_col];
+            let occurred_at = status_row[occurred_at_col];
+
+            // Duplicate rows ARE possible if many status changes happen in VERY quick succession,
+            // so we go ahead and handle them.
+            assert!(
+                *diff > 0,
+                "only know how to operate over consolidated data with diffs > 0, \
+                found diff {} for object {} in {:?}",
+                diff,
+                id,
+                collection
             );
 
-            let d = row.unpack();
-            let source_id = d[source_id];
-            let occurred_at = d[occurred_at];
+            // Consider duplicated rows separately.
+            for _ in 0..*diff {
+                let entries = last_n_entries_per_id.entry(id).or_default();
 
-            let entries = last_n_entries_per_id.entry(source_id).or_default();
+                // We CAN have multiple statuses (most likely Starting and Running) at the exact same
+                // millisecond, depending on how the `health_operator` is scheduled.
+                //
+                // Note that these will be arbitrarily ordered, so a Starting event might
+                // survive and a Running one won't. The next restart will remove the other,
+                // so we don't bother being careful about it.
+                //
+                // TODO(guswynn): unpack these into health-status objects and use
+                // their `Ord1 impl.
+                entries.push(Reverse((occurred_at, status_row.clone())));
 
-            let old = entries.insert(occurred_at, d.clone());
-            mz_ore::soft_assert!(
-                old.is_none(),
-                "expected only one status at each time, but got multiple at {:?}",
-                occurred_at
-            );
-
-            // Retain some number of entries, using pop_first to mark the oldest entries for
-            // deletion.
-            while entries.len() > keep_n {
-                if let Some((_, r)) = entries.pop_first() {
-                    deletions.push(r);
+                // Retain some number of entries, using pop to mark the oldest entries for
+                // deletion.
+                while entries.len() > keep_n {
+                    if let Some(Reverse((_, r))) = entries.pop() {
+                        deletions.push(r);
+                    }
                 }
             }
         }
@@ -2840,7 +2921,11 @@ where
                 PartialOrder::less_than(&collection.implied_capability, &collection.write_frontier)
                     // Whenever a collection is being initialized, this state is
                     // acceptable.
-                    || *collection.write_frontier == [T::minimum()]
+                    || *collection.write_frontier == [T::minimum()],
+                "{id}:  the implied capability {:?} should be less than the write_frontier {:?}. Collection state dump: {:#?}",
+                collection.implied_capability,
+                collection.write_frontier,
+                collection
             );
 
             collection

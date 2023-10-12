@@ -35,49 +35,25 @@
 //! When in doubt, reach out to the Surfaces team, and we'll be more than happy to help :)
 //!
 //! [`Stash`]: crate::Stash
-//! [`STASH_VERSION`]: crate::STASH_VERSION
+//! [`STASH_VERSION`]: mz_stash_types::STASH_VERSION
 
 use std::collections::BTreeMap;
 
-use paste::paste;
+use bytes::Bytes;
+use mz_stash_types::objects::proto::{ConfigKey, ConfigValue};
+use mz_stash_types::{InternalStashError, StashError};
 
-use crate::objects::proto::{ConfigKey, ConfigValue};
-use crate::objects::WireCompatible;
-use crate::{
-    AppendBatch, Data, InternalStashError, StashError, Transaction, TypedCollection,
-    COLLECTION_CONFIG, USER_VERSION_KEY,
-};
+use crate::{AppendBatch, Data, Transaction, TypedCollection, COLLECTION_CONFIG, USER_VERSION_KEY};
 
-pub(crate) mod v25_to_v26;
-pub(crate) mod v26_to_v27;
-pub(crate) mod v27_to_v28;
-pub(crate) mod v28_to_v29;
-pub(crate) mod v29_to_v30;
-pub(crate) mod v30_to_v31;
-pub(crate) mod v31_to_v32;
-pub(crate) mod v32_to_v33;
-pub(crate) mod v33_to_v34;
-pub(crate) mod v34_to_v35;
 pub(crate) mod v35_to_v36;
 pub(crate) mod v36_to_v37;
 pub(crate) mod v37_to_v38;
-
-macro_rules! objects {
-    ( $( $x:ident ),* ) => {
-        paste! {
-            $(
-                pub(crate) mod [<objects_ $x>] {
-                    include!(concat!(env!("OUT_DIR"), "/objects_", stringify!($x), ".rs"));
-                }
-            )*
-        }
-    }
-}
-
-objects!(v27, v28, v29, v31, v32, v33, v34, v35, v36, v37, v38);
+pub(crate) mod v38_to_v39;
+pub(crate) mod v39_to_v40;
 
 pub(crate) enum MigrationAction<K1, K2, V2> {
     /// Deletes the provided key.
+    #[allow(unused)]
     Delete(K1),
     /// Inserts the provided key-value pair. The key must not currently exist!
     Insert(K2, V2),
@@ -158,6 +134,7 @@ where
 
     /// Provided a closure, will migrate a [`TypedCollection`] of types `K` and `V` to
     /// [`WireCompatible`] types `K2` and `V2`.
+    #[allow(unused)]
     pub(crate) async fn migrate_compat<K2, V2>(
         &self,
         tx: &mut Transaction<'_>,
@@ -277,3 +254,88 @@ impl TypedCollection<ConfigKey, ConfigValue> {
         Ok(())
     }
 }
+
+/// Denotes that `Self` is wire compatible with type `T`.
+///
+/// You should not implement this yourself, instead use the `wire_compatible!` macro.
+pub unsafe trait WireCompatible<T: prost::Message>: prost::Message + Default {
+    /// Converts the type `T` into `Self` by serializing `T` and deserializing as `Self`.
+    fn convert(old: &T) -> Self {
+        let bytes = old.encode_to_vec();
+        // Note: use Bytes to enable possible re-use of the underlying buffer.
+        let bytes = Bytes::from(bytes);
+        Self::decode(bytes).expect("wire compatible")
+    }
+}
+
+// SAFETY: A message type is trivially wire compatible with itself.
+unsafe impl<T: prost::Message + Default + Clone> WireCompatible<T> for T {
+    fn convert(old: &Self) -> Self {
+        old.clone()
+    }
+}
+
+/// Defines one protobuf type as wire compatible with another.
+///
+/// ```text
+/// wire_compatible!(objects_v28::DatabaseKey with objects_v27::DatabaseKey);
+/// ```
+///
+/// Internally this will implement the `WireCompatible<B> for <A>`, e.g.
+/// `WireCompatible<objects_v27::DatabaseKey> for objects_v28::DatabaseKey` and generate `proptest`
+/// cases that will create arbitrary objects of type `B` and assert they can be deserialized with
+/// type `A`, and vice versa.
+macro_rules! wire_compatible {
+    ($a:ident $(:: $a_sub:ident)* with $b:ident $(:: $b_sub:ident)*) => {
+        ::static_assertions::assert_impl_all!(
+            $a $(::$a_sub)* : ::proptest::arbitrary::Arbitrary, ::prost::Message, Default,
+        );
+        ::static_assertions::assert_impl_all!(
+            $b $(::$b_sub)*  : ::proptest::arbitrary::Arbitrary, ::prost::Message, Default,
+        );
+
+        // SAFETY: Below we assert that these types are wire compatible by generating arbitrary
+        // structs, encoding in one, and then decoding in the other.
+        unsafe impl $crate::upgrade::WireCompatible< $b $(::$b_sub)* > for $a $(::$a_sub)* {}
+        unsafe impl $crate::upgrade::WireCompatible< $a $(::$a_sub)* > for $b $(::$b_sub)* {}
+
+        ::paste::paste! {
+            ::proptest::proptest! {
+                #[mz_ore::test]
+                #[cfg_attr(miri, ignore)] // slow
+                fn [<proptest_wire_compat_ $a:snake $(_$a_sub:snake)* _to_ $b:snake $(_$b_sub:snake)* >](a: $a $(::$a_sub)* ) {
+                    use ::prost::Message;
+                    let a_bytes = a.encode_to_vec();
+                    let b_decoded = $b $(::$b_sub)*::decode(&a_bytes[..]);
+                    ::proptest::prelude::prop_assert!(b_decoded.is_ok());
+
+                    // Maybe superfluous, but this is a method called in production.
+                    let b_decoded = b_decoded.expect("asserted Ok");
+                    let b_converted: $b $(::$b_sub)* = $crate::upgrade::WireCompatible::convert(&a);
+                    assert_eq!(b_decoded, b_converted);
+
+                    let b_bytes = b_decoded.encode_to_vec();
+                    ::proptest::prelude::prop_assert_eq!(a_bytes, b_bytes, "a and b serialize differently");
+                }
+
+                #[mz_ore::test]
+                #[cfg_attr(miri, ignore)] // slow
+                fn [<proptest_wire_compat_ $b:snake $(_$b_sub:snake)* _to_ $a:snake $(_$a_sub:snake)* >](b: $b $(::$b_sub)* ) {
+                    use ::prost::Message;
+                    let b_bytes = b.encode_to_vec();
+                    let a_decoded = $a $(::$a_sub)*::decode(&b_bytes[..]);
+                    ::proptest::prelude::prop_assert!(a_decoded.is_ok());
+
+                    // Maybe superfluous, but this is a method called in production.
+                    let a_decoded = a_decoded.expect("asserted Ok");
+                    let a_converted: $a $(::$a_sub)* = $crate::upgrade::WireCompatible::convert(&b);
+                    assert_eq!(a_decoded, a_converted);
+
+                    let a_bytes = a_decoded.encode_to_vec();
+                    ::proptest::prelude::prop_assert_eq!(a_bytes, b_bytes, "a and b serialize differently");
+                }
+            }
+        }
+    };
+}
+pub(crate) use wire_compatible;

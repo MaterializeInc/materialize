@@ -360,10 +360,7 @@ pub(crate) enum SerdeLeasedBatchPartMetadata {
 ///
 /// In any other circumstance, dropping `LeasedBatchPart` panics.
 #[derive(Debug)]
-pub struct LeasedBatchPart<T>
-where
-    T: Timestamp + Codec64,
-{
+pub struct LeasedBatchPart<T> {
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) shard_id: ShardId,
     pub(crate) reader_id: LeasedReaderId,
@@ -443,10 +440,7 @@ where
     }
 }
 
-impl<T> Drop for LeasedBatchPart<T>
-where
-    T: Timestamp + Codec64,
-{
+impl<T> Drop for LeasedBatchPart<T> {
     /// For details, see [`LeasedBatchPart`].
     fn drop(&mut self) {
         self.metrics.lease.dropped_part.inc()

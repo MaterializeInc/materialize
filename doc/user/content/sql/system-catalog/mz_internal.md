@@ -138,6 +138,15 @@ each replica, including the times at which it was created and dropped
 | `dropped_at`          | [`timestamp with time zone`] | The time at which the replica was dropped, or `NULL` if it still exists.                                                                  |
 | `credits_per_hour`    | [`numeric`]                  | The number of compute credits consumed per hour. Corresponds to [`mz_cluster_replica_sizes.credits_per_hour`](#mz_cluster_replica_sizes). |
 
+### `mz_internal_cluster_replicas`
+
+The `mz_internal_cluster_replicas` table lists the replicas that are created and maintained by Materialize support.
+
+<!-- RELATION_SPEC mz_internal.mz_internal_cluster_replicas -->
+| Field      | Type     | Meaning                                                                                                     |
+|------------|----------|-------------------------------------------------------------------------------------------------------------|
+| id         | [`text`] | The ID of a cluster replica. Corresponds to [`mz_cluster_replicas.id`](../mz_catalog/#mz_cluster_replicas). |
+
 ### `mz_comments`
 
 The `mz_comments` table stores optional comments (descriptions) for objects in the database.
@@ -147,7 +156,7 @@ The `mz_comments` table stores optional comments (descriptions) for objects in t
 | -------------- |-------------| --------                                                                                     |
 | `id`           | [`text`]    | The ID of the object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).           |
 | `object_type`  | [`text`]    | The type of object the comment is associated with.                                           |
-| `object_sub_id`| [`uint8`]   | For a comment on a column of a relation, this is the column number. For all other object types this column is `NULL`. |
+| `object_sub_id`| [`integer`] | For a comment on a column of a relation, this is the column number. For all other object types this column is `NULL`. |
 | `comment`      | [`text`]    | The comment itself.                                                                          |
 
 ### `mz_compute_dependencies`
@@ -788,6 +797,21 @@ The `mz_compute_delays_histogram` view describes a histogram of the wall-clock d
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_delays_histogram_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_delays_histogram_raw -->
 
+### `mz_compute_error_counts`
+
+The `mz_compute_error_counts` view describes the counts of errors in objects exported by [dataflows][dataflow] in the system.
+
+Dataflow exports that don't have any errors are not included in this view.
+
+<!-- RELATION_SPEC mz_internal.mz_compute_error_counts -->
+| Field        | Type        | Meaning                                                                                              |
+| ------------ |-------------| --------                                                                                             |
+| `export_id`  | [`text`]    | The ID of the dataflow export. Corresponds to [`mz_compute_exports.export_id`](#mz_compute_exports). |
+| `count`      | [`numeric`] | The count of errors present in this dataflow export.                                                 |
+
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_error_counts_per_worker -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_compute_error_counts_raw -->
+
 ### `mz_compute_exports`
 
 The `mz_compute_exports` view describes the objects exported by [dataflows][dataflow] in the system.
@@ -874,7 +898,7 @@ operators under each dataflow.
 | Field         | Type        | Meaning                                                                      |
 |---------------|-------------|------------------------------------------------------------------------------|
 | `id`          | [`uint8`]   | The ID of the [dataflow]. Corresponds to [`mz_dataflows.id`](#mz_dataflows). |
-| `name`        | [`text`]    | The name of the object (e.g., index) maintained by the dataflow.             |
+| `name`        | [`text`]    | The name of the [dataflow].                                                  |
 | `records`     | [`numeric`] | The number of records in all arrangements in the dataflow.                   |
 | `batches`     | [`numeric`] | The number of batches in all arrangements in the dataflow.                   |
 | `size`        | [`numeric`] | The utilized size in bytes of the arrangements.                              |
@@ -1114,5 +1138,3 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_storage_shards -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_storage_usage_by_shard -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_type_pg_metadata -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_view_foreign_keys -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_view_keys -->

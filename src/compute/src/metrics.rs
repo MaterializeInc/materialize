@@ -11,6 +11,7 @@ use mz_compute_client::metrics::{CommandMetrics, HistoryMetrics};
 use mz_ore::metric;
 use mz_ore::metrics::{raw, MetricsRegistry, UIntGauge};
 use prometheus::core::{AtomicF64, GenericCounter};
+use prometheus::Histogram;
 
 /// Metrics exposed by compute replicas.
 //
@@ -34,6 +35,18 @@ pub struct ComputeMetrics {
     // arrangements
     arrangement_maintenance_seconds_total: raw::CounterVec,
     arrangement_maintenance_active_info: raw::UIntGaugeVec,
+
+    // timely step timings
+    //
+    // Note that this particular metric unfortunately takes some care to
+    // interpret. It measures the duration of step_or_park calls, which
+    // undesirably includes the parking. This is probably fine because we
+    // regularly send progress information through persist sources, which likely
+    // means the parking is capped at a second or two in practice. It also
+    // doesn't do anything to let you pinpoint _which_ operator or worker isn't
+    // yielding, but it should hopefully alert us when there is something to
+    // look at.
+    pub(crate) timely_step_duration_seconds: Histogram,
 }
 
 impl ComputeMetrics {
@@ -69,6 +82,12 @@ impl ComputeMetrics {
                 help: "Whether maintenance is currently occuring.",
                 var_labels: ["worker_id"],
             )),
+            timely_step_duration_seconds: registry.register(metric!(
+                name: "mz_timely_step_duration_seconds",
+                help: "The time spent in each compute step_or_park call",
+                const_labels: {"cluster" => "compute"},
+                buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 32.0),
+            ))
         }
     }
 

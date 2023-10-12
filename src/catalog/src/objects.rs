@@ -15,13 +15,37 @@ use mz_proto::{IntoRustIfSome, ProtoType};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
-use mz_sql::catalog::{CatalogItemType, ObjectType, RoleAttributes, RoleMembership};
-use mz_sql::names::{CommentObjectId, DatabaseId, QualifiedItemName, SchemaId};
-use mz_stash::objects::{proto, RustType, TryFromProtoError};
+use mz_sql::catalog::{
+    CatalogItemType, DefaultPrivilegeAclItem, DefaultPrivilegeObject, ObjectType, RoleAttributes,
+    RoleMembership, RoleVars,
+};
+use mz_sql::names::{CommentObjectId, DatabaseId, SchemaId};
+use mz_stash_types::objects::{proto, RustType, TryFromProtoError};
+use mz_storage_types::sources::Timeline;
 use proptest_derive::Arbitrary;
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 // Structs used to pass information to outside modules.
+
+/// A trait for representing `Self` as a key-value pair of type
+/// `(K, V)` for the purpose of storing this value durably.
+///
+/// To encode a key-value pair, use [`DurableType::into_key_value`].
+///
+/// To decode a key-value pair, use [`DurableType::from_key_value`].
+///
+/// This trait is based on [`RustType`], however it is meant to
+/// convert the types used in [`RustType`] to a more consumable and
+/// condensed type.
+pub(crate) trait DurableType<K, V>: Sized {
+    /// Consume and convert `Self` into a `(K, V)` key-value pair.
+    fn into_key_value(self) -> (K, V);
+
+    /// Consume and convert a `(K, V)` key-value pair back into a
+    /// `Self` value.
+    fn from_key_value(key: K, value: V) -> Self;
+}
 
 #[derive(Debug, Clone)]
 pub struct Database {
@@ -29,6 +53,28 @@ pub struct Database {
     pub name: String,
     pub owner_id: RoleId,
     pub privileges: Vec<MzAclItem>,
+}
+
+impl DurableType<DatabaseKey, DatabaseValue> for Database {
+    fn into_key_value(self) -> (DatabaseKey, DatabaseValue) {
+        (
+            DatabaseKey { id: self.id },
+            DatabaseValue {
+                name: self.name,
+                owner_id: self.owner_id,
+                privileges: self.privileges,
+            },
+        )
+    }
+
+    fn from_key_value(key: DatabaseKey, value: DatabaseValue) -> Self {
+        Self {
+            id: key.id,
+            name: value.name,
+            owner_id: value.owner_id,
+            privileges: value.privileges,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -40,12 +86,61 @@ pub struct Schema {
     pub privileges: Vec<MzAclItem>,
 }
 
+impl DurableType<SchemaKey, SchemaValue> for Schema {
+    fn into_key_value(self) -> (SchemaKey, SchemaValue) {
+        (
+            SchemaKey { id: self.id },
+            SchemaValue {
+                database_id: self.database_id,
+                name: self.name,
+                owner_id: self.owner_id,
+                privileges: self.privileges,
+            },
+        )
+    }
+
+    fn from_key_value(key: SchemaKey, value: SchemaValue) -> Self {
+        Self {
+            id: key.id,
+            name: value.name,
+            database_id: value.database_id,
+            owner_id: value.owner_id,
+            privileges: value.privileges,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Role {
     pub id: RoleId,
     pub name: String,
     pub attributes: RoleAttributes,
     pub membership: RoleMembership,
+    pub vars: RoleVars,
+}
+
+impl DurableType<RoleKey, RoleValue> for Role {
+    fn into_key_value(self) -> (RoleKey, RoleValue) {
+        (
+            RoleKey { id: self.id },
+            RoleValue {
+                name: self.name,
+                attributes: self.attributes,
+                membership: self.membership,
+                vars: self.vars,
+            },
+        )
+    }
+
+    fn from_key_value(key: RoleKey, value: RoleValue) -> Self {
+        Self {
+            id: key.id,
+            name: value.name,
+            attributes: value.attributes,
+            membership: value.membership,
+            vars: value.vars,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -56,6 +151,32 @@ pub struct Cluster {
     pub owner_id: RoleId,
     pub privileges: Vec<MzAclItem>,
     pub config: ClusterConfig,
+}
+
+impl DurableType<ClusterKey, ClusterValue> for Cluster {
+    fn into_key_value(self) -> (ClusterKey, ClusterValue) {
+        (
+            ClusterKey { id: self.id },
+            ClusterValue {
+                name: self.name,
+                linked_object_id: self.linked_object_id,
+                owner_id: self.owner_id,
+                privileges: self.privileges,
+                config: self.config,
+            },
+        )
+    }
+
+    fn from_key_value(key: ClusterKey, value: ClusterValue) -> Self {
+        Self {
+            id: key.id,
+            name: value.name,
+            linked_object_id: value.linked_object_id,
+            owner_id: value.owner_id,
+            privileges: value.privileges,
+            config: value.config,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
@@ -137,6 +258,13 @@ pub struct ClusterVariantManaged {
     pub disk: bool,
 }
 
+#[derive(Clone, Debug)]
+pub struct IntrospectionSourceIndex {
+    pub cluster_id: ClusterId,
+    pub name: String,
+    pub index_id: GlobalId,
+}
+
 #[derive(Debug, Clone)]
 pub struct ClusterReplica {
     pub cluster_id: ClusterId,
@@ -144,6 +272,32 @@ pub struct ClusterReplica {
     pub name: String,
     pub config: ReplicaConfig,
     pub owner_id: RoleId,
+}
+
+impl DurableType<ClusterReplicaKey, ClusterReplicaValue> for ClusterReplica {
+    fn into_key_value(self) -> (ClusterReplicaKey, ClusterReplicaValue) {
+        (
+            ClusterReplicaKey {
+                id: self.replica_id,
+            },
+            ClusterReplicaValue {
+                cluster_id: self.cluster_id,
+                name: self.name,
+                config: self.config,
+                owner_id: self.owner_id,
+            },
+        )
+    }
+
+    fn from_key_value(key: ClusterReplicaKey, value: ClusterReplicaValue) -> Self {
+        Self {
+            cluster_id: value.cluster_id,
+            replica_id: key.id,
+            name: value.name,
+            config: value.config,
+            owner_id: value.owner_id,
+        }
+    }
 }
 
 // The on-disk replica configuration does not match the in-memory replica configuration, so we need
@@ -202,6 +356,8 @@ pub enum ReplicaLocation {
         /// `Some(az)` if the AZ was specified by the user and must be respected;
         availability_zone: Option<String>,
         disk: bool,
+        internal: bool,
+        billed_as: Option<String>,
     },
 }
 
@@ -229,6 +385,8 @@ impl From<mz_controller::clusters::ReplicaLocation> for ReplicaLocation {
                     size,
                     availability_zones,
                     disk,
+                    billed_as,
+                    internal,
                 },
             ) => ReplicaLocation::Managed {
                 size,
@@ -242,6 +400,8 @@ impl From<mz_controller::clusters::ReplicaLocation> for ReplicaLocation {
                         None
                     },
                 disk,
+                internal,
+                billed_as,
             },
         }
     }
@@ -269,10 +429,14 @@ impl RustType<proto::replica_config::Location> for ReplicaLocation {
                 size,
                 availability_zone,
                 disk,
+                billed_as,
+                internal,
             } => proto::replica_config::Location::Managed(proto::replica_config::ManagedLocation {
                 size: size.to_string(),
                 availability_zone: availability_zone.clone(),
                 disk: *disk,
+                billed_as: billed_as.clone(),
+                internal: *internal,
             }),
         }
     }
@@ -289,9 +453,11 @@ impl RustType<proto::replica_config::Location> for ReplicaLocation {
                 })
             }
             proto::replica_config::Location::Managed(location) => Ok(ReplicaLocation::Managed {
-                size: location.size,
                 availability_zone: location.availability_zone,
+                billed_as: location.billed_as,
                 disk: location.disk,
+                internal: location.internal,
+                size: location.size,
             }),
         }
     }
@@ -306,10 +472,37 @@ pub struct ComputeReplicaLogging {
 #[derive(Debug, Clone)]
 pub struct Item {
     pub id: GlobalId,
-    pub name: QualifiedItemName,
+    pub schema_id: SchemaId,
+    pub name: String,
     pub create_sql: String,
     pub owner_id: RoleId,
     pub privileges: Vec<MzAclItem>,
+}
+
+impl DurableType<ItemKey, ItemValue> for Item {
+    fn into_key_value(self) -> (ItemKey, ItemValue) {
+        (
+            ItemKey { gid: self.id },
+            ItemValue {
+                schema_id: self.schema_id,
+                name: self.name,
+                create_sql: self.create_sql,
+                owner_id: self.owner_id,
+                privileges: self.privileges,
+            },
+        )
+    }
+
+    fn from_key_value(key: ItemKey, value: ItemValue) -> Self {
+        Self {
+            id: key.gid,
+            schema_id: value.schema_id,
+            name: value.name,
+            create_sql: value.create_sql,
+            owner_id: value.owner_id,
+            privileges: value.privileges,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq)]
@@ -338,7 +531,312 @@ pub struct SystemObjectMapping {
     pub unique_identifier: SystemObjectUniqueIdentifier,
 }
 
-// Structs used internally to represent on disk-state.
+impl DurableType<GidMappingKey, GidMappingValue> for SystemObjectMapping {
+    fn into_key_value(self) -> (GidMappingKey, GidMappingValue) {
+        (
+            GidMappingKey {
+                schema_name: self.description.schema_name,
+                object_type: self.description.object_type,
+                object_name: self.description.object_name,
+            },
+            GidMappingValue {
+                id: match self.unique_identifier.id {
+                    GlobalId::System(id) => id,
+                    GlobalId::User(_) => unreachable!("GID mapping cannot use a User ID"),
+                    GlobalId::Transient(_) => unreachable!("GID mapping cannot use a Transient ID"),
+                    GlobalId::Explain => unreachable!("GID mapping cannot use an Explain ID"),
+                },
+                fingerprint: self.unique_identifier.fingerprint,
+            },
+        )
+    }
+
+    fn from_key_value(key: GidMappingKey, value: GidMappingValue) -> Self {
+        Self {
+            description: SystemObjectDescription {
+                schema_name: key.schema_name,
+                object_type: key.object_type,
+                object_name: key.object_name,
+            },
+            unique_identifier: SystemObjectUniqueIdentifier {
+                id: GlobalId::System(value.id),
+                fingerprint: value.fingerprint,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DefaultPrivilege {
+    pub object: DefaultPrivilegeObject,
+    pub acl_item: DefaultPrivilegeAclItem,
+}
+
+impl DurableType<DefaultPrivilegesKey, DefaultPrivilegesValue> for DefaultPrivilege {
+    fn into_key_value(self) -> (DefaultPrivilegesKey, DefaultPrivilegesValue) {
+        (
+            DefaultPrivilegesKey {
+                role_id: self.object.role_id,
+                database_id: self.object.database_id,
+                schema_id: self.object.schema_id,
+                object_type: self.object.object_type,
+                grantee: self.acl_item.grantee,
+            },
+            DefaultPrivilegesValue {
+                privileges: self.acl_item.acl_mode,
+            },
+        )
+    }
+
+    fn from_key_value(key: DefaultPrivilegesKey, value: DefaultPrivilegesValue) -> Self {
+        Self {
+            object: DefaultPrivilegeObject {
+                role_id: key.role_id,
+                database_id: key.database_id,
+                schema_id: key.schema_id,
+                object_type: key.object_type,
+            },
+            acl_item: DefaultPrivilegeAclItem {
+                grantee: key.grantee,
+                acl_mode: value.privileges,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Comment {
+    pub object_id: CommentObjectId,
+    pub sub_component: Option<usize>,
+    pub comment: String,
+}
+
+impl DurableType<CommentKey, CommentValue> for Comment {
+    fn into_key_value(self) -> (CommentKey, CommentValue) {
+        (
+            CommentKey {
+                object_id: self.object_id,
+                sub_component: self.sub_component,
+            },
+            CommentValue {
+                comment: self.comment,
+            },
+        )
+    }
+
+    fn from_key_value(key: CommentKey, value: CommentValue) -> Self {
+        Self {
+            object_id: key.object_id,
+            sub_component: key.sub_component,
+            comment: value.comment,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct IdAlloc {
+    pub name: String,
+    pub next_id: u64,
+}
+
+impl DurableType<IdAllocKey, IdAllocValue> for IdAlloc {
+    fn into_key_value(self) -> (IdAllocKey, IdAllocValue) {
+        (
+            IdAllocKey { name: self.name },
+            IdAllocValue {
+                next_id: self.next_id,
+            },
+        )
+    }
+
+    fn from_key_value(key: IdAllocKey, value: IdAllocValue) -> Self {
+        Self {
+            name: key.name,
+            next_id: value.next_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub key: String,
+    pub value: u64,
+}
+
+impl DurableType<ConfigKey, ConfigValue> for Config {
+    fn into_key_value(self) -> (ConfigKey, ConfigValue) {
+        (
+            ConfigKey { key: self.key },
+            ConfigValue { value: self.value },
+        )
+    }
+
+    fn from_key_value(key: ConfigKey, value: ConfigValue) -> Self {
+        Self {
+            key: key.key,
+            value: value.value,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Setting {
+    pub name: String,
+    pub value: String,
+}
+
+impl DurableType<SettingKey, SettingValue> for Setting {
+    fn into_key_value(self) -> (SettingKey, SettingValue) {
+        (
+            SettingKey { name: self.name },
+            SettingValue { value: self.value },
+        )
+    }
+
+    fn from_key_value(key: SettingKey, value: SettingValue) -> Self {
+        Self {
+            name: key.name,
+            value: value.value,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TimelineTimestamp {
+    pub timeline: Timeline,
+    pub ts: mz_repr::Timestamp,
+}
+
+impl DurableType<TimestampKey, TimestampValue> for TimelineTimestamp {
+    fn into_key_value(self) -> (TimestampKey, TimestampValue) {
+        (
+            TimestampKey {
+                id: self.timeline.to_string(),
+            },
+            TimestampValue { ts: self.ts },
+        )
+    }
+
+    fn from_key_value(key: TimestampKey, value: TimestampValue) -> Self {
+        Self {
+            timeline: key.id.parse().expect("invalid timeline persisted"),
+            ts: value.ts,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SystemConfiguration {
+    pub name: String,
+    pub value: String,
+}
+
+impl DurableType<ServerConfigurationKey, ServerConfigurationValue> for SystemConfiguration {
+    fn into_key_value(self) -> (ServerConfigurationKey, ServerConfigurationValue) {
+        (
+            ServerConfigurationKey { name: self.name },
+            ServerConfigurationValue { value: self.value },
+        )
+    }
+
+    fn from_key_value(key: ServerConfigurationKey, value: ServerConfigurationValue) -> Self {
+        Self {
+            name: key.name,
+            value: value.value,
+        }
+    }
+}
+
+impl DurableType<SystemPrivilegesKey, SystemPrivilegesValue> for MzAclItem {
+    fn into_key_value(self) -> (SystemPrivilegesKey, SystemPrivilegesValue) {
+        (
+            SystemPrivilegesKey {
+                grantee: self.grantee,
+                grantor: self.grantor,
+            },
+            SystemPrivilegesValue {
+                acl_mode: self.acl_mode,
+            },
+        )
+    }
+
+    fn from_key_value(key: SystemPrivilegesKey, value: SystemPrivilegesValue) -> Self {
+        Self {
+            grantee: key.grantee,
+            grantor: key.grantor,
+            acl_mode: value.acl_mode,
+        }
+    }
+}
+
+// Structs used internally to represent on-disk state.
+
+/// A snapshot of the current on-disk state.
+#[derive(Debug, Clone)]
+pub struct Snapshot {
+    pub databases: BTreeMap<proto::DatabaseKey, proto::DatabaseValue>,
+    pub schemas: BTreeMap<proto::SchemaKey, proto::SchemaValue>,
+    pub roles: BTreeMap<proto::RoleKey, proto::RoleValue>,
+    pub items: BTreeMap<proto::ItemKey, proto::ItemValue>,
+    pub comments: BTreeMap<proto::CommentKey, proto::CommentValue>,
+    pub clusters: BTreeMap<proto::ClusterKey, proto::ClusterValue>,
+    pub cluster_replicas: BTreeMap<proto::ClusterReplicaKey, proto::ClusterReplicaValue>,
+    pub introspection_sources: BTreeMap<
+        proto::ClusterIntrospectionSourceIndexKey,
+        proto::ClusterIntrospectionSourceIndexValue,
+    >,
+    pub id_allocator: BTreeMap<proto::IdAllocKey, proto::IdAllocValue>,
+    pub configs: BTreeMap<proto::ConfigKey, proto::ConfigValue>,
+    pub settings: BTreeMap<proto::SettingKey, proto::SettingValue>,
+    pub timestamps: BTreeMap<proto::TimestampKey, proto::TimestampValue>,
+    pub system_object_mappings: BTreeMap<proto::GidMappingKey, proto::GidMappingValue>,
+    pub system_configurations:
+        BTreeMap<proto::ServerConfigurationKey, proto::ServerConfigurationValue>,
+    pub default_privileges: BTreeMap<proto::DefaultPrivilegesKey, proto::DefaultPrivilegesValue>,
+    pub system_privileges: BTreeMap<proto::SystemPrivilegesKey, proto::SystemPrivilegesValue>,
+}
+
+impl Snapshot {
+    pub fn empty() -> Snapshot {
+        Snapshot {
+            databases: BTreeMap::new(),
+            schemas: BTreeMap::new(),
+            roles: BTreeMap::new(),
+            items: BTreeMap::new(),
+            comments: BTreeMap::new(),
+            clusters: BTreeMap::new(),
+            cluster_replicas: BTreeMap::new(),
+            introspection_sources: BTreeMap::new(),
+            id_allocator: BTreeMap::new(),
+            configs: BTreeMap::new(),
+            settings: BTreeMap::new(),
+            timestamps: BTreeMap::new(),
+            system_object_mappings: BTreeMap::new(),
+            system_configurations: BTreeMap::new(),
+            default_privileges: BTreeMap::new(),
+            system_privileges: BTreeMap::new(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.databases.is_empty()
+            && self.schemas.is_empty()
+            && self.roles.is_empty()
+            && self.items.is_empty()
+            && self.comments.is_empty()
+            && self.clusters.is_empty()
+            && self.cluster_replicas.is_empty()
+            && self.introspection_sources.is_empty()
+            && self.id_allocator.is_empty()
+            && self.configs.is_empty()
+            && self.settings.is_empty()
+            && self.timestamps.is_empty()
+            && self.system_object_mappings.is_empty()
+            && self.system_configurations.is_empty()
+            && self.default_privileges.is_empty()
+            && self.system_privileges.is_empty()
+    }
+}
 
 #[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct SettingKey {
@@ -846,16 +1344,7 @@ pub struct RoleValue {
     pub(crate) name: String,
     pub(crate) attributes: RoleAttributes,
     pub(crate) membership: RoleMembership,
-}
-
-impl From<Role> for RoleValue {
-    fn from(role: Role) -> Self {
-        RoleValue {
-            name: role.name,
-            attributes: role.attributes,
-            membership: role.membership,
-        }
-    }
+    pub(crate) vars: RoleVars,
 }
 
 impl RustType<proto::RoleValue> for RoleValue {
@@ -864,6 +1353,7 @@ impl RustType<proto::RoleValue> for RoleValue {
             name: self.name.to_string(),
             attributes: Some(self.attributes.into_proto()),
             membership: Some(self.membership.into_proto()),
+            vars: Some(self.vars.into_proto()),
         }
     }
 
@@ -876,6 +1366,7 @@ impl RustType<proto::RoleValue> for RoleValue {
             membership: proto
                 .membership
                 .into_rust_if_some("RoleValue::membership")?,
+            vars: proto.vars.into_rust_if_some("RoleValue::vars")?,
         })
     }
 }

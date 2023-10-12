@@ -32,7 +32,7 @@ use mz_repr::explain::ExprHumanizer;
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, GlobalId, RelationDesc};
 use mz_sql_parser::ast::{Expr, QualifiedReplica, UnresolvedItemName};
-use mz_stash::objects::{proto, RustType, TryFromProtoError};
+use mz_stash_types::objects::{proto, RustType, TryFromProtoError};
 use mz_storage_types::connections::inline::{ConnectionResolver, ReferencedConnection};
 use mz_storage_types::connections::Connection;
 use mz_storage_types::sources::SourceDesc;
@@ -52,7 +52,7 @@ use crate::normalize;
 use crate::plan::statement::ddl::PlannedRoleAttributes;
 use crate::plan::statement::StatementDesc;
 use crate::plan::{PlanError, PlanNotice};
-use crate::session::vars::SystemVars;
+use crate::session::vars::{OwnedVarInput, SystemVars};
 
 /// A catalog keeps track of SQL objects and session state available to the
 /// planner.
@@ -324,6 +324,9 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     /// Adds a [`PlanNotice`] that will be displayed to the user if the plan
     /// successfully executes.
     fn add_notice(&self, notice: PlanNotice);
+
+    /// Returns the associated comments for the given `id`
+    fn get_item_comments(&self, id: &GlobalId) -> Option<&BTreeMap<Option<usize>, String>>;
 }
 
 /// Configuration associated with a catalog.
@@ -412,8 +415,6 @@ pub trait CatalogSchema {
     fn privileges(&self) -> &PrivilegeMap;
 }
 
-// TODO(jkosh44) When https://github.com/MaterializeInc/materialize/issues/17824 is implemented
-//  then switch this to a bitflag (https://docs.rs/bitflags/latest/bitflags/)
 /// Attributes belonging to a [`CatalogRole`].
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd, Arbitrary)]
 pub struct RoleAttributes {
@@ -437,6 +438,11 @@ impl RoleAttributes {
         self.inherit = true;
         self
     }
+
+    /// Returns whether or not the role has inheritence of privileges.
+    pub const fn is_inherit(&self) -> bool {
+        self.inherit
+    }
 }
 
 impl From<PlannedRoleAttributes> for RoleAttributes {
@@ -444,17 +450,6 @@ impl From<PlannedRoleAttributes> for RoleAttributes {
         let default_attributes = RoleAttributes::new();
         RoleAttributes {
             inherit: inherit.unwrap_or(default_attributes.inherit),
-            _private: (),
-        }
-    }
-}
-
-impl From<(&dyn CatalogRole, PlannedRoleAttributes)> for RoleAttributes {
-    fn from(
-        (role, PlannedRoleAttributes { inherit }): (&dyn CatalogRole, PlannedRoleAttributes),
-    ) -> RoleAttributes {
-        RoleAttributes {
-            inherit: inherit.unwrap_or_else(|| role.is_inherit()),
             _private: (),
         }
     }
@@ -476,6 +471,63 @@ impl RustType<proto::RoleAttributes> for RoleAttributes {
     }
 }
 
+/// Default variable values for a [`CatalogRole`].
+#[derive(Default, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct RoleVars {
+    /// Map of variable names to their value.
+    pub map: BTreeMap<String, OwnedVarInput>,
+}
+
+impl RustType<proto::role_vars::entry::Val> for OwnedVarInput {
+    fn into_proto(&self) -> proto::role_vars::entry::Val {
+        match self.clone() {
+            OwnedVarInput::Flat(v) => proto::role_vars::entry::Val::Flat(v),
+            OwnedVarInput::SqlSet(entries) => {
+                proto::role_vars::entry::Val::SqlSet(proto::role_vars::SqlSet { entries })
+            }
+        }
+    }
+
+    fn from_proto(proto: proto::role_vars::entry::Val) -> Result<Self, TryFromProtoError> {
+        let result = match proto {
+            proto::role_vars::entry::Val::Flat(v) => OwnedVarInput::Flat(v),
+            proto::role_vars::entry::Val::SqlSet(proto::role_vars::SqlSet { entries }) => {
+                OwnedVarInput::SqlSet(entries)
+            }
+        };
+        Ok(result)
+    }
+}
+
+impl RustType<proto::RoleVars> for RoleVars {
+    fn into_proto(&self) -> proto::RoleVars {
+        let entries = self
+            .map
+            .clone()
+            .into_iter()
+            .map(|(key, val)| proto::role_vars::Entry {
+                key,
+                val: Some(val.into_proto()),
+            })
+            .collect();
+
+        proto::RoleVars { entries }
+    }
+
+    fn from_proto(proto: proto::RoleVars) -> Result<Self, TryFromProtoError> {
+        let map = proto
+            .entries
+            .into_iter()
+            .map(|entry| {
+                let val = entry.val.into_rust_if_some("role_vars::Entry::Val")?;
+                Ok::<_, TryFromProtoError>((entry.key, val))
+            })
+            .collect::<Result<_, _>>()?;
+
+        Ok(RoleVars { map })
+    }
+}
+
 /// A role in a [`SessionCatalog`].
 pub trait CatalogRole {
     /// Returns a fully-specified name of the role.
@@ -484,14 +536,17 @@ pub trait CatalogRole {
     /// Returns a stable ID for the role.
     fn id(&self) -> RoleId;
 
-    /// Indicates whether the role has inheritance of privileges.
-    fn is_inherit(&self) -> bool;
-
     /// Returns all role IDs that this role is an immediate a member of, and the grantor of that
     /// membership.
     ///
     /// Key is the role that some role is a member of, value is the grantor role ID.
     fn membership(&self) -> &BTreeMap<RoleId, RoleId>;
+
+    /// Returns the attributes associated with this role.
+    fn attributes(&self) -> &RoleAttributes;
+
+    /// Returns all variables that this role has a default value stored for.
+    fn vars(&self) -> &BTreeMap<String, OwnedVarInput>;
 }
 
 /// A cluster in a [`SessionCatalog`].
@@ -783,10 +838,13 @@ pub enum CatalogType<T: TypeReference> {
     Jsonb,
     List {
         element_reference: T::Reference,
+        element_modifiers: Vec<i64>,
     },
     Map {
         key_reference: T::Reference,
+        key_modifiers: Vec<i64>,
         value_reference: T::Reference,
+        value_modifiers: Vec<i64>,
     },
     Numeric,
     Oid,
@@ -797,7 +855,7 @@ pub enum CatalogType<T: TypeReference> {
         element_reference: T::Reference,
     },
     Record {
-        fields: Vec<(ColumnName, T::Reference)>,
+        fields: Vec<CatalogRecordField<T>>,
     },
     RegClass,
     RegProc,
@@ -810,6 +868,17 @@ pub enum CatalogType<T: TypeReference> {
     VarChar,
     Int2Vector,
     MzAclItem,
+}
+
+/// A description of a field in a [`CatalogType::Record`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CatalogRecordField<T: TypeReference> {
+    /// The name of the field.
+    pub name: ColumnName,
+    /// The ID of the type of the field.
+    pub type_reference: T::Reference,
+    /// Modifiers to apply to the type.
+    pub type_modifiers: Vec<i64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1109,6 +1178,12 @@ pub enum CatalogError {
     },
     /// Ran out of unique IDs.
     IdExhaustion,
+    /// Timeline already exists.
+    TimelineAlreadyExists(String),
+    /// Id Allocator already exists.
+    IdAllocatorAlreadyExists(String),
+    /// Config already exists.
+    ConfigAlreadyExists(String),
     /// Builtin migrations failed.
     FailedBuiltinSchemaMigration(String),
 }
@@ -1151,6 +1226,9 @@ impl fmt::Display for CatalogError {
                 typ,
             ),
             Self::IdExhaustion => write!(f, "id counter overflows i64"),
+            Self::TimelineAlreadyExists(name) => write!(f, "timeline '{name}' already exists"),
+            Self::IdAllocatorAlreadyExists(name) => write!(f, "ID allocator '{name}' already exists"),
+            Self::ConfigAlreadyExists(key) => write!(f, "config '{key}' already exists"),
             Self::FailedBuiltinSchemaMigration(objects) => write!(f, "failed to migrate schema of builtin objects: {objects}"),
         }
     }

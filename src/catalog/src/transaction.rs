@@ -12,15 +12,15 @@ use crate::objects::{
     AuditLogKey, Cluster, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
     ClusterKey, ClusterReplica, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, CommentKey,
     CommentValue, ConfigKey, ConfigValue, Database, DatabaseKey, DatabaseValue,
-    DefaultPrivilegesKey, DefaultPrivilegesValue, GidMappingKey, GidMappingValue, IdAllocKey,
-    IdAllocValue, Item, ItemKey, ItemValue, ReplicaConfig, Role, RoleKey, RoleValue, Schema,
-    SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey,
+    DefaultPrivilegesKey, DefaultPrivilegesValue, DurableType, GidMappingKey, GidMappingValue,
+    IdAllocKey, IdAllocValue, Item, ItemKey, ItemValue, ReplicaConfig, Role, RoleKey, RoleValue,
+    Schema, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey,
     SettingValue, StorageUsageKey, SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue,
     TimestampKey, TimestampValue,
 };
 use crate::objects::{ClusterConfig, ClusterVariant};
 use crate::{
-    BootstrapArgs, DurableCatalogState, Error, ReplicaLocation, DATABASE_ID_ALLOC_KEY,
+    BootstrapArgs, DurableCatalogState, Error, ReplicaLocation, Snapshot, DATABASE_ID_ALLOC_KEY,
     SCHEMA_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY,
     USER_ROLE_ID_ALLOC_KEY,
 };
@@ -33,16 +33,13 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Diff, GlobalId};
 use mz_sql::catalog::{
-    CatalogError as SqlCatalogError, ObjectType, RoleAttributes, RoleMembership,
+    CatalogError as SqlCatalogError, ObjectType, RoleAttributes, RoleMembership, RoleVars,
 };
-use mz_sql::names::{
-    CommentObjectId, DatabaseId, ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier,
-    SchemaId, SchemaSpecifier,
-};
+use mz_sql::names::{CommentObjectId, DatabaseId, SchemaId};
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql_parser::ast::QualifiedReplica;
-use mz_stash::objects::proto;
 use mz_stash::TableTransaction;
+use mz_stash_types::objects::proto;
 use mz_storage_types::sources::Timeline;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
@@ -112,7 +109,7 @@ pub(crate) fn add_new_builtin_cluster_replicas_migration(
                 *cluster_id,
                 replica_id,
                 builtin_replica.name,
-                &config,
+                config,
                 MZ_SYSTEM_ROLE_ID,
             )?;
         }
@@ -123,9 +120,11 @@ pub(crate) fn add_new_builtin_cluster_replicas_migration(
 pub(crate) fn builtin_cluster_replica_config(bootstrap_args: &BootstrapArgs) -> ReplicaConfig {
     ReplicaConfig {
         location: ReplicaLocation::Managed {
-            size: bootstrap_args.builtin_cluster_replica_size.clone(),
             availability_zone: None,
+            billed_as: None,
             disk: false,
+            internal: false,
+            size: bootstrap_args.builtin_cluster_replica_size.clone(),
         },
         logging: default_logging_config(),
         idle_arrangement_merge_effort: None,
@@ -139,8 +138,7 @@ fn default_logging_config() -> ReplicaLogging {
     }
 }
 
-/// A [`Transaction`] batches multiple [`crate::stash::Connection`] operations together and commits
-/// them atomically.
+/// A [`Transaction`] batches multiple catalog operations together and commits them atomically.
 pub struct Transaction<'a> {
     durable_catalog: &'a mut dyn DurableCatalogState,
     databases: TableTransaction<DatabaseKey, DatabaseValue>,
@@ -169,28 +167,24 @@ pub struct Transaction<'a> {
 impl<'a> Transaction<'a> {
     pub fn new(
         durable_catalog: &'a mut dyn DurableCatalogState,
-        databases: BTreeMap<proto::DatabaseKey, proto::DatabaseValue>,
-        schemas: BTreeMap<proto::SchemaKey, proto::SchemaValue>,
-        roles: BTreeMap<proto::RoleKey, proto::RoleValue>,
-        items: BTreeMap<proto::ItemKey, proto::ItemValue>,
-        comments: BTreeMap<proto::CommentKey, proto::CommentValue>,
-        clusters: BTreeMap<proto::ClusterKey, proto::ClusterValue>,
-        cluster_replicas: BTreeMap<proto::ClusterReplicaKey, proto::ClusterReplicaValue>,
-        introspection_sources: BTreeMap<
-            proto::ClusterIntrospectionSourceIndexKey,
-            proto::ClusterIntrospectionSourceIndexValue,
-        >,
-        id_allocator: BTreeMap<proto::IdAllocKey, proto::IdAllocValue>,
-        configs: BTreeMap<proto::ConfigKey, proto::ConfigValue>,
-        settings: BTreeMap<proto::SettingKey, proto::SettingValue>,
-        timestamps: BTreeMap<proto::TimestampKey, proto::TimestampValue>,
-        system_gid_mapping: BTreeMap<proto::GidMappingKey, proto::GidMappingValue>,
-        system_configurations: BTreeMap<
-            proto::ServerConfigurationKey,
-            proto::ServerConfigurationValue,
-        >,
-        default_privileges: BTreeMap<proto::DefaultPrivilegesKey, proto::DefaultPrivilegesValue>,
-        system_privileges: BTreeMap<proto::SystemPrivilegesKey, proto::SystemPrivilegesValue>,
+        Snapshot {
+            databases,
+            schemas,
+            roles,
+            items,
+            comments,
+            clusters,
+            cluster_replicas,
+            introspection_sources,
+            id_allocator,
+            configs,
+            settings,
+            timestamps,
+            system_object_mappings,
+            system_configurations,
+            default_privileges,
+            system_privileges,
+        }: Snapshot,
     ) -> Result<Transaction, Error> {
         Ok(Transaction {
             durable_catalog,
@@ -213,7 +207,7 @@ impl<'a> Transaction<'a> {
             configs: TableTransaction::new(configs, |_a, _b| false)?,
             settings: TableTransaction::new(settings, |_a, _b| false)?,
             timestamps: TableTransaction::new(timestamps, |_a, _b| false)?,
-            system_gid_mapping: TableTransaction::new(system_gid_mapping, |_a, _b| false)?,
+            system_gid_mapping: TableTransaction::new(system_object_mappings, |_a, _b| false)?,
             system_configurations: TableTransaction::new(system_configurations, |_a, _b| false)?,
             default_privileges: TableTransaction::new(default_privileges, |_a, _b| false)?,
             system_privileges: TableTransaction::new(system_privileges, |_a, _b| false)?,
@@ -223,45 +217,9 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn loaded_items(&self) -> Vec<Item> {
-        let databases = self.databases.items();
-        let schemas = self.schemas.items();
         let mut items = Vec::new();
         self.items.for_values(|k, v| {
-            let schema_key = SchemaKey { id: v.schema_id };
-            let schema = match schemas.get(&schema_key) {
-                Some(schema) => schema,
-                None => panic!(
-                    "corrupt stash! unknown schema id {}, for item with key \
-                        {k:?} and value {v:?}",
-                    v.schema_id
-                ),
-            };
-            let database_spec = match schema.database_id {
-                Some(id) => {
-                    let key = DatabaseKey { id };
-                    if databases.get(&key).is_none() {
-                        panic!(
-                            "corrupt stash! unknown database id {key:?}, for item with key \
-                        {k:?} and value {v:?}"
-                        );
-                    }
-                    ResolvedDatabaseSpecifier::from(id)
-                }
-                None => ResolvedDatabaseSpecifier::Ambient,
-            };
-            items.push(Item {
-                id: k.gid,
-                name: QualifiedItemName {
-                    qualifiers: ItemQualifiers {
-                        database_spec,
-                        schema_spec: SchemaSpecifier::from(v.schema_id),
-                    },
-                    item: v.name.clone(),
-                },
-                create_sql: v.create_sql.clone(),
-                owner_id: v.owner_id,
-                privileges: v.privileges.clone(),
-            });
+            items.push(Item::from_key_value(k.clone(), v.clone()));
         });
         items.sort_by_key(|Item { id, .. }| *id);
         items
@@ -284,19 +242,28 @@ impl<'a> Transaction<'a> {
         privileges: Vec<MzAclItem>,
     ) -> Result<DatabaseId, Error> {
         let id = self.get_and_increment_id(DATABASE_ID_ALLOC_KEY.to_string())?;
+        // TODO(parkertimmerman): Support creating databases in the System namespace.
+        let id = DatabaseId::User(id);
+        self.insert_database(id, database_name, owner_id, privileges)?;
+        Ok(id)
+    }
+
+    pub(crate) fn insert_database(
+        &mut self,
+        id: DatabaseId,
+        database_name: &str,
+        owner_id: RoleId,
+        privileges: Vec<MzAclItem>,
+    ) -> Result<(), Error> {
         match self.databases.insert(
-            DatabaseKey {
-                // TODO(parkertimmerman): Support creating databases in the System namespace.
-                id: DatabaseId::User(id),
-            },
+            DatabaseKey { id },
             DatabaseValue {
                 name: database_name.to_string(),
                 owner_id,
                 privileges,
             },
         ) {
-            // TODO(parkertimmerman): Support creating databases in the System namespace.
-            Ok(_) => Ok(DatabaseId::User(id)),
+            Ok(_) => Ok(()),
             Err(_) => Err(SqlCatalogError::DatabaseAlreadyExists(database_name.to_owned()).into()),
         }
     }
@@ -309,21 +276,37 @@ impl<'a> Transaction<'a> {
         privileges: Vec<MzAclItem>,
     ) -> Result<SchemaId, Error> {
         let id = self.get_and_increment_id(SCHEMA_ID_ALLOC_KEY.to_string())?;
+        // TODO(parkertimmerman): Support creating schemas in the System namespace.
+        let id = SchemaId::User(id);
+        self.insert_schema(
+            id,
+            Some(database_id),
+            schema_name.to_string(),
+            owner_id,
+            privileges,
+        )?;
+        Ok(id)
+    }
+
+    pub(crate) fn insert_schema(
+        &mut self,
+        schema_id: SchemaId,
+        database_id: Option<DatabaseId>,
+        schema_name: String,
+        owner_id: RoleId,
+        privileges: Vec<MzAclItem>,
+    ) -> Result<(), Error> {
         match self.schemas.insert(
-            SchemaKey {
-                // TODO(parkertimmerman): Support creating schemas in the System namespace.
-                id: SchemaId::User(id),
-            },
+            SchemaKey { id: schema_id },
             SchemaValue {
-                database_id: Some(database_id),
-                name: schema_name.to_string(),
+                database_id,
+                name: schema_name.clone(),
                 owner_id,
                 privileges,
             },
         ) {
-            // TODO(parkertimmerman): Support creating schemas in the System namespace.
-            Ok(_) => Ok(SchemaId::User(id)),
-            Err(_) => Err(SqlCatalogError::SchemaAlreadyExists(schema_name.to_owned()).into()),
+            Ok(_) => Ok(()),
+            Err(_) => Err(SqlCatalogError::SchemaAlreadyExists(schema_name).into()),
         }
     }
 
@@ -332,18 +315,32 @@ impl<'a> Transaction<'a> {
         name: String,
         attributes: RoleAttributes,
         membership: RoleMembership,
+        vars: RoleVars,
     ) -> Result<RoleId, Error> {
         let id = self.get_and_increment_id(USER_ROLE_ID_ALLOC_KEY.to_string())?;
         let id = RoleId::User(id);
+        self.insert_role(id, name, attributes, membership, vars)?;
+        Ok(id)
+    }
+
+    pub(crate) fn insert_role(
+        &mut self,
+        id: RoleId,
+        name: String,
+        attributes: RoleAttributes,
+        membership: RoleMembership,
+        vars: RoleVars,
+    ) -> Result<(), Error> {
         match self.roles.insert(
             RoleKey { id },
             RoleValue {
                 name: name.clone(),
                 attributes,
                 membership,
+                vars,
             },
         ) {
-            Ok(_) => Ok(id),
+            Ok(_) => Ok(()),
             Err(_) => Err(SqlCatalogError::RoleAlreadyExists(name).into()),
         }
     }
@@ -506,7 +503,7 @@ impl<'a> Transaction<'a> {
         cluster_id: ClusterId,
         replica_id: ReplicaId,
         replica_name: &str,
-        config: &ReplicaConfig,
+        config: ReplicaConfig,
         owner_id: RoleId,
     ) -> Result<(), Error> {
         if let Err(_) = self.cluster_replicas.insert(
@@ -514,7 +511,7 @@ impl<'a> Transaction<'a> {
             ClusterReplicaValue {
                 cluster_id,
                 name: replica_name.into(),
-                config: config.clone(),
+                config,
                 owner_id,
             },
         ) {
@@ -584,6 +581,22 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    pub fn insert_timestamp(
+        &mut self,
+        timeline: Timeline,
+        ts: mz_repr::Timestamp,
+    ) -> Result<(), Error> {
+        match self.timestamps.insert(
+            TimestampKey {
+                id: timeline.to_string(),
+            },
+            TimestampValue { ts },
+        ) {
+            Ok(_) => Ok(()),
+            Err(_) => Err(SqlCatalogError::TimelineAlreadyExists(timeline.to_string()).into()),
+        }
+    }
+
     pub fn get_and_increment_id(&mut self, key: String) -> Result<u64, Error> {
         let id = self
             .id_allocator
@@ -597,6 +610,16 @@ impl<'a> Transaction<'a> {
             .set(IdAllocKey { name: key }, Some(IdAllocValue { next_id }))?;
         assert!(prev.is_some());
         Ok(id)
+    }
+
+    pub(crate) fn insert_id_allocator(&mut self, name: String, next_id: u64) -> Result<(), Error> {
+        match self
+            .id_allocator
+            .insert(IdAllocKey { name: name.clone() }, IdAllocValue { next_id })
+        {
+            Ok(_) => Ok(()),
+            Err(_) => Err(SqlCatalogError::IdAllocatorAlreadyExists(name).into()),
+        }
     }
 
     pub fn remove_database(&mut self, id: &DatabaseId) -> Result<(), Error> {
@@ -711,17 +734,9 @@ impl<'a> Transaction<'a> {
             if k.gid == id {
                 let item = item.clone();
                 // Schema IDs cannot change.
-                assert_eq!(
-                    SchemaId::from(item.name.qualifiers.schema_spec),
-                    v.schema_id
-                );
-                Some(ItemValue {
-                    schema_id: v.schema_id,
-                    name: item.name.item,
-                    create_sql: item.create_sql,
-                    owner_id: item.owner_id,
-                    privileges: item.privileges,
-                })
+                assert_eq!(item.schema_id, v.schema_id);
+                let (_, new_value) = item.into_key_value();
+                Some(new_value)
             } else {
                 None
             }
@@ -745,17 +760,9 @@ impl<'a> Transaction<'a> {
         let n = self.items.update(|k, v| {
             if let Some(item) = items.get(&k.gid) {
                 // Schema IDs cannot change.
-                assert_eq!(
-                    SchemaId::from(item.name.qualifiers.schema_spec),
-                    v.schema_id
-                );
-                Some(ItemValue {
-                    schema_id: v.schema_id,
-                    name: item.name.item.clone(),
-                    create_sql: item.create_sql.clone(),
-                    owner_id: item.owner_id.clone(),
-                    privileges: item.privileges.clone(),
-                })
+                assert_eq!(item.schema_id, v.schema_id);
+                let (_, new_value) = item.clone().into_key_value();
+                Some(new_value)
             } else {
                 None
             }
@@ -782,7 +789,8 @@ impl<'a> Transaction<'a> {
         let n = self.roles.update(move |k, _v| {
             if k.id == id {
                 let role = role.clone();
-                Some(RoleValue::from(role))
+                let (_, new_value) = role.into_key_value();
+                Some(new_value)
             } else {
                 None
             }
@@ -805,15 +813,8 @@ impl<'a> Transaction<'a> {
     ) -> Result<(), Error> {
         let n = self.system_gid_mapping.update(|_k, v| {
             if let Some(mapping) = mappings.get(&GlobalId::System(v.id)) {
-                let id = if let GlobalId::System(id) = mapping.unique_identifier.id {
-                    id
-                } else {
-                    panic!("non-system id provided")
-                };
-                Some(GidMappingValue {
-                    id,
-                    fingerprint: mapping.unique_identifier.fingerprint.clone(),
-                })
+                let (_, new_value) = mapping.clone().into_key_value();
+                Some(new_value)
             } else {
                 None
             }
@@ -836,14 +837,8 @@ impl<'a> Transaction<'a> {
     pub fn update_cluster(&mut self, id: ClusterId, cluster: Cluster) -> Result<(), Error> {
         let n = self.clusters.update(|k, _v| {
             if k.id == id {
-                let cluster = cluster.clone();
-                Some(ClusterValue {
-                    name: cluster.name,
-                    linked_object_id: cluster.linked_object_id,
-                    owner_id: cluster.owner_id,
-                    privileges: cluster.privileges,
-                    config: cluster.config,
-                })
+                let (_, new_value) = cluster.clone().into_key_value();
+                Some(new_value)
             } else {
                 None
             }
@@ -864,19 +859,13 @@ impl<'a> Transaction<'a> {
     /// DO NOT call this function in a loop.
     pub fn update_cluster_replica(
         &mut self,
-        cluster_id: ClusterId,
         replica_id: ReplicaId,
         replica: ClusterReplica,
     ) -> Result<(), Error> {
         let n = self.cluster_replicas.update(|k, _v| {
             if k.id == replica_id {
-                let replica = replica.clone();
-                Some(ClusterReplicaValue {
-                    cluster_id,
-                    name: replica.name,
-                    config: replica.config,
-                    owner_id: replica.owner_id,
-                })
+                let (_, new_value) = replica.clone().into_key_value();
+                Some(new_value)
             } else {
                 None
             }
@@ -898,12 +887,8 @@ impl<'a> Transaction<'a> {
     pub fn update_database(&mut self, id: DatabaseId, database: Database) -> Result<(), Error> {
         let n = self.databases.update(|k, _v| {
             if id == k.id {
-                let database = database.clone();
-                Some(DatabaseValue {
-                    name: database.name,
-                    owner_id: database.owner_id,
-                    privileges: database.privileges,
-                })
+                let (_, new_value) = database.clone().into_key_value();
+                Some(new_value)
             } else {
                 None
             }
@@ -922,21 +907,12 @@ impl<'a> Transaction<'a> {
     ///
     /// Runtime is linear with respect to the total number of schemas in the stash.
     /// DO NOT call this function in a loop.
-    pub fn update_schema(
-        &mut self,
-        database_id: Option<DatabaseId>,
-        schema_id: SchemaId,
-        schema: Schema,
-    ) -> Result<(), Error> {
+    pub fn update_schema(&mut self, schema_id: SchemaId, schema: Schema) -> Result<(), Error> {
         let n = self.schemas.update(|k, _v| {
             if schema_id == k.id {
                 let schema = schema.clone();
-                Some(SchemaValue {
-                    database_id,
-                    name: schema.name,
-                    owner_id: schema.owner_id,
-                    privileges: schema.privileges,
-                })
+                let (_, new_value) = schema.clone().into_key_value();
+                Some(new_value)
             } else {
                 None
             }
@@ -1046,6 +1022,16 @@ impl<'a> Transaction<'a> {
             .set(TimestampKey { id: timeline_str }, None)
             .expect("cannot have uniqueness violation");
         assert!(prev.is_some());
+    }
+
+    pub(crate) fn insert_config(&mut self, key: String, value: u64) -> Result<(), Error> {
+        match self
+            .configs
+            .insert(ConfigKey { key: key.clone() }, ConfigValue { value })
+        {
+            Ok(_) => Ok(()),
+            Err(_) => Err(SqlCatalogError::ConfigAlreadyExists(key).into()),
+        }
     }
 
     /// Commits the storage transaction to the stash. Any error returned indicates the stash may be

@@ -87,7 +87,6 @@ use mz_controller::clusters::{ClusterConfig, ClusterEvent, CreateReplicaConfig};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_orchestrator::ServiceProcessMetrics;
-use mz_ore::cast::CastFrom;
 use mz_ore::metrics::{MetricsFutureExt, MetricsRegistry};
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::retry::Retry;
@@ -98,7 +97,7 @@ use mz_ore::{soft_assert_or_log, stack, task};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::ExplainFormat;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Datum, GlobalId, RelationType, Row, Timestamp};
+use mz_repr::{GlobalId, RelationType, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::SecretsController;
 use mz_sql::ast::{CreateSubsourceStatement, Raw, Statement};
@@ -138,6 +137,7 @@ use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
 use crate::coord::read_policy::ReadCapability;
 use crate::coord::timeline::{TimelineContext, TimelineState, WriteTimestamp};
+use crate::coord::timestamp_oracle::catalog_oracle::CatalogTimestampPersistence;
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
@@ -146,7 +146,7 @@ use crate::statement_logging::StatementEndedExecutionReason;
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, ResultExt};
 use crate::{flags, AdapterNotice, TimestampProvider};
-use mz_catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
+use mz_catalog::builtin::BUILTINS;
 
 pub(crate) mod dataflows;
 use self::statement_logging::{StatementLogging, StatementLoggingId};
@@ -155,10 +155,12 @@ pub(crate) mod id_bundle;
 pub(crate) mod peek;
 pub(crate) mod statement_logging;
 pub(crate) mod timeline;
+pub(crate) mod timestamp_oracle;
 pub(crate) mod timestamp_selection;
 
 mod appends;
 mod command_handler;
+pub mod consistency;
 mod ddl;
 mod indexes;
 mod introspection;
@@ -250,28 +252,41 @@ pub enum Message<T = mz_repr::Timestamp> {
 impl Message {
     /// Returns a string to identify the kind of [`Message`], useful for logging.
     pub const fn kind(&self) -> &'static str {
-        use Message::*;
-
         match self {
-            Command(_) => "command",
-            ControllerReady => "controller_ready",
-            PurifiedStatementReady(_) => "purified_statement_ready",
-            CreateConnectionValidationReady(_) => "create_connection_validation_ready",
-            SinkConnectionReady(_) => "sink_connection_ready",
-            WriteLockGrant(_) => "write_lock_grant",
-            GroupCommitInitiate(..) => "group_commit_initiate",
-            GroupCommitApply(..) => "group_commit_apply",
-            AdvanceTimelines => "advance_timelines",
-            ClusterEvent(_) => "cluster_event",
-            RemovePendingPeeks { .. } => "remove_pending_peeks",
-            LinearizeReads(_) => "linearize_reads",
-            StorageUsageFetch => "storage_usage_fetch",
-            StorageUsageUpdate(_) => "storage_usage_update",
-            RealTimeRecencyTimestamp { .. } => "real_time_recency_timestamp",
-            RetireExecute { .. } => "retire_execute",
-            ExecuteSingleStatementTransaction { .. } => "execute_single_statement_transaction",
-            PeekStageReady { .. } => "peek_stage_ready",
-            DrainStatementLog => "drain_statement_log",
+            Message::Command(msg) => match msg {
+                Command::CatalogSnapshot { .. } => "command-catalog_snapshot",
+                Command::Startup { .. } => "command-startup",
+                Command::Execute { .. } => "command-execute",
+                Command::Commit { .. } => "command-commit",
+                Command::CancelRequest { .. } => "command-cancel_request",
+                Command::PrivilegedCancelRequest { .. } => "command-privileged_cancel_request",
+                Command::AppendWebhook { .. } => "command-append_webhook",
+                Command::GetSystemVars { .. } => "command-get_system_vars",
+                Command::SetSystemVars { .. } => "command-set_system_vars",
+                Command::Terminate { .. } => "command-terminate",
+                Command::RetireExecute { .. } => "command-retire_execute",
+                Command::CheckConsistency { .. } => "command-check_consistency",
+            },
+            Message::ControllerReady => "controller_ready",
+            Message::PurifiedStatementReady(_) => "purified_statement_ready",
+            Message::CreateConnectionValidationReady(_) => "create_connection_validation_ready",
+            Message::SinkConnectionReady(_) => "sink_connection_ready",
+            Message::WriteLockGrant(_) => "write_lock_grant",
+            Message::GroupCommitInitiate(..) => "group_commit_initiate",
+            Message::GroupCommitApply(..) => "group_commit_apply",
+            Message::AdvanceTimelines => "advance_timelines",
+            Message::ClusterEvent(_) => "cluster_event",
+            Message::RemovePendingPeeks { .. } => "remove_pending_peeks",
+            Message::LinearizeReads(_) => "linearize_reads",
+            Message::StorageUsageFetch => "storage_usage_fetch",
+            Message::StorageUsageUpdate(_) => "storage_usage_update",
+            Message::RealTimeRecencyTimestamp { .. } => "real_time_recency_timestamp",
+            Message::RetireExecute { .. } => "retire_execute",
+            Message::ExecuteSingleStatementTransaction { .. } => {
+                "execute_single_statement_transaction"
+            }
+            Message::PeekStageReady { .. } => "peek_stage_ready",
+            Message::DrainStatementLog => "drain_statement_log",
         }
     }
 }
@@ -474,7 +489,7 @@ impl PlanValidity {
             };
 
             if let Some(replica_id) = self.replica_id {
-                if !cluster.replicas_by_id.contains_key(&replica_id) {
+                if cluster.replica(replica_id).is_none() {
                     return Err(AdapterError::ChangedPlan);
                 }
             }
@@ -775,6 +790,10 @@ impl ExecuteContextExtra {
     pub fn is_trivial(&self) -> bool {
         let Self { statement_uuid } = self;
         statement_uuid.is_none()
+    }
+    pub fn contents(&self) -> Option<StatementLoggingId> {
+        let Self { statement_uuid } = self;
+        *statement_uuid
     }
     /// Take responsibility for the contents.  This should only be
     /// called from code that knows what to do to finish up logging
@@ -1081,13 +1100,13 @@ impl Coordinator {
                 },
                 self.variable_length_row_encoding,
             )?;
-            for (replica_id, replica) in instance.replicas_by_id.clone() {
+            for replica in instance.replicas() {
                 let role = instance.role();
                 replicas_to_start.push(CreateReplicaConfig {
                     cluster_id: instance.id,
-                    replica_id,
+                    replica_id: replica.replica_id,
                     role,
-                    config: replica.config,
+                    config: replica.config.clone(),
                 });
             }
         }
@@ -1323,11 +1342,13 @@ impl Coordinator {
             }
         }
 
+        let register_ts = self.get_local_write_ts().await.timestamp;
         self.controller
             .storage
-            .create_collections(collections_to_create)
+            .create_collections(Some(register_ts), collections_to_create)
             .await
             .unwrap_or_terminate("cannot fail to create collections");
+        self.apply_local_write(register_ts).await;
 
         debug!("coordinator init: installing existing objects in catalog");
         let mut privatelink_connections = BTreeMap::new();
@@ -1360,7 +1381,7 @@ impl Coordinator {
                             source_desc(self.catalog(), source_status_collection_id, source);
                         self.controller
                             .storage
-                            .create_collections(vec![(entry.id(), source_desc)])
+                            .create_collections(None, vec![(entry.id(), source_desc)])
                             .await
                             .unwrap_or_terminate("cannot fail to create collections");
                     }
@@ -1438,7 +1459,7 @@ impl Coordinator {
                     );
                     self.controller
                         .storage
-                        .create_collections(vec![(entry.id(), collection_desc)])
+                        .create_collections(None, vec![(entry.id(), collection_desc)])
                         .await
                         .unwrap_or_terminate("cannot fail to create collections");
 
@@ -1462,6 +1483,7 @@ impl Coordinator {
                         debug_name,
                         &mview.optimized_expr,
                         &mview.desc,
+                        &mview.non_null_assertions,
                     )?;
 
                     // Note: ideally, the optimized_plan should be computed and
@@ -1597,61 +1619,6 @@ impl Coordinator {
         // Announce the completion of initialization.
         self.controller.initialization_complete();
 
-        // Announce primary and foreign key relationships.
-        debug!("coordinator init: announcing primary and foreign key relationships");
-        let mz_view_keys = self.catalog().resolve_builtin_table(&MZ_VIEW_KEYS);
-        for log in BUILTINS::logs() {
-            let log_id = &self.catalog().resolve_builtin_log(log).to_string();
-            builtin_table_updates.extend(
-                log.variant
-                    .desc()
-                    .typ()
-                    .keys
-                    .iter()
-                    .enumerate()
-                    .flat_map(move |(index, key)| {
-                        key.iter().map(move |k| {
-                            let row = Row::pack_slice(&[
-                                Datum::String(log_id),
-                                Datum::UInt64(u64::cast_from(*k)),
-                                Datum::UInt64(u64::cast_from(index)),
-                            ]);
-                            BuiltinTableUpdate {
-                                id: mz_view_keys,
-                                row,
-                                diff: 1,
-                            }
-                        })
-                    }),
-            );
-
-            let mz_foreign_keys = self.catalog().resolve_builtin_table(&MZ_VIEW_FOREIGN_KEYS);
-            builtin_table_updates.extend(
-                log.variant.foreign_keys().into_iter().enumerate().flat_map(
-                    |(index, (parent, pairs))| {
-                        let parent_log = BUILTINS::logs()
-                            .find(|src| src.variant == parent)
-                            .expect("log foreign key variant is invalid");
-                        let parent_id = self.catalog().resolve_builtin_log(parent_log).to_string();
-                        pairs.into_iter().map(move |(c, p)| {
-                            let row = Row::pack_slice(&[
-                                Datum::String(log_id),
-                                Datum::UInt64(u64::cast_from(c)),
-                                Datum::String(&parent_id),
-                                Datum::UInt64(u64::cast_from(p)),
-                                Datum::UInt64(u64::cast_from(index)),
-                            ]);
-                            BuiltinTableUpdate {
-                                id: mz_foreign_keys,
-                                row,
-                                diff: 1,
-                            }
-                        })
-                    },
-                ),
-            )
-        }
-
         // Expose mapping from T-shirt sizes to actual sizes
         builtin_table_updates.extend(self.catalog().state().pack_all_replica_size_updates());
 
@@ -1664,11 +1631,11 @@ impl Coordinator {
         let appends = entries
             .iter()
             .filter(|entry| entry.is_table())
-            .map(|entry| (entry.id(), Vec::new(), advance_to))
+            .map(|entry| (entry.id(), Vec::new()))
             .collect();
         self.controller
             .storage
-            .append_table(appends)
+            .append_table(write_ts.clone(), advance_to, appends)
             .expect("invalid updates")
             .await
             .expect("One-shot shouldn't be dropped during bootstrap")
@@ -1677,7 +1644,7 @@ impl Coordinator {
 
         // Add builtin table updates the clear the contents of all system tables
         debug!("coordinator init: resetting system tables");
-        let read_ts = self.get_local_read_ts();
+        let read_ts = self.get_local_read_ts().await;
         for system_table in entries
             .iter()
             .filter(|entry| entry.is_table() && entry.id().is_system())
@@ -1880,7 +1847,7 @@ impl Coordinator {
             }
         });
 
-        self.schedule_storage_usage_collection();
+        self.schedule_storage_usage_collection().await;
         self.spawn_statement_logging_task();
         flags::tracing_config(self.catalog.system_config()).apply(&self.tracing_handle);
 
@@ -2124,18 +2091,23 @@ pub async fn serve(
     let advance_timelines_interval = tokio::time::interval(catalog.config().timestamp_interval);
     let thread = thread::Builder::new()
         // The Coordinator thread tends to keep a lot of data on its stack. To
-        // prevent a stack overflow we allocate a stack twice as big as the default
+        // prevent a stack overflow we allocate a stack three times as big as the default
         // stack.
-        .stack_size(2 * stack::STACK_SIZE)
+        .stack_size(3 * stack::STACK_SIZE)
         .name("coordinator".to_string())
         .spawn(move || {
+            let catalog = Arc::new(catalog);
+
             let mut timestamp_oracles = BTreeMap::new();
             for (timeline, initial_timestamp) in initial_timestamps {
+                let persistence =
+                    CatalogTimestampPersistence::new(timeline.clone(), Arc::clone(&catalog));
+
                 handle.block_on(Coordinator::ensure_timeline_state_with_initial_time(
                     &timeline,
                     initial_timestamp,
                     coord_now.clone(),
-                    |ts| catalog.persist_timestamp(&timeline, ts),
+                    persistence,
                     &mut timestamp_oracles,
                 ));
             }
@@ -2151,7 +2123,7 @@ pub async fn serve(
                 view_optimizer: Optimizer::logical_optimizer(
                     &mz_transform::typecheck::empty_context(),
                 ),
-                catalog: Arc::new(catalog),
+                catalog,
                 internal_cmd_tx,
                 group_commit_tx,
                 strict_serializable_reads_tx,

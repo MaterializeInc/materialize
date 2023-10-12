@@ -67,8 +67,12 @@ macro_rules! rbac_preamble {
             ));
         };
 
-        // Skip RBAC checks if RBAC is disabled.
-        if !is_rbac_enabled_for_session($catalog.system_vars(), $session_vars) {
+        // Skip RBAC checks if RBAC is disabled. However, we never skip RBAC checks for system
+        // roles. This allows us to limit access of system users even when RBAC is off.
+        if !is_rbac_enabled_for_session($catalog.system_vars(), $session_vars)
+            && !$role_metadata.current_role.is_system()
+            && !$role_metadata.session_role.is_system()
+        {
             return Ok(());
         }
 
@@ -272,7 +276,6 @@ pub fn check_plan(
         plan,
         active_conns,
         target_cluster_id,
-        resolved_ids,
         role_metadata.current_role,
     );
     debug!("rbac requirements {rbac_requirements:?} for plan {plan:?}");
@@ -298,7 +301,6 @@ fn generate_rbac_requirements(
     plan: &Plan,
     active_conns: &BTreeMap<u32, RoleId>,
     target_cluster_id: Option<ClusterId>,
-    resolved_ids: &ResolvedIds,
     role_id: RoleId,
 ) -> RbacRequirements {
     match plan {
@@ -615,7 +617,7 @@ fn generate_rbac_requirements(
         Plan::ShowColumns(plan::ShowColumnsPlan {
             id,
             select_plan,
-            new_resolved_ids,
+            new_resolved_ids: _,
         }) => {
             let mut privileges = vec![(
                 SystemObjectId::Object(catalog.get_item(id).name().qualifiers.clone().into()),
@@ -628,7 +630,6 @@ fn generate_rbac_requirements(
                 &Plan::Select(select_plan.clone()),
                 active_conns,
                 target_cluster_id,
-                new_resolved_ids,
                 role_id,
             )
             .privileges
@@ -647,7 +648,7 @@ fn generate_rbac_requirements(
             copy_to: _,
         }) => {
             let mut privileges =
-                generate_read_privileges(catalog, resolved_ids.0.iter().cloned(), role_id);
+                generate_read_privileges(catalog, source.depends_on().into_iter(), role_id);
             if let Some(privilege) =
                 generate_cluster_usage_privileges(source, target_cluster_id, role_id)
             {
@@ -659,7 +660,7 @@ fn generate_rbac_requirements(
             }
         }
         Plan::Subscribe(plan::SubscribePlan {
-            from: _,
+            from,
             with_snapshot: _,
             when: _,
             up_to: _,
@@ -668,7 +669,7 @@ fn generate_rbac_requirements(
             output: _,
         }) => {
             let mut privileges =
-                generate_read_privileges(catalog, resolved_ids.0.iter().cloned(), role_id);
+                generate_read_privileges(catalog, from.depends_on().into_iter(), role_id);
             if let Some(cluster_id) = target_cluster_id {
                 privileges.push((
                     SystemObjectId::Object(cluster_id.into()),
@@ -708,7 +709,7 @@ fn generate_rbac_requirements(
                     let schema_id: ObjectId = item.name().qualifiers.clone().into();
                     vec![(SystemObjectId::Object(schema_id), AclMode::USAGE, role_id)]
                 }
-                Explainee::Query { raw_plan, .. } => raw_plan
+                Explainee::Statement(stmt) => stmt
                     .depends_on()
                     .into_iter()
                     .map(|id| {
@@ -720,7 +721,7 @@ fn generate_rbac_requirements(
             },
             item_usage: match explainee {
                 Explainee::MaterializedView(_) | Explainee::Index(_) => false,
-                Explainee::Query { .. } => true,
+                Explainee::Statement(_) => true,
             },
             ..Default::default()
         },
@@ -871,6 +872,15 @@ fn generate_rbac_requirements(
             ownership: vec![ObjectId::Cluster(*id)],
             ..Default::default()
         },
+        Plan::AlterClusterSwap(plan::AlterClusterSwapPlan {
+            id_a,
+            id_b,
+            name_a: _,
+            name_b: _,
+        }) => RbacRequirements {
+            ownership: vec![ObjectId::Cluster(*id_a), ObjectId::Cluster(*id_b)],
+            ..Default::default()
+        },
         Plan::AlterClusterReplicaRename(plan::AlterClusterReplicaRenamePlan {
             cluster_id,
             replica_id,
@@ -889,17 +899,34 @@ fn generate_rbac_requirements(
             ownership: vec![ObjectId::Item(*id)],
             ..Default::default()
         },
+        Plan::AlterItemSwap(plan::AlterItemSwapPlan {
+            id_a,
+            id_b,
+            full_name_a: _,
+            full_name_b: _,
+            object_type: _,
+        }) => RbacRequirements {
+            ownership: vec![ObjectId::Item(*id_a), ObjectId::Item(*id_b)],
+            ..Default::default()
+        },
         Plan::AlterSecret(plan::AlterSecretPlan { id, secret_as: _ }) => RbacRequirements {
             ownership: vec![ObjectId::Item(*id)],
             ..Default::default()
         },
         Plan::AlterRole(plan::AlterRolePlan {
-            id: _,
+            id,
             name: _,
-            attributes: _,
-        }) => RbacRequirements {
-            privileges: vec![(SystemObjectId::System, AclMode::CREATE_ROLE, role_id)],
-            ..Default::default()
+            option,
+        }) => match option {
+            // Roles are allowed to change their own variables.
+            plan::PlannedAlterRoleOption::Variable(_) if role_id == *id => {
+                RbacRequirements::default()
+            }
+            // Otherwise to ALTER a role, you need to have the CREATE_ROLE privilege.
+            _ => RbacRequirements {
+                privileges: vec![(SystemObjectId::System, AclMode::CREATE_ROLE, role_id)],
+                ..Default::default()
+            },
         },
         Plan::AlterOwner(plan::AlterOwnerPlan {
             id,

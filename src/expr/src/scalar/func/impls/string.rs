@@ -15,7 +15,6 @@ use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
 use mz_ore::str::StrExt;
-use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::char::{format_str_trim, Char};
 use mz_repr::adt::date::Date;
 use mz_repr::adt::interval::Interval;
@@ -26,12 +25,13 @@ use mz_repr::adt::regex::Regex;
 use mz_repr::adt::system::{Oid, PgLegacyChar};
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampPrecision};
 use mz_repr::adt::varchar::{VarChar, VarCharMaxLength};
-use mz_repr::{strconv, ColumnType, Datum, Row, RowArena, ScalarType};
+use mz_repr::{strconv, ColumnType, Datum, RowArena, ScalarType};
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::func::regexp_match_static;
 use crate::scalar::func::{
     array_create_scalar, regexp_split_to_array_re, EagerUnaryFunc, LazyUnaryFunc,
 };
@@ -917,42 +917,7 @@ impl LazyUnaryFunc for RegexpMatch {
         if haystack.is_null() {
             return Ok(Datum::Null);
         }
-        let mut row = Row::default();
-        let mut packer = row.packer();
-        if self.0.captures_len() > 1 {
-            // The regex contains capture groups, so return an array containing the
-            // matched text in each capture group, unless the entire match fails.
-            // Individual capture groups may also be null if that group did not
-            // participate in the match.
-            match self.0.captures(haystack.unwrap_str()) {
-                None => packer.push(Datum::Null),
-                Some(captures) => packer.push_array(
-                    &[ArrayDimension {
-                        lower_bound: 1,
-                        length: captures.len() - 1,
-                    }],
-                    // Skip the 0th capture group, which is the whole match.
-                    captures.iter().skip(1).map(|mtch| match mtch {
-                        None => Datum::Null,
-                        Some(mtch) => Datum::String(mtch.as_str()),
-                    }),
-                )?,
-            }
-        } else {
-            // The regex contains no capture groups, so return a one-element array
-            // containing the match, or null if there is no match.
-            match self.0.find(haystack.unwrap_str()) {
-                None => packer.push(Datum::Null),
-                Some(mtch) => packer.push_array(
-                    &[ArrayDimension {
-                        lower_bound: 1,
-                        length: 1,
-                    }],
-                    std::iter::once(Datum::String(mtch.as_str())),
-                )?,
-            };
-        };
-        Ok(temp_storage.push_unary_row(row))
+        regexp_match_static(haystack, temp_storage, &self.0)
     }
 
     /// The output ColumnType of this function

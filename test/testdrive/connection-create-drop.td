@@ -9,6 +9,9 @@
 #
 # Test basic connection functionality
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_connection_validation_syntax = true
+
 ###
 # Test core functionality by creating, introspecting and dropping a connection
 ###
@@ -321,13 +324,30 @@ contains:under-specified security configuration
 
 > CREATE SECRET s AS '...';
 
-! CREATE CONNECTION kafka_sasl_lowercase_mechanism TO KAFKA (
+> CREATE CONNECTION kafka_sasl_lowercase_string_mechanism TO KAFKA (
     BROKER 'kafka:9092',
     SASL MECHANISMS = 'plain',
     SASL USERNAME = 'materialize',
     SASL PASSWORD = SECRET s
-  );
-contains:invalid SASL MECHANISM "plain": must be uppercase
+  ) WITH (VALIDATE = FALSE);
+> CREATE CONNECTION kafka_sasl_spongebob_string_mechanism TO KAFKA (
+    BROKER 'kafka:9092',
+    SASL MECHANISMS = 'pLaIN',
+    SASL USERNAME = 'materialize',
+    SASL PASSWORD = SECRET s
+  ) WITH (VALIDATE = FALSE);
+> CREATE CONNECTION kafka_sasl_uppercase_ident_mechanism TO KAFKA (
+    BROKER 'kafka:9092',
+    SASL MECHANISMS = PLAIN,
+    SASL USERNAME = 'materialize',
+    SASL PASSWORD = SECRET s
+  ) WITH (VALIDATE = FALSE);
+> CREATE CONNECTION kafka_sasl_spongebob_ident_mechanism TO KAFKA (
+    BROKER 'kafka:9092',
+    SASL MECHANISMS = pLaIN,
+    SASL USERNAME = 'materialize',
+    SASL PASSWORD = SECRET s
+  ) WITH (VALIDATE = FALSE);
 
 ! CREATE CONNECTION multiple_brokers TO KAFKA (
     BROKER 'kafka:9092, kafka:9093'

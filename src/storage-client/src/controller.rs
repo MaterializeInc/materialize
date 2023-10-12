@@ -24,23 +24,26 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use derivative::Derivative;
+use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::ReplicaId;
+use mz_persist_client::read::{Cursor, ReadHandle};
 use mz_persist_client::stats::SnapshotStats;
+use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_storage_types::controller::{CollectionMetadata, StorageError};
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::sinks::{MetadataUnfilled, StorageSinkDesc};
-use mz_storage_types::sources::{IngestionDescription, SourceEnvelope};
+use mz_storage_types::sources::{IngestionDescription, SourceData, SourceEnvelope};
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::client::Update;
+use crate::client::TimestamplessUpdate;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub enum IntrospectionType {
@@ -182,6 +185,25 @@ impl CreateExportToken {
     }
 }
 
+/// A cursor over a snapshot, allowing us to read just part of a snapshot in its
+/// consolidated form.
+pub struct SnapshotCursor<T: Codec64 + Timestamp + Lattice> {
+    // We allocate a temporary read handle for each snapshot, and that handle needs to live at
+    // least as long as the cursor itself, which holds part leases. Bundling them together!
+    pub _read_handle: ReadHandle<SourceData, (), T, Diff>,
+    pub cursor: Cursor<SourceData, (), T, Diff>,
+}
+
+impl<T: Codec64 + Timestamp + Lattice> SnapshotCursor<T> {
+    pub async fn next(
+        &mut self,
+    ) -> Option<
+        impl Iterator<Item = ((Result<SourceData, String>, Result<(), String>), T, Diff)> + Sized + '_,
+    > {
+        self.cursor.next().await
+    }
+}
+
 #[async_trait(?Send)]
 pub trait StorageController: Debug + Send {
     type Timestamp;
@@ -267,8 +289,14 @@ pub trait StorageController: Debug + Send {
     /// This method is NOT idempotent; It can fail between processing of different
     /// collections and leave the controller in an inconsistent state. It is almost
     /// always wrong to do anything but abort the process on `Err`.
+    ///
+    /// The `register_ts` is used as the initial timestamp that tables are available for reads. (We
+    /// might later give non-tables the same treatment, but hold off on that initially.) Callers
+    /// must provide a Some if any of the collections is a table. A None may be given if none of the
+    /// collections are a table (i.e. all materialized views, sources, etc).
     async fn create_collections(
         &mut self,
+        register_ts: Option<Self::Timestamp>,
         collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError>;
 
@@ -356,7 +384,9 @@ pub trait StorageController: Debug + Send {
     // TODO(petrosagg): switch upper to `Antichain<Timestamp>`
     fn append_table(
         &mut self,
-        commands: Vec<(GlobalId, Vec<Update<Self::Timestamp>>, Self::Timestamp)>,
+        write_ts: Self::Timestamp,
+        advance_to: Self::Timestamp,
+        commands: Vec<(GlobalId, Vec<TimestamplessUpdate>)>,
     ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError>;
 
     /// Returns a [`MonotonicAppender`] which is a oneshot-esque struct that can be used to
@@ -369,6 +399,15 @@ pub trait StorageController: Debug + Send {
         id: GlobalId,
         as_of: Self::Timestamp,
     ) -> Result<Vec<(Row, Diff)>, StorageError>;
+
+    /// Returns the snapshot of the contents of the local input named `id` at `as_of`.
+    async fn snapshot_cursor(
+        &self,
+        id: GlobalId,
+        as_of: Self::Timestamp,
+    ) -> Result<SnapshotCursor<Self::Timestamp>, StorageError>
+    where
+        Self::Timestamp: Codec64 + Timestamp + Lattice;
 
     /// Returns aggregate statistics about the contents of the local input named
     /// `id` at `as_of`.

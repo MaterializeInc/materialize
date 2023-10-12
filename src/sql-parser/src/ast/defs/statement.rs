@@ -65,6 +65,7 @@ pub enum Statement<T: AstInfo> {
     AlterCluster(AlterClusterStatement<T>),
     AlterOwner(AlterOwnerStatement<T>),
     AlterObjectRename(AlterObjectRenameStatement),
+    AlterObjectSwap(AlterObjectSwapStatement),
     AlterIndex(AlterIndexStatement<T>),
     AlterSecret(AlterSecretStatement<T>),
     AlterSetCluster(AlterSetClusterStatement<T>),
@@ -132,6 +133,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::AlterCluster(stmt) => f.write_node(stmt),
             Statement::AlterOwner(stmt) => f.write_node(stmt),
             Statement::AlterObjectRename(stmt) => f.write_node(stmt),
+            Statement::AlterObjectSwap(stmt) => f.write_node(stmt),
             Statement::AlterIndex(stmt) => f.write_node(stmt),
             Statement::AlterSetCluster(stmt) => f.write_node(stmt),
             Statement::AlterSecret(stmt) => f.write_node(stmt),
@@ -201,6 +203,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::CreateSecret => "create_secret",
         StatementKind::AlterCluster => "alter_cluster",
         StatementKind::AlterObjectRename => "alter_object_rename",
+        StatementKind::AlterObjectSwap => "alter_object_swap",
         StatementKind::AlterIndex => "alter_index",
         StatementKind::AlterRole => "alter_role",
         StatementKind::AlterSecret => "alter_secret",
@@ -1236,6 +1239,7 @@ pub struct CreateMaterializedViewStatement<T: AstInfo> {
     pub columns: Vec<Ident>,
     pub in_cluster: Option<T::ClusterName>,
     pub query: Query<T>,
+    pub non_null_assertions: Vec<Ident>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {
@@ -1477,6 +1481,33 @@ impl AstDisplay for RoleAttribute {
 }
 impl_display!(RoleAttribute);
 
+/// `ALTER ROLE role_name [SET | RESET] ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SetRoleVar {
+    /// `SET name TO value`
+    Set { name: Ident, value: SetVariableTo },
+    /// `RESET name`
+    Reset { name: Ident },
+}
+
+impl AstDisplay for SetRoleVar {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            SetRoleVar::Set { name, value } => {
+                f.write_str("SET ");
+                f.write_node(name);
+                f.write_str(" = ");
+                f.write_node(value);
+            }
+            SetRoleVar::Reset { name } => {
+                f.write_str("RESET ");
+                f.write_node(name);
+            }
+        }
+    }
+}
+impl_display!(SetRoleVar);
+
 /// A `CREATE SECRET` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateSecretStatement<T: AstInfo> {
@@ -1703,6 +1734,8 @@ impl_display_t!(CreateClusterReplicaStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ReplicaOptionName {
+    /// The `BILLED AS [=] <value>` option.
+    BilledAs,
     /// The `SIZE [[=] <size>]` option.
     Size,
     /// The `AVAILABILITY ZONE [[=] <id>]` option.
@@ -1715,8 +1748,10 @@ pub enum ReplicaOptionName {
     ComputectlAddresses,
     /// The `COMPUTE ADDRESSES` option.
     ComputeAddresses,
-    /// The `WORKERS` option
+    /// The `WORKERS` option.
     Workers,
+    /// The `INTERNAL` option.
+    Internal,
     /// The `INTROSPECTION INTERVAL [[=] <interval>]` option.
     IntrospectionInterval,
     /// The `INTROSPECTION DEBUGGING [[=] <enabled>]` option.
@@ -1730,6 +1765,7 @@ pub enum ReplicaOptionName {
 impl AstDisplay for ReplicaOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
+            ReplicaOptionName::BilledAs => f.write_str("BILLED AS"),
             ReplicaOptionName::Size => f.write_str("SIZE"),
             ReplicaOptionName::AvailabilityZone => f.write_str("AVAILABILITY ZONE"),
             ReplicaOptionName::StorageAddresses => f.write_str("STORAGE ADDRESSES"),
@@ -1737,6 +1773,7 @@ impl AstDisplay for ReplicaOptionName {
             ReplicaOptionName::ComputectlAddresses => f.write_str("COMPUTECTL ADDRESSES"),
             ReplicaOptionName::ComputeAddresses => f.write_str("COMPUTE ADDRESSES"),
             ReplicaOptionName::Workers => f.write_str("WORKERS"),
+            ReplicaOptionName::Internal => f.write_str("INTERNAL"),
             ReplicaOptionName::IntrospectionInterval => f.write_str("INTROSPECTION INTERVAL"),
             ReplicaOptionName::IntrospectionDebugging => f.write_str("INTROSPECTION DEBUGGING"),
             ReplicaOptionName::IdleArrangementMergeEffort => {
@@ -1896,6 +1933,27 @@ impl AstDisplay for AlterObjectRenameStatement {
     }
 }
 impl_display!(AlterObjectRenameStatement);
+
+/// `ALTER <OBJECT> SWAP ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterObjectSwapStatement {
+    pub object_type: ObjectType,
+    pub name_a: UnresolvedObjectName,
+    pub name_b: UnresolvedObjectName,
+}
+
+impl AstDisplay for AlterObjectSwapStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("ALTER ");
+        f.write_node(&self.object_type);
+        f.write_str(" SWAP ");
+
+        f.write_node(&self.name_a);
+        f.write_str(" ");
+        f.write_node(&self.name_b);
+    }
+}
+impl_display!(AlterObjectSwapStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AlterIndexAction<T: AstInfo> {
@@ -2134,21 +2192,45 @@ impl_display!(AlterConnectionStatement);
 pub struct AlterRoleStatement<T: AstInfo> {
     /// The specified role.
     pub name: T::RoleName,
-    /// Any options that were attached, in the order they were presented.
-    pub options: Vec<RoleAttribute>,
+    /// Alterations we're making to the role.
+    pub option: AlterRoleOption,
 }
 
 impl<T: AstInfo> AstDisplay for AlterRoleStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("ALTER ROLE ");
         f.write_node(&self.name);
-        for option in &self.options {
-            f.write_str(" ");
-            option.fmt(f)
-        }
+        f.write_node(&self.option);
     }
 }
 impl_display_t!(AlterRoleStatement);
+
+/// `ALTER ROLE ... [ WITH | SET ] ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum AlterRoleOption {
+    /// Any options that were attached, in the order they were presented.
+    Attributes(Vec<RoleAttribute>),
+    /// A variable that we want to provide a default value for this role.
+    Variable(SetRoleVar),
+}
+
+impl AstDisplay for AlterRoleOption {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            AlterRoleOption::Attributes(attrs) => {
+                for attr in attrs {
+                    f.write_str(" ");
+                    attr.fmt(f)
+                }
+            }
+            AlterRoleOption::Variable(var) => {
+                f.write_str(" ");
+                f.write_node(var);
+            }
+        }
+    }
+}
+impl_display!(AlterRoleOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DiscardStatement {
@@ -3045,13 +3127,13 @@ pub enum ExplainStage {
 
 impl ExplainStage {
     /// Return the tracing path that corresponds to a given stage.
-    pub fn path(&self) -> &'static str {
+    pub fn path(&self) -> Option<&'static str> {
         match self {
-            ExplainStage::RawPlan => "optimize/raw",
-            ExplainStage::DecorrelatedPlan => "optimize/hir_to_mir",
-            ExplainStage::OptimizedPlan => "optimize/global",
-            ExplainStage::PhysicalPlan => "optimize/finalize_dataflow",
-            ExplainStage::Trace => unreachable!(),
+            ExplainStage::RawPlan => Some("optimize/raw"),
+            ExplainStage::DecorrelatedPlan => Some("optimize/hir_to_mir"),
+            ExplainStage::OptimizedPlan => Some("optimize/global"),
+            ExplainStage::PhysicalPlan => Some("optimize/finalize_dataflow"),
+            ExplainStage::Trace => None,
         }
     }
 }
@@ -3074,7 +3156,9 @@ pub enum Explainee<T: AstInfo> {
     View(T::ItemName),
     MaterializedView(T::ItemName),
     Index(T::ItemName),
-    Query(Query<T>, bool),
+    Query(Box<Query<T>>, bool),
+    CreateMaterializedView(Box<CreateMaterializedViewStatement<T>>, bool),
+    CreateIndex(Box<CreateIndexStatement<T>>, bool),
 }
 
 impl<T: AstInfo> AstDisplay for Explainee<T> {
@@ -3097,6 +3181,18 @@ impl<T: AstInfo> AstDisplay for Explainee<T> {
                     f.write_str("BROKEN ");
                 }
                 f.write_node(query);
+            }
+            Self::CreateMaterializedView(statement, broken) => {
+                if *broken {
+                    f.write_str("BROKEN ");
+                }
+                f.write_node(statement);
+            }
+            Self::CreateIndex(statement, broken) => {
+                if *broken {
+                    f.write_str("BROKEN ");
+                }
+                f.write_node(statement);
             }
         }
     }
@@ -3815,55 +3911,22 @@ impl_display_t!(CommentStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CommentObjectType<T: AstInfo> {
-    Table {
-        name: UnresolvedItemName,
-    },
-    View {
-        name: UnresolvedItemName,
-    },
-    Column {
-        relation_name: UnresolvedItemName,
-        column_name: Ident,
-    },
-    MaterializedView {
-        name: UnresolvedItemName,
-    },
-    Source {
-        name: UnresolvedItemName,
-    },
-    Sink {
-        name: UnresolvedItemName,
-    },
-    Index {
-        name: UnresolvedItemName,
-    },
-    Func {
-        name: UnresolvedItemName,
-    },
-    Connection {
-        name: UnresolvedItemName,
-    },
-    Type {
-        name: UnresolvedItemName,
-    },
-    Secret {
-        name: UnresolvedItemName,
-    },
-    Role {
-        name: Ident,
-    },
-    Database {
-        name: UnresolvedDatabaseName,
-    },
-    Schema {
-        name: UnresolvedSchemaName,
-    },
-    Cluster {
-        name: T::ClusterName,
-    },
-    ClusterReplica {
-        name: QualifiedReplica,
-    },
+    Table { name: T::ItemName },
+    View { name: T::ItemName },
+    Column { name: T::ColumnName },
+    MaterializedView { name: T::ItemName },
+    Source { name: T::ItemName },
+    Sink { name: T::ItemName },
+    Index { name: T::ItemName },
+    Func { name: T::ItemName },
+    Connection { name: T::ItemName },
+    Type { name: T::ItemName },
+    Secret { name: T::ItemName },
+    Role { name: T::RoleName },
+    Database { name: T::DatabaseName },
+    Schema { name: T::SchemaName },
+    Cluster { name: T::ClusterName },
+    ClusterReplica { name: QualifiedReplica },
 }
 
 impl<T: AstInfo> AstDisplay for CommentObjectType<T> {
@@ -3879,14 +3942,9 @@ impl<T: AstInfo> AstDisplay for CommentObjectType<T> {
                 f.write_str("VIEW ");
                 f.write_node(name);
             }
-            Column {
-                relation_name,
-                column_name,
-            } => {
+            Column { name } => {
                 f.write_str("COLUMN ");
-                f.write_node(relation_name);
-                f.write_str(".");
-                f.write_node(column_name);
+                f.write_node(name);
             }
             MaterializedView { name } => {
                 f.write_str("MATERIALIZED VIEW ");

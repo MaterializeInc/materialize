@@ -116,6 +116,7 @@ pub enum PlanError {
     InvalidTimestampPrecision(InvalidTimestampPrecisionError),
     InvalidSecret(Box<ResolvedItemName>),
     InvalidTemporarySchema,
+    MangedReplicaName(String),
     ParserStatement(ParserStatementError),
     Parser(ParserError),
     DropViewOnMaterializedView(String),
@@ -547,6 +548,9 @@ impl fmt::Display for PlanError {
             Self::KafkaSourcePurification(e) => write!(f, "KAFKA source validation: {}", e),
             Self::TestScriptSourcePurification(e) => write!(f, "TEST SCRIPT source validation: {}", e),
             Self::LoadGeneratorSourcePurification(e) => write!(f, "LOAD GENERATOR source validation: {}", e),
+            Self::MangedReplicaName(name) => {
+                write!(f, "{name} is reserved for replicas of managed clusters")
+            }
         }
     }
 }

@@ -238,8 +238,6 @@ This is often referred to as a **grace period**.
 
 ## Temporal filter pushdown
 
-{{< private-preview />}}
-
 All of the queries in the previous examples only return results based on recently-added events.
 Materialize can "push down" filters that match this pattern all the way down to its storage layer, skipping over old data that’s not relevant to the query.
 Here are the key benefits of this optimization:
@@ -267,3 +265,5 @@ Source materialize.public.events
 ```
 
 The filter in our query appears in the `pushdown=` list at the bottom of the output, so the filter pushdown optimization will be able to filter out irrelevant ranges of data in that source and make the overall query more efficient.
+
+Some common functions, such as casting from a string to a timestamp, can prevent filter pushdown for a query. For similar functions that _do_ allow pushdown, see [the pushdown functions documentation](/sql/functions/pushdown/).

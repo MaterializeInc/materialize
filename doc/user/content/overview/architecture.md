@@ -4,7 +4,7 @@ description: "Understand the different components that make Materialize a horizo
 draft: true
 menu:
   main:
-    parent: overview
+    parent: get-started
     weight: 10
 ---
 

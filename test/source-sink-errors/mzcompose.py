@@ -79,6 +79,7 @@ class KafkaTransactionLogGreaterThan1:
             self.assert_error(
                 c, "retriable transaction error", "running a single Kafka broker"
             )
+            c.down(sanity_restart_mz=False)
 
     def populate(self, c: Composition) -> None:
         # Create a source and a sink
@@ -131,7 +132,7 @@ class KafkaDisruption:
         print(f"+++ Running disruption scenario {self.name}")
         seed = random.randint(0, 256**4)
 
-        c.down(destroy_volumes=True)
+        c.down(destroy_volumes=True, sanity_restart_mz=False)
         c.up("testdrive", persistent=True)
         c.up("redpanda", "materialized", "clusterd")
 
@@ -178,6 +179,12 @@ class KafkaDisruption:
                   FORMAT BYTES
                   ENVELOPE NONE
                 # WITH ( REMOTE 'clusterd:2100' ) https://github.com/MaterializeInc/materialize/issues/16582
+
+                # Ensure the source makes _real_ progress before we disrupt it. This also
+                # ensures the sink makes progress, which is required to hit certain stalls.
+                # As of implementing correctness property #2, this is required.
+                > SELECT count(*) from source1
+                1
 
                 > CREATE SINK sink1 FROM source1
                   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-topic-${testdrive.seed}')
@@ -244,7 +251,7 @@ class PgDisruption:
         print(f"+++ Running disruption scenario {self.name}")
         seed = random.randint(0, 256**4)
 
-        c.down(destroy_volumes=True)
+        c.down(destroy_volumes=True, sanity_restart_mz=False)
         c.up("testdrive", persistent=True)
         c.up("postgres", "materialized", "clusterd")
 

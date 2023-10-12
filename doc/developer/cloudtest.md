@@ -29,7 +29,7 @@ official [`kubernetes`] Python library to control the Kubernetes cluster.
     On Linux, use:
 
     ```
-    curl -fL https://dl.k8s.io/release/v1.24.3/bin/linux/amd64/kubectl > kubectl
+    curl -fL https://dl.k8s.io/release/v1.26.6/bin/linux/amd64/kubectl > kubectl
     chmod +x kubectl
     sudo mv kubectl /usr/local/bin
     ```

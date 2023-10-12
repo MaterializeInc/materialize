@@ -89,7 +89,7 @@ use anyhow::Context;
 use clap::Parser;
 use mz_adapter::catalog::{Catalog, ClusterReplicaSizeMap, Config};
 use mz_build_info::{build_info, BuildInfo};
-use mz_catalog::{self as catalog, BootstrapArgs};
+use mz_catalog::{self as catalog, BootstrapArgs, OpenableDurableCatalogState, StashConfig};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
@@ -163,7 +163,7 @@ async fn main() {
 }
 
 async fn run(args: Args) -> Result<(), anyhow::Error> {
-    let tls = mz_postgres_util::make_tls(&tokio_postgres::config::Config::from_str(
+    let tls = mz_tls_util::make_tls(&tokio_postgres::config::Config::from_str(
         &args.postgres_url,
     )?)?;
     let factory = StashFactory::new(&MetricsRegistry::new());
@@ -171,6 +171,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         .open_readonly(args.postgres_url.clone(), None, tls.clone())
         .await?;
     let usage = Usage::from_stash(&mut stash).await?;
+    let schema = None;
 
     match args.action {
         Action::Dump { target } => {
@@ -187,24 +188,32 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             value,
         } => {
             // edit needs a mutable stash, so reconnect.
-            let stash = factory.open(args.postgres_url, None, tls).await?;
+            let stash = factory.open(args.postgres_url, schema, tls).await?;
             edit(stash, usage, collection, key, value).await
         }
         Action::Delete { collection, key } => {
             // delete needs a mutable stash, so reconnect.
-            let stash = factory.open(args.postgres_url, None, tls).await?;
+            let stash = factory.open(args.postgres_url, schema, tls).await?;
             delete(stash, usage, collection, key).await
         }
         Action::UpgradeCheck {
             cluster_replica_sizes,
         } => {
-            // upgrade needs fake writes, so use a savepoint.
-            let stash = factory.open_savepoint(args.postgres_url, tls).await?;
             let cluster_replica_sizes: ClusterReplicaSizeMap = match cluster_replica_sizes {
                 None => Default::default(),
                 Some(json) => serde_json::from_str(&json).context("parsing replica size map")?,
             };
-            upgrade_check(stash, usage, cluster_replica_sizes).await
+            upgrade_check(
+                StashConfig {
+                    stash_factory: factory,
+                    stash_url: args.postgres_url,
+                    schema,
+                    tls,
+                },
+                usage,
+                cluster_replica_sizes,
+            )
+            .await
         }
     }
 }
@@ -237,11 +246,13 @@ async fn dump(mut stash: Stash, usage: Usage, mut target: impl Write) -> Result<
     Ok(())
 }
 async fn upgrade_check(
-    stash: Stash,
+    stash_config: StashConfig,
     usage: Usage,
     cluster_replica_sizes: ClusterReplicaSizeMap,
 ) -> Result<(), anyhow::Error> {
-    let msg = usage.upgrade_check(stash, cluster_replica_sizes).await?;
+    let msg = usage
+        .upgrade_check(stash_config, cluster_replica_sizes)
+        .await?;
     println!("{msg}");
     Ok(())
 }
@@ -459,7 +470,7 @@ impl Usage {
 
     async fn upgrade_check(
         &self,
-        stash: Stash,
+        stash_config: StashConfig,
         cluster_replica_sizes: ClusterReplicaSizeMap,
     ) -> Result<String, anyhow::Error> {
         if !matches!(self, Self::Catalog) {
@@ -468,21 +479,24 @@ impl Usage {
 
         let metrics_registry = &MetricsRegistry::new();
         let now = SYSTEM_TIME.clone();
-        let storage = mz_catalog::Connection::open(
-            stash,
-            now.clone(),
-            &BootstrapArgs {
-                default_cluster_replica_size: "1".into(),
-                builtin_cluster_replica_size: "1".into(),
-                bootstrap_role: None,
-            },
-            None,
-        )
-        .await?;
+        let mut openable_storage = mz_catalog::stash_backed_catalog_state(stash_config);
+        let storage = Box::new(
+            openable_storage
+                .open_savepoint(
+                    now.clone(),
+                    &BootstrapArgs {
+                        default_cluster_replica_size: "1".into(),
+                        builtin_cluster_replica_size: "1".into(),
+                        bootstrap_role: None,
+                    },
+                    None,
+                )
+                .await?,
+        );
         let secrets_reader = Arc::new(InMemorySecretsController::new());
 
         let (_catalog, _, _, last_catalog_version) = Catalog::open(Config {
-            storage: Box::new(storage),
+            storage,
             unsafe_mode: true,
             all_features: false,
             build_info: &BUILD_INFO,

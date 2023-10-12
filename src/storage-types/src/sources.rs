@@ -57,9 +57,6 @@ use crate::instances::StorageInstanceId;
 use crate::sources::encoding::{DataEncoding, DataEncodingInner, SourceDataEncoding};
 use crate::sources::proto_ingestion_description::{ProtoSourceExport, ProtoSourceImport};
 use crate::sources::proto_load_generator_source_connection::Generator as ProtoGenerator;
-use crate::sources_legacy::{
-    decode_dataflow_error_with_fallback, decode_source_data_with_fallback,
-};
 
 pub mod encoding;
 
@@ -611,6 +608,7 @@ impl Refines<()> for MzOffset {
 }
 
 impl PartialOrder for MzOffset {
+    #[inline]
     fn less_equal(&self, other: &Self) -> bool {
         self.offset.less_equal(&other.offset)
     }
@@ -2684,14 +2682,14 @@ impl Codec for SourceData {
     }
 
     fn encode<B: BufMut>(&self, buf: &mut B) {
-        let proto: ProtoSourceData = self.into_proto();
-        proto
+        self.into_proto()
             .encode(buf)
             .expect("no required fields means no initialization errors");
     }
 
     fn decode(buf: &[u8]) -> Result<Self, String> {
-        decode_source_data_with_fallback(buf)
+        let proto = ProtoSourceData::decode(buf).map_err(|err| err.to_string())?;
+        proto.into_rust().map_err(|err| err.to_string())
     }
 }
 
@@ -2725,8 +2723,7 @@ impl<'a> PartEncoder<'a, SourceData> for SourceDataEncoder<'a> {
                 for encoder in self.ok.col_encoders() {
                     encoder.encode_default();
                 }
-                let err: ProtoDataflowError = err.into_proto();
-                let err = err.encode_to_vec();
+                let err = err.into_proto().encode_to_vec();
                 ColumnPush::<Option<Vec<u8>>>::push(self.err, Some(err.as_slice()));
             }
         }
@@ -2761,7 +2758,10 @@ impl<'a> PartDecoder<'a, SourceData> for SourceDataDecoder<'a> {
                 }
             }
             (false, Some(err)) => {
-                let err = decode_dataflow_error_with_fallback(err).expect("proto should be valid");
+                let err = ProtoDataflowError::decode(err)
+                    .expect("proto should be valid")
+                    .into_rust()
+                    .expect("error should be valid");
                 val.0 = Err(err);
             }
             (true, Some(_)) | (false, None) => {

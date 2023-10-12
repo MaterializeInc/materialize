@@ -14,7 +14,7 @@ use itertools::Itertools;
 use mz_persist_client::{PersistLocation, ShardId};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationDesc};
-use mz_stash::StashError;
+use mz_stash_types::StashError;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -98,15 +98,17 @@ impl RustType<ProtoDurableCollectionMetadata> for DurableCollectionMetadata {
     }
 }
 
-impl RustType<mz_stash::objects::proto::DurableCollectionMetadata> for DurableCollectionMetadata {
-    fn into_proto(&self) -> mz_stash::objects::proto::DurableCollectionMetadata {
-        mz_stash::objects::proto::DurableCollectionMetadata {
+impl RustType<mz_stash_types::objects::proto::DurableCollectionMetadata>
+    for DurableCollectionMetadata
+{
+    fn into_proto(&self) -> mz_stash_types::objects::proto::DurableCollectionMetadata {
+        mz_stash_types::objects::proto::DurableCollectionMetadata {
             data_shard: self.data_shard.into_proto(),
         }
     }
 
     fn from_proto(
-        proto: mz_stash::objects::proto::DurableCollectionMetadata,
+        proto: mz_stash_types::objects::proto::DurableCollectionMetadata,
     ) -> Result<Self, TryFromProtoError> {
         Ok(DurableCollectionMetadata {
             data_shard: proto.data_shard.into_rust()?,

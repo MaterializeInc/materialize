@@ -81,6 +81,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 "database.history.kafka.topic": "mysql-history",
                 "database.allowPublicKeyRetrieval": "true",
                 "time.precision.mode": "connect",
+                "topic.prefix": "mysql",
             },
         },
     )

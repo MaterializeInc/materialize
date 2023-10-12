@@ -213,7 +213,7 @@ mod tests {
                 let context = ExplainContext {
                     config: &config,
                     humanizer: cat,
-                    used_indexes: UsedIndexes::new(vec![]),
+                    used_indexes: UsedIndexes::default(),
                     finishing: None,
                     duration: Duration::default(),
                     optimizer_notices: Vec::new(),

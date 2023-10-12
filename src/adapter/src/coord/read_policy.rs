@@ -243,7 +243,7 @@ impl crate::coord::Coordinator {
             match timeline_context {
                 TimelineContext::TimelineDependent(timeline) => {
                     let TimelineState { oracle, .. } = self.ensure_timeline_state(&timeline).await;
-                    let read_ts = oracle.read_ts();
+                    let read_ts = oracle.read_ts().await;
                     let new_read_holds = self.initialize_read_holds(read_ts, &id_bundle);
                     let TimelineState { read_holds, .. } =
                         self.ensure_timeline_state(&timeline).await;

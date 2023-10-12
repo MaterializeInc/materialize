@@ -12,16 +12,14 @@
 use std::backtrace::Backtrace;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
-use std::future::Future;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use futures::stream::{FuturesUnordered, StreamExt};
-use futures::{FutureExt, Stream};
+use futures::Stream;
 use mz_ore::now::EpochMillis;
 use mz_ore::task::RuntimeExt;
 use mz_persist::location::{Blob, SeqNo};
@@ -32,7 +30,7 @@ use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
-use tracing::{debug, debug_span, instrument, trace_span, warn, Instrument};
+use tracing::{debug_span, instrument, warn, Instrument};
 use uuid::Uuid;
 
 use crate::cfg::PersistFeatureFlag;
@@ -42,11 +40,13 @@ use crate::fetch::{
 };
 use crate::internal::encoding::Schemas;
 use crate::internal::machine::Machine;
-use crate::internal::metrics::{Metrics, MetricsRetryStream};
-use crate::internal::state::{HollowBatch, HollowBatchPart, Since};
+use crate::internal::metrics::Metrics;
+use crate::internal::state::{HollowBatch, HollowBatchPart};
 use crate::internal::watch::StateWatch;
 use crate::iter::Consolidator;
 use crate::{parse_id, GarbageCollector, PersistConfig, ShardId};
+
+pub use crate::internal::state::Since;
 
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
 #[derive(Arbitrary, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -296,7 +296,12 @@ where
     pub async fn next(&mut self) -> (Vec<LeasedBatchPart<T>>, Antichain<T>) {
         let batch = self
             .handle
-            .next_listen_batch(&self.frontier, &mut self.watch)
+            .machine
+            .next_listen_batch(
+                &self.frontier,
+                &mut self.watch,
+                Some(&self.handle.reader_id),
+            )
             .await;
 
         // A lot of things across mz have to line up to hold the following
@@ -794,7 +799,7 @@ where
     /// # Panics
     /// - If `self` does not have record of issuing the [`LeasedBatchPart`], e.g.
     ///   it originated from from another `ReadHandle`.
-    pub(crate) fn process_returned_leased_part(&mut self, leased_part: LeasedBatchPart<T>) {
+    pub fn process_returned_leased_part(&mut self, leased_part: LeasedBatchPart<T>) {
         self.lease_returner.return_leased_part(leased_part)
     }
 
@@ -914,109 +919,6 @@ where
         self.explicitly_expired = true;
     }
 
-    async fn next_listen_batch(
-        &mut self,
-        frontier: &Antichain<T>,
-        watch: &mut StateWatch<K, V, T, D>,
-    ) -> HollowBatch<T> {
-        let mut seqno = match self.machine.next_listen_batch(frontier) {
-            Ok(b) => return b,
-            Err(seqno) => seqno,
-        };
-
-        // The latest state still doesn't have a new frontier for us:
-        // watch+sleep in a loop until it does.
-        let sleeps = self.metrics.retries.next_listen_batch.stream(
-            self.cfg
-                .dynamic
-                .next_listen_batch_retry_params()
-                .into_retry(SystemTime::now())
-                .into_retry_stream(),
-        );
-
-        enum Wake<'a, K, V, T, D> {
-            Watch(&'a mut StateWatch<K, V, T, D>),
-            Sleep(MetricsRetryStream),
-        }
-        let mut wakes = FuturesUnordered::<
-            std::pin::Pin<Box<dyn Future<Output = Wake<K, V, T, D>> + Send + Sync>>,
-        >::new();
-        wakes.push(Box::pin(
-            watch
-                .wait_for_seqno_ge(seqno.next())
-                .map(Wake::Watch)
-                .instrument(trace_span!("snapshot::watch")),
-        ));
-        wakes.push(Box::pin(
-            sleeps
-                .sleep()
-                .map(Wake::Sleep)
-                .instrument(trace_span!("snapshot::sleep")),
-        ));
-
-        loop {
-            assert_eq!(wakes.len(), 2);
-            let wake = wakes.next().await.expect("wakes should be non-empty");
-            // Note that we don't need to fetch in the Watch case, because the
-            // Watch wakeup is a signal that the shared state has already been
-            // updated.
-            match &wake {
-                Wake::Watch(_) => self.metrics.watch.listen_woken_via_watch.inc(),
-                Wake::Sleep(_) => {
-                    self.metrics.watch.listen_woken_via_sleep.inc();
-                    self.machine
-                        .applier
-                        .fetch_and_update_state(Some(seqno))
-                        .await;
-                }
-            }
-
-            seqno = match self.machine.next_listen_batch(frontier) {
-                Ok(b) => {
-                    match &wake {
-                        Wake::Watch(_) => self.metrics.watch.listen_resolved_via_watch.inc(),
-                        Wake::Sleep(_) => self.metrics.watch.listen_resolved_via_sleep.inc(),
-                    }
-                    return b;
-                }
-                Err(seqno) => seqno,
-            };
-
-            // There might be some holdup in the next batch being
-            // produced. Perhaps we've quiesced a table or maybe a
-            // dataflow is taking a long time to start up because it has
-            // to read a lot of data. Heartbeat ourself so we don't
-            // accidentally lose our lease while we wait for things to
-            // resume.
-            self.maybe_heartbeat_reader().await;
-
-            // Wait a bit and try again. Intentionally don't ever log
-            // this at info level.
-            match wake {
-                Wake::Watch(watch) => wakes.push(Box::pin(
-                    async move {
-                        watch.wait_for_seqno_ge(seqno.next()).await;
-                        Wake::Watch(watch)
-                    }
-                    .instrument(trace_span!("snapshot::watch")),
-                )),
-                Wake::Sleep(sleeps) => {
-                    debug!(
-                        "{}: next_listen_batch didn't find new data, retrying in {:?}",
-                        self.reader_id,
-                        sleeps.next_sleep()
-                    );
-                    wakes.push(Box::pin(
-                        sleeps
-                            .sleep()
-                            .map(Wake::Sleep)
-                            .instrument(trace_span!("snapshot::sleep")),
-                    ));
-                }
-            }
-        }
-    }
-
     /// Test helper for a [Self::listen] call that is expected to succeed.
     #[cfg(test)]
     #[track_caller]
@@ -1024,6 +926,38 @@ where
         self.listen(Antichain::from_elem(as_of))
             .await
             .expect("cannot serve requested as_of")
+    }
+}
+
+/// An incremental cursor through a particular shard, returned from [ReadHandle::snapshot_cursor].
+///
+/// To read an entire dataset, the
+/// client should call `next` until it returns `None`, which signals all data has been returned...
+/// but it's also free to abandon the instance at any time if it eg. only needs a few entries.
+#[derive(Debug)]
+pub struct Cursor<K: Codec, V: Codec, T: Timestamp + Codec64, D> {
+    consolidator: Consolidator<T, D>,
+    _schemas: Schemas<K, V>,
+}
+
+impl<K, V, T, D> Cursor<K, V, T, D>
+where
+    K: Debug + Codec + Ord,
+    V: Debug + Codec + Ord,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
+{
+    /// Grab the next batch of consolidated data.
+    pub async fn next(
+        &mut self,
+    ) -> Option<impl Iterator<Item = ((Result<K, String>, Result<V, String>), T, D)> + '_> {
+        let iter = self
+            .consolidator
+            .next()
+            .await
+            .expect("fetching a leased part")?;
+        let iter = iter.map(|(k, v, t, d)| ((K::decode(k), V::decode(v)), t, d));
+        Some(iter)
     }
 }
 
@@ -1109,6 +1043,38 @@ where
         &mut self,
         as_of: Antichain<T>,
     ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, Since<T>> {
+        let mut cursor = self.snapshot_cursor(as_of).await?;
+        let mut contents = Vec::new();
+        while let Some(iter) = cursor.next().await {
+            contents.extend(iter);
+        }
+
+        // We don't currently guarantee that encoding is one-to-one, so we still need to
+        // consolidate the decoded outputs. However, let's report if this isn't a noop.
+        let old_len = contents.len();
+        consolidate_updates(&mut contents);
+        if old_len != contents.len() {
+            // TODO(bkirwi): do we need more / finer-grained metrics for this?
+            self.machine
+                .applier
+                .shard_metrics
+                .unconsolidated_snapshot
+                .inc();
+        }
+
+        Ok(contents)
+    }
+
+    /// Generates a [Self::snapshot], and fetches all of the batches it
+    /// contains.
+    ///
+    /// To keep memory usage down when reading a snapshot that consolidates well, this consolidates
+    /// as it goes. However, note that only the serialized data is consolidated: the deserialized
+    /// data will only be consolidated if your K/V codecs are one-to-one.
+    pub async fn snapshot_cursor(
+        &mut self,
+        as_of: Antichain<T>,
+    ) -> Result<Cursor<K, V, T, D>, Since<T>> {
         let batches = self.machine.snapshot(&as_of).await?;
 
         let mut consolidator = Consolidator::new(
@@ -1141,26 +1107,10 @@ where
             }
         }
 
-        let mut contents = Vec::new();
-
-        while let Some(iter) = consolidator.next().await.expect("fetching a leased part") {
-            contents.extend(iter.map(|(k, v, t, d)| ((K::decode(k), V::decode(v)), t, d)))
-        }
-
-        // We don't currently guarantee that encoding is one-to-one, so we still need to
-        // consolidate the decoded outputs. However, let's report if this isn't a noop.
-        let old_len = contents.len();
-        consolidate_updates(&mut contents);
-        if old_len != contents.len() {
-            // TODO(bkirwi): do we need more / finer-grained metrics for this?
-            self.machine
-                .applier
-                .shard_metrics
-                .unconsolidated_snapshot
-                .inc();
-        }
-
-        Ok(contents)
+        Ok(Cursor {
+            consolidator,
+            _schemas: self.schemas.clone(),
+        })
     }
 
     /// Generates a [Self::snapshot], and streams out all of the updates

@@ -230,7 +230,7 @@ impl Transactor {
                 )
                 .await
                 .expect("data schema shouldn't change");
-            let res = self.txns.register(init_ts, data_write).await;
+            let res = self.txns.register(init_ts, [data_write]).await;
             match res {
                 Ok(_) => {
                     self.data_reads.insert(*data_id, (init_ts, data_read));
@@ -264,7 +264,7 @@ impl Transactor {
                 .data_reads
                 .get(data_id)
                 .expect("data handle was registered");
-            let data_read = data_read.clone("read_at").await;
+            let mut data_read = data_read.clone("read_at").await;
             // SUBTLE! Maelstrom txn-list-append requires that we be able to
             // reconstruct the order in which we appended list items. To avoid
             // needing to change the staged writes if our read_ts advances, we
@@ -276,18 +276,35 @@ impl Transactor {
             // TODO: It would be lovely to do this without cloning the
             // ReadHandle, but that would require adding a method to fetch the
             // un-advanced data in some `(lower, upper)`.
-            let target_inclusive = self
+            //
+            // TODO(txn): Use the timely operator instead to get additional
+            // coverage of it. In the meantime, hack access to the non-pub
+            // unblock_read by fetching a snapshot and throwing it away. This
+            // guarantees that the data shard is readable through read_ts.
+            let data_write = self
+                .client
+                .open_writer(
+                    *data_id,
+                    Arc::new(VecU8Schema),
+                    Arc::new(UnitSchema),
+                    Diagnostics::from_purpose("txn data"),
+                )
+                .await
+                .expect("data schema shouldn't change");
+            let _ = self
                 .txns
                 .read_cache()
-                .to_data_inclusive(data_id, read_ts)
-                .expect("data shard was registered");
+                .data_snapshot(data_id, read_ts)
+                .expect("data shard was registered")
+                .snapshot_and_fetch(&mut data_read, data_write)
+                .await;
             let mut subscribe = data_read
                 .subscribe(Antichain::from_elem(0))
                 .await
                 .expect("data shard is not compacted");
             let mut data = Vec::new();
             let mut progress_exclusive = 0;
-            while progress_exclusive <= target_inclusive {
+            while progress_exclusive <= read_ts {
                 let events = subscribe.fetch_next().await;
                 for event in events {
                     match event {
@@ -296,7 +313,7 @@ impl Transactor {
                             trace!(
                                 "{} read {} progress: {}",
                                 data_id,
-                                target_inclusive,
+                                read_ts,
                                 progress_exclusive
                             );
                         }
@@ -307,9 +324,9 @@ impl Transactor {
                                     let (k, ()) = (k.unwrap(), v.unwrap());
                                     (k, t, d)
                                 })
-                                .filter(|(_, t, _)| *t <= target_inclusive)
+                                .filter(|(_, t, _)| *t <= read_ts)
                                 .map(|x| {
-                                    trace!("{} read {} data: {:?}", data_id, target_inclusive, x);
+                                    trace!("{} read {} data: {:?}", data_id, read_ts, x);
                                     x
                                 });
                             data.extend(updates);

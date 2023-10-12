@@ -29,8 +29,9 @@ use crate::catalog::{
 };
 use crate::names::{
     self, Aug, DatabaseId, FullItemName, ItemQualifiers, ObjectId, PartialItemName,
-    QualifiedItemName, RawDatabaseSpecifier, ResolvedDataType, ResolvedDatabaseSpecifier,
-    ResolvedIds, ResolvedItemName, ResolvedSchemaName, SchemaSpecifier, SystemObjectId,
+    QualifiedItemName, RawDatabaseSpecifier, ResolvedColumnName, ResolvedDataType,
+    ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName, ResolvedSchemaName, SchemaSpecifier,
+    SystemObjectId,
 };
 use crate::normalize;
 use crate::plan::error::PlanError;
@@ -120,6 +121,7 @@ pub fn describe(
         Statement::AlterConnection(stmt) => ddl::describe_alter_connection(&scx, stmt)?,
         Statement::AlterIndex(stmt) => ddl::describe_alter_index_options(&scx, stmt)?,
         Statement::AlterObjectRename(stmt) => ddl::describe_alter_object_rename(&scx, stmt)?,
+        Statement::AlterObjectSwap(stmt) => ddl::describe_alter_object_swap(&scx, stmt)?,
         Statement::AlterRole(stmt) => ddl::describe_alter_role(&scx, stmt)?,
         Statement::AlterSecret(stmt) => ddl::describe_alter_secret_options(&scx, stmt)?,
         Statement::AlterSetCluster(stmt) => ddl::describe_alter_set_cluster(&scx, stmt)?,
@@ -294,6 +296,7 @@ pub fn plan(
         Statement::AlterConnection(stmt) => ddl::plan_alter_connection(scx, stmt),
         Statement::AlterIndex(stmt) => ddl::plan_alter_index_options(scx, stmt),
         Statement::AlterObjectRename(stmt) => ddl::plan_alter_object_rename(scx, stmt),
+        Statement::AlterObjectSwap(stmt) => ddl::plan_alter_object_swap(scx, stmt),
         Statement::AlterRole(stmt) => ddl::plan_alter_role(scx, stmt),
         Statement::AlterSecret(stmt) => ddl::plan_alter_secret(scx, stmt),
         Statement::AlterSetCluster(stmt) => ddl::plan_alter_item_set_cluster(scx, stmt),
@@ -705,6 +708,29 @@ impl<'a> StatementContext<'a> {
             ResolvedItemName::Item { id, .. } => Ok(self.get_item(id)),
             ResolvedItemName::Cte { .. } => sql_bail!("non-user item"),
             ResolvedItemName::Error => unreachable!("should have been caught in name resolution"),
+        }
+    }
+
+    pub fn get_column_by_resolved_name(
+        &self,
+        name: &ResolvedColumnName,
+    ) -> Result<(&dyn CatalogItem, usize), PlanError> {
+        match name {
+            ResolvedColumnName::Column {
+                relation: ResolvedItemName::Item { id, .. },
+                index,
+                ..
+            } => {
+                let item = self.get_item(id);
+                Ok((item, *index))
+            }
+            ResolvedColumnName::Column {
+                relation: ResolvedItemName::Cte { .. } | ResolvedItemName::Error,
+                ..
+            }
+            | ResolvedColumnName::Error => {
+                unreachable!("should have been caught in name resolution")
+            }
         }
     }
 

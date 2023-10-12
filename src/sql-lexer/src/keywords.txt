@@ -37,6 +37,7 @@ Arrangement
 Array
 As
 Asc
+Assert
 At
 Auction
 Authority
@@ -46,6 +47,7 @@ Aws
 Begin
 Between
 Bigint
+Billed
 Body
 Boolean
 Both
@@ -108,6 +110,7 @@ Decimal
 Declare
 Decorrelated
 Default
+Defaults
 Delete
 Delimited
 Delimiter
@@ -116,6 +119,7 @@ Details
 Discard
 Disk
 Distinct
+Doc
 Dot
 Double
 Drop
@@ -183,6 +187,7 @@ Insert
 Inspect
 Int
 Integer
+Internal
 Intersect
 Interval
 Into
@@ -354,6 +359,7 @@ Subsource
 Subsources
 Substring
 Superuser
+Swap
 System
 Table
 Tables

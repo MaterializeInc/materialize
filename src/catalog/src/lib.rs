@@ -77,7 +77,7 @@
 // Disallow usage of `unwrap()`.
 #![warn(clippy::unwrap_used)]
 
-//! This crate is responsible for durable storing and modifying the catalog contents.
+//! This crate is responsible for durably storing and modifying the catalog contents.
 
 use async_trait::async_trait;
 use std::collections::BTreeMap;
@@ -87,33 +87,34 @@ use std::num::NonZeroI64;
 use std::time::Duration;
 
 use mz_proto::TryFromProtoError;
-use mz_sql::catalog::{
-    CatalogError as SqlCatalogError, DefaultPrivilegeAclItem, DefaultPrivilegeObject,
-};
-use mz_stash::StashError;
+use mz_sql::catalog::CatalogError as SqlCatalogError;
+use mz_stash::DebugStashFactory;
+use mz_stash_types::StashError;
 
+use crate::objects::Snapshot;
 pub use crate::objects::{
-    Cluster, ClusterConfig, ClusterReplica, ClusterVariant, ClusterVariantManaged, Database, Item,
-    ReplicaConfig, ReplicaLocation, Role, Schema, SystemObjectMapping,
+    Cluster, ClusterConfig, ClusterReplica, ClusterVariant, ClusterVariantManaged, Comment,
+    Database, DefaultPrivilege, Item, ReplicaConfig, ReplicaLocation, Role, Schema,
+    SystemConfiguration, SystemObjectMapping, TimelineTimestamp,
 };
-pub use crate::stash::{Connection, ALL_COLLECTIONS};
+use crate::stash::{Connection, DebugOpenableConnection, OpenableConnection};
+pub use crate::stash::{
+    StashConfig, ALL_COLLECTIONS, AUDIT_LOG_COLLECTION, CLUSTER_COLLECTION,
+    CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION, CLUSTER_REPLICA_COLLECTION, COMMENTS_COLLECTION,
+    CONFIG_COLLECTION, DATABASES_COLLECTION, DEFAULT_PRIVILEGES_COLLECTION,
+    ID_ALLOCATOR_COLLECTION, ITEM_COLLECTION, ROLES_COLLECTION, SCHEMAS_COLLECTION,
+    SETTING_COLLECTION, STORAGE_USAGE_COLLECTION, SYSTEM_CONFIGURATION_COLLECTION,
+    SYSTEM_GID_MAPPING_COLLECTION, SYSTEM_PRIVILEGES_COLLECTION, TIMESTAMP_COLLECTION,
+};
 pub use crate::transaction::Transaction;
 use crate::transaction::TransactionBatch;
-pub use initialize::{
-    AUDIT_LOG_COLLECTION, CLUSTER_COLLECTION, CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION,
-    CLUSTER_REPLICA_COLLECTION, COMMENTS_COLLECTION, CONFIG_COLLECTION, DATABASES_COLLECTION,
-    DEFAULT_PRIVILEGES_COLLECTION, ID_ALLOCATOR_COLLECTION, ITEM_COLLECTION, ROLES_COLLECTION,
-    SCHEMAS_COLLECTION, SETTING_COLLECTION, STORAGE_USAGE_COLLECTION,
-    SYSTEM_CONFIGURATION_COLLECTION, SYSTEM_GID_MAPPING_COLLECTION, SYSTEM_PRIVILEGES_COLLECTION,
-    TIMESTAMP_COLLECTION,
-};
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::CollectionExt;
+use mz_ore::now::NowFn;
 use mz_repr::adt::mz_acl_item::MzAclItem;
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
-use mz_sql::names::CommentObjectId;
 use mz_storage_types::sources::Timeline;
 
 mod stash;
@@ -165,7 +166,7 @@ impl From<StashError> for Error {
 
 impl From<TryFromProtoError> for Error {
     fn from(e: TryFromProtoError) -> Error {
-        Error::Stash(mz_stash::StashError::from(e))
+        Error::Stash(mz_stash_types::StashError::from(e))
     }
 }
 
@@ -176,28 +177,56 @@ pub struct BootstrapArgs {
     pub bootstrap_role: Option<String>,
 }
 
-/// A read only API for the durable catalog state.
+/// An API for opening a durable catalog state.
 #[async_trait]
-pub trait ReadOnlyDurableCatalogState: Debug + Send {
-    /// Reports if the catalog state has been initialized.
-    async fn is_initialized(&mut self) -> Result<bool, Error>;
-
-    // TODO(jkosh44) add and implement open methods to be implementation agnostic.
-    /*   /// Checks to see if opening the catalog would be
-    /// successful, without making any durable changes.
+pub trait OpenableDurableCatalogState<D: DurableCatalogState>: Debug + Send {
+    /// Opens the catalog in a mode that accepts and buffers all writes,
+    /// but never durably commits them. This is used to check and see if
+    /// opening the catalog would be successful, without making any durable
+    /// changes.
     ///
     /// Will return an error in the following scenarios:
-    ///   - Catalog not initialized.
+    ///   - Catalog initialization fails.
     ///   - Catalog migrations fail.
-    async fn check_open(&self) -> Result<(), Error>;
+    async fn open_savepoint(
+        &mut self,
+        now: NowFn,
+        bootstrap_args: &BootstrapArgs,
+        deploy_generation: Option<u64>,
+    ) -> Result<D, Error>;
 
     /// Opens the catalog in read only mode. All mutating methods
     /// will return an error.
     ///
     /// If the catalog is uninitialized or requires a migrations, then
     /// it will fail to open in read only mode.
-    async fn open_read_only(&mut self) -> Result<(), Error>;*/
+    async fn open_read_only(
+        &mut self,
+        now: NowFn,
+        bootstrap_args: &BootstrapArgs,
+    ) -> Result<D, Error>;
 
+    /// Opens the catalog in a writeable mode. Optionally initializes the
+    /// catalog, if it has not been initialized, and perform any migrations
+    /// needed.
+    async fn open(
+        &mut self,
+        now: NowFn,
+        bootstrap_args: &BootstrapArgs,
+        deploy_generation: Option<u64>,
+    ) -> Result<D, Error>;
+
+    /// Reports if the catalog state has been initialized.
+    async fn is_initialized(&mut self) -> Result<bool, Error>;
+
+    /// Get the deployment generation of this instance.
+    async fn get_deployment_generation(&mut self) -> Result<Option<u64>, Error>;
+}
+
+// TODO(jkosh44) No method should take &mut self, but due to stash implementations we need it.
+/// A read only API for the durable catalog state.
+#[async_trait]
+pub trait ReadOnlyDurableCatalogState: Debug + Send {
     /// Returns the epoch of the current durable catalog state. The epoch acts as
     /// a fencing token to prevent split brain issues across two
     /// [`DurableCatalogState`]s. When a new [`DurableCatalogState`] opens the
@@ -243,24 +272,20 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
     async fn get_roles(&mut self) -> Result<Vec<Role>, Error>;
 
     /// Get all default privileges.
-    async fn get_default_privileges(
-        &mut self,
-    ) -> Result<Vec<(DefaultPrivilegeObject, DefaultPrivilegeAclItem)>, Error>;
+    async fn get_default_privileges(&mut self) -> Result<Vec<DefaultPrivilege>, Error>;
 
     /// Get all system privileges.
     async fn get_system_privileges(&mut self) -> Result<Vec<MzAclItem>, Error>;
 
     /// Get all system configurations.
-    async fn get_system_configurations(&mut self) -> Result<BTreeMap<String, String>, Error>;
+    async fn get_system_configurations(&mut self) -> Result<Vec<SystemConfiguration>, Error>;
 
     /// Get all comments.
-    async fn get_comments(
-        &mut self,
-    ) -> Result<Vec<(CommentObjectId, Option<usize>, String)>, Error>;
+    async fn get_comments(&mut self) -> Result<Vec<Comment>, Error>;
 
     /// Get all timelines and their persisted timestamps.
     // TODO(jkosh44) This should be removed once the timestamp oracle is extracted.
-    async fn get_timestamps(&mut self) -> Result<BTreeMap<Timeline, mz_repr::Timestamp>, Error>;
+    async fn get_timestamps(&mut self) -> Result<Vec<TimelineTimestamp>, Error>;
 
     /// Get the persisted timestamp of a timeline.
     // TODO(jkosh44) This should be removed once the timestamp oracle is extracted.
@@ -285,6 +310,9 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
         self.get_next_id(USER_REPLICA_ID_ALLOC_KEY).await
     }
 
+    /// Get a snapshot of the catalog.
+    async fn snapshot(&mut self) -> Result<Snapshot, Error>;
+
     // TODO(jkosh44) Implement this for the catalog debug tool.
     /*    /// Dumps the entire catalog contents in human readable JSON.
     async fn dump(&self) -> Result<String, Error>;*/
@@ -293,11 +321,6 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
 /// A read-write API for the durable catalog state.
 #[async_trait]
 pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
-    // TODO(jkosh44) add and implement open methods to be implementation agnostic.
-    /*/// Opens the catalog in a writeable mode. Initializes the
-    /// catalog, if it is uninitialized, and executes migrations.
-    async fn open(&mut self) -> Result<(), Error>;*/
-
     /// Returns true if the catalog is opened in read only mode, false otherwise.
     fn is_read_only(&self) -> bool;
 
@@ -397,4 +420,20 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         let id = id.into_element();
         Ok(ReplicaId::User(id))
     }
+}
+
+/// Creates a durable catalog state implemented using the stash. The catalog status is unopened,
+/// and must be opened before use.
+pub fn stash_backed_catalog_state(
+    config: StashConfig,
+) -> impl OpenableDurableCatalogState<Connection> {
+    OpenableConnection::new(config)
+}
+
+/// Creates a debug durable catalog state implemented using the stash that is meant to be used in
+/// tests. The catalog status is unopened, and must be opened before use.
+pub fn debug_stash_backed_catalog_state(
+    debug_stash_factory: &DebugStashFactory,
+) -> impl OpenableDurableCatalogState<Connection> + '_ {
+    DebugOpenableConnection::new(debug_stash_factory)
 }

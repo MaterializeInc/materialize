@@ -140,6 +140,31 @@ impl HealthStatusUpdate {
     }
 }
 
+impl crate::healthcheck::HealthStatus for HealthStatusUpdate {
+    fn name(&self) -> &'static str {
+        self.update.name()
+    }
+    fn error(&self) -> Option<&str> {
+        self.update.error()
+    }
+    fn hint(&self) -> Option<&str> {
+        self.update.hint()
+    }
+    fn should_halt(&self) -> bool {
+        self.should_halt
+    }
+    fn can_transition_from(&self, other: Option<&Self>) -> bool {
+        if let Some(other) = other {
+            self.update != other.update
+        } else {
+            true
+        }
+    }
+    fn starting() -> Self {
+        Self::status(HealthStatus::Starting)
+    }
+}
+
 /// Source-agnostic wrapper for messages. Each source must implement a
 /// conversion to Message.
 #[derive(Debug, Clone)]
@@ -485,6 +510,8 @@ pub struct UpsertMetrics {
     pub(crate) multi_get_result_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) multi_put_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
 
+    pub(crate) legacy_value_errors: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+
     pub(crate) shared: Arc<UpsertSharedMetrics>,
     pub(crate) rocksdb_shared: Arc<mz_rocksdb::RocksDBSharedMetrics>,
     pub(crate) rocksdb_instance_metrics: Arc<mz_rocksdb::RocksDBInstanceMetrics>,
@@ -547,6 +574,10 @@ impl UpsertMetrics {
             multi_put_size: base
                 .multi_put_size
                 .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+
+            legacy_value_errors: base
+                .legacy_value_errors
+                .get_delete_on_drop_gauge(vec![source_id_s.clone(), worker_id.clone()]),
 
             shared: base.shared(&source_id),
             rocksdb_shared: base.rocksdb_shared(&source_id),

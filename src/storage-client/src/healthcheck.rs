@@ -83,7 +83,10 @@ pub static MZ_SESSION_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {
             "connected_at",
             ScalarType::TimestampTz { precision: None }.nullable(false),
         )
-        .with_column("application_name", ScalarType::String.nullable(false))
+        .with_column(
+            "initial_application_name",
+            ScalarType::String.nullable(false),
+        )
         .with_column("authenticated_user", ScalarType::String.nullable(false))
 });
 
@@ -92,6 +95,9 @@ pub static MZ_STATEMENT_EXECUTION_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|
         .with_column("id", ScalarType::Uuid.nullable(false))
         .with_column("prepared_statement_id", ScalarType::Uuid.nullable(false))
         .with_column("sample_rate", ScalarType::Float64.nullable(false))
+        .with_column("cluster_id", ScalarType::String.nullable(true))
+        .with_column("application_name", ScalarType::String.nullable(false))
+        .with_column("cluster_name", ScalarType::String.nullable(true))
         .with_column(
             "params",
             ScalarType::Array(Box::new(ScalarType::String)).nullable(false),

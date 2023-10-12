@@ -3,7 +3,7 @@ title: "Manage privileges"
 description: "Assign and manage role privileges in Materialize"
 menu:
   main:
-    parent: rbac
+    parent: access-control
     weight: 20
 ---
 

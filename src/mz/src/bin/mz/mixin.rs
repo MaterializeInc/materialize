@@ -18,7 +18,7 @@
 use url::Url;
 
 /// Validate if a profile name consist of only ASCII letters, ASCII digits, underscores, and dashes.
-fn validate_profile_name(val: &str) -> Result<String, String> {
+pub fn validate_profile_name(val: &str) -> Result<String, String> {
     if val.is_empty() {
         return Err(String::from("Profile name should not be empty"));
     }
@@ -28,13 +28,6 @@ fn validate_profile_name(val: &str) -> Result<String, String> {
         }
     }
     Ok(String::from(val))
-}
-
-#[derive(Debug, clap::Args)]
-pub struct ProfileArg {
-    /// Use the specified authentication profile.
-    #[clap(long, env = "PROFILE", value_parser = validate_profile_name)]
-    pub profile: Option<String>,
 }
 
 #[derive(Debug, clap::Args)]

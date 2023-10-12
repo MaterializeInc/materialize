@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use bytes::BytesMut;
+use mz_controller_types::ClusterId;
 use mz_ore::now::to_datetime;
 use mz_ore::task::spawn;
 use mz_ore::{cast::CastFrom, now::EpochMillis};
@@ -58,7 +59,7 @@ pub enum PreparedStatementLoggingInfo {
     },
 }
 
-#[derive(Debug, Ord, Eq, PartialOrd, PartialEq)]
+#[derive(Copy, Clone, Debug, Ord, Eq, PartialOrd, PartialEq)]
 pub struct StatementLoggingId(Uuid);
 
 #[derive(Debug)]
@@ -234,12 +235,22 @@ impl Coordinator {
             sample_rate,
             params,
             began_at,
+            cluster_id,
+            cluster_name,
+            application_name,
         } = record;
 
+        let cluster = cluster_id.map(|id| id.to_string());
         packer.extend([
             Datum::Uuid(*id),
             Datum::Uuid(*prepared_statement_id),
             Datum::Float64((*sample_rate).into()),
+            match &cluster {
+                None => Datum::Null,
+                Some(cluster_id) => Datum::String(cluster_id),
+            },
+            Datum::String(&*application_name),
+            cluster_name.as_ref().map(String::as_str).into(),
         ]);
         packer
             .push_array(
@@ -361,6 +372,33 @@ impl Coordinator {
         vec![(retraction, -1), (new, 1)]
     }
 
+    /// Set the `cluster_id` for a statement, once it's known.
+    pub fn set_statement_execution_cluster(
+        &mut self,
+        StatementLoggingId(id): StatementLoggingId,
+        cluster_id: ClusterId,
+    ) {
+        let cluster_name = self.catalog().get_cluster(cluster_id).name.clone();
+        let record = self
+            .statement_logging
+            .executions_begun
+            .get_mut(&id)
+            .expect("set_statement_execution_cluster must not be called after execution ends");
+        if record.cluster_id == Some(cluster_id) {
+            return;
+        }
+        let retraction = Self::pack_statement_began_execution_update(record);
+        self.statement_logging
+            .pending_statement_execution_events
+            .push((retraction, -1));
+        record.cluster_name = Some(cluster_name);
+        record.cluster_id = Some(cluster_id);
+        let update = Self::pack_statement_began_execution_update(record);
+        self.statement_logging
+            .pending_statement_execution_events
+            .push((update, 1));
+    }
+
     /// Possibly record the beginning of statement execution, depending on a randomly-chosen value.
     /// If the execution beginning was indeed logged, returns a `StatementLoggingId` that must be
     /// passed to `end_statement_execution` to record when it ends.
@@ -428,6 +466,10 @@ impl Coordinator {
             sample_rate,
             params,
             began_at: self.now(),
+            // Cluster is not known yet; we'll fill it in later
+            cluster_id: None,
+            cluster_name: None,
+            application_name: session.application_name().to_string(),
         };
         let mseh_update = Self::pack_statement_began_execution_update(&record);
         self.statement_logging

@@ -18,13 +18,10 @@
 use mz::context::Context;
 use mz_frontegg_client::client::app_password::CreateAppPasswordRequest;
 
-use crate::mixin::ProfileArg;
 use mz::error::Error;
 
 #[derive(Debug, clap::Args)]
 pub struct AppPasswordCommand {
-    #[clap(flatten)]
-    profile: ProfileArg,
     #[clap(subcommand)]
     subcommand: AppPasswordSubcommand,
 }
@@ -44,7 +41,7 @@ pub enum AppPasswordSubcommand {
 }
 
 pub async fn run(cx: Context, cmd: AppPasswordCommand) -> Result<(), Error> {
-    let mut cx = cx.activate_profile(cmd.profile.profile)?;
+    let mut cx = cx.activate_profile()?;
     match &cmd.subcommand {
         AppPasswordSubcommand::Create { name } => {
             mz::command::app_password::create(

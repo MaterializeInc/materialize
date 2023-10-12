@@ -71,7 +71,7 @@ use mz_sql_parser::ast::{
     UnresolvedItemName, UnresolvedObjectName, ViewDefinition,
 };
 use mz_sql_parser::parser;
-use mz_stash::StashFactory;
+use mz_stash_types::metrics::Metrics as StashMetrics;
 use mz_storage_types::connections::ConnectionContext;
 use once_cell::sync::Lazy;
 use postgres_protocol::types;
@@ -959,7 +959,6 @@ impl<'a> RunnerInner<'a> {
             |_, _| PubSubClientConnection::noop(),
         );
         let persist_clients = Arc::new(persist_clients);
-        let postgres_factory = StashFactory::new(&metrics_registry);
         let secrets_controller = Arc::clone(&orchestrator);
         let connection_context = ConnectionContext::for_tests(orchestrator.reader());
         let listeners = mz_environmentd::Listeners::bind_any_local().await?;
@@ -981,7 +980,7 @@ impl<'a> RunnerInner<'a> {
                 persist_clients,
                 storage_stash_url,
                 now: SYSTEM_TIME.clone(),
-                postgres_factory: postgres_factory.clone(),
+                stash_metrics: Arc::new(StashMetrics::register_into(&metrics_registry)),
                 metrics_registry: metrics_registry.clone(),
                 persist_pubsub_url: "http://not-needed-for-sqllogictests".into(),
                 secrets_args: mz_service::secrets::SecretsReaderCliArgs {
@@ -1023,6 +1022,7 @@ impl<'a> RunnerInner<'a> {
             bootstrap_role: Some("materialize".into()),
             deploy_generation: None,
             http_host_name: Some(host_name),
+            internal_console_redirect_url: None,
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned
@@ -1095,18 +1095,14 @@ impl<'a> RunnerInner<'a> {
     /// Set features that should be enabled regardless of whether reset-server was
     /// called. These features may be set conditionally depending on the run configuration.
     async fn ensure_fixed_features(&self) -> Result<(), anyhow::Error> {
-        // We turn on enable_monotonic_oneshot_selects and enable_with_mutually_recursive,
-        // as these two features have reached enough maturity to do so.
+        // We turn on enable_monotonic_oneshot_selects,
+        // as that feature has reached enough maturity to do so.
         // TODO(vmarcos): Remove this code when we retire these feature flags.
         self.system_client
             .execute(
                 "ALTER SYSTEM SET enable_monotonic_oneshot_selects = on",
                 &[],
             )
-            .await?;
-
-        self.system_client
-            .execute("ALTER SYSTEM SET enable_with_mutually_recursive = on", &[])
             .await?;
 
         // Dangerous functions are useful for tests so we enable it for all tests.

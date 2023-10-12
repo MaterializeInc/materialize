@@ -69,7 +69,7 @@ pub enum ErrorKind {
     #[error("{0}")]
     Unstructured(String),
     #[error(transparent)]
-    Stash(#[from] mz_stash::StashError),
+    Stash(#[from] mz_stash_types::StashError),
     #[error("stash in unexpected state")]
     UnexpectedStashState,
     #[error(transparent)]
@@ -119,15 +119,15 @@ impl From<SqlCatalogError> for Error {
     }
 }
 
-impl From<mz_stash::StashError> for Error {
-    fn from(e: mz_stash::StashError) -> Error {
+impl From<mz_stash_types::StashError> for Error {
+    fn from(e: mz_stash_types::StashError) -> Error {
         Error::new(ErrorKind::from(e))
     }
 }
 
 impl From<TryFromProtoError> for Error {
     fn from(e: TryFromProtoError) -> Error {
-        Error::new(ErrorKind::from(mz_stash::StashError::from(e)))
+        Error::new(ErrorKind::from(mz_stash_types::StashError::from(e)))
     }
 }
 

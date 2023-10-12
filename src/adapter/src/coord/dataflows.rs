@@ -310,7 +310,7 @@ impl<'a> DataflowBuilder<'a> {
 
     /// Imports the view, source, or table with `id` into the provided
     /// dataflow description.
-    fn import_into_dataflow(
+    pub fn import_into_dataflow(
         &mut self,
         id: &GlobalId,
         dataflow: &mut DataflowDesc,
@@ -327,9 +327,6 @@ impl<'a> DataflowBuilder<'a> {
             // pipeline, and removes unneeded index imports based on the optimized plan.
             let mut valid_indexes = self.indexes_on(*id).peekable();
             if valid_indexes.peek().is_some() {
-                // Deduplicate indexes by keys, in case we have redundant indexes.
-                let mut valid_indexes = valid_indexes.collect::<Vec<_>>();
-                valid_indexes.sort_by_key(|(_, idx)| &idx.keys);
                 for (index_id, idx) in valid_indexes {
                     let index_desc = IndexDesc {
                         on_id: *id,
@@ -498,6 +495,7 @@ impl<'a> DataflowBuilder<'a> {
         debug_name: String,
         optimized_expr: &OptimizedMirRelationExpr,
         desc: &RelationDesc,
+        non_null_assertions: &[usize],
     ) -> Result<(DataflowDesc, DataflowMetainfo), AdapterError> {
         let mut dataflow = DataflowDesc::new(debug_name);
 
@@ -516,6 +514,7 @@ impl<'a> DataflowBuilder<'a> {
             }),
             with_snapshot: true,
             up_to: Antichain::default(),
+            non_null_assertions: non_null_assertions.to_vec(),
         };
 
         let dataflow_metainfo =

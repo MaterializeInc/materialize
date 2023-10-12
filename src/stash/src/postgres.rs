@@ -14,27 +14,26 @@ use std::num::NonZeroI64;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::future::{self, BoxFuture, FutureExt, TryFutureExt};
 use futures::{Future, StreamExt};
-use mz_ore::metric;
-use mz_ore::metrics::MetricsRegistry;
+use mz_ore::metrics::{MetricsFutureExt, MetricsRegistry};
 use mz_ore::retry::Retry;
+use mz_stash_types::metrics::Metrics;
+use mz_stash_types::{InternalStashError, StashError, MIN_STASH_VERSION, STASH_VERSION};
 use postgres_openssl::MakeTlsConnector;
-use prometheus::{IntCounter, IntCounterVec};
+use prometheus::Histogram;
 use rand::Rng;
 use timely::progress::Antichain;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Interval;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::{Client, Config, Statement};
-use tracing::{error, event, info, warn, Level};
+use tracing::{debug, event, info, warn, Level};
 
 use crate::upgrade;
-use crate::{
-    Diff, Id, InternalStashError, StashError, Timestamp, COLLECTION_CONFIG, MIN_STASH_VERSION,
-    STASH_VERSION, USER_VERSION_KEY,
-};
+use crate::{Diff, Id, Timestamp, COLLECTION_CONFIG, USER_VERSION_KEY};
 
 // TODO: Change the indexes on data to be more applicable to the current
 // consolidation technique. This will involve a migration (which we don't yet
@@ -155,6 +154,7 @@ impl PreparedStatements {
 // Track statement execution counts.
 pub(crate) struct CountedStatements<'a> {
     stmts: &'a PreparedStatements,
+    metrics: &'a Arc<Metrics>,
     // Due to our use of try_join and futures, this needs to be an Arc Mutex.
     // Use a BTreeMap for deterministic debug printing. Use an Option to avoid
     // allocating an Arc when unused.
@@ -162,9 +162,10 @@ pub(crate) struct CountedStatements<'a> {
 }
 
 impl<'a> CountedStatements<'a> {
-    fn from(stmts: &'a PreparedStatements) -> Self {
+    fn from(stmts: &'a PreparedStatements, metrics: &'a Arc<Metrics>) -> Self {
         Self {
             stmts,
+            metrics,
             counts: if tracing::enabled!(Level::DEBUG) {
                 Some(Arc::new(Mutex::new(BTreeMap::new())))
             } else {
@@ -181,37 +182,85 @@ impl<'a> CountedStatements<'a> {
         }
     }
 
-    fn fetch_epoch(&self) -> &Statement {
-        self.inc("fetch_epoch");
-        &self.stmts.fetch_epoch
+    fn fetch_epoch(&self) -> (&Statement, Histogram) {
+        let name = "fetch_epoch";
+        self.inc(name);
+        let histogram = self
+            .metrics
+            .query_latency_duration_seconds
+            .with_label_values(&[name]);
+
+        (&self.stmts.fetch_epoch, histogram)
     }
-    pub(crate) fn iter_key(&self) -> &Statement {
-        self.inc("iter_key");
-        &self.stmts.iter_key
+    pub(crate) fn iter_key(&self) -> (&Statement, Histogram) {
+        let name = "iter_key";
+        self.inc(name);
+        let histogram = self
+            .metrics
+            .query_latency_duration_seconds
+            .with_label_values(&[name]);
+
+        (&self.stmts.iter_key, histogram)
     }
-    pub(crate) fn since(&self) -> &Statement {
-        self.inc("since");
-        &self.stmts.since
+    pub(crate) fn since(&self) -> (&Statement, Histogram) {
+        let name = "since";
+        self.inc(name);
+        let histogram = self
+            .metrics
+            .query_latency_duration_seconds
+            .with_label_values(&[name]);
+
+        (&self.stmts.since, histogram)
     }
-    pub(crate) fn upper(&self) -> &Statement {
-        self.inc("upper");
-        &self.stmts.upper
+    pub(crate) fn upper(&self) -> (&Statement, Histogram) {
+        let name = "upper";
+        self.inc(name);
+        let histogram = self
+            .metrics
+            .query_latency_duration_seconds
+            .with_label_values(&[name]);
+
+        (&self.stmts.upper, histogram)
     }
-    pub(crate) fn collection(&self) -> &Statement {
-        self.inc("collection");
-        &self.stmts.collection
+    pub(crate) fn collection(&self) -> (&Statement, Histogram) {
+        let name = "collection";
+        self.inc(name);
+        let histogram = self
+            .metrics
+            .query_latency_duration_seconds
+            .with_label_values(&[name]);
+
+        (&self.stmts.collection, histogram)
     }
-    pub(crate) fn iter(&self) -> &Statement {
-        self.inc("iter");
-        &self.stmts.iter
+    pub(crate) fn iter(&self) -> (&Statement, Histogram) {
+        let name = "iter";
+        self.inc(name);
+        let histogram = self
+            .metrics
+            .query_latency_duration_seconds
+            .with_label_values(&[name]);
+
+        (&self.stmts.iter, histogram)
     }
-    pub(crate) fn seal(&self) -> &Statement {
-        self.inc("seal");
-        &self.stmts.seal
+    pub(crate) fn seal(&self) -> (&Statement, Histogram) {
+        let name = "seal";
+        self.inc(name);
+        let histogram = self
+            .metrics
+            .query_latency_duration_seconds
+            .with_label_values(&[name]);
+
+        (&self.stmts.seal, histogram)
     }
-    pub(crate) fn compact(&self) -> &Statement {
-        self.inc("compact");
-        &self.stmts.compact
+    pub(crate) fn compact(&self) -> (&Statement, Histogram) {
+        let name = "compact";
+        self.inc(name);
+        let histogram = self
+            .metrics
+            .query_latency_duration_seconds
+            .with_label_values(&[name]);
+
+        (&self.stmts.compact, histogram)
     }
     /// Returns a ToStatement to INSERT a specified number of rows. First
     /// statement parameter is collection_id. Then key, value, time, diff as
@@ -268,9 +317,11 @@ pub struct StashFactory {
 
 impl StashFactory {
     pub fn new(registry: &MetricsRegistry) -> StashFactory {
-        StashFactory {
-            metrics: Arc::new(Metrics::register_into(registry)),
-        }
+        Self::from_metrics(Arc::new(Metrics::register_into(registry)))
+    }
+
+    pub fn from_metrics(metrics: Arc<Metrics>) -> StashFactory {
+        StashFactory { metrics }
     }
 
     /// Opens the stash stored at the specified path.
@@ -303,9 +354,10 @@ impl StashFactory {
     pub async fn open_savepoint(
         &self,
         url: String,
+        schema: Option<String>,
         tls: MakeTlsConnector,
     ) -> Result<Stash, StashError> {
-        self.open_inner(TransactionMode::Savepoint, url, None, tls)
+        self.open_inner(TransactionMode::Savepoint, url, schema, tls)
             .await
     }
 
@@ -331,7 +383,7 @@ impl StashFactory {
         let mut conn = Stash {
             txn_mode,
             config: Arc::clone(&config),
-            schema,
+            schema: schema.clone(),
             tls: tls.clone(),
             client: None,
             reconnect: tokio::time::interval(RECONNECT_INTERVAL),
@@ -372,46 +424,10 @@ impl StashFactory {
                 while let Some(_) = sinces_rx.recv().await {}
             });
         } else {
-            Consolidator::start(config, tls, sinces_rx);
+            Consolidator::start(config, schema, tls, sinces_rx);
         }
 
         Ok(conn)
-    }
-}
-
-#[derive(Debug, Clone)]
-struct Metrics {
-    transactions: IntCounter,
-    transaction_errors: IntCounterVec,
-}
-
-impl Metrics {
-    fn register_into(registry: &MetricsRegistry) -> Metrics {
-        let metrics = Metrics {
-            transactions: registry.register(metric!(
-                name: "mz_stash_transactions",
-                help: "Total number of started transactions.",
-            )),
-            transaction_errors: registry.register(metric!(
-                name: "mz_stash_transaction_errors",
-                help: "Total number of transaction errors.",
-                var_labels: ["cause"],
-            )),
-        };
-        // Initialize error codes to 0 so we can observe their increase.
-        metrics
-            .transaction_errors
-            .with_label_values(&["closed"])
-            .inc_by(0);
-        metrics
-            .transaction_errors
-            .with_label_values(&["retry"])
-            .inc_by(0);
-        metrics
-            .transaction_errors
-            .with_label_values(&["other"])
-            .inc_by(0);
-        metrics
     }
 }
 
@@ -458,7 +474,7 @@ impl Stash {
         let (client, connection) = tokio_postgres::connect(url, tls).await?;
         mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
             if let Err(e) = connection.await {
-                tracing::error!("postgres stash connection error: {}", e);
+                tracing::warn!("postgres stash connection error: {}", e);
             }
         });
         client
@@ -485,8 +501,10 @@ impl Stash {
         Fut: Future<Output = T>,
     {
         let factory = DebugStashFactory::try_new().await?;
-        let stash = factory.try_open_debug().await?;
-        Ok(f(stash).await)
+        let stash = factory.try_open().await?;
+        let res = Ok(f(stash).await);
+        factory.drop().await;
+        res
     }
 
     /// Verifies stash invariants. Should only be called by tests.
@@ -523,9 +541,14 @@ impl Stash {
         let (mut client, connection) = self.config.lock().await.connect(self.tls.clone()).await?;
         mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
             if let Err(e) = connection.await {
-                tracing::error!("postgres stash connection error: {}", e);
+                tracing::warn!("postgres stash connection error: {}", e);
             }
         });
+        // The Config is shared with the Consolidator, so we update the application name in the
+        // session instead of the Config.
+        client
+            .batch_execute("SET application_name = 'stash'")
+            .await?;
         client
             .batch_execute("SET default_transaction_isolation = serializable")
             .await?;
@@ -765,7 +788,7 @@ impl Stash {
         // client is guaranteed to be Some here.
         let client = self.client.as_mut().unwrap();
         let stmts = self.statements.as_ref().unwrap();
-        let stmts = CountedStatements::from(stmts);
+        let stmts = CountedStatements::from(stmts, &self.metrics);
         // Generate statements to execute depending on our mode.
         let (tx_start, tx_end) = match self.txn_mode {
             TransactionMode::Writeable => ("BEGIN", "COMMIT"),
@@ -776,9 +799,12 @@ impl Stash {
             .await
             .map_err(|err| TransactionError::Txn(err.into()))?;
         // Pipeline the epoch query and closure.
+        let (query, histogram) = stmts.fetch_epoch();
         let epoch_fut = client
-            .query_one(stmts.fetch_epoch(), &[])
-            .map_err(|err| err.into());
+            .query_one(query, &[])
+            .map_err(|err| err.into())
+            .wall_time()
+            .observe(histogram);
         let f_fut = f(&stmts, client, &self.collections);
         let (epoch_row, res) = future::try_join(epoch_fut, f_fut)
             .await
@@ -908,19 +934,11 @@ impl Stash {
                         match version {
                             ..=TOO_OLD_VERSION => return Err(incompatible),
 
-                            25 => upgrade::v25_to_v26::upgrade(),
-                            26 => upgrade::v26_to_v27::upgrade(),
-                            27 => upgrade::v27_to_v28::upgrade(&mut tx).await?,
-                            28 => upgrade::v28_to_v29::upgrade(&mut tx).await?,
-                            29 => upgrade::v29_to_v30::upgrade(),
-                            30 => upgrade::v30_to_v31::upgrade(),
-                            31 => upgrade::v31_to_v32::upgrade(&mut tx).await?,
-                            32 => upgrade::v32_to_v33::upgrade(&mut tx).await?,
-                            33 => upgrade::v33_to_v34::upgrade(&mut tx).await?,
-                            34 => upgrade::v34_to_v35::upgrade(&mut tx).await?,
                             35 => upgrade::v35_to_v36::upgrade(&mut tx).await?,
                             36 => upgrade::v36_to_v37::upgrade(),
                             37 => upgrade::v37_to_v38::upgrade(&mut tx).await?,
+                            38 => upgrade::v38_to_v39::upgrade(&mut tx).await?,
+                            39 => upgrade::v39_to_v40::upgrade(&mut tx).await?,
 
                             // Up-to-date, no migration needed!
                             STASH_VERSION => return Ok(STASH_VERSION),
@@ -1071,20 +1089,20 @@ impl Stash {
         self.with_transaction(|_| Box::pin(async { Ok(()) })).await
     }
 
+    pub fn is_writeable(&self) -> bool {
+        matches!(self.txn_mode, TransactionMode::Writeable)
+    }
+
     pub fn is_readonly(&self) -> bool {
         matches!(self.txn_mode, TransactionMode::Readonly)
     }
 
+    pub fn is_savepoint(&self) -> bool {
+        matches!(self.txn_mode, TransactionMode::Savepoint)
+    }
+
     pub fn epoch(&self) -> Option<NonZeroI64> {
         self.epoch
-    }
-}
-
-impl From<tokio_postgres::Error> for StashError {
-    fn from(e: tokio_postgres::Error) -> StashError {
-        StashError {
-            inner: InternalStashError::Postgres(e),
-        }
     }
 }
 
@@ -1097,6 +1115,7 @@ impl From<tokio_postgres::Error> for StashError {
 struct Consolidator {
     config: Arc<tokio::sync::Mutex<Config>>,
     tls: MakeTlsConnector,
+    schema: Option<String>,
     sinces_rx: mpsc::UnboundedReceiver<ConsolidateRequest>,
     consolidations: BTreeMap<Id, (Antichain<Timestamp>, Vec<oneshot::Sender<()>>)>,
 
@@ -1110,11 +1129,13 @@ struct Consolidator {
 impl Consolidator {
     fn start(
         config: Arc<tokio::sync::Mutex<Config>>,
+        schema: Option<String>,
         tls: MakeTlsConnector,
         sinces_rx: mpsc::UnboundedReceiver<ConsolidateRequest>,
     ) {
         let cons = Self {
             config,
+            schema,
             tls,
             sinces_rx,
             client: None,
@@ -1165,7 +1186,7 @@ impl Consolidator {
                             Ok(()) => break,
                             Err(e) => {
                                 attempt += 1;
-                                error!("tokio-postgres stash consolidation error, retry attempt {attempt}: {e}");
+                                debug!("tokio-postgres stash consolidation error, retry attempt {attempt}: {e}");
                                 self.client = None;
                                 retry.next().await;
                             }
@@ -1260,10 +1281,20 @@ impl Consolidator {
             || "tokio-postgres stash consolidation connection",
             async move {
                 if let Err(e) = connection.await {
-                    tracing::error!("postgres stash connection error: {}", e);
+                    tracing::warn!("postgres stash connection error: {}", e);
                 }
             },
         );
+        // The Config is shared with the Stash, so we update the application name in the
+        // session instead of the Config.
+        client
+            .execute("SET application_name = 'stash-consolidator'", &[])
+            .await?;
+        if let Some(schema) = &self.schema {
+            client
+                .execute(format!("SET search_path TO {schema}").as_str(), &[])
+                .await?;
+        }
         self.stmt_candidates = Some(
             client
                 .prepare(
@@ -1299,27 +1330,33 @@ impl Consolidator {
 
 /// Stash factory to use for tests that uses a random schema for a stash, which is re-used on all
 /// stash openings. The schema is dropped when this factory is dropped.
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct DebugStashFactory {
     url: String,
     schema: String,
+    #[derivative(Debug = "ignore")]
     tls: MakeTlsConnector,
     stash_factory: StashFactory,
+    dropped: bool,
 }
 
 impl DebugStashFactory {
     /// Returns a new factory that will generate a random schema one time, then use it on any
     /// opened Stash.
+    ///
+    /// IMPORTANT: Call [`Self::drop`] when you are done to clean up leftover state in CRDB.
     pub async fn try_new() -> Result<DebugStashFactory, StashError> {
         let url =
             std::env::var("COCKROACH_URL").expect("COCKROACH_URL environment variable is not set");
         let rng: usize = rand::thread_rng().gen();
         let schema = format!("schema_{rng}");
-        let tls = mz_postgres_util::make_tls(&tokio_postgres::Config::new()).unwrap();
+        let tls = mz_tls_util::make_tls(&tokio_postgres::Config::new()).unwrap();
 
         let (client, connection) = tokio_postgres::connect(&url, tls.clone()).await?;
         mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
             if let Err(e) = connection.await {
-                tracing::error!("postgres stash connection error: {e}");
+                tracing::warn!("postgres stash connection error: {e}");
             }
         });
         client
@@ -1333,11 +1370,14 @@ impl DebugStashFactory {
             schema,
             tls,
             stash_factory,
+            dropped: false,
         })
     }
 
     /// Returns a new factory that will generate a random schema one time, then use it on any
     /// opened Stash.
+    ///
+    /// IMPORTANT: Call [`Self::drop`] when you are done to clean up leftover state in CRDB.
     ///
     /// # Panics
     /// Panics if it is unable to create a new factory.
@@ -1347,10 +1387,11 @@ impl DebugStashFactory {
             .expect("unable to create debug stash factory")
     }
 
-    /// Returns a new Stash.
-    pub async fn try_open_debug(&self) -> Result<Stash, StashError> {
+    async fn try_open_inner(&self, mode: TransactionMode) -> Result<Stash, StashError> {
+        debug!("debug stash open: {mode:?}, {}", self.schema);
         self.stash_factory
-            .open(
+            .open_inner(
+                mode,
                 self.url.clone(),
                 Some(self.schema.clone()),
                 self.tls.clone(),
@@ -1359,50 +1400,73 @@ impl DebugStashFactory {
     }
 
     /// Returns a new Stash.
+    pub async fn try_open(&self) -> Result<Stash, StashError> {
+        self.try_open_inner(TransactionMode::Writeable).await
+    }
+
+    /// Returns the factory's Stash.
     ///
     /// # Panics
     /// Panics if it is unable to create a new stash.
-    pub async fn open_debug(&self) -> Stash {
-        self.try_open_debug()
+    pub async fn open(&self) -> Stash {
+        self.try_open().await.expect("unable to open debug stash")
+    }
+
+    /// Returns the factory's Stash in readonly mode.
+    ///
+    /// # Panics
+    /// Panics if it is unable to create a new stash.
+    pub async fn open_readonly(&self) -> Stash {
+        self.try_open_inner(TransactionMode::Readonly)
             .await
             .expect("unable to open debug stash")
+    }
+
+    /// Returns the factory's Stash in savepoint mode.
+    ///
+    /// # Panics
+    /// Panics if it is unable to create a new stash.
+    pub async fn open_savepoint(&self) -> Stash {
+        self.try_open_inner(TransactionMode::Savepoint)
+            .await
+            .expect("unable to open debug stash")
+    }
+
+    /// Best effort clean up of testing state in CRDB, any error is ignored.
+    pub async fn drop(mut self) {
+        let Ok((client, connection)) = tokio_postgres::connect(&self.url, self.tls.clone()).await
+        else {
+            return;
+        };
+        mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
+            let _ = connection.await;
+        });
+        let _ = client
+            .batch_execute(&format!("DROP SCHEMA {} CASCADE", &self.schema))
+            .await;
+        self.dropped = true;
+    }
+
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+    pub fn schema(&self) -> &str {
+        &self.schema
+    }
+    pub fn tls(&self) -> &MakeTlsConnector {
+        &self.tls
+    }
+    pub fn stash_factory(&self) -> &StashFactory {
+        &self.stash_factory
     }
 }
 
 impl Drop for DebugStashFactory {
     fn drop(&mut self) {
-        let url = self.url.clone();
-        let schema = self.schema.clone();
-        let tls = self.tls.clone();
-        let result = std::thread::spawn(move || {
-            let async_runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()?;
-            async_runtime.block_on(async {
-                let (client, connection) = tokio_postgres::connect(&url, tls).await?;
-                mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
-                    if let Err(e) = connection.await {
-                        std::panic::resume_unwind(Box::new(e));
-                    }
-                });
-                client
-                    .batch_execute(&format!("DROP SCHEMA {} CASCADE", &schema))
-                    .await?;
-                Ok::<_, StashError>(())
-            })
-        })
-        // Note that we are joining on a tokio task here, which blocks the current runtime from making other progress on the current worker thread.
-        // Because this only happens on shutdown and is only used in tests, we have determined that its okay
-        .join();
-
-        match result {
-            Ok(result) => {
-                if let Err(e) = result {
-                    std::panic::resume_unwind(Box::new(e));
-                }
-            }
-
-            Err(e) => std::panic::resume_unwind(e),
-        }
+        assert!(
+            self.dropped,
+            "You forgot to call `drop()` on a `DebugStashFactory` before dropping it! You may also \
+            see this if a test panicked before calling `drop()`."
+        );
     }
 }

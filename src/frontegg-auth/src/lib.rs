@@ -79,12 +79,38 @@ mod app_password;
 mod auth;
 mod client;
 mod error;
+mod metrics;
 
 pub use auth::{
-    Authentication, AuthenticationConfig, Claims, ValidatedApiTokenResponse, REFRESH_SUFFIX,
+    Authentication, AuthenticationConfig, Claims, ExchangePasswordForTokenResponse,
+    ValidatedApiTokenResponse, REFRESH_SUFFIX,
 };
 pub use client::tokens::{ApiTokenArgs, ApiTokenResponse, RefreshToken};
 pub use client::Client;
 pub use error::Error;
+use uuid::Uuid;
 
 pub use crate::app_password::{AppPassword, AppPasswordParseError};
+
+/// Command line arguments for frontegg.
+#[derive(Debug, Clone, clap::Parser)]
+pub struct FronteggCliArgs {
+    /// Enables Frontegg authentication for the specified tenant ID.
+    #[clap(
+        long,
+        env = "FRONTEGG_TENANT",
+        requires_all = &["frontegg-jwk", "frontegg-api-token-url", "frontegg-admin-role"],
+        value_name = "UUID",
+    )]
+    frontegg_tenant: Option<Uuid>,
+    /// JWK used to validate JWTs during Frontegg authentication as a PEM public
+    /// key. Can optionally be base64 encoded with the URL-safe alphabet.
+    #[clap(long, env = "FRONTEGG_JWK", requires = "frontegg-tenant")]
+    frontegg_jwk: Option<String>,
+    /// The full URL (including path) to the Frontegg api-token endpoint.
+    #[clap(long, env = "FRONTEGG_API_TOKEN_URL", requires = "frontegg-tenant")]
+    frontegg_api_token_url: Option<String>,
+    /// The name of the admin role in Frontegg.
+    #[clap(long, env = "FRONTEGG_ADMIN_ROLE", requires = "frontegg-tenant")]
+    frontegg_admin_role: Option<String>,
+}

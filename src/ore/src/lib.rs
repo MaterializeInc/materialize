@@ -137,6 +137,8 @@ pub mod result;
 pub mod retry;
 #[cfg(feature = "serde")]
 pub mod serde;
+#[cfg(feature = "server")]
+pub mod server;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "stack")))]
 #[cfg(feature = "stack")]
 pub mod stack;
@@ -145,8 +147,8 @@ pub mod str;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "async")))]
 #[cfg(feature = "async")]
 pub mod task;
-#[cfg_attr(nightly_doc_features, doc(cfg(feature = "test")))]
-#[cfg(feature = "test")]
+#[cfg_attr(nightly_doc_features, doc(cfg(any(test, feature = "test"))))]
+#[cfg(any(test, feature = "test"))]
 pub mod test;
 pub mod thread;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "tracing_")))]

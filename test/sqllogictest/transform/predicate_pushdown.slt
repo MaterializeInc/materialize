@@ -59,7 +59,9 @@ Source materialize.public.x
 
 EOF
 
-# Don't inline binary expressions not having a leaf argument.
+# This test was testing our earlier heuristics for when can push_filters_through_map inline a Map expression.
+# (Which was to not inline binary expressions not having a leaf argument.) This has changed with
+# https://github.com/MaterializeInc/materialize/pull/22098, so now we inline in this test.
 
 query T multiline
 EXPLAIN WITH(arity, join_impls)
@@ -70,10 +72,13 @@ Explained Query:
     Filter ((#0 + 1) != (#1 + 3)) // { arity: 3 }
       ReadStorage materialize.public.x // { arity: 3 }
 
+Source materialize.public.x
+  filter=(((#0 + 1) != (#1 + 3)))
+
 EOF
 
-# We can push down b = 3, since it only refers to input columns. We can't push
-# down c = 3 since the computation of c refers to mapped columns.
+# Similar to the above: we push everything here since
+# https://github.com/MaterializeInc/materialize/pull/22098
 
 query T multiline
 EXPLAIN WITH(arity, join_impls)
@@ -88,7 +93,8 @@ Explained Query:
       ReadStorage materialize.public.y // { arity: 1 }
 
 Source materialize.public.y
-  filter=((3 = (#0 + 1)))
+  filter=((3 = #1) AND (3 = (#1 + 1)))
+  map=((#0 + 1))
 
 EOF
 
@@ -384,14 +390,12 @@ Explained Query:
                 ReadIndex on=mz_views mz_show_views_ind=[*** full scan ***] // { arity: 7 }
             Project (#2, #3, #8) // { arity: 3 }
               Map ("materialized-view") // { arity: 9 }
-                ReadStorage mz_catalog.mz_materialized_views // { arity: 8 }
-
-Source mz_catalog.mz_materialized_views
-  filter=(true)
+                ReadIndex on=mz_materialized_views mz_materialized_views_ind=[*** full scan ***] // { arity: 8 }
 
 Used Indexes:
   - mz_internal.mz_show_schemas_ind (*** full scan ***)
   - mz_internal.mz_show_views_ind (*** full scan ***)
+  - mz_internal.mz_materialized_views_ind (*** full scan ***)
 
 EOF
 
@@ -894,3 +898,105 @@ WHERE pg_has_role('r555', member.oid, 'USAGE');
 
 query error db error: ERROR: role "aaa" does not exist
 select * from (select 'aaa' as aaa) where pg_has_role('r2', aaa, 'USAGE');
+
+# Test when `push_filters_through_map` needs to do several inlining steps on top of each other
+
+statement ok
+CREATE TABLE t(x int, y int);
+
+query T multiline
+EXPLAIN
+SELECT *
+FROM (
+  SELECT x, y, x*y as z1, x*y + 1 AS z2
+  FROM t
+)
+WHERE z2 > 5;
+----
+Explained Query:
+  Filter (#3 > 5)
+    Map ((#0 * #1), (#2 + 1))
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+  filter=((((#0 * #1) + 1) > 5))
+
+EOF
+
+# Regression test for https://github.com/MaterializeInc/materialize/issues/22257
+# The transitive closure computation in `inline_if_not_too_big` has to do more than one step here. For this, later map
+# expressions should mention only the previous map expression, but not earlier ones. Also, there has to be at least
+# 3 map expressions, so that adding the support of the last one doesn't immediately cover all of the map expressions.
+query T multiline
+EXPLAIN
+SELECT * FROM (
+  SELECT z2 * 4 AS z3
+  FROM (
+    SELECT z1 + 1 AS z2
+    FROM (
+      SELECT x, y, x*y AS z1
+      FROM t
+    )
+  )
+)
+WHERE z3 > 5;
+----
+Explained Query:
+  Project (#2)
+    Filter (#2 > 5)
+      Map ((((#0 * #1) + 1) * 4))
+        ReadStorage materialize.public.t
+
+Source materialize.public.t
+  filter=(((((#0 * #1) + 1) * 4) > 5))
+
+EOF
+
+# Test when `push_filters_through_map` runs into the inlining limit: The source shouldn't have the filter pushed down
+# into it.
+query T multiline
+EXPLAIN
+SELECT * FROM (
+  SELECT * FROM (
+    SELECT *, x + y + z1 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 AS r1
+    FROM (
+      SELECT x, y, x*y as z1, x*y + 1 AS z2
+      FROM t
+    )
+  )
+)
+WHERE r1 * r1 * r1 * r1 * r1 * r1 * r1 * r1 * r1 * r1 * r1 * r1 * r1 > 5;
+----
+Explained Query:
+  Filter (((((((((((((#4 * #4) * #4) * #4) * #4) * #4) * #4) * #4) * #4) * #4) * #4) * #4) * #4) > 5)
+    Map ((#0 * #1), (#2 + 1), ((((((((((((((((((((((((((#0 + #1) + #2) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3))
+      ReadStorage materialize.public.t
+
+EOF
+
+# Similar test as above, but a bit smaller, so we are below the inlining limit. The source should get the pushdown.
+# Also adds more predicates to test a bit more scenarios.
+# Also tests that MFP CSE happens for the MFP that is in the source.
+query T multiline
+EXPLAIN
+SELECT * FROM (
+  SELECT * FROM (
+    SELECT *, x + y + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z1 AS r1
+    FROM (
+      SELECT x, y, x*y as z1, x*y + 1 AS z2
+      FROM t
+    )
+  )
+)
+WHERE r1 * r1 * r1 * r1 > 5 AND r1 * x * z2 * r1 < z2 * z1 + y AND x < y AND z2 > z1 AND z1 > z2 + r1 + r1;
+----
+Explained Query:
+  Filter (#0 < #1) AND (#3 > #2) AND (#2 > ((#3 + #4) + #4)) AND ((((#4 * #4) * #4) * #4) > 5) AND ((((#4 * #0) * #3) * #4) < ((#3 * #2) + #1))
+    Map ((#0 * #1), (#2 + 1), ((((((((((((((((((((((((((#0 + #1) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #2))
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+  filter=((#0 < #1) AND (#3 > #2) AND ((((#4 * #0) * #3) * #4) < ((#3 * #2) + #1)) AND (#2 > ((#3 + #4) + #4)) AND ((((#4 * #4) * #4) * #4) > 5))
+  map=((#0 * #1), (#2 + 1), ((((((((((((((((((((((((((#0 + #1) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #3) + #2))
+
+EOF

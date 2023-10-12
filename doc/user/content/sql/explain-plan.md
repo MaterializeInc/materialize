@@ -34,9 +34,11 @@ The following three objects can be explained.
 
 Explained object | Description
 ------|-----
-**select_stmt** | Display the plan for an ad hoc `SELECT` statement.
-**INDEX index_name** | Display the plan for an existing index.
-**MATERIALIZED VIEW view_name** | Display the plan for an existing materialized view.
+**select_stmt** | Display a plan for an ad-hoc [`SELECT` statement](../select).
+**create_index** | Display a plan for a [`CREATE INDEX` statement](../create-index).
+**create_materialized_view** | Display a plan for a [`CREATE MATERIALIZED VIEW` statement](../create-materialized-view).
+**INDEX index_name** | Display the `OPTIMIZED` or `PHYSICAL` plan for an existing index.
+**MATERIALIZED VIEW view_name** | Display the `OPTIMIZED` or `PHYSICAL` plan for an existing materialized view.
 
 ### Output format
 
@@ -72,6 +74,7 @@ Modifier | Description
 **join_impls** | Render details about the implementation strategy of optimized MIR `Join` nodes.
 **keys** | Annotate each subplan with its unique keys.
 **types** | Annotate each subplan with its inferred type.
+**humanized_exprs** | Render `EXPLAIN AS TEXT` output with human-readable column references in operator expressions. **Warning**: SQL-level aliasing is not considered when inferring column names, so the plan output might become ambiguous if you use this modifier.
 **filter_pushdown** | **Private preview** For each source, include a `pushdown` field that explains which filters [can be pushed down](../../transform-data/patterns/temporal-filters/#temporal-filter-pushdown).
 
 ## Details

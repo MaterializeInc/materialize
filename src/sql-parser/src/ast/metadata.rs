@@ -44,6 +44,8 @@ pub trait AstInfo: Clone {
     /// The type used for item references. Items are the subset of objects that are namespaced by a
     /// database and schema.
     type ItemName: AstDisplay + Clone + Hash + Debug + Eq + Ord;
+    /// The type used for column references.
+    type ColumnName: AstDisplay + Clone + Hash + Debug + Eq + Ord;
     /// The type used for schema names.
     type SchemaName: AstDisplay + Clone + Hash + Debug + Eq + Ord;
     /// The type used for database names.
@@ -66,6 +68,7 @@ pub struct Raw;
 impl AstInfo for Raw {
     type NestedStatement = Statement<Raw>;
     type ItemName = RawItemName;
+    type ColumnName = RawColumnName;
     type SchemaName = UnresolvedSchemaName;
     type DatabaseName = UnresolvedDatabaseName;
     type ClusterName = RawClusterName;
@@ -124,6 +127,21 @@ where
         f.fold_item_name(self)
     }
 }
+
+#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Clone)]
+pub struct RawColumnName {
+    pub relation: RawItemName,
+    pub column: Ident,
+}
+
+impl AstDisplay for RawColumnName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.relation);
+        f.write_str(".");
+        f.write_node(&self.column);
+    }
+}
+impl_display!(RawColumnName);
 
 #[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Clone)]
 pub enum RawClusterName {

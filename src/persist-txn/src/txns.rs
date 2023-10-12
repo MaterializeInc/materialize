@@ -15,16 +15,18 @@ use std::sync::Arc;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use futures::stream::FuturesUnordered;
+use futures::StreamExt;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
-use mz_persist_types::{Codec, Codec64};
+use mz_persist_types::{Codec, Codec64, StepForward};
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
-use tracing::debug;
+use tracing::{debug, instrument};
 
 use crate::txn_read::TxnsCache;
 use crate::txn_write::Txn;
-use crate::{StepForward, TxnsCodec, TxnsCodecDefault};
+use crate::{TxnsCodec, TxnsCodecDefault};
 
 /// An interface for atomic multi-shard writes.
 ///
@@ -165,53 +167,83 @@ where
         Txn::new()
     }
 
-    /// Registers a data shard for use with this txn set.
+    /// Registers data shards for use with this txn set.
     ///
-    /// The data shard will be initially readable at `register_ts`. First, a
-    /// registration entry is written to the txn shard. If it is not possible to
-    /// register the data at that time, an Err will be returned with the minimum
-    /// time the data shard could be registered. Second, the data shard will be
-    /// made readable at `register_ts` by appending empty updates to it, if
-    /// necessary. If the data has already been registered, this method is
-    /// idempotent.
+    /// First, a registration entry is written to the txn shard. If it is not
+    /// possible to register the data at the requested time, an Err will be
+    /// returned with the minimum time the data shards could be registered.
+    /// Second, the data shard will be made readable through `register_ts` by
+    /// appending empty updates to it, if necessary.
+    ///
+    /// This method is idempotent. Data shards registered previously to
+    /// `register_ts` will not be registered a second time.
     ///
     /// **WARNING!** While a data shard is registered to the txn set, writing to
     /// it directly (i.e. using a WriteHandle instead of the TxnHandle,
     /// registering it with another txn shard) will lead to incorrectness,
     /// undefined behavior, and (potentially sticky) panics.
+    #[instrument(level = "debug", skip_all, fields(ts = ?register_ts))]
     pub async fn register(
         &mut self,
         mut register_ts: T,
-        data_write: WriteHandle<K, V, T, D>,
+        data_writes: impl IntoIterator<Item = WriteHandle<K, V, T, D>>,
     ) -> Result<T, T> {
-        let data_id = data_write.shard_id();
+        let mut max_registered_ts = T::minimum();
+
+        let data_writes = data_writes.into_iter().collect::<Vec<_>>();
+        let mut data_ids = data_writes.iter().map(|x| x.shard_id()).collect::<Vec<_>>();
+        let data_ids_debug = data_ids
+            .iter()
+            .map(|x| format!("{:.9}", x.to_string()))
+            .collect::<Vec<_>>()
+            .join(" ");
 
         // SUBTLE! We have to write the registration to the txns shard *before*
         // we write empty data to the physical shard. Otherwise we could race
         // with a commit at the same timestamp, which would then not be able to
         // copy the committed batch into the data shard.
-        let mut txns_upper = recent_upper(&mut self.txns_write).await;
+        let mut txns_upper = self
+            .txns_write
+            .shared_upper()
+            .into_option()
+            .expect("txns should not be closed");
         loop {
             self.txns_cache.update_ge(&txns_upper).await;
-            if let Ok(init_ts) = self.txns_cache.data_since(&data_id) {
-                debug!("txns register {:.9} already done at {:?}", data_id, init_ts);
-                if register_ts < init_ts {
-                    return Ok(init_ts);
+            data_ids.retain(|data_id| {
+                let Ok(ts) = self.txns_cache.data_since(data_id) else {
+                    return true;
+                };
+                debug!(
+                    "txns register {:.9} already done at {:?}",
+                    data_id.to_string(),
+                    ts
+                );
+                if max_registered_ts < ts {
+                    max_registered_ts = ts;
                 }
-                register_ts = init_ts;
+                false
+            });
+            if data_ids.is_empty() {
+                register_ts = max_registered_ts;
                 break;
             } else if register_ts < txns_upper {
                 debug!(
-                    "txns register {:.9} at {:?} mismatch current={:?}",
-                    data_id, register_ts, txns_upper,
+                    "txns register {} at {:?} mismatch current={:?}",
+                    data_ids_debug, register_ts, txns_upper,
                 );
                 return Err(txns_upper);
             }
 
-            let (key, val) = C::encode(crate::TxnsEntry::Register(data_id));
-            let updates = vec![((&key, &val), &register_ts, 1)];
+            let updates = data_ids
+                .iter()
+                .map(|data_id| C::encode(crate::TxnsEntry::Register(*data_id)))
+                .collect::<Vec<_>>();
+            let updates = updates
+                .iter()
+                .map(|(key, val)| ((key, val), &register_ts, 1i64))
+                .collect::<Vec<_>>();
             let res = crate::small_caa(
-                || format!("txns register {:.9}", data_id.to_string()),
+                || format!("txns register {}", data_ids_debug),
                 &mut self.txns_write,
                 &updates,
                 txns_upper,
@@ -220,7 +252,10 @@ where
             .await;
             match res {
                 Ok(()) => {
-                    debug!("txns register {:.9} at {:?} success", data_id, register_ts);
+                    debug!(
+                        "txns register {} at {:?} success",
+                        data_ids_debug, register_ts
+                    );
                     break;
                 }
                 Err(new_txns_upper) => {
@@ -229,7 +264,11 @@ where
                 }
             }
         }
-        self.datas.data_write.insert(data_id, data_write);
+        for data_write in data_writes {
+            self.datas
+                .data_write
+                .insert(data_write.shard_id(), data_write);
+        }
 
         // Now that we've written the initialization into the txns shard, we
         // know it's safe to make the data shard readable at `commit_ts`. We
@@ -255,36 +294,66 @@ where
     /// for an unbounded amount of time.
     ///
     /// This method is idempotent.
+    #[instrument(level = "debug", skip_all, fields(ts = ?ts))]
     pub async fn apply_le(&mut self, ts: &T) -> Tidy {
         debug!("apply_le {:?}", ts);
         self.txns_cache.update_gt(ts).await;
 
         // TODO(txn): Oof, figure out a protocol where we don't have to do this
         // every time.
+        let inits = FuturesUnordered::new();
         for (data_id, times) in self.txns_cache.datas.iter() {
             let register_ts = times.first().expect("data shard has register ts").clone();
-            let data_write = self.datas.get_write(data_id).await;
-            let () = crate::empty_caa(
-                || format!("data init {:.9}", data_id.to_string()),
-                data_write,
-                register_ts,
-            )
-            .await;
+            let mut data_write = self.datas.take_write(data_id).await;
+            inits.push(async move {
+                let () = crate::empty_caa(
+                    || format!("data init {:.9}", data_id.to_string()),
+                    &mut data_write,
+                    register_ts,
+                )
+                .await;
+                data_write
+            });
+        }
+        let data_writes = inits.collect::<Vec<_>>().await;
+        for data_write in data_writes {
+            self.datas.put_write(data_write);
         }
 
-        let mut retractions = BTreeMap::new();
+        let mut unapplied_batches_by_data = BTreeMap::<_, Vec<_>>::new();
         for (data_id, batch_raw, commit_ts) in self.txns_cache.unapplied_batches() {
             if ts < commit_ts {
                 break;
             }
-
-            let write = self.datas.get_write(data_id).await;
-            crate::apply_caa(write, batch_raw, commit_ts.clone()).await;
-            // NB: Protos are not guaranteed to exactly roundtrip the
-            // encoded bytes, so we intentionally use the raw batch so that
-            // it definitely retracts.
-            retractions.insert(batch_raw.clone(), *data_id);
+            unapplied_batches_by_data
+                .entry(*data_id)
+                .or_default()
+                .push((batch_raw, commit_ts));
         }
+
+        let retractions = FuturesUnordered::new();
+        for (data_id, batches) in unapplied_batches_by_data {
+            let mut data_write = self.datas.take_write(&data_id).await;
+            retractions.push(async move {
+                let mut ret = Vec::new();
+                for (batch_raw, commit_ts) in batches {
+                    crate::apply_caa(&mut data_write, batch_raw, commit_ts.clone()).await;
+                    // NB: Protos are not guaranteed to exactly roundtrip the
+                    // encoded bytes, so we intentionally use the raw batch so that
+                    // it definitely retracts.
+                    ret.push((batch_raw.clone(), data_id));
+                }
+                (data_write, ret)
+            });
+        }
+        let retractions = retractions.collect::<Vec<_>>().await;
+        let retractions = retractions
+            .into_iter()
+            .flat_map(|(data_write, retractions)| {
+                self.datas.put_write(data_write);
+                retractions
+            })
+            .collect();
 
         debug!("apply_le {:?} success", ts);
         Tidy { retractions }
@@ -359,48 +428,47 @@ where
     T: Timestamp + Lattice + TotalOrder + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
+    async fn open_data_write(&self, data_id: ShardId) -> WriteHandle<K, V, T, D> {
+        self.client
+            .open_writer(
+                data_id,
+                Arc::clone(&self.key_schema),
+                Arc::clone(&self.val_schema),
+                Diagnostics::from_purpose("txn data"),
+            )
+            .await
+            .expect("schema shouldn't change")
+    }
+
+    #[allow(dead_code)]
     pub(crate) async fn get_write<'a>(
         &'a mut self,
         data_id: &ShardId,
     ) -> &'a mut WriteHandle<K, V, T, D> {
         if self.data_write.get(data_id).is_none() {
-            let data = self
-                .client
-                .open_writer(
-                    *data_id,
-                    Arc::clone(&self.key_schema),
-                    Arc::clone(&self.val_schema),
-                    Diagnostics::from_purpose("txn data"),
-                )
-                .await
-                .expect("schema shouldn't change");
-            assert!(self.data_write.insert(*data_id, data).is_none());
+            let data_write = self.open_data_write(*data_id).await;
+            assert!(self.data_write.insert(*data_id, data_write).is_none());
         }
         self.data_write.get_mut(data_id).expect("inserted above")
     }
-}
 
-pub(crate) async fn recent_upper<K, V, T>(txns_or_data_write: &mut WriteHandle<K, V, T, i64>) -> T
-where
-    K: Debug + Codec,
-    V: Debug + Codec,
-    T: Timestamp + Lattice + TotalOrder + Codec64,
-{
-    // TODO(txn): Replace this fetch_recent_upper call with pubsub in
-    // maelstrom.
-    txns_or_data_write
-        .fetch_recent_upper()
-        .await
-        .as_option()
-        .expect("txns shard should not be closed")
-        .clone()
+    pub(crate) async fn take_write(&mut self, data_id: &ShardId) -> WriteHandle<K, V, T, D> {
+        if let Some(data_write) = self.data_write.remove(data_id) {
+            return data_write;
+        }
+        self.open_data_write(*data_id).await
+    }
+
+    pub(crate) fn put_write(&mut self, data_write: WriteHandle<K, V, T, D>) {
+        self.data_write.insert(data_write.shard_id(), data_write);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 
-    use crate::tests::writer;
+    use crate::tests::{writer, CommitLog};
 
     use super::*;
 
@@ -412,7 +480,7 @@ mod tests {
         pub(crate) async fn expect_open_id(client: PersistClient, txns_id: ShardId) -> Self {
             Self::open(
                 0,
-                client.clone(),
+                client,
                 txns_id,
                 Arc::new(StringSchema),
                 Arc::new(UnitSchema),
@@ -420,9 +488,13 @@ mod tests {
             .await
         }
 
+        pub(crate) fn new_log(&self) -> CommitLog {
+            CommitLog::new(self.datas.client.clone(), self.txns_id())
+        }
+
         pub(crate) async fn expect_register(&mut self, register_ts: u64) -> ShardId {
             let data_id = ShardId::new();
-            self.register(register_ts, writer(&self.datas.client, data_id).await)
+            self.register(register_ts, [writer(&self.datas.client, data_id).await])
                 .await
                 .unwrap();
             data_id
@@ -433,16 +505,22 @@ mod tests {
             commit_ts: u64,
             data_id: ShardId,
             keys: &[&str],
+            log: &CommitLog,
         ) -> Tidy {
             let mut txn = self.begin();
             for key in keys {
                 txn.write(&data_id, (*key).into(), (), 1).await;
             }
-            txn.commit_at(self, commit_ts)
+            let tidy = txn
+                .commit_at(self, commit_ts)
                 .await
                 .unwrap()
                 .apply(self)
-                .await
+                .await;
+            for key in keys {
+                log.record((data_id, (*key).into(), commit_ts, 1));
+            }
+            tidy
         }
     }
 
@@ -451,24 +529,46 @@ mod tests {
     async fn register_at() {
         let client = PersistClient::new_for_tests().await;
         let mut txns = TxnsHandle::expect_open(client.clone()).await;
+        let log = txns.new_log();
         let d0 = txns.expect_register(2).await;
         txns.apply_le(&2).await;
 
         // Register a second time is a no-op and returns the original
         // registration time, regardless of whether the second attempt is for
         // before or after the original time.
-        assert_eq!(txns.register(1, writer(&client, d0).await).await, Ok(2));
-        assert_eq!(txns.register(3, writer(&client, d0).await).await, Ok(2));
+        assert_eq!(txns.register(1, [writer(&client, d0).await]).await, Ok(2));
+        assert_eq!(txns.register(3, [writer(&client, d0).await]).await, Ok(2));
 
         // Cannot register a new data shard at an already closed off time. An
         // error is returned with the first time that a registration would
         // succeed.
         let d1 = ShardId::new();
-        assert_eq!(txns.register(2, writer(&client, d1).await).await, Err(3));
+        assert_eq!(txns.register(2, [writer(&client, d1).await]).await, Err(3));
 
         // Can still register after txns have been committed.
-        txns.expect_commit_at(3, d0, &["foo"]).await;
-        assert_eq!(txns.register(4, writer(&client, d1).await).await, Ok(4));
+        txns.expect_commit_at(3, d0, &["foo"], &log).await;
+        assert_eq!(txns.register(4, [writer(&client, d1).await]).await, Ok(4));
+
+        // Reregistration returns the latest original registration time.
+        assert_eq!(txns.register(5, [writer(&client, d0).await]).await, Ok(2));
+        assert_eq!(
+            txns.register(5, [writer(&client, d0).await, writer(&client, d1).await])
+                .await,
+            Ok(4)
+        );
+
+        // If some are registered but some are not, then register_ts is
+        // returned. This also tests that the previous entirely registered calls
+        // did not consume the timestamp.
+        let d2 = ShardId::new();
+        assert_eq!(
+            txns.register(5, [writer(&client, d0).await, writer(&client, d2).await])
+                .await,
+            Ok(5)
+        );
+
+        let () = log.assert_snapshot(d0, 5).await;
+        let () = log.assert_snapshot(d1, 5).await;
     }
 
     // Regression test for a bug encountered during initial development:
@@ -490,7 +590,7 @@ mod tests {
         txn.write(&d0, "foo".into(), (), 1).await;
         let commit_apply = txn.commit_at(&mut txns, 2).await.unwrap();
 
-        txns.register(2, writer(&client, d0).await).await.unwrap();
+        txns.register(2, [writer(&client, d0).await]).await.unwrap();
 
         // Make sure that we can read empty at the register commit time even
         // before the txn commit apply.
@@ -500,5 +600,27 @@ mod tests {
         commit_apply.apply(&mut txns).await;
         let actual = txns.txns_cache.expect_snapshot(&client, d0, 2).await;
         assert_eq!(actual, vec!["foo".to_owned()]);
+    }
+
+    // A test that applies a batch of writes all at once.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn apply_many_ts() {
+        let client = PersistClient::new_for_tests().await;
+        let mut txns = TxnsHandle::expect_open(client.clone()).await;
+        let log = txns.new_log();
+        let d0 = txns.expect_register(1).await;
+
+        for ts in 2..10 {
+            let mut txn = txns.begin();
+            txn.write(&d0, ts.to_string(), (), 1).await;
+            let _apply = txn.commit_at(&mut txns, ts).await.unwrap();
+            log.record((d0, ts.to_string(), ts, 1));
+        }
+        // This automatically runs the apply, which catches up all the previous
+        // txns at once.
+        txns.expect_commit_at(10, d0, &[], &log).await;
+
+        log.assert_snapshot(d0, 10).await;
     }
 }

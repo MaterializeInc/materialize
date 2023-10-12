@@ -73,20 +73,6 @@ impl Coordinator {
         responses.push(ExecuteResponseKind::Canceled);
         ctx.tx_mut().set_allowed(responses);
 
-        let session_catalog = self.catalog.for_session(ctx.session());
-
-        if let Err(e) = introspection::user_privilege_hack(
-            &session_catalog,
-            ctx.session(),
-            &plan,
-            &resolved_ids,
-        ) {
-            return ctx.retire(Err(e));
-        }
-        if let Err(e) = introspection::check_cluster_restrictions(&session_catalog, &plan) {
-            return ctx.retire(Err(e));
-        }
-
         // If our query only depends on system tables, a LaunchDarkly flag is enabled, and a
         // session var is set, then we automatically run the query on the mz_introspection cluster.
         let target_cluster =
@@ -96,6 +82,17 @@ impl Coordinator {
             .resolve_target_cluster(target_cluster, ctx.session())
             .ok()
             .map(|cluster| cluster.id());
+
+        if let (Some(cluster_id), Some(statement_id)) = (target_cluster_id, ctx.extra().contents())
+        {
+            self.set_statement_execution_cluster(statement_id, cluster_id);
+        }
+
+        let session_catalog = self.catalog.for_session(ctx.session());
+
+        if let Err(e) = introspection::check_cluster_restrictions(&session_catalog, &plan) {
+            return ctx.retire(Err(e));
+        }
 
         if let Err(e) = rbac::check_plan(
             &session_catalog,
@@ -317,7 +314,8 @@ impl Coordinator {
                 self.sequence_explain_plan(ctx, plan, target_cluster).await;
             }
             Plan::ExplainTimestamp(plan) => {
-                self.sequence_explain_timestamp(ctx, plan, target_cluster);
+                self.sequence_explain_timestamp(ctx, plan, target_cluster)
+                    .await;
             }
             Plan::Insert(plan) => {
                 self.sequence_insert(ctx, plan).await;
@@ -338,6 +336,11 @@ impl Coordinator {
                     .await;
                 ctx.retire(result);
             }
+            Plan::AlterClusterSwap(_plan) => {
+                // Note: we should never reach this point because we return an unsupported error in
+                // planning.
+                ctx.retire(Err(AdapterError::Unsupported("ALTER ... SWAP ...")));
+            }
             Plan::AlterClusterReplicaRename(plan) => {
                 let result = self
                     .sequence_alter_cluster_replica_rename(ctx.session(), plan)
@@ -352,6 +355,11 @@ impl Coordinator {
                 let result = self.sequence_alter_item_rename(ctx.session(), plan).await;
                 ctx.retire(result);
             }
+            Plan::AlterItemSwap(_plan) => {
+                // Note: we should never reach this point because we return an unsupported error in
+                // planning.
+                ctx.retire(Err(AdapterError::Unsupported("ALTER ... SWAP ...")));
+            }
             Plan::AlterIndexSetOptions(plan) => {
                 let result = self.sequence_alter_index_set_options(plan);
                 ctx.retire(result);
@@ -361,7 +369,7 @@ impl Coordinator {
                 ctx.retire(result);
             }
             Plan::AlterRole(plan) => {
-                let result = self.sequence_alter_role(ctx.session(), plan).await;
+                let result = self.sequence_alter_role(ctx.session_mut(), plan).await;
                 if result.is_ok() {
                     self.maybe_send_rbac_notice(ctx.session());
                 }
@@ -626,7 +634,7 @@ impl Coordinator {
         self.sequence_create_role(None, plan).await
     }
 
-    pub(crate) fn sequence_explain_timestamp_finish(
+    pub(crate) async fn sequence_explain_timestamp_finish(
         &mut self,
         ctx: &mut ExecuteContext,
         format: ExplainFormat,
@@ -643,6 +651,7 @@ impl Coordinator {
             id_bundle,
             real_time_recency_ts,
         )
+        .await
     }
 
     pub(crate) fn allocate_transient_id(&mut self) -> Result<GlobalId, AdapterError> {

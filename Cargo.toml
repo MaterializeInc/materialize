@@ -7,6 +7,7 @@ members = [
     "src/avro-derive",
     "src/aws-s3-util",
     "src/aws-secrets-controller",
+    "src/balancerd",
     "src/build-id",
     "src/build-info",
     "src/ccsr",
@@ -33,6 +34,8 @@ members = [
     "src/lowertest-derive",
     "src/metabase",
     "src/mz",
+    "src/lsp-server",
+    "src/metrics",
     "src/npm",
     "src/orchestrator",
     "src/orchestrator-kubernetes",
@@ -49,7 +52,9 @@ members = [
     "src/pgrepr-consts",
     "src/pgtest",
     "src/pgwire",
+    "src/pgwire-common",
     "src/pid-file",
+    "src/postgres-client",
     "src/postgres-util",
     "src/prof",
     "src/proto",
@@ -65,9 +70,11 @@ members = [
     "src/sql",
     "src/sql-lexer",
     "src/sql-parser",
+    "src/sql-pretty",
     "src/sqllogictest",
     "src/stash",
     "src/stash-debug",
+    "src/stash-types",
     "src/storage",
     "src/storage-client",
     "src/storage-controller",
@@ -76,6 +83,7 @@ members = [
     "src/test-macro",
     "src/testdrive",
     "src/timely-util",
+    "src/tls-util",
     "src/tracing",
     "src/transform",
     "src/cloud-resources",
@@ -99,7 +107,9 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
-rust-version = "1.72.0"
+# 1.72.0 has a compile time performance regression:
+# https://github.com/rust-lang/rust/issues/115283, so don't use it.
+rust-version = "1.71.0"
 
 [profile.dev]
 # TODO(gusywnn|benesch): incremental is still not reliable as of rust 1.72
@@ -119,6 +129,9 @@ object = { opt-level = 3 }
 rustc-demangle = { opt-level = 3 }
 
 [profile.release]
+# Compile time seems similar to "lto = false", runtime ~10% faster
+lto = "thin"
+
 # Emit full debug info, allowing us to easily analyze core dumps from
 # staging (and, in an emergency, also prod).
 #
@@ -145,7 +158,7 @@ differential-dataflow = { git = "https://github.com/MaterializeInc/differential-
 dogsdogsdogs = { git = "https://github.com/MaterializeInc/differential-dataflow.git" }
 
 # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
-postgres  = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }

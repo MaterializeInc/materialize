@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Debug;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::Error;
 use crossbeam_channel::{RecvError, TryRecvError};
@@ -135,7 +136,12 @@ impl CommandReceiverQueue {
     /// is available.
     fn recv<A: Allocate>(&mut self, worker: &mut Worker<A>) -> Result<ComputeCommand, RecvError> {
         while self.is_empty() {
+            let start = Instant::now();
             worker.timely_worker.step_or_park(None);
+            worker
+                .metrics
+                .timely_step_duration_seconds
+                .observe(start.elapsed().as_secs_f64());
         }
         match self.try_recv() {
             Ok(cmd) => Ok(cmd),
@@ -367,7 +373,11 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                 compute_state.traces.maintenance();
             }
 
+            let start = Instant::now();
             self.timely_worker.step_or_park(None);
+            self.metrics
+                .timely_step_duration_seconds
+                .observe(start.elapsed().as_secs_f64());
 
             // Report frontier information back the coordinator.
             if let Some(mut compute_state) = self.activate_compute(&mut response_tx) {
@@ -478,9 +488,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
         if let Some(compute_state) = &mut self.compute_state {
             // Reduce the installed commands.
             // Importantly, act as if all peeks may have been retired (as we cannot know otherwise).
-            compute_state
-                .command_history
-                .retain_peeks(&BTreeMap::<_, ()>::default());
+            compute_state.command_history.discard_peeks();
             compute_state.command_history.reduce();
 
             // At this point, we need to sort out which of the *certainly installed* dataflows are
@@ -691,7 +699,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
             let mut command_history =
                 ComputeCommandHistory::new(self.metrics.for_history(worker_id));
             for command in new_commands.iter() {
-                command_history.push(command.clone(), &compute_state.pending_peeks);
+                command_history.push(command.clone());
             }
             compute_state.command_history = command_history;
         }

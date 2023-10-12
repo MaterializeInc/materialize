@@ -26,9 +26,10 @@ use mz_ore::stats::histogram_seconds_buckets;
 use mz_persist::location::{
     Atomicity, Blob, BlobMetadata, CaSResult, Consensus, ExternalError, SeqNo, VersionedData,
 };
-use mz_persist::metrics::{PostgresConsensusMetrics, S3BlobMetrics};
+use mz_persist::metrics::S3BlobMetrics;
 use mz_persist::retry::RetryStream;
 use mz_persist_types::Codec64;
+use mz_postgres_client::metrics::PostgresClientMetrics;
 use prometheus::core::{AtomicI64, AtomicU64, Collector, Desc, GenericGauge};
 use prometheus::proto::MetricFamily;
 use prometheus::{CounterVec, Gauge, GaugeVec, Histogram, HistogramVec, IntCounterVec};
@@ -82,6 +83,8 @@ pub struct Metrics {
     pub pubsub_client: PubSubClientMetrics,
     /// Metrics for mfp/filter pushdown.
     pub pushdown: PushdownMetrics,
+    /// Metrics for consolidation.
+    pub consolidation: ConsolidationMetrics,
     /// Metrics for blob caching.
     pub blob_cache_mem: BlobMemCache,
     /// Metrics for tokio tasks.
@@ -93,7 +96,7 @@ pub struct Metrics {
     /// Metrics for S3-backed blob implementation
     pub s3_blob: S3BlobMetrics,
     /// Metrics for Postgres-backed consensus implementation
-    pub postgres_consensus: PostgresConsensusMetrics,
+    pub postgres_consensus: PostgresClientMetrics,
 }
 
 impl std::fmt::Debug for Metrics {
@@ -136,11 +139,12 @@ impl Metrics {
             watch: WatchMetrics::new(registry),
             pubsub_client: PubSubClientMetrics::new(registry),
             pushdown: PushdownMetrics::new(registry),
+            consolidation: ConsolidationMetrics::new(registry),
             blob_cache_mem: BlobMemCache::new(registry),
             tasks: TasksMetrics::new(registry),
             sink: SinkMetrics::new(registry),
             s3_blob: S3BlobMetrics::new(registry),
-            postgres_consensus: PostgresConsensusMetrics::new(registry),
+            postgres_consensus: PostgresClientMetrics::new(registry, "mz_persist"),
             _vecs: vecs,
             _uptime: uptime,
         }
@@ -1976,6 +1980,32 @@ impl PushdownMetrics {
             parts_stats_trimmed_bytes: registry.register(metric!(
                 name: "mz_persist_pushdown_parts_stats_trimmed_bytes",
                 help: "total bytes trimmed from part stats",
+            )),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ConsolidationMetrics {
+    pub(crate) parts_fetched: IntCounter,
+    pub(crate) parts_skipped: IntCounter,
+    pub(crate) parts_wasted: IntCounter,
+}
+
+impl ConsolidationMetrics {
+    fn new(registry: &MetricsRegistry) -> Self {
+        ConsolidationMetrics {
+            parts_fetched: registry.register(metric!(
+                name: "mz_persist_consolidation_parts_fetched_count",
+                help: "count of parts that were fetched and used during consolidation",
+            )),
+            parts_skipped: registry.register(metric!(
+                name: "mz_persist_consolidation_parts_skipped_count",
+                help: "count of parts that were never needed during consolidation",
+            )),
+            parts_wasted: registry.register(metric!(
+                name: "mz_persist_consolidation_parts_wasted_count",
+                help: "count of parts that were fetched but not needed during consolidation",
             )),
         }
     }

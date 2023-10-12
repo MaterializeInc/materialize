@@ -91,6 +91,7 @@ use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
 use mz_ore::retry::Retry;
+use mz_ore::server::TlsCertConfig;
 use mz_ore::task;
 use mz_ore::tracing::{
     OpenTelemetryConfig, StderrLogConfig, StderrLogFormat, TracingConfig, TracingGuard,
@@ -102,7 +103,7 @@ use mz_persist_client::rpc::PersistGrpcPubSubServer;
 use mz_persist_client::PersistLocation;
 use mz_secrets::SecretsController;
 use mz_sql::catalog::EnvironmentId;
-use mz_stash::StashFactory;
+use mz_stash_types::metrics::Metrics as StashMetrics;
 use mz_storage_types::connections::ConnectionContext;
 use once_cell::sync::Lazy;
 use postgres::error::DbError;
@@ -129,7 +130,7 @@ pub static KAFKA_ADDRS: Lazy<String> =
 #[derive(Clone)]
 pub struct Config {
     data_directory: Option<PathBuf>,
-    tls: Option<mz_environmentd::TlsConfig>,
+    tls: Option<TlsCertConfig>,
     frontegg: Option<FronteggAuthentication>,
     unsafe_mode: bool,
     workers: usize,
@@ -145,6 +146,8 @@ pub struct Config {
     deploy_generation: Option<u64>,
     system_parameter_defaults: BTreeMap<String, String>,
     concurrent_webhook_req_count: Option<usize>,
+    internal_console_redirect_url: Option<String>,
+    metrics_registry: Option<MetricsRegistry>,
 }
 
 impl Default for Config {
@@ -167,6 +170,8 @@ impl Default for Config {
             deploy_generation: None,
             system_parameter_defaults: BTreeMap::new(),
             concurrent_webhook_req_count: None,
+            internal_console_redirect_url: None,
+            metrics_registry: None,
         }
     }
 }
@@ -178,7 +183,7 @@ impl Config {
     }
 
     pub fn with_tls(mut self, cert_path: impl Into<PathBuf>, key_path: impl Into<PathBuf>) -> Self {
-        self.tls = Some(mz_environmentd::TlsConfig {
+        self.tls = Some(TlsCertConfig {
             cert: cert_path.into(),
             key: key_path.into(),
         });
@@ -266,6 +271,19 @@ impl Config {
         self.concurrent_webhook_req_count = Some(limit);
         self
     }
+
+    pub fn with_internal_console_redirect_url(
+        mut self,
+        internal_console_redirect_url: Option<String>,
+    ) -> Self {
+        self.internal_console_redirect_url = internal_console_redirect_url;
+        self
+    }
+
+    pub fn with_metrics_registry(mut self, registry: MetricsRegistry) -> Self {
+        self.metrics_registry = Some(registry);
+        self
+    }
 }
 
 pub struct Listeners {
@@ -311,7 +329,7 @@ impl Listeners {
                 format!("{cockroach_url}?options=--search_path=storage_{seed}"),
             )
         };
-        let metrics_registry = MetricsRegistry::new();
+        let metrics_registry = config.metrics_registry.unwrap_or_else(MetricsRegistry::new);
         let orchestrator = Arc::new(
             self.runtime
                 .block_on(ProcessOrchestrator::new(ProcessOrchestratorConfig {
@@ -369,7 +387,6 @@ impl Listeners {
             PersistClientCache::new(persist_cfg, &metrics_registry, |_, _| persist_pubsub_client)
         };
         let persist_clients = Arc::new(persist_clients);
-        let postgres_factory = StashFactory::new(&metrics_registry);
         let secrets_controller = Arc::clone(&orchestrator);
         let connection_context = ConnectionContext::for_tests(orchestrator.reader());
         let (tracing_handle, tracing_guard) = if config.enable_tracing {
@@ -417,7 +434,7 @@ impl Listeners {
                         persist_clients,
                         storage_stash_url,
                         now: config.now.clone(),
-                        postgres_factory,
+                        stash_metrics: Arc::new(StashMetrics::register_into(&metrics_registry)),
                         metrics_registry: metrics_registry.clone(),
                         persist_pubsub_url: format!(
                             "http://localhost:{}",
@@ -462,6 +479,7 @@ impl Listeners {
                     bootstrap_role: config.bootstrap_role,
                     deploy_generation: config.deploy_generation,
                     http_host_name: Some(host_name),
+                    internal_console_redirect_url: config.internal_console_redirect_url,
                 })
                 .await
         })?;

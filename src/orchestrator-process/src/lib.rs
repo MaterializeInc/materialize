@@ -305,11 +305,11 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                             // Justification for `unwrap`:
                             //
                             // `u64::try_cast_from(f: f64)`
-                            // will always succeed if 0 <= f <= 2^53.
+                            // will always succeed if 0 <= f < 2^64.
                             // Since the max value of `process.cpu_usage()` is
                             // 100.0 * num_of_cores, this will be true whenever there
-                            // are less than 2^53 / 10^9 logical cores, or about
-                            // 9 million.
+                            // are less than 2^64 / 10^9 logical cores, or about
+                            // 18 billion.
                             let cpu = u64::try_cast_from(
                                 (f64::from(process.cpu_usage()) * 10_000_000.0).trunc(),
                             )

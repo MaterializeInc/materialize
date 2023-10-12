@@ -21,13 +21,14 @@ use derivative::Derivative;
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_controller_types::ClusterId;
 use mz_ore::now::EpochMillis;
-use mz_pgrepr::Format;
+use mz_pgwire_common::Format;
 use mz_repr::role_id::RoleId;
+use mz_repr::user::ExternalUserMetadata;
 use mz_repr::{Datum, Diff, GlobalId, Row, ScalarType, TimestampManipulation};
 use mz_sql::ast::{Raw, Statement, TransactionAccessMode};
 use mz_sql::plan::{Params, PlanContext, QueryWhen, StatementDesc};
 use mz_sql::session::user::{
-    ExternalUserMetadata, RoleMetadata, User, INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER, SYSTEM_USER,
+    RoleMetadata, User, INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER, SYSTEM_USER,
 };
 pub use mz_sql::session::vars::{
     EndTransactionAction, SessionVars, DEFAULT_DATABASE_NAME, SERVER_MAJOR_VERSION,
@@ -40,6 +41,7 @@ use mz_storage_types::sources::Timeline;
 use qcell::{QCell, QCellOwner};
 use rand::Rng;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use tokio::sync::watch;
 use tokio::sync::OwnedMutexGuard;
 use uuid::Uuid;
 
@@ -48,7 +50,6 @@ use crate::coord::peek::PeekResponseUnary;
 use crate::coord::statement_logging::PreparedStatementLoggingInfo;
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
 use crate::error::AdapterError;
-use crate::severity::Severity;
 use crate::AdapterNotice;
 
 const DUMMY_CONNECTION_ID: ConnectionId = ConnectionId::Static(0);
@@ -83,8 +84,7 @@ pub struct Session<T = mz_repr::Timestamp> {
     notices_rx: mpsc::UnboundedReceiver<AdapterNotice>,
     next_transaction_id: TransactionId,
     secret_key: u32,
-    external_metadata_tx: mpsc::UnboundedSender<ExternalUserMetadata>,
-    external_metadata_rx: mpsc::UnboundedReceiver<ExternalUserMetadata>,
+    external_metadata_rx: Option<watch::Receiver<ExternalUserMetadata>>,
     // Token allowing us to access `Arc<QCell<StatementLogging>>`
     // metadata. We want these to be reference-counted, because the same
     // statement might be referenced from multiple portals simultaneously.
@@ -166,7 +166,6 @@ impl<T: TimestampManipulation> Session<T> {
         user: User,
     ) -> Session<T> {
         let (notices_tx, notices_rx) = mpsc::unbounded_channel();
-        let (external_metadata_tx, external_metadata_rx) = mpsc::unbounded_channel();
         let default_cluster = INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER.get(&user.name);
         let mut vars = SessionVars::new(build_info, user);
         if let Some(default_cluster) = default_cluster {
@@ -185,8 +184,7 @@ impl<T: TimestampManipulation> Session<T> {
             notices_rx,
             next_transaction_id: 0,
             secret_key: rand::thread_rng().gen(),
-            external_metadata_tx,
-            external_metadata_rx,
+            external_metadata_rx: None,
             qcell_owner: QCellOwner::new(),
         }
     }
@@ -398,8 +396,8 @@ impl<T: TimestampManipulation> Session<T> {
     fn notice_filter(&mut self, notice: AdapterNotice) -> Option<AdapterNotice> {
         // Filter out low threshold severity.
         let minimum_client_severity = self.vars.client_min_messages();
-        let sev = Severity::for_adapter_notice(&notice);
-        if !sev.should_output_to_client(minimum_client_severity) {
+        let sev = notice.severity();
+        if !minimum_client_severity.should_output_to_client(&sev) {
             return None;
         }
         // Filter out notices for other clusters.
@@ -562,7 +560,7 @@ impl<T: TimestampManipulation> Session<T> {
         stmt: Option<Statement<Raw>>,
         logging: Arc<QCell<PreparedStatementLoggingInfo>>,
         params: Vec<(Datum, ScalarType)>,
-        result_formats: Vec<mz_pgrepr::Format>,
+        result_formats: Vec<Format>,
         catalog_revision: u64,
     ) -> Result<(), AdapterError> {
         // The empty portal can be silently replaced.
@@ -695,18 +693,37 @@ impl<T: TimestampManipulation> Session<T> {
         self.vars.is_superuser()
     }
 
-    /// Returns a channel on which to send external metadata to the session.
-    pub fn retain_external_metadata_transmitter(
+    /// Register a receiver which pushes updates of [`ExternalUserMetadata`]. Errors if a receiver
+    /// was already registered.
+    pub fn register_external_metadata_transmitter(
         &mut self,
-    ) -> UnboundedSender<ExternalUserMetadata> {
-        self.external_metadata_tx.clone()
+        rx: tokio::sync::watch::Receiver<ExternalUserMetadata>,
+    ) -> Result<(), ()> {
+        match self.external_metadata_rx {
+            Some(_) => Err(()),
+            None => {
+                self.external_metadata_rx = Some(rx);
+                Ok(())
+            }
+        }
     }
 
     /// Drains any external metadata updates and applies the changes from the latest update.
     pub fn apply_external_metadata_updates(&mut self) {
-        while let Ok(metadata) = self.external_metadata_rx.try_recv() {
-            self.vars.set_external_user_metadata(metadata);
+        // If no sender is registered then there isn't anything to do.
+        let Some(rx) = &mut self.external_metadata_rx else {
+            return;
+        };
+
+        // If the value hasn't changed then return.
+        if !rx.has_changed().unwrap_or(false) {
+            return;
         }
+
+        // Update our metadata! Note the short critical section (just a clone) to avoid blocking
+        // the sending side of this watch channel.
+        let metadata = rx.borrow_and_update().clone();
+        self.vars.set_external_user_metadata(metadata);
     }
 
     /// Initializes the session's role metadata.
@@ -796,7 +813,7 @@ pub struct Portal {
     /// The bound values for the parameters in the prepared statement, if any.
     pub parameters: Params,
     /// The desired output format for each column in the result set.
-    pub result_formats: Vec<mz_pgrepr::Format>,
+    pub result_formats: Vec<Format>,
     /// A handle to metadata needed for statement logging.
     #[derivative(Debug = "ignore")]
     pub logging: Arc<QCell<PreparedStatementLoggingInfo>>,

@@ -33,10 +33,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from inspect import Traceback, getframeinfo, getmembers, isfunction, stack
 from tempfile import TemporaryFile
-from typing import (
-    Any,
-    cast,
-)
+from typing import Any, cast
 
 import pg8000
 import sqlparse
@@ -250,6 +247,7 @@ class Composition:
         capture_stderr: bool = False,
         stdin: str | None = None,
         check: bool = True,
+        max_tries: int = 1,
     ) -> subprocess.CompletedProcess:
         """Invoke `docker compose` on the rendered composition.
 
@@ -275,29 +273,43 @@ class Composition:
             ("--project-name", self.project_name) if self.project_name else ()
         )
 
-        try:
-            return subprocess.run(
-                [
-                    "docker",
-                    "compose",
-                    f"-f/dev/fd/{self.file.fileno()}",
-                    "--project-directory",
-                    self.path,
-                    *project_name_args,
-                    *args,
-                ],
-                close_fds=False,
-                check=check,
-                stdout=stdout,
-                stderr=stderr,
-                input=stdin,
-                text=True,
-                bufsize=1,
-            )
-        except subprocess.CalledProcessError as e:
-            if e.stdout:
-                print(e.stdout)
-            raise UIError(f"running docker compose failed (exit status {e.returncode})")
+        ret = None
+        for retry in range(1, max_tries + 1):
+            try:
+                ret = subprocess.run(
+                    [
+                        "docker",
+                        "compose",
+                        f"-f/dev/fd/{self.file.fileno()}",
+                        "--project-directory",
+                        self.path,
+                        *project_name_args,
+                        *args,
+                    ],
+                    close_fds=False,
+                    check=check,
+                    stdout=stdout,
+                    stderr=stderr,
+                    input=stdin,
+                    text=True,
+                    bufsize=1,
+                )
+            except subprocess.CalledProcessError as e:
+                if e.stdout:
+                    print(e.stdout)
+
+                if retry < max_tries:
+                    print("Retrying ...")
+                    time.sleep(1)
+                    continue
+                else:
+                    raise UIError(
+                        f"running docker compose failed (exit status {e.returncode})"
+                    )
+            break
+
+        assert ret is not None
+        return ret
 
     def port(self, service: str, private_port: int | str) -> int:
         """Get the public port for a service's private port.
@@ -350,6 +362,7 @@ class Composition:
                 # trivial help message.
                 parser.parse_args()
                 func(self)
+            self.sanity_restart_mz()
         finally:
             loader.composition_path = None
 
@@ -389,6 +402,25 @@ class Composition:
             # Run the next composition.
             yield
         finally:
+            # If sanity_check existed in the overriden service, but
+            # override() disabled it by removing the label,
+            # keep the sanity check disabled
+            if (
+                "materialized" in old_compose["services"]
+                and "labels" in old_compose["services"]["materialized"]
+                and "sanity_restart"
+                in old_compose["services"]["materialized"]["labels"]
+            ):
+                if (
+                    "labels" not in self.compose["services"]["materialized"]
+                    or "sanity_restart"
+                    not in self.compose["services"]["materialized"]["labels"]
+                ):
+                    print("sanity_restart disabled by override(), keeping it disabled")
+                    old_compose["services"]["materialized"]["labels"].remove(
+                        "sanity_restart"
+                    )
+
             # Restore the old composition.
             self.compose = old_compose
             self._write_compose()
@@ -534,7 +566,7 @@ class Composition:
         # Restart any dependencies whose definitions have changed. The trick,
         # taken from Buildkite's Docker Compose plugin, is to run an `up`
         # command that requests zero instances of the requested service.
-        self.invoke("up", "--detach", "--scale", f"{service}=0", service)
+        self.up("--scale", f"{service}=0", service, wait=False)
         return self.invoke(
             "run",
             *(["--entrypoint", entrypoint] if entrypoint else []),
@@ -590,7 +622,7 @@ class Composition:
             check=check,
         )
 
-    def pull_if_variable(self, services: list[str]) -> None:
+    def pull_if_variable(self, services: list[str], max_tries: int = 2) -> None:
         """Pull fresh service images in case the tag indicates thee underlying image may change over time.
 
         Args:
@@ -602,7 +634,7 @@ class Composition:
                 self.compose["services"][service]["image"].endswith(tag)
                 for tag in [":latest", ":unstable", ":rolling"]
             ):
-                self.invoke("pull", service)
+                self.invoke("pull", service, max_tries=max_tries)
 
     def up(
         self,
@@ -610,7 +642,7 @@ class Composition:
         detach: bool = True,
         wait: bool = True,
         persistent: bool = False,
-        max_retries: int = 2,
+        max_tries: int = 2,
     ) -> None:
         """Build, (re)create, and start the named services.
 
@@ -624,6 +656,7 @@ class Composition:
             persistent: Replace the container's entrypoint and command with
                 `sleep infinity` so that additional commands can be scheduled
                 on the container with `Composition.exec`.
+            max_tries: Number of tries on failure.
         """
         if persistent:
             old_compose = copy.deepcopy(self.compose)
@@ -632,29 +665,98 @@ class Composition:
                 service["command"] = []
             self._write_compose()
 
-        for retry in range(1, max_retries + 1):
-            try:
-                self.invoke(
-                    "up",
-                    *(["--detach"] if detach else []),
-                    *(["--wait"] if wait else []),
-                    *services,
-                )
-            except UIError as e:
-                if retry < max_retries:
-                    print("Retrying ...")
-                    time.sleep(1)
-                    continue
-                else:
-                    raise e
-
-            break
+        self.invoke(
+            "up",
+            *(["--detach"] if detach else []),
+            *(["--wait"] if wait else []),
+            *services,
+            max_tries=2,
+        )
 
         if persistent:
             self.compose = old_compose  # type: ignore
             self._write_compose()
 
-    def down(self, destroy_volumes: bool = True, remove_orphans: bool = True) -> None:
+    def validate_sources_sinks_clusters(self) -> str | None:
+        """Validate that all sources, sinks & clusters are in a good state"""
+
+        # starting sources are currently expected if no new data is produced, see #21980
+        results = self.sql_query(
+            """
+            SELECT name, status, error, details
+            FROM mz_internal.mz_source_statuses
+            WHERE NOT(
+                status IN ('running', 'starting') OR
+                (type = 'progress' AND status = 'created')
+            )
+            """
+        )
+        for (name, status, error, details) in results:
+            return f"Source {name} is expected to be running/created, but is {status}, error: {error}, details: {details}"
+
+        results = self.sql_query(
+            """
+            SELECT name, status, error, details
+            FROM mz_internal.mz_sink_statuses
+            WHERE status NOT IN ('running', 'dropped')
+            """
+        )
+        for (name, status, error, details) in results:
+            return f"Sink {name} is expected to be running/dropped, but is {status}, error: {error}, details: {details}"
+
+        results = self.sql_query(
+            """
+            SELECT mz_clusters.name, mz_cluster_replicas.name, status, reason
+            FROM mz_internal.mz_cluster_replica_statuses
+            JOIN mz_cluster_replicas
+            ON mz_internal.mz_cluster_replica_statuses.replica_id = mz_cluster_replicas.id
+            JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id
+            WHERE status NOT IN ('ready', 'not-ready')
+            """
+        )
+        for (cluster_name, replica_name, status, reason) in results:
+            return f"Cluster replica {cluster_name}.{replica_name} is expected to be ready/not-ready, but is {status}, reason: {reason}"
+
+        return None
+
+    def sanity_restart_mz(self) -> None:
+        """Restart Materialized if it is part of the composition to find
+        problems with persisted objects, functions as a sanity check."""
+        if (
+            "materialized" in self.compose["services"]
+            and "labels" in self.compose["services"]["materialized"]
+            and "sanity_restart" in self.compose["services"]["materialized"]["labels"]
+        ):
+            ui.header(
+                "Sanity Restart: Restart Mz and verify source/sink/replica health"
+            )
+            self.kill("materialized")
+            # TODO(def-): Better way to detect when kill has finished
+            time.sleep(3)
+            self.up("materialized")
+            self.sql("SELECT 1")
+
+            NUM_RETRIES = 60
+            for i in range(NUM_RETRIES + 1):
+                error = self.validate_sources_sinks_clusters()
+                if not error:
+                    break
+                if i == NUM_RETRIES:
+                    raise ValueError(error)
+                # Sources and cluster replicas need a few seconds to start up
+                print(f"Retrying ({i+1}/{NUM_RETRIES})...")
+                time.sleep(1)
+        else:
+            ui.header(
+                "Sanity Restart skipped because Mz not in services or `sanity_restart` label not set"
+            )
+
+    def down(
+        self,
+        destroy_volumes: bool = True,
+        remove_orphans: bool = True,
+        sanity_restart_mz: bool = True,
+    ) -> None:
         """Stop and remove resources.
 
         Delegates to `docker compose down`. See that command's help for details.
@@ -662,7 +764,12 @@ class Composition:
         Args:
             destroy_volumes: Remove named volumes and anonymous volumes attached
                 to containers.
+            sanity_restart_mz: Try restarting materialize first if it is part
+                of the composition, as a sanity check.
         """
+        if sanity_restart_mz:
+            self.sanity_restart_mz()
+
         self.invoke(
             "down",
             *(["--volumes"] if destroy_volumes else []),

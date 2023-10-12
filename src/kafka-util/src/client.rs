@@ -12,11 +12,11 @@
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::str::FromStr;
-use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::bail;
+use crossbeam::channel::{unbounded, Receiver, Sender};
 use mz_ore::collections::CollectionExt;
 use rdkafka::client::{BrokerAddr, Client, NativeClient, OAuthToken};
 use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
@@ -52,8 +52,10 @@ impl Default for MzClientContext {
 impl MzClientContext {
     /// Constructs a new client context and returns an mpsc `Receiver` that can be used to learn
     /// about librdkafka errors.
+    // `crossbeam` channel receivers can be cloned, but this is intended to be used as a mpsc,
+    // until we upgrade to `1.72` and the std mpsc sender is `Sync`.
     pub fn with_errors() -> (Self, Receiver<MzKafkaError>) {
-        let (error_tx, error_rx) = mpsc::channel();
+        let (error_tx, error_rx) = unbounded();
         (Self { error_tx }, error_rx)
     }
 
@@ -160,9 +162,13 @@ impl ClientContext for MzClientContext {
         match level {
             Emerg | Alert | Critical | Error => {
                 self.record_error(log_message);
-                error!(target: "librdkafka", "{} {}", fac, log_message);
+                // We downgrade error messages to `warn!` level to avoid
+                // sending the errors to Sentry. Most errors are customer
+                // configuration problems that are not appropriate to send to
+                // Sentry.
+                warn!(target: "librdkafka", "error: {} {}", fac, log_message);
             }
-            Warning => warn!(target: "librdkafka", "{} {}", fac, log_message),
+            Warning => warn!(target: "librdkafka", "warning: {} {}", fac, log_message),
             Notice => info!(target: "librdkafka", "{} {}", fac, log_message),
             Info => info!(target: "librdkafka", "{} {}", fac, log_message),
             Debug => debug!(target: "librdkafka", "{} {}", fac, log_message),
@@ -172,7 +178,7 @@ impl ClientContext for MzClientContext {
     fn error(&self, error: KafkaError, reason: &str) {
         self.record_error(reason);
         // Refer to the comment in the `log` callback.
-        error!(target: "librdkafka", "{}: {}", error, reason);
+        warn!(target: "librdkafka", "error: {}: {}", error, reason);
     }
 }
 

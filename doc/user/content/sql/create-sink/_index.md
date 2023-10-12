@@ -17,8 +17,8 @@ that data.
 
 ## Connectors
 
-Materialize bundles **native sink connectors** for the following external
-systems:
+Materialize bundles **native connectors** that allow writing data to the
+following external systems:
 
 {{< multilinkbox >}}
 {{< linkbox title="Message Brokers" >}}

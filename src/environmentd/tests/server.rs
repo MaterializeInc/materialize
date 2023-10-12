@@ -113,7 +113,7 @@ use postgres::SimpleQueryMessage;
 use postgres_array::Array;
 use rand::RngCore;
 use reqwest::blocking::Client;
-use reqwest::Url;
+use reqwest::{header::CONTENT_TYPE, Url};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 use tokio_postgres::error::SqlState;
@@ -237,8 +237,9 @@ fn setup_statement_logging(
     setup_statement_logging_core(max_sample_rate, sample_rate, util::Config::default())
 }
 
-#[mz_ore::test]
 // Test that we log various kinds of statement whose execution terminates in the coordinator.
+#[mz_ore::test]
+#[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/21598
 fn test_statement_logging_immediate() {
     let (_server, mut client) = setup_statement_logging(1.0, 1.0);
     let successful_immediates: &[&str] = &[
@@ -943,7 +944,6 @@ fn test_cancel_long_running_query() {
 fn test_cancellation_cancels_dataflows(query: &str) {
     let config = util::Config::default().unsafe_mode();
     let server = util::start_server(config).unwrap();
-    server.enable_feature_flags(&["enable_with_mutually_recursive"]);
 
     let mut client1 = server.connect(postgres::NoTls).unwrap();
     let mut client2 = server.connect(postgres::NoTls).unwrap();
@@ -1028,7 +1028,6 @@ fn test_cancel_insert_select() {
 fn test_closing_connection_cancels_dataflows(query: String) {
     let config = util::Config::default().unsafe_mode();
     let server = util::start_server(config).unwrap();
-    server.enable_feature_flags(&["enable_with_mutually_recursive"]);
 
     let mut cmd = Command::new("psql");
     let cmd = cmd
@@ -1539,7 +1538,7 @@ fn test_max_request_size() {
 
     // pgwire
     {
-        let param_size = mz_pgwire::MAX_REQUEST_SIZE - statement_size + 1;
+        let param_size = mz_pgwire_common::MAX_REQUEST_SIZE - statement_size + 1;
         let param = std::iter::repeat("1").take(param_size).join("");
         let mut client = server.connect(postgres::NoTls).unwrap();
 
@@ -2014,6 +2013,101 @@ fn test_concurrent_id_reuse() {
 
     let mut client = server.connect(postgres::NoTls).unwrap();
     client.batch_execute("SELECT 1").unwrap();
+}
+
+#[mz_ore::test]
+fn test_internal_console_proxy() {
+    let config = util::Config::default();
+    let server = util::start_server(config.clone()).unwrap();
+
+    let res = Client::builder()
+        .build()
+        .unwrap()
+        .get(
+            Url::parse(&format!(
+                "http://{}/internal-console/styles.css",
+                server.inner.internal_http_local_addr()
+            ))
+            .unwrap(),
+        )
+        .send()
+        .unwrap();
+
+    assert_eq!(res.status().is_success(), true);
+    assert_contains!(
+        res.headers().get(CONTENT_TYPE).unwrap().to_str().unwrap(),
+        "text/css"
+    );
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_internal_http_auth() {
+    let server = util::start_server(util::Config::default()).unwrap();
+    let json = serde_json::json!({"query": "SELECT current_user;"});
+    let url = Url::parse(&format!(
+        "http://{}/api/sql",
+        server.inner.internal_http_local_addr()
+    ))
+    .unwrap();
+
+    let res = Client::new().post(url.clone()).json(&json).send().unwrap();
+
+    tracing::info!("response: {res:?}");
+
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "{:?}",
+        res.json::<serde_json::Value>()
+    );
+    // defaults to mz_system
+    assert!(res.text().unwrap().to_string().contains("mz_system"));
+
+    let res = Client::new()
+        .post(url.clone())
+        .header("x-materialize-user", "mz_system")
+        .json(&json)
+        .send()
+        .unwrap();
+
+    tracing::info!("response: {res:?}");
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "{:?}",
+        res.json::<serde_json::Value>()
+    );
+    // can be explicitly set to mz_system
+    assert!(res.text().unwrap().to_string().contains("mz_system"));
+
+    let res = Client::new()
+        .post(url.clone())
+        .header("x-materialize-user", "mz_support")
+        .json(&json)
+        .send()
+        .unwrap();
+
+    tracing::info!("response: {res:?}");
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "{:?}",
+        res.json::<serde_json::Value>()
+    );
+    // can be explicitly set to mz_support
+    assert!(res.text().unwrap().to_string().contains("mz_support"));
+
+    let res = Client::new()
+        .post(url.clone())
+        .header("x-materialize-user", "invalid value")
+        .json(&json)
+        .send()
+        .unwrap();
+
+    tracing::info!("response: {res:?}");
+    // invalid header returns an error
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED, "{:?}", res.text());
 }
 
 #[mz_ore::test]

@@ -108,6 +108,7 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     ruby \
     unzip \
     xz-utils \
+    yamllint \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Node.js LTS, for our Python typechecker. This is up here because we don't
@@ -177,7 +178,6 @@ RUN mkdir rust \
     && cargo install --root /usr/local --version "=0.5.2" --locked cargo-about \
     && cargo install --root /usr/local --version "=1.40.5" --locked cargo-deb \
     && cargo install --root /usr/local --version "=0.12.2" --locked cargo-deny \
-    && cargo install --root /usr/local --version "=0.8.0" --locked cargo-vet \
     && cargo install --root /usr/local --version "=0.1.0" --locked cargo-deplint \
     && cargo install --root /usr/local --version ="0.9.18" --locked cargo-hakari \
     && cargo install --root /usr/local --version "=0.9.44" --locked cargo-nextest \
@@ -264,7 +264,7 @@ ENV CC=$ARCH_GCC-unknown-linux-gnu-cc
 ENV CXX=$ARCH_GCC-unknown-linux-gnu-c++
 ENV CXXSTDLIB=static=stdc++
 ENV LDFLAGS="-fuse-ld=lld -static-libstdc++"
-ENV RUSTFLAGS="-Clink-arg=-Wl,--compress-debug-sections=zlib -Clink-arg=-fuse-ld=lld -L/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/$ARCH_GCC-unknown-linux-gnu/sysroot/lib/ -Csymbol-mangling-version=v0"
+ENV RUSTFLAGS="-Clink-arg=-Wl,--compress-debug-sections=zlib -Clink-arg=-fuse-ld=lld -L/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/$ARCH_GCC-unknown-linux-gnu/sysroot/lib/ -Csymbol-mangling-version=v0 --cfg=tokio_unstable"
 ENV TARGET_AR=$AR
 ENV TARGET_CC=$CC
 ENV TARGET_CXX=$CXX

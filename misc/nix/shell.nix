@@ -33,7 +33,7 @@ stdenv.mkDerivation rec {
 
   hardeningDisable = [ "fortify" ];
 
-  RUSTFLAGS = "-Clinker=clang -Clink-arg=--ld-path=${pkgs.mold}/bin/mold -Clink-arg=-Wl,--warn-unresolved-symbols -Cdebuginfo=1 -Csymbol-mangling-version=v0";
+  RUSTFLAGS = "-Clinker=clang -Clink-arg=--ld-path=${pkgs.mold}/bin/mold -Clink-arg=-Wl,--warn-unresolved-symbols -Cdebuginfo=1 -Csymbol-mangling-version=v0 --cfg=tokio_usntable";
 
   shellHook = ''
     export LD_LIBRARY_PATH=${pkgs.stdenv.cc.cc.lib}/lib:$LD_LIBRARY_PATH

@@ -22,7 +22,7 @@ pub async fn run_execute(
 
     let client;
     let client = if connection.starts_with("postgres://") {
-        let (client_inner, _) = postgres_client(&connection).await?;
+        let (client_inner, _) = postgres_client(&connection, state.default_timeout).await?;
         client = client_inner;
         &client
     } else {

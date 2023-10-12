@@ -10,7 +10,7 @@
 //! Implementation-specific metrics for persist blobs and consensus
 
 use mz_ore::metric;
-use mz_ore::metrics::{Counter, IntCounter, MetricsRegistry, UIntGauge};
+use mz_ore::metrics::{IntCounter, MetricsRegistry};
 use prometheus::IntCounterVec;
 
 /// Metrics specific to S3Blob's internal workings.
@@ -63,49 +63,6 @@ impl S3BlobMetrics {
             delete_head: operations.with_label_values(&["delete_head"]),
             delete_object: operations.with_label_values(&["delete_object"]),
             list_objects: operations.with_label_values(&["list_objects"]),
-        }
-    }
-}
-
-/// Metrics specific to PostgresConsensus's internal workings.
-#[derive(Debug, Clone)]
-pub struct PostgresConsensusMetrics {
-    pub(crate) connpool_size: UIntGauge,
-    pub(crate) connpool_acquires: IntCounter,
-    pub(crate) connpool_acquire_seconds: Counter,
-    pub(crate) connpool_connections_created: Counter,
-    pub(crate) connpool_connection_errors: Counter,
-    pub(crate) connpool_ttl_reconnections: Counter,
-}
-
-impl PostgresConsensusMetrics {
-    /// Returns a new [PostgresConsensusMetrics] instance connected to the given registry.
-    pub fn new(registry: &MetricsRegistry) -> Self {
-        Self {
-            connpool_size: registry.register(metric!(
-                name: "mz_persist_postgres_connpool_size",
-                help: "number of connections currently in pool",
-            )),
-            connpool_acquires: registry.register(metric!(
-                name: "mz_persist_postgres_connpool_acquires",
-                help: "times a connection has been acquired from pool",
-            )),
-            connpool_acquire_seconds: registry.register(metric!(
-                name: "mz_persist_postgres_connpool_acquire_seconds",
-                help: "time spent acquiring connections from pool",
-            )),
-            connpool_connections_created: registry.register(metric!(
-                name: "mz_persist_postgres_connpool_connections_created",
-                help: "times a connection was created",
-            )),
-            connpool_connection_errors: registry.register(metric!(
-                name: "mz_persist_postgres_connpool_connection_errors",
-                help: "number of errors when establishing a new connection",
-            )),
-            connpool_ttl_reconnections: registry.register(metric!(
-                name: "mz_persist_postgres_connpool_ttl_reconnections",
-                help: "times a connection was recycled due to ttl",
-            )),
         }
     }
 }

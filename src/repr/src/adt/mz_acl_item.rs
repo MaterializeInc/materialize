@@ -18,7 +18,7 @@ use std::str::FromStr;
 use crate::adt::system::Oid;
 use anyhow::{anyhow, Error};
 use bitflags::bitflags;
-use columnation::{CloneRegion, Columnation};
+use columnation::{Columnation, CopyRegion};
 use mz_ore::str::StrExt;
 use mz_proto::{RustType, TryFromProtoError};
 use proptest::arbitrary::Arbitrary;
@@ -233,7 +233,7 @@ impl RustType<ProtoAclMode> for AclMode {
 }
 
 impl Columnation for AclMode {
-    type InnerRegion = CloneRegion<AclMode>;
+    type InnerRegion = CopyRegion<AclMode>;
 }
 
 impl Arbitrary for AclMode {
@@ -374,7 +374,7 @@ impl RustType<ProtoMzAclItem> for MzAclItem {
 }
 
 impl Columnation for MzAclItem {
-    type InnerRegion = CloneRegion<MzAclItem>;
+    type InnerRegion = CopyRegion<MzAclItem>;
 }
 
 /// A list of privileges granted to a role.
@@ -514,7 +514,7 @@ impl RustType<ProtoAclItem> for AclItem {
 }
 
 impl Columnation for AclItem {
-    type InnerRegion = CloneRegion<AclItem>;
+    type InnerRegion = CopyRegion<AclItem>;
 }
 
 /// A container of [`MzAclItem`]s that is optimized to look up an [`MzAclItem`] by the grantee.

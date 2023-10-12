@@ -20,7 +20,7 @@ use tokio_postgres::tls::MakeTlsConnect;
 use tokio_postgres::Client;
 use tracing::{info, warn};
 
-use crate::{make_tls, PostgresError};
+use crate::PostgresError;
 
 pub async fn drop_replication_slots(config: Config, slots: &[&str]) -> Result<(), PostgresError> {
     let client = config.connect("postgres_drop_replication_slots").await?;
@@ -207,7 +207,12 @@ impl Config {
     {
         let mut postgres_config = self.inner.clone();
         configure(&mut postgres_config);
-        let mut tls = make_tls(&postgres_config)?;
+
+        let mut tls = mz_tls_util::make_tls(&postgres_config).map_err(|tls_err| match tls_err {
+            mz_tls_util::TlsError::Generic(e) => PostgresError::Generic(e),
+            mz_tls_util::TlsError::OpenSsl(e) => PostgresError::PostgresSsl(e),
+        })?;
+
         match &self.tunnel {
             TunnelConfig::Direct => {
                 let (client, connection) = postgres_config.connect(tls).await?;

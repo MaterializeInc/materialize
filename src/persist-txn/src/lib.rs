@@ -179,28 +179,29 @@
 //!
 //! ```
 //! # use mz_persist_client::{Diagnostics, PersistClient, ShardId};
+//! # use mz_persist_txn::operator::DataSubscribe;
 //! # use mz_persist_txn::txns::TxnsHandle;
-//! # use mz_persist_types::codec_impls::{UnitSchema, VecU8Schema};
+//! # use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 //! #
 //! # tokio::runtime::Runtime::new().unwrap().block_on(async {
-//! # let c = PersistClient::new_for_tests().await;
+//! # let client = PersistClient::new_for_tests().await;
 //! # mz_ore::test::init_logging();
 //! // Open a txn shard, initializing it if necessary.
-//! # let client = c.clone();
-//! let mut txns = TxnsHandle::<Vec<u8>, (), u64, i64>::open(
-//!     0u64, client, ShardId::new(), VecU8Schema.into(), UnitSchema.into()
+//! let txns_id = ShardId::new();
+//! let mut txns = TxnsHandle::<String, (), u64, i64>::open(
+//!     0u64, client.clone(), txns_id, StringSchema.into(), UnitSchema.into()
 //! ).await;
 //!
 //! // Register data shards to the txn set.
 //! let (d0, d1) = (ShardId::new(), ShardId::new());
-//! # let d0_write = c.open_writer(
-//! #    d0, VecU8Schema.into(), UnitSchema.into(), Diagnostics::for_tests()
+//! # let d0_write = client.open_writer(
+//! #    d0, StringSchema.into(), UnitSchema.into(), Diagnostics::for_tests()
 //! # ).await.unwrap();
-//! # let d1_write = c.open_writer(
-//! #    d1, VecU8Schema.into(), UnitSchema.into(), Diagnostics::for_tests()
+//! # let d1_write = client.open_writer(
+//! #    d1, StringSchema.into(), UnitSchema.into(), Diagnostics::for_tests()
 //! # ).await.unwrap();
-//! txns.register(1u64, d0_write).await.expect("not previously initialized");
-//! txns.register(2u64, d1_write).await.expect("not previously initialized");
+//! txns.register(1u64, [d0_write]).await.expect("not previously initialized");
+//! txns.register(2u64, [d1_write]).await.expect("not previously initialized");
 //!
 //! // Commit a txn. This is durable if/when the `commit_at` succeeds, but reads
 //! // at the commit ts will _block_ until after the txn is applied. Users are
@@ -209,8 +210,8 @@
 //! // but in the event of a crash, neither correctness nor liveness depend on
 //! // it.
 //! let mut txn = txns.begin();
-//! txn.write(&d0, vec![0], (), 1);
-//! txn.write(&d1, vec![1], (), -1);
+//! txn.write(&d0, "0".into(), (), 1);
+//! txn.write(&d1, "1".into(), (), -1);
 //! let tidy = txn.commit_at(&mut txns, 3).await.expect("ts 3 available")
 //!     // Make it available to reads by applying it.
 //!     .apply(&mut txns).await;
@@ -219,21 +220,19 @@
 //! // is also advanced by this. At the same time clean up after our last commit
 //! // (the tidy).
 //! let mut txn = txns.begin();
-//! txn.write(&d0, vec![2], (), 1);
+//! txn.write(&d0, "2".into(), (), 1);
 //! txn.tidy(tidy);
 //! txn.commit_at(&mut txns, 3).await.expect_err("ts 3 not available");
 //! let _tidy = txn.commit_at(&mut txns, 4).await.expect("ts 4 available")
 //!     .apply(&mut txns).await;
 //!
 //! // Read data shard(s) at some `read_ts`.
-//! //
-//! // TODO(txn): Replace this with the timely operator once it's added.
-//! # let mut d1_read = c.open_leased_reader::<Vec<u8>, (), u64, i64>(
-//! #     d1, VecU8Schema.into(), UnitSchema.into(), Diagnostics::for_tests(),
-//! # ).await.unwrap();
-//! let updates = d1_read.snapshot_and_fetch(
-//!     vec![txns.read_cache().to_data_inclusive(&d1, 4).unwrap()].into()
-//! ).await.unwrap();
+//! let mut subscribe = DataSubscribe::new("example", client, txns_id, d1, 4);
+//! while subscribe.progress() <= 4 {
+//!     subscribe.step();
+//! #   tokio::task::yield_now().await;
+//! }
+//! let updates = subscribe.output();
 //! # })
 //! ```
 //!
@@ -275,33 +274,22 @@ use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{ShardId, ShardIdSchema};
 use mz_persist_types::codec_impls::VecU8Schema;
-use mz_persist_types::{Codec, Codec64};
+use mz_persist_types::{Codec, Codec64, StepForward};
 use prost::Message;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
-use tracing::debug;
+use tracing::{debug, instrument};
 
 pub mod error;
+pub mod operator;
 pub mod txn_read;
 pub mod txn_write;
 pub mod txns;
 
 // TODO(txn):
-// - Figure out the mod and struct naming.
-// - Add frontier advancement operator.
 // - Closing/deleting data shards.
 // - Hold a critical since capability for each registered shard?
 // - Figure out the compaction story for both txn and data shard.
-
-/// Advance a timestamp by the least amount possible such that
-/// `ts.less_than(ts.step_forward())` is true.
-///
-/// TODO(txn): Unify this with repr's TimestampManipulation.
-pub trait StepForward {
-    /// Advance a timestamp by the least amount possible such that
-    /// `ts.less_than(ts.step_forward())` is true. Panic if unable to do so.
-    fn step_forward(&self) -> Self;
-}
 
 /// The in-mem representation of an update in the txns shard.
 #[derive(Debug)]
@@ -361,6 +349,7 @@ impl TxnsCodec for TxnsCodecDefault {
 }
 
 /// Helper for common logging for compare_and_append-ing a small amount of data.
+#[instrument(level = "debug", skip_all, fields(shard=%txns_or_data_write.shard_id()))]
 pub(crate) async fn small_caa<S, F, K, V, T, D>(
     name: F,
     txns_or_data_write: &mut WriteHandle<K, V, T, D>,
@@ -440,10 +429,9 @@ pub(crate) async fn empty_caa<S, F, K, V, T, D>(
     let name = name();
     let empty: &[((&K, &V), &T, D)] = &[];
     let mut upper = txns_or_data_write
-        .upper()
-        .as_option()
-        .expect("shard should not be closed")
-        .clone();
+        .shared_upper()
+        .into_option()
+        .expect("shard should not be closed");
     loop {
         if init_ts < upper {
             return;
@@ -473,6 +461,7 @@ pub(crate) async fn empty_caa<S, F, K, V, T, D>(
 /// the work must have already been done by someone else. (Think how our compute
 /// replicas race to compute some MATERIALIZED VIEW, but they're all guaranteed
 /// to get the same answer.)
+#[instrument(level = "debug", skip_all, fields(shard=%data_write.shard_id()))]
 async fn apply_caa<K, V, T, D>(
     data_write: &mut WriteHandle<K, V, T, D>,
     batch_raw: &[u8],
@@ -486,10 +475,9 @@ async fn apply_caa<K, V, T, D>(
     let batch = ProtoBatch::decode(batch_raw).expect("valid batch");
     let mut batch = data_write.batch_from_transmittable_batch(batch);
     let mut upper = data_write
-        .upper()
-        .as_option()
-        .expect("data shard should not be closed")
-        .clone();
+        .shared_upper()
+        .into_option()
+        .expect("data shard should not be closed");
     loop {
         if commit_ts < upper {
             debug!(
@@ -547,21 +535,122 @@ async fn apply_caa<K, V, T, D>(
     }
 }
 
-impl StepForward for u64 {
-    fn step_forward(&self) -> Self {
-        self.checked_add(1).unwrap()
-    }
-}
-
 #[cfg(test)]
 pub mod tests {
     use std::sync::Arc;
+    use std::sync::Mutex;
 
+    use crossbeam_channel::{Receiver, Sender, TryRecvError};
+    use differential_dataflow::consolidation::consolidate_updates;
     use mz_persist_client::read::ReadHandle;
     use mz_persist_client::{Diagnostics, PersistClient, ShardId};
     use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 
+    use crate::operator::DataSubscribe;
+    use crate::txn_write::Txn;
+
     use super::*;
+
+    /// A test helper for collecting committed writes and later comparing them
+    /// to reads for correctness.
+    #[derive(Debug, Clone)]
+    pub struct CommitLog {
+        client: PersistClient,
+        txns_id: ShardId,
+        writes: Arc<Mutex<Vec<(ShardId, String, u64, i64)>>>,
+        tx: Sender<(ShardId, String, u64, i64)>,
+        rx: Receiver<(ShardId, String, u64, i64)>,
+    }
+
+    impl CommitLog {
+        pub fn new(client: PersistClient, txns_id: ShardId) -> Self {
+            let (tx, rx) = crossbeam_channel::unbounded();
+            CommitLog {
+                client,
+                txns_id,
+                writes: Arc::new(Mutex::new(Vec::new())),
+                tx,
+                rx,
+            }
+        }
+
+        pub fn record(&self, update: (ShardId, String, u64, i64)) {
+            let () = self.tx.send(update).unwrap();
+        }
+
+        pub fn record_txn(&self, commit_ts: u64, txn: &Txn<String, (), i64>) {
+            for (data_id, writes) in txn.writes.iter() {
+                for (k, (), d) in writes.iter() {
+                    self.record((*data_id, k.clone(), commit_ts, *d));
+                }
+            }
+        }
+
+        #[track_caller]
+        pub fn assert_eq(
+            &self,
+            data_id: ShardId,
+            as_of: u64,
+            until: u64,
+            actual: impl IntoIterator<Item = (String, u64, i64)>,
+        ) {
+            // First read everything off the channel.
+            let mut expected = {
+                let mut writes = self.writes.lock().unwrap();
+                loop {
+                    match self.rx.try_recv() {
+                        Ok(x) => writes.push(x),
+                        Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
+                    }
+                }
+                writes
+                    .iter()
+                    .flat_map(|(id, key, ts, diff)| {
+                        if id != &data_id {
+                            return None;
+                        }
+                        let mut ts = *ts;
+                        if ts < as_of {
+                            ts = as_of;
+                        }
+                        if until <= ts {
+                            None
+                        } else {
+                            Some((key.clone(), ts, *diff))
+                        }
+                    })
+                    .collect()
+            };
+            consolidate_updates(&mut expected);
+            let mut actual = actual.into_iter().collect();
+            consolidate_updates(&mut actual);
+            // NB: Extra spaces after actual are so it lines up with expected.
+            tracing::debug!(
+                "{:.9} as_of={} until={} actual  ={:?}",
+                data_id,
+                as_of,
+                until,
+                actual
+            );
+            tracing::debug!(
+                "{:.9} as_of={} until={} expected={:?}",
+                data_id,
+                as_of,
+                until,
+                expected
+            );
+            assert_eq!(actual, expected)
+        }
+
+        #[allow(ungated_async_fn_track_caller)]
+        #[track_caller]
+        pub async fn assert_snapshot(&self, data_id: ShardId, as_of: u64) {
+            let mut data_subscribe =
+                DataSubscribe::new("test", self.client.clone(), self.txns_id, data_id, as_of);
+            data_subscribe.step_past(as_of).await;
+            self.assert_eq(data_id, as_of, as_of + 1, data_subscribe.output().clone())
+        }
+    }
 
     pub(crate) async fn writer(
         client: &PersistClient,
@@ -591,5 +680,62 @@ pub mod tests {
             )
             .await
             .expect("codecs should not change")
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn commit_log() {
+        let (d0, d1) = (ShardId::new(), ShardId::new());
+        let log0 = CommitLog::new(PersistClient::new_for_tests().await, ShardId::new());
+
+        // Send before cloning into another handle.
+        log0.record((d0, "0".into(), 0, 1));
+
+        // Send after cloning into another handle. Also push duplicate (which
+        // gets consolidated).
+        let log1 = log0.clone();
+        log0.record((d0, "2".into(), 2, 1));
+        log1.record((d0, "2".into(), 2, 1));
+
+        // Send retraction.
+        log0.record((d0, "3".into(), 3, 1));
+        log1.record((d0, "3".into(), 4, -1));
+
+        // Send out of order.
+        log0.record((d0, "1".into(), 1, 1));
+
+        // Send to a different shard.
+        log1.record((d1, "5".into(), 5, 1));
+
+        // Assert_eq with no advancement or truncation.
+        log0.assert_eq(
+            d0,
+            0,
+            6,
+            vec![
+                ("0".into(), 0, 1),
+                ("1".into(), 1, 1),
+                ("2".into(), 2, 2),
+                ("3".into(), 3, 1),
+                ("3".into(), 4, -1),
+            ],
+        );
+        log0.assert_eq(d1, 0, 6, vec![("5".into(), 5, 1)]);
+
+        // Assert_eq with advancement.
+        log0.assert_eq(
+            d0,
+            4,
+            6,
+            vec![("0".into(), 4, 1), ("1".into(), 4, 1), ("2".into(), 4, 2)],
+        );
+
+        // Assert_eq with truncation.
+        log0.assert_eq(
+            d0,
+            0,
+            3,
+            vec![("0".into(), 0, 1), ("1".into(), 1, 1), ("2".into(), 2, 2)],
+        );
     }
 }

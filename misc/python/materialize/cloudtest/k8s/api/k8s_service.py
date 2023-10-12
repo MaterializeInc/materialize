@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 
+import logging
 from typing import Any
 
 import pg8000
@@ -16,6 +17,8 @@ from kubernetes.client import V1Service
 from pg8000 import Connection, Cursor
 
 from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
+
+LOGGER = logging.getLogger(__name__)
 
 
 class K8sService(K8sResource):
@@ -82,7 +85,7 @@ class K8sService(K8sResource):
         """Run a batch of SQL statements against the service."""
         with self.sql_cursor(port=port, user=user) as cursor:
             for statement in sqlparse.split(sql):
-                print(f"> {statement}")
+                LOGGER.info(f"> {statement}")
                 cursor.execute(statement)
 
     def sql_query(
@@ -93,6 +96,6 @@ class K8sService(K8sResource):
     ) -> Any:
         """Execute a SQL query against the service and return results."""
         with self.sql_cursor(port=port, user=user) as cursor:
-            print(f"> {sql}")
+            LOGGER.info(f"> {sql}")
             cursor.execute(sql)
             return cursor.fetchall()

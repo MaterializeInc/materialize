@@ -8,14 +8,17 @@
 # by the Apache License, Version 2.0.
 
 import json
+import os
 import re
 import time
+from collections.abc import Callable
 from copy import copy
-from datetime import datetime
+from datetime import datetime, timedelta
 from statistics import quantiles
 from textwrap import dedent
 from threading import Thread
 
+import requests
 from pg8000 import Cursor
 from pg8000.dbapi import ProgrammingError
 
@@ -25,6 +28,7 @@ from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.localstack import Localstack
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
@@ -55,41 +59,54 @@ SERVICES = [
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    for name in [
-        "test-smoke",
-        "test-github-12251",
-        "test-github-15531",
-        "test-github-15535",
-        "test-github-15799",
-        "test-github-15930",
-        "test-github-15496",
-        "test-github-17177",
-        "test-github-17510",
-        "test-github-17509",
-        "test-github-19610",
-        "test-single-time-monotonicity-enforcers",
-        "test-remote-storage",
-        "test-drop-default-cluster",
-        "test-upsert",
-        "test-resource-limits",
-        "test-invalid-compute-reuse",
-        "pg-snapshot-resumption",
-        "pg-snapshot-partial-failure",
-        "test-system-table-indexes",
-        "test-replica-targeted-subscribe-abort",
-        "test-compute-reconciliation-reuse",
-        "test-compute-reconciliation-no-errors",
-        "test-mz-subscriptions",
-        "test-mv-source-sink",
-        "test-query-without-default-cluster",
-        "test-clusterd-death-detection",
-        "test-replica-metrics",
-        "test-compute-controller-metrics",
-        "test-metrics-retention-across-restart",
-        "test-concurrent-connections",
-    ]:
-        with c.test_case(name):
-            c.workflow(name)
+    shard = os.environ.get("BUILDKITE_PARALLEL_JOB")
+    shard_count = os.environ.get("BUILDKITE_PARALLEL_JOB_COUNT")
+
+    if shard:
+        shard = int(shard)
+    if shard_count:
+        shard_count = int(shard_count)
+
+    for i, name in enumerate(
+        [
+            "test-smoke",
+            "test-github-12251",
+            "test-github-15531",
+            "test-github-15535",
+            "test-github-15799",
+            "test-github-15930",
+            "test-github-15496",
+            "test-github-17177",
+            "test-github-17510",
+            "test-github-17509",
+            "test-github-19610",
+            "test-single-time-monotonicity-enforcers",
+            "test-remote-storage",
+            "test-drop-default-cluster",
+            "test-upsert",
+            "test-resource-limits",
+            "test-invalid-compute-reuse",
+            "pg-snapshot-resumption",
+            "pg-snapshot-partial-failure",
+            "test-system-table-indexes",
+            "test-replica-targeted-subscribe-abort",
+            "test-replica-targeted-select-abort",
+            "test-compute-reconciliation-reuse",
+            "test-compute-reconciliation-no-errors",
+            "test-mz-subscriptions",
+            "test-mv-source-sink",
+            "test-query-without-default-cluster",
+            "test-clusterd-death-detection",
+            "test-replica-metrics",
+            "test-compute-controller-metrics",
+            "test-metrics-retention-across-restart",
+            "test-concurrent-connections",
+            "test-profile-fetch",
+        ]
+    ):
+        if shard is None or shard_count is None or i % int(shard_count) == shard:
+            with c.test_case(name):
+                c.workflow(name)
 
 
 def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -1548,6 +1565,91 @@ def workflow_test_replica_targeted_subscribe_abort(c: Composition) -> None:
     killer.join()
 
 
+def workflow_test_replica_targeted_select_abort(c: Composition) -> None:
+    """
+    Test that a replica-targeted SELECT is aborted when the target
+    replica disconnects.
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+    c.up("clusterd1")
+    c.up("clusterd2")
+
+    c.sql(
+        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
+
+    c.sql(
+        """
+        DROP CLUSTER IF EXISTS cluster1 CASCADE;
+        CREATE CLUSTER cluster1 REPLICAS (
+            replica1 (
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                COMPUTE ADDRESSES ['clusterd1:2102'],
+                WORKERS 2
+            ),
+            replica2 (
+                STORAGECTL ADDRESSES ['clusterd2:2100'],
+                STORAGE ADDRESSES ['clusterd2:2103'],
+                COMPUTECTL ADDRESSES ['clusterd2:2101'],
+                COMPUTE ADDRESSES ['clusterd2:2102'],
+                WORKERS 2
+            )
+        );
+        CREATE TABLE t (a int);
+        """
+    )
+
+    def drop_replica_with_delay() -> None:
+        time.sleep(2)
+        c.sql("DROP CLUSTER REPLICA cluster1.replica1;")
+
+    dropper = Thread(target=drop_replica_with_delay)
+    dropper.start()
+
+    try:
+        c.sql(
+            """
+            SET cluster = cluster1;
+            SET cluster_replica = replica1;
+            SELECT * FROM t AS OF 18446744073709551615;
+            """
+        )
+    except ProgrammingError as e:
+        assert "target replica failed or was dropped" in e.args[0]["M"], e
+    else:
+        assert False, "SELECT didn't return the expected error"
+
+    dropper.join()
+
+    def kill_replica_with_delay() -> None:
+        time.sleep(2)
+        c.kill("clusterd2")
+
+    killer = Thread(target=kill_replica_with_delay)
+    killer.start()
+
+    try:
+        c.sql(
+            """
+            SET cluster = cluster1;
+            SET cluster_replica = replica2;
+            SELECT * FROM t AS OF 18446744073709551615;
+            """
+        )
+    except ProgrammingError as e:
+        assert "target replica failed or was dropped" in e.args[0]["M"], e
+    else:
+        assert False, "SELECT didn't return the expected error"
+
+    killer.join()
+
+
 def workflow_pg_snapshot_partial_failure(c: Composition) -> None:
     """Test PostgreSQL snapshot partial failure"""
 
@@ -2365,8 +2467,9 @@ def workflow_test_metrics_retention_across_restart(c: Composition) -> None:
         dt = datetime.fromtimestamp(since / 1000.0)
         diff = now - dt
 
+        # This env was just created, so the since should be recent.
         assert (
-            diff.days >= 30
+            diff.days < 30
         ), f"{name} greater than expected (since={since}, diff={diff})"
 
     c.down(destroy_volumes=True)
@@ -2380,9 +2483,15 @@ def workflow_test_metrics_retention_across_restart(c: Composition) -> None:
     c.kill("materialized")
     c.up("materialized")
 
+    # The env has been up for less than 30d, so the since should not have
+    # changed.
     table_since2, index_since2 = collect_sinces()
-    validate_since(table_since2, "table_since2")
-    validate_since(index_since2, "index_since2")
+    assert (
+        table_since1 == table_since2
+    ), f"table sinces did not match {table_since1} vs {table_since2})"
+    assert (
+        index_since1 == index_since2
+    ), f"index sinces did not match {index_since1} vs {index_since2})"
 
 
 def workflow_test_concurrent_connections(c: Composition) -> None:
@@ -2391,6 +2500,9 @@ def workflow_test_concurrent_connections(c: Composition) -> None:
     sure #21782 does not regress.
     """
     num_conns = 2000
+    p50_limit = 10.0
+    p99_limit = 20.0
+
     runtimes: list[float] = [float("inf")] * num_conns
 
     def worker(c: Composition, i: int) -> None:
@@ -2408,20 +2520,211 @@ def workflow_test_concurrent_connections(c: Composition) -> None:
         user="mz_system",
     )
 
-    threads = []
-    for i in range(num_conns):
-        thread = Thread(name=f"worker_{i}", target=worker, args=(c, i))
-        threads.append(thread)
+    for i in range(3):
+        threads = []
+        for j in range(num_conns):
+            thread = Thread(name=f"worker_{j}", target=worker, args=(c, j))
+            threads.append(thread)
 
-    for thread in threads:
-        thread.start()
+        for thread in threads:
+            thread.start()
 
-    for thread in threads:
-        thread.join()
+        for thread in threads:
+            thread.join()
 
-    p = quantiles(runtimes, n=100)
-    print(
-        f"min: {min(runtimes):.2f}s, p50: {p[49]:.2f}s, p99: {p[98]:.2f}s, max: {max(runtimes):.2f}s"
+        p = quantiles(runtimes, n=100)
+        print(
+            f"min: {min(runtimes):.2f}s, p50: {p[49]:.2f}s, p99: {p[98]:.2f}s, max: {max(runtimes):.2f}s"
+        )
+
+        p50 = p[49]
+        p99 = p[98]
+        if p50 < p50_limit and p99 < p99_limit:
+            return
+        if i < 2:
+            print("retry...")
+            continue
+        assert (
+            p50 < p50_limit
+        ), f"p50 is {p50:.2f}s, should be less than {p50_limit:.2f}s"
+        assert (
+            p99 < p99_limit
+        ), f"p99 is {p99:.2f}s, should be less than {p99_limit:.2f}s"
+
+
+def workflow_test_profile_fetch(c: Composition) -> None:
+    """
+    Test fetching memory and CPU profiles via the internal HTTP
+    endpoint.
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+    c.up("clusterd1")
+
+    envd_port = c.port("materialized", 6878)
+    envd_url = f"http://localhost:{envd_port}/prof/"
+    clusterd_port = c.port("clusterd1", 6878)
+    clusterd_url = f"http://localhost:{clusterd_port}/"
+
+    def test_post(data: dict[str, str], check: Callable[[int, str], None]) -> None:
+        resp = requests.post(envd_url, data=data)
+        check(resp.status_code, resp.text)
+
+        resp = requests.post(clusterd_url, data=data)
+        check(resp.status_code, resp.text)
+
+    def test_get(path: str, check: Callable[[int, str], None]) -> None:
+        resp = requests.get(envd_url + path)
+        check(resp.status_code, resp.text)
+
+        resp = requests.get(clusterd_url + path)
+        check(resp.status_code, resp.text)
+
+    def make_check(code: int, contents: str) -> Callable[[int, str], None]:
+        def check(code_: int, text: str) -> None:
+            assert code_ == code, f"expected {code}, got {code_}"
+            assert contents in text, f"'{contents}' not found in text: {text}"
+
+        return check
+
+    def make_ok_check(contents: str) -> Callable[[int, str], None]:
+        return make_check(200, contents)
+
+    def check_profiling_disabled(code: int, text: str) -> None:
+        check = make_check(403, "heap profiling not activated")
+        check(code, text)
+
+    # Test fetching CPU profiles.
+    test_post(
+        {"action": "time_fg", "time_secs": "1", "hz": "1"},
+        make_ok_check(
+            "mz_fg_version: 1\\nSampling time (s): 1\\nSampling frequency (Hz): 1\\n"
+        ),
     )
-    assert p[49] < 1.0, f"p50 is {p[49]:.2f}s, should be less than 1.0s"
-    assert p[98] < 1.5, f"p99 is {p[98]:.2f}s, should be less than 1.5s"
+
+    # Activate memory profiling.
+    test_post({"action": "activate"}, make_ok_check("Jemalloc profiling active"))
+
+    # Test fetching heap profiles.
+    test_post({"action": "dump_jeheap"}, make_ok_check("heap_v2/"))
+    test_post(
+        {"action": "dump_sym_mzfg"}, make_ok_check("mz_fg_version: 1\nAllocated:")
+    )
+    test_post(
+        {"action": "mem_fg"},
+        make_ok_check("mz_fg_version: 1\\ndisplay_bytes: 1\\nAllocated:"),
+    )
+    test_get("heap", make_ok_check(""))
+
+    # Deactivate memory profiling.
+    test_post(
+        {"action": "deactivate"},
+        make_ok_check("Jemalloc profiling enabled but inactive"),
+    )
+
+    # Test that fetching heap profiles is forbidden.
+    test_post({"action": "dump_jeheap"}, check_profiling_disabled)
+    test_post({"action": "dump_sym_mzfg"}, check_profiling_disabled)
+    test_post({"action": "mem_fg"}, check_profiling_disabled)
+    test_get("heap", check_profiling_disabled)
+
+    # Test toggling profiling via feature flag.
+    c.sql(
+        "ALTER SYSTEM SET enable_jemalloc_profiling = true;",
+        port=6877,
+        user="mz_system",
+    )
+    code = requests.get(envd_url + "heap").status_code
+    assert code == 200, f"expected 200, got {code}"
+
+    c.sql(
+        "ALTER SYSTEM SET enable_jemalloc_profiling = false;",
+        port=6877,
+        user="mz_system",
+    )
+    code = requests.get(envd_url + "heap").status_code
+    assert code == 403, f"expected 403, got {code}"
+
+
+def workflow_test_incident_70(c: Composition) -> None:
+    """
+    Test incident-70.
+    """
+    num_conns = 1
+    mv_count = 50
+    persist_reader_lease_duration_in_sec = 10
+    data_scale_factor = 10
+
+    with c.override(
+        Materialized(
+            external_cockroach=True,
+            external_minio=True,
+            sanity_restart=False,
+        ),
+        Minio(setup_materialize=True),
+    ):
+        c.down(destroy_volumes=True)
+        c.up("minio", "materialized")
+
+        c.sql(
+            f"ALTER SYSTEM SET max_connections = {num_conns + 5};",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.sql(
+            f"ALTER SYSTEM SET persist_reader_lease_duration = '{persist_reader_lease_duration_in_sec}s';",
+            port=6877,
+            user="mz_system",
+        )
+
+        mz_view_create_statements = []
+
+        for i in range(mv_count):
+            mz_view_create_statements.append(
+                f"CREATE MATERIALIZED VIEW mv_lineitem_count_{i + 1} AS SELECT count(*) FROM lineitem;"
+            )
+
+        mz_view_create_statements_sql = "\n".join(mz_view_create_statements)
+
+        c.sql(
+            dedent(
+                f"""
+                CREATE SOURCE gen FROM LOAD GENERATOR TPCH (SCALE FACTOR {data_scale_factor}) FOR ALL TABLES;
+
+                {mz_view_create_statements_sql}
+                """
+            )
+        )
+
+        start_time = datetime.now()
+        end_time = start_time + timedelta(seconds=600)
+
+        def worker(c: Composition, worker_index: int) -> None:
+            print(f"Thread {worker_index} tries to acquire a cursor")
+            cursor = c.sql_cursor()
+            print(f"Thread {worker_index} got a cursor")
+
+            iteration = 1
+            while datetime.now() < end_time:
+                if iteration % 20 == 0:
+                    print(f"Thread {worker_index}, iteration {iteration}")
+                cursor.execute("SELECT * FROM mv_lineitem_count_1;")
+                iteration += 1
+            print(f"Thread {worker_index} terminates before iteration {iteration}")
+
+        threads = []
+        for worker_index in range(num_conns):
+            thread = Thread(
+                name=f"worker_{worker_index}", target=worker, args=(c, worker_index)
+            )
+            threads.append(thread)
+
+        for thread in threads:
+            thread.start()
+            # this is because of #22038
+            time.sleep(0.2)
+
+        for thread in threads:
+            thread.join()

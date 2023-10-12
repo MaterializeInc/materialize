@@ -2409,6 +2409,8 @@ pub enum EvalError {
     // printer.
     IfNullError(String),
     LengthTooLarge,
+    AclArrayNullElement,
+    MzAclArrayNullElement,
 }
 
 impl fmt::Display for EvalError {
@@ -2597,6 +2599,10 @@ impl fmt::Display for EvalError {
             }
             EvalError::IfNullError(s) => f.write_str(s),
             EvalError::LengthTooLarge => write!(f, "requested length too large"),
+            EvalError::AclArrayNullElement => write!(f, "ACL arrays must not contain null values"),
+            EvalError::MzAclArrayNullElement => {
+                write!(f, "MZ_ACL arrays must not contain null values")
+            }
         }
     }
 }
@@ -2847,6 +2853,8 @@ impl RustType<ProtoEvalError> for EvalError {
             }),
             EvalError::IfNullError(s) => IfNullError(s.clone()),
             EvalError::LengthTooLarge => LengthTooLarge(()),
+            EvalError::AclArrayNullElement => AclArrayNullElement(()),
+            EvalError::MzAclArrayNullElement => MzAclArrayNullElement(()),
         };
         ProtoEvalError { kind: Some(kind) }
     }
@@ -2964,6 +2972,8 @@ impl RustType<ProtoEvalError> for EvalError {
                 }),
                 IfNullError(v) => Ok(EvalError::IfNullError(v)),
                 LengthTooLarge(()) => Ok(EvalError::LengthTooLarge),
+                AclArrayNullElement(()) => Ok(EvalError::AclArrayNullElement),
+                MzAclArrayNullElement(()) => Ok(EvalError::MzAclArrayNullElement),
             },
             None => Err(TryFromProtoError::missing_field("ProtoEvalError::kind")),
         }

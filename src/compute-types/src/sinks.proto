@@ -23,6 +23,7 @@ message ProtoComputeSinkDesc {
     ProtoComputeSinkConnection connection = 3;
     bool with_snapshot = 4;
     mz_repr.antichain.ProtoU64Antichain up_to = 5;
+    repeated uint64 non_null_assertions = 6;
 }
 
 message ProtoComputeSinkConnection {

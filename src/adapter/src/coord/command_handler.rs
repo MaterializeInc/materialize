@@ -210,6 +210,10 @@ impl Coordinator {
                     catalog: self.owned_catalog(),
                 });
             }
+
+            Command::CheckConsistency { tx } => {
+                let _ = tx.send(self.check_consistency());
+            }
         }
     }
 
@@ -228,7 +232,7 @@ impl Coordinator {
         // Early return if successful, otherwise cleanup any possible state.
         match self.handle_startup_inner(&user, &conn_id).await {
             Ok(role_id) => {
-                let mut set_vars = Vec::new();
+                let mut session_vars = Vec::new();
                 if !set_setting_keys
                     .iter()
                     .any(|k| k == STATEMENT_LOGGING_SAMPLE_RATE.name())
@@ -238,11 +242,17 @@ impl Coordinator {
                         .state()
                         .system_config()
                         .statement_logging_default_sample_rate();
-                    set_vars.push((
+                    session_vars.push((
                         STATEMENT_LOGGING_SAMPLE_RATE.name().to_string(),
-                        default.to_string(),
+                        OwnedVarInput::Flat(default.to_string()),
                     ));
                 }
+                let role_vars = self
+                    .catalog()
+                    .get_role(&role_id)
+                    .vars()
+                    .map(|(name, val)| (name.to_owned(), val.clone()))
+                    .collect();
 
                 let session_type = metrics::session_type_label_value(&user);
                 self.metrics
@@ -271,8 +281,9 @@ impl Coordinator {
 
                 let resp = Ok(StartupResponse {
                     role_id,
-                    set_vars,
                     write_notify: notify,
+                    session_vars,
+                    role_vars,
                     catalog: self.owned_catalog(),
                 });
                 if tx.send(resp).is_err() {
@@ -524,6 +535,7 @@ impl Coordinator {
                     | Statement::AlterIndex(_)
                     | Statement::AlterSetCluster(_)
                     | Statement::AlterObjectRename(_)
+                    | Statement::AlterObjectSwap(_)
                     | Statement::AlterOwner(_)
                     | Statement::AlterRole(_)
                     | Statement::AlterSecret(_)

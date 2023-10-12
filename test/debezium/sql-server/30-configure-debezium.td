@@ -35,15 +35,19 @@ $ http-request method=POST url=http://debezium:8083/connectors content-type=appl
     "config": {
         "connector.class": "io.debezium.connector.sqlserver.SqlServerConnector",
         "database.hostname": "sql-server",
+        "database.encrypt": "false",
         "database.port": "1433",
         "database.user": "sa",
         "database.password": "${arg.sa-password}",
-        "database.dbname": "test",
+        "database.names": "test",
         "database.server.name": "sql-server",
         "database.history.kafka.bootstrap.servers": "kafka:9092",
         "database.history.kafka.topic": "schema-changes.history",
+        "schema.history.internal.kafka.bootstrap.servers": "kafka:9092",
+        "schema.history.internal.kafka.topic": "schemahistory.sql-server",
         "snapshot.isolation.mode": "exclusive",
-        "provide.transaction.metadata": "true"
+        "provide.transaction.metadata": "true",
+        "topic.prefix": "sql-server"
 #,
 #        "signal.data.collection": "test.dbo.debezium_signal"
     }

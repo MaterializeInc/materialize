@@ -107,14 +107,17 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         junit_report = ci_util.junit_report_filename(c.name)
 
         try:
-            c.run(
-                "testdrive",
-                f"--junit-report={junit_report}",
-                f"--var=replicas={args.replicas}",
-                f"--var=default-replica-size={materialized.default_replica_size}",
-                f"--var=default-storage-size={materialized.default_storage_size}",
-                *args.files,
-            )
+            junit_report = ci_util.junit_report_filename(c.name)
+            for file in args.files:
+                c.run(
+                    "testdrive",
+                    f"--junit-report={junit_report}",
+                    f"--var=replicas={args.replicas}",
+                    f"--var=default-replica-size={materialized.default_replica_size}",
+                    f"--var=default-storage-size={materialized.default_storage_size}",
+                    file,
+                )
+                c.sanity_restart_mz()
         finally:
             ci_util.upload_junit_report(
                 "testdrive", Path(__file__).parent / junit_report

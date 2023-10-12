@@ -122,6 +122,8 @@ connection through an AWS PrivateLink service or an SSH bastion host.
 {{< tabs >}}
 {{< tab "AWS PrivateLink">}}
 
+{{< public-preview />}}
+
 ##### Syntax {#kafka-privatelink-syntax}
 
 {{< warning >}}
@@ -452,7 +454,7 @@ an SSH bastion server to accept connections from Materialize, check [this guide]
 
 ### AWS PrivateLink
 
-{{< private-preview />}}
+{{< public-preview />}}
 
 An AWS PrivateLink connection establishes a link to an [AWS PrivateLink] service.
 You can use AWS PrivateLink connections in [Confluent Schema Registry connections](#confluent-schema-registry),

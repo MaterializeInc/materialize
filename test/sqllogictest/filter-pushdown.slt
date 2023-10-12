@@ -239,3 +239,75 @@ Source materialize.public.events_timestamped
   pushdown=((mz_now() < timestamp_to_mz_timestamp(try_parse_monotonic_iso8601_timestamp(content))))
 
 EOF
+
+# Regression tests for https://github.com/MaterializeInc/materialize/issues/22040
+
+statement ok
+create table t(x int, t timestamp);
+
+query T multiline
+explain with(filter_pushdown)
+select * from t
+where t < '2023-10-02 15:55:31.918 UTC';
+----
+Explained Query:
+  Filter (#1 < 2023-10-02 15:55:31.918)
+    ReadStorage materialize.public.t
+
+Source materialize.public.t
+  filter=((#1 < 2023-10-02 15:55:31.918))
+  pushdown=((#1 < 2023-10-02 15:55:31.918))
+
+EOF
+
+query T multiline
+explain with(filter_pushdown)
+select * from t
+where case when x=0 then t < '2023-10-02 15:55:31.918 UTC' else t > '2023-10-02 15:55:31.918 UTC' end;
+----
+Explained Query:
+  Filter case when (#0 = 0) then (#1 < 2023-10-02 15:55:31.918) else (#1 > 2023-10-02 15:55:31.918) end
+    ReadStorage materialize.public.t
+
+Source materialize.public.t
+  filter=(case when (#0 = 0) then (#1 < 2023-10-02 15:55:31.918) else (#1 > 2023-10-02 15:55:31.918) end)
+  pushdown=(case when (#0 = 0) then (#1 < 2023-10-02 15:55:31.918) else (#1 > 2023-10-02 15:55:31.918) end)
+
+EOF
+
+query T multiline
+explain with(filter_pushdown)
+with cte as (
+  select x, t, case when x=0 then t - INTERVAL '1' day else t - INTERVAL '2' day end as case_statement from t
+)
+select x, t, case_statement from cte
+where case_statement < '2023-10-02 15:55:31.918 UTC';
+----
+Explained Query:
+  Filter (#2 < 2023-10-02 15:55:31.918)
+    Map (case when (#0 = 0) then (#1 - 1 day) else (#1 - 2 days) end)
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+  filter=((case when (#0 = 0) then (#1 - 1 day) else (#1 - 2 days) end < 2023-10-02 15:55:31.918))
+  pushdown=((case when (#0 = 0) then (#1 - 1 day) else (#1 - 2 days) end < 2023-10-02 15:55:31.918))
+
+EOF
+
+query T multiline
+explain with(filter_pushdown)
+with cte as (
+  select x, t, case when x=0 then t - INTERVAL '1' day else t - INTERVAL '2' day end as case_statement from t
+)
+select x, t from cte
+where case_statement < mz_now();
+----
+Explained Query:
+  Filter (timestamp_to_mz_timestamp(case when (#0 = 0) then (#1 - 1 day) else (#1 - 2 days) end) < mz_now())
+    ReadStorage materialize.public.t
+
+Source materialize.public.t
+  filter=((timestamp_to_mz_timestamp(case when (#0 = 0) then (#1 - 1 day) else (#1 - 2 days) end) < mz_now()))
+  pushdown=((timestamp_to_mz_timestamp(case when (#0 = 0) then (#1 - 1 day) else (#1 - 2 days) end) < mz_now()))
+
+EOF
