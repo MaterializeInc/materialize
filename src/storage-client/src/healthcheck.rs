@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use chrono::{DateTime, NaiveDateTime, Utc};
 use mz_repr::{Datum, GlobalId, RelationDesc, Row, ScalarType};
 use once_cell::sync::Lazy;
@@ -15,8 +17,9 @@ pub fn pack_status_row(
     collection_id: GlobalId,
     status_name: &str,
     error: Option<&str>,
+    hints: &BTreeSet<String>,
+    namespaced_errors: &BTreeMap<String, String>,
     ts: u64,
-    hint: Option<&str>,
 ) -> Row {
     let timestamp = NaiveDateTime::from_timestamp_opt(
         (ts / 1000)
@@ -41,13 +44,27 @@ pub fn pack_status_row(
     let mut packer = row.packer();
     packer.extend([timestamp, collection_id, status, error]);
 
-    match hint {
-        Some(hint) => {
-            let metadata = vec![("hint", Datum::String(hint))];
-            packer.push_dict(metadata);
-        }
-        None => packer.push(Datum::Null),
-    };
+    if !hints.is_empty() || !namespaced_errors.is_empty() {
+        packer.push_dict_with(|dict_packer| {
+            // `hint` and `namespaced` are ordered,
+            // as well as the BTree's they each contain.
+            if !hints.is_empty() {
+                dict_packer.push(Datum::String("hints"));
+                dict_packer.push_list(hints.iter().map(|s| Datum::String(s)));
+            }
+            if !namespaced_errors.is_empty() {
+                dict_packer.push(Datum::String("namespaced"));
+                dict_packer.push_dict(
+                    namespaced_errors
+                        .iter()
+                        .map(|(k, v)| (k.as_str(), Datum::String(v))),
+                );
+            }
+        });
+    } else {
+        packer.push(Datum::Null);
+    }
+
     row
 }
 

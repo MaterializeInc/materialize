@@ -11,7 +11,9 @@
 
 use std::any::Any;
 use std::cell::RefCell;
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::fmt::Debug;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -19,6 +21,7 @@ use std::time::Duration;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
+use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
@@ -33,7 +36,7 @@ use timely::dataflow::operators::{Enter, Map};
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
-use tracing::{info, trace, error};
+use tracing::{error, info, trace};
 
 use crate::internal_control::{InternalCommandSender, InternalStorageCommand};
 
@@ -41,19 +44,21 @@ pub async fn write_to_persist(
     collection_id: GlobalId,
     new_status: &str,
     new_error: Option<&str>,
+    hints: &BTreeSet<String>,
+    namespaced_errors: &BTreeMap<String, String>,
     now: NowFn,
     client: &PersistClient,
     status_shard: ShardId,
     relation_desc: &RelationDesc,
-    hint: Option<&str>,
 ) {
     let now_ms = now();
     let row = mz_storage_client::healthcheck::pack_status_row(
         collection_id,
         new_status,
         new_error,
+        hints,
+        namespaced_errors,
         now_ms,
-        hint,
     );
 
     let mut handle = client
@@ -120,13 +125,155 @@ pub(crate) struct ObjectHealthConfig {
     pub(crate) persist_location: PersistLocation,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub enum StatusNamespace {
+    /// A normal status namespace. Any `Running` status from any worker will mark the object
+    /// `Running`.
+    Default(String),
+    /// A side-channel namespace. `Running` does not mark the object as `Running`, but does clear
+    /// errors from this namespace. All statuses from side-channels are considered to be from the
+    /// same worker.
+    SideChannel(String),
+}
+
+impl fmt::Display for StatusNamespace {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            StatusNamespace::Default(n) | StatusNamespace::SideChannel(n) => {
+                write!(f, "{}", n)
+            }
+        }
+    }
+}
+
+struct PerWorkerHealthStatus {
+    pub(crate) errors_by_worker: Vec<BTreeMap<StatusNamespace, HealthStatusUpdate>>,
+}
+
+impl PerWorkerHealthStatus {
+    fn merge_update(
+        &mut self,
+        mut worker: usize,
+        namespace: StatusNamespace,
+        update: HealthStatusUpdate,
+        only_greater: bool,
+    ) {
+        if let StatusNamespace::SideChannel(_) = &namespace {
+            worker = 0;
+        }
+
+        let errors = &mut self.errors_by_worker[worker];
+        match errors.entry(namespace) {
+            Entry::Vacant(v) => {
+                v.insert(update);
+            }
+            Entry::Occupied(mut o) => {
+                if !only_greater || o.get() < &update {
+                    o.insert(update);
+                }
+            }
+        }
+    }
+
+    fn decide_status(&self) -> OverallStatus {
+        let mut output_status = OverallStatus::Starting;
+        let mut namespaced_errors: BTreeMap<String, String> = BTreeMap::new();
+        let mut hints: BTreeSet<String> = BTreeSet::new();
+
+        for status in self.errors_by_worker.iter() {
+            use HealthStatusUpdate::*;
+            for (ns, ns_status) in status.iter() {
+                if let Stalled { error, hint, .. } = ns_status {
+                    let ns = ns.to_string();
+
+                    if Some(error) > namespaced_errors.get(&ns).as_deref() {
+                        namespaced_errors.insert(ns, error.to_string());
+                    }
+
+                    if let Some(hint) = hint {
+                        hints.insert(hint.to_string());
+                    }
+                }
+
+                if let (StatusNamespace::Default(_), HealthStatusUpdate::Running) = (ns, ns_status)
+                {
+                    output_status = OverallStatus::Running;
+                }
+            }
+        }
+
+        if !namespaced_errors.is_empty() {
+            output_status = OverallStatus::Stalled {
+                // Concatenate the namespaced errors together with commas, for an individual
+                // error message the user can look at.
+                error: namespaced_errors
+                    .iter()
+                    .map(|(ns, err)| format!("{}: {}", ns, err))
+                    .join(", "),
+                hints,
+                namespaced_errors,
+            }
+        }
+
+        output_status
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub enum OverallStatus {
+    Starting,
+    Running,
+    Stalled {
+        error: String,
+        hints: BTreeSet<String>,
+        namespaced_errors: BTreeMap<String, String>,
+    },
+}
+
+impl OverallStatus {
+    /// The user-readable name of the status state.
+    pub(crate) fn name(&self) -> &'static str {
+        match self {
+            OverallStatus::Starting => "starting",
+            OverallStatus::Running => "running",
+            OverallStatus::Stalled { .. } => "stalled",
+        }
+    }
+
+    /// The user-readable error string, if there is one.
+    pub(crate) fn error(&self) -> Option<&str> {
+        match self {
+            OverallStatus::Starting | OverallStatus::Running => None,
+            OverallStatus::Stalled { error, .. } => Some(error),
+        }
+    }
+
+    /// A set of namespaced errors, if there are any.
+    pub(crate) fn errors(&self) -> Option<&BTreeMap<String, String>> {
+        match self {
+            OverallStatus::Starting | OverallStatus::Running => None,
+            OverallStatus::Stalled {
+                namespaced_errors, ..
+            } => Some(namespaced_errors),
+        }
+    }
+
+    /// A set of hints, if there are any.
+    pub(crate) fn hints(&self) -> Option<&BTreeSet<String>> {
+        match self {
+            OverallStatus::Starting | OverallStatus::Running => None,
+            OverallStatus::Stalled { hints, .. } => Some(hints),
+        }
+    }
+}
+
 struct HealthState<'a> {
     id: GlobalId,
     persist_details: Option<(ShardId, &'a PersistClient)>,
-    healths: Vec<Option<HealthStatusUpdate>>,
+    healths: PerWorkerHealthStatus,
     schema: &'static RelationDesc,
-    last_reported_status: Option<HealthStatusUpdate>,
-    halt_with: Option<HealthStatusUpdate>,
+    last_reported_status: Option<OverallStatus>,
+    halt_with: Option<(StatusNamespace, HealthStatusUpdate)>,
 }
 
 impl<'a> HealthState<'a> {
@@ -146,7 +293,9 @@ impl<'a> HealthState<'a> {
         HealthState {
             id,
             persist_details,
-            healths: vec![None; worker_count],
+            healths: PerWorkerHealthStatus {
+                errors_by_worker: vec![Default::default(); worker_count],
+            },
             schema,
             last_reported_status: None,
             halt_with: None,
@@ -165,6 +314,8 @@ pub trait HealthOperator {
         collection_id: GlobalId,
         new_status: &str,
         new_error: Option<&str>,
+        hints: &BTreeSet<String>,
+        namespaced_errors: &BTreeMap<String, String>,
         now: NowFn,
         // TODO(guswynn): not urgent:
         // Ideally this would be entirely included in the `DefaultWriter`, but that
@@ -173,9 +324,8 @@ pub trait HealthOperator {
         client: &PersistClient,
         status_shard: ShardId,
         relation_desc: &RelationDesc,
-        hint: Option<&str>,
     );
-    async fn send_halt(&self, id: GlobalId, error: Option<HealthStatusUpdate>);
+    async fn send_halt(&self, id: GlobalId, error: Option<(StatusNamespace, HealthStatusUpdate)>);
 
     /// Optionally override the chosen worker index. Default is semi-random.
     /// Only useful for tests.
@@ -194,26 +344,28 @@ impl HealthOperator for DefaultWriter {
         collection_id: GlobalId,
         new_status: &str,
         new_error: Option<&str>,
+        hints: &BTreeSet<String>,
+        namespaced_errors: &BTreeMap<String, String>,
         now: NowFn,
         client: &PersistClient,
         status_shard: ShardId,
         relation_desc: &RelationDesc,
-        hint: Option<&str>,
     ) {
         write_to_persist(
             collection_id,
             new_status,
             new_error,
+            hints,
+            namespaced_errors,
             now,
             client,
             status_shard,
             relation_desc,
-            hint,
         )
         .await
     }
 
-    async fn send_halt(&self, id: GlobalId, error: Option<HealthStatusUpdate>) {
+    async fn send_halt(&self, id: GlobalId, error: Option<(StatusNamespace, HealthStatusUpdate)>) {
         self.0
             .borrow_mut()
             .broadcast(InternalStorageCommand::SuspendAndRestart {
@@ -238,13 +390,13 @@ pub(crate) fn health_operator<'g, G, P>(
     now: NowFn,
     // A set of id's that should be marked as `HealthStatusUpdate::starting()` during startup.
     mark_starting: BTreeSet<GlobalId>,
-    // An id that is allowed to halt the dataflow. Others are ignored, and panic during debug
+    // An id that is allowed to halt the dataflow. SideChannels are ignored, and panic during debug
     // mode.
     halting_id: GlobalId,
     // A description of the object type we are writing status updates about. Used in log lines.
     object_type: &'static str,
     // An indexed stream of health updates. Indexes are configured in `configs`.
-    health_stream: &Stream<G, (usize, HealthStatusUpdate)>,
+    health_stream: &Stream<G, (usize, StatusNamespace, HealthStatusUpdate)>,
     // A configuration per _index_. Indexes support things like subsources, and allow the
     // `health_operator` to understand where each sub-object should have its status written down
     // at.
@@ -359,17 +511,18 @@ where
             for state in health_states.values_mut() {
                 if mark_starting.contains(&state.id) {
                     if let Some((status_shard, persist_client)) = state.persist_details {
-                        let status = HealthStatusUpdate::starting();
+                        let status = OverallStatus::Starting;
                         health_operator_impl
                             .record_new_status(
                                 state.id,
                                 status.name(),
                                 status.error(),
+                                status.hints().unwrap_or(&BTreeSet::new()),
+                                status.errors().unwrap_or(&BTreeMap::new()),
                                 now.clone(),
                                 persist_client,
                                 status_shard,
                                 state.schema,
-                                status.hint(),
                             )
                             .await;
 
@@ -382,7 +535,7 @@ where
         let mut outputs_seen = BTreeSet::new();
         while let Some(event) = input.next_mut().await {
             if let AsyncEvent::Data(_cap, rows) = event {
-                for (worker_id, (output_index, health_event)) in rows.drain(..) {
+                for (worker_id, (output_index, ns, health_event)) in rows.drain(..) {
                     let HealthState {
                         id,
                         healths,
@@ -406,15 +559,10 @@ where
                     }
 
                     if health_event.should_halt() {
-                        *halt_with = Some(health_event.clone());
+                        *halt_with = Some((ns.clone(), health_event.clone()));
                     }
 
-                    let update = Some(health_event);
-                    // Keep the max of the messages in each round; this ensures that errors don't
-                    // get lost while also letting us frequently update to the newest status.
-                    if new_round || &healths[worker_id] < &update {
-                        healths[worker_id] = update;
-                    }
+                    healths.merge_update(worker_id, ns, health_event, !new_round);
                 }
 
                 let mut halt_with_outer = None;
@@ -431,31 +579,31 @@ where
                         .get_mut(&output_index)
                         .expect("known to exist");
 
-                    let overall_status = healths.iter().filter_map(Option::as_ref).max();
+                    let new_status = healths.decide_status();
 
-                    if let Some(new_status) = overall_status {
-                        if new_status.can_transition_from(last_reported_status.as_ref()) {
-                            info!(
-                                "Health transition for {object_type} {id}: \
-                                  {last_reported_status:?} -> {new_status:?}"
-                            );
-                            if let Some((status_shard, persist_client)) = persist_details {
-                                health_operator_impl
-                                    .record_new_status(
-                                        *id,
-                                        new_status.name(),
-                                        new_status.error(),
-                                        now.clone(),
-                                        persist_client,
-                                        *status_shard,
-                                        schema,
-                                        new_status.hint(),
-                                    )
-                                    .await;
-                            }
-
-                            *last_reported_status = Some(new_status.clone());
+                    if Some(&new_status) != last_reported_status.as_ref() {
+                        info!(
+                            "Health transition for {object_type} {id}: \
+                                  {last_reported_status:?} -> {:?}",
+                            Some(&new_status)
+                        );
+                        if let Some((status_shard, persist_client)) = persist_details {
+                            health_operator_impl
+                                .record_new_status(
+                                    *id,
+                                    new_status.name(),
+                                    new_status.error(),
+                                    new_status.hints().unwrap_or(&BTreeSet::new()),
+                                    new_status.errors().unwrap_or(&BTreeMap::new()),
+                                    now.clone(),
+                                    persist_client,
+                                    *status_shard,
+                                    schema,
+                                )
+                                .await;
                         }
+
+                        *last_reported_status = Some(new_status.clone());
                     }
 
                     // Set halt with if None.
@@ -508,12 +656,8 @@ pub enum HealthStatusUpdate {
         should_halt: bool,
     },
 }
-impl HealthStatusUpdate {
-    /// Generates a starting [`HealthStatusUpdate`].
-    pub(crate) fn starting() -> Self {
-        HealthStatusUpdate::Starting
-    }
 
+impl HealthStatusUpdate {
     /// Generates a running [`HealthStatusUpdate`].
     pub(crate) fn running() -> Self {
         HealthStatusUpdate::Running
@@ -537,31 +681,6 @@ impl HealthStatusUpdate {
         }
     }
 
-    /// The user-readable name of the status state.
-    pub(crate) fn name(&self) -> &'static str {
-        match self {
-            HealthStatusUpdate::Starting => "starting",
-            HealthStatusUpdate::Running => "running",
-            HealthStatusUpdate::Stalled { .. } => "stalled",
-        }
-    }
-
-    /// The user-readable error string, if there is one.
-    pub(crate) fn error(&self) -> Option<&str> {
-        match self {
-            HealthStatusUpdate::Starting | HealthStatusUpdate::Running => None,
-            HealthStatusUpdate::Stalled { error, .. } => Some(error),
-        }
-    }
-
-    /// A hint for solving the error, if there is one.
-    pub(crate) fn hint(&self) -> Option<&str> {
-        match self {
-            HealthStatusUpdate::Starting | HealthStatusUpdate::Running => None,
-            HealthStatusUpdate::Stalled { hint, .. } => hint.as_deref(),
-        }
-    }
-
     /// Whether or not we should halt the dataflow instances and restart it.
     pub(crate) fn should_halt(&self) -> bool {
         match self {
@@ -570,114 +689,18 @@ impl HealthStatusUpdate {
         }
     }
 
+    /*
     /// Whether or not we can transition from a state (or lack of one).
     ///
     /// Each time this returns `true`, a new status message will be communicated to the user.
     /// Note that messages that are identical except for `should_halt` don't need to be
     /// able to transition between each other, that is handled separately.
-    pub(crate) fn can_transition_from(&self, other: Option<&Self>) -> bool {
-        match (self, other) {
-            (_, None) => true,
-            (
-                HealthStatusUpdate::Stalled {
-                    hint: to_hint,
-                    error: to_error,
-                    ..
-                },
-                Some(HealthStatusUpdate::Stalled {
-                    hint: from_hint,
-                    error: from_error,
-                    ..
-                }),
-            ) => {
-                // We ignore `should_halt` while checking if we can transition.
-                to_hint != from_hint || to_error != from_error
-            }
-            (to, Some(from)) => from != to,
-        }
-    }
+     */
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn starting() -> HealthStatusUpdate {
-        HealthStatusUpdate::starting()
-    }
-
-    fn running() -> HealthStatusUpdate {
-        HealthStatusUpdate::running()
-    }
-
-    fn stalled() -> HealthStatusUpdate {
-        HealthStatusUpdate::stalled("".into(), None)
-    }
-    fn stalled2() -> HealthStatusUpdate {
-        HealthStatusUpdate::stalled("other".into(), None)
-    }
-
-    fn should_halt() -> HealthStatusUpdate {
-        HealthStatusUpdate::halting("".into(), None)
-    }
-    fn should_halt2() -> HealthStatusUpdate {
-        HealthStatusUpdate::halting("other".into(), None)
-    }
-
-    #[mz_ore::test]
-    fn test_can_transition() {
-        let test_cases = [
-            // Allowed transitions
-            (
-                Some(starting()),
-                vec![running(), stalled(), should_halt()],
-                true,
-            ),
-            (
-                Some(running()),
-                vec![starting(), stalled(), should_halt()],
-                true,
-            ),
-            (
-                Some(stalled()),
-                vec![starting(), running(), stalled2(), should_halt2()],
-                true,
-            ),
-            (
-                Some(should_halt()),
-                vec![starting(), running(), stalled2(), should_halt2()],
-                true,
-            ),
-            (
-                None,
-                vec![starting(), running(), stalled(), should_halt()],
-                true,
-            ),
-            // Forbidden transitions
-            (Some(starting()), vec![starting()], false),
-            (Some(running()), vec![running()], false),
-            (Some(stalled()), vec![stalled()], false),
-            (Some(should_halt()), vec![should_halt()], false),
-            // In practice these can't happen, so they are disallowed.
-            (Some(should_halt()), vec![stalled()], false),
-            (Some(stalled()), vec![should_halt()], false),
-        ];
-
-        for test_case in test_cases {
-            run_test(test_case)
-        }
-
-        fn run_test(test_case: (Option<HealthStatusUpdate>, Vec<HealthStatusUpdate>, bool)) {
-            let (from_status, to_status, allowed) = test_case;
-            for status in to_status {
-                assert_eq!(
-                    allowed,
-                    status.can_transition_from(from_status.as_ref()),
-                    "Bad can_transition: {from_status:?} -> {status:?}; expected allowed: {allowed:?}"
-                );
-            }
-        }
-    }
 
     // Actual timely tests for `health_operator`.
 
@@ -707,6 +730,7 @@ mod tests {
                 // Update and assert one is running.
                 Update(TestUpdate {
                     worker_id: 1,
+                    namespace: StatusNamespace::Default("default".to_string()),
                     input_index: 0,
                     update: HealthStatusUpdate::running(),
                 }),
@@ -716,30 +740,286 @@ mod tests {
                     ..Default::default()
                 }]),
                 // Assert the other can be stalled by 1 worker.
-                Update(TestUpdate {
-                    worker_id: 0,
-                    input_index: 1,
-                    update: HealthStatusUpdate::stalled("uhoh".to_string(), None),
-                }),
+                //
+                // TODO(guswynn): ideally we could push these updates
+                // at the same time, but because they are coming from separately
+                // workers, they could end up in different rounds, causing flakes.
+                // For now, we just do this.
                 Update(TestUpdate {
                     worker_id: 1,
+                    namespace: StatusNamespace::Default("default".to_string()),
                     input_index: 1,
                     update: HealthStatusUpdate::running(),
                 }),
                 AssertStatus(vec![StatusToAssert {
                     collection_index: 1,
+                    status: "running".to_string(),
+                    ..Default::default()
+                }]),
+                Update(TestUpdate {
+                    worker_id: 0,
+                    namespace: StatusNamespace::Default("default".to_string()),
+                    input_index: 1,
+                    update: HealthStatusUpdate::stalled("uhoh".to_string(), None),
+                }),
+                AssertStatus(vec![StatusToAssert {
+                    collection_index: 1,
                     status: "stalled".to_string(),
-                    error: Some("uhoh".to_string()),
+                    error: Some("default: uhoh".to_string()),
                     ..Default::default()
                 }]),
                 // And that it can recover.
                 Update(TestUpdate {
                     worker_id: 0,
+                    namespace: StatusNamespace::Default("default".to_string()),
                     input_index: 1,
                     update: HealthStatusUpdate::running(),
                 }),
                 AssertStatus(vec![StatusToAssert {
                     collection_index: 1,
+                    status: "running".to_string(),
+                    ..Default::default()
+                }]),
+            ],
+        );
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // Reports undefined behavior
+    fn test_health_operator_namespaces() {
+        use Step::*;
+
+        // Test 2 inputs across 2 workers.
+        health_operator_runner(
+            2,
+            1,
+            vec![
+                AssertStatus(vec![
+                    // Assert both inputs started.
+                    StatusToAssert {
+                        collection_index: 0,
+                        status: "starting".to_string(),
+                        ..Default::default()
+                    },
+                ]),
+                // Assert that we merge namespaced errors correctly.
+                //
+                // Note that these all happen on the same worker id.
+                Update(TestUpdate {
+                    worker_id: 0,
+                    namespace: StatusNamespace::Default("default".to_string()),
+                    input_index: 0,
+                    update: HealthStatusUpdate::stalled("uhoh".to_string(), None),
+                }),
+                AssertStatus(vec![StatusToAssert {
+                    collection_index: 0,
+                    status: "stalled".to_string(),
+                    error: Some("default: uhoh".to_string()),
+                    ..Default::default()
+                }]),
+                Update(TestUpdate {
+                    worker_id: 0,
+                    namespace: StatusNamespace::Default("default2".to_string()),
+                    input_index: 0,
+                    update: HealthStatusUpdate::stalled("uhoh".to_string(), None),
+                }),
+                AssertStatus(vec![StatusToAssert {
+                    collection_index: 0,
+                    status: "stalled".to_string(),
+                    error: Some("default: uhoh, default2: uhoh".to_string()),
+                    ..Default::default()
+                }]),
+                // And that it can recover.
+                Update(TestUpdate {
+                    worker_id: 0,
+                    namespace: StatusNamespace::Default("default2".to_string()),
+                    input_index: 0,
+                    update: HealthStatusUpdate::running(),
+                }),
+                AssertStatus(vec![StatusToAssert {
+                    collection_index: 0,
+                    status: "stalled".to_string(),
+                    error: Some("default: uhoh".to_string()),
+                    ..Default::default()
+                }]),
+                Update(TestUpdate {
+                    worker_id: 0,
+                    namespace: StatusNamespace::Default("default".to_string()),
+                    input_index: 0,
+                    update: HealthStatusUpdate::running(),
+                }),
+                AssertStatus(vec![StatusToAssert {
+                    collection_index: 0,
+                    status: "running".to_string(),
+                    ..Default::default()
+                }]),
+            ],
+        );
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // Reports undefined behavior
+    fn test_health_operator_namespace_side_channel() {
+        use Step::*;
+
+        health_operator_runner(
+            2,
+            1,
+            vec![
+                AssertStatus(vec![
+                    // Assert both inputs started.
+                    StatusToAssert {
+                        collection_index: 0,
+                        status: "starting".to_string(),
+                        ..Default::default()
+                    },
+                ]),
+                // Assert that `SideChannel` doesn't downgrade the status
+                //
+                // Note that these all happen on the same worker id.
+                Update(TestUpdate {
+                    worker_id: 0,
+                    namespace: StatusNamespace::SideChannel("other".to_string()),
+                    input_index: 0,
+                    update: HealthStatusUpdate::stalled("uhoh".to_string(), None),
+                }),
+                AssertStatus(vec![StatusToAssert {
+                    collection_index: 0,
+                    status: "stalled".to_string(),
+                    error: Some("other: uhoh".to_string()),
+                    ..Default::default()
+                }]),
+                // Note this is from a different work, but it merges as if its from
+                // the same worker.
+                Update(TestUpdate {
+                    worker_id: 1,
+                    namespace: StatusNamespace::SideChannel("other".to_string()),
+                    input_index: 0,
+                    update: HealthStatusUpdate::stalled("uhoh2".to_string(), None),
+                }),
+                AssertStatus(vec![StatusToAssert {
+                    collection_index: 0,
+                    status: "stalled".to_string(),
+                    error: Some("other: uhoh2".to_string()),
+                    ..Default::default()
+                }]),
+                Update(TestUpdate {
+                    worker_id: 0,
+                    namespace: StatusNamespace::SideChannel("other".to_string()),
+                    input_index: 0,
+                    update: HealthStatusUpdate::running(),
+                }),
+                // We haven't starting running yet, as a `Default` namespace hasn't told us.
+                AssertStatus(vec![StatusToAssert {
+                    collection_index: 0,
+                    status: "starting".to_string(),
+                    ..Default::default()
+                }]),
+                Update(TestUpdate {
+                    worker_id: 0,
+                    namespace: StatusNamespace::Default("default".to_string()),
+                    input_index: 0,
+                    update: HealthStatusUpdate::running(),
+                }),
+                AssertStatus(vec![StatusToAssert {
+                    collection_index: 0,
+                    status: "running".to_string(),
+                    ..Default::default()
+                }]),
+            ],
+        );
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // Reports undefined behavior
+    fn test_health_operator_hints() {
+        use Step::*;
+
+        health_operator_runner(
+            2,
+            1,
+            vec![
+                AssertStatus(vec![
+                    // Assert both inputs started.
+                    StatusToAssert {
+                        collection_index: 0,
+                        status: "starting".to_string(),
+                        ..Default::default()
+                    },
+                ]),
+                // Assert that `SideChannel` doesn't downgrade the status
+                //
+                // Note that these all happen across worker ids.
+                Update(TestUpdate {
+                    worker_id: 0,
+                    namespace: StatusNamespace::Default("default".to_string()),
+                    input_index: 0,
+                    update: HealthStatusUpdate::stalled(
+                        "uhoh".to_string(),
+                        Some("hint1".to_string()),
+                    ),
+                }),
+                AssertStatus(vec![StatusToAssert {
+                    collection_index: 0,
+                    status: "stalled".to_string(),
+                    error: Some("default: uhoh".to_string()),
+                    hint: Some("hint1".to_string()),
+                }]),
+                Update(TestUpdate {
+                    worker_id: 1,
+                    namespace: StatusNamespace::Default("default".to_string()),
+                    input_index: 0,
+                    update: HealthStatusUpdate::stalled(
+                        "uhoh2".to_string(),
+                        Some("hint2".to_string()),
+                    ),
+                }),
+                AssertStatus(vec![StatusToAssert {
+                    collection_index: 0,
+                    status: "stalled".to_string(),
+                    // Note the error sorts later so we just use that.
+                    error: Some("default: uhoh2".to_string()),
+                    hint: Some("hint1, hint2".to_string()),
+                }]),
+                // Update one of the hints
+                Update(TestUpdate {
+                    worker_id: 1,
+                    namespace: StatusNamespace::Default("default".to_string()),
+                    input_index: 0,
+                    update: HealthStatusUpdate::stalled(
+                        "uhoh2".to_string(),
+                        Some("hint3".to_string()),
+                    ),
+                }),
+                AssertStatus(vec![StatusToAssert {
+                    collection_index: 0,
+                    status: "stalled".to_string(),
+                    // Note the error sorts later so we just use that.
+                    error: Some("default: uhoh2".to_string()),
+                    hint: Some("hint1, hint3".to_string()),
+                }]),
+                // Assert recovery.
+                Update(TestUpdate {
+                    worker_id: 0,
+                    namespace: StatusNamespace::Default("default".to_string()),
+                    input_index: 0,
+                    update: HealthStatusUpdate::running(),
+                }),
+                AssertStatus(vec![StatusToAssert {
+                    collection_index: 0,
+                    status: "stalled".to_string(),
+                    // Note the error sorts later so we just use that.
+                    error: Some("default: uhoh2".to_string()),
+                    hint: Some("hint3".to_string()),
+                }]),
+                Update(TestUpdate {
+                    worker_id: 1,
+                    namespace: StatusNamespace::Default("default".to_string()),
+                    input_index: 0,
+                    update: HealthStatusUpdate::running(),
+                }),
+                AssertStatus(vec![StatusToAssert {
+                    collection_index: 0,
                     status: "running".to_string(),
                     ..Default::default()
                 }]),
@@ -769,6 +1049,7 @@ mod tests {
     #[derive(Debug, Clone)]
     struct TestUpdate {
         worker_id: u64,
+        namespace: StatusNamespace,
         input_index: usize,
         update: HealthStatusUpdate,
     }
@@ -794,21 +1075,31 @@ mod tests {
             collection_id: GlobalId,
             new_status: &str,
             new_error: Option<&str>,
+            hints: &BTreeSet<String>,
+            // test with the `new_error`, which is pre-constructed
+            _namespaced_errors: &BTreeMap<String, String>,
             _now: NowFn,
             _client: &PersistClient,
             _status_shard: ShardId,
             _relation_desc: &RelationDesc,
-            hint: Option<&str>,
         ) {
             let _ = self.sender.send(StatusToAssert {
                 collection_index: *self.input_mapping.get(&collection_id).unwrap(),
                 status: new_status.to_string(),
                 error: new_error.map(str::to_string),
-                hint: hint.map(str::to_string),
+                hint: if !hints.is_empty() {
+                    Some(hints.iter().join(", "))
+                } else {
+                    None
+                },
             });
         }
 
-        async fn send_halt(&self, _id: GlobalId, _error: Option<HealthStatusUpdate>) {
+        async fn send_halt(
+            &self,
+            _id: GlobalId,
+            _error: Option<(StatusNamespace, HealthStatusUpdate)>,
+        ) {
             // Not yet unit-tested
             unimplemented!()
         }
@@ -930,7 +1221,7 @@ mod tests {
     fn producer<G: Scope<Timestamp = ()>>(
         scope: G,
         mut input: UnboundedReceiver<TestUpdate>,
-    ) -> Stream<G, (usize, HealthStatusUpdate)> {
+    ) -> Stream<G, (usize, StatusNamespace, HealthStatusUpdate)> {
         let mut iterator = AsyncOperatorBuilder::new("iterator".to_string(), scope.clone());
         let (mut output_handle, output) = iterator.new_output();
 
@@ -945,7 +1236,12 @@ mod tests {
                 output_handle
                     .give(
                         capability.as_ref().unwrap(),
-                        (element.worker_id, element.input_index, element.update),
+                        (
+                            element.worker_id,
+                            element.input_index,
+                            element.namespace,
+                            element.update,
+                        ),
                     )
                     .await;
             }
@@ -953,7 +1249,7 @@ mod tests {
             capability.take();
         });
 
-        let output = output.exchange(|d| d.0).map(|d| (d.1, d.2));
+        let output = output.exchange(|d| d.0).map(|d| (d.1, d.2, d.3));
 
         output
     }

@@ -320,7 +320,15 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 .concatenate(upper_streams)
                 .connect_loop(feedback_handle);
 
-            let health_stream = root_scope.concatenate(health_streams);
+            let health_stream = root_scope.concatenate(health_streams).map(|(o, s)| {
+                (
+                    o,
+                    crate::healthcheck::StatusNamespace::Default(
+                        "placeholder_fixed_in_next_commit".to_string(),
+                    ),
+                    s,
+                )
+            });
             let health_token = crate::healthcheck::health_operator(
                 into_time_scope,
                 Arc::clone(&storage_state.persist_clients),
@@ -391,6 +399,15 @@ pub fn build_export_dataflow<A: Allocate>(
                     persist_location: description.from_storage_metadata.persist_location.clone(),
                 },
             );
+            let health_stream = health_stream.map(|(o, s)| {
+                (
+                    o,
+                    crate::healthcheck::StatusNamespace::Default(
+                        "placeholder_fixed_in_next_commit".to_string(),
+                    ),
+                    s,
+                )
+            });
 
             // Note that sinks also have only 1 active worker, which simplifies the work that
             // `health_operator` has to do internally.

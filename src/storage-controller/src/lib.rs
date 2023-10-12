@@ -1631,7 +1631,14 @@ where
             self.introspection_ids[&IntrospectionType::SourceStatusHistory];
         let mut updates = vec![];
         for id in pending_source_drops.drain(..) {
-            let status_row = healthcheck::pack_status_row(id, "dropped", None, (self.now)(), None);
+            let status_row = healthcheck::pack_status_row(
+                id,
+                "dropped",
+                None,
+                &Default::default(),
+                &Default::default(),
+                (self.now)(),
+            );
             updates.push((status_row, 1));
         }
 
@@ -1651,8 +1658,14 @@ where
         {
             let mut sink_statistics = self.sink_statistics.lock().expect("poisoned");
             for id in pending_sink_drops.drain(..) {
-                let status_row =
-                    healthcheck::pack_status_row(id, "dropped", None, (self.now)(), None);
+                let status_row = healthcheck::pack_status_row(
+                    id,
+                    "dropped",
+                    None,
+                    &Default::default(),
+                    &Default::default(),
+                    (self.now)(),
+                );
                 updates.push((status_row, 1));
 
                 sink_statistics.remove(&id);
