@@ -87,8 +87,8 @@
 // END LINT CONFIG
 
 use mz_catalog::{
-    debug_stash_backed_catalog_state, stash_backed_catalog_state, BootstrapArgs,
-    DurableCatalogState, Error, OpenableDurableCatalogState, StashConfig,
+    debug_stash_backed_catalog_state, stash_backed_catalog_state, BootstrapArgs, CatalogError,
+    DurableCatalogState, OpenableDurableCatalogState, StashConfig,
 };
 use mz_ore::now::SYSTEM_TIME;
 use mz_repr::role_id::RoleId;
@@ -210,8 +210,8 @@ async fn open_savepoint<D: DurableCatalogState>(
             .await
             .unwrap_err();
         match err {
-            Error::Catalog(_) => panic!("unexpected catalog error"),
-            Error::Stash(e) => assert!(e.can_recover_with_write_mode()),
+            CatalogError::Catalog(_) => panic!("unexpected catalog error"),
+            CatalogError::Durable(e) => assert!(e.can_recover_with_write_mode()),
         }
 
         // Initialize the stash.
@@ -296,8 +296,8 @@ async fn open_read_only<D: DurableCatalogState>(
         .await
         .unwrap_err();
     match err {
-        Error::Catalog(_) => panic!("unexpected catalog error"),
-        Error::Stash(e) => assert!(e.can_recover_with_write_mode()),
+        CatalogError::Catalog(_) => panic!("unexpected catalog error"),
+        CatalogError::Durable(e) => assert!(e.can_recover_with_write_mode()),
     }
 
     // Initialize the stash.

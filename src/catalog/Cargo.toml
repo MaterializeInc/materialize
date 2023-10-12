@@ -32,6 +32,7 @@ postgres-openssl = { version = "0.5.0" }
 serde = "1.0.152"
 serde_json = "1.0.89"
 tracing = "0.1.37"
+thiserror = "1.0.37"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [dev-dependencies]

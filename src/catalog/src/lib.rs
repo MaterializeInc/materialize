@@ -81,16 +81,13 @@
 
 use async_trait::async_trait;
 use std::collections::BTreeMap;
-use std::fmt;
-use std::fmt::{Debug, Formatter};
+use std::fmt::Debug;
 use std::num::NonZeroI64;
 use std::time::Duration;
 
-use mz_proto::TryFromProtoError;
-use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_stash::DebugStashFactory;
-use mz_stash_types::StashError;
 
+pub use crate::error::{CatalogError, DurableCatalogError};
 use crate::objects::Snapshot;
 pub use crate::objects::{
     Cluster, ClusterConfig, ClusterReplica, ClusterVariant, ClusterVariantManaged, Comment,
@@ -121,6 +118,7 @@ mod stash;
 mod transaction;
 
 pub mod builtin;
+mod error;
 pub mod initialize;
 pub mod objects;
 
@@ -133,42 +131,6 @@ const USER_REPLICA_ID_ALLOC_KEY: &str = "replica";
 const SYSTEM_REPLICA_ID_ALLOC_KEY: &str = "system_replica";
 pub const AUDIT_LOG_ID_ALLOC_KEY: &str = "auditlog";
 pub const STORAGE_USAGE_ID_ALLOC_KEY: &str = "storage_usage";
-
-#[derive(Debug)]
-pub enum Error {
-    Catalog(SqlCatalogError),
-    // TODO(jkosh44) make this more generic.
-    Stash(StashError),
-}
-
-impl std::error::Error for Error {}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Error::Catalog(e) => write!(f, "{e}"),
-            Error::Stash(e) => write!(f, "{e}"),
-        }
-    }
-}
-
-impl From<SqlCatalogError> for Error {
-    fn from(e: SqlCatalogError) -> Self {
-        Self::Catalog(e)
-    }
-}
-
-impl From<StashError> for Error {
-    fn from(e: StashError) -> Self {
-        Self::Stash(e)
-    }
-}
-
-impl From<TryFromProtoError> for Error {
-    fn from(e: TryFromProtoError) -> Error {
-        Error::Stash(mz_stash_types::StashError::from(e))
-    }
-}
 
 #[derive(Clone, Debug)]
 pub struct BootstrapArgs {
@@ -193,7 +155,7 @@ pub trait OpenableDurableCatalogState<D: DurableCatalogState>: Debug + Send {
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
-    ) -> Result<D, Error>;
+    ) -> Result<D, CatalogError>;
 
     /// Opens the catalog in read only mode. All mutating methods
     /// will return an error.
@@ -204,7 +166,7 @@ pub trait OpenableDurableCatalogState<D: DurableCatalogState>: Debug + Send {
         &mut self,
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
-    ) -> Result<D, Error>;
+    ) -> Result<D, CatalogError>;
 
     /// Opens the catalog in a writeable mode. Optionally initializes the
     /// catalog, if it has not been initialized, and perform any migrations
@@ -214,13 +176,13 @@ pub trait OpenableDurableCatalogState<D: DurableCatalogState>: Debug + Send {
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
-    ) -> Result<D, Error>;
+    ) -> Result<D, CatalogError>;
 
     /// Reports if the catalog state has been initialized.
-    async fn is_initialized(&mut self) -> Result<bool, Error>;
+    async fn is_initialized(&mut self) -> Result<bool, CatalogError>;
 
     /// Get the deployment generation of this instance.
-    async fn get_deployment_generation(&mut self) -> Result<Option<u64>, Error>;
+    async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError>;
 }
 
 // TODO(jkosh44) No method should take &mut self, but due to stash implementations we need it.
@@ -241,22 +203,22 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
     /// Returns the version of Materialize that last wrote to the catalog.
     ///
     /// If the catalog is uninitialized this will return None.
-    async fn get_catalog_content_version(&mut self) -> Result<Option<String>, Error>;
+    async fn get_catalog_content_version(&mut self) -> Result<Option<String>, CatalogError>;
 
     /// Get all clusters.
-    async fn get_clusters(&mut self) -> Result<Vec<Cluster>, Error>;
+    async fn get_clusters(&mut self) -> Result<Vec<Cluster>, CatalogError>;
 
     /// Get all cluster replicas.
-    async fn get_cluster_replicas(&mut self) -> Result<Vec<ClusterReplica>, Error>;
+    async fn get_cluster_replicas(&mut self) -> Result<Vec<ClusterReplica>, CatalogError>;
 
     /// Get all databases.
-    async fn get_databases(&mut self) -> Result<Vec<Database>, Error>;
+    async fn get_databases(&mut self) -> Result<Vec<Database>, CatalogError>;
 
     /// Get all schemas.
-    async fn get_schemas(&mut self) -> Result<Vec<Schema>, Error>;
+    async fn get_schemas(&mut self) -> Result<Vec<Schema>, CatalogError>;
 
     /// Get all system items.
-    async fn get_system_items(&mut self) -> Result<Vec<SystemObjectMapping>, Error>;
+    async fn get_system_items(&mut self) -> Result<Vec<SystemObjectMapping>, CatalogError>;
 
     /// Get all introspection source indexes.
     ///
@@ -264,52 +226,53 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
     async fn get_introspection_source_indexes(
         &mut self,
         cluster_id: ClusterId,
-    ) -> Result<BTreeMap<String, GlobalId>, Error>;
+    ) -> Result<BTreeMap<String, GlobalId>, CatalogError>;
 
     /// Get all roles.
-    async fn get_roles(&mut self) -> Result<Vec<Role>, Error>;
+    async fn get_roles(&mut self) -> Result<Vec<Role>, CatalogError>;
 
     /// Get all default privileges.
-    async fn get_default_privileges(&mut self) -> Result<Vec<DefaultPrivilege>, Error>;
+    async fn get_default_privileges(&mut self) -> Result<Vec<DefaultPrivilege>, CatalogError>;
 
     /// Get all system privileges.
-    async fn get_system_privileges(&mut self) -> Result<Vec<MzAclItem>, Error>;
+    async fn get_system_privileges(&mut self) -> Result<Vec<MzAclItem>, CatalogError>;
 
     /// Get all system configurations.
-    async fn get_system_configurations(&mut self) -> Result<Vec<SystemConfiguration>, Error>;
+    async fn get_system_configurations(&mut self)
+        -> Result<Vec<SystemConfiguration>, CatalogError>;
 
     /// Get all comments.
-    async fn get_comments(&mut self) -> Result<Vec<Comment>, Error>;
+    async fn get_comments(&mut self) -> Result<Vec<Comment>, CatalogError>;
 
     /// Get all timelines and their persisted timestamps.
     // TODO(jkosh44) This should be removed once the timestamp oracle is extracted.
-    async fn get_timestamps(&mut self) -> Result<Vec<TimelineTimestamp>, Error>;
+    async fn get_timestamps(&mut self) -> Result<Vec<TimelineTimestamp>, CatalogError>;
 
     /// Get the persisted timestamp of a timeline.
     // TODO(jkosh44) This should be removed once the timestamp oracle is extracted.
     async fn get_timestamp(
         &mut self,
         timeline: &Timeline,
-    ) -> Result<Option<mz_repr::Timestamp>, Error>;
+    ) -> Result<Option<mz_repr::Timestamp>, CatalogError>;
 
     /// Get all audit log events.
-    async fn get_audit_logs(&mut self) -> Result<Vec<VersionedEvent>, Error>;
+    async fn get_audit_logs(&mut self) -> Result<Vec<VersionedEvent>, CatalogError>;
 
     /// Get the next ID of `id_type`, without allocating it.
-    async fn get_next_id(&mut self, id_type: &str) -> Result<u64, Error>;
+    async fn get_next_id(&mut self, id_type: &str) -> Result<u64, CatalogError>;
 
     /// Get the next system replica id without allocating it.
-    async fn get_next_system_replica_id(&mut self) -> Result<u64, Error> {
+    async fn get_next_system_replica_id(&mut self) -> Result<u64, CatalogError> {
         self.get_next_id(SYSTEM_REPLICA_ID_ALLOC_KEY).await
     }
 
     /// Get the next user replica id without allocating it.
-    async fn get_next_user_replica_id(&mut self) -> Result<u64, Error> {
+    async fn get_next_user_replica_id(&mut self) -> Result<u64, CatalogError> {
         self.get_next_id(USER_REPLICA_ID_ALLOC_KEY).await
     }
 
     /// Get a snapshot of the catalog.
-    async fn snapshot(&mut self) -> Result<Snapshot, Error>;
+    async fn snapshot(&mut self) -> Result<Snapshot, CatalogError>;
 
     // TODO(jkosh44) Implement this for the catalog debug tool.
     /*    /// Dumps the entire catalog contents in human readable JSON.
@@ -323,21 +286,22 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     fn is_read_only(&self) -> bool;
 
     /// Creates a new durable catalog state transaction.
-    async fn transaction(&mut self) -> Result<Transaction, Error>;
+    async fn transaction(&mut self) -> Result<Transaction, CatalogError>;
 
     /// Commits a durable catalog state transaction.
-    async fn commit_transaction(&mut self, txn_batch: TransactionBatch) -> Result<(), Error>;
+    async fn commit_transaction(&mut self, txn_batch: TransactionBatch)
+        -> Result<(), CatalogError>;
 
     /// Confirms that this catalog is connected as the current leader.
     ///
     /// NB: We may remove this in later iterations of Pv2.
-    async fn confirm_leadership(&mut self) -> Result<(), Error>;
+    async fn confirm_leadership(&mut self) -> Result<(), CatalogError>;
 
     /// Set's the connection timeout for the underlying durable store.
     async fn set_connect_timeout(&mut self, connect_timeout: Duration);
 
     /// Persist the version of Materialize that last wrote to the catalog.
-    async fn set_catalog_content_version(&mut self, new_version: &str) -> Result<(), Error>;
+    async fn set_catalog_content_version(&mut self, new_version: &str) -> Result<(), CatalogError>;
 
     /// Gets all storage usage events and permanently deletes from the catalog those
     /// that happened more than the retention period ago from boot_ts.
@@ -345,10 +309,13 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         &mut self,
         retention_period: Option<Duration>,
         boot_ts: mz_repr::Timestamp,
-    ) -> Result<Vec<VersionedStorageUsage>, Error>;
+    ) -> Result<Vec<VersionedStorageUsage>, CatalogError>;
 
     /// Persist system items.
-    async fn set_system_items(&mut self, mappings: Vec<SystemObjectMapping>) -> Result<(), Error>;
+    async fn set_system_items(
+        &mut self,
+        mappings: Vec<SystemObjectMapping>,
+    ) -> Result<(), CatalogError>;
 
     /// Persist introspection source indexes.
     ///
@@ -358,7 +325,7 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     async fn set_introspection_source_indexes(
         &mut self,
         mappings: Vec<(ClusterId, &str, GlobalId)>,
-    ) -> Result<(), Error>;
+    ) -> Result<(), CatalogError>;
 
     /// Persist the configuration of a replica.
     /// This accepts only one item, as we currently use this only for the default cluster
@@ -369,51 +336,51 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         name: String,
         config: ReplicaConfig,
         owner_id: RoleId,
-    ) -> Result<(), Error>;
+    ) -> Result<(), CatalogError>;
 
     /// Persist new global timestamp for a timeline.
     async fn set_timestamp(
         &mut self,
         timeline: &Timeline,
         timestamp: mz_repr::Timestamp,
-    ) -> Result<(), Error>;
+    ) -> Result<(), CatalogError>;
 
     /// Persist the deployment generation of this instance.
-    async fn set_deploy_generation(&mut self, deploy_generation: u64) -> Result<(), Error>;
+    async fn set_deploy_generation(&mut self, deploy_generation: u64) -> Result<(), CatalogError>;
 
     /// Allocates and returns `amount` IDs of `id_type`.
-    async fn allocate_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, Error>;
+    async fn allocate_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, CatalogError>;
 
     /// Allocates and returns `amount` system [`GlobalId`]s.
-    async fn allocate_system_ids(&mut self, amount: u64) -> Result<Vec<GlobalId>, Error> {
+    async fn allocate_system_ids(&mut self, amount: u64) -> Result<Vec<GlobalId>, CatalogError> {
         let id = self.allocate_id("system", amount).await?;
 
         Ok(id.into_iter().map(GlobalId::System).collect())
     }
 
     /// Allocates and returns a user [`GlobalId`].
-    async fn allocate_user_id(&mut self) -> Result<GlobalId, Error> {
+    async fn allocate_user_id(&mut self) -> Result<GlobalId, CatalogError> {
         let id = self.allocate_id("user", 1).await?;
         let id = id.into_element();
         Ok(GlobalId::User(id))
     }
 
     /// Allocates and returns a system [`ClusterId`].
-    async fn allocate_system_cluster_id(&mut self) -> Result<ClusterId, Error> {
+    async fn allocate_system_cluster_id(&mut self) -> Result<ClusterId, CatalogError> {
         let id = self.allocate_id(SYSTEM_CLUSTER_ID_ALLOC_KEY, 1).await?;
         let id = id.into_element();
         Ok(ClusterId::System(id))
     }
 
     /// Allocates and returns a user [`ClusterId`].
-    async fn allocate_user_cluster_id(&mut self) -> Result<ClusterId, Error> {
+    async fn allocate_user_cluster_id(&mut self) -> Result<ClusterId, CatalogError> {
         let id = self.allocate_id(USER_CLUSTER_ID_ALLOC_KEY, 1).await?;
         let id = id.into_element();
         Ok(ClusterId::User(id))
     }
 
     /// Allocates and returns a user [`ReplicaId`].
-    async fn allocate_user_replica_id(&mut self) -> Result<ReplicaId, Error> {
+    async fn allocate_user_replica_id(&mut self) -> Result<ReplicaId, CatalogError> {
         let id = self.allocate_id(USER_REPLICA_ID_ALLOC_KEY, 1).await?;
         let id = id.into_element();
         Ok(ReplicaId::User(id))

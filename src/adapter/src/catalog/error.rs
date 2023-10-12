@@ -69,9 +69,7 @@ pub enum ErrorKind {
     #[error("{0}")]
     Unstructured(String),
     #[error(transparent)]
-    Stash(#[from] mz_stash_types::StashError),
-    #[error("stash in unexpected state")]
-    UnexpectedStashState,
+    Durable(#[from] mz_catalog::DurableCatalogError),
     #[error(transparent)]
     Uuid(#[from] uuid::Error),
     #[error("role \"{role_name}\" is a member of role \"{member_name}\"")]
@@ -119,15 +117,9 @@ impl From<SqlCatalogError> for Error {
     }
 }
 
-impl From<mz_stash_types::StashError> for Error {
-    fn from(e: mz_stash_types::StashError) -> Error {
-        Error::new(ErrorKind::from(e))
-    }
-}
-
 impl From<TryFromProtoError> for Error {
     fn from(e: TryFromProtoError) -> Error {
-        Error::new(ErrorKind::from(mz_stash_types::StashError::from(e)))
+        Error::from(mz_catalog::CatalogError::from(e))
     }
 }
 
@@ -137,11 +129,11 @@ impl From<uuid::Error> for Error {
     }
 }
 
-impl From<mz_catalog::Error> for Error {
-    fn from(e: mz_catalog::Error) -> Self {
+impl From<mz_catalog::CatalogError> for Error {
+    fn from(e: mz_catalog::CatalogError) -> Self {
         match e {
-            mz_catalog::Error::Catalog(e) => Error::new(ErrorKind::from(e)),
-            mz_catalog::Error::Stash(e) => Error::new(ErrorKind::from(e)),
+            mz_catalog::CatalogError::Catalog(e) => Error::new(ErrorKind::from(e)),
+            mz_catalog::CatalogError::Durable(e) => Error::new(ErrorKind::from(e)),
         }
     }
 }
