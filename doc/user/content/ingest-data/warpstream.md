@@ -27,11 +27,11 @@ Ensure you have the following:
 
     a. **Sign Up**: Begin by registering for a WarpStream account.
 
-    b. **Deploy on Fly.io**: Follow the given guidelines to deploy your WarpStream cluster on Fly.io.
+    b. **Deploy on Fly.io**: Follow [this guide](https://github.com/warpstreamlabs/warpstream-fly-io-template) to deploy your WarpStream cluster on Fly.io.
 
-    c. **Generate Credentials**: Post deployment, create credentials for connecting to your WarpStream cluster.
+    c. **Generate Credentials**: Post deployment, [create credentials](https://docs.warpstream.com/warpstream/how-to/configure-the-warpstream-agent-for-production/configure-authentication-for-the-warpstream-agent#sasl-authentication) for connecting to your WarpStream cluster.
 
-    d. **Test Connection**: Use the provided credentials to connect to the WarpStream cluster on Fly.io. Test this connection using the WarpStream CLI:
+    d. **Test Connection**: Use the provided credentials to connect to the WarpStream cluster on Fly.io. Test this connection using [the WarpStream CLI](https://docs.warpstream.com/warpstream/install-the-warpstream-agent):
 
     ```bash
     warpstream kcmd -type diagnose-connection \
@@ -39,6 +39,8 @@ Ensure you have the following:
                     -tls -username ccun_XXXXXXXXXX \
                     -password ccp_XXXXXXXXXX
     ```
+
+    Change the `bootstrap-host` to the name of your WarpStream cluster on Fly.io.
 
     e. **Topic Creation**: Establish the `materialize_click_streams` topic:
 
@@ -61,6 +63,7 @@ Ensure you have the following:
                     --records '{"action": "click", "user_id": "user_0", "page_id": "home"},,{"action": "hover", "user_id": "user_0", "page_id": "home"},,{"action": "scroll", "user_id": "user_0", "page_id": "home"}'
     ```
 
+    The WarpStream CLI uses `,,` as a delimiter between JSON records.
 
 2. #### Integrate with Materialize
 
@@ -122,6 +125,12 @@ Ensure you have the following:
                     -type produce \
                     -topic materialize_click_streams_1 \
                     --records '{"action": "click", "user_id": "user_1", "page_id": "home"}'
+    ```
+
+    f. Query the materialized view to monitor the real-time updates:
+
+    ```sql
+    SELECT * FROM warpstream_click_stream_aggregate;
     ```
 
 ---
