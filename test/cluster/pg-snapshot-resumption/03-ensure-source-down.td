@@ -15,6 +15,6 @@
       mz_sources.name =ANY (ARRAY['mz_source', 't1', 'ten'])
           AND
       status = 'stalled';
-t1 "recoverable errors should crash the process during snapshots"
-ten "recoverable errors should crash the process during snapshots"
-mz_source "recoverable errors should crash the process during snapshots"
+t1 "postgres: recoverable errors should crash the process during snapshots"
+ten "postgres: recoverable errors should crash the process during snapshots"
+mz_source "postgres: recoverable errors should crash the process during snapshots"

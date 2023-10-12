@@ -242,15 +242,15 @@ def workflow_failpoint(c: Composition) -> None:
     for failpoint in [
         (
             "fail_merge_snapshot_chunk",
-            "Failed to rehydrate state: Error merging snapshot values",
+            "upsert: Failed to rehydrate state: Error merging snapshot values",
         ),
         (
             "fail_state_multi_put",
-            "Failed to update records in state: Error putting values into state",
+            "upsert: Failed to update records in state: Error putting values into state",
         ),
         (
             "fail_state_multi_get",
-            "Failed to fetch records from state: Error getting values from state",
+            "upsert: Failed to fetch records from state: Error getting values from state",
         ),
     ]:
         run_one_failpoint(c, failpoint[0], failpoint[1])

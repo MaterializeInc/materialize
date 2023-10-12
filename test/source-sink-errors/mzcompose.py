@@ -111,7 +111,7 @@ class KafkaTransactionLogGreaterThan1:
         c.testdrive(
             dedent(
                 f"""
-                > SELECT bool_or(error ~* '{error}'), bool_or(details::json#>>'{{hint}}' ~* '{hint}')
+                > SELECT bool_or(error ~* '{error}'), bool_or(details::json#>>'{{hints,0}}' ~* '{hint}')
                   FROM mz_internal.mz_sink_status_history
                   JOIN mz_sinks ON mz_sinks.id = sink_id
                   WHERE name = 'kafka_sink' and status = 'stalled'
