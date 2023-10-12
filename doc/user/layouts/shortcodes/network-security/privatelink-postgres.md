@@ -75,6 +75,14 @@
 
 ## Validate the AWS PrivateLink connection
 
+Validate the AWS PrivateLink connection you created using the [`VALIDATE CONNECTION`](/sql/validate-connection) command:
+
+```sql
+VALIDATE CONNECTION privatelink_svc;
+```
+
+If no validation error is returned, move to the next step.
+
 ## Create a source connection
 
 In Materialize, create a source connection that uses the AWS PrivateLink connection you just configured:
