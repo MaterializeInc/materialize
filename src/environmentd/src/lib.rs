@@ -433,9 +433,7 @@ impl Listeners {
         {
             bail!("bootstrap default cluster replica size is unknown");
         }
-        let envd_epoch = adapter_storage
-            .epoch()
-            .expect("a real environmentd should always have an epoch number");
+        let envd_epoch = adapter_storage.epoch();
 
         // Initialize storage usage client.
         let storage_usage_client = StorageUsageClient::open(
