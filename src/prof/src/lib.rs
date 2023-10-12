@@ -261,7 +261,7 @@ mz_fg_version: 1
 
             for addr in stack.addrs.iter().rev() {
                 // See the comment
-                // [here](https://github.com/rust-lang/backtrace-rs/blob/master/src/symbolize/mod.rs#L123-L147)
+                // [here](https://github.com/rust-lang/backtrace-rs/blob/036d4909e1fb9c08c2bb0f59ac81994e39489b2f/src/symbolize/mod.rs#L123-L147)
                 // for why we need to subtract one. tl;dr addresses
                 // in stack traces are actually the return address of
                 // the called function, which is one past the call
