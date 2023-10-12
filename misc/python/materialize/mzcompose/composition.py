@@ -402,7 +402,7 @@ class Composition:
             # Run the next composition.
             yield
         finally:
-            # If sanity_check existed in the overriden service, but
+            # If sanity_restart existed in the overriden service, but
             # override() disabled it by removing the label,
             # keep the sanity check disabled
             if (
@@ -730,6 +730,11 @@ class Composition:
             ui.header(
                 "Sanity Restart: Restart Mz and verify source/sink/replica health"
             )
+            ps = self.invoke("ps", "materialized", "--quiet", capture=True)
+            if len(ps.stdout) == 0:
+                print("Service materialized not running, will not restart it.")
+                return
+
             self.kill("materialized")
             # TODO(def-): Better way to detect when kill has finished
             time.sleep(3)
