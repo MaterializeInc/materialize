@@ -21,7 +21,9 @@ use uuid::Uuid;
 use mz_catalog::builtin::{
     Builtin, Fingerprint, BUILTINS, BUILTIN_CLUSTERS, BUILTIN_PREFIXES, BUILTIN_ROLES,
 };
-use mz_catalog::objects::{SystemObjectDescription, SystemObjectUniqueIdentifier};
+use mz_catalog::objects::{
+    IntrospectionSourceIndex, SystemObjectDescription, SystemObjectUniqueIdentifier,
+};
 use mz_catalog::SystemObjectMapping;
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_compute_client::logging::LogVariant;
@@ -659,7 +661,11 @@ impl Catalog {
                 .set_introspection_source_indexes(
                     new_indexes
                         .iter()
-                        .map(|(log, index_id)| (id, log.name, *index_id))
+                        .map(|(log, index_id)| IntrospectionSourceIndex {
+                            cluster_id: id,
+                            name: log.name.to_string(),
+                            index_id: *index_id,
+                        })
                         .collect(),
                 )
                 .await?;

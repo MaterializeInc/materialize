@@ -40,8 +40,9 @@ use crate::initialize::DEPLOY_GENERATION;
 use crate::objects::{
     AuditLogKey, Cluster, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
     ClusterReplica, ClusterReplicaKey, ClusterReplicaValue, Comment, Database, DefaultPrivilege,
-    DurableType, IdAllocKey, IdAllocValue, ReplicaConfig, Role, Schema, Snapshot, StorageUsageKey,
-    SystemConfiguration, SystemObjectMapping, TimelineTimestamp, TimestampValue,
+    DurableType, IdAllocKey, IdAllocValue, IntrospectionSourceIndex, ReplicaConfig, Role, Schema,
+    Snapshot, StorageUsageKey, SystemConfiguration, SystemObjectMapping, TimelineTimestamp,
+    TimestampValue,
 };
 use crate::transaction::{
     add_new_builtin_cluster_replicas_migration, add_new_builtin_clusters_migration, Transaction,
@@ -1007,7 +1008,7 @@ impl DurableCatalogState for Connection {
     #[tracing::instrument(level = "debug", skip(self))]
     async fn set_introspection_source_indexes(
         &mut self,
-        mappings: Vec<(ClusterId, &str, GlobalId)>,
+        mappings: Vec<IntrospectionSourceIndex>,
     ) -> Result<(), Error> {
         if mappings.is_empty() {
             return Ok(());
@@ -1015,20 +1016,7 @@ impl DurableCatalogState for Connection {
 
         let mappings = mappings
             .into_iter()
-            .map(|(cluster_id, name, index_id)| {
-                let index_id = if let GlobalId::System(id) = index_id {
-                    id
-                } else {
-                    panic!("non-system id provided")
-                };
-                (
-                    ClusterIntrospectionSourceIndexKey {
-                        cluster_id,
-                        name: name.to_string(),
-                    },
-                    ClusterIntrospectionSourceIndexValue { index_id },
-                )
-            })
+            .map(DurableType::into_key_value)
             .map(|e| RustType::into_proto(&e));
         CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION
             .upsert(&mut self.stash, mappings)

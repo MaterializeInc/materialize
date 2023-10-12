@@ -265,6 +265,48 @@ pub struct IntrospectionSourceIndex {
     pub index_id: GlobalId,
 }
 
+impl DurableType<ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue>
+    for IntrospectionSourceIndex
+{
+    fn into_key_value(
+        self,
+    ) -> (
+        ClusterIntrospectionSourceIndexKey,
+        ClusterIntrospectionSourceIndexValue,
+    ) {
+        let index_id = match self.index_id {
+            GlobalId::System(id) => id,
+            GlobalId::User(_) => {
+                unreachable!("cluster introspection source index mapping cannot use a User ID")
+            }
+            GlobalId::Transient(_) => {
+                unreachable!("cluster introspection source index mapping cannot use a Transient ID")
+            }
+            GlobalId::Explain => {
+                unreachable!("cluster introspection source index mapping cannot use an Explain ID")
+            }
+        };
+        (
+            ClusterIntrospectionSourceIndexKey {
+                cluster_id: self.cluster_id,
+                name: self.name,
+            },
+            ClusterIntrospectionSourceIndexValue { index_id },
+        )
+    }
+
+    fn from_key_value(
+        key: ClusterIntrospectionSourceIndexKey,
+        value: ClusterIntrospectionSourceIndexValue,
+    ) -> Self {
+        Self {
+            cluster_id: key.cluster_id,
+            name: key.name,
+            index_id: GlobalId::System(value.index_id),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ClusterReplica {
     pub cluster_id: ClusterId,
