@@ -52,7 +52,7 @@ impl ToSql for Numeric {
         out: &mut BytesMut,
     ) -> Result<IsNull, Box<dyn Error + 'static + Send + Sync>> {
         let mut d = self.0 .0.clone();
-        let scale = u16::from(numeric::get_scale(&d));
+        let scale = u16::try_from(numeric::get_scale(&d))?;
         let is_zero = d.is_zero();
         let is_nan = d.is_nan();
         let is_neg = d.is_negative() && !is_zero;
