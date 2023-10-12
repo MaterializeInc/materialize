@@ -455,7 +455,7 @@ steps:
     label: "Platform checks upgrade, restarting compute clusterd first"
     timeout_in_minutes: 30
     agents:
-      queue: linux-x86_64
+      queue: builder-linux-x86_64
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
@@ -466,7 +466,7 @@ steps:
     label: "Platform checks upgrade, restarting compute clusterd last"
     timeout_in_minutes: 30
     agents:
-      queue: linux-x86_64
+      queue: builder-linux-x86_64
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
