@@ -191,6 +191,9 @@ impl PersistConfig {
                 storage_sink_minimum_batch_updates: AtomicUsize::new(
                     Self::DEFAULT_SINK_MINIMUM_BATCH_UPDATES,
                 ),
+                storage_source_decode_fuel: AtomicUsize::new(
+                    Self::DEFAULT_STORAGE_SOURCE_DECODE_FUEL,
+                ),
                 next_listen_batch_retryer: RwLock::new(Self::DEFAULT_NEXT_LISTEN_BATCH_RETRYER),
                 stats_audit_percent: AtomicUsize::new(Self::DEFAULT_STATS_AUDIT_PERCENT),
                 stats_collection_enabled: AtomicBool::new(Self::DEFAULT_STATS_COLLECTION_ENABLED),
@@ -247,6 +250,14 @@ impl PersistConfig {
     pub fn storage_sink_minimum_batch_updates(&self) -> usize {
         self.dynamic
             .storage_sink_minimum_batch_updates
+            .load(DynamicConfig::LOAD_ORDERING)
+    }
+
+    /// The maximum amount of work to do in the persist_source mfp_and_decode
+    /// operator before yielding.
+    pub fn storage_source_decode_fuel(&self) -> usize {
+        self.dynamic
+            .storage_source_decode_fuel
             .load(DynamicConfig::LOAD_ORDERING)
     }
 
@@ -318,6 +329,9 @@ impl PersistConfig {
 
     /// Default value for [`PersistConfig::sink_minimum_batch_updates`].
     pub const DEFAULT_SINK_MINIMUM_BATCH_UPDATES: usize = 0;
+
+    /// Default value for [`PersistConfig::storage_source_decode_fuel`].
+    pub const DEFAULT_STORAGE_SOURCE_DECODE_FUEL: usize = 1_000_000;
 
     /// Default value for [`DynamicConfig::next_listen_batch_retry_params`].
     pub const DEFAULT_NEXT_LISTEN_BATCH_RETRYER: RetryParameters = RetryParameters {
@@ -425,6 +439,7 @@ pub struct DynamicConfig {
     reader_lease_duration: RwLock<Duration>,
     sink_minimum_batch_updates: AtomicUsize,
     storage_sink_minimum_batch_updates: AtomicUsize,
+    storage_source_decode_fuel: AtomicUsize,
     stats_audit_percent: AtomicUsize,
     stats_collection_enabled: AtomicBool,
     stats_filter_enabled: AtomicBool,
@@ -780,6 +795,8 @@ pub struct PersistParameters {
     pub sink_minimum_batch_updates: Option<usize>,
     /// Configures [`PersistConfig::storage_sink_minimum_batch_updates`].
     pub storage_sink_minimum_batch_updates: Option<usize>,
+    /// Configures [`PersistConfig::storage_source_decode_fuel`].
+    pub storage_source_decode_fuel: Option<usize>,
     /// Configures [`DynamicConfig::stats_audit_percent`].
     pub stats_audit_percent: Option<usize>,
     /// Configures [`DynamicConfig::stats_collection_enabled`].
@@ -816,6 +833,7 @@ impl PersistParameters {
             reader_lease_duration: self_reader_lease_duration,
             sink_minimum_batch_updates: self_sink_minimum_batch_updates,
             storage_sink_minimum_batch_updates: self_storage_sink_minimum_batch_updates,
+            storage_source_decode_fuel: self_storage_source_decode_fuel,
             next_listen_batch_retryer: self_next_listen_batch_retryer,
             stats_audit_percent: self_stats_audit_percent,
             stats_collection_enabled: self_stats_collection_enabled,
@@ -838,6 +856,7 @@ impl PersistParameters {
             reader_lease_duration: other_reader_lease_duration,
             sink_minimum_batch_updates: other_sink_minimum_batch_updates,
             storage_sink_minimum_batch_updates: other_storage_sink_minimum_batch_updates,
+            storage_source_decode_fuel: other_storage_source_decode_fuel,
             next_listen_batch_retryer: other_next_listen_batch_retryer,
             stats_audit_percent: other_stats_audit_percent,
             stats_collection_enabled: other_stats_collection_enabled,
@@ -878,6 +897,9 @@ impl PersistParameters {
         }
         if let Some(v) = other_storage_sink_minimum_batch_updates {
             *self_storage_sink_minimum_batch_updates = Some(v);
+        }
+        if let Some(v) = other_storage_source_decode_fuel {
+            *self_storage_source_decode_fuel = Some(v);
         }
         if let Some(v) = other_next_listen_batch_retryer {
             *self_next_listen_batch_retryer = Some(v);
@@ -926,6 +948,7 @@ impl PersistParameters {
             reader_lease_duration,
             sink_minimum_batch_updates,
             storage_sink_minimum_batch_updates,
+            storage_source_decode_fuel,
             next_listen_batch_retryer,
             stats_audit_percent,
             stats_collection_enabled,
@@ -947,6 +970,7 @@ impl PersistParameters {
             && reader_lease_duration.is_none()
             && sink_minimum_batch_updates.is_none()
             && storage_sink_minimum_batch_updates.is_none()
+            && storage_source_decode_fuel.is_none()
             && next_listen_batch_retryer.is_none()
             && stats_audit_percent.is_none()
             && stats_collection_enabled.is_none()
@@ -977,6 +1001,7 @@ impl PersistParameters {
             reader_lease_duration,
             sink_minimum_batch_updates,
             storage_sink_minimum_batch_updates,
+            storage_source_decode_fuel,
             next_listen_batch_retryer,
             stats_audit_percent,
             stats_collection_enabled,
@@ -1052,6 +1077,11 @@ impl PersistParameters {
                 *storage_sink_minimum_batch_updates,
                 DynamicConfig::STORE_ORDERING,
             );
+        }
+        if let Some(storage_source_decode_fuel) = storage_source_decode_fuel {
+            cfg.dynamic
+                .storage_source_decode_fuel
+                .store(*storage_source_decode_fuel, DynamicConfig::STORE_ORDERING);
         }
         if let Some(retry_params) = next_listen_batch_retryer {
             let mut retry = cfg
@@ -1129,6 +1159,7 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             storage_sink_minimum_batch_updates: self
                 .storage_sink_minimum_batch_updates
                 .into_proto(),
+            storage_source_decode_fuel: self.storage_source_decode_fuel.into_proto(),
             next_listen_batch_retryer: self.next_listen_batch_retryer.into_proto(),
             stats_audit_percent: self.stats_audit_percent.into_proto(),
             stats_collection_enabled: self.stats_collection_enabled.into_proto(),
@@ -1159,6 +1190,7 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             storage_sink_minimum_batch_updates: proto
                 .storage_sink_minimum_batch_updates
                 .into_rust()?,
+            storage_source_decode_fuel: proto.storage_source_decode_fuel.into_rust()?,
             next_listen_batch_retryer: proto.next_listen_batch_retryer.into_rust()?,
             stats_audit_percent: proto.stats_audit_percent.into_rust()?,
             stats_collection_enabled: proto.stats_collection_enabled.into_rust()?,

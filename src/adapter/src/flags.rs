@@ -180,6 +180,7 @@ fn persist_config(config: &SystemVars) -> PersistParameters {
         storage_sink_minimum_batch_updates: Some(
             config.storage_persist_sink_minimum_batch_updates(),
         ),
+        storage_source_decode_fuel: Some(config.storage_source_decode_fuel()),
         next_listen_batch_retryer: Some(RetryParameters {
             initial_backoff: config.persist_next_listen_batch_retryer_initial_backoff(),
             multiplier: config.persist_next_listen_batch_retryer_multiplier(),
