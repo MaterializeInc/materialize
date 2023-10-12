@@ -626,7 +626,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqlsmith
-          args: [--max-joins=1, --runtime=1500]
+          args: [--max-joins=2, --runtime=1500]
 
   - id: sqlsmith-explain
     label: "SQLsmith explain"

@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 import json
-import os
 import random
 import time
 from datetime import datetime
@@ -22,13 +21,8 @@ from materialize.mzcompose.composition import (
 )
 from materialize.mzcompose.services.materialized import Materialized
 
-if os.getenv("BUILDKITE_AGENT_META_DATA_AWS_INSTANCE_TYPE") == "c5.2xlarge":
-    TOTAL_MEMORY = 12
-    NUM_SERVERS = 2
-else:
-    TOTAL_MEMORY = 96
-    NUM_SERVERS = 1
-
+TOTAL_MEMORY = 12
+NUM_SERVERS = 2
 MZ_SERVERS = [f"mz_{i + 1}" for i in range(NUM_SERVERS)]
 
 SERVICES = [
