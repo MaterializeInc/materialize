@@ -59,7 +59,7 @@ use timely::PartialOrder;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
-use crate::healthcheck::HealthStatusUpdate;
+use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::render::sinks::SinkRender;
 use crate::sink::KafkaBaseMetrics;
 use crate::statistics::{SinkStatisticsMetrics, StorageStatistics};
@@ -97,7 +97,7 @@ where
         // TODO(benesch): errors should stream out through the sink,
         // if we figure out a protocol for that.
         _err_collection: Collection<G, DataflowError, Diff>,
-    ) -> (Stream<G, HealthStatusUpdate>, Option<Rc<dyn Any>>)
+    ) -> (Stream<G, HealthStatusMessage>, Option<Rc<dyn Any>>)
     where
         G: Scope<Timestamp = Timestamp>,
     {
@@ -371,8 +371,8 @@ struct HealthOutputHandle {
     handle: Mutex<
         mz_timely_util::builder_async::AsyncOutputHandle<
             mz_repr::Timestamp,
-            Vec<HealthStatusUpdate>,
-            TeeCore<mz_repr::Timestamp, Vec<HealthStatusUpdate>>,
+            Vec<HealthStatusMessage>,
+            TeeCore<mz_repr::Timestamp, Vec<HealthStatusMessage>>,
         >,
     >,
 }
@@ -907,7 +907,15 @@ async fn update_status(healthchecker: &HealthOutputHandle, status: HealthStatusU
         .handle
         .lock()
         .await
-        .give(&healthchecker.health_cap, status)
+        .give(
+            &healthchecker.health_cap,
+            HealthStatusMessage {
+                // sinks only have 1 logical object.
+                index: 0,
+                namespace: StatusNamespace::Kafka,
+                update: status,
+            },
+        )
         .await;
 }
 
@@ -965,7 +973,7 @@ fn kafka<G>(
     metrics: KafkaBaseMetrics,
     sink_statistics: StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics>,
     connection_context: ConnectionContext,
-) -> (Stream<G, HealthStatusUpdate>, Rc<dyn Any>)
+) -> (Stream<G, HealthStatusMessage>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -1053,7 +1061,7 @@ pub fn produce_to_kafka<G>(
     metrics: KafkaBaseMetrics,
     sink_statistics: StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics>,
     connection_context: ConnectionContext,
-) -> (Stream<G, HealthStatusUpdate>, Rc<dyn Any>)
+) -> (Stream<G, HealthStatusMessage>, Rc<dyn Any>)
 where
     G: Scope<Timestamp = Timestamp>,
 {

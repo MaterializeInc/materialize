@@ -75,8 +75,7 @@ use timely::PartialOrder;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::{info, trace};
 
-use crate::healthcheck::HealthStatusUpdate;
-use crate::render::sources::OutputIndex;
+use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate};
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::reclock::{ReclockBatch, ReclockError, ReclockFollower, ReclockOperator};
 use crate::source::types::{
@@ -179,7 +178,7 @@ pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C>(
         Collection<Child<'g, G, mz_repr::Timestamp>, SourceOutput<C::Key, C::Value>, Diff>,
         Collection<Child<'g, G, mz_repr::Timestamp>, SourceError, Diff>,
     )>,
-    Stream<G, (OutputIndex, HealthStatusUpdate)>,
+    Stream<G, HealthStatusMessage>,
     Option<Rc<dyn Any>>,
 )
 where
@@ -260,7 +259,7 @@ fn source_render_operator<G, C>(
         Diff,
     >,
     Stream<G, Infallible>,
-    Stream<G, (OutputIndex, HealthStatusUpdate)>,
+    Stream<G, HealthStatusMessage>,
     Rc<dyn Any>,
 )
 where
@@ -310,11 +309,17 @@ where
 
                 let statuses: &mut Vec<_> = statuses_by_idx.entry(*output_index).or_default();
 
-                let status = (*output_index, status);
+                let mut status = HealthStatusMessage {
+                    index: *output_index,
+                    namespace: C::STATUS_NAMESPACE.clone(),
+                    update: status,
+                };
                 if statuses.last() != Some(&status) {
                     statuses.push(status.clone());
                     // The global status contains the most recent update of the subsources
-                    statuses.push((0, status.1));
+
+                    status.index = 0;
+                    statuses.push(status);
                 }
 
                 match message {

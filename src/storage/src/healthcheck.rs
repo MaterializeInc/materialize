@@ -127,9 +127,15 @@ pub(crate) struct ObjectHealthConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StatusNamespace {
-    /// A normal status namespace. Any `Running` status from any worker will mark the object
+    /// A normal status namespaces. Any `Running` status from any worker will mark the object
     /// `Running`.
-    Default(String),
+    Kafka,
+    Postgres,
+    Generator,
+    TestScript,
+    Upsert,
+    Decode,
+    Internal,
     /// A side-channel namespace. `Running` does not mark the object as `Running`, but does clear
     /// errors from this namespace. All statuses from side-channels are considered to be from the
     /// same worker.
@@ -138,8 +144,16 @@ pub enum StatusNamespace {
 
 impl fmt::Display for StatusNamespace {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use StatusNamespace::*;
         match self {
-            StatusNamespace::Default(n) | StatusNamespace::SideChannel(n) => {
+            Kafka => write!(f, "kafka"),
+            Postgres => write!(f, "postgres"),
+            Generator => write!(f, "generator"),
+            TestScript => write!(f, "testscript"),
+            Upsert => write!(f, "upsert"),
+            Decode => write!(f, "decode"),
+            Internal => write!(f, "internal"),
+            StatusNamespace::SideChannel(n) => {
                 write!(f, "{}", n)
             }
         }
@@ -195,7 +209,8 @@ impl PerWorkerHealthStatus {
                     }
                 }
 
-                if let (StatusNamespace::Default(_), HealthStatusUpdate::Running) = (ns, ns_status)
+                if !matches!(ns, StatusNamespace::SideChannel(_))
+                    && matches!(ns_status, HealthStatusUpdate::Running)
                 {
                     output_status = OverallStatus::Running;
                 }
@@ -377,6 +392,19 @@ impl HealthOperator for DefaultWriter {
     }
 }
 
+/// A health message consumed by the `health_operator`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct HealthStatusMessage {
+    /// The index of the object this message describes.
+    ///
+    /// Useful for sub-objects like sub-sources.
+    pub index: usize,
+    /// The namespace of the health update.
+    pub namespace: StatusNamespace,
+    /// The update itself.
+    pub update: HealthStatusUpdate,
+}
+
 /// Writes updates that come across `health_stream` to the collection's status shards, as identified
 /// by their `CollectionMetadata`.
 ///
@@ -396,7 +424,7 @@ pub(crate) fn health_operator<'g, G, P>(
     // A description of the object type we are writing status updates about. Used in log lines.
     object_type: &'static str,
     // An indexed stream of health updates. Indexes are configured in `configs`.
-    health_stream: &Stream<G, (usize, StatusNamespace, HealthStatusUpdate)>,
+    health_stream: &Stream<G, HealthStatusMessage>,
     // A configuration per _index_. Indexes support things like subsources, and allow the
     // `health_operator` to understand where each sub-object should have its status written down
     // at.
@@ -535,7 +563,15 @@ where
         let mut outputs_seen = BTreeSet::new();
         while let Some(event) = input.next_mut().await {
             if let AsyncEvent::Data(_cap, rows) = event {
-                for (worker_id, (output_index, ns, health_event)) in rows.drain(..) {
+                for (
+                    worker_id,
+                    HealthStatusMessage {
+                        index: output_index,
+                        namespace: ns,
+                        update: health_event,
+                    },
+                ) in rows.drain(..)
+                {
                     let HealthState {
                         id,
                         healths,
@@ -730,7 +766,7 @@ mod tests {
                 // Update and assert one is running.
                 Update(TestUpdate {
                     worker_id: 1,
-                    namespace: StatusNamespace::Default("default".to_string()),
+                    namespace: StatusNamespace::TestScript,
                     input_index: 0,
                     update: HealthStatusUpdate::running(),
                 }),
@@ -747,7 +783,7 @@ mod tests {
                 // For now, we just do this.
                 Update(TestUpdate {
                     worker_id: 1,
-                    namespace: StatusNamespace::Default("default".to_string()),
+                    namespace: StatusNamespace::TestScript,
                     input_index: 1,
                     update: HealthStatusUpdate::running(),
                 }),
@@ -758,20 +794,20 @@ mod tests {
                 }]),
                 Update(TestUpdate {
                     worker_id: 0,
-                    namespace: StatusNamespace::Default("default".to_string()),
+                    namespace: StatusNamespace::TestScript,
                     input_index: 1,
                     update: HealthStatusUpdate::stalled("uhoh".to_string(), None),
                 }),
                 AssertStatus(vec![StatusToAssert {
                     collection_index: 1,
                     status: "stalled".to_string(),
-                    error: Some("default: uhoh".to_string()),
+                    error: Some("testscript: uhoh".to_string()),
                     ..Default::default()
                 }]),
                 // And that it can recover.
                 Update(TestUpdate {
                     worker_id: 0,
-                    namespace: StatusNamespace::Default("default".to_string()),
+                    namespace: StatusNamespace::TestScript,
                     input_index: 1,
                     update: HealthStatusUpdate::running(),
                 }),
@@ -807,44 +843,44 @@ mod tests {
                 // Note that these all happen on the same worker id.
                 Update(TestUpdate {
                     worker_id: 0,
-                    namespace: StatusNamespace::Default("default".to_string()),
+                    namespace: StatusNamespace::TestScript,
                     input_index: 0,
                     update: HealthStatusUpdate::stalled("uhoh".to_string(), None),
                 }),
                 AssertStatus(vec![StatusToAssert {
                     collection_index: 0,
                     status: "stalled".to_string(),
-                    error: Some("default: uhoh".to_string()),
+                    error: Some("testscript: uhoh".to_string()),
                     ..Default::default()
                 }]),
                 Update(TestUpdate {
                     worker_id: 0,
-                    namespace: StatusNamespace::Default("default2".to_string()),
+                    namespace: StatusNamespace::Kafka,
                     input_index: 0,
                     update: HealthStatusUpdate::stalled("uhoh".to_string(), None),
                 }),
                 AssertStatus(vec![StatusToAssert {
                     collection_index: 0,
                     status: "stalled".to_string(),
-                    error: Some("default: uhoh, default2: uhoh".to_string()),
+                    error: Some("kafka: uhoh, testscript: uhoh".to_string()),
                     ..Default::default()
                 }]),
                 // And that it can recover.
                 Update(TestUpdate {
                     worker_id: 0,
-                    namespace: StatusNamespace::Default("default2".to_string()),
+                    namespace: StatusNamespace::Kafka,
                     input_index: 0,
                     update: HealthStatusUpdate::running(),
                 }),
                 AssertStatus(vec![StatusToAssert {
                     collection_index: 0,
                     status: "stalled".to_string(),
-                    error: Some("default: uhoh".to_string()),
+                    error: Some("testscript: uhoh".to_string()),
                     ..Default::default()
                 }]),
                 Update(TestUpdate {
                     worker_id: 0,
-                    namespace: StatusNamespace::Default("default".to_string()),
+                    namespace: StatusNamespace::TestScript,
                     input_index: 0,
                     update: HealthStatusUpdate::running(),
                 }),
@@ -917,7 +953,7 @@ mod tests {
                 }]),
                 Update(TestUpdate {
                     worker_id: 0,
-                    namespace: StatusNamespace::Default("default".to_string()),
+                    namespace: StatusNamespace::TestScript,
                     input_index: 0,
                     update: HealthStatusUpdate::running(),
                 }),
@@ -952,7 +988,7 @@ mod tests {
                 // Note that these all happen across worker ids.
                 Update(TestUpdate {
                     worker_id: 0,
-                    namespace: StatusNamespace::Default("default".to_string()),
+                    namespace: StatusNamespace::TestScript,
                     input_index: 0,
                     update: HealthStatusUpdate::stalled(
                         "uhoh".to_string(),
@@ -962,12 +998,12 @@ mod tests {
                 AssertStatus(vec![StatusToAssert {
                     collection_index: 0,
                     status: "stalled".to_string(),
-                    error: Some("default: uhoh".to_string()),
+                    error: Some("testscript: uhoh".to_string()),
                     hint: Some("hint1".to_string()),
                 }]),
                 Update(TestUpdate {
                     worker_id: 1,
-                    namespace: StatusNamespace::Default("default".to_string()),
+                    namespace: StatusNamespace::TestScript,
                     input_index: 0,
                     update: HealthStatusUpdate::stalled(
                         "uhoh2".to_string(),
@@ -978,13 +1014,13 @@ mod tests {
                     collection_index: 0,
                     status: "stalled".to_string(),
                     // Note the error sorts later so we just use that.
-                    error: Some("default: uhoh2".to_string()),
+                    error: Some("testscript: uhoh2".to_string()),
                     hint: Some("hint1, hint2".to_string()),
                 }]),
                 // Update one of the hints
                 Update(TestUpdate {
                     worker_id: 1,
-                    namespace: StatusNamespace::Default("default".to_string()),
+                    namespace: StatusNamespace::TestScript,
                     input_index: 0,
                     update: HealthStatusUpdate::stalled(
                         "uhoh2".to_string(),
@@ -995,13 +1031,13 @@ mod tests {
                     collection_index: 0,
                     status: "stalled".to_string(),
                     // Note the error sorts later so we just use that.
-                    error: Some("default: uhoh2".to_string()),
+                    error: Some("testscript: uhoh2".to_string()),
                     hint: Some("hint1, hint3".to_string()),
                 }]),
                 // Assert recovery.
                 Update(TestUpdate {
                     worker_id: 0,
-                    namespace: StatusNamespace::Default("default".to_string()),
+                    namespace: StatusNamespace::TestScript,
                     input_index: 0,
                     update: HealthStatusUpdate::running(),
                 }),
@@ -1009,12 +1045,12 @@ mod tests {
                     collection_index: 0,
                     status: "stalled".to_string(),
                     // Note the error sorts later so we just use that.
-                    error: Some("default: uhoh2".to_string()),
+                    error: Some("testscript: uhoh2".to_string()),
                     hint: Some("hint3".to_string()),
                 }]),
                 Update(TestUpdate {
                     worker_id: 1,
-                    namespace: StatusNamespace::Default("default".to_string()),
+                    namespace: StatusNamespace::TestScript,
                     input_index: 0,
                     update: HealthStatusUpdate::running(),
                 }),
@@ -1221,7 +1257,7 @@ mod tests {
     fn producer<G: Scope<Timestamp = ()>>(
         scope: G,
         mut input: UnboundedReceiver<TestUpdate>,
-    ) -> Stream<G, (usize, StatusNamespace, HealthStatusUpdate)> {
+    ) -> Stream<G, HealthStatusMessage> {
         let mut iterator = AsyncOperatorBuilder::new("iterator".to_string(), scope.clone());
         let (mut output_handle, output) = iterator.new_output();
 
@@ -1249,7 +1285,11 @@ mod tests {
             capability.take();
         });
 
-        let output = output.exchange(|d| d.0).map(|d| (d.1, d.2, d.3));
+        let output = output.exchange(|d| d.0).map(|d| HealthStatusMessage {
+            index: d.1,
+            namespace: d.2,
+            update: d.3,
+        });
 
         output
     }

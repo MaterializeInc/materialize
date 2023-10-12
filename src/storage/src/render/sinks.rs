@@ -27,12 +27,12 @@ use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sinks::{
     MetadataFilled, SinkEnvelope, StorageSinkConnection, StorageSinkDesc,
 };
-use timely::dataflow::operators::{Leave, Map};
+use timely::dataflow::operators::Leave;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
 use tracing::warn;
 
-use crate::healthcheck::HealthStatusUpdate;
+use crate::healthcheck::HealthStatusMessage;
 use crate::storage_state::StorageState;
 
 /// _Renders_ complete _differential_ [`Collection`]s
@@ -44,7 +44,7 @@ pub(crate) fn render_sink<'g, G: Scope<Timestamp = ()>>(
     tokens: &mut Vec<Rc<dyn std::any::Any>>,
     sink_id: GlobalId,
     sink: &StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>,
-) -> Stream<G, (usize, HealthStatusUpdate)> {
+) -> Stream<G, HealthStatusMessage> {
     let sink_render = get_sink_render_for(&sink.connection);
 
     let (ok_collection, err_collection, source_token) = persist_source::persist_source(
@@ -76,7 +76,7 @@ pub(crate) fn render_sink<'g, G: Scope<Timestamp = ()>>(
         tokens.push(sink_token);
     }
 
-    health.map(|status| (0, status)).leave()
+    health.leave()
 }
 
 #[allow(clippy::borrowed_box)]
@@ -245,7 +245,7 @@ where
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
-    ) -> (Stream<G, HealthStatusUpdate>, Option<Rc<dyn Any>>)
+    ) -> (Stream<G, HealthStatusMessage>, Option<Rc<dyn Any>>)
     where
         G: Scope<Timestamp = Timestamp>;
 }

@@ -103,7 +103,7 @@ use tokio_postgres::error::SqlState;
 use tokio_postgres::types::PgLsn;
 use tokio_postgres::{Client, SimpleQueryMessage, SimpleQueryRow};
 
-use crate::healthcheck::HealthStatusUpdate;
+use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::source::types::SourceRender;
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 
@@ -115,6 +115,8 @@ impl SourceRender for PostgresSourceConnection {
     type Key = ();
     type Value = Row;
     type Time = MzOffset;
+
+    const STATUS_NAMESPACE: StatusNamespace = StatusNamespace::Postgres;
 
     /// Render the ingestion dataflow. This function only connects things together and contains no
     /// actual processing logic.
@@ -128,7 +130,7 @@ impl SourceRender for PostgresSourceConnection {
     ) -> (
         Collection<G, (usize, Result<SourceMessage<(), Row>, SourceReaderError>), Diff>,
         Option<Stream<G, Infallible>>,
-        Stream<G, (usize, HealthStatusUpdate)>,
+        Stream<G, HealthStatusMessage>,
         Rc<dyn Any>,
     ) {
         // Determined which collections need to be snapshot and which already have been.
@@ -197,12 +199,20 @@ impl SourceRender for PostgresSourceConnection {
             // This update will cause the dataflow to restart
             let err_string = err.display_with_causes().to_string();
             let update = HealthStatusUpdate::halting(err_string.clone(), None);
-            let mut statuses = vec![(0, update)];
+            let mut statuses = vec![HealthStatusMessage {
+                index: 0,
+                namespace: Self::STATUS_NAMESPACE.clone(),
+                update,
+            }];
 
             // But we still want to report the transient error for all subsources
             statuses.extend(subsource_outputs.iter().map(|index| {
                 let status = HealthStatusUpdate::stalled(err_string.clone(), None);
-                (*index, status)
+                HealthStatusMessage {
+                    index: *index,
+                    namespace: Self::STATUS_NAMESPACE.clone(),
+                    update: status,
+                }
             }));
             statuses
         });

@@ -33,8 +33,7 @@ use serde::{Deserialize, Serialize};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
-use crate::healthcheck::HealthStatusUpdate;
-use crate::render::sources::OutputIndex;
+use crate::healthcheck::{HealthStatusMessage, StatusNamespace};
 use crate::source::metrics::{SourceBaseMetrics, UpsertSharedMetrics};
 use crate::source::RawSourceCreationConfig;
 
@@ -43,6 +42,7 @@ pub trait SourceRender {
     type Key: timely::Data + MaybeLength;
     type Value: timely::Data + MaybeLength;
     type Time: SourceTimestamp;
+    const STATUS_NAMESPACE: StatusNamespace;
 
     /// Renders the source in the provided timely scope.
     ///
@@ -86,7 +86,7 @@ pub trait SourceRender {
             Diff,
         >,
         Option<Stream<G, Infallible>>,
-        Stream<G, (OutputIndex, HealthStatusUpdate)>,
+        Stream<G, HealthStatusMessage>,
         Rc<dyn Any>,
     );
 }
