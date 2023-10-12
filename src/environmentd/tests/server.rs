@@ -95,7 +95,7 @@ use itertools::Itertools;
 use mz_environmentd::http::{
     BecomeLeaderResponse, BecomeLeaderResult, LeaderStatus, LeaderStatusResponse,
 };
-use mz_environmentd::WebSocketResponse;
+use mz_environmentd::{WebSocketAuth, WebSocketResponse};
 use mz_ore::cast::CastFrom;
 use mz_ore::cast::CastLossy;
 use mz_ore::cast::TryCastFrom;
@@ -2117,25 +2117,38 @@ fn test_internal_ws_auth() {
 
     // Create our WebSocket.
     let ws_url = server.internal_ws_addr();
-    let req = Request::builder()
-        .uri(ws_url.as_str())
-        .method("GET")
-        .header("Host", ws_url.host_str().unwrap())
-        .header("Connection", "Upgrade")
-        .header("Upgrade", "websocket")
-        .header("Sec-WebSocket-Version", "13")
-        .header("Sec-WebSocket-Key", "foobar")
-        // Set our user to the mz_support user
-        .header("x-materialize-user", "mz_support")
-        .body(())
-        .unwrap();
+    let make_req = || {
+        Request::builder()
+            .uri(ws_url.as_str())
+            .method("GET")
+            .header("Host", ws_url.host_str().unwrap())
+            .header("Connection", "Upgrade")
+            .header("Upgrade", "websocket")
+            .header("Sec-WebSocket-Version", "13")
+            .header("Sec-WebSocket-Key", "foobar")
+            // Set our user to the mz_support user
+            .header("x-materialize-user", "mz_support")
+            .body(())
+            .unwrap()
+    };
 
-    let (mut ws, _resp) = tungstenite::connect(req).unwrap();
+    let (mut ws, _resp) = tungstenite::connect(make_req()).unwrap();
     let options = BTreeMap::from([(
         "application_name".to_string(),
         "billion_dollar_idea".to_string(),
     )]);
-    util::auth_with_ws(&mut ws, options).unwrap();
+    // We should receive error if sending the standard bearer auth, since that is unexpected
+    // for the Internal HTTP API
+    assert_eq!(util::auth_with_ws(&mut ws, options.clone()).is_err(), true);
+
+    // Recreate the websocket
+    let (mut ws, _resp) = tungstenite::connect(make_req()).unwrap();
+    // Auth with OptionsOnly
+    util::auth_with_ws_impl(
+        &mut ws,
+        Message::Text(serde_json::to_string(&WebSocketAuth::OptionsOnly { options }).unwrap()),
+    )
+    .unwrap();
 
     // Query to make sure we get back the correct user, which should be
     // set from the headers passed with the websocket request.

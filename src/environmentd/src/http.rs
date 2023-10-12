@@ -160,7 +160,7 @@ impl HttpServer {
             .route("/api/experimental/sql", routing::get(sql::handle_sql_ws))
             .with_state(WsState {
                 frontegg,
-                adapter_client_rx: adapter_client_rx,
+                adapter_client_rx,
                 active_connection_count,
             });
 
@@ -452,7 +452,7 @@ impl InternalHttpServer {
             .layer(middleware::from_fn(internal_http_auth))
             .with_state(WsState {
                 frontegg: Arc::new(None),
-                adapter_client_rx: adapter_client_rx,
+                adapter_client_rx,
                 active_connection_count,
             });
 
