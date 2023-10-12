@@ -392,7 +392,7 @@ pub async fn run_ingest(
 }
 
 async fn make_transcoder(
-    state: &mut State,
+    state: &State,
     format: Format,
     ccsr_subject: String,
 ) -> Result<Transcoder, anyhow::Error> {

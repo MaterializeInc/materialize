@@ -10,6 +10,7 @@
 use std::borrow::ToOwned;
 use std::collections::{btree_map, BTreeMap};
 use std::error::Error;
+use std::fmt::Write;
 use std::str::FromStr;
 
 use anyhow::{anyhow, bail, Context};
@@ -327,8 +328,10 @@ fn parse_explain_sql(line_reader: &mut LineReader) -> Result<SqlCommand, PosErro
         .inner
         .lines()
         .take_while(|l| !is_sigil(l.chars().next()))
-        .map(|l| format!("{}\n", l))
-        .collect();
+        .fold(String::new(), |mut output, l| {
+            let _ = write!(output, "{}\n", l);
+            output
+        });
     slurp_all(line_reader);
     while expected_output.ends_with("\n\n") {
         expected_output.pop();

@@ -245,7 +245,7 @@ enum PersistTableWriteCmd<T: Timestamp + Lattice + Codec64> {
 // #20954.
 impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWriteWorker<T> {
     pub(crate) fn new(
-        mut frontier_responses: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
+        frontier_responses: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
     ) -> Self {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(tracing::Span, _)>();
 
@@ -331,7 +331,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
                             }
 
                             async fn append_work<T2: Timestamp + Lattice + Codec64>(
-                                frontier_responses: &mut tokio::sync::mpsc::UnboundedSender<
+                                frontier_responses: &tokio::sync::mpsc::UnboundedSender<
                                     StorageResponse<T2>,
                                 >,
                                 write_handles: &mut BTreeMap<
@@ -397,7 +397,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
                             }
 
                             let result =
-                                append_work(&mut frontier_responses, &mut write_handles, all_updates).await;
+                                append_work(&frontier_responses, &mut write_handles, all_updates).await;
 
                             for (ids, response) in all_responses {
                                 let result = match &result {
@@ -560,7 +560,7 @@ enum PersistMonotonicWriteCmd<T: Timestamp + Lattice + Codec64> {
 // by #20954.
 impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistMonotonicWriteWorker<T> {
     pub(crate) fn new(
-        mut frontier_responses: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
+        frontier_responses: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
     ) -> Self {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(tracing::Span, _)>();
 
@@ -679,7 +679,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistMonotonicW
                             }
 
                             async fn append_work<T2: Timestamp + Lattice + Codec64>(
-                                frontier_responses: &mut tokio::sync::mpsc::UnboundedSender<
+                                frontier_responses: &tokio::sync::mpsc::UnboundedSender<
                                     StorageResponse<T2>,
                                 >,
                                 write_handles: &mut BTreeMap<
@@ -745,7 +745,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistMonotonicW
                             }
 
                             let result =
-                                append_work(&mut frontier_responses, &mut write_handles, all_updates).await;
+                                append_work(&frontier_responses, &mut write_handles, all_updates).await;
 
                             for (ids, response) in all_responses {
                                 let result = match &result {

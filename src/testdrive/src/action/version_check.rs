@@ -15,7 +15,7 @@ use crate::action::State;
 pub async fn run_version_check(
     min_version: i32,
     max_version: i32,
-    state: &mut State,
+    state: &State,
 ) -> Result<bool, anyhow::Error> {
     let query = "SELECT mz_version_num()";
     let stmt = state

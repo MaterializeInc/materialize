@@ -148,7 +148,7 @@ struct CreateSourceInner {
 impl Coordinator {
     async fn create_source_inner(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         plans: Vec<plan::CreateSourcePlans>,
     ) -> Result<CreateSourceInner, AdapterError> {
         let mut ops = vec![];
@@ -1230,7 +1230,7 @@ impl Coordinator {
 
     pub(super) async fn sequence_drop_objects(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         plan::DropObjectsPlan {
             drop_ids,
             object_type,
@@ -1434,7 +1434,7 @@ impl Coordinator {
 
     pub(super) async fn sequence_drop_owned(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         plan: plan::DropOwnedPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         for role_id in &plan.role_ids {
@@ -1510,7 +1510,7 @@ impl Coordinator {
 
     fn sequence_drop_common(
         &self,
-        session: &mut Session,
+        session: &Session,
         ids: Vec<ObjectId>,
     ) -> Result<DropOps, AdapterError> {
         let mut dropped_active_db = false;
@@ -2128,7 +2128,7 @@ impl Coordinator {
     // Do some simple validation. We must defer most of it until after any off-thread work.
     fn peek_stage_validate(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         PeekStageValidate {
             plan,
             target_cluster,
@@ -2942,11 +2942,11 @@ impl Coordinator {
                 result.await
             }
             Explainee::MaterializedView(_) => {
-                let result = self.explain_materialized_view(&mut ctx, plan);
+                let result = self.explain_materialized_view(&ctx, plan);
                 result
             }
             Explainee::Index(_) => {
-                let result = self.explain_index(&mut ctx, plan);
+                let result = self.explain_index(&ctx, plan);
                 result
             }
         };
@@ -2955,7 +2955,7 @@ impl Coordinator {
 
     fn explain_materialized_view(
         &mut self,
-        ctx: &mut ExecuteContext,
+        ctx: &ExecuteContext,
         plan: plan::ExplainPlanPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let plan::ExplainPlanPlan {
@@ -3025,7 +3025,7 @@ impl Coordinator {
 
     fn explain_index(
         &mut self,
-        ctx: &mut ExecuteContext,
+        ctx: &ExecuteContext,
         plan: plan::ExplainPlanPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let plan::ExplainPlanPlan {
@@ -4420,7 +4420,7 @@ impl Coordinator {
 
     pub(super) async fn sequence_alter_role(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         plan::AlterRolePlan { id, name, option }: plan::AlterRolePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let catalog = self.catalog().for_session(session);
@@ -4514,7 +4514,7 @@ impl Coordinator {
 
     pub(super) async fn sequence_alter_source(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         plan::AlterSourcePlan { id, action }: plan::AlterSourcePlan,
         to_create_subsources: Vec<plan::CreateSourcePlans>,
     ) -> Result<ExecuteResponse, AdapterError> {
@@ -5184,7 +5184,7 @@ impl Coordinator {
 
     pub(super) async fn sequence_grant_privileges(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         plan::GrantPrivilegesPlan {
             update_privileges,
             grantees,
@@ -5201,7 +5201,7 @@ impl Coordinator {
 
     pub(super) async fn sequence_revoke_privileges(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         plan::RevokePrivilegesPlan {
             update_privileges,
             revokees,
@@ -5218,7 +5218,7 @@ impl Coordinator {
 
     async fn sequence_update_privileges(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         update_privileges: Vec<UpdatePrivilege>,
         grantees: Vec<RoleId>,
         variant: UpdatePrivilegeVariant,
@@ -5326,7 +5326,7 @@ impl Coordinator {
 
     pub(super) async fn sequence_alter_default_privileges(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         plan::AlterDefaultPrivilegesPlan {
             privilege_objects,
             privilege_acl_items,
@@ -5372,7 +5372,7 @@ impl Coordinator {
 
     pub(super) async fn sequence_grant_role(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         plan::GrantRolePlan {
             role_ids,
             member_ids,
@@ -5416,7 +5416,7 @@ impl Coordinator {
 
     pub(super) async fn sequence_revoke_role(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         plan::RevokeRolePlan {
             role_ids,
             member_ids,
@@ -5460,7 +5460,7 @@ impl Coordinator {
 
     pub(super) async fn sequence_alter_owner(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         plan::AlterOwnerPlan {
             id,
             object_type,

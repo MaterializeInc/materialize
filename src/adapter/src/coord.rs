@@ -2092,18 +2092,15 @@ pub async fn serve(
         coord_bail!("availability zones must be unique");
     }
 
-    let aws_principal_context = if aws_account_id.is_some()
-        && connection_context.aws_external_id_prefix.is_some()
-    {
-        Some(AwsPrincipalContext {
-            aws_account_id: aws_account_id.expect("known to be `Some` from `is_some()` call above"),
-            aws_external_id_prefix: connection_context
-                .aws_external_id_prefix
-                .clone()
-                .expect("known to be `Some` from `is_some()` call above"),
-        })
-    } else {
-        None
+    let aws_principal_context = match (
+        aws_account_id,
+        connection_context.aws_external_id_prefix.clone(),
+    ) {
+        (Some(aws_account_id), Some(aws_external_id_prefix)) => Some(AwsPrincipalContext {
+            aws_account_id,
+            aws_external_id_prefix,
+        }),
+        _ => None,
     };
 
     let aws_privatelink_availability_zones = aws_privatelink_availability_zones

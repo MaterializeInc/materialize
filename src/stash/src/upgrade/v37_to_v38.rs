@@ -13,7 +13,7 @@ use crate::upgrade::MigrationAction;
 use crate::{StashError, Transaction, TypedCollection};
 
 /// Update fingerprint of builtin types to have timestsamp with precision
-pub async fn upgrade(tx: &mut Transaction<'_>) -> Result<(), StashError> {
+pub async fn upgrade(tx: &Transaction<'_>) -> Result<(), StashError> {
     const GID_MAPPING_COLLECTION: TypedCollection<
         objects_v37::GidMappingKey,
         objects_v37::GidMappingValue,

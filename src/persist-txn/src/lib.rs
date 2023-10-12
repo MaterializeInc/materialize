@@ -265,6 +265,7 @@
 #![warn(missing_docs, missing_debug_implementations)]
 
 use std::fmt::Debug;
+use std::fmt::Write;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
@@ -366,7 +367,10 @@ where
     D: Semigroup + Codec64 + Send + Sync,
 {
     fn debug_sep<'a, T: Debug + 'a>(sep: &str, xs: impl IntoIterator<Item = &'a T>) -> String {
-        xs.into_iter().map(|x| format!("{}{:?}", sep, x)).collect()
+        xs.into_iter().fold(String::new(), |mut output, x| {
+            let _ = write!(output, "{}{:?}", sep, x);
+            output
+        })
     }
     debug!(
         "CaA {} [{:?},{:?}){}",

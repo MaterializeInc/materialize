@@ -43,7 +43,7 @@ pub enum SecretSubcommand {
 }
 
 pub async fn run(cx: Context, cmd: SecretCommand) -> Result<(), Error> {
-    let mut cx = cx.activate_profile()?.activate_region()?;
+    let cx = cx.activate_profile()?.activate_region()?;
     match cmd.subcommand {
         SecretSubcommand::Create {
             database,
@@ -52,7 +52,7 @@ pub async fn run(cx: Context, cmd: SecretCommand) -> Result<(), Error> {
             force,
         } => {
             mz::command::secret::create(
-                &mut cx,
+                &cx,
                 CreateArgs {
                     database: database.as_deref(),
                     schema: schema.as_deref(),

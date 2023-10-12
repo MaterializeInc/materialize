@@ -919,9 +919,9 @@ impl Stash {
 
         async fn run_upgrade(stash: &mut Stash) -> Result<u64, StashError> {
             stash
-                .with_transaction(move |mut tx| {
+                .with_transaction(move |tx| {
                     async move {
-                        let version = COLLECTION_CONFIG.version(&mut tx).await?;
+                        let version = COLLECTION_CONFIG.version(&tx).await?;
 
                         // Note(parkmycar): Ideally we wouldn't have to define these extra constants,
                         // but const expressions aren't yet supported in match statements.
@@ -934,11 +934,11 @@ impl Stash {
                         match version {
                             ..=TOO_OLD_VERSION => return Err(incompatible),
 
-                            35 => upgrade::v35_to_v36::upgrade(&mut tx).await?,
+                            35 => upgrade::v35_to_v36::upgrade(&tx).await?,
                             36 => upgrade::v36_to_v37::upgrade(),
-                            37 => upgrade::v37_to_v38::upgrade(&mut tx).await?,
-                            38 => upgrade::v38_to_v39::upgrade(&mut tx).await?,
-                            39 => upgrade::v39_to_v40::upgrade(&mut tx).await?,
+                            37 => upgrade::v37_to_v38::upgrade(&tx).await?,
+                            38 => upgrade::v38_to_v39::upgrade(&tx).await?,
+                            39 => upgrade::v39_to_v40::upgrade(&tx).await?,
 
                             // Up-to-date, no migration needed!
                             STASH_VERSION => return Ok(STASH_VERSION),
@@ -946,7 +946,7 @@ impl Stash {
                         };
                         // Set the new version.
                         let new_version = version + 1;
-                        COLLECTION_CONFIG.set_version(&mut tx, new_version).await?;
+                        COLLECTION_CONFIG.set_version(&tx, new_version).await?;
 
                         Ok(new_version)
                     }

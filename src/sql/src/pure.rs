@@ -66,7 +66,7 @@ mod postgres;
 fn subsource_gen<'a, T>(
     selected_subsources: &mut Vec<CreateSourceSubsource<Aug>>,
     catalog: &ErsatzCatalog<'a, T>,
-    source_name: &mut UnresolvedItemName,
+    source_name: &UnresolvedItemName,
 ) -> Result<Vec<(UnresolvedItemName, UnresolvedItemName, &'a T)>, PlanError> {
     let mut validated_requested_subsources = vec![];
 

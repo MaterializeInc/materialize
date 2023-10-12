@@ -20,7 +20,7 @@ const ROLES_COLLECTION: TypedCollection<v38::RoleKey, v38::RoleValue> =
     TypedCollection::new("role");
 
 /// Update all Roles to contains an empy set of RoleVars.
-pub async fn upgrade(tx: &mut Transaction<'_>) -> Result<(), StashError> {
+pub async fn upgrade(tx: &Transaction<'_>) -> Result<(), StashError> {
     ROLES_COLLECTION
         .migrate_to(tx, |entries| {
             let mut updates = Vec::with_capacity(entries.len());
@@ -110,9 +110,9 @@ mod tests {
 
             // Run the migration.
             stash
-                .with_transaction(|mut tx| {
+                .with_transaction(|tx| {
                     Box::pin(async move {
-                        upgrade(&mut tx).await?;
+                        upgrade(&tx).await?;
                         Ok(())
                     })
                 })

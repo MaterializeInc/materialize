@@ -1883,7 +1883,6 @@ pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<()
     let mut in_transaction = false;
 
     for record in parser.parse_records()? {
-        let record = record;
         let outcome = runner.run_record(&record, &mut in_transaction).await?;
 
         match (&record, &outcome) {

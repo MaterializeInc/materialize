@@ -186,7 +186,7 @@ impl SemijoinIdempotence {
 /// Attempt to simplify the join using local information and let bindings.
 fn attempt_join_simplification(
     inputs: &mut [MirRelationExpr],
-    equivalences: &mut Vec<Vec<MirScalarExpr>>,
+    equivalences: &Vec<Vec<MirScalarExpr>>,
     implementation: &mut mz_expr::JoinImplementation,
     let_replacements: &BTreeMap<LocalId, Vec<Replacement>>,
     gets_behind_gets: &BTreeMap<LocalId, Vec<(Id, Vec<MirScalarExpr>)>>,

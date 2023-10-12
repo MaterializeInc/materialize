@@ -824,7 +824,7 @@ async fn execute_request<S: ResultSender>(
     }
 
     fn parse<'a>(
-        client: &mut SessionClient,
+        client: &SessionClient,
         query: &'a str,
     ) -> Result<Vec<StatementParseResult<'a>>, anyhow::Error> {
         match client.parse(query) {

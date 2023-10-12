@@ -858,7 +858,7 @@ impl MirRelationExpr {
     fn fmt_attributes(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, MirRelationExpr>,
+        ctx: &PlanRenderingContext<'_, MirRelationExpr>,
     ) -> fmt::Result {
         if ctx.config.requires_attributes() {
             if let Some(attrs) = ctx.annotations.get(self) {

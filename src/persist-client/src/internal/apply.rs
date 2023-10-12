@@ -320,6 +320,8 @@ where
         }
     }
 
+    // work_fn fails to compile without mut, false positive
+    #[allow(clippy::needless_pass_by_ref_mut)]
     async fn apply_unbatched_cmd_locked<
         R,
         E,

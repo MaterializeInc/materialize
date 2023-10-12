@@ -113,7 +113,7 @@ pub fn split_subquery_predicates(expr: &mut HirRelationExpr) {
     /// ```
     ///
     /// and returns the expression fragments `EXISTS (<subquery 1>)` and
-    //// `(<subquery 2>) = e` in the `out` vector.
+    /// `(<subquery 2>) = e` in the `out` vector.
     fn extract_conjuncted_subqueries(expr: &mut HirScalarExpr, out: &mut Vec<HirScalarExpr>) {
         match expr {
             HirScalarExpr::CallVariadic {
