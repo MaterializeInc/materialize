@@ -608,7 +608,7 @@ steps:
 
   - id: output-consistency-test
     label: "Output consistency test"
-    timeout_in_minutes: 58
+    timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
     artifact_paths: junit_*.xml
