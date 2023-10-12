@@ -75,7 +75,7 @@ SELECT current_schemas(true)
 {mz_catalog,pg_catalog}
 
 statement ok
-SET cluster = default
+SET cluster = "default"
 
 statement error no schema has been selected to create in
 CREATE TABLE t (i INT)

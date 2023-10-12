@@ -96,7 +96,7 @@ contains:cannot create source in cluster with more than one replica
 contains:cannot drop cluster with active objects
 > DROP CLUSTER storage CASCADE
 
-> SET cluster = default
+> SET cluster = "default"
 
 # Test that a cluster can contain multiple sources and sinks, and verify that
 # the sources and sinks produce the correct output.

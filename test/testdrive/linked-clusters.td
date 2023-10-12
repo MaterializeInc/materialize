@@ -139,7 +139,7 @@ contains:cannot execute queries on cluster containing sources or sinks
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_unified_clusters = true
 
-> SET cluster = default
+> SET cluster = "default"
 
 # Test that only the default clusters and replicas remain after dropping
 # the sources.

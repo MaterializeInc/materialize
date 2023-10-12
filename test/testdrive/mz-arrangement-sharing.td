@@ -848,7 +848,7 @@ ReduceMinsMaxes
 "Reduced TopK input"
 "Reduced TopK input"
 
-> SET CLUSTER TO default
+> SET CLUSTER TO "default"
 
 # Check dataflows of our logging infrastructure with log_logging
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}

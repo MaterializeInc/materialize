@@ -88,7 +88,7 @@ class UnifiedCluster(Check):
             > SELECT COUNT(*) > 0 FROM mz_tables;
             true
 
-            > SET cluster = default
+            > SET cluster = "default"
 
             ! DROP CLUSTER shared_cluster_compute_first;
             contains: cannot drop cluster with active object

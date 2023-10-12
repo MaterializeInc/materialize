@@ -877,7 +877,7 @@ statement ok
 COMMIT
 
 statement ok
-SET CLUSTER TO default
+SET CLUSTER TO "default"
 
 statement ok
 BEGIN
@@ -892,7 +892,7 @@ statement ok
 COMMIT
 
 statement ok
-SET CLUSTER TO default
+SET CLUSTER TO "default"
 
 # Test that the cluster is selected at the start of a transaction and doesn't change.
 

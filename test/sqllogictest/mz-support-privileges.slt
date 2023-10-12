@@ -14,7 +14,7 @@ statement ok
 CREATE TABLE t (a INT)
 
 simple conn=mz_support,user=mz_support
-SET CLUSTER TO default
+SET CLUSTER TO "default"
 ----
 COMPLETE 0
 

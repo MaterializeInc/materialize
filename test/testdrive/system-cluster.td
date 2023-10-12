@@ -63,7 +63,7 @@ mv default
 #! CREATE MATERIALIZED VIEW mv1 AS SELECT MIN(1)
 #contains:system cluster 'mz_system' cannot be modified
 
-> SET CLUSTER TO default
+> SET CLUSTER TO "default"
 
 > CREATE TABLE temp (a INT)
 

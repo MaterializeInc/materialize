@@ -1450,7 +1450,7 @@ def workflow_test_system_table_indexes(c: Composition) -> None:
             input=dedent(
                 """
         $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
-        SET CLUSTER TO DEFAULT;
+        SET CLUSTER TO "DEFAULT";
         CREATE DEFAULT INDEX ON mz_views;
 
         > SELECT id FROM mz_indexes WHERE id like 'u%';
@@ -2441,7 +2441,7 @@ def workflow_test_metrics_retention_across_restart(c: Composition) -> None:
     # collect the `since` frontiers we want.
     def collect_sinces() -> tuple[int, int]:
         explain = c.sql_query(
-            "SET cluster = default;"
+            "SET cluster = 'default';"
             "EXPLAIN TIMESTAMP FOR SELECT * FROM mz_cluster_replicas;"
         )[0][0]
         table_since = parse_since_from_explain(explain)

@@ -1597,7 +1597,7 @@ fn test_github_12951() {
         client1.batch_execute("DROP CLUSTER foo CASCADE").unwrap();
         client2_cancel.cancel_query(postgres::NoTls).unwrap();
         client2
-            .batch_execute("ROLLBACK; SET CLUSTER = default")
+            .batch_execute("ROLLBACK; SET CLUSTER = 'default'")
             .unwrap();
         assert_eq!(
             client2
@@ -1620,7 +1620,7 @@ fn test_github_12951() {
         client2.batch_execute("BEGIN; SELECT * FROM t1").unwrap();
         client1.batch_execute("DROP CLUSTER foo CASCADE").unwrap();
         client2
-            .batch_execute("COMMIT; SET CLUSTER = default")
+            .batch_execute("COMMIT; SET CLUSTER = 'default'")
             .unwrap();
         assert_eq!(
             client2
@@ -1657,7 +1657,7 @@ fn test_subscribe_outlive_cluster() {
         .unwrap();
     client2_cancel.cancel_query(postgres::NoTls).unwrap();
     client2
-        .batch_execute("ROLLBACK; SET CLUSTER = default")
+        .batch_execute("ROLLBACK; SET CLUSTER = 'default'")
         .unwrap();
     assert_eq!(
         client2
