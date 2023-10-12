@@ -19,13 +19,17 @@ from fixtures import (
     actual_indexes,
     expected_indexes,
     test_materialized_view,
+    test_materialized_view_grant,
     test_materialized_view_index,
     test_relation_name_length,
     test_sink,
     test_source,
+    test_source_grant,
     test_source_index,
     test_subsources,
+    test_table_grant,
     test_table_index,
+    test_view_grant,
     test_view_index,
 )
 
@@ -46,17 +50,24 @@ class TestCustomMaterializations:
         return {
             "actual_indexes.sql": actual_indexes,
             "test_materialized_view.sql": test_materialized_view,
+            "test_materialized_view_grant.sql": test_materialized_view_grant,
             "test_materialized_view_index.sql": test_materialized_view_index,
             "test_relation_name_loooooooooooooooooonger_than_postgres_63_limit.sql": test_relation_name_length,
             "test_source.sql": test_source,
+            "test_source_grant.sql": test_source_grant,
             "test_source_index.sql": test_source_index,
             "test_subsources.sql": test_subsources,
             "test_sink.sql": test_sink,
+            "test_table_grant.sql": test_table_grant,
             "test_table_index.sql": test_table_index,
+            "test_view_grant.sql": test_view_grant,
             "test_view_index.sql": test_view_index,
         }
 
     def test_custom_materializations(self, project):
+        project.run_sql("CREATE ROLE bi")
+        project.run_sql('CREATE ROLE "test@materialize.com"')
+
         # seed seeds
         results = run_dbt(["seed"])
         # seed result length
@@ -64,12 +75,12 @@ class TestCustomMaterializations:
         # run models
         results = run_dbt(["run"])
         # run result length
-        assert len(results) == 10
+        assert len(results) == 14
         # re-run models to ensure there are no lingering errors in recreating
         # the materializations
         results = run_dbt(["run"])
         # re-run result length
-        assert len(results) == 10
+        assert len(results) == 14
         # relations_equal
         check_relations_equal(
             project.adapter,

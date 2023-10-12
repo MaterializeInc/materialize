@@ -37,6 +37,9 @@
   {{ create_indexes(target_relation) }}
   {% do persist_docs(target_relation, model) %}
 
+  {% set grant_config = config.get('grants') %}
+  {% do apply_grants(target_relation, grant_config, should_revoke=should_revoke) %}
+
   {{ run_hooks(post_hooks, inside_transaction=False) }}
   {{ run_hooks(post_hooks, inside_transaction=True) }}
 

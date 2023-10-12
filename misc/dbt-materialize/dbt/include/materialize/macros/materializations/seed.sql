@@ -83,4 +83,7 @@
 
   {% set target_relation = this.incorporate(type='materializedview') %}
   {{ return({'relations': [target_relation]}) }}
+
+  {% set grant_config = config.get('grants') %}
+  {% do apply_grants(target_relation, grant_config, should_revoke=should_revoke) %}
 {% endmaterialization %}

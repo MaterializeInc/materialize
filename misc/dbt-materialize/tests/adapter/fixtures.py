@@ -30,6 +30,15 @@ test_materialized_view_index = """
     SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse')) _ (a, b)
 """
 
+test_materialized_view_grant = """
+{{ config(
+    materialized='materializedview',
+    grants={'select': ['bi', 'test@materialize.com']}
+) }}
+
+    SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse')) _ (a, b)
+"""
+
 test_view_index = """
 {{ config(
     materialized='view',
@@ -39,10 +48,28 @@ test_view_index = """
     SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse'), (NULL, NULL)) _ (a, b)
 """
 
+test_view_grant = """
+{{ config(
+    materialized='view',
+    grants={'select': ['bi', 'test@materialize.com']}
+) }}
+
+    SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse'), (NULL, NULL)) _ (a, b)
+"""
+
 test_table_index = """
 {{ config(
     materialized='table',
     indexes=[{'columns': ['a', 'length(a)'], 'name': 'test_table_index_a_idx'}]
+) }}
+
+    SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse')) _ (a, b)
+"""
+
+test_table_grant = """
+{{ config(
+    materialized='table',
+    grants={'select': ['bi', 'test@materialize.com']}
 ) }}
 
     SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse')) _ (a, b)
@@ -65,6 +92,17 @@ test_source_index = """
 {{ config(
     materialized='source',
     indexes=[{'columns': ['data']}]
+) }}
+
+CREATE SOURCE {{ this }}
+FROM KAFKA CONNECTION kafka_connection (TOPIC 'test-source')
+FORMAT BYTES
+"""
+
+test_source_grant = """
+{{ config(
+    materialized='source',
+    grants={'select': ['bi', 'test@materialize.com']}
 ) }}
 
 CREATE SOURCE {{ this }}
