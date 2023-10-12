@@ -52,15 +52,16 @@ Complete sample profiles can be found in [sample_profiles.yml](dbt/include/mater
 
 ### Materializations
 
-Type               | Supported? | Details
--------------------|------------|--------
-`source`           | YES        | Creates a [source].
-`view`             | YES        | Creates a [view].
-`materializedview` | YES        | Creates a [materialized view].
-`table`            | YES        | Creates a [materialized view]. (Actual table support pending [#5266].)
-`sink`             | YES        | Creates a [sink].
-`ephemeral`        | YES        | Executes queries using CTEs.
-`incremental`      | NO         | Use the `materializedview` materialization instead! dbt's incremental models are valuable because they only spend your time and money transforming your new data as it arrives. Luckily, this is exactly what Materialize's materialized views were built to do! Better yet, our materialized views will always return up-to-date results without manual or configured refreshes. For more information, check out [our documentation](https://materialize.com/docs/).
+Type                | Supported? | Details
+--------------------|------------|--------
+`source`            | YES        | Creates a [source].
+`view`              | YES        | Creates a [view].
+`materializedview`  | YES        | (Deprecated) Creates a [materialized view].
+`materialized_view` | YES        | Creates a [materialized view]. The `materializedview` legacy materialization name is supported for backwards compatibility.
+`table`             | YES        | Creates a [materialized view]. (Actual table support pending [#5266].)
+`sink`              | YES        | Creates a [sink].
+`ephemeral`         | YES        | Executes queries using CTEs.
+`incremental`       | NO         | Use the `materialized_view` materialization instead! dbt's incremental models are valuable because they only spend your time and money transforming your new data as it arrives. Luckily, this is exactly what Materialize's materialized views were built to do! Better yet, our materialized views will always return up-to-date results without manual or configured refreshes. For more information, check out [our documentation](https://materialize.com/docs/).
 
 ### Indexes
 
@@ -103,7 +104,7 @@ You can instruct dbt to create a [`dbt source`](https://docs.getdbt.com/docs/bui
 ### Testing
 [`dbt test`](https://docs.getdbt.com/reference/commands/test) is supported.
 
-If you set the optional `--store-failures` flag or [`store-failures` config](https://docs.getdbt.com/reference/resource-configs/store_failures), dbt will save the results of a test query to a `materializedview`.
+If you set the optional `--store-failures` flag or [`store-failures` config](https://docs.getdbt.com/reference/resource-configs/store_failures), dbt will save the results of a test query to a `materialized_view`.
 These will be created in a schema suffixed or named `dbt_test__audit` by default. Change this value by setting a `schema` config.
 
 ### Snapshots
