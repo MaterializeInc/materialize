@@ -122,13 +122,15 @@ mod error;
 pub mod initialize;
 pub mod objects;
 
-const DATABASE_ID_ALLOC_KEY: &str = "database";
-const SCHEMA_ID_ALLOC_KEY: &str = "schema";
-const USER_ROLE_ID_ALLOC_KEY: &str = "user_role";
-const USER_CLUSTER_ID_ALLOC_KEY: &str = "user_compute";
-const SYSTEM_CLUSTER_ID_ALLOC_KEY: &str = "system_compute";
-const USER_REPLICA_ID_ALLOC_KEY: &str = "replica";
-const SYSTEM_REPLICA_ID_ALLOC_KEY: &str = "system_replica";
+pub const DATABASE_ID_ALLOC_KEY: &str = "database";
+pub const SCHEMA_ID_ALLOC_KEY: &str = "schema";
+pub const USER_ITEM_ALLOC_KEY: &str = "user";
+pub const SYSTEM_ITEM_ALLOC_KEY: &str = "system";
+pub const USER_ROLE_ID_ALLOC_KEY: &str = "user_role";
+pub const USER_CLUSTER_ID_ALLOC_KEY: &str = "user_compute";
+pub const SYSTEM_CLUSTER_ID_ALLOC_KEY: &str = "system_compute";
+pub const USER_REPLICA_ID_ALLOC_KEY: &str = "replica";
+pub const SYSTEM_REPLICA_ID_ALLOC_KEY: &str = "system_replica";
 pub const AUDIT_LOG_ID_ALLOC_KEY: &str = "auditlog";
 pub const STORAGE_USAGE_ID_ALLOC_KEY: &str = "storage_usage";
 
@@ -353,14 +355,14 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
 
     /// Allocates and returns `amount` system [`GlobalId`]s.
     async fn allocate_system_ids(&mut self, amount: u64) -> Result<Vec<GlobalId>, CatalogError> {
-        let id = self.allocate_id("system", amount).await?;
+        let id = self.allocate_id(SYSTEM_ITEM_ALLOC_KEY, amount).await?;
 
         Ok(id.into_iter().map(GlobalId::System).collect())
     }
 
     /// Allocates and returns a user [`GlobalId`].
     async fn allocate_user_id(&mut self) -> Result<GlobalId, CatalogError> {
-        let id = self.allocate_id("user", 1).await?;
+        let id = self.allocate_id(USER_ITEM_ALLOC_KEY, 1).await?;
         let id = id.into_element();
         Ok(GlobalId::User(id))
     }
@@ -401,4 +403,12 @@ pub fn debug_stash_backed_catalog_state(
     debug_stash_factory: &DebugStashFactory,
 ) -> impl OpenableDurableCatalogState<Connection> + '_ {
     DebugOpenableConnection::new(debug_stash_factory)
+}
+
+pub fn debug_bootstrap_args() -> BootstrapArgs {
+    BootstrapArgs {
+        default_cluster_replica_size: "1".into(),
+        builtin_cluster_replica_size: "1".into(),
+        bootstrap_role: None,
+    }
 }
