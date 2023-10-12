@@ -1239,6 +1239,7 @@ pub struct CreateMaterializedViewStatement<T: AstInfo> {
     pub columns: Vec<Ident>,
     pub in_cluster: Option<T::ClusterName>,
     pub query: Query<T>,
+    pub non_null_assertions: Vec<Ident>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {

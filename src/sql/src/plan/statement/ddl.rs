@@ -2064,6 +2064,30 @@ pub fn plan_create_materialized_view(
         &stmt.columns,
     )?;
     let column_names: Vec<ColumnName> = desc.iter_names().cloned().collect();
+    let mut non_null_assertions = stmt
+        .non_null_assertions
+        .into_iter()
+        .map(normalize::column_name)
+        .map(|assertion_name| {
+            column_names
+                .iter()
+                .position(|col| col == &assertion_name)
+                .ok_or_else(|| {
+                    sql_err!(
+                        "column {} in ASSERT NOT NULL option not found",
+                        assertion_name.as_str().quoted()
+                    )
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    non_null_assertions.sort();
+    if let Some(dup) = non_null_assertions.iter().duplicates().next() {
+        let dup = &column_names[*dup];
+        sql_bail!(
+            "duplicate column {} in non-null assertions",
+            dup.as_str().quoted()
+        );
+    }
 
     if let Some(dup) = column_names.iter().duplicates().next() {
         sql_bail!("column {} specified more than once", dup.as_str().quoted());
@@ -2125,6 +2149,7 @@ pub fn plan_create_materialized_view(
             expr,
             column_names,
             cluster_id,
+            non_null_assertions,
         },
         replace,
         drop_ids,

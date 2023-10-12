@@ -3285,6 +3285,18 @@ impl<'a> Parser<'a> {
         let columns = self.parse_parenthesized_column_list(Optional)?;
         let in_cluster = self.parse_optional_in_cluster()?;
 
+        let non_null_assertions = if self.parse_keyword(WITH) {
+            self.expect_token(&Token::LParen)?;
+            let assertions = self.parse_comma_separated(|self_| {
+                self_.expect_keywords(&[ASSERT, NOT, NULL])?;
+                self_.parse_identifier()
+            })?;
+            self.expect_token(&Token::RParen)?;
+            assertions
+        } else {
+            vec![]
+        };
+
         self.expect_keyword(AS)?;
         let query = self.parse_query()?;
 
@@ -3295,6 +3307,7 @@ impl<'a> Parser<'a> {
                 columns,
                 in_cluster,
                 query,
+                non_null_assertions,
             },
         ))
     }

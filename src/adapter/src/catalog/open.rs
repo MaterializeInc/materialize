@@ -1783,6 +1783,7 @@ async fn test_builtin_migration() {
                             .with_key(vec![0]),
                         resolved_ids: ResolvedIds(BTreeSet::from_iter(resolved_ids)),
                         cluster_id: ClusterId::User(1),
+                        non_null_assertions: vec![],
                     })
                 }
                 SimplifiedItem::Index { on } => {

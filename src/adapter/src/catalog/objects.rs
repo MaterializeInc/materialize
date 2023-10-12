@@ -685,6 +685,7 @@ pub struct MaterializedView {
     pub desc: RelationDesc,
     pub resolved_ids: ResolvedIds,
     pub cluster_id: ClusterId,
+    pub non_null_assertions: Vec<usize>,
 }
 
 #[derive(Debug, Clone, Serialize)]
