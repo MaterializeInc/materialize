@@ -352,6 +352,9 @@ That's it! From here on, Materialize makes sure that your models are **increment
 
 ## Test and document a dbt project
 
+[//]: # "TODO(morsapaes) Call out the cluster configuration for tests once this
+page is rehashed."
+
 ### Configure continuous testing
 
 Using dbt in a streaming context means that you're able to run data quality and integrity [tests](https://docs.getdbt.com/docs/building-a-dbt-project/tests) non-stop, and monitor failures as soon as they happen. This is useful for unit testing during the development of your dbt models, and later in production to trigger **real-time alerts** downstream.

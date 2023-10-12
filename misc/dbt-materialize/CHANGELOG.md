@@ -1,24 +1,45 @@
 # dbt-materialize Changelog
 
-## Unreleased
+## 1.6.0 - 2023-10-12
 
-* Deprecate the custom `materializedview` materialization name in favor of
-  `materialized_view`, which is built-in from dbt v1.6.
+* Upgrade to `dbt-postgres` v1.6.0:
 
-  **New**
+  * Support [model contracts](https://docs.getdbt.com/docs/collaborate/govern/model-contracts)
+    for `view`, `materialized_view` and `table` materializations.
+    Materialize does not have a notion of constraints, so [model- and column-level constraints](https://docs.getdbt.com/reference/resource-properties/constraints)
+    are **not supported**.
 
-  ```sql
-  {{ config( materialized = 'materialized_view' )}}
+  * Deprecate the custom `materializedview` materialization name in favor of
+    `materialized_view`, which is built-in from dbt v1.6.
+
+    **New**
+
+    ```sql
+    {{ config( materialized = 'materialized_view' )}}
+    ```
+
+    **Deprecated**
+
+    ```sql
+    {{ config( materialized = 'materializedview' )}}
+    ```
+
+    The deprecated materialization name will be removed in a future release of the
+    adapter.
+
+* Enable the `cluster` configuration for tests, which allows specifying a target
+  cluster for `dbt test` to run against (for both one-shot and [continuous testing](https://materialize.com/docs/manage/dbt/#configure-continuous-testing)).
+
+  ```yaml
+  tests:
+  example:
+    +store_failures: true
+    +schema: 'dbt_test_schema'
+    +cluster: 'dbt_test_cluster'
   ```
 
-  **Deprecated**
-
-  ```sql
-  {{ config( materialized = 'materializedview' )}}
-  ```
-
-  The deprecated materialization name will be removed in a future release of the
-  adapter.
+* Override the `dbt init` command to generate a project based on the [quickstart](https://materialize.com/docs/get-started/quickstart/),
+  instead of the default project generated in `dbt-core`.
 
 * **Breaking change.** Set 255 as the maximum identifier length for relation
     names, after [#20999](https://github.com/MaterializeInc/materialize/pull/20999)

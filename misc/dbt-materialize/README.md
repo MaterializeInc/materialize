@@ -57,7 +57,7 @@ Type                | Supported? | Details
 `source`            | YES        | Creates a [source].
 `view`              | YES        | Creates a [view].
 `materializedview`  | YES        | (Deprecated) Creates a [materialized view].
-`materialized_view` | YES        | Creates a [materialized view].
+`materialized_view` | YES        | Creates a [materialized view]. The `materializedview` legacy materialization name is supported for backwards compatibility.
 `table`             | YES        | Creates a [materialized view]. (Actual table support pending [#5266].)
 `sink`              | YES        | Creates a [sink].
 `ephemeral`         | YES        | Executes queries using CTEs.

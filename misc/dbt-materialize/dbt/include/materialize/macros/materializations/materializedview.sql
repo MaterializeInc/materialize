@@ -17,7 +17,7 @@
 {% materialization materializedview, adapter='materialize' %}
   {{ exceptions.warn(
         """
-        The `materializedview` materialization type is deprecated and will be
+        The `materializedview` materialization name is deprecated and will be
         removed in a future release of dbt-materialize. Please use
         `materialized_view` instead, which is built-in from dbt v1.6:
 
