@@ -40,7 +40,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-certs", "cat", "/secrets/postgres.key", capture=True
     ).stdout
 
-    c.up("materialized", "test-certs", "testdrive", "postgres")
+    c.up("materialized", "test-certs", "postgres")
     c.run(
         "testdrive",
         f"--var=ssl-ca={ssl_ca}",

@@ -9,7 +9,7 @@
 from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import Check
+from materialize.checks.checks import TESTDRIVE_NOP, Check
 from materialize.checks.executors import Executor
 from materialize.util import MzVersion
 
@@ -24,7 +24,7 @@ class CreateRole(Check):
         return ""
 
     def initialize(self) -> Testdrive:
-        return Testdrive("")
+        return Testdrive(TESTDRIVE_NOP)
 
     def manipulate(self) -> list[Testdrive]:
         return [

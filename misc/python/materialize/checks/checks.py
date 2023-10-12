@@ -13,6 +13,8 @@ from materialize.checks.actions import Testdrive
 from materialize.checks.executors import Executor
 from materialize.util import MzVersion
 
+TESTDRIVE_NOP = "$ nop"
+
 
 class Check:
     def __init__(self, base_version: MzVersion, rng: Random | None) -> None:
@@ -23,7 +25,7 @@ class Check:
         return True
 
     def initialize(self) -> Testdrive:
-        return Testdrive("")
+        return Testdrive(TESTDRIVE_NOP)
 
     def manipulate(self) -> list[Testdrive]:
         assert False
@@ -67,7 +69,7 @@ class Check:
 
 class CheckDisabled(Check):
     def manipulate(self) -> list[Testdrive]:
-        return [Testdrive(""), Testdrive("")]
+        return [Testdrive(TESTDRIVE_NOP), Testdrive(TESTDRIVE_NOP)]
 
     def validate(self) -> Testdrive:
-        return Testdrive("")
+        return Testdrive(TESTDRIVE_NOP)
