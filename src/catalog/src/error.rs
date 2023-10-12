@@ -14,33 +14,12 @@ use mz_proto::TryFromProtoError;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_stash_types::{InternalStashError, StashError, MIN_STASH_VERSION, STASH_VERSION};
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum CatalogError {
-    Catalog(SqlCatalogError),
-    Durable(DurableCatalogError),
-}
-
-impl std::error::Error for CatalogError {}
-
-impl fmt::Display for CatalogError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            CatalogError::Catalog(e) => write!(f, "{e}"),
-            CatalogError::Durable(e) => write!(f, "{e}"),
-        }
-    }
-}
-
-impl From<SqlCatalogError> for CatalogError {
-    fn from(e: SqlCatalogError) -> Self {
-        Self::Catalog(e)
-    }
-}
-
-impl From<DurableCatalogError> for CatalogError {
-    fn from(e: DurableCatalogError) -> Self {
-        Self::Durable(e)
-    }
+    #[error(transparent)]
+    Catalog(#[from] SqlCatalogError),
+    #[error(transparent)]
+    Durable(#[from] DurableCatalogError),
 }
 
 impl From<StashError> for CatalogError {
@@ -56,21 +35,29 @@ impl From<TryFromProtoError> for CatalogError {
 }
 
 /// An error that can occur while interacting with a durable catalog.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum DurableCatalogError {
     /// Catalog has been fenced by another writer.
+    #[error("{0}")]
     Fence(String),
     /// The persisted catalog's version is too old for the current catalog to migrate.
+    #[error(
+        "incompatible Catalog version {0}, minimum: {MIN_STASH_VERSION}, current: {STASH_VERSION}"
+    )]
     IncompatibleVersion(u64),
     /// Catalog is uninitialized.
+    #[error("uninitialized")]
     Uninitialized,
     /// Catalog is not in a writable state.
+    #[error("{0}")]
     NotWritable(String),
     /// Unable to serialize/deserialize Protobuf message.
+    #[error("proto: {0}")]
     Proto(TryFromProtoError),
     /// Misc errors from the Stash implementation.
     ///
     /// Once the Stash implementation is removed we can remove this variant.
+    #[error(transparent)]
     MiscStash(StashError),
 }
 
@@ -99,21 +86,6 @@ impl DurableCatalogError {
         match self {
             DurableCatalogError::MiscStash(e) => e.should_retry(),
             _ => false,
-        }
-    }
-}
-
-impl std::error::Error for DurableCatalogError {}
-
-impl fmt::Display for DurableCatalogError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            DurableCatalogError::Fence(e) => f.write_str(e),
-            DurableCatalogError::IncompatibleVersion(v) => write!(f, "incompatible Catalog version {v}, minimum: {MIN_STASH_VERSION}, current: {STASH_VERSION}"),
-            DurableCatalogError::Uninitialized => write!(f, "uninitialized"),
-            DurableCatalogError::NotWritable(e) => f.write_str(e),
-            DurableCatalogError::Proto(e) => write!(f, "proto: {e}"),
-            DurableCatalogError::MiscStash(e) => write!(f, "{e}"),
         }
     }
 }

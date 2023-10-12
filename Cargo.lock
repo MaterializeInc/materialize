@@ -3710,6 +3710,7 @@ dependencies = [
  "rand",
  "serde",
  "serde_json",
+ "thiserror",
  "tokio",
  "tokio-postgres",
  "tracing",
