@@ -260,7 +260,18 @@ mz_fg_version: 1
             sample.value.push(value);
 
             for addr in stack.addrs.iter().rev() {
-                let addr = u64::cast_from(*addr);
+                // See the comment
+                // [here](https://github.com/rust-lang/backtrace-rs/blob/036d4909e1fb9c08c2bb0f59ac81994e39489b2f/src/symbolize/mod.rs#L123-L147)
+                // for why we need to subtract one. tl;dr addresses
+                // in stack traces are actually the return address of
+                // the called function, which is one past the call
+                // itself.
+                //
+                // Of course, the `call` instruction can be more than one byte, so after subtracting
+                // one, we might point somewhere in the middle of it, rather
+                // than to the beginning of the instruction. That's fine; symbolization
+                // tools don't seem to get confused by this.
+                let addr = u64::cast_from(*addr) - 1;
 
                 let loc_id = *location_ids.entry(addr).or_insert_with(|| {
                     // pprof_types.proto says the location id may be the address, but Polar Signals
