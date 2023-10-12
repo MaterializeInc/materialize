@@ -155,7 +155,14 @@ mod tests {
         let hint = "hint message";
         let id = GlobalId::User(1);
         let status = "dropped";
-        let row = pack_status_row(id, status, Some(error_message), 1000, Some(hint));
+        let row = pack_status_row(
+            id,
+            status,
+            Some(error_message),
+            &BTreeSet::from([hint.to_string()]),
+            &Default::default(),
+            1000,
+        );
 
         for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
             assert!(datum.is_instance_of(column_type));
@@ -168,14 +175,22 @@ mod tests {
         assert_eq!(row.iter().nth(1).unwrap(), Datum::String(&id.to_string()));
         assert_eq!(row.iter().nth(2).unwrap(), Datum::String(status));
         assert_eq!(row.iter().nth(3).unwrap(), Datum::String(error_message));
+
+        let details = row
+            .iter()
+            .nth(4)
+            .unwrap()
+            .unwrap_map()
+            .iter()
+            .collect::<Vec<_>>();
+
+        assert_eq!(details.len(), 1);
+        let hint_datum = &details[0];
+
+        assert_eq!(hint_datum.0, "hints");
         assert_eq!(
-            row.iter()
-                .nth(4)
-                .unwrap()
-                .unwrap_map()
-                .iter()
-                .collect::<Vec<_>>(),
-            vec![("hint", Datum::String(hint))]
+            hint_datum.1.unwrap_list().iter().next().unwrap(),
+            Datum::String(hint)
         );
     }
 
@@ -184,7 +199,14 @@ mod tests {
         let error_message = "error message";
         let id = GlobalId::User(1);
         let status = "dropped";
-        let row = pack_status_row(id, status, Some(error_message), 1000, None);
+        let row = pack_status_row(
+            id,
+            status,
+            Some(error_message),
+            &Default::default(),
+            &Default::default(),
+            1000,
+        );
 
         for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
             assert!(datum.is_instance_of(column_type));
@@ -205,7 +227,14 @@ mod tests {
         let id = GlobalId::User(1);
         let status = "dropped";
         let hint = "hint message";
-        let row = pack_status_row(id, status, None, 1000, Some(hint));
+        let row = pack_status_row(
+            id,
+            status,
+            None,
+            &BTreeSet::from([hint.to_string()]),
+            &Default::default(),
+            1000,
+        );
 
         for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
             assert!(datum.is_instance_of(column_type));
@@ -218,14 +247,119 @@ mod tests {
         assert_eq!(row.iter().nth(1).unwrap(), Datum::String(&id.to_string()));
         assert_eq!(row.iter().nth(2).unwrap(), Datum::String(status));
         assert_eq!(row.iter().nth(3).unwrap(), Datum::Null);
+
+        let details = row
+            .iter()
+            .nth(4)
+            .unwrap()
+            .unwrap_map()
+            .iter()
+            .collect::<Vec<_>>();
+
+        assert_eq!(details.len(), 1);
+        let hint_datum = &details[0];
+
+        assert_eq!(hint_datum.0, "hints");
         assert_eq!(
-            row.iter()
-                .nth(4)
-                .unwrap()
-                .unwrap_map()
-                .iter()
-                .collect::<Vec<_>>(),
-            vec![("hint", Datum::String(hint))]
+            hint_datum.1.unwrap_list().iter().next().unwrap(),
+            Datum::String(hint)
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_row_with_namespaced() {
+        let error_message = "error message";
+        let id = GlobalId::User(1);
+        let status = "dropped";
+        let row = pack_status_row(
+            id,
+            status,
+            Some(error_message),
+            &Default::default(),
+            &BTreeMap::from([("thing".to_string(), "error".to_string())]),
+            1000,
+        );
+
+        for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
+            assert!(datum.is_instance_of(column_type));
+        }
+
+        for (datum, column_type) in row.iter().zip(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types()) {
+            assert!(datum.is_instance_of(column_type));
+        }
+
+        assert_eq!(row.iter().nth(1).unwrap(), Datum::String(&id.to_string()));
+        assert_eq!(row.iter().nth(2).unwrap(), Datum::String(status));
+        assert_eq!(row.iter().nth(3).unwrap(), Datum::String(error_message));
+
+        let details = row
+            .iter()
+            .nth(4)
+            .unwrap()
+            .unwrap_map()
+            .iter()
+            .collect::<Vec<_>>();
+
+        assert_eq!(details.len(), 1);
+        let ns_datum = &details[0];
+
+        assert_eq!(ns_datum.0, "namespaced");
+        assert_eq!(
+            ns_datum.1.unwrap_map().iter().next().unwrap(),
+            ("thing", Datum::String("error"))
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_row_with_everything() {
+        let error_message = "error message";
+        let hint = "hint message";
+        let id = GlobalId::User(1);
+        let status = "dropped";
+        let row = pack_status_row(
+            id,
+            status,
+            Some(error_message),
+            &BTreeSet::from([hint.to_string()]),
+            &BTreeMap::from([("thing".to_string(), "error".to_string())]),
+            1000,
+        );
+
+        for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
+            assert!(datum.is_instance_of(column_type));
+        }
+
+        for (datum, column_type) in row.iter().zip(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types()) {
+            assert!(datum.is_instance_of(column_type));
+        }
+
+        assert_eq!(row.iter().nth(1).unwrap(), Datum::String(&id.to_string()));
+        assert_eq!(row.iter().nth(2).unwrap(), Datum::String(status));
+        assert_eq!(row.iter().nth(3).unwrap(), Datum::String(error_message));
+
+        let details = row
+            .iter()
+            .nth(4)
+            .unwrap()
+            .unwrap_map()
+            .iter()
+            .collect::<Vec<_>>();
+
+        assert_eq!(details.len(), 2);
+        // These are always sorted
+        let hint_datum = &details[0];
+        let ns_datum = &details[1];
+
+        assert_eq!(hint_datum.0, "hints");
+        assert_eq!(
+            hint_datum.1.unwrap_list().iter().next().unwrap(),
+            Datum::String(hint)
+        );
+
+        assert_eq!(ns_datum.0, "namespaced");
+        assert_eq!(
+            ns_datum.1.unwrap_map().iter().next().unwrap(),
+            ("thing", Datum::String("error"))
         );
     }
 }
