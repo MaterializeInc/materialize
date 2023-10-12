@@ -16,6 +16,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use deadpool_postgres::{Object, PoolError};
+use dec::Decimal;
+use mz_pgrepr::Numeric;
 use mz_postgres_client::{PostgresClient, PostgresClientConfig, PostgresClientKnobs};
 use mz_repr::Timestamp;
 use tracing::{debug, info};
@@ -24,6 +26,10 @@ use crate::coord::timeline::WriteTimestamp;
 use crate::coord::timestamp_oracle::metrics::Metrics;
 use crate::coord::timestamp_oracle::{GenericNowFn, TimestampOracle};
 
+// The timestamp columns are a `DECIMAL` that is big enough to hold
+// `18446744073709551615`, the maximum value of `u64` which is our underlying
+// timestamp type.
+//
 // These `sql_stats_automatic_collection_enabled` are for the cost-based
 // optimizer but all the queries against this table are single-table and very
 // carefully tuned to hit the primary index, so the cost-based optimizer doesn't
@@ -33,8 +39,8 @@ use crate::coord::timestamp_oracle::{GenericNowFn, TimestampOracle};
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS timestamp_oracle (
     timeline text NOT NULL,
-    read_ts bigint NOT NULL,
-    write_ts bigint NOT NULL,
+    read_ts DECIMAL(20,0) NOT NULL,
+    write_ts DECIMAL(20,0) NOT NULL,
     PRIMARY KEY(timeline)
 ) WITH (sql_stats_automatic_collection_enabled = false);
 ";
@@ -200,7 +206,7 @@ where
                 .prepare_cached(q)
                 .await
                 .expect("todo: add internal retries");
-            let initially_coerced = Self::coerce_timestamp(initially, "initial_ts");
+            let initially_coerced = Self::ts_to_decimal(initially);
             let _ = client
                 .execute(
                     &statement,
@@ -270,8 +276,8 @@ where
             .into_iter()
             .map(|row| {
                 let timeline: String = row.try_get("timeline").expect("missing timeline column");
-                let ts: i64 = row.try_get("ts").expect("missing ts column");
-                let ts = Timestamp::try_from(ts).expect("we don't use negative timestamps");
+                let ts: Numeric = row.try_get("ts").expect("missing ts column");
+                let ts = Self::decimal_to_ts(ts);
 
                 (timeline, ts)
             })
@@ -283,7 +289,7 @@ where
     #[tracing::instrument(name = "oracle::write_ts", level = "debug", skip_all)]
     async fn fallible_write_ts(&self) -> Result<WriteTimestamp<Timestamp>, anyhow::Error> {
         let proposed_next_ts = self.next.now();
-        let proposed_next_ts = Self::coerce_timestamp(proposed_next_ts, "proposed_next_ts");
+        let proposed_next_ts = Self::ts_to_decimal(proposed_next_ts);
 
         let q = r#"
             UPDATE timestamp_oracle SET write_ts = GREATEST(write_ts+1, $2)
@@ -296,8 +302,8 @@ where
             .query_one(&statement, &[&self.timeline, &proposed_next_ts])
             .await?;
 
-        let write_ts: i64 = result.try_get("write_ts").expect("missing column write_ts");
-        let write_ts = Timestamp::try_from(write_ts).expect("we don't use negative timestamps");
+        let write_ts: Numeric = result.try_get("write_ts").expect("missing column write_ts");
+        let write_ts = Self::decimal_to_ts(write_ts);
 
         debug!(
             timeline = ?self.timeline,
@@ -323,8 +329,8 @@ where
         let statement = client.prepare_cached(q).await?;
         let result = client.query_one(&statement, &[&self.timeline]).await?;
 
-        let write_ts: i64 = result.try_get("write_ts").expect("missing column write_ts");
-        let write_ts = Timestamp::try_from(write_ts).expect("we don't use negative timestamps");
+        let write_ts: Numeric = result.try_get("write_ts").expect("missing column write_ts");
+        let write_ts = Self::decimal_to_ts(write_ts);
 
         debug!(
             timeline = ?self.timeline,
@@ -344,8 +350,8 @@ where
         let statement = client.prepare_cached(q).await?;
         let result = client.query_one(&statement, &[&self.timeline]).await?;
 
-        let read_ts: i64 = result.try_get("read_ts").expect("missing column read_ts");
-        let read_ts = Timestamp::try_from(read_ts).expect("we don't use negative timestamps");
+        let read_ts: Numeric = result.try_get("read_ts").expect("missing column read_ts");
+        let read_ts = Self::decimal_to_ts(read_ts);
 
         debug!(
             timeline = ?self.timeline,
@@ -363,7 +369,7 @@ where
         "#;
         let client = self.get_connection().await?;
         let statement = client.prepare_cached(q).await?;
-        let write_ts = Self::coerce_timestamp(write_ts, "write_ts");
+        let write_ts = Self::ts_to_decimal(write_ts);
 
         let _ = client
             .execute(&statement, &[&self.timeline, &write_ts])
@@ -377,11 +383,17 @@ where
         Ok(())
     }
 
-    fn coerce_timestamp(ts: Timestamp, display_name: &str) -> i64 {
-        match i64::try_from(ts) {
-            Ok(ts) => ts,
-            Err(err) => panic!("{} {} does not fit into i64: {}", display_name, ts, err),
-        }
+    // We could add `From` impls for these but for now keep the code local to
+    // the oracle.
+    fn ts_to_decimal(ts: Timestamp) -> Numeric {
+        let decimal = Decimal::from(ts);
+        Numeric::from(decimal)
+    }
+
+    // We could add `From` impls for these but for now keep the code local to
+    // the oracle.
+    fn decimal_to_ts(ts: Numeric) -> Timestamp {
+        ts.0 .0.try_into().expect("we only use u64 timestamps")
     }
 }
 
