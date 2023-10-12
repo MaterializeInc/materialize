@@ -235,10 +235,8 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
     /// guaranteed that no two [`DurableCatalogState`]s will return the same value
     /// for their epoch.
     ///
-    /// None is returned if the catalog hasn't been opened yet.
-    ///
     /// NB: We may remove this in later iterations of Pv2.
-    fn epoch(&mut self) -> Option<NonZeroI64>;
+    fn epoch(&mut self) -> NonZeroI64;
 
     /// Returns the version of Materialize that last wrote to the catalog.
     ///

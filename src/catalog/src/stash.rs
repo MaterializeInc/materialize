@@ -419,8 +419,10 @@ impl Connection {
 
 #[async_trait]
 impl ReadOnlyDurableCatalogState for Connection {
-    fn epoch(&mut self) -> Option<NonZeroI64> {
-        self.stash.epoch()
+    fn epoch(&mut self) -> NonZeroI64 {
+        self.stash
+            .epoch()
+            .expect("a opened stash should always have an epoch number")
     }
 
     async fn get_catalog_content_version(&mut self) -> Result<Option<String>, Error> {
