@@ -32,10 +32,10 @@
 
   ```yaml
   tests:
-  example:
-    +store_failures: true
-    +schema: 'dbt_test_schema'
-    +cluster: 'dbt_test_cluster'
+    example:
+      +store_failures: true
+      +schema: 'dbt_test_schema'
+      +cluster: 'dbt_test_cluster'
   ```
 
 * Override the `dbt init` command to generate a project based on the [quickstart](https://materialize.com/docs/get-started/quickstart/),
@@ -47,10 +47,6 @@
     limit in Materialize.
 
 * Support cancelling outstanding queries when pressing Ctrl+C.
-
-* Make `dbt init` generate a project based on the [quickstart](https://materialize.com/docs/get-started/quickstart/).
-
-* Allow `cluster` configuration for `dbt test`.
 
 ## 1.5.1 - 2023-07-24
 
