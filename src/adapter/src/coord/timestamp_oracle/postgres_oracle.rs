@@ -12,11 +12,12 @@
 //! any external precautions/machinery.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use deadpool_postgres::{Object, PoolError};
 use dec::Decimal;
+use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_pgrepr::Numeric;
 use mz_postgres_client::{PostgresClient, PostgresClientConfig, PostgresClientKnobs};
@@ -24,7 +25,8 @@ use mz_repr::Timestamp;
 use tracing::{debug, info};
 
 use crate::coord::timeline::WriteTimestamp;
-use crate::coord::timestamp_oracle::metrics::Metrics;
+use crate::coord::timestamp_oracle::metrics::{Metrics, RetryMetrics};
+use crate::coord::timestamp_oracle::retry::Retry;
 use crate::coord::timestamp_oracle::{GenericNowFn, TimestampOracle};
 
 // The timestamp columns are a `DECIMAL` that is big enough to hold
@@ -198,10 +200,10 @@ where
     ) -> Self {
         info!(url = ?config.url, "opening PostgresTimestampOracle");
 
-        let fallible = async move {
+        let fallible = || async {
             let metrics = Arc::clone(&config.metrics);
 
-            let postgres_client = PostgresClient::open(config.into())?;
+            let postgres_client = PostgresClient::open(config.clone().into())?;
 
             let client = postgres_client.get_connection().await?;
 
@@ -222,8 +224,8 @@ where
                 .await?;
 
             let mut oracle = PostgresTimestampOracle {
-                timeline,
-                next,
+                timeline: timeline.clone(),
+                next: next.clone(),
                 postgres_client: Arc::new(postgres_client),
                 metrics,
             };
@@ -238,10 +240,8 @@ where
                         VALUES ($1, $2, $3)
                         ON CONFLICT (timeline) DO NOTHING;
                 "#;
-            let statement = client
-                .prepare_cached(q)
-                .await
-                .expect("todo: add internal retries");
+            let statement = client.prepare_cached(q).await?;
+
             let initially_coerced = Self::ts_to_decimal(initially);
             let _ = client
                 .execute(
@@ -258,7 +258,9 @@ where
             Result::<_, anyhow::Error>::Ok(oracle)
         };
 
-        let oracle = fallible.await.expect("todo: add internal retries");
+        let metrics = &config.metrics.retries.open;
+
+        let oracle = retry_fallible(metrics, fallible).await;
 
         oracle
     }
@@ -281,43 +283,49 @@ where
     pub(crate) async fn get_all_timelines(
         config: PostgresTimestampOracleConfig,
     ) -> Result<Vec<(String, Timestamp)>, anyhow::Error> {
-        let postgres_client = PostgresClient::open(config.into())?;
+        let fallible = || async {
+            let postgres_client = PostgresClient::open(config.clone().into())?;
 
-        let mut client = postgres_client.get_connection().await?;
+            let mut client = postgres_client.get_connection().await?;
 
-        let txn = client.transaction().await?;
+            let txn = client.transaction().await?;
 
-        let q = r#"
+            let q = r#"
             SELECT EXISTS (SELECT * FROM information_schema.tables where table_name = 'timestamp_oracle');
         "#;
-        let statement = txn.prepare(q).await?;
-        let exists_row = txn.query_one(&statement, &[]).await?;
-        let exists: bool = exists_row.try_get("exists").expect("missing exists column");
-        if !exists {
-            return Ok(Vec::new());
-        }
+            let statement = txn.prepare(q).await?;
+            let exists_row = txn.query_one(&statement, &[]).await?;
+            let exists: bool = exists_row.try_get("exists").expect("missing exists column");
+            if !exists {
+                return Ok(Vec::new());
+            }
 
-        let q = r#"
+            let q = r#"
             SELECT timeline, GREATEST(read_ts, write_ts) as ts FROM timestamp_oracle;
         "#;
-        let statement = txn.prepare(q).await?;
-        let rows = txn
-            .query(&statement, &[])
-            .await
-            .expect("todo: add internal retries");
+            let statement = txn.prepare(q).await?;
+            let rows = txn.query(&statement, &[]).await?;
 
-        txn.commit().await?;
+            txn.commit().await?;
 
-        let result = rows
-            .into_iter()
-            .map(|row| {
-                let timeline: String = row.try_get("timeline").expect("missing timeline column");
-                let ts: Numeric = row.try_get("ts").expect("missing ts column");
-                let ts = Self::decimal_to_ts(ts);
+            let result = rows
+                .into_iter()
+                .map(|row| {
+                    let timeline: String =
+                        row.try_get("timeline").expect("missing timeline column");
+                    let ts: Numeric = row.try_get("ts").expect("missing ts column");
+                    let ts = Self::decimal_to_ts(ts);
 
-                (timeline, ts)
-            })
-            .collect::<Vec<_>>();
+                    (timeline, ts)
+                })
+                .collect::<Vec<_>>();
+
+            Ok(result)
+        };
+
+        let metrics = &config.metrics.retries.get_all_timelines;
+
+        let result = retry_fallible(metrics, fallible).await;
 
         Ok(result)
     }
@@ -434,7 +442,7 @@ where
 }
 
 // A wrapper around the `fallible_` methods that adds operation metrics and
-// (TODO: future work) retries.
+// retries.
 //
 // NOTE: This implementation is tied to [`mz_repr::Timestamp`]. We could change
 // that, and also make the types we store in the backing "Postgres" table
@@ -446,39 +454,100 @@ where
     N: GenericNowFn<Timestamp> + 'static,
 {
     async fn write_ts(&mut self) -> WriteTimestamp<Timestamp> {
-        self.metrics
-            .oracle
-            .write_ts
-            .run_op(|| self.fallible_write_ts())
-            .await
-            .expect("todo: add retries")
+        let metrics = &self.metrics.retries.write_ts;
+
+        let res = retry_fallible(metrics, || {
+            self.metrics
+                .oracle
+                .write_ts
+                .run_op(|| self.fallible_write_ts())
+        })
+        .await;
+
+        res
     }
 
     async fn peek_write_ts(&self) -> Timestamp {
-        self.metrics
-            .oracle
-            .peek_write_ts
-            .run_op(|| self.fallible_peek_write_ts())
-            .await
-            .expect("todo: add retries")
+        let metrics = &self.metrics.retries.peek_write_ts;
+
+        let res = retry_fallible(metrics, || {
+            self.metrics
+                .oracle
+                .peek_write_ts
+                .run_op(|| self.fallible_peek_write_ts())
+        })
+        .await;
+
+        res
     }
 
     async fn read_ts(&self) -> Timestamp {
-        self.metrics
-            .oracle
-            .read_ts
-            .run_op(|| self.fallible_read_ts())
-            .await
-            .expect("todo: add retries")
+        let metrics = &self.metrics.retries.read_ts;
+
+        let res = retry_fallible(metrics, || {
+            self.metrics
+                .oracle
+                .read_ts
+                .run_op(|| self.fallible_read_ts())
+        })
+        .await;
+
+        res
     }
 
     async fn apply_write(&mut self, write_ts: Timestamp) {
-        self.metrics
-            .oracle
-            .apply_write
-            .run_op(|| self.fallible_apply_write(write_ts))
-            .await
-            .expect("todo: add retries")
+        let metrics = &self.metrics.retries.apply_write;
+
+        let res = retry_fallible(metrics, || {
+            self.metrics
+                .oracle
+                .apply_write
+                .run_op(|| self.fallible_apply_write(write_ts.clone()))
+        })
+        .await;
+
+        res
+    }
+}
+
+pub const INFO_MIN_ATTEMPTS: usize = 3;
+
+pub async fn retry_fallible<R, F, WorkFn>(metrics: &RetryMetrics, mut work_fn: WorkFn) -> R
+where
+    F: std::future::Future<Output = Result<R, anyhow::Error>>,
+    WorkFn: FnMut() -> F,
+{
+    let mut retry = metrics.stream(Retry::oracle_defaults(SystemTime::now()).into_retry_stream());
+    loop {
+        match work_fn().await {
+            Ok(x) => {
+                if retry.attempt() > 0 {
+                    debug!(
+                        "external operation {} succeeded after failing at least once",
+                        metrics.name,
+                    );
+                }
+                return x;
+            }
+            Err(err) => {
+                if retry.attempt() >= INFO_MIN_ATTEMPTS {
+                    info!(
+                        "external operation {} failed, retrying in {:?}: {}",
+                        metrics.name,
+                        retry.next_sleep(),
+                        err.display_with_causes()
+                    );
+                } else {
+                    debug!(
+                        "external operation {} failed, retrying in {:?}: {}",
+                        metrics.name,
+                        retry.next_sleep(),
+                        err.display_with_causes()
+                    );
+                }
+                retry = retry.sleep().await;
+            }
+        }
     }
 }
 

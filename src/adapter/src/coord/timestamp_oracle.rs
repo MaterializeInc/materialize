@@ -22,6 +22,7 @@ use crate::coord::timeline::WriteTimestamp;
 pub mod catalog_oracle;
 pub mod metrics;
 pub mod postgres_oracle;
+pub mod retry;
 
 /// A type that provides write and read timestamps, reads observe exactly their
 /// preceding writes.
