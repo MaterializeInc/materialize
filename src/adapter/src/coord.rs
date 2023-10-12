@@ -141,6 +141,7 @@ use crate::coord::timestamp_oracle::catalog_oracle::CatalogTimestampPersistence;
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
+use crate::optimize::{Optimize, OptimizeMaterializedView, OptimizerConfig};
 use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::subscribe::ActiveSubscribe;
@@ -1352,6 +1353,12 @@ impl Coordinator {
 
         debug!("coordinator init: installing existing objects in catalog");
         let mut privatelink_connections = BTreeMap::new();
+
+        let enable_unified_optimizer_api = self
+            .catalog()
+            .system_config()
+            .enable_unified_optimizer_api();
+
         for entry in &entries {
             debug!(
                 "coordinator init: installing {} {}",
@@ -1469,41 +1476,96 @@ impl Coordinator {
                         .storage_ids
                         .insert(entry.id());
 
-                    // Re-create the sink on the compute instance.
-                    let internal_view_id = self.allocate_transient_id()?;
-                    let debug_name = self
-                        .catalog()
-                        .resolve_full_name(entry.name(), entry.conn_id())
-                        .to_string();
+                    if enable_unified_optimizer_api {
+                        // Collect optimizer parameters
+                        let compute_instance = self
+                            .instance_snapshot(mview.cluster_id)
+                            .expect("compute instance does not exist");
+                        let internal_view_id = self.allocate_transient_id()?;
+                        let debug_name = self
+                            .catalog()
+                            .resolve_full_name(entry.name(), None)
+                            .to_string();
+                        let optimzier_config =
+                            OptimizerConfig::from(self.catalog().system_config());
 
-                    let mut builder = self.dataflow_builder(mview.cluster_id);
-                    let (mut df, df_metainfo) = builder.build_materialized_view(
-                        entry.id(),
-                        internal_view_id,
-                        debug_name,
-                        &mview.optimized_expr,
-                        &mview.desc,
-                        &mview.non_null_assertions,
-                    )?;
+                        // Build a MATERIALIZED VIEW optimizer for this view.
+                        let mut optimizer = OptimizeMaterializedView::new(
+                            self.owned_catalog(),
+                            compute_instance,
+                            entry.id(),
+                            internal_view_id,
+                            mview.desc.iter_names().cloned().collect(),
+                            mview.non_null_assertions.clone(),
+                            debug_name,
+                            optimzier_config,
+                        );
 
-                    // Note: ideally, the optimized_plan should be computed and
-                    // set when the CatalogItem is re-constructed (in
-                    // parse_item).
-                    //
-                    // However, it's not clear how exactly to change
-                    // `load_catalog_items` to accommodate for the
-                    // `build_materialized_view` call above.
-                    self.catalog_mut()
-                        .set_optimized_plan(entry.id(), df.clone());
-                    self.catalog_mut()
-                        .set_dataflow_metainfo(entry.id(), df_metainfo);
+                        // MIR ⇒ MIR optimization (global)
+                        let global_mir_plan = optimizer.optimize(mview.optimized_expr.clone())?;
+                        // Timestamp selection
+                        let as_of = self.bootstrap_materialized_view_as_of(
+                            global_mir_plan.df_desc(),
+                            global_mir_plan.compute_instance_id(),
+                        );
+                        let timestamped_plan = global_mir_plan.clone().resolve(as_of.clone());
+                        // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+                        let global_lir_plan = optimizer.optimize(timestamped_plan)?;
 
-                    // The 'as_of' field of the dataflow changes after restart
-                    let as_of = self.bootstrap_materialized_view_as_of(&df, mview.cluster_id);
-                    df.set_as_of(as_of);
+                        // Note: ideally, the optimized_plan should be computed
+                        // and set when the CatalogItem is re-constructed (in
+                        // parse_item).
+                        //
+                        // However, it's not clear how exactly to change
+                        // `load_catalog_items` in order to accommodate the
+                        // optimizer pipeline executed above.
+                        self.catalog_mut()
+                            .set_optimized_plan(entry.id(), global_mir_plan.df_desc().clone());
+                        self.catalog_mut()
+                            .set_physical_plan(entry.id(), global_lir_plan.df_desc().clone());
+                        self.catalog_mut()
+                            .set_dataflow_metainfo(entry.id(), global_lir_plan.df_meta().clone());
 
-                    let df = self.must_ship_dataflow(df, mview.cluster_id).await;
-                    self.catalog_mut().set_physical_plan(entry.id(), df);
+                        let df = global_lir_plan.unapply().0;
+
+                        self.ship_dataflow_new(df, mview.cluster_id).await;
+                    } else {
+                        // Re-create the sink on the compute instance.
+                        let internal_view_id = self.allocate_transient_id()?;
+                        let debug_name = self
+                            .catalog()
+                            .resolve_full_name(entry.name(), entry.conn_id())
+                            .to_string();
+
+                        let mut builder = self.dataflow_builder(mview.cluster_id);
+                        let (mut df, df_metainfo) = builder.build_materialized_view(
+                            entry.id(),
+                            internal_view_id,
+                            debug_name,
+                            &mview.optimized_expr,
+                            &mview.desc,
+                            &mview.non_null_assertions,
+                        )?;
+
+                        // Note: ideally, the optimized_plan should be computed and
+                        // set when the CatalogItem is re-constructed (in
+                        // parse_item).
+                        //
+                        // However, it's not clear how exactly to change
+                        // `load_catalog_items` to accommodate for the
+                        // `build_materialized_view` call above.
+                        self.catalog_mut()
+                            .set_optimized_plan(entry.id(), df.clone());
+                        self.catalog_mut()
+                            .set_dataflow_metainfo(entry.id(), df_metainfo);
+
+                        // The 'as_of' field of the dataflow changes after restart
+                        let as_of = self.bootstrap_materialized_view_as_of(&df, mview.cluster_id);
+                        df.set_as_of(as_of);
+
+                        let df = self.must_ship_dataflow(df, mview.cluster_id).await;
+                        self.catalog_mut().set_physical_plan(entry.id(), df);
+                    }
                 }
                 CatalogItem::Sink(sink) => {
                     // Re-create the sink.

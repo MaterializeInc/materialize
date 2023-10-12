@@ -1715,6 +1715,11 @@ feature_flags!(
         "DOC ON option for sinks",
         false, // default false
         false  // internal false
+    ),
+    (
+        enable_unified_optimizer_api,
+        "use the new unified optimzier API in bootstrap() and coordinator methods",
+        true
     )
 );
 

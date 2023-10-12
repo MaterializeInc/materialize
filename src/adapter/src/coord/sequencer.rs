@@ -59,6 +59,7 @@ mod alter_set_cluster;
 mod cluster;
 mod inner;
 mod linked_cluster;
+mod old_optimizer_api;
 
 impl Coordinator {
     #[tracing::instrument(level = "debug", skip_all)]
@@ -112,6 +113,10 @@ impl Coordinator {
             return ctx.retire(Err(e.into()));
         }
 
+        let enable_unified_optimizer_api = self
+            .catalog()
+            .system_config()
+            .enable_unified_optimizer_api();
         match plan {
             Plan::CreateSource(plan) => {
                 let source_id = return_if_err!(self.catalog_mut().allocate_user_id().await, ctx);
@@ -186,10 +191,24 @@ impl Coordinator {
                 ctx.retire(result);
             }
             Plan::CreateMaterializedView(plan) => {
-                let result = self
-                    .sequence_create_materialized_view(ctx.session_mut(), plan, resolved_ids)
-                    .await;
-                ctx.retire(result);
+                if enable_unified_optimizer_api {
+                    let result = self
+                        .sequence_create_materialized_view(ctx.session_mut(), plan, resolved_ids)
+                        .await;
+                    ctx.retire(result);
+                } else {
+                    // Allow while the introduction of the new optimizer API in
+                    // #20569 is in progress.
+                    #[allow(deprecated)]
+                    let result = self
+                        .sequence_create_materialized_view_deprecated(
+                            ctx.session_mut(),
+                            plan,
+                            resolved_ids,
+                        )
+                        .await;
+                    ctx.retire(result);
+                }
             }
             Plan::CreateIndex(plan) => {
                 let result = self

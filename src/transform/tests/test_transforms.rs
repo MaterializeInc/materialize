@@ -180,9 +180,9 @@ fn handle_typecheck(
     use mz_transform::typecheck::{columns_pretty, Typecheck};
     let ctx = mz_transform::typecheck::empty_context();
 
-    let tc = Typecheck::new(std::rc::Rc::clone(&ctx));
+    let tc = Typecheck::new(std::sync::Arc::clone(&ctx));
 
-    let res = tc.typecheck(&relation, &ctx.borrow_mut());
+    let res = tc.typecheck(&relation, &ctx.lock().expect("typecheck ctx"));
 
     match res {
         Ok(typ) => format!("{}\n", columns_pretty(&typ, catalog).trim()),
