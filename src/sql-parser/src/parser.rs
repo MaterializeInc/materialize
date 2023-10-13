@@ -3867,10 +3867,18 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_cluster_replica_name(&mut self) -> Result<QualifiedReplica, ParserError> {
+        let pos = self.peek_pos();
         let cluster = self.parse_identifier()?;
-        self.expect_token(&Token::Dot)?;
-        let replica = self.parse_identifier()?;
-        Ok(QualifiedReplica { cluster, replica })
+        if !self.consume_token(&Token::Dot) {
+            return self.expected(
+                pos,
+                format!("cluster_identifier.replica_identifier"),
+                Some(Token::Ident(cluster.to_string())),
+            );
+        } else {
+            let replica = self.parse_identifier()?;
+            Ok(QualifiedReplica { cluster, replica })
+        }
     }
 
     fn parse_create_table(&mut self) -> Result<Statement<Raw>, ParserError> {
