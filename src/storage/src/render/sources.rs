@@ -78,7 +78,7 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
     resume_uppers: BTreeMap<GlobalId, Antichain<mz_repr::Timestamp>>,
     source_resume_uppers: BTreeMap<GlobalId, Vec<Row>>,
     resume_stream: &Stream<Child<'g, G, mz_repr::Timestamp>, ()>,
-    storage_state: &mut crate::storage_state::StorageState,
+    storage_state: &crate::storage_state::StorageState,
 ) -> (
     Vec<(
         Collection<Child<'g, G, mz_repr::Timestamp>, Row, Diff>,
@@ -254,7 +254,7 @@ fn render_source_stream<G>(
     description: IngestionDescription<CollectionMetadata>,
     as_of: Antichain<G::Timestamp>,
     mut error_collections: Vec<Collection<G, DataflowError, Diff>>,
-    storage_state: &mut crate::storage_state::StorageState,
+    storage_state: &crate::storage_state::StorageState,
     base_source_config: RawSourceCreationConfig,
     rehydrated_token: impl std::any::Any + 'static,
 ) -> (

@@ -307,11 +307,11 @@ struct BatchSet {
 /// This is done to avoid a clone of the underlying data so that both
 /// operators can have the collection as input.
 pub(crate) fn render<G>(
-    scope: &mut G,
+    scope: &G,
     collection_id: GlobalId,
     target: CollectionMetadata,
     desired_collection: Collection<G, Result<Row, DataflowError>, Diff>,
-    storage_state: &mut StorageState,
+    storage_state: &StorageState,
     metrics: SourcePersistSinkMetrics,
     output_index: usize,
 ) -> (Stream<G, ()>, Stream<G, Rc<anyhow::Error>>, Rc<dyn Any>)
@@ -371,7 +371,7 @@ where
 /// `broadcast()` to, ahem, broadcast, the one description to all downstream
 /// write operators/workers.
 fn mint_batch_descriptions<G>(
-    scope: &mut G,
+    scope: &G,
     collection_id: GlobalId,
     operator_name: &str,
     target: &CollectionMetadata,
@@ -549,14 +549,14 @@ where
 ///
 /// This also and updates various metrics.
 fn write_batches<G>(
-    scope: &mut G,
+    scope: &G,
     collection_id: GlobalId,
     operator_name: &str,
     target: &CollectionMetadata,
     batch_descriptions: &Stream<G, (Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>)>,
     desired_collection: &Collection<G, Result<Row, DataflowError>, Diff>,
     persist_clients: Arc<PersistClientCache>,
-    storage_state: &mut StorageState,
+    storage_state: &StorageState,
 ) -> (
     Stream<G, HollowBatchAndMetadata<SourceData, (), mz_repr::Timestamp, Diff>>,
     Rc<dyn Any>,
@@ -898,14 +898,14 @@ where
 /// sync with the upper of the persist shard, and updates various metrics
 /// and statistics objects.
 fn append_batches<G>(
-    scope: &mut G,
+    scope: &G,
     collection_id: GlobalId,
     operator_name: String,
     target: &CollectionMetadata,
     batch_descriptions: &Stream<G, (Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>)>,
     batches: &Stream<G, HollowBatchAndMetadata<SourceData, (), mz_repr::Timestamp, Diff>>,
     persist_clients: Arc<PersistClientCache>,
-    storage_state: &mut StorageState,
+    storage_state: &StorageState,
     output_index: usize,
     metrics: SourcePersistSinkMetrics,
 ) -> (Stream<G, ()>, Stream<G, Rc<anyhow::Error>>, Rc<dyn Any>)

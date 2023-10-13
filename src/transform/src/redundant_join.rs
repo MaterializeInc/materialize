@@ -650,7 +650,7 @@ fn find_redundancy(
                     };
 
                     // Find an unique key for input that has all columns equated to other.
-                    if keys.iter().any(|key| all_key_columns_equated(key)) {
+                    if keys.iter().any(all_key_columns_equated) {
                         // Find out whether we can produce input's projection strictly with
                         // elements in other's projection.
                         let expressions = input_prov

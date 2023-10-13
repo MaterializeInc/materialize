@@ -53,9 +53,9 @@ use mz_sql::names::{
 };
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_sql::plan::{
-    AlterOptionParameter, Explainee, Index, IndexOption, MaterializedView, MutationKind,
-    OptimizerConfig, Params, Plan, PlannedAlterRoleOption, PlannedRoleVariable, QueryWhen,
-    SideEffectingFunc, SourceSinkClusterConfig, SubscribeFrom, UpdatePrivilege, VariableValue,
+    AlterOptionParameter, Explainee, Index, IndexOption, MaterializedView, MutationKind, Params,
+    Plan, PlannedAlterRoleOption, PlannedRoleVariable, QueryWhen, SideEffectingFunc,
+    SourceSinkClusterConfig, SubscribeFrom, UpdatePrivilege, VariableValue,
 };
 use mz_sql::session::vars::{
     IsolationLevel, OwnedVarInput, SessionVars, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
@@ -112,6 +112,7 @@ use crate::error::AdapterError;
 use crate::explain::explain_dataflow;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::notice::{AdapterNotice, DroppedInUseIndex};
+use crate::optimize::{Optimize, OptimizeMaterializedView, OptimizerConfig};
 use crate::session::{EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp};
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{viewable_variables, ClientTransmitter, ComputeSinkId, ResultExt};
@@ -147,7 +148,7 @@ struct CreateSourceInner {
 impl Coordinator {
     async fn create_source_inner(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         plans: Vec<plan::CreateSourcePlans>,
     ) -> Result<CreateSourceInner, AdapterError> {
         let mut ops = vec![];
@@ -847,7 +848,7 @@ impl Coordinator {
     ///   object, because there are no system objects in the top level view and
     ///   all sub-views are guaranteed to have no ambiguous column references to
     ///   system objects.
-    fn validate_system_column_references(
+    pub(super) fn validate_system_column_references(
         &self,
         uses_ambiguous_columns: bool,
         depends_on: &BTreeSet<GlobalId>,
@@ -942,6 +943,8 @@ impl Coordinator {
         Ok(ops)
     }
 
+    /// This should mirror the operational semantics of
+    /// `Coordinator::sequence_create_materialized_view_deprecated`.
     #[tracing::instrument(level = "debug", skip(self))]
     pub(super) async fn sequence_create_materialized_view(
         &mut self,
@@ -957,6 +960,7 @@ impl Coordinator {
                     expr: raw_expr,
                     column_names,
                     cluster_id,
+                    non_null_assertions,
                 },
             replace: _,
             drop_ids,
@@ -989,24 +993,35 @@ impl Coordinator {
             });
         }
 
-        // Allocate IDs for the materialized view in the catalog.
+        // Collect optimizer parameters
+        let compute_instance = self
+            .instance_snapshot(cluster_id)
+            .expect("compute instance does not exist");
         let id = self.catalog_mut().allocate_user_id().await?;
-        let oid = self.catalog_mut().allocate_oid()?;
-        // Allocate a unique ID that can be used by the dataflow builder to
-        // connect the view dataflow to the storage sink.
         let internal_view_id = self.allocate_transient_id()?;
-        let decorrelated_expr = raw_expr.optimize_and_lower(&plan::OptimizerConfig {})?;
-        let optimized_expr = self.view_optimizer.optimize(decorrelated_expr)?;
-        let desc = RelationDesc::new(optimized_expr.typ(), column_names);
         let debug_name = self.catalog().resolve_full_name(&name, None).to_string();
+        let optimizier_config = OptimizerConfig::from(self.catalog().system_config());
 
-        // Pick the least valid read timestamp as the as-of for the view
-        // dataflow. This makes the materialized view include the maximum possible
-        // amount of historical detail.
-        let id_bundle = self
-            .index_oracle(cluster_id)
-            .sufficient_collections(&expr_depends_on);
-        let as_of = self.least_valid_read(&id_bundle);
+        // Build a MATERIALIZED VIEW optimizer for this view.
+        let mut optimizer = OptimizeMaterializedView::new(
+            self.owned_catalog(),
+            compute_instance,
+            id,
+            internal_view_id,
+            column_names.clone(),
+            non_null_assertions.clone(),
+            debug_name,
+            optimizier_config,
+        );
+
+        // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
+        let local_mir_plan = optimizer.optimize(raw_expr)?;
+        let global_mir_plan = optimizer.optimize(local_mir_plan.clone())?;
+        // Timestamp selection
+        let since = self.least_valid_read(&global_mir_plan.id_bundle());
+        let timestamped_plan = global_mir_plan.clone().resolve(since.clone());
+        // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+        let global_lir_plan = optimizer.optimize(timestamped_plan)?;
 
         let mut ops = Vec::new();
         ops.extend(
@@ -1016,41 +1031,35 @@ impl Coordinator {
         );
         ops.push(catalog::Op::CreateItem {
             id,
-            oid,
+            oid: self.catalog_mut().allocate_oid()?,
             name: name.clone(),
             item: CatalogItem::MaterializedView(catalog::MaterializedView {
                 create_sql,
-                optimized_expr,
-                desc: desc.clone(),
+                optimized_expr: local_mir_plan.expr(),
+                desc: global_lir_plan.desc(),
                 resolved_ids,
                 cluster_id,
+                non_null_assertions,
             }),
             owner_id: *session.current_role_id(),
         });
 
         match self
-            .catalog_transact_with(Some(session.conn_id()), ops, |txn| {
-                // Create a dataflow that materializes the view query and sinks
-                // it to storage.
-                let CatalogItem::MaterializedView(mv) = txn.catalog.get_entry(&id).item() else {
-                    unreachable!()
-                };
-
-                let mut builder = txn.dataflow_builder(cluster_id);
-                let (df, df_metainfo) = builder.build_materialized_view(
-                    id,
-                    internal_view_id,
-                    debug_name,
-                    &mv.optimized_expr,
-                    &mv.desc,
-                )?;
-
-                Ok((df, df_metainfo))
-            })
+            .catalog_transact_conn(Some(session.conn_id()), ops)
             .await
         {
-            Ok((mut df, df_metainfo)) => {
-                self.emit_optimizer_notices(session, &df_metainfo.optimizer_notices);
+            Ok(_) => {
+                // Save plan structures.
+                self.catalog_mut()
+                    .set_optimized_plan(id, global_mir_plan.df_desc().clone());
+                self.catalog_mut()
+                    .set_physical_plan(id, global_lir_plan.df_desc().clone());
+                self.catalog_mut()
+                    .set_dataflow_metainfo(id, global_lir_plan.df_meta().clone());
+
+                // Emit notices.
+                self.emit_optimizer_notices(session, &global_lir_plan.df_meta().optimizer_notices);
+
                 // Announce the creation of the materialized view source.
                 self.controller
                     .storage
@@ -1059,9 +1068,9 @@ impl Coordinator {
                         vec![(
                             id,
                             CollectionDescription {
-                                desc,
+                                desc: global_lir_plan.desc(),
                                 data_source: DataSource::Other(DataSourceOther::Compute),
-                                since: Some(as_of.clone()),
+                                since: Some(since),
                                 status_collection_id: None,
                             },
                         )],
@@ -1075,12 +1084,9 @@ impl Coordinator {
                 )
                 .await;
 
-                self.catalog_mut().set_optimized_plan(id, df.clone());
-                self.catalog_mut().set_dataflow_metainfo(id, df_metainfo);
+                let df = global_lir_plan.unapply().0;
 
-                df.set_as_of(as_of);
-                let df = self.must_ship_dataflow(df, cluster_id).await;
-                self.catalog_mut().set_physical_plan(id, df);
+                self.ship_dataflow_new(df, cluster_id).await;
 
                 Ok(ExecuteResponse::CreatedMaterializedView)
             }
@@ -1224,7 +1230,7 @@ impl Coordinator {
 
     pub(super) async fn sequence_drop_objects(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         plan::DropObjectsPlan {
             drop_ids,
             object_type,
@@ -1428,7 +1434,7 @@ impl Coordinator {
 
     pub(super) async fn sequence_drop_owned(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         plan: plan::DropOwnedPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         for role_id in &plan.role_ids {
@@ -1504,7 +1510,7 @@ impl Coordinator {
 
     fn sequence_drop_common(
         &self,
-        session: &mut Session,
+        session: &Session,
         ids: Vec<ObjectId>,
     ) -> Result<DropOps, AdapterError> {
         let mut dropped_active_db = false;
@@ -2122,7 +2128,7 @@ impl Coordinator {
     // Do some simple validation. We must defer most of it until after any off-thread work.
     fn peek_stage_validate(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         PeekStageValidate {
             plan,
             target_cluster,
@@ -2830,6 +2836,8 @@ impl Coordinator {
                     connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection::default()),
                     with_snapshot,
                     up_to,
+                    // No `FORCE NOT NULL` for subscribes
+                    non_null_assertions: vec![],
                 };
                 let sink_name = format!("subscribe-{}", sink_id);
                 self.dataflow_builder(cluster_id)
@@ -2845,6 +2853,8 @@ impl Coordinator {
                     connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection::default()),
                     with_snapshot,
                     up_to,
+                    // No `FORCE NOT NULL` for subscribes
+                    non_null_assertions: vec![],
                 };
                 let mut dataflow = DataflowDesc::new(format!("subscribe-{}", id));
                 let mut dataflow_builder = self.dataflow_builder(cluster_id);
@@ -2881,6 +2891,9 @@ impl Coordinator {
         active_subscribe.initialize();
         self.add_active_subscribe(sink_id, active_subscribe).await;
 
+        // Allow while the introduction of the new optimizer API in
+        // #20569 is in progress.
+        #[allow(deprecated)]
         match self.ship_dataflow(dataflow, cluster_id).await {
             Ok(_) => {}
             Err(e) => {
@@ -2929,11 +2942,11 @@ impl Coordinator {
                 result.await
             }
             Explainee::MaterializedView(_) => {
-                let result = self.explain_materialized_view(&mut ctx, plan);
+                let result = self.explain_materialized_view(&ctx, plan);
                 result
             }
             Explainee::Index(_) => {
-                let result = self.explain_index(&mut ctx, plan);
+                let result = self.explain_index(&ctx, plan);
                 result
             }
         };
@@ -2942,7 +2955,7 @@ impl Coordinator {
 
     fn explain_materialized_view(
         &mut self,
-        ctx: &mut ExecuteContext,
+        ctx: &ExecuteContext,
         plan: plan::ExplainPlanPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let plan::ExplainPlanPlan {
@@ -3012,7 +3025,7 @@ impl Coordinator {
 
     fn explain_index(
         &mut self,
-        ctx: &mut ExecuteContext,
+        ctx: &ExecuteContext,
         plan: plan::ExplainPlanPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let plan::ExplainPlanPlan {
@@ -3108,6 +3121,11 @@ impl Coordinator {
         // we aren't storing this clone in a `Subscriber`, so we should be fine.
         let root_dispatch = tracing::dispatcher::get_default(|d| d.clone());
 
+        let enable_unified_optimizer_api = self
+            .catalog()
+            .system_config()
+            .enable_unified_optimizer_api();
+
         let pipeline_result = match stmt {
             plan::ExplaineeStatement::Query {
                 raw_plan,
@@ -3133,18 +3151,38 @@ impl Coordinator {
                 column_names,
                 cluster_id,
                 broken,
+                non_null_assertions,
             } => {
-                // Please see the docs on `explain_query_optimizer_pipeline` above.
-                self.explain_create_materialized_view_optimizer_pipeline(
-                    name,
-                    raw_plan,
-                    column_names,
-                    cluster_id,
-                    broken,
-                    root_dispatch,
-                )
-                .with_subscriber(&optimizer_trace)
-                .await
+                if enable_unified_optimizer_api {
+                    // Please see the docs on `explain_query_optimizer_pipeline` above.
+                    self.explain_create_materialized_view_optimizer_pipeline(
+                        name,
+                        raw_plan,
+                        column_names,
+                        cluster_id,
+                        broken,
+                        non_null_assertions,
+                        root_dispatch,
+                    )
+                    .with_subscriber(&optimizer_trace)
+                    .await
+                } else {
+                    // Allow while the introduction of the new optimizer API in
+                    // #20569 is in progress.
+                    #[allow(deprecated)]
+                    // Please see the docs on `explain_query_optimizer_pipeline` above.
+                    self.explain_create_materialized_view_optimizer_pipeline_deprecated(
+                        name,
+                        raw_plan,
+                        column_names,
+                        cluster_id,
+                        broken,
+                        &non_null_assertions,
+                        root_dispatch,
+                    )
+                    .with_subscriber(&optimizer_trace)
+                    .await
+                }
             }
             plan::ExplaineeStatement::CreateIndex {
                 name,
@@ -3232,30 +3270,33 @@ impl Coordinator {
         Ok(Self::send_immediate_rows(rows))
     }
 
-    /// WARNING, ENTERING SPOOKY ZONE 3.0
-    ///
-    /// This method is ALWAYS called within the context of a specialized `tracing` `Subscriber` (set as
-    /// the thread-local default `Dispatch` using `.with_subscriber` at call-sites.
-    ///
-    /// In general, this should be considered safe, but `tracing` has limitations that mean that
-    /// any `Span` created under the specialized `Subscriber` that _leaves_ this function will
-    /// almost assuredly cause a panic inside `tracing`. This is because `Span`s track the
-    /// `Subscriber` they were created under, but certain actions (like an ordinary `Span` exit)
-    /// will call a method on the _thread-local_ `Subscriber`, which may be backed with a different
-    /// `Registry`.
-    ///
-    /// At first glance, there is no obvious way this method leaks `Span`s, but ANY tokio
-    /// resource (like `oneshot` channels) create `Span`s if tokio is built with `tokio_unstable`
-    /// and the `tracing` feature. This method has been audited to make sure ALL such
-    /// cases are dispatched inside the global `root_dispatch`, and **any change to this method
-    /// needs to ensure this invariant is upheld.**
-    ///
-    /// It is a bit wonky to have this method under a specialized `Dispatch`, but ensuring
-    /// all `.await` points inside it use the passed `root_dispatch`, but splitting the method
-    /// into pieces to allow us to control the `Dispatch` for various pieces at a higher-level
-    /// would be very hard to read. Additionally, once the issues with `broken` are resolved
-    /// (as discussed in <https://github.com/MaterializeInc/materialize/pull/21809>), this
-    /// can be simplified, as only a _singular_ `Registry` will be in use.
+    /// Run the query optimization explanation pipeline. This function must be called with
+    /// an `OptimizerTrace` `tracing` subscriber, using `.with_subscriber(...)`.
+    /// The `root_dispatch` should be the global `tracing::Dispatch`.
+    //
+    // WARNING, ENTERING SPOOKY ZONE 3.0
+    //
+    // You must be careful when altering this function. Any async call (so, anything that uses
+    // `.await` should be wrapped with `.with_subscriber(root_dispatch)`.
+    //
+    // `tracing` has limitations that mean that any `Span` created under the `OptimizerTrace`
+    // subscriber that _leaves_ this function will almost assuredly cause a panic inside `tracing`.
+    // This is because `Span`s track the `Subscriber` they were created under, but certain actions
+    // (like an ordinary `Span` exit) will call a method on the _thread-local_ `Subscriber`, which
+    // may be backed with a different `Registry`.
+    //
+    // At first glance, there is no obvious way this method leaks `Span`s, but ANY tokio
+    // resource (like `oneshot` channels) create `Span`s if tokio is built with `tokio_unstable`
+    // and the `tracing` feature. This method has been audited to make sure ALL such
+    // cases are dispatched inside the global `root_dispatch`, and **any change to this method
+    // needs to ensure this invariant is upheld.**
+    //
+    // It is a bit wonky to have this method under a specialized `Dispatch`, but ensuring
+    // all `.await` points inside it use the passed `root_dispatch`, but splitting the method
+    // into pieces to allow us to control the `Dispatch` for various pieces at a higher-level
+    // would be very hard to read. Additionally, once the issues with `broken` are resolved
+    // (as discussed in <https://github.com/MaterializeInc/materialize/pull/21809>), this
+    // can be simplified, as only a _singular_ `Registry` will be in use.
     #[tracing::instrument(target = "optimizer", level = "trace", name = "optimize", skip_all)]
     async fn explain_query_optimizer_pipeline(
         &mut self,
@@ -3293,7 +3334,7 @@ impl Coordinator {
 
         // Execute the `optimize/hir_to_mir` stage.
         let decorrelated_plan = catch_unwind(broken, "hir_to_mir", || {
-            raw_plan.optimize_and_lower(&OptimizerConfig {})
+            raw_plan.optimize_and_lower(&plan::OptimizerConfig {})
         })?;
 
         let mut timeline_context =
@@ -3430,9 +3471,16 @@ impl Coordinator {
         Ok((used_indexes, fast_path_plan, df_metainfo, BTreeMap::new()))
     }
 
+    /// Run the MV optimization explanation pipeline. This function must be called with
+    /// an `OptimizerTrace` `tracing` subscriber, using `.with_subscriber(...)`.
+    /// The `root_dispatch` should be the global `tracing::Dispatch`.
+    ///
+    /// This should mirror the operational semantics of
+    /// `Coordinator::explain_create_materialized_view_optimizer_pipeline_deprecated`.
+    ///
     /// WARNING, ENTERING SPOOKY ZONE 3.0
     ///
-    /// Please read the docs on `explain_query_optimizer_pipeline`.
+    /// Please read the docs on `explain_query_optimizer_pipeline` before changing this function.
     ///
     /// Currently this method does not need to use the global `Dispatch` like
     /// `explain_query_optimizer_pipeline`, but it is passed in case changes to this function
@@ -3445,6 +3493,7 @@ impl Coordinator {
         column_names: Vec<ColumnName>,
         target_cluster_id: ClusterId,
         broken: bool,
+        non_null_assertions: Vec<usize>,
         _root_dispatch: tracing::Dispatch,
     ) -> Result<
         (
@@ -3466,18 +3515,26 @@ impl Coordinator {
         // Initialize optimizer context
         // ----------------------------
 
+        // Collect optimizer parameters
         let compute_instance = self
             .instance_snapshot(target_cluster_id)
             .expect("compute instance does not exist");
         let exported_sink_id = self.allocate_transient_id()?;
         let internal_view_id = self.allocate_transient_id()?;
         let debug_name = full_name.to_string();
-        let as_of = {
-            let id_bundle = self
-                .index_oracle(target_cluster_id)
-                .sufficient_collections(&raw_plan.depends_on());
-            self.least_valid_read(&id_bundle)
-        };
+        let optimizier_config = OptimizerConfig::from(self.catalog().system_config());
+
+        // Build a MATERIALIZED VIEW optimizer for this view.
+        let mut optimizer = OptimizeMaterializedView::new(
+            self.owned_catalog(),
+            compute_instance,
+            exported_sink_id,
+            internal_view_id,
+            column_names.clone(),
+            non_null_assertions,
+            debug_name,
+            optimizier_config,
+        );
 
         // Create a transient catalog item
         // -------------------------------
@@ -3499,83 +3556,57 @@ impl Coordinator {
             trace_plan(&raw_plan);
         });
 
-        // Execute the `optimize/hir_to_mir` stage.
-        let decorrelated_plan = catch_unwind(broken, "hir_to_mir", || {
-            raw_plan.optimize_and_lower(&OptimizerConfig {})
-        })?;
+        let (df_desc, df_meta, used_indexes) = catch_unwind(broken, "optimize", || {
+            // MIR ⇒ MIR optimization (local and global)
+            let local_mir_plan = optimizer.optimize(raw_plan)?;
+            let global_mir_plan = optimizer.optimize(local_mir_plan.clone())?;
 
-        // Execute the `optimize/local` stage.
-        let optimized_plan = catch_unwind(broken, "local", || {
-            let _span = tracing::span!(target: "optimizer", Level::TRACE, "local").entered();
-            let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
-            trace_plan(optimized_plan.as_inner());
-            Ok::<_, AdapterError>(optimized_plan)
-        })?;
+            // Collect the list of indexes used by the dataflow at this point
+            let used_indexes = {
+                let df_desc = global_mir_plan.df_desc();
+                let df_meta = global_mir_plan.df_meta();
+                UsedIndexes::new(
+                    df_desc
+                        .index_imports
+                        .iter()
+                        .map(|(id, _index_import)| {
+                            (*id, df_meta.index_usage_types.get(id).expect("prune_and_annotate_dataflow_index_imports should have been called already").clone())
+                        })
+                        .collect(),
+                )
+            };
 
-        // Execute the `optimize/global` stage.
-        let (mut df, df_metainfo) = catch_unwind(broken, "global", || {
-            let mut df_builder = DataflowBuilder::new(self.catalog().state(), compute_instance);
-            df_builder.build_materialized_view(
-                exported_sink_id,
-                internal_view_id,
-                debug_name,
-                &optimized_plan,
-                &RelationDesc::new(optimized_plan.typ(), column_names),
-            )
-        })?;
+            // Timestamp selection
+            let since = self.least_valid_read(&global_mir_plan.id_bundle());
+            let timestamped_plan = global_mir_plan.clone().resolve(since.clone());
 
-        // Collect the list of indexes used by the dataflow at this point
-        let used_indexes = UsedIndexes::new(
-            df
-                .index_imports
-                .iter()
-                .map(|(id, _index_import)| {
-                    (*id, df_metainfo.index_usage_types.get(id).expect("prune_and_annotate_dataflow_index_imports should have been called already").clone())
-                })
-                .collect(),
-        );
+            // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+            let global_lir_plan = optimizer.optimize(timestamped_plan)?;
 
-        df.set_as_of(as_of);
+            let (df_desc, df_meta) = global_lir_plan.unapply();
 
-        // In the actual sequencing of `CREATE MATERIALIZED VIEW` statements,
-        // the following DataflowDescription manipulations happen in the
-        // `ship_dataflow` call. However, since we don't want to ship, we have
-        // temporary duplicated the code below. This will be resolved once we
-        // implement the proposal from #20569.
-
-        // If the only outputs of the dataflow are sinks, we might be able to
-        // turn off the computation early, if they all have non-trivial
-        // `up_to`s.
-        //
-        // TODO: This should always be the case here so we can demote
-        // the outer index to a soft assert.
-        if df.index_exports.is_empty() {
-            df.until = Antichain::from_elem(Timestamp::MIN);
-            for (_, sink) in &df.sink_exports {
-                df.until.join_assign(&sink.up_to);
-            }
-        }
-
-        // Execute the `optimize/finalize_dataflow` stage.
-        let df = catch_unwind(broken, "finalize_dataflow", || {
-            self.finalize_dataflow(df, target_cluster_id)
+            Ok::<_, AdapterError>((df_desc, df_meta, used_indexes))
         })?;
 
         // Trace the resulting plan for the top-level `optimize` path.
-        trace_plan(&df);
+        trace_plan(&df_desc);
 
         // Return objects that need to be passed to the `ExplainContext`
         // when rendering explanations for the various trace entries.
-        Ok((used_indexes, None, df_metainfo, transient_items))
+        Ok((used_indexes, None, df_meta, transient_items))
     }
 
-    /// WARNING, ENTERING SPOOKY ZONE 3.0
-    ///
-    /// Please read the docs on `explain_query_optimizer_pipeline`.
-    ///
-    /// Currently this method does not need to use the global `Dispatch` like
-    /// `explain_query_optimizer_pipeline`, but it is passed in case changes to this function
-    /// require it.
+    /// Run the index optimization explanation pipeline. This function must be called with
+    /// an `OptimizerTrace` `tracing` subscriber, using `.with_subscriber(...)`.
+    /// The `root_dispatch` should be the global `tracing::Dispatch`.
+    //
+    // WARNING, ENTERING SPOOKY ZONE 3.0
+    //
+    // Please read the docs on `explain_query_optimizer_pipeline` before changing this function.
+    //
+    // Currently this method does not need to use the global `Dispatch` like
+    // `explain_query_optimizer_pipeline`, but it is passed in case changes to this function
+    // require it.
     #[tracing::instrument(target = "optimizer", level = "trace", name = "optimize", skip_all)]
     async fn explain_create_index_optimizer_pipeline(
         &mut self,
@@ -3788,7 +3819,7 @@ impl Coordinator {
     > {
         let plan::ExplainTimestampPlan { format, raw_plan } = plan;
 
-        let decorrelated_plan = raw_plan.optimize_and_lower(&OptimizerConfig {})?;
+        let decorrelated_plan = raw_plan.optimize_and_lower(&plan::OptimizerConfig {})?;
         let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
         let source_ids = optimized_plan.depends_on();
         let cluster = self
@@ -4389,7 +4420,7 @@ impl Coordinator {
 
     pub(super) async fn sequence_alter_role(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         plan::AlterRolePlan { id, name, option }: plan::AlterRolePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let catalog = self.catalog().for_session(session);
@@ -4483,7 +4514,7 @@ impl Coordinator {
 
     pub(super) async fn sequence_alter_source(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         plan::AlterSourcePlan { id, action }: plan::AlterSourcePlan,
         to_create_subsources: Vec<plan::CreateSourcePlans>,
     ) -> Result<ExecuteResponse, AdapterError> {
@@ -5153,7 +5184,7 @@ impl Coordinator {
 
     pub(super) async fn sequence_grant_privileges(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         plan::GrantPrivilegesPlan {
             update_privileges,
             grantees,
@@ -5170,7 +5201,7 @@ impl Coordinator {
 
     pub(super) async fn sequence_revoke_privileges(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         plan::RevokePrivilegesPlan {
             update_privileges,
             revokees,
@@ -5187,7 +5218,7 @@ impl Coordinator {
 
     async fn sequence_update_privileges(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         update_privileges: Vec<UpdatePrivilege>,
         grantees: Vec<RoleId>,
         variant: UpdatePrivilegeVariant,
@@ -5295,7 +5326,7 @@ impl Coordinator {
 
     pub(super) async fn sequence_alter_default_privileges(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         plan::AlterDefaultPrivilegesPlan {
             privilege_objects,
             privilege_acl_items,
@@ -5341,7 +5372,7 @@ impl Coordinator {
 
     pub(super) async fn sequence_grant_role(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         plan::GrantRolePlan {
             role_ids,
             member_ids,
@@ -5385,7 +5416,7 @@ impl Coordinator {
 
     pub(super) async fn sequence_revoke_role(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         plan::RevokeRolePlan {
             role_ids,
             member_ids,
@@ -5429,7 +5460,7 @@ impl Coordinator {
 
     pub(super) async fn sequence_alter_owner(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         plan::AlterOwnerPlan {
             id,
             object_type,
@@ -5691,7 +5722,11 @@ fn alter_storage_cluster_config(size: AlterOptionParameter) -> Option<SourceSink
 ///
 /// Used to implement `EXPLAIN BROKEN <statement>` in the `~_optimizer_pipeline`
 /// methods above.
-fn catch_unwind<R, E, F>(guard: bool, stage: &'static str, f: F) -> Result<R, AdapterError>
+pub(crate) fn catch_unwind<R, E, F>(
+    guard: bool,
+    stage: &'static str,
+    f: F,
+) -> Result<R, AdapterError>
 where
     F: FnOnce() -> Result<R, E>,
     E: Into<AdapterError>,
@@ -5712,7 +5747,7 @@ where
 
 impl Coordinator {
     /// Forward notices that we got from the optimizer.
-    fn emit_optimizer_notices(
+    pub(super) fn emit_optimizer_notices(
         &mut self,
         session: &Session,
         optimizer_notices: &Vec<OptimizerNotice>,

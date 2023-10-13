@@ -1677,11 +1677,6 @@ feature_flags!(
         "MANAGED, AVAILABILITY ZONES syntax"
     ),
     (
-        enable_arrangement_size_logging,
-        "arrangement size logging",
-        true
-    ),
-    (
         statement_logging_use_reproducible_rng,
         "statement logging with reproducible RNG"
     ),
@@ -1714,6 +1709,21 @@ feature_flags!(
         "the COMMENT ON feature for objects",
         false, // default false
         false  // internal false
+    ),
+    (
+        enable_sink_doc_on_option,
+        "DOC ON option for sinks",
+        false, // default false
+        false  // internal false
+    ),
+    (
+        enable_unified_optimizer_api,
+        "use the new unified optimzier API in bootstrap() and coordinator methods",
+        true
+    ),
+    (
+        enable_assert_not_null,
+        "ASSERT NOT NULL for materialized views"
     )
 );
 
@@ -4734,7 +4744,6 @@ pub fn is_tracing_var(name: &str) -> bool {
 pub fn is_compute_config_var(name: &str) -> bool {
     name == MAX_RESULT_SIZE.name()
         || name == DATAFLOW_MAX_INFLIGHT_BYTES.name()
-        || name == ENABLE_ARRANGEMENT_SIZE_LOGGING.name()
         || name == ENABLE_MZ_JOIN_CORE.name()
         || name == ENABLE_JEMALLOC_PROFILING.name()
         || is_persist_config_var(name)

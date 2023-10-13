@@ -1910,7 +1910,7 @@ impl Catalog {
                         cluster_id,
                         id,
                         &name,
-                        &config.clone().into(),
+                        config.clone().into(),
                         owner_id,
                     )?;
                     if let ReplicaLocation::Managed(ManagedReplicaLocation {
@@ -2523,7 +2523,6 @@ impl Catalog {
                                     ResolvedDatabaseSpecifier::Id(id) => Some(*id),
                                 };
                                 tx.update_schema(
-                                    database_id,
                                     schema_id,
                                     schema.clone().into_durable_schema(database_id),
                                 )?;
@@ -2904,11 +2903,7 @@ impl Catalog {
                                 .replica_mut(*replica_id)
                                 .expect("catalog out of sync");
                             replica.owner_id = new_owner;
-                            tx.update_cluster_replica(
-                                *cluster_id,
-                                *replica_id,
-                                replica.clone().into(),
-                            )?;
+                            tx.update_cluster_replica(*replica_id, replica.clone().into())?;
                             builtin_table_updates.extend(state.pack_cluster_replica_update(
                                 *cluster_id,
                                 &replica_name,
@@ -2948,7 +2943,6 @@ impl Catalog {
                                 ResolvedDatabaseSpecifier::Id(id) => Some(id),
                             };
                             tx.update_schema(
-                                database_id.copied(),
                                 schema_id,
                                 schema.clone().into_durable_schema(database_id.copied()),
                             )?;
@@ -3426,13 +3420,18 @@ impl Catalog {
                 let raw_expr = materialized_view.expr;
                 let decorrelated_expr = raw_expr.optimize_and_lower(&plan::OptimizerConfig {})?;
                 let optimized_expr = optimizer.optimize(decorrelated_expr)?;
-                let desc = RelationDesc::new(optimized_expr.typ(), materialized_view.column_names);
+                let mut typ = optimized_expr.typ();
+                for &i in &materialized_view.non_null_assertions {
+                    typ.column_types[i].nullable = false;
+                }
+                let desc = RelationDesc::new(typ, materialized_view.column_names);
                 CatalogItem::MaterializedView(MaterializedView {
                     create_sql: materialized_view.create_sql,
                     optimized_expr,
                     desc,
                     resolved_ids,
                     cluster_id: materialized_view.cluster_id,
+                    non_null_assertions: materialized_view.non_null_assertions,
                 })
             }
             Plan::CreateIndex(CreateIndexPlan { index, .. }) => CatalogItem::Index(Index {
@@ -4431,6 +4430,11 @@ impl SessionCatalog for ConnCatalog<'_> {
     fn add_notice(&self, notice: PlanNotice) {
         let _ = self.notices_tx.send(notice.into());
     }
+
+    fn get_item_comments(&self, id: &GlobalId) -> Option<&BTreeMap<Option<usize>, String>> {
+        let comment_id = self.state.get_comment_id(ObjectId::Item(*id));
+        self.state.comments.get_object_comments(comment_id)
+    }
 }
 
 #[cfg(test)]
@@ -5268,7 +5272,7 @@ mod tests {
                                 );
                             }
 
-                            let imp_return_oid = imp.return_typ.map(|item| resolve_type_oid(item));
+                            let imp_return_oid = imp.return_typ.map(resolve_type_oid);
 
                             assert!(
                                 is_same_type(imp.oid, imp_return_oid, pg_fn.ret_oid),
@@ -5303,10 +5307,8 @@ mod tests {
 
                     assert_eq!(*op, pg_op.name);
 
-                    let imp_return_oid = imp
-                        .return_typ
-                        .map(|item| resolve_type_oid(item))
-                        .expect("must have oid");
+                    let imp_return_oid =
+                        imp.return_typ.map(resolve_type_oid).expect("must have oid");
                     if imp_return_oid != pg_op.oprresult {
                         panic!(
                             "operators with oid {} ({}) don't match return typs: {} in mz, {} in pg",
@@ -5398,7 +5400,7 @@ mod tests {
 
                     let return_oid = details
                         .return_typ
-                        .map(|item| resolve_type_oid(item))
+                        .map(resolve_type_oid)
                         .expect("must exist");
                     let return_styp = mz_pgrepr::Type::from_oid(return_oid)
                         .ok()

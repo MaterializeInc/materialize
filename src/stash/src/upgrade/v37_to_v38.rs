@@ -7,11 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use crate::upgrade::{objects_v37, objects_v38, MigrationAction};
+use mz_stash_types::upgrade::{objects_v37, objects_v38};
+
+use crate::upgrade::MigrationAction;
 use crate::{StashError, Transaction, TypedCollection};
 
 /// Update fingerprint of builtin types to have timestsamp with precision
-pub async fn upgrade(tx: &mut Transaction<'_>) -> Result<(), StashError> {
+pub async fn upgrade(tx: &Transaction<'_>) -> Result<(), StashError> {
     const GID_MAPPING_COLLECTION: TypedCollection<
         objects_v37::GidMappingKey,
         objects_v37::GidMappingValue,
@@ -22,7 +24,7 @@ pub async fn upgrade(tx: &mut Transaction<'_>) -> Result<(), StashError> {
             let mut updates = Vec::new();
 
             for (key, value) in entries {
-                let new_key: objects_v38::GidMappingKey = key.clone().into();
+                let new_key: objects_v38::GidMappingKey = gid_mapping_key_from(key.clone());
                 let new_fingerprint = value
                     .fingerprint
                     .replace("\"TimestampTz\"", "{\"TimestampTz\":{\"precision\":null}}");
@@ -39,12 +41,10 @@ pub async fn upgrade(tx: &mut Transaction<'_>) -> Result<(), StashError> {
     Ok(())
 }
 
-impl From<objects_v37::GidMappingKey> for objects_v38::GidMappingKey {
-    fn from(key: objects_v37::GidMappingKey) -> Self {
-        objects_v38::GidMappingKey {
-            schema_name: key.schema_name,
-            object_type: key.object_type,
-            object_name: key.object_name,
-        }
+fn gid_mapping_key_from(key: objects_v37::GidMappingKey) -> objects_v38::GidMappingKey {
+    objects_v38::GidMappingKey {
+        schema_name: key.schema_name,
+        object_type: key.object_type,
+        object_name: key.object_name,
     }
 }

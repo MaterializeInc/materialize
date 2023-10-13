@@ -1961,55 +1961,51 @@ fn wrap<'a>(datums: &'a [Datum<'a>], width: usize) -> impl Iterator<Item = (Row,
 fn acl_explode<'a>(
     acl_items: Datum<'a>,
     temp_storage: &'a RowArena,
-) -> impl Iterator<Item = (Row, Diff)> + 'a {
+) -> Result<impl Iterator<Item = (Row, Diff)> + 'a, EvalError> {
     let acl_items = acl_items.unwrap_array();
-    acl_items
-        .elements()
-        .iter()
-        .map(|acl_item| acl_item.unwrap_acl_item())
-        .flat_map(move |acl_item| {
-            acl_item
-                .acl_mode
-                .explode()
-                .into_iter()
-                .map(move |privilege| {
-                    [
-                        Datum::UInt32(acl_item.grantor.0),
-                        Datum::UInt32(acl_item.grantee.0),
-                        Datum::String(temp_storage.push_string(privilege.to_string())),
-                        // GRANT OPTION is not implemented, so we hardcode false.
-                        Datum::False,
-                    ]
-                })
-        })
-        .map(|row| (Row::pack_slice(&row), 1))
+    let mut res = Vec::new();
+    for acl_item in acl_items.elements().iter() {
+        if acl_item.is_null() {
+            return Err(EvalError::AclArrayNullElement);
+        }
+        let acl_item = acl_item.unwrap_acl_item();
+        for privilege in acl_item.acl_mode.explode() {
+            let row = [
+                Datum::UInt32(acl_item.grantor.0),
+                Datum::UInt32(acl_item.grantee.0),
+                Datum::String(temp_storage.push_string(privilege.to_string())),
+                // GRANT OPTION is not implemented, so we hardcode false.
+                Datum::False,
+            ];
+            res.push((Row::pack_slice(&row), 1));
+        }
+    }
+    Ok(res.into_iter())
 }
 
 fn mz_acl_explode<'a>(
     mz_acl_items: Datum<'a>,
     temp_storage: &'a RowArena,
-) -> impl Iterator<Item = (Row, Diff)> + 'a {
+) -> Result<impl Iterator<Item = (Row, Diff)> + 'a, EvalError> {
     let mz_acl_items = mz_acl_items.unwrap_array();
-    mz_acl_items
-        .elements()
-        .iter()
-        .map(|mz_acl_item| mz_acl_item.unwrap_mz_acl_item())
-        .flat_map(move |mz_acl_item| {
-            mz_acl_item
-                .acl_mode
-                .explode()
-                .into_iter()
-                .map(move |privilege| {
-                    [
-                        Datum::String(temp_storage.push_string(mz_acl_item.grantor.to_string())),
-                        Datum::String(temp_storage.push_string(mz_acl_item.grantee.to_string())),
-                        Datum::String(temp_storage.push_string(privilege.to_string())),
-                        // GRANT OPTION is not implemented, so we hardcode false.
-                        Datum::False,
-                    ]
-                })
-        })
-        .map(|row| (Row::pack_slice(&row), 1))
+    let mut res = Vec::new();
+    for mz_acl_item in mz_acl_items.elements().iter() {
+        if mz_acl_item.is_null() {
+            return Err(EvalError::MzAclArrayNullElement);
+        }
+        let mz_acl_item = mz_acl_item.unwrap_mz_acl_item();
+        for privilege in mz_acl_item.acl_mode.explode() {
+            let row = [
+                Datum::String(temp_storage.push_string(mz_acl_item.grantor.to_string())),
+                Datum::String(temp_storage.push_string(mz_acl_item.grantee.to_string())),
+                Datum::String(temp_storage.push_string(privilege.to_string())),
+                // GRANT OPTION is not implemented, so we hardcode false.
+                Datum::False,
+            ];
+            res.push((Row::pack_slice(&row), 1));
+        }
+    }
+    Ok(res.into_iter())
 }
 
 #[derive(
@@ -2141,8 +2137,8 @@ impl TableFunc {
             return Ok(Box::new(vec![].into_iter()));
         }
         match self {
-            TableFunc::AclExplode => Ok(Box::new(acl_explode(datums[0], temp_storage))),
-            TableFunc::MzAclExplode => Ok(Box::new(mz_acl_explode(datums[0], temp_storage))),
+            TableFunc::AclExplode => Ok(Box::new(acl_explode(datums[0], temp_storage)?)),
+            TableFunc::MzAclExplode => Ok(Box::new(mz_acl_explode(datums[0], temp_storage)?)),
             TableFunc::JsonbEach { stringify } => {
                 Ok(Box::new(jsonb_each(datums[0], temp_storage, *stringify)))
             }

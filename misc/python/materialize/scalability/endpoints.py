@@ -109,7 +109,9 @@ class MaterializeContainer(MaterializeNonRemote):
 
     def up(self) -> None:
         self.composition.down(destroy_volumes=True)
-        with self.composition.override(Materialized(image=self.image)):
+        with self.composition.override(
+            Materialized(image=self.image, sanity_restart=False)
+        ):
             self.composition.up("materialized")
             self._port = self.composition.default_port("materialized")
 

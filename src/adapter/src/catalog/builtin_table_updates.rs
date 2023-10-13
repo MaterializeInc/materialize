@@ -1434,7 +1434,12 @@ impl CatalogState {
             CommentObjectId::ClusterReplica((_, replica_id)) => replica_id.to_string(),
         };
         let column_pos_datum = match column_pos {
-            Some(pos) => Datum::UInt64(CastFrom::cast_from(pos)),
+            Some(pos) => {
+                // TODO(parkmycar): https://github.com/MaterializeInc/materialize/issues/22246.
+                let pos =
+                    i32::try_from(pos).expect("we constrain this value in the planning layer");
+                Datum::Int32(pos)
+            }
             None => Datum::Null,
         };
 

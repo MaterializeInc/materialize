@@ -10,8 +10,14 @@
 MZFROM ubuntu-base
 
 RUN apt-get update \
-    && apt-get -qy install ca-certificates
+    && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install \
+        ca-certificates \
+        tini \
+    && groupadd --system --gid=999 materialize \
+    && useradd --system --gid=999 --uid=999 --create-home materialize
 
 COPY mz-balancerd /usr/local/bin/balancerd
 
-ENTRYPOINT ["balancerd"]
+USER materialize
+
+ENTRYPOINT ["tini", "--", "balancerd"]

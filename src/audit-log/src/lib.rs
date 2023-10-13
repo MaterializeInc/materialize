@@ -91,7 +91,7 @@
 
 use mz_ore::now::EpochMillis;
 use mz_proto::{IntoRustIfSome, ProtoType};
-use mz_stash::objects::{proto, RustType, TryFromProtoError};
+use mz_stash_types::objects::{proto, RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -193,7 +193,7 @@ impl RustType<proto::audit_log_event_v1::EventType> for EventType {
 
     fn from_proto(
         proto: proto::audit_log_event_v1::EventType,
-    ) -> Result<Self, mz_stash::objects::TryFromProtoError> {
+    ) -> Result<Self, mz_stash_types::objects::TryFromProtoError> {
         match proto {
             proto::audit_log_event_v1::EventType::Create => Ok(EventType::Create),
             proto::audit_log_event_v1::EventType::Drop => Ok(EventType::Drop),
@@ -1286,7 +1286,7 @@ mod tests {
         EventDetails, EventType, EventV1, IdNameV1, ObjectType, VersionedEvent,
         VersionedStorageUsage,
     };
-    use mz_stash::objects::RustType;
+    use mz_stash_types::objects::RustType;
     use proptest::prelude::*;
 
     // Test all versions of events. This test hard codes bytes so that

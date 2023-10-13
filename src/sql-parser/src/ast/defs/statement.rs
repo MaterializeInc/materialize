@@ -1239,6 +1239,7 @@ pub struct CreateMaterializedViewStatement<T: AstInfo> {
     pub columns: Vec<Ident>,
     pub in_cluster: Option<T::ClusterName>,
     pub query: Query<T>,
+    pub non_null_assertions: Vec<Ident>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {
@@ -1266,6 +1267,18 @@ impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {
         if let Some(cluster) = &self.in_cluster {
             f.write_str(" IN CLUSTER ");
             f.write_node(cluster);
+        }
+
+        if !self.non_null_assertions.is_empty() {
+            f.write_str(" WITH (");
+            for (i, nna) in self.non_null_assertions.iter().enumerate() {
+                f.write_str("ASSERT NOT NULL ");
+                f.write_node(nna);
+                if i + 1 != self.non_null_assertions.len() {
+                    f.write_str(", ")
+                }
+            }
+            f.write_str(")");
         }
 
         f.write_str(" AS ");

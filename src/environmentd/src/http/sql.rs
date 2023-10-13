@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use axum::extract::{State, WebSocketUpgrade};
 use axum::response::IntoResponse;
-use axum::Json;
+use axum::{Extension, Json};
 use futures::future::BoxFuture;
 use futures::Future;
 use http::StatusCode;
@@ -43,7 +43,7 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::debug;
 use tungstenite::protocol::frame::coding::CloseCode;
 
-use crate::http::{init_ws, AuthedClient, WsState, MAX_REQUEST_SIZE};
+use crate::http::{init_ws, AuthedClient, AuthedUser, WsState, MAX_REQUEST_SIZE};
 
 pub async fn handle_sql(
     mut client: AuthedClient,
@@ -67,10 +67,13 @@ struct ErrorResponse {
 
 pub async fn handle_sql_ws(
     State(state): State<WsState>,
+    existing_user: Option<Extension<AuthedUser>>,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
+    // An upstream middleware may have already provided the user for us
+    let user = existing_user.and_then(|Extension(user)| Some(user));
     ws.max_message_size(MAX_REQUEST_SIZE)
-        .on_upgrade(|ws| async move { run_ws(&state, ws).await })
+        .on_upgrade(|ws| async move { run_ws(&state, user, ws).await })
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
@@ -87,10 +90,14 @@ pub enum WebSocketAuth {
         #[serde(default)]
         options: BTreeMap<String, String>,
     },
+    OptionsOnly {
+        #[serde(default)]
+        options: BTreeMap<String, String>,
+    },
 }
 
-async fn run_ws(state: &WsState, mut ws: WebSocket) {
-    let mut client = match init_ws(state, &mut ws).await {
+async fn run_ws(state: &WsState, user: Option<AuthedUser>, mut ws: WebSocket) {
+    let mut client = match init_ws(state, user, &mut ws).await {
         Ok(client) => client,
         Err(e) => {
             // We omit most detail from the error message we send to the client, to
@@ -817,7 +824,7 @@ async fn execute_request<S: ResultSender>(
     }
 
     fn parse<'a>(
-        client: &mut SessionClient,
+        client: &SessionClient,
         query: &'a str,
     ) -> Result<Vec<StatementParseResult<'a>>, anyhow::Error> {
         match client.parse(query) {

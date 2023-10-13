@@ -51,6 +51,7 @@ mod file;
 mod http;
 mod kafka;
 mod mysql;
+mod nop;
 mod persist;
 mod postgres;
 mod protobuf;
@@ -322,10 +323,13 @@ impl State {
     }
 
     pub async fn reset_materialize(&mut self) -> Result<(), anyhow::Error> {
-        let (inner_client, _) = postgres_client(&format!(
-            "postgres://mz_system:materialize@{}",
-            self.materialize_internal_sql_addr
-        ))
+        let (inner_client, _) = postgres_client(
+            &format!(
+                "postgres://mz_system:materialize@{}",
+                self.materialize_internal_sql_addr
+            ),
+            self.default_timeout,
+        )
         .await?;
         inner_client
             .batch_execute("ALTER SYSTEM RESET ALL")
@@ -566,6 +570,7 @@ impl Run for PosCommand {
                     "kafka-verify-commit" => kafka::run_verify_commit(builtin, state).await,
                     "mysql-connect" => mysql::run_connect(builtin, state).await,
                     "mysql-execute" => mysql::run_execute(builtin, state).await,
+                    "nop" => nop::run_nop(),
                     "postgres-connect" => postgres::run_connect(builtin, state).await,
                     "postgres-execute" => postgres::run_execute(builtin, state).await,
                     "postgres-verify-slot" => postgres::run_verify_slot(builtin, state).await,
@@ -812,6 +817,8 @@ pub async fn create_state(
                 kafka_config.set("ssl.keystore.password", cert_password);
             }
         }
+        kafka_config.set("message.max.bytes", "15728640");
+
         for (key, value) in &config.kafka_opts {
             kafka_config.set(key, value);
         }
@@ -822,7 +829,6 @@ pub async fn create_state(
 
         let admin_opts = AdminOptions::new().operation_timeout(Some(config.default_timeout));
 
-        kafka_config.set("message.max.bytes", "15728640");
         let producer: FutureProducer<_> = kafka_config
             .create_with_context(MzClientContext::default())
             .with_context(|| format!("opening Kafka producer connection: {}", config.kafka_addr))?;

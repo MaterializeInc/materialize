@@ -116,7 +116,7 @@ use mz_persist_types::Codec64;
 use mz_proto::RustType;
 use mz_repr::{GlobalId, TimestampManipulation};
 use mz_service::secrets::SecretsReaderCliArgs;
-use mz_stash::StashFactory;
+use mz_stash_types::metrics::Metrics as StashMetrics;
 use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse,
 };
@@ -152,8 +152,8 @@ pub struct ControllerConfig {
     pub init_container_image: Option<String>,
     /// The now function to advance the controller's introspection collections.
     pub now: NowFn,
-    /// The postgres stash factory.
-    pub postgres_factory: StashFactory,
+    /// The process-wide stash metrics.
+    pub stash_metrics: Arc<StashMetrics>,
     /// The metrics registry.
     pub metrics_registry: MetricsRegistry,
     /// The URL for Persist PubSub.
@@ -385,7 +385,7 @@ where
             config.persist_location,
             config.persist_clients,
             config.now,
-            &config.postgres_factory,
+            config.stash_metrics,
             envd_epoch,
             config.metrics_registry.clone(),
         )

@@ -107,8 +107,9 @@ use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec64, Opaque};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{ColumnName, Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
-use mz_stash::objects::proto;
 use mz_stash::{self, AppendBatch, StashFactory, TypedCollection};
+use mz_stash_types::metrics::Metrics as StashMetrics;
+use mz_stash_types::objects::proto;
 use mz_storage_client::client::{
     CreateSinkCommand, ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand,
     SinkStatisticsUpdate, SourceStatisticsUpdate, StorageCommand, StorageResponse,
@@ -213,17 +214,17 @@ impl RustType<ProtoDurableExportMetadata> for DurableExportMetadata<mz_repr::Tim
     }
 }
 
-impl RustType<mz_stash::objects::proto::DurableExportMetadata>
+impl RustType<mz_stash_types::objects::proto::DurableExportMetadata>
     for DurableExportMetadata<mz_repr::Timestamp>
 {
-    fn into_proto(&self) -> mz_stash::objects::proto::DurableExportMetadata {
-        mz_stash::objects::proto::DurableExportMetadata {
+    fn into_proto(&self) -> mz_stash_types::objects::proto::DurableExportMetadata {
+        mz_stash_types::objects::proto::DurableExportMetadata {
             initial_as_of: Some(self.initial_as_of.into_proto()),
         }
     }
 
     fn from_proto(
-        proto: mz_stash::objects::proto::DurableExportMetadata,
+        proto: mz_stash_types::objects::proto::DurableExportMetadata,
     ) -> Result<Self, TryFromProtoError> {
         Ok(DurableExportMetadata {
             initial_as_of: proto
@@ -1838,7 +1839,7 @@ where
         persist_location: PersistLocation,
         persist_clients: Arc<PersistClientCache>,
         now: NowFn,
-        factory: &StashFactory,
+        stash_metrics: Arc<StashMetrics>,
         envd_epoch: NonZeroI64,
         metrics_registry: MetricsRegistry,
     ) -> Self {
@@ -1849,7 +1850,7 @@ where
                 .expect("invalid postgres url for storage stash"),
         )
         .expect("could not make storage TLS connection");
-        let mut stash = factory
+        let mut stash = StashFactory::from_metrics(stash_metrics)
             .open(postgres_url, None, tls)
             .await
             .expect("could not connect to postgres storage stash");

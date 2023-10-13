@@ -47,7 +47,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, Row};
-use mz_stash::objects::proto;
+use mz_stash_types::objects::proto;
 use mz_storage_client::controller::{ReadPolicy, StorageController};
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};

@@ -20,12 +20,10 @@
 
 use mz_expr::CollectionPlan;
 use mz_repr::GlobalId;
-use mz_sql::catalog::{ErrorMessageObjectDescription, SessionCatalog};
-use mz_sql::names::{ResolvedIds, SystemObjectId};
+use mz_sql::catalog::SessionCatalog;
 use mz_sql::plan::{
     ExplainPlanPlan, ExplainTimestampPlan, Explainee, ExplaineeStatement, Plan, SubscribeFrom,
 };
-use mz_sql::rbac;
 use smallvec::SmallVec;
 
 use crate::catalog::Catalog;
@@ -33,7 +31,7 @@ use crate::coord::TargetCluster;
 use crate::notice::AdapterNotice;
 use crate::session::Session;
 use crate::AdapterError;
-use mz_catalog::builtin::{MZ_INTROSPECTION_CLUSTER, MZ_SUPPORT_ROLE};
+use mz_catalog::builtin::MZ_INTROSPECTION_CLUSTER;
 
 /// Checks whether or not we should automatically run a query on the `mz_introspection`
 /// cluster, as opposed to whatever the current default cluster is.
@@ -237,133 +235,4 @@ pub fn check_cluster_restrictions(
     } else {
         Ok(())
     }
-}
-
-/// TODO(jkosh44) This function will verify the privileges for the mz_support user.
-///  All of the privileges are hard coded into this function. In the future if we ever add
-///  a more robust privileges framework, then this function should be replaced with that
-///  framework.
-pub fn user_privilege_hack(
-    catalog: &impl SessionCatalog,
-    session: &Session,
-    plan: &Plan,
-    resolved_ids: &ResolvedIds,
-) -> Result<(), AdapterError> {
-    if session.user().name != MZ_SUPPORT_ROLE.name {
-        return Ok(());
-    }
-
-    match plan {
-        // **Special Cases**
-        //
-        // Generally we want to prevent the mz_support user from being able to
-        // access user objects. But there are a few special cases where we
-        // permit limited access, which are are very useful for debugging. More
-        // specifically:
-        //   * SHOW CREATE ... commands. See
-        //     <https://github.com/MaterializeInc/materialize/issues/18027> for
-        //     more details.
-        //   * EXPLAIN PLAN ... and EXPLAIN TIMESTAMP ... and commands. See
-        //     <https://github.com/MaterializeInc/materialize/issues/20478> for
-        //     more details.
-        //
-        Plan::ShowCreate(_)
-        | Plan::ShowColumns(_)
-        | Plan::ExplainPlan(_)
-        | Plan::ExplainTimestamp(_) => {
-            return Ok(());
-        }
-
-        Plan::Subscribe(_)
-        | Plan::Select(_)
-        | Plan::CopyFrom(_)
-        | Plan::ShowAllVariables
-        | Plan::ShowVariable(_)
-        | Plan::SetVariable(_)
-        | Plan::ResetVariable(_)
-        | Plan::SetTransaction(_)
-        | Plan::StartTransaction(_)
-        | Plan::CommitTransaction(_)
-        | Plan::AbortTransaction(_)
-        | Plan::EmptyQuery
-        | Plan::Declare(_)
-        | Plan::Fetch(_)
-        | Plan::Close(_)
-        | Plan::Prepare(_)
-        | Plan::Execute(_)
-        | Plan::Deallocate(_)
-        | Plan::SideEffectingFunc(_)
-        | Plan::ValidateConnection(_) => {}
-
-        Plan::CreateConnection(_)
-        | Plan::CreateDatabase(_)
-        | Plan::CreateSchema(_)
-        | Plan::CreateRole(_)
-        | Plan::CreateCluster(_)
-        | Plan::CreateClusterReplica(_)
-        | Plan::CreateSource(_)
-        | Plan::CreateSources(_)
-        | Plan::CreateSecret(_)
-        | Plan::CreateSink(_)
-        | Plan::CreateTable(_)
-        | Plan::CreateView(_)
-        | Plan::CreateMaterializedView(_)
-        | Plan::CreateIndex(_)
-        | Plan::CreateType(_)
-        | Plan::Comment(_)
-        | Plan::DiscardTemp
-        | Plan::DiscardAll
-        | Plan::DropObjects(_)
-        | Plan::DropOwned(_)
-        | Plan::Insert(_)
-        | Plan::AlterNoop(_)
-        | Plan::AlterClusterRename(_)
-        | Plan::AlterClusterSwap(_)
-        | Plan::AlterClusterReplicaRename(_)
-        | Plan::AlterCluster(_)
-        | Plan::AlterIndexSetOptions(_)
-        | Plan::AlterIndexResetOptions(_)
-        | Plan::AlterSetCluster(_)
-        | Plan::AlterRole(_)
-        | Plan::AlterSink(_)
-        | Plan::AlterSource(_)
-        | Plan::PurifiedAlterSource { .. }
-        | Plan::AlterItemRename(_)
-        | Plan::AlterItemSwap(_)
-        | Plan::AlterSecret(_)
-        | Plan::AlterSystemSet(_)
-        | Plan::AlterSystemReset(_)
-        | Plan::AlterSystemResetAll(_)
-        | Plan::AlterOwner(_)
-        | Plan::InspectShard(_)
-        | Plan::ReadThenWrite(_)
-        | Plan::Raise(_)
-        | Plan::RotateKeys(_)
-        | Plan::GrantRole(_)
-        | Plan::RevokeRole(_)
-        | Plan::GrantPrivileges(_)
-        | Plan::RevokePrivileges(_)
-        | Plan::AlterDefaultPrivileges(_)
-        | Plan::ReassignOwned(_) => {
-            return Err(AdapterError::Unauthorized(
-                rbac::UnauthorizedError::MzSupport {
-                    action: plan.name().to_string(),
-                },
-            ))
-        }
-    }
-
-    for id in &resolved_ids.0 {
-        let item = catalog.get_item(id);
-        let full_name = catalog.resolve_full_name(item.name());
-        if !catalog.is_system_schema(&full_name.schema) {
-            let object_description =
-                ErrorMessageObjectDescription::from_id(&SystemObjectId::Object(id.into()), catalog);
-            return Err(AdapterError::Unauthorized(
-                rbac::UnauthorizedError::Privilege { object_description },
-            ));
-        }
-    }
-
-    Ok(())
 }

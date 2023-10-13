@@ -468,14 +468,22 @@ where
 
             // `recv_timeout()` is cancel-safe as per it's docs.
             Some(timeout) = self.adapter_client.recv_timeout() => {
-                let e: AdapterError =timeout.into();
-                let error_response = e.into_response(Severity::Fatal);
+                let err: AdapterError = timeout.into();
+                let conn_id = self.adapter_client.session().conn_id();
+                tracing::warn!("session timed out, conn_id {}", conn_id);
+
+                // Process the error, doing any state cleanup.
+                let error_response = err.into_response(Severity::Fatal);
+                let error_state = self.error(error_response).await;
+
+                // Terminate __after__ we do any cleanup.
                 self.adapter_client.terminate().await;
+
                 // We must wait for the client to send a request before we can send the error response.
                 // Due to the PG wire protocol, we can't send an ErrorResponse unless it is in response
                 // to a client message.
                 let _ = self.conn.recv().await?;
-                return self.error(error_response).await;
+                return error_state;
             },
             // `recv()` is cancel-safe as per it's docs.
             message = self.conn.recv() => message?,
@@ -1772,6 +1780,7 @@ where
                 let cancel_fut = self.adapter_client.canceled();
                 let notice_fut = self.adapter_client.session().recv_notice();
                 tokio::select! {
+                    err = self.conn.wait_closed() => return Err(err),
                     _ = time::sleep_until(deadline.unwrap_or_else(tokio::time::Instant::now)), if deadline.is_some() => FetchResult::Rows(None),
                     notice = notice_fut => {
                         FetchResult::Notice(notice)

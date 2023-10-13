@@ -89,131 +89,21 @@
 use std::error::Error;
 use std::iter;
 
+use datadriven::walk;
 use itertools::Itertools;
-use mz_ore::collections::CollectionExt;
-use mz_ore::fmt::FormatBuffer;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::Visit;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
-use mz_sql_parser::ast::{AstInfo, Expr, Ident, Raw, RawDataType, RawItemName, Statement};
+use mz_sql_parser::ast::{AstInfo, Expr, Ident, Raw, RawDataType, RawItemName};
+use mz_sql_parser::datadriven_testcase;
 use mz_sql_parser::parser::{
-    self, parse_statements, parse_statements_with_limit, ParserError, MAX_STATEMENT_BATCH_SIZE,
+    self, parse_statements, parse_statements_with_limit, MAX_STATEMENT_BATCH_SIZE,
 };
-use unicode_width::UnicodeWidthStr;
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn datadriven() {
-    use datadriven::{walk, TestCase};
-
-    fn render_error(sql: &str, e: ParserError) -> String {
-        let mut s = format!("error: {}\n", e.message);
-
-        // Do our best to emulate psql in rendering a caret pointing at the
-        // offending character in the query. This makes it possible to detect
-        // incorrect error positions by visually scanning the test files.
-        let end = sql.len();
-        let line_start = sql[..e.pos].rfind('\n').map(|p| p + 1).unwrap_or(0);
-        let line_end = sql[e.pos..].find('\n').map(|p| e.pos + p).unwrap_or(end);
-        writeln!(s, "{}", &sql[line_start..line_end]);
-        for _ in 0..sql[line_start..e.pos].width() {
-            write!(s, " ");
-        }
-        writeln!(s, "^");
-
-        s
-    }
-
-    fn parse_statement(tc: &TestCase) -> String {
-        let input = tc.input.strip_suffix('\n').unwrap_or(&tc.input);
-        match parser::parse_statements(input) {
-            Ok(s) => {
-                if s.len() != 1 {
-                    return "expected exactly one statement\n".to_string();
-                }
-                let stmt = s.into_element().ast;
-                for printed in [stmt.to_ast_string(), stmt.to_ast_string_stable()] {
-                    let mut parsed = match parser::parse_statements(&printed) {
-                        Ok(parsed) => parsed.into_element().ast,
-                        Err(err) => panic!("reparse failed: {}: {}\n", stmt, err),
-                    };
-                    match (&mut parsed, &stmt) {
-                        // DECLARE remembers the original SQL. Erase that here so it can differ if
-                        // needed (for example, quoting identifiers vs not). This is ok because we
-                        // still compare that the resulting ASTs are identical, and it's valid for
-                        // those to come from different original strings.
-                        (Statement::Declare(parsed), Statement::Declare(stmt)) => {
-                            parsed.sql = stmt.sql.clone();
-                        }
-                        _ => {}
-                    }
-                    if parsed != stmt {
-                        panic!(
-                            "reparse comparison failed:\n{:?}\n!=\n{:?}\n{printed}\n",
-                            stmt, parsed
-                        );
-                    }
-                }
-                if tc.args.get("roundtrip").is_some() {
-                    format!("{}\n", stmt)
-                } else {
-                    // TODO(justin): it would be nice to have a middle-ground between this
-                    // all-on-one-line and {:#?}'s huge number of lines.
-                    format!("{}\n=>\n{:?}\n", stmt, stmt)
-                }
-            }
-            Err(e) => render_error(input, e.error),
-        }
-    }
-
-    fn parse_scalar(tc: &TestCase) -> String {
-        let input = tc.input.trim();
-        match parser::parse_expr(input) {
-            Ok(s) => {
-                for printed in [s.to_ast_string(), s.to_ast_string_stable()] {
-                    match parser::parse_expr(&printed) {
-                        Ok(parsed) => {
-                            // TODO: We always coerce the double colon operator into a Cast expr instead
-                            // of keeping it as an Op (see parse_pg_cast). Expr::Cast always prints
-                            // itself as double colon. We're thus unable to perfectly roundtrip
-                            // `CAST(..)`. We could fix this by keeping "::" as a binary operator and
-                            // teaching func.rs how to handle it, similar to how that file handles "~~"
-                            // (without the parser converting that operator directly into an
-                            // Expr::Like).
-                            if !matches!(parsed, Expr::Cast { .. }) {
-                                if parsed != s {
-                                    panic!(
-                                    "reparse comparison failed: {input} != {s}\n{:?}\n!=\n{:?}\n{printed}\n",
-                                    s, parsed
-                                );
-                                }
-                            }
-                        }
-                        Err(err) => panic!("reparse failed: {printed}: {err}\n{s:?}"),
-                    }
-                }
-
-                if tc.args.get("roundtrip").is_some() {
-                    format!("{}\n", s)
-                } else {
-                    // TODO(justin): it would be nice to have a middle-ground between this
-                    // all-on-one-line and {:#?}'s huge number of lines.
-                    format!("{:?}\n", s)
-                }
-            }
-            Err(e) => render_error(input, e),
-        }
-    }
-
-    walk("tests/testdata", |f| {
-        f.run(|test_case| -> String {
-            match test_case.directive.as_str() {
-                "parse-statement" => parse_statement(test_case),
-                "parse-scalar" => parse_scalar(test_case),
-                dir => panic!("unhandled directive {}", dir),
-            }
-        })
-    });
+    walk("tests/testdata", |f| f.run(datadriven_testcase));
 }
 
 #[mz_ore::test]

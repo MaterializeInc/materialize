@@ -29,12 +29,15 @@ class MaterializeRelationType(StrEnum):
     View = "view"
     CTE = "cte"
     External = "external"
+    MaterializedView = "materialized_view"
 
     # Materialize-specific materialization types.
     Source = "source"
-    MaterializedView = "materializedview"
-    Index = "index"
     Sink = "sink"
+    # NOTE(morsapaes): dbt supports materialized views as a built-in
+    # materialization since v1.6.0, so we deprecate the legacy materialization
+    # name but keep it around for backwards compatibility.
+    MaterializedViewLegacy = "materializedview"
 
 
 @dataclass(frozen=True, eq=False, repr=False)
@@ -50,3 +53,10 @@ class MaterializeRelation(PostgresRelation):
     @classproperty
     def get_relation_type(cls) -> Type[MaterializeRelationType]:
         return MaterializeRelationType
+
+    @property
+    def is_materialized_view(self) -> bool:
+        return self.type in [
+            MaterializeRelationType.MaterializedView,
+            MaterializeRelationType.MaterializedViewLegacy,
+        ]

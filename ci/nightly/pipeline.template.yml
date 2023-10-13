@@ -210,7 +210,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
-          args: [--scenario=KafkaSources, --actions=10000, --max-execution-time=55m]
+          args: [--scenario=KafkaSources, --actions=10000, --max-execution-time=30m]
 
   - id: zippy-kafka-parallel-insert
     label: "Zippy Kafka Parallel Insert"
@@ -221,7 +221,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
-          args: [--scenario=KafkaParallelInsert, --transaction-isolation=serializable, --actions=10000, --max-execution-time=55m]
+          args: [--scenario=KafkaParallelInsert, --transaction-isolation=serializable, --actions=10000, --max-execution-time=30m]
 
   - id: zippy-user-tables
     label: "Zippy User Tables"
@@ -232,7 +232,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
-          args: [--scenario=UserTables, --actions=1000]
+          args: [--scenario=UserTables, --actions=10000, --max-execution-time=30m]
 
   - id: zippy-postgres-cdc
     label: "Zippy Postgres CDC"
@@ -243,7 +243,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
-          args: [--scenario=PostgresCdc, --actions=10000, --max-execution-time=55m]
+          args: [--scenario=PostgresCdc, --actions=10000, --max-execution-time=30m]
 
   - id: zippy-debezium-postgres
     label: "Zippy Debezium Postgres"
@@ -254,7 +254,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
-          args: [--scenario=DebeziumPostgres, --actions=10000, --max-execution-time=55m]
+          args: [--scenario=DebeziumPostgres, --actions=10000, --max-execution-time=30m]
 
   - id: zippy-cluster-replicas
     label: "Zippy Cluster Replicas"
@@ -278,7 +278,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
-          args: [--scenario=KafkaSources, --actions=10000, --cockroach-tag=latest, --max-execution-time=55m]
+          args: [--scenario=KafkaSources, --actions=10000, --cockroach-tag=latest, --max-execution-time=30m]
 
   - id: secrets-aws-secrets-manager
     label: "Secrets AWS"
@@ -455,7 +455,7 @@ steps:
     label: "Platform checks upgrade, restarting compute clusterd first"
     timeout_in_minutes: 30
     agents:
-      queue: linux-x86_64
+      queue: builder-linux-x86_64
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
@@ -466,7 +466,7 @@ steps:
     label: "Platform checks upgrade, restarting compute clusterd last"
     timeout_in_minutes: 30
     agents:
-      queue: linux-x86_64
+      queue: builder-linux-x86_64
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
@@ -608,7 +608,7 @@ steps:
 
   - id: output-consistency-test
     label: "Output consistency test"
-    timeout_in_minutes: 58
+    timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
     artifact_paths: junit_*.xml
@@ -622,13 +622,11 @@ steps:
     artifact_paths: junit_*.xml
     timeout_in_minutes: 30
     agents:
-      # A larger instance is needed since SQLsmith likes creating
-      # large queries and going out of memory
-      queue: builder-linux-x86_64
+      queue: linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqlsmith
-          args: [--max-joins=1, --runtime=1500]
+          args: [--max-joins=2, --runtime=1500]
 
   - id: sqlsmith-explain
     label: "SQLsmith explain"

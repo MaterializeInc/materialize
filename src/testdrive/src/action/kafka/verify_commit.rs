@@ -20,7 +20,7 @@ use crate::parser::BuiltinCommand;
 
 pub async fn run_verify_commit(
     mut cmd: BuiltinCommand,
-    state: &mut State,
+    state: &State,
 ) -> Result<ControlFlow, anyhow::Error> {
     let consumer_group_id = cmd.args.string("consumer-group-id")?;
     let topic = cmd.args.string("topic")?;

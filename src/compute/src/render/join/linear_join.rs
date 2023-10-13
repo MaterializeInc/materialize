@@ -160,7 +160,6 @@ where
                     inputs[stage_plan.lookup_relation].enter_region(inner),
                     stage_plan,
                     &mut errors,
-                    self.enable_arrangement_size_logging,
                 );
                 // Update joined results and capture any errors.
                 joined = JoinedFlavor::Collection(stream);
@@ -218,7 +217,6 @@ fn differential_join<G, T>(
         lookup_relation: _,
     }: LinearStagePlan,
     errors: &mut Vec<Collection<G, DataflowError, Diff>>,
-    enable_arrangement_size_logging: bool,
 ) -> Collection<G, Row, Diff>
 where
     G: Scope,
@@ -249,8 +247,7 @@ where
         });
 
         errors.push(errs);
-        let arranged =
-            keyed.mz_arrange::<RowSpine<_, _, _, _>>("JoinStage", enable_arrangement_size_logging);
+        let arranged = keyed.mz_arrange::<RowSpine<_, _, _, _>>("JoinStage");
         joined = JoinedFlavor::Local(arranged);
     }
 

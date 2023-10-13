@@ -13,6 +13,7 @@
 /.devcontainer                      @mjibson
 /.github                            @benesch
 /bin
+/bin/lint-versions                  @MaterializeInc/testing
 /ci                                 @MaterializeInc/testing
 /ci/test/lint-deps.toml             @danhhz @benesch
 /doc/user                           @MaterializeInc/docs
@@ -20,6 +21,7 @@
 /doc/developer/reference/storage    @MaterializeInc/storage
 /misc/dbt-materialize               @MaterializeInc/devex
 /src/adapter                        @MaterializeInc/adapter
+/src/adapter/src/optimizer          @MaterializeInc/compute
 /src/adapter/src/flags.rs
 /src/alloc                          @benesch
 /src/audit-log                      @MaterializeInc/adapter
@@ -48,7 +50,7 @@
 /src/lowertest                      @MaterializeInc/compute
 /src/lowertest-derive               @MaterializeInc/compute
 /src/metabase                       @benesch
-/src/mz                             @MaterializeInc/adapter @MaterializeInc/devex
+/src/mz                             @MaterializeInc/devex
 /src/npm                            @benesch
 /src/orchestrator                   @benesch
 /src/orchestrator-kubernetes        @benesch

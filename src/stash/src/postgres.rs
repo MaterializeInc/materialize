@@ -18,12 +18,12 @@ use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::future::{self, BoxFuture, FutureExt, TryFutureExt};
 use futures::{Future, StreamExt};
-use mz_ore::metric;
 use mz_ore::metrics::{MetricsFutureExt, MetricsRegistry};
 use mz_ore::retry::Retry;
-use mz_ore::stats::histogram_seconds_buckets;
+use mz_stash_types::metrics::Metrics;
+use mz_stash_types::{InternalStashError, StashError, MIN_STASH_VERSION, STASH_VERSION};
 use postgres_openssl::MakeTlsConnector;
-use prometheus::{Histogram, HistogramVec, IntCounter, IntCounterVec};
+use prometheus::Histogram;
 use rand::Rng;
 use timely::progress::Antichain;
 use tokio::sync::{mpsc, oneshot};
@@ -33,10 +33,7 @@ use tokio_postgres::{Client, Config, Statement};
 use tracing::{debug, event, info, warn, Level};
 
 use crate::upgrade;
-use crate::{
-    Diff, Id, InternalStashError, StashError, Timestamp, COLLECTION_CONFIG, MIN_STASH_VERSION,
-    STASH_VERSION, USER_VERSION_KEY,
-};
+use crate::{Diff, Id, Timestamp, COLLECTION_CONFIG, USER_VERSION_KEY};
 
 // TODO: Change the indexes on data to be more applicable to the current
 // consolidation technique. This will involve a migration (which we don't yet
@@ -320,9 +317,11 @@ pub struct StashFactory {
 
 impl StashFactory {
     pub fn new(registry: &MetricsRegistry) -> StashFactory {
-        StashFactory {
-            metrics: Arc::new(Metrics::register_into(registry)),
-        }
+        Self::from_metrics(Arc::new(Metrics::register_into(registry)))
+    }
+
+    pub fn from_metrics(metrics: Arc<Metrics>) -> StashFactory {
+        StashFactory { metrics }
     }
 
     /// Opens the stash stored at the specified path.
@@ -432,49 +431,6 @@ impl StashFactory {
     }
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct Metrics {
-    transactions: IntCounter,
-    transaction_errors: IntCounterVec,
-    query_latency_duration_seconds: HistogramVec,
-}
-
-impl Metrics {
-    fn register_into(registry: &MetricsRegistry) -> Metrics {
-        let metrics = Metrics {
-            transactions: registry.register(metric!(
-                name: "mz_stash_transactions",
-                help: "Total number of started transactions.",
-            )),
-            transaction_errors: registry.register(metric!(
-                name: "mz_stash_transaction_errors",
-                help: "Total number of transaction errors.",
-                var_labels: ["cause"],
-            )),
-            query_latency_duration_seconds: registry.register(metric!(
-                name: "mz_query_latency",
-                help: "Latency for queries to CockroachDB",
-                var_labels: ["query_kind"],
-                buckets: histogram_seconds_buckets(0.000_128, 32.0),
-            )),
-        };
-        // Initialize error codes to 0 so we can observe their increase.
-        metrics
-            .transaction_errors
-            .with_label_values(&["closed"])
-            .inc_by(0);
-        metrics
-            .transaction_errors
-            .with_label_values(&["retry"])
-            .inc_by(0);
-        metrics
-            .transaction_errors
-            .with_label_values(&["other"])
-            .inc_by(0);
-        metrics
-    }
-}
-
 /// A Stash whose data is stored in a Postgres-compatible database. The format of the
 /// tables are not specified and should not be relied upon. The only promise is
 /// stability. Any changes to the table schemas will be accompanied by a clear
@@ -518,7 +474,7 @@ impl Stash {
         let (client, connection) = tokio_postgres::connect(url, tls).await?;
         mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
             if let Err(e) = connection.await {
-                tracing::error!("postgres stash connection error: {}", e);
+                tracing::warn!("postgres stash connection error: {}", e);
             }
         });
         client
@@ -585,7 +541,7 @@ impl Stash {
         let (mut client, connection) = self.config.lock().await.connect(self.tls.clone()).await?;
         mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
             if let Err(e) = connection.await {
-                tracing::error!("postgres stash connection error: {}", e);
+                tracing::warn!("postgres stash connection error: {}", e);
             }
         });
         // The Config is shared with the Consolidator, so we update the application name in the
@@ -963,9 +919,9 @@ impl Stash {
 
         async fn run_upgrade(stash: &mut Stash) -> Result<u64, StashError> {
             stash
-                .with_transaction(move |mut tx| {
+                .with_transaction(move |tx| {
                     async move {
-                        let version = COLLECTION_CONFIG.version(&mut tx).await?;
+                        let version = COLLECTION_CONFIG.version(&tx).await?;
 
                         // Note(parkmycar): Ideally we wouldn't have to define these extra constants,
                         // but const expressions aren't yet supported in match statements.
@@ -978,21 +934,11 @@ impl Stash {
                         match version {
                             ..=TOO_OLD_VERSION => return Err(incompatible),
 
-                            25 => upgrade::v25_to_v26::upgrade(),
-                            26 => upgrade::v26_to_v27::upgrade(),
-                            27 => upgrade::v27_to_v28::upgrade(&mut tx).await?,
-                            28 => upgrade::v28_to_v29::upgrade(&mut tx).await?,
-                            29 => upgrade::v29_to_v30::upgrade(),
-                            30 => upgrade::v30_to_v31::upgrade(),
-                            31 => upgrade::v31_to_v32::upgrade(&mut tx).await?,
-                            32 => upgrade::v32_to_v33::upgrade(&mut tx).await?,
-                            33 => upgrade::v33_to_v34::upgrade(&mut tx).await?,
-                            34 => upgrade::v34_to_v35::upgrade(&mut tx).await?,
-                            35 => upgrade::v35_to_v36::upgrade(&mut tx).await?,
+                            35 => upgrade::v35_to_v36::upgrade(&tx).await?,
                             36 => upgrade::v36_to_v37::upgrade(),
-                            37 => upgrade::v37_to_v38::upgrade(&mut tx).await?,
-                            38 => upgrade::v38_to_v39::upgrade(&mut tx).await?,
-                            39 => upgrade::v39_to_v40::upgrade(&mut tx).await?,
+                            37 => upgrade::v37_to_v38::upgrade(&tx).await?,
+                            38 => upgrade::v38_to_v39::upgrade(&tx).await?,
+                            39 => upgrade::v39_to_v40::upgrade(&tx).await?,
 
                             // Up-to-date, no migration needed!
                             STASH_VERSION => return Ok(STASH_VERSION),
@@ -1000,7 +946,7 @@ impl Stash {
                         };
                         // Set the new version.
                         let new_version = version + 1;
-                        COLLECTION_CONFIG.set_version(&mut tx, new_version).await?;
+                        COLLECTION_CONFIG.set_version(&tx, new_version).await?;
 
                         Ok(new_version)
                     }
@@ -1157,14 +1103,6 @@ impl Stash {
 
     pub fn epoch(&self) -> Option<NonZeroI64> {
         self.epoch
-    }
-}
-
-impl From<tokio_postgres::Error> for StashError {
-    fn from(e: tokio_postgres::Error) -> StashError {
-        StashError {
-            inner: InternalStashError::Postgres(e),
-        }
     }
 }
 
@@ -1343,7 +1281,7 @@ impl Consolidator {
             || "tokio-postgres stash consolidation connection",
             async move {
                 if let Err(e) = connection.await {
-                    tracing::error!("postgres stash connection error: {}", e);
+                    tracing::warn!("postgres stash connection error: {}", e);
                 }
             },
         );
@@ -1418,7 +1356,7 @@ impl DebugStashFactory {
         let (client, connection) = tokio_postgres::connect(&url, tls.clone()).await?;
         mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
             if let Err(e) = connection.await {
-                tracing::error!("postgres stash connection error: {e}");
+                tracing::warn!("postgres stash connection error: {e}");
             }
         });
         client

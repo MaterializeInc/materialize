@@ -80,6 +80,11 @@ steps:
     agents:
       queue: linux-x86_64
     coverage: skip
+    # Fortify against intermittent DockerHub issues
+    retry:
+      automatic:
+        - exit_status: 1
+          limit: 2
 
   - id: lint-fast
     label: Lint and rustfmt

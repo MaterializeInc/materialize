@@ -187,7 +187,7 @@ pub struct GrpcPubSubClient;
 impl GrpcPubSubClient {
     async fn reconnect_to_server_forever(
         send_requests: tokio::sync::broadcast::Sender<ProtoPubSubMessage>,
-        receiver_input: &mut tokio::sync::mpsc::Sender<ProtoPubSubMessage>,
+        receiver_input: &tokio::sync::mpsc::Sender<ProtoPubSubMessage>,
         sender: Arc<SubscriptionTrackingSender>,
         metadata: MetadataMap,
         config: PersistPubSubClientConfig,
@@ -305,7 +305,7 @@ impl GrpcPubSubClient {
 
     async fn consume_grpc_stream(
         mut responses: Streaming<ProtoPubSubMessage>,
-        receiver_input: &mut Sender<ProtoPubSubMessage>,
+        receiver_input: &Sender<ProtoPubSubMessage>,
         config: &PersistPubSubClientConfig,
         metrics: &Metrics,
     ) -> Result<(), Error> {
@@ -349,7 +349,7 @@ impl PersistPubSubClient for GrpcPubSubClient {
         // Create a stable channel to receive messages from our gRPC stream. The input end lives inside
         // a task that continuously reads from the active gRPC stream, decoupling the `PubSubReceiver`
         // from the lifetime of a specific gRPC connection.
-        let (mut receiver_input, receiver_output) =
+        let (receiver_input, receiver_output) =
             tokio::sync::mpsc::channel(config.persist_cfg.pubsub_client_receiver_channel_size);
 
         let sender = Arc::new(SubscriptionTrackingSender::new(Arc::new(
@@ -371,7 +371,7 @@ impl PersistPubSubClient for GrpcPubSubClient {
 
                 GrpcPubSubClient::reconnect_to_server_forever(
                     send_requests,
-                    &mut receiver_input,
+                    &receiver_input,
                     pubsub_sender,
                     metadata,
                     config,

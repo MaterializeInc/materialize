@@ -17,7 +17,7 @@ use crate::util::text;
 
 pub async fn run_execute(
     mut cmd: BuiltinCommand,
-    state: &mut State,
+    state: &State,
 ) -> Result<ControlFlow, anyhow::Error> {
     let command = cmd.args.string("command")?;
     cmd.args.done()?;

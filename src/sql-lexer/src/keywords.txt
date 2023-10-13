@@ -37,6 +37,7 @@ Arrangement
 Array
 As
 Asc
+Assert
 At
 Auction
 Authority
@@ -118,6 +119,7 @@ Details
 Discard
 Disk
 Distinct
+Doc
 Dot
 Double
 Drop

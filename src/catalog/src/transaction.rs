@@ -12,17 +12,17 @@ use crate::objects::{
     AuditLogKey, Cluster, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
     ClusterKey, ClusterReplica, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, CommentKey,
     CommentValue, ConfigKey, ConfigValue, Database, DatabaseKey, DatabaseValue,
-    DefaultPrivilegesKey, DefaultPrivilegesValue, GidMappingKey, GidMappingValue, IdAllocKey,
-    IdAllocValue, Item, ItemKey, ItemValue, ReplicaConfig, Role, RoleKey, RoleValue, Schema,
-    SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey,
+    DefaultPrivilegesKey, DefaultPrivilegesValue, DurableType, GidMappingKey, GidMappingValue,
+    IdAllocKey, IdAllocValue, Item, ItemKey, ItemValue, ReplicaConfig, Role, RoleKey, RoleValue,
+    Schema, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey,
     SettingValue, StorageUsageKey, SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue,
     TimestampKey, TimestampValue,
 };
 use crate::objects::{ClusterConfig, ClusterVariant};
 use crate::{
-    BootstrapArgs, DurableCatalogState, Error, ReplicaLocation, Snapshot, DATABASE_ID_ALLOC_KEY,
-    SCHEMA_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY,
-    USER_ROLE_ID_ALLOC_KEY,
+    BootstrapArgs, CatalogError, DurableCatalogState, ReplicaLocation, Snapshot,
+    DATABASE_ID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY,
+    SYSTEM_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
 use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
@@ -35,19 +35,18 @@ use mz_repr::{Diff, GlobalId};
 use mz_sql::catalog::{
     CatalogError as SqlCatalogError, ObjectType, RoleAttributes, RoleMembership, RoleVars,
 };
-use mz_sql::names::{
-    CommentObjectId, DatabaseId, ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier,
-    SchemaId, SchemaSpecifier,
-};
+use mz_sql::names::{CommentObjectId, DatabaseId, SchemaId};
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql_parser::ast::QualifiedReplica;
-use mz_stash::objects::proto;
 use mz_stash::TableTransaction;
+use mz_stash_types::objects::proto;
 use mz_storage_types::sources::Timeline;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
-pub(crate) fn add_new_builtin_clusters_migration(txn: &mut Transaction<'_>) -> Result<(), Error> {
+pub(crate) fn add_new_builtin_clusters_migration(
+    txn: &mut Transaction<'_>,
+) -> Result<(), CatalogError> {
     let cluster_names: BTreeSet<_> = txn
         .clusters
         .items()
@@ -77,7 +76,7 @@ pub(crate) fn add_new_builtin_clusters_migration(txn: &mut Transaction<'_>) -> R
 pub(crate) fn add_new_builtin_cluster_replicas_migration(
     txn: &mut Transaction<'_>,
     bootstrap_args: &BootstrapArgs,
-) -> Result<(), Error> {
+) -> Result<(), CatalogError> {
     let cluster_lookup: BTreeMap<_, _> = txn
         .clusters
         .items()
@@ -112,7 +111,7 @@ pub(crate) fn add_new_builtin_cluster_replicas_migration(
                 *cluster_id,
                 replica_id,
                 builtin_replica.name,
-                &config,
+                config,
                 MZ_SYSTEM_ROLE_ID,
             )?;
         }
@@ -188,7 +187,7 @@ impl<'a> Transaction<'a> {
             default_privileges,
             system_privileges,
         }: Snapshot,
-    ) -> Result<Transaction, Error> {
+    ) -> Result<Transaction, CatalogError> {
         Ok(Transaction {
             durable_catalog,
             databases: TableTransaction::new(databases, |a: &DatabaseValue, b| a.name == b.name)?,
@@ -220,45 +219,9 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn loaded_items(&self) -> Vec<Item> {
-        let databases = self.databases.items();
-        let schemas = self.schemas.items();
         let mut items = Vec::new();
         self.items.for_values(|k, v| {
-            let schema_key = SchemaKey { id: v.schema_id };
-            let schema = match schemas.get(&schema_key) {
-                Some(schema) => schema,
-                None => panic!(
-                    "corrupt stash! unknown schema id {}, for item with key \
-                        {k:?} and value {v:?}",
-                    v.schema_id
-                ),
-            };
-            let database_spec = match schema.database_id {
-                Some(id) => {
-                    let key = DatabaseKey { id };
-                    if databases.get(&key).is_none() {
-                        panic!(
-                            "corrupt stash! unknown database id {key:?}, for item with key \
-                        {k:?} and value {v:?}"
-                        );
-                    }
-                    ResolvedDatabaseSpecifier::from(id)
-                }
-                None => ResolvedDatabaseSpecifier::Ambient,
-            };
-            items.push(Item {
-                id: k.gid,
-                name: QualifiedItemName {
-                    qualifiers: ItemQualifiers {
-                        database_spec,
-                        schema_spec: SchemaSpecifier::from(v.schema_id),
-                    },
-                    item: v.name.clone(),
-                },
-                create_sql: v.create_sql.clone(),
-                owner_id: v.owner_id,
-                privileges: v.privileges.clone(),
-            });
+            items.push(Item::from_key_value(k.clone(), v.clone()));
         });
         items.sort_by_key(|Item { id, .. }| *id);
         items
@@ -279,21 +242,30 @@ impl<'a> Transaction<'a> {
         database_name: &str,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
-    ) -> Result<DatabaseId, Error> {
+    ) -> Result<DatabaseId, CatalogError> {
         let id = self.get_and_increment_id(DATABASE_ID_ALLOC_KEY.to_string())?;
+        // TODO(parkertimmerman): Support creating databases in the System namespace.
+        let id = DatabaseId::User(id);
+        self.insert_database(id, database_name, owner_id, privileges)?;
+        Ok(id)
+    }
+
+    pub(crate) fn insert_database(
+        &mut self,
+        id: DatabaseId,
+        database_name: &str,
+        owner_id: RoleId,
+        privileges: Vec<MzAclItem>,
+    ) -> Result<(), CatalogError> {
         match self.databases.insert(
-            DatabaseKey {
-                // TODO(parkertimmerman): Support creating databases in the System namespace.
-                id: DatabaseId::User(id),
-            },
+            DatabaseKey { id },
             DatabaseValue {
                 name: database_name.to_string(),
                 owner_id,
                 privileges,
             },
         ) {
-            // TODO(parkertimmerman): Support creating databases in the System namespace.
-            Ok(_) => Ok(DatabaseId::User(id)),
+            Ok(_) => Ok(()),
             Err(_) => Err(SqlCatalogError::DatabaseAlreadyExists(database_name.to_owned()).into()),
         }
     }
@@ -304,23 +276,39 @@ impl<'a> Transaction<'a> {
         schema_name: &str,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
-    ) -> Result<SchemaId, Error> {
+    ) -> Result<SchemaId, CatalogError> {
         let id = self.get_and_increment_id(SCHEMA_ID_ALLOC_KEY.to_string())?;
+        // TODO(parkertimmerman): Support creating schemas in the System namespace.
+        let id = SchemaId::User(id);
+        self.insert_schema(
+            id,
+            Some(database_id),
+            schema_name.to_string(),
+            owner_id,
+            privileges,
+        )?;
+        Ok(id)
+    }
+
+    pub(crate) fn insert_schema(
+        &mut self,
+        schema_id: SchemaId,
+        database_id: Option<DatabaseId>,
+        schema_name: String,
+        owner_id: RoleId,
+        privileges: Vec<MzAclItem>,
+    ) -> Result<(), CatalogError> {
         match self.schemas.insert(
-            SchemaKey {
-                // TODO(parkertimmerman): Support creating schemas in the System namespace.
-                id: SchemaId::User(id),
-            },
+            SchemaKey { id: schema_id },
             SchemaValue {
-                database_id: Some(database_id),
-                name: schema_name.to_string(),
+                database_id,
+                name: schema_name.clone(),
                 owner_id,
                 privileges,
             },
         ) {
-            // TODO(parkertimmerman): Support creating schemas in the System namespace.
-            Ok(_) => Ok(SchemaId::User(id)),
-            Err(_) => Err(SqlCatalogError::SchemaAlreadyExists(schema_name.to_owned()).into()),
+            Ok(_) => Ok(()),
+            Err(_) => Err(SqlCatalogError::SchemaAlreadyExists(schema_name).into()),
         }
     }
 
@@ -330,9 +318,21 @@ impl<'a> Transaction<'a> {
         attributes: RoleAttributes,
         membership: RoleMembership,
         vars: RoleVars,
-    ) -> Result<RoleId, Error> {
+    ) -> Result<RoleId, CatalogError> {
         let id = self.get_and_increment_id(USER_ROLE_ID_ALLOC_KEY.to_string())?;
         let id = RoleId::User(id);
+        self.insert_role(id, name, attributes, membership, vars)?;
+        Ok(id)
+    }
+
+    pub(crate) fn insert_role(
+        &mut self,
+        id: RoleId,
+        name: String,
+        attributes: RoleAttributes,
+        membership: RoleMembership,
+        vars: RoleVars,
+    ) -> Result<(), CatalogError> {
         match self.roles.insert(
             RoleKey { id },
             RoleValue {
@@ -342,7 +342,7 @@ impl<'a> Transaction<'a> {
                 vars,
             },
         ) {
-            Ok(_) => Ok(id),
+            Ok(_) => Ok(()),
             Err(_) => Err(SqlCatalogError::RoleAlreadyExists(name).into()),
         }
     }
@@ -357,7 +357,7 @@ impl<'a> Transaction<'a> {
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
         config: ClusterConfig,
-    ) -> Result<(), Error> {
+    ) -> Result<(), CatalogError> {
         self.insert_cluster(
             cluster_id,
             cluster_name,
@@ -377,7 +377,7 @@ impl<'a> Transaction<'a> {
         introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId)>,
         privileges: Vec<MzAclItem>,
         config: ClusterConfig,
-    ) -> Result<(), Error> {
+    ) -> Result<(), CatalogError> {
         self.insert_cluster(
             cluster_id,
             cluster_name,
@@ -398,7 +398,7 @@ impl<'a> Transaction<'a> {
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
         config: ClusterConfig,
-    ) -> Result<(), Error> {
+    ) -> Result<(), CatalogError> {
         if let Err(_) = self.clusters.insert(
             ClusterKey { id: cluster_id },
             ClusterValue {
@@ -437,7 +437,7 @@ impl<'a> Transaction<'a> {
         cluster_id: ClusterId,
         cluster_name: &str,
         cluster_to_name: &str,
-    ) -> Result<(), Error> {
+    ) -> Result<(), CatalogError> {
         let key = ClusterKey { id: cluster_id };
 
         match self.clusters.update(|k, v| {
@@ -457,7 +457,7 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub fn check_migration_has_run(&mut self, name: String) -> Result<bool, Error> {
+    pub fn check_migration_has_run(&mut self, name: String) -> Result<bool, CatalogError> {
         let key = SettingKey { name };
         // If the key does not exist, then the migration has not been run.
         let has_run = self.settings.get(&key).as_ref().is_some();
@@ -465,7 +465,7 @@ impl<'a> Transaction<'a> {
         Ok(has_run)
     }
 
-    pub fn mark_migration_has_run(&mut self, name: String) -> Result<(), Error> {
+    pub fn mark_migration_has_run(&mut self, name: String) -> Result<(), CatalogError> {
         let key = SettingKey { name };
         let val = SettingValue {
             value: true.to_string(),
@@ -480,7 +480,7 @@ impl<'a> Transaction<'a> {
         replica_id: ReplicaId,
         replica_name: &QualifiedReplica,
         replica_to_name: &str,
-    ) -> Result<(), Error> {
+    ) -> Result<(), CatalogError> {
         let key = ClusterReplicaKey { id: replica_id };
 
         match self.cluster_replicas.update(|k, v| {
@@ -505,15 +505,15 @@ impl<'a> Transaction<'a> {
         cluster_id: ClusterId,
         replica_id: ReplicaId,
         replica_name: &str,
-        config: &ReplicaConfig,
+        config: ReplicaConfig,
         owner_id: RoleId,
-    ) -> Result<(), Error> {
+    ) -> Result<(), CatalogError> {
         if let Err(_) = self.cluster_replicas.insert(
             ClusterReplicaKey { id: replica_id },
             ClusterReplicaValue {
                 cluster_id,
                 name: replica_name.into(),
-                config: config.clone(),
+                config,
                 owner_id,
             },
         ) {
@@ -537,7 +537,7 @@ impl<'a> Transaction<'a> {
     pub fn update_introspection_source_index_gids(
         &mut self,
         mappings: impl Iterator<Item = (ClusterId, impl Iterator<Item = (String, GlobalId)>)>,
-    ) -> Result<(), Error> {
+    ) -> Result<(), CatalogError> {
         for (cluster_id, updates) in mappings {
             for (name, id) in updates {
                 let index_id = if let GlobalId::System(index_id) = id {
@@ -567,7 +567,7 @@ impl<'a> Transaction<'a> {
         create_sql: String,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
-    ) -> Result<(), Error> {
+    ) -> Result<(), CatalogError> {
         match self.items.insert(
             ItemKey { gid: id },
             ItemValue {
@@ -583,7 +583,23 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub fn get_and_increment_id(&mut self, key: String) -> Result<u64, Error> {
+    pub fn insert_timestamp(
+        &mut self,
+        timeline: Timeline,
+        ts: mz_repr::Timestamp,
+    ) -> Result<(), CatalogError> {
+        match self.timestamps.insert(
+            TimestampKey {
+                id: timeline.to_string(),
+            },
+            TimestampValue { ts },
+        ) {
+            Ok(_) => Ok(()),
+            Err(_) => Err(SqlCatalogError::TimelineAlreadyExists(timeline.to_string()).into()),
+        }
+    }
+
+    pub fn get_and_increment_id(&mut self, key: String) -> Result<u64, CatalogError> {
         let id = self
             .id_allocator
             .items()
@@ -598,7 +614,21 @@ impl<'a> Transaction<'a> {
         Ok(id)
     }
 
-    pub fn remove_database(&mut self, id: &DatabaseId) -> Result<(), Error> {
+    pub(crate) fn insert_id_allocator(
+        &mut self,
+        name: String,
+        next_id: u64,
+    ) -> Result<(), CatalogError> {
+        match self
+            .id_allocator
+            .insert(IdAllocKey { name: name.clone() }, IdAllocValue { next_id })
+        {
+            Ok(_) => Ok(()),
+            Err(_) => Err(SqlCatalogError::IdAllocatorAlreadyExists(name).into()),
+        }
+    }
+
+    pub fn remove_database(&mut self, id: &DatabaseId) -> Result<(), CatalogError> {
         let prev = self.databases.set(DatabaseKey { id: *id }, None)?;
         if prev.is_some() {
             Ok(())
@@ -611,7 +641,7 @@ impl<'a> Transaction<'a> {
         &mut self,
         database_id: &Option<DatabaseId>,
         schema_id: &SchemaId,
-    ) -> Result<(), Error> {
+    ) -> Result<(), CatalogError> {
         let prev = self.schemas.set(SchemaKey { id: *schema_id }, None)?;
         if prev.is_some() {
             Ok(())
@@ -624,7 +654,7 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub fn remove_role(&mut self, name: &str) -> Result<(), Error> {
+    pub fn remove_role(&mut self, name: &str) -> Result<(), CatalogError> {
         let roles = self.roles.delete(|_k, v| v.name == name);
         assert!(
             roles.iter().all(|(k, _)| k.id.is_user()),
@@ -639,7 +669,7 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub fn remove_cluster(&mut self, id: ClusterId) -> Result<(), Error> {
+    pub fn remove_cluster(&mut self, id: ClusterId) -> Result<(), CatalogError> {
         let deleted = self.clusters.delete(|k, _v| k.id == id);
         if deleted.is_empty() {
             Err(SqlCatalogError::UnknownCluster(id.to_string()).into())
@@ -657,7 +687,7 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub fn remove_cluster_replica(&mut self, id: ReplicaId) -> Result<(), Error> {
+    pub fn remove_cluster_replica(&mut self, id: ReplicaId) -> Result<(), CatalogError> {
         let deleted = self.cluster_replicas.delete(|k, _v| k.id == id);
         if deleted.len() == 1 {
             Ok(())
@@ -673,7 +703,7 @@ impl<'a> Transaction<'a> {
     ///
     /// Runtime is linear with respect to the total number of items in the stash.
     /// DO NOT call this function in a loop, use [`Self::remove_items`] instead.
-    pub fn remove_item(&mut self, id: GlobalId) -> Result<(), Error> {
+    pub fn remove_item(&mut self, id: GlobalId) -> Result<(), CatalogError> {
         let prev = self.items.set(ItemKey { gid: id }, None)?;
         if prev.is_some() {
             Ok(())
@@ -688,7 +718,7 @@ impl<'a> Transaction<'a> {
     ///
     /// NOTE: On error, there still may be some items removed from the transaction. It is
     /// up to the called to either abort the transaction or commit.
-    pub fn remove_items(&mut self, ids: BTreeSet<GlobalId>) -> Result<(), Error> {
+    pub fn remove_items(&mut self, ids: BTreeSet<GlobalId>) -> Result<(), CatalogError> {
         let n = self.items.delete(|k, _v| ids.contains(&k.gid)).len();
         if n == ids.len() {
             Ok(())
@@ -705,22 +735,14 @@ impl<'a> Transaction<'a> {
     ///
     /// Runtime is linear with respect to the total number of items in the stash.
     /// DO NOT call this function in a loop, use [`Self::update_items`] instead.
-    pub fn update_item(&mut self, id: GlobalId, item: Item) -> Result<(), Error> {
+    pub fn update_item(&mut self, id: GlobalId, item: Item) -> Result<(), CatalogError> {
         let n = self.items.update(|k, v| {
             if k.gid == id {
                 let item = item.clone();
                 // Schema IDs cannot change.
-                assert_eq!(
-                    SchemaId::from(item.name.qualifiers.schema_spec),
-                    v.schema_id
-                );
-                Some(ItemValue {
-                    schema_id: v.schema_id,
-                    name: item.name.item,
-                    create_sql: item.create_sql,
-                    owner_id: item.owner_id,
-                    privileges: item.privileges,
-                })
+                assert_eq!(item.schema_id, v.schema_id);
+                let (_, new_value) = item.into_key_value();
+                Some(new_value)
             } else {
                 None
             }
@@ -740,21 +762,13 @@ impl<'a> Transaction<'a> {
     ///
     /// NOTE: On error, there still may be some items updated in the transaction. It is
     /// up to the called to either abort the transaction or commit.
-    pub fn update_items(&mut self, items: BTreeMap<GlobalId, Item>) -> Result<(), Error> {
+    pub fn update_items(&mut self, items: BTreeMap<GlobalId, Item>) -> Result<(), CatalogError> {
         let n = self.items.update(|k, v| {
             if let Some(item) = items.get(&k.gid) {
                 // Schema IDs cannot change.
-                assert_eq!(
-                    SchemaId::from(item.name.qualifiers.schema_spec),
-                    v.schema_id
-                );
-                Some(ItemValue {
-                    schema_id: v.schema_id,
-                    name: item.name.item.clone(),
-                    create_sql: item.create_sql.clone(),
-                    owner_id: item.owner_id.clone(),
-                    privileges: item.privileges.clone(),
-                })
+                assert_eq!(item.schema_id, v.schema_id);
+                let (_, new_value) = item.clone().into_key_value();
+                Some(new_value)
             } else {
                 None
             }
@@ -777,11 +791,12 @@ impl<'a> Transaction<'a> {
     /// Runtime is linear with respect to the total number of items in the stash.
     /// DO NOT call this function in a loop, implement and use some `Self::update_roles` instead.
     /// You should model it after [`Self::update_items`].
-    pub fn update_role(&mut self, id: RoleId, role: Role) -> Result<(), Error> {
+    pub fn update_role(&mut self, id: RoleId, role: Role) -> Result<(), CatalogError> {
         let n = self.roles.update(move |k, _v| {
             if k.id == id {
                 let role = role.clone();
-                Some(RoleValue::from(role))
+                let (_, new_value) = role.into_key_value();
+                Some(new_value)
             } else {
                 None
             }
@@ -801,18 +816,11 @@ impl<'a> Transaction<'a> {
     pub fn update_system_object_mappings(
         &mut self,
         mappings: BTreeMap<GlobalId, SystemObjectMapping>,
-    ) -> Result<(), Error> {
+    ) -> Result<(), CatalogError> {
         let n = self.system_gid_mapping.update(|_k, v| {
             if let Some(mapping) = mappings.get(&GlobalId::System(v.id)) {
-                let id = if let GlobalId::System(id) = mapping.unique_identifier.id {
-                    id
-                } else {
-                    panic!("non-system id provided")
-                };
-                Some(GidMappingValue {
-                    id,
-                    fingerprint: mapping.unique_identifier.fingerprint.clone(),
-                })
+                let (_, new_value) = mapping.clone().into_key_value();
+                Some(new_value)
             } else {
                 None
             }
@@ -832,17 +840,11 @@ impl<'a> Transaction<'a> {
     ///
     /// Runtime is linear with respect to the total number of clusters in the stash.
     /// DO NOT call this function in a loop.
-    pub fn update_cluster(&mut self, id: ClusterId, cluster: Cluster) -> Result<(), Error> {
+    pub fn update_cluster(&mut self, id: ClusterId, cluster: Cluster) -> Result<(), CatalogError> {
         let n = self.clusters.update(|k, _v| {
             if k.id == id {
-                let cluster = cluster.clone();
-                Some(ClusterValue {
-                    name: cluster.name,
-                    linked_object_id: cluster.linked_object_id,
-                    owner_id: cluster.owner_id,
-                    privileges: cluster.privileges,
-                    config: cluster.config,
-                })
+                let (_, new_value) = cluster.clone().into_key_value();
+                Some(new_value)
             } else {
                 None
             }
@@ -863,19 +865,13 @@ impl<'a> Transaction<'a> {
     /// DO NOT call this function in a loop.
     pub fn update_cluster_replica(
         &mut self,
-        cluster_id: ClusterId,
         replica_id: ReplicaId,
         replica: ClusterReplica,
-    ) -> Result<(), Error> {
+    ) -> Result<(), CatalogError> {
         let n = self.cluster_replicas.update(|k, _v| {
             if k.id == replica_id {
-                let replica = replica.clone();
-                Some(ClusterReplicaValue {
-                    cluster_id,
-                    name: replica.name,
-                    config: replica.config,
-                    owner_id: replica.owner_id,
-                })
+                let (_, new_value) = replica.clone().into_key_value();
+                Some(new_value)
             } else {
                 None
             }
@@ -894,15 +890,15 @@ impl<'a> Transaction<'a> {
     ///
     /// Runtime is linear with respect to the total number of databases in the stash.
     /// DO NOT call this function in a loop.
-    pub fn update_database(&mut self, id: DatabaseId, database: Database) -> Result<(), Error> {
+    pub fn update_database(
+        &mut self,
+        id: DatabaseId,
+        database: Database,
+    ) -> Result<(), CatalogError> {
         let n = self.databases.update(|k, _v| {
             if id == k.id {
-                let database = database.clone();
-                Some(DatabaseValue {
-                    name: database.name,
-                    owner_id: database.owner_id,
-                    privileges: database.privileges,
-                })
+                let (_, new_value) = database.clone().into_key_value();
+                Some(new_value)
             } else {
                 None
             }
@@ -923,19 +919,14 @@ impl<'a> Transaction<'a> {
     /// DO NOT call this function in a loop.
     pub fn update_schema(
         &mut self,
-        database_id: Option<DatabaseId>,
         schema_id: SchemaId,
         schema: Schema,
-    ) -> Result<(), Error> {
+    ) -> Result<(), CatalogError> {
         let n = self.schemas.update(|k, _v| {
             if schema_id == k.id {
                 let schema = schema.clone();
-                Some(SchemaValue {
-                    database_id,
-                    name: schema.name,
-                    owner_id: schema.owner_id,
-                    privileges: schema.privileges,
-                })
+                let (_, new_value) = schema.clone().into_key_value();
+                Some(new_value)
             } else {
                 None
             }
@@ -957,7 +948,7 @@ impl<'a> Transaction<'a> {
         object_type: ObjectType,
         grantee: RoleId,
         privileges: Option<AclMode>,
-    ) -> Result<(), Error> {
+    ) -> Result<(), CatalogError> {
         self.default_privileges.set(
             DefaultPrivilegesKey {
                 role_id,
@@ -977,7 +968,7 @@ impl<'a> Transaction<'a> {
         grantee: RoleId,
         grantor: RoleId,
         acl_mode: Option<AclMode>,
-    ) -> Result<(), Error> {
+    ) -> Result<(), CatalogError> {
         self.system_privileges.set(
             SystemPrivilegesKey { grantee, grantor },
             acl_mode.map(|acl_mode| SystemPrivilegesValue { acl_mode }),
@@ -990,7 +981,7 @@ impl<'a> Transaction<'a> {
         object_id: CommentObjectId,
         sub_component: Option<usize>,
         comment: Option<String>,
-    ) -> Result<(), Error> {
+    ) -> Result<(), CatalogError> {
         let key = CommentKey {
             object_id,
             sub_component,
@@ -1004,7 +995,7 @@ impl<'a> Transaction<'a> {
     pub fn drop_comments(
         &mut self,
         object_id: CommentObjectId,
-    ) -> Result<Vec<(CommentObjectId, Option<usize>, String)>, Error> {
+    ) -> Result<Vec<(CommentObjectId, Option<usize>, String)>, CatalogError> {
         let deleted = self.comments.delete(|k, _v| k.object_id == object_id);
         let deleted = deleted
             .into_iter()
@@ -1014,7 +1005,7 @@ impl<'a> Transaction<'a> {
     }
 
     /// Upserts persisted system configuration `name` to `value`.
-    pub fn upsert_system_config(&mut self, name: &str, value: String) -> Result<(), Error> {
+    pub fn upsert_system_config(&mut self, name: &str, value: String) -> Result<(), CatalogError> {
         let key = ServerConfigurationKey {
             name: name.to_string(),
         };
@@ -1047,12 +1038,22 @@ impl<'a> Transaction<'a> {
         assert!(prev.is_some());
     }
 
+    pub(crate) fn insert_config(&mut self, key: String, value: u64) -> Result<(), CatalogError> {
+        match self
+            .configs
+            .insert(ConfigKey { key: key.clone() }, ConfigValue { value })
+        {
+            Ok(_) => Ok(()),
+            Err(_) => Err(SqlCatalogError::ConfigAlreadyExists(key).into()),
+        }
+    }
+
     /// Commits the storage transaction to the stash. Any error returned indicates the stash may be
     /// in an indeterminate state and needs to be fully re-read before proceeding. In general, this
     /// must be fatal to the calling process. We do not panic/halt inside this function itself so
     /// that errors can bubble up during initialization.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn commit(self) -> Result<(), Error> {
+    pub async fn commit(self) -> Result<(), CatalogError> {
         let txn_batch = TransactionBatch {
             databases: self.databases.pending(),
             schemas: self.schemas.pending(),
