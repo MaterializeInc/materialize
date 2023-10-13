@@ -88,12 +88,12 @@ use std::time::Duration;
 use mz_stash::DebugStashFactory;
 
 pub use crate::error::{CatalogError, DurableCatalogError};
-use crate::objects::Snapshot;
 pub use crate::objects::{
     Cluster, ClusterConfig, ClusterReplica, ClusterVariant, ClusterVariantManaged, Comment,
     Database, DefaultPrivilege, Item, ReplicaConfig, ReplicaLocation, Role, Schema,
     SystemConfiguration, SystemObjectMapping, TimelineTimestamp,
 };
+use crate::objects::{IntrospectionSourceIndex, Snapshot};
 use crate::stash::{Connection, DebugOpenableConnection, OpenableConnection};
 pub use crate::stash::{
     StashConfig, ALL_COLLECTIONS, AUDIT_LOG_COLLECTION, CLUSTER_COLLECTION,
@@ -324,7 +324,7 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     /// Panics if the provided id is not a system id.
     async fn set_introspection_source_indexes(
         &mut self,
-        mappings: Vec<(ClusterId, &str, GlobalId)>,
+        mappings: Vec<IntrospectionSourceIndex>,
     ) -> Result<(), CatalogError>;
 
     /// Persist the configuration of a replica.

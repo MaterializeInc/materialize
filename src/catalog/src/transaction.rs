@@ -13,10 +13,10 @@ use crate::objects::{
     ClusterKey, ClusterReplica, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, CommentKey,
     CommentValue, ConfigKey, ConfigValue, Database, DatabaseKey, DatabaseValue,
     DefaultPrivilegesKey, DefaultPrivilegesValue, DurableType, GidMappingKey, GidMappingValue,
-    IdAllocKey, IdAllocValue, Item, ItemKey, ItemValue, ReplicaConfig, Role, RoleKey, RoleValue,
-    Schema, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey,
-    SettingValue, StorageUsageKey, SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue,
-    TimestampKey, TimestampValue,
+    IdAllocKey, IdAllocValue, IntrospectionSourceIndex, Item, ItemKey, ItemValue, ReplicaConfig,
+    Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue, ServerConfigurationKey,
+    ServerConfigurationValue, SettingKey, SettingValue, StorageUsageKey, SystemObjectMapping,
+    SystemPrivilegesKey, SystemPrivilegesValue, TimestampKey, TimestampValue,
 };
 use crate::objects::{ClusterConfig, ClusterVariant};
 use crate::{
@@ -413,19 +413,14 @@ impl<'a> Transaction<'a> {
         };
 
         for (builtin, index_id) in introspection_source_indexes {
-            let index_id = if let GlobalId::System(id) = index_id {
-                id
-            } else {
-                panic!("non-system id provided")
+            let introspection_source_index = IntrospectionSourceIndex {
+                cluster_id,
+                name: builtin.name.to_string(),
+                index_id,
             };
+            let (key, value) = introspection_source_index.into_key_value();
             self.introspection_sources
-                .insert(
-                    ClusterIntrospectionSourceIndexKey {
-                        cluster_id,
-                        name: builtin.name.to_string(),
-                    },
-                    ClusterIntrospectionSourceIndexValue { index_id },
-                )
+                .insert(key, value)
                 .expect("no uniqueness violation");
         }
 
@@ -539,20 +534,20 @@ impl<'a> Transaction<'a> {
         mappings: impl Iterator<Item = (ClusterId, impl Iterator<Item = (String, GlobalId)>)>,
     ) -> Result<(), CatalogError> {
         for (cluster_id, updates) in mappings {
-            for (name, id) in updates {
-                let index_id = if let GlobalId::System(index_id) = id {
-                    index_id
-                } else {
-                    panic!("Introspection source index should have a system id")
+            for (name, index_id) in updates {
+                let introspection_source_index = IntrospectionSourceIndex {
+                    cluster_id,
+                    name,
+                    index_id,
                 };
-                let prev = self.introspection_sources.set(
-                    ClusterIntrospectionSourceIndexKey { cluster_id, name },
-                    Some(ClusterIntrospectionSourceIndexValue { index_id }),
-                )?;
+                let (key, value) = introspection_source_index.into_key_value();
+
+                let prev = self.introspection_sources.set(key, Some(value))?;
                 if prev.is_none() {
-                    return Err(
-                        SqlCatalogError::FailedBuiltinSchemaMigration(format!("{id}")).into(),
-                    );
+                    return Err(SqlCatalogError::FailedBuiltinSchemaMigration(format!(
+                        "{index_id}"
+                    ))
+                    .into());
                 }
             }
         }
