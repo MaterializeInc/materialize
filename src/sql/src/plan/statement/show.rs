@@ -61,7 +61,7 @@ pub fn plan_show_create_view(
     match view.item_type() {
         CatalogItemType::View => {
             let name = view_name.full_name_str();
-            let create_sql = simplify_names(scx.catalog, view.create_sql())?;
+            let create_sql = format_create_sql(scx.catalog, view.create_sql(), PrintStyle::Pretty)?;
             Ok(ShowCreatePlan {
                 id: view.id(),
                 row: Row::pack_slice(&[Datum::String(&name), Datum::String(&create_sql)]),
@@ -93,7 +93,7 @@ pub fn plan_show_create_materialized_view(
     let mview = scx.get_item_by_resolved_name(&name)?;
     if let CatalogItemType::MaterializedView = mview.item_type() {
         let full_name = name.full_name_str();
-        let create_sql = simplify_names(scx.catalog, mview.create_sql())?;
+        let create_sql = format_create_sql(scx.catalog, mview.create_sql(), PrintStyle::Pretty)?;
         Ok(ShowCreatePlan {
             id: mview.id(),
             row: Row::pack_slice(&[Datum::String(&full_name), Datum::String(&create_sql)]),
@@ -127,7 +127,7 @@ pub fn plan_show_create_table(
     }
     if let CatalogItemType::Table = table.item_type() {
         let name = table_name.full_name_str();
-        let create_sql = simplify_names(scx.catalog, table.create_sql())?;
+        let create_sql = format_create_sql(scx.catalog, table.create_sql(), PrintStyle::Stable)?;
         Ok(ShowCreatePlan {
             id: table.id(),
             row: Row::pack_slice(&[Datum::String(&name), Datum::String(&create_sql)]),
@@ -161,7 +161,7 @@ pub fn plan_show_create_source(
     }
     if let CatalogItemType::Source = source.item_type() {
         let name = source_name.full_name_str();
-        let create_sql = simplify_names(scx.catalog, source.create_sql())?;
+        let create_sql = format_create_sql(scx.catalog, source.create_sql(), PrintStyle::Stable)?;
         Ok(ShowCreatePlan {
             id: source.id(),
             row: Row::pack_slice(&[Datum::String(&name), Datum::String(&create_sql)]),
@@ -189,7 +189,7 @@ pub fn plan_show_create_sink(
     let sink = scx.get_item_by_resolved_name(&sink_name)?;
     if let CatalogItemType::Sink = sink.item_type() {
         let name = sink_name.full_name_str();
-        let create_sql = simplify_names(scx.catalog, sink.create_sql())?;
+        let create_sql = format_create_sql(scx.catalog, sink.create_sql(), PrintStyle::Stable)?;
         Ok(ShowCreatePlan {
             id: sink.id(),
             row: Row::pack_slice(&[Datum::String(&name), Datum::String(&create_sql)]),
@@ -217,7 +217,7 @@ pub fn plan_show_create_index(
     let index = scx.get_item_by_resolved_name(&index_name)?;
     if let CatalogItemType::Index = index.item_type() {
         let name = index_name.full_name_str();
-        let create_sql = simplify_names(scx.catalog, index.create_sql())?;
+        let create_sql = format_create_sql(scx.catalog, index.create_sql(), PrintStyle::Stable)?;
         Ok(ShowCreatePlan {
             id: index.id(),
             row: Row::pack_slice(&[Datum::String(&name), Datum::String(&create_sql)]),
@@ -245,7 +245,8 @@ pub fn plan_show_create_connection(
     let connection = scx.get_item_by_resolved_name(&connection_name)?;
     if let CatalogItemType::Connection = connection.item_type() {
         let name = connection_name.full_name_str();
-        let create_sql = simplify_names(scx.catalog, connection.create_sql())?;
+        let create_sql =
+            format_create_sql(scx.catalog, connection.create_sql(), PrintStyle::Stable)?;
         Ok(ShowCreatePlan {
             id: connection.id(),
             row: Row::pack_slice(&[Datum::String(&name), Datum::String(&create_sql)]),
@@ -942,10 +943,23 @@ impl<'a> ShowColumnsSelect<'a> {
     }
 }
 
-fn simplify_names(catalog: &dyn SessionCatalog, sql: &str) -> Result<String, PlanError> {
+enum PrintStyle {
+    Pretty,
+    Stable,
+}
+
+fn format_create_sql(
+    catalog: &dyn SessionCatalog,
+    sql: &str,
+    style: PrintStyle,
+) -> Result<String, PlanError> {
+    const PRETTY_WIDTH: usize = 80;
     let parsed = parse::parse(sql)?.into_element().ast;
     let (mut resolved, _) = names::resolve(catalog, parsed)?;
     let mut simplifier = NameSimplifier { catalog };
     simplifier.visit_statement_mut(&mut resolved);
-    Ok(resolved.to_ast_string_stable())
+    Ok(match style {
+        PrintStyle::Pretty => mz_sql_pretty::to_pretty(&resolved, PRETTY_WIDTH),
+        PrintStyle::Stable => resolved.to_ast_string_stable(),
+    })
 }

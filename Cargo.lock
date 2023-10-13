@@ -5224,6 +5224,7 @@ dependencies = [
  "mz-secrets",
  "mz-sql-lexer",
  "mz-sql-parser",
+ "mz-sql-pretty",
  "mz-stash-types",
  "mz-storage-types",
  "mz-tracing",
