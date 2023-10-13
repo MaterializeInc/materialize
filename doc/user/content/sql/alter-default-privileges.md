@@ -20,7 +20,13 @@ themselves any privilege on an object that they own.
 
 The `REVOKE` variant of `ALTER DEFAULT PRIVILEGES` is used to revoke previously created default
 privileges on objects created in the future. It will not revoke any privileges on objects that have
-already been created.
+already been created. When revoking a default privilege, all the fields in the revoke statement
+(`target_role`, `schema_name`, `database_name`, `privilege`, `grantee`) must exactly match an
+existing default privilege. The existing default privileges can easily be viewed by the following
+query: `SELECT * FROM mz_internal.mz_show_default_privileges`.
+
+All new environments are created with a single default privilege, `USAGE` is granted on all `TYPES`
+to the `PUBLIC` role. This can be revoked like any other default privilege.
 
 ## Syntax
 
