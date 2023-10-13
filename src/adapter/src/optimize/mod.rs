@@ -50,9 +50,11 @@
 //! For details, see the `20230714_optimizer_interface.md` design doc in this
 //! repository.
 
+mod index;
 mod materialized_view;
 
 // Re-export optimzier structs
+pub use index::{Index, OptimizeIndex};
 pub use materialized_view::OptimizeMaterializedView;
 
 use mz_compute_types::dataflows::DataflowDescription;
