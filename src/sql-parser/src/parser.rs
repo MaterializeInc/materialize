@@ -3874,7 +3874,7 @@ impl<'a> Parser<'a> {
 
             self.expected(
                 pos,
-                format!("cluster_identifier.replica_identifier"),
+                "cluster_identifier.replica_identifier",
                 self.peek_token(),
             )
         } else {
