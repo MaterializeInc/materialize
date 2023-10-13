@@ -133,4 +133,7 @@ pub enum Error {
     /// Error that raises when the vault value from the config is invalid.
     #[error("Vault value for the profile is invalid.")]
     InvalidVaultError,
+    /// Error that raises when the user tries to create a new profile with a name that already exists.
+    #[error("The profile name '{0}' already exists. You can either use 'mz profile init -f' to replace it or 'mz profile init --profile <PROFILE>' to choose another name.")]
+    ProfileNameAlreadyExistsError(String),
 }

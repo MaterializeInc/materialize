@@ -188,6 +188,33 @@ mod tests {
         let output = output_to_string(assert);
         assert!(output.trim() == "default");
 
+        // Asert `mz profile init` fails.
+        let assert = cmd()
+            .arg("profile")
+            .arg("init")
+            .arg("--config")
+            .arg(config_path)
+            .assert()
+            .failure();
+
+        let output = output_to_string(assert);
+        eprintln!("Output: {}", output);
+        assert!(output.trim() == "The profile name 'default' already exists. You can either use 'mz profile init -f' to replace it or 'mz profile init --profile <PROFILE>' to choose another name.");
+
+        let assert = cmd()
+            .arg("profile")
+            .arg("init")
+            .arg("--profile")
+            .arg("alternative")
+            .arg("--config")
+            .arg(config_path)
+            .assert()
+            .failure();
+
+        let output = output_to_string(assert);
+        eprintln!("Output: {}", output);
+        assert!(output.trim() == "The profile name 'alternative' already exists. You can either use 'mz profile init -f' to replace it or 'mz profile init --profile <PROFILE>' to choose another name.");
+
         // Asert `mz profile config get region --profile alternative`
         let binding = cmd()
             .arg("profile")

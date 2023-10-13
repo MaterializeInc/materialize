@@ -37,6 +37,9 @@ pub enum ProfileSubcommand {
         /// The admin or cloud endpoint to use.
         #[clap(flatten)]
         endpoint: EndpointArgs,
+        /// Force reauthentication if the profile already exists.
+        #[clap(short, long)]
+        force: bool,
     },
     /// List available authentication profiles.
     #[clap(alias = "ls")]
@@ -80,10 +83,12 @@ pub async fn run(cx: Context, cmd: ProfileCommand) -> Result<(), Error> {
         ProfileSubcommand::Init {
             no_browser,
             endpoint,
+            force,
         } => {
             mz::command::profile::init(
                 &cx,
                 *no_browser,
+                *force,
                 endpoint.admin_endpoint.clone(),
                 endpoint.cloud_endpoint.clone(),
             )
@@ -110,6 +115,7 @@ pub async fn run(cx: Context, cmd: ProfileCommand) -> Result<(), Error> {
                 ProfileSubcommand::Init {
                     no_browser: _,
                     endpoint: _,
+                    force: _,
                 } => panic!("invalid command."),
                 ProfileSubcommand::List => panic!("invalid command."),
                 ProfileSubcommand::Remove => panic!("invalid command."),
