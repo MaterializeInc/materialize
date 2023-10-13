@@ -153,6 +153,8 @@ impl Blob for MemBlob {
     }
 
     async fn restore(&self, key: &str) -> Result<(), ExternalError> {
+        // Yield to maximize our chances for getting interesting orderings.
+        let () = yield_now().await;
         if !self.core.lock().await.dataz.contains_key(key) {
             return Err(
                 Determinate::new(anyhow!("unable to restore {key} from in-memory state")).into(),

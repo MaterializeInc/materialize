@@ -471,6 +471,7 @@ impl MetricsVecs {
             get: self.external_op_metrics("blob_get", true),
             list_keys: self.external_op_metrics("blob_list_keys", false),
             delete: self.external_op_metrics("blob_delete", false),
+            restore: self.external_op_metrics("restore", false),
             delete_noop: self.external_blob_delete_noop_count.clone(),
             blob_sizes: self.external_blob_sizes.clone(),
             rtt_latency: self.external_rtt_latency.with_label_values(&["blob"]),
@@ -2139,6 +2140,7 @@ pub struct BlobMetrics {
     get: ExternalOpMetrics,
     list_keys: ExternalOpMetrics,
     delete: ExternalOpMetrics,
+    restore: ExternalOpMetrics,
     delete_noop: IntCounter,
     blob_sizes: Histogram,
     pub rtt_latency: Gauge,
@@ -2249,8 +2251,11 @@ impl Blob for MetricsBlob {
     }
 
     async fn restore(&self, key: &str) -> Result<(), ExternalError> {
-        // TODO: metrics!
-        self.blob.restore(key).await
+        self.metrics
+            .blob
+            .restore
+            .run_op(|| self.blob.restore(key), Self::on_err)
+            .await
     }
 }
 
