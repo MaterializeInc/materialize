@@ -482,7 +482,7 @@ mz_system r1 1
 statement ok
 CREATE CLUSTER REPLICA default.foo_bar SIZE '1'
 
-statement error db error: ERROR: Expected dot, found RENAME
+statement error db error: ERROR: Expected cluster_identifier.replica_identifier, found DEFAULT
 ALTER CLUSTER REPLICA default RENAME TO bar_foo
 
 statement ok
