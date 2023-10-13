@@ -78,12 +78,6 @@ Component                            | Value     | Description
 
 We provide a `materialize-dbt-utils` package with Materialize-specific implementations of dispatched macros from `dbt-utils`. To use this package in your dbt project, check the latest installation instructions in [dbt Hub](https://hub.getdbt.com/materializeinc/materialize_dbt_utils/latest/).
 
-### Seeds
-
-[`dbt seed`](https://docs.getdbt.com/reference/commands/seed/) will create a
-static materialized view from a CSV file. You will not be able to add to or
-update this view after it has been created.
-
 ### Hooks
 
 Not tested.
