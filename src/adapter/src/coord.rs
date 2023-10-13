@@ -140,7 +140,7 @@ use crate::coord::timestamp_oracle::catalog_oracle::CatalogTimestampPersistence;
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
-use crate::optimize::{Optimize, OptimizeMaterializedView, OptimizerConfig};
+use crate::optimize::{self, Optimize, OptimizeMaterializedView, OptimizerConfig};
 use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::subscribe::ActiveSubscribe;
@@ -1414,28 +1414,49 @@ impl Coordinator {
                             .or_insert_with(BTreeSet::new)
                             .insert(entry.id());
                     } else if enable_unified_optimizer_api {
-                        let (mut df, df_metainfo) = self
-                            .dataflow_builder(idx.cluster_id)
-                            .build_index_dataflow(entry.id())?;
+                        // Collect optimizer parameters
+                        let compute_instance = self
+                            .instance_snapshot(idx.cluster_id)
+                            .expect("compute instance does not exist");
+                        let optimizer_config =
+                            OptimizerConfig::from(self.catalog().system_config());
 
-                        // Note: ideally, the optimized_plan should be computed and
-                        // set when the CatalogItem is re-constructed (in
+                        // Build an INDEX optimizer.
+                        let mut optimizer = optimize::OptimizeIndex::new(
+                            self.owned_catalog(),
+                            compute_instance,
+                            entry.id(),
+                            optimizer_config,
+                        );
+
+                        // MIR ⇒ MIR optimization (global)
+                        let index_plan = optimize::Index::new(entry.name(), &idx.on, &idx.keys);
+                        let global_mir_plan = optimizer.optimize(index_plan)?;
+                        // Timestamp selection
+                        let as_of = self.bootstrap_index_as_of(
+                            global_mir_plan.df_desc(),
+                            global_mir_plan.compute_instance_id(),
+                            idx.is_retained_metrics_object,
+                        );
+                        let global_mir_plan = global_mir_plan.resolve(as_of);
+                        // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+                        let global_lir_plan = optimizer.optimize(global_mir_plan.clone())?;
+
+                        // Note: ideally, the optimized_plan should be computed
+                        // and set when the CatalogItem is re-constructed (in
                         // parse_item).
                         //
                         // However, it's not clear how exactly to change
-                        // `load_catalog_items` to accommodate for the
-                        // `build_index_dataflow` call above.
+                        // `load_catalog_items` in order to accommodate for the
+                        // optimizer pipeline executed above.
                         self.catalog_mut()
-                            .set_optimized_plan(entry.id(), df.clone());
+                            .set_optimized_plan(entry.id(), global_mir_plan.df_desc().clone());
                         self.catalog_mut()
-                            .set_dataflow_metainfo(entry.id(), df_metainfo);
+                            .set_physical_plan(entry.id(), global_lir_plan.df_desc().clone());
+                        self.catalog_mut()
+                            .set_dataflow_metainfo(entry.id(), global_lir_plan.df_meta().clone());
 
-                        let as_of = self.bootstrap_index_as_of(
-                            &df,
-                            idx.cluster_id,
-                            idx.is_retained_metrics_object,
-                        );
-                        df.set_as_of(as_of);
+                        let df_desc = global_lir_plan.unapply().0;
 
                         // What follows is morally equivalent to `self.ship_dataflow(df, idx.cluster_id)`,
                         // but we cannot call that as it will also downgrade the read hold on the index.
@@ -1443,14 +1464,11 @@ impl Coordinator {
                             .compute_ids
                             .entry(idx.cluster_id)
                             .or_insert_with(Default::default)
-                            .extend(df.export_ids());
-
-                        let df = self.must_finalize_dataflow(df, idx.cluster_id);
-                        self.catalog_mut().set_physical_plan(entry.id(), df.clone());
+                            .extend(df_desc.export_ids());
 
                         self.controller
                             .active_compute()
-                            .create_dataflow(idx.cluster_id, df)
+                            .create_dataflow(idx.cluster_id, df_desc)
                             .unwrap_or_terminate("cannot fail to create dataflows");
                     } else {
                         let (mut df, df_metainfo) = self
