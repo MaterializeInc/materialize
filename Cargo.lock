@@ -2931,7 +2931,7 @@ dependencies = [
 [[package]]
 name = "launchdarkly-server-sdk"
 version = "1.0.0"
-source = "git+https://github.com/MaterializeInc/rust-server-sdk#dcc193d9601086f4329bde3ec191e0e929da7170"
+source = "git+https://github.com/MaterializeInc/rust-server-sdk#71559906dfc648963787f87ef6b1119c3a0d1b63"
 dependencies = [
  "built",
  "chrono",
