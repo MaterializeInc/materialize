@@ -3870,11 +3870,13 @@ impl<'a> Parser<'a> {
         let pos = self.peek_pos();
         let cluster = self.parse_identifier()?;
         if !self.consume_token(&Token::Dot) {
-            return self.expected(
+            self.prev_token();
+
+            self.expected(
                 pos,
                 format!("cluster_identifier.replica_identifier"),
-                Some(Token::Ident(cluster.to_string())),
-            );
+                self.peek_token(),
+            )
         } else {
             let replica = self.parse_identifier()?;
             Ok(QualifiedReplica { cluster, replica })
