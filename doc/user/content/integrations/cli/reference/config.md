@@ -31,7 +31,7 @@ Argument            | Environment variables | Description
 Get the default profile:
 
 ```shell
-$ mz config get profile
+mz config get profile
 ```
 ```
 acme-corp
@@ -51,7 +51,7 @@ parameters.
 ### Examples
 
 ```shell
-$ mz config list
+mz config list
 ```
 ```
 Name    | Value

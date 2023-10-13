@@ -54,7 +54,7 @@ Argument              | Environment variables | Description
 List all app passwords:
 
 ```shell
-$ mz app-password list
+mz app-password list
 ```
 ```
 Name        | Created at

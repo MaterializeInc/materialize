@@ -10,7 +10,9 @@ menu:
 disable_list: true
 ---
 
-`mz`, the Materialize command-line interface (CLI), lets you interact with
+{{< public-preview />}}
+
+The Materialize command-line interface (CLI), lets you interact with
 Materialize from your terminal.
 
 You can use `mz` to:
@@ -39,17 +41,17 @@ You can use `mz` to:
 2. Log in to your Materialize account:
 
    ```shell
-   $ mz profile init
+   mz profile init
    ```
 
-   `mz` will launch your web browser and ask you to log in.
+   `mz` will attempt to launch your web browser and ask you to log in.
 
    See [Configuration](configuration) for alternative configuration methods.
 
 3. Show enabled regions in your organization:
 
    ```shell
-   $ mz region list
+   mz region list
    ```
    ```
    aws/us-east-1  enabled
@@ -60,17 +62,19 @@ You can use `mz` to:
    organization:
 
    ```shell
-   $ mz sql --region=aws/us-east-1
+   mz sql
    ```
    ```
+   Authenticated using profile 'default'.
+   Connected to the default cluster.
    psql (14.2)
    Type "help" for help.
 
-   you@corp.com=#
+   materialize=>
    ```
 
-   Substitute `aws/us-east-1` with the name of an enabled region in your
-   organization. If you don't yet have an enabled region, use
+   You can use the `--region=aws/us-east-1` flag with the name of an enabled region
+   in your organization. If you don't yet have an enabled region, use
    [`mz region enable`](reference/region) to enable one.
 
 ## Command reference

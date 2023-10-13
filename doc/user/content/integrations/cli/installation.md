@@ -19,7 +19,7 @@ On macOS, we we recommend using Homebrew.
 You'll need [Homebrew] installed on your system. Then install `mz` from
 [our tap][homebrew-tap]:
 
-```
+```shell
 brew install materializeinc/materialize/mz
 ```
 
@@ -44,7 +44,7 @@ sudo apt install materialize-cli
 
 ### Binary download
 
-```
+```shell
 curl -L https://binaries.materialize.com/mz-latest-$(uname -m)-unknown-linux-gnu.tar.gz \
     | sudo tar -xzC /usr/local --strip-components=1
 ```

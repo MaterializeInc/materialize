@@ -43,7 +43,7 @@ When invoking an `mz` command that requires authentication, you can explicitly
 choose which profile to use by passing the `--profile` flag. For example, to use
 the `hooli` profile with the `mz sql` command:
 
-```
+```shell
 mz sql --profile=hooli
 ```
 
@@ -51,7 +51,7 @@ When the profile is not explicitly specified, `mz` uses the default profile
 specified in the configuration file. You can change the default profile using
 `mz config`. For example, to set the default profile to `hooli`:
 
-```
+```shell
 mz config set profile hooli
 ```
 
