@@ -391,6 +391,11 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
                         handle,
                         maybe_unconsolidated,
                     } => {
+                        if handle.is_finished() {
+                            self.metrics.compaction.parts_prefetched.inc();
+                        } else {
+                            self.metrics.compaction.parts_waited.inc()
+                        }
                         self.metrics.consolidation.parts_fetched.inc();
                         *part = ConsolidationPart::from_encoded(
                             handle.await??,
@@ -460,7 +465,6 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
                         }
                         _ => continue,
                     };
-                    self.metrics.compaction.parts_prefetched.inc();
 
                     let maybe_unconsolidated = data.maybe_unconsolidated();
                     let span = debug_span!("compaction::prefetch");

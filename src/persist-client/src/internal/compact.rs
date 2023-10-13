@@ -660,7 +660,7 @@ where
         // For now, invent some some extra budget out of thin air for prefetch.
         let prefetch_budget_bytes = 2 * cfg.batch.blob_target_size;
 
-        let timings = Timings::default();
+        let mut timings = Timings::default();
 
         // Old style compaction operates on the encoded bytes and doesn't need
         // the real schema, so we synthesize one. We use the real schema for
@@ -711,7 +711,12 @@ where
             metrics.compaction.not_all_prefetched.inc();
         }
 
-        while let Some(updates) = consolidator.next().await? {
+        loop {
+            let fetch_start = Instant::now();
+            let Some(updates) = consolidator.next().await? else {
+                break;
+            };
+            timings.part_fetching += fetch_start.elapsed();
             for (k, v, t, d) in updates.take(cfg.compaction_yield_after_n_updates) {
                 batch
                     .add(&real_schemas, &k.to_vec(), &v.to_vec(), &t, &d)
