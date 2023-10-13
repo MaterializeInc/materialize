@@ -1483,7 +1483,7 @@ impl Coordinator {
                             .catalog()
                             .resolve_full_name(entry.name(), None)
                             .to_string();
-                        let optimzier_config =
+                        let optimizer_config =
                             OptimizerConfig::from(self.catalog().system_config());
 
                         // Build a MATERIALIZED VIEW optimizer for this view.
@@ -1495,7 +1495,7 @@ impl Coordinator {
                             mview.desc.iter_names().cloned().collect(),
                             mview.non_null_assertions.clone(),
                             debug_name,
-                            optimzier_config,
+                            optimizer_config,
                         );
 
                         // MIR ⇒ MIR optimization (global)
@@ -1505,16 +1505,16 @@ impl Coordinator {
                             global_mir_plan.df_desc(),
                             global_mir_plan.compute_instance_id(),
                         );
-                        let timestamped_plan = global_mir_plan.clone().resolve(as_of.clone());
+                        let global_mir_plan = global_mir_plan.resolve(as_of);
                         // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                        let global_lir_plan = optimizer.optimize(timestamped_plan)?;
+                        let global_lir_plan = optimizer.optimize(global_mir_plan.clone())?;
 
                         // Note: ideally, the optimized_plan should be computed
                         // and set when the CatalogItem is re-constructed (in
                         // parse_item).
                         //
                         // However, it's not clear how exactly to change
-                        // `load_catalog_items` in order to accommodate the
+                        // `load_catalog_items` in order to accommodate for the
                         // optimizer pipeline executed above.
                         self.catalog_mut()
                             .set_optimized_plan(entry.id(), global_mir_plan.df_desc().clone());
@@ -1523,9 +1523,8 @@ impl Coordinator {
                         self.catalog_mut()
                             .set_dataflow_metainfo(entry.id(), global_lir_plan.df_meta().clone());
 
-                        let df = global_lir_plan.unapply().0;
-
-                        self.ship_dataflow_new(df, mview.cluster_id).await;
+                        let df_desc = global_lir_plan.unapply().0;
+                        self.ship_dataflow_new(df_desc, mview.cluster_id).await;
                     } else {
                         // Re-create the sink on the compute instance.
                         let internal_view_id = self.allocate_transient_id()?;
