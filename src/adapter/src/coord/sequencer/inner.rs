@@ -16,7 +16,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
-use differential_dataflow::lattice::Lattice;
 use futures::future::BoxFuture;
 use itertools::Itertools;
 use maplit::btreeset;
@@ -31,7 +30,7 @@ use mz_expr::{
 use mz_ore::collections::CollectionExt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::vec::VecExt;
-use mz_ore::{soft_assert, soft_panic_or_log, task};
+use mz_ore::{soft_assert, task};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::explain::{
@@ -1111,29 +1110,54 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, AdapterError> {
         let plan::CreateIndexPlan {
             name,
-            index,
+            index:
+                plan::Index {
+                    create_sql,
+                    on,
+                    keys,
+                    cluster_id,
+                },
             options,
             if_not_exists,
         } = plan;
 
-        // An index must be created on a specific cluster.
-        let cluster_id = index.cluster_id;
-
         self.ensure_cluster_can_host_compute_item(&name, cluster_id)?;
 
-        let empty_key = index.keys.is_empty();
-
+        // Collect optimizer parameters
+        let compute_instance = self
+            .instance_snapshot(cluster_id)
+            .expect("compute instance does not exist");
         let id = self.catalog_mut().allocate_user_id().await?;
+        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
+
+        // Build an INDEX optimizer.
+        let mut optimizer = optimize::OptimizeIndex::new(
+            self.owned_catalog(),
+            compute_instance,
+            id,
+            optimizer_config,
+        );
+
+        // MIR ⇒ MIR optimization (global)
+        let index_plan = optimize::Index::new(&name, &on, &keys);
+        let global_mir_plan = optimizer.optimize(index_plan)?;
+        // Timestamp selection
+        let since = self.least_valid_read(&global_mir_plan.id_bundle());
+        let global_mir_plan = global_mir_plan.resolve(since);
+        // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+        let global_lir_plan = optimizer.optimize(global_mir_plan.clone())?;
+
         let index = catalog::Index {
-            create_sql: index.create_sql,
-            keys: index.keys,
-            on: index.on,
+            create_sql,
+            keys,
+            on,
             conn_id: None,
             resolved_ids,
             cluster_id,
             is_retained_metrics_object: false,
             custom_logical_compaction_window: None,
         };
+
         let oid = self.catalog_mut().allocate_oid()?;
         let on = self.catalog().get_entry(&index.on);
         // Indexes have the same owner as their parent relation.
@@ -1146,25 +1170,24 @@ impl Coordinator {
             owner_id,
         };
         match self
-            .catalog_transact_with(Some(session.conn_id()), vec![op], |txn| {
-                let mut builder = txn.dataflow_builder(cluster_id);
-                let (df, df_metainfo) = builder.build_index_dataflow(id)?;
-                Ok((df, df_metainfo))
-            })
+            .catalog_transact_conn(Some(session.conn_id()), vec![op])
             .await
         {
-            Ok((df, mut df_metainfo)) => {
-                if empty_key {
-                    df_metainfo.push_optimizer_notice_dedup(OptimizerNotice::IndexKeyEmpty);
-                }
+            Ok(_) => {
+                // Save plan structures.
+                self.catalog_mut()
+                    .set_optimized_plan(id, global_mir_plan.df_desc().clone());
+                self.catalog_mut()
+                    .set_physical_plan(id, global_lir_plan.df_desc().clone());
+                self.catalog_mut()
+                    .set_dataflow_metainfo(id, global_lir_plan.df_meta().clone());
 
-                self.emit_optimizer_notices(session, &df_metainfo.optimizer_notices);
+                // Emit notices.
+                self.emit_optimizer_notices(session, &global_lir_plan.df_meta().optimizer_notices);
 
-                self.catalog_mut().set_optimized_plan(id, df.clone());
-                self.catalog_mut().set_dataflow_metainfo(id, df_metainfo);
+                let df_desc = global_lir_plan.unapply().0;
 
-                let df = self.must_ship_dataflow(df, cluster_id).await;
-                self.catalog_mut().set_physical_plan(id, df);
+                self.ship_dataflow_new(df_desc, cluster_id).await;
 
                 self.set_index_options(id, options).expect("index enabled");
                 Ok(ExecuteResponse::CreatedIndex)
@@ -3645,23 +3668,31 @@ impl Coordinator {
             tracing::warn!("EXPLAIN ... BROKEN <query> is known to leak memory, use with caution");
         }
 
-        // Initialize helper context
-        // -------------------------
+        // Initialize optimizer context
+        // ----------------------------
 
-        let target_cluster_id = index.cluster_id;
         let compute_instance = self
-            .instance_snapshot(target_cluster_id)
+            .instance_snapshot(index.cluster_id)
             .expect("compute instance does not exist");
         let exported_index_id = self.allocate_transient_id()?;
-        let state = self.catalog().state();
+        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
+
+        // Build a MATERIALIZED VIEW optimizer for this view.
+        let mut optimizer = optimize::OptimizeIndex::new(
+            self.owned_catalog(),
+            compute_instance,
+            exported_index_id,
+            optimizer_config,
+        );
+
+        // Create a transient catalog item
+        // -------------------------------
+
         let on_entry = self.catalog.get_entry(&index.on);
         let full_name = self.catalog.resolve_full_name(&name, on_entry.conn_id());
         let on_desc = on_entry
             .desc(&full_name)
             .expect("can only create indexes on items with a valid description");
-
-        // Create a transient catalog item
-        // -------------------------------
 
         let mut transient_items = BTreeMap::new();
         transient_items.insert(exported_index_id, {
@@ -3672,90 +3703,47 @@ impl Coordinator {
             )
         });
 
-        // Global optimization
-        // -------------------
-        let (mut df, df_metainfo) = catch_unwind(broken, "global", || {
-            // This code should mirror the sequence of steps performed in
-            // `build_index_dataflow`. We cannot call `build_index_dataflow`
-            // here directly because it assumes that the index is present in the
-            // catalog as an `IndexEntry`. However, in the condtext of `EXPLAIN
-            // CREATE` we don't want to do actually modify the catalog state.
+        // Execute the various stages of the optimization pipeline
+        // -------------------------------------------------------
 
-            let mut df_builder = DataflowBuilder::new(self.catalog().state(), compute_instance);
-            let mut df = DataflowDesc::new(full_name.to_string());
+        let (df_desc, df_meta, used_indexes) = catch_unwind(broken, "optimize", || {
+            // MIR ⇒ MIR optimization (global)
+            let index_plan = optimize::Index::new(&name, &index.on, &index.keys);
+            let global_mir_plan = optimizer.optimize(index_plan)?;
 
-            df_builder.import_into_dataflow(&index.on, &mut df)?;
-
-            for desc in df.objects_to_build.iter_mut() {
-                prep_relation_expr(state, &mut desc.plan, ExprPrepStyle::Index)?;
-            }
-
-            let mut index_description = IndexDesc {
-                on_id: index.on,
-                key: index.keys.clone(),
+            // Collect the list of indexes used by the dataflow at this point
+            let used_indexes = {
+                let df_desc = global_mir_plan.df_desc();
+                let df_meta = global_mir_plan.df_meta();
+                UsedIndexes::new(
+                    df_desc
+                        .index_imports
+                        .iter()
+                        .map(|(id, _index_import)| {
+                            (*id, df_meta.index_usage_types.get(id).expect("prune_and_annotate_dataflow_index_imports should have been called already").clone())
+                        })
+                        .collect(),
+                )
             };
 
-            for key in index_description.key.iter_mut() {
-                prep_scalar_expr(state, key, ExprPrepStyle::Index)?;
-            }
+            // Timestamp selection
+            let since = self.least_valid_read(&global_mir_plan.id_bundle());
+            let global_mir_plan = global_mir_plan.resolve(since);
 
-            df.export_index(exported_index_id, index_description, on_desc.typ().clone());
+            // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+            let global_lir_plan = optimizer.optimize(global_mir_plan)?;
 
-            // Optimize the dataflow across views, and any other ways that appeal.
-            let df_metainfo = mz_transform::optimize_dataflow(
-                &mut df,
-                &df_builder,
-                &mz_transform::EmptyStatisticsOracle,
-            )?;
+            let (df_desc, df_meta) = global_lir_plan.unapply();
 
-            Ok::<_, AdapterError>((df, df_metainfo))
-        })?;
-
-        // Collect the list of indexes used by the dataflow at this point
-        let used_indexes = UsedIndexes::new(
-            df
-                .index_imports
-                .iter()
-                .map(|(id, _index_import)| {
-                    (*id, df_metainfo.index_usage_types.get(id).expect("prune_and_annotate_dataflow_index_imports should have been called already").clone())
-                })
-                .collect(),
-        );
-
-        // Finalization
-        // ------------
-
-        // In the actual sequencing of `CREATE INDEX` statements, the following
-        // DataflowDescription manipulations happen in the `ship_dataflow` call.
-        // However, since we don't want to ship, we have temporary duplicated
-        // the code below. This will be resolved once we implement the proposal
-        // from #20569.
-
-        // If the only outputs of the dataflow are sinks, we might be able to
-        // turn off the computation early, if they all have non-trivial
-        // `up_to`s.
-        //
-        // TODO: This should never be the case here so we can probably remove
-        // the entire thing.
-        if df.index_exports.is_empty() {
-            soft_panic_or_log!("unexpectedly setting df.until for an index");
-            df.until = Antichain::from_elem(Timestamp::MIN);
-            for (_, sink) in &df.sink_exports {
-                df.until.join_assign(&sink.up_to);
-            }
-        }
-
-        // Execute the `optimize/finalize_dataflow` stage.
-        let df = catch_unwind(broken, "finalize_dataflow", || {
-            self.finalize_dataflow(df, target_cluster_id)
+            Ok::<_, AdapterError>((df_desc, df_meta, used_indexes))
         })?;
 
         // Trace the resulting plan for the top-level `optimize` path.
-        trace_plan(&df);
+        trace_plan(&df_desc);
 
         // Return objects that need to be passed to the `ExplainContext`
         // when rendering explanations for the various trace entries.
-        Ok((used_indexes, None, df_metainfo, transient_items))
+        Ok((used_indexes, None, df_meta, transient_items))
     }
 
     pub async fn sequence_explain_timestamp(
