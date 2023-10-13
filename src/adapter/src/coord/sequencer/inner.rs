@@ -3189,9 +3189,25 @@ impl Coordinator {
                 index,
                 broken,
             } => {
-                self.explain_create_index_optimizer_pipeline(name, index, broken, root_dispatch)
+                if enable_unified_optimizer_api {
+                    // Please see the docs on `explain_query_optimizer_pipeline` above.
+                    self.explain_create_index_optimizer_pipeline(name, index, broken, root_dispatch)
+                        .with_subscriber(&optimizer_trace)
+                        .await
+                } else {
+                    // Allow while the introduction of the new optimizer API in
+                    // #20569 is in progress.
+                    #[allow(deprecated)]
+                    // Please see the docs on `explain_query_optimizer_pipeline` above.
+                    self.explain_create_index_optimizer_pipeline_deprecated(
+                        name,
+                        index,
+                        broken,
+                        root_dispatch,
+                    )
                     .with_subscriber(&optimizer_trace)
                     .await
+                }
             }
         };
 
@@ -4390,7 +4406,7 @@ impl Coordinator {
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
-    fn set_index_options(
+    pub(super) fn set_index_options(
         &mut self,
         id: GlobalId,
         options: Vec<IndexOption>,
