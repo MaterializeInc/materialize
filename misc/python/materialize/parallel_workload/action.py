@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 import pg8000
 import requests
 
-from materialize.data_ingest.data_type import Text, TextTextMap
+from materialize.data_ingest.data_type import NUMBER_TYPES, Text, TextTextMap
 from materialize.mzcompose.composition import Composition
 from materialize.parallel_workload.database import (
     MAX_CLUSTER_REPLICAS,
@@ -157,29 +157,45 @@ class SelectAction(Action):
         obj_name = str(obj)
         obj2_name = str(obj2)
         columns = [c for c in obj2.columns if c.data_type == column.data_type]
+
+        if obj_name != obj2_name and columns:
+            all_columns = list(obj.columns) + list(obj2.columns)
+        else:
+            all_columns = obj.columns
+
+        if self.rng.choice([True, False]):
+            expressions = ", ".join(
+                str(column)
+                for column in self.rng.sample(
+                    all_columns, k=self.rng.randint(1, len(all_columns))
+                )
+            )
+            if self.rng.choice([True, False]):
+                column1 = self.rng.choice(all_columns)
+                column2 = self.rng.choice(all_columns)
+                column3 = self.rng.choice(all_columns)
+                fns = ["COUNT"]
+                if column1.data_type in NUMBER_TYPES:
+                    fns.extend(["SUM", "AVG", "MAX", "MIN"])
+                window_fn = self.rng.choice(fns)
+                expressions += f", {window_fn}({column1}) OVER (PARTITION BY {column2} ORDER BY {column3})"
+        else:
+            expressions = "*"
+
+        query = f"SELECT {expressions} FROM {obj_name} "
+
         if obj_name != obj2_name and columns:
             column2 = self.rng.choice(columns)
-            query = f"SELECT * FROM {obj_name} JOIN {obj2_name} ON "
+            query += f"JOIN {obj2_name} ON "
             if column.data_type == TextTextMap:
                 query += f"map_length({column}) = map_length({column2})"
             else:
                 query += f"{column} = {column2}"
-            query += " LIMIT 1"
-            exe.execute(query, explainable=True)
-            exe.cur.fetchall()
-        else:
-            if self.rng.choice([True, False]):
-                expressions = ", ".join(
-                    str(column)
-                    for column in random.sample(
-                        obj.columns, k=random.randint(1, len(obj.columns))
-                    )
-                )
-            else:
-                expressions = "*"
-            query = f"SELECT {expressions} FROM {obj} LIMIT 1"
-            exe.execute(query, explainable=True)
-            exe.cur.fetchall()
+
+        query += " LIMIT 1"
+
+        exe.execute(query, explainable=True)
+        exe.cur.fetchall()
 
 
 class InsertAction(Action):

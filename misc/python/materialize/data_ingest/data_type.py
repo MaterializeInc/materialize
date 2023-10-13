@@ -327,3 +327,5 @@ DATA_TYPES = DataType.__subclasses__()
 
 # fastavro._schema_common.UnknownType: record
 DATA_TYPES_FOR_AVRO = list(set(DATA_TYPES) - {TextTextMap, Jsonb, Boolean})
+
+NUMBER_TYPES = [SmallInt, Int, Long, Float, Double]
