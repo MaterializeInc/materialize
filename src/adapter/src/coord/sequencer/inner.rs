@@ -112,7 +112,7 @@ use crate::error::AdapterError;
 use crate::explain::explain_dataflow;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::notice::{AdapterNotice, DroppedInUseIndex};
-use crate::optimize::{Optimize, OptimizeMaterializedView, OptimizerConfig};
+use crate::optimize::{self, Optimize};
 use crate::session::{EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp};
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{viewable_variables, ClientTransmitter, ComputeSinkId, ResultExt};
@@ -1000,10 +1000,10 @@ impl Coordinator {
         let id = self.catalog_mut().allocate_user_id().await?;
         let internal_view_id = self.allocate_transient_id()?;
         let debug_name = self.catalog().resolve_full_name(&name, None).to_string();
-        let optimizier_config = OptimizerConfig::from(self.catalog().system_config());
+        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
 
         // Build a MATERIALIZED VIEW optimizer for this view.
-        let mut optimizer = OptimizeMaterializedView::new(
+        let mut optimizer = optimize::OptimizeMaterializedView::new(
             self.owned_catalog(),
             compute_instance,
             id,
@@ -1011,7 +1011,7 @@ impl Coordinator {
             column_names.clone(),
             non_null_assertions.clone(),
             debug_name,
-            optimizier_config,
+            optimizer_config,
         );
 
         // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
@@ -1019,9 +1019,9 @@ impl Coordinator {
         let global_mir_plan = optimizer.optimize(local_mir_plan.clone())?;
         // Timestamp selection
         let since = self.least_valid_read(&global_mir_plan.id_bundle());
-        let timestamped_plan = global_mir_plan.clone().resolve(since.clone());
+        let global_mir_plan = global_mir_plan.resolve(since.clone());
         // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-        let global_lir_plan = optimizer.optimize(timestamped_plan)?;
+        let global_lir_plan = optimizer.optimize(global_mir_plan.clone())?;
 
         let mut ops = Vec::new();
         ops.extend(
@@ -1084,9 +1084,8 @@ impl Coordinator {
                 )
                 .await;
 
-                let df = global_lir_plan.unapply().0;
-
-                self.ship_dataflow_new(df, cluster_id).await;
+                let df_desc = global_lir_plan.unapply().0;
+                self.ship_dataflow_new(df_desc, cluster_id).await;
 
                 Ok(ExecuteResponse::CreatedMaterializedView)
             }
@@ -3523,10 +3522,10 @@ impl Coordinator {
         let exported_sink_id = self.allocate_transient_id()?;
         let internal_view_id = self.allocate_transient_id()?;
         let debug_name = full_name.to_string();
-        let optimizier_config = OptimizerConfig::from(self.catalog().system_config());
+        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
 
         // Build a MATERIALIZED VIEW optimizer for this view.
-        let mut optimizer = OptimizeMaterializedView::new(
+        let mut optimizer = optimize::OptimizeMaterializedView::new(
             self.owned_catalog(),
             compute_instance,
             exported_sink_id,
@@ -3534,7 +3533,7 @@ impl Coordinator {
             column_names.clone(),
             non_null_assertions,
             debug_name,
-            optimizier_config,
+            optimizer_config,
         );
 
         // Create a transient catalog item
@@ -3560,7 +3559,7 @@ impl Coordinator {
         let (df_desc, df_meta, used_indexes) = catch_unwind(broken, "optimize", || {
             // MIR ⇒ MIR optimization (local and global)
             let local_mir_plan = optimizer.optimize(raw_plan)?;
-            let global_mir_plan = optimizer.optimize(local_mir_plan.clone())?;
+            let global_mir_plan = optimizer.optimize(local_mir_plan)?;
 
             // Collect the list of indexes used by the dataflow at this point
             let used_indexes = {
@@ -3579,10 +3578,10 @@ impl Coordinator {
 
             // Timestamp selection
             let since = self.least_valid_read(&global_mir_plan.id_bundle());
-            let timestamped_plan = global_mir_plan.clone().resolve(since.clone());
+            let global_mir_plan = global_mir_plan.resolve(since);
 
             // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-            let global_lir_plan = optimizer.optimize(timestamped_plan)?;
+            let global_lir_plan = optimizer.optimize(global_mir_plan)?;
 
             let (df_desc, df_meta) = global_lir_plan.unapply();
 
