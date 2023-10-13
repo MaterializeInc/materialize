@@ -39,14 +39,10 @@ use crate::async_runtime::IsolatedRuntime;
 use crate::cache::StateCache;
 use crate::cli::inspect::{StateArgs, StoreArgs};
 use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
-use crate::internal::encoding::{Schemas, UntypedState};
+use crate::internal::encoding::Schemas;
 use crate::internal::gc::{GarbageCollector, GcReq};
 use crate::internal::machine::Machine;
 use crate::internal::metrics::{MetricsBlob, MetricsConsensus};
-use crate::internal::state::State;
-use crate::internal::state_diff::{StateDiff, StateFieldValDiff};
-
-use crate::internal::paths::BlobKey;
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::rpc::NoopPubSubSender;
 use crate::write::WriterId;
@@ -159,8 +155,13 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
                 let shard_id = shard?;
                 let shard_id = ShardId::from_str(&shard_id).expect("invalid shard id");
 
-                let shard_not_restored =
-                    restore_blob(&versions, blob.as_ref(), &cfg.build_version, shard_id).await?;
+                let shard_not_restored = crate::internal::restore::restore_blob(
+                    &versions,
+                    blob.as_ref(),
+                    &cfg.build_version,
+                    shard_id,
+                )
+                .await?;
                 info!(
                     "Restored blob state for shard {shard_id}; {} errors.",
                     shard_not_restored.len()
@@ -175,84 +176,6 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
         }
     }
     Ok(())
-}
-
-/// Attempt to restore all the blobs referenced by the current state in consensus.
-/// Returns a list of blobs that were not possible to restore.
-async fn restore_blob(
-    versions: &StateVersions,
-    blob: &(dyn Blob + Send + Sync),
-    build_version: &semver::Version,
-    shard_id: ShardId,
-) -> anyhow::Result<Vec<BlobKey>> {
-    let diffs = versions.fetch_all_live_diffs(&shard_id).await;
-    let Some(first_live_seqno) = diffs.0.first().map(|d| d.seqno) else {
-        info!("No diffs for shard {shard_id}.");
-        return Ok(vec![]);
-    };
-
-    fn after<A>(diff: StateFieldValDiff<A>) -> Option<A> {
-        match diff {
-            StateFieldValDiff::Insert(a) => Some(a),
-            StateFieldValDiff::Update(_, a) => Some(a),
-            StateFieldValDiff::Delete(_) => None,
-        }
-    }
-
-    let mut not_restored = vec![];
-    let mut check_restored = |key: &BlobKey, result: Result<(), _>| {
-        if result.is_err() {
-            not_restored.push(key.clone());
-        }
-    };
-
-    for diff in diffs.0 {
-        let diff: StateDiff<u64> = StateDiff::decode(build_version, diff.data);
-        for rollup in diff.rollups {
-            // We never actually reference rollups from before the first live diff.
-            if rollup.key < first_live_seqno {
-                continue;
-            }
-            if let Some(value) = after(rollup.val) {
-                let key = value.key.complete(&shard_id);
-                check_restored(&key, blob.restore(&key).await);
-                // Elsewhere, we restore any state referenced in live diffs... but we also
-                // need to restore everything referenced in that first rollup.
-                if rollup.key != first_live_seqno {
-                    continue;
-                }
-                let rollup_bytes = blob
-                    .get(&key)
-                    .await?
-                    .ok_or_else(|| anyhow!("fetching just-restored rollup"))?;
-                let rollup_state: State<u64> =
-                    UntypedState::decode(build_version, rollup_bytes).check_ts_codec(&shard_id)?;
-                for (seqno, rollup) in &rollup_state.collections.rollups {
-                    // We never actually reference rollups from before the first live diff.
-                    if *seqno < first_live_seqno {
-                        continue;
-                    }
-                    let key = rollup.key.complete(&shard_id);
-                    check_restored(&key, blob.restore(&key).await);
-                }
-                for batch in rollup_state.collections.trace.batches() {
-                    for part in &batch.parts {
-                        let key = part.key.complete(&shard_id);
-                        check_restored(&key, blob.restore(&key).await);
-                    }
-                }
-            }
-        }
-        for batch in diff.spine {
-            if let Some(_) = after(batch.val) {
-                for part in batch.key.parts {
-                    let key = part.key.complete(&shard_id);
-                    check_restored(&key, blob.restore(&key).await);
-                }
-            }
-        }
-    }
-    Ok(not_restored)
 }
 
 pub(crate) fn info_log_non_zero_metrics(metric_families: &[MetricFamily]) {

@@ -157,6 +157,7 @@ mod internal {
     pub mod maintenance;
     pub mod metrics;
     pub mod paths;
+    pub mod restore;
     pub mod service;
     pub mod state;
     pub mod state_diff;
