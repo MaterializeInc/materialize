@@ -215,20 +215,7 @@ impl Backend {
                 // Check for Jinja code (dbt)
                 // If Jinja code is detected, inform that parsing is not available..
                 if self.is_jinja(&err_parsing.error.message, params.text) {
-                    self.client
-                        .publish_diagnostics(
-                            params.uri.clone(),
-                            vec![Diagnostic::new_with_code_number(
-                                range,
-                                DiagnosticSeverity::INFORMATION,
-                                1,
-                                None,
-                                "Jinja code will not be parsed by the Materialize extension."
-                                    .to_string(),
-                            )],
-                            Some(params.version),
-                        )
-                        .await;
+                    // Do not send any new diagnostics
                     return;
                 }
 
