@@ -3867,13 +3867,12 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_cluster_replica_name(&mut self) -> Result<QualifiedReplica, ParserError> {
-        let pos = self.peek_pos();
         let cluster = self.parse_identifier()?;
         if !self.consume_token(&Token::Dot) {
             self.prev_token();
 
             self.expected(
-                pos,
+                self.peek_pos(),
                 "cluster_identifier.replica_identifier",
                 self.peek_token(),
             )
