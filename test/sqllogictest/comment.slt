@@ -247,7 +247,45 @@ statement ok
 CREATE TYPE custom_type AS (x integer, y int4_list);
 
 statement ok
+CREATE TYPE custom_map_type AS MAP (KEY TYPE = text, VALUE TYPE = custom_type)
+
+statement ok
+COMMENT ON TYPE custom_map_type IS 'custom_map_type_comment';
+
+statement error cannot be depended upon
+COMMENT ON COLUMN custom_map_type.key IS 'comment_on_key';
+
+statement ok
+CREATE TYPE custom_list_type AS LIST (ELEMENT TYPE = custom_type)
+
+statement ok
+COMMENT ON TYPE custom_list_type IS 'custom_list_type_comment';
+
+statement error cannot be depended upon
+COMMENT ON COLUMN custom_list_type.element IS 'comment_on_element';
+
+statement error cannot be depended upon
+COMMENT ON COLUMN custom_map_type.key IS 'comment_on_key';
+
+statement ok
 COMMENT ON TYPE custom_type IS 'custom_type_comment';
+
+query TTT
+SELECT object_type, object_sub_id, comment FROM mz_internal.mz_comments;
+----
+source   1      json_blob
+type     NULL   supercool_list
+source   NULL   all_the_data
+cluster  NULL   careful_now
+type     NULL   custom_type_comment
+type     NULL   custom_map_type_comment
+type     NULL   custom_list_type_comment
+
+statement ok
+DROP TYPE custom_map_type;
+
+statement ok
+DROP TYPE custom_list_type;
 
 statement ok
 COMMENT ON COLUMN custom_type.x IS 'custom_type_x_comment';
