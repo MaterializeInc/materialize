@@ -1779,7 +1779,7 @@ feature_flags!(
     ),
     (
         enable_unified_optimizer_api,
-        "use the new unified optimzier API in bootstrap() and coordinator methods",
+        "use the new unified optimizer API in bootstrap() and coordinator methods",
         true
     ),
     (
