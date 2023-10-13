@@ -34,7 +34,7 @@ pub struct CreateArgs<'a> {
 
 /// Creates and shows a new app-password for the profile.
 pub async fn create(
-    cx: &mut ProfileContext,
+    cx: &ProfileContext,
     params: CreateAppPasswordRequest<'_>,
 ) -> Result<(), Error> {
     let app_password = cx.admin_client().create_app_password(params).await?;
@@ -44,7 +44,7 @@ pub async fn create(
 
 /// Lists all the profile app-password descriptions available
 /// and their creation date.
-pub async fn list(cx: &mut ProfileContext) -> Result<(), Error> {
+pub async fn list(cx: &ProfileContext) -> Result<(), Error> {
     let loading_spinner = cx
         .output_formatter()
         .loading_spinner("Retrieving app-passwords...");

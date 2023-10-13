@@ -26,7 +26,7 @@ const ENABLE_LD_RBAC_CHECKS_NAME: &str = "enable_ld_rbac_checks";
 const ENABLE_RBAC_CHECKS_NAME: &str = "enable_rbac_checks";
 
 /// Persist `false` for existing environments' RBAC flags, iff they're not already set.
-pub async fn upgrade(tx: &mut Transaction<'_>) -> Result<(), StashError> {
+pub async fn upgrade(tx: &Transaction<'_>) -> Result<(), StashError> {
     SYSTEM_CONFIGURATION_COLLECTION
         .migrate_to(
             tx,
@@ -117,9 +117,9 @@ mod tests {
 
             // Run the migration.
             stash
-                .with_transaction(|mut tx| {
+                .with_transaction(|tx| {
                     Box::pin(async move {
-                        upgrade(&mut tx).await?;
+                        upgrade(&tx).await?;
                         Ok(())
                     })
                 })
@@ -158,9 +158,9 @@ mod tests {
 
             // Run the migration.
             stash
-                .with_transaction(|mut tx| {
+                .with_transaction(|tx| {
                     Box::pin(async move {
-                        upgrade(&mut tx).await?;
+                        upgrade(&tx).await?;
                         Ok(())
                     })
                 })

@@ -74,7 +74,7 @@ pub enum ProfileConfigSubcommand {
     },
 }
 
-pub async fn run(mut cx: Context, cmd: ProfileCommand) -> Result<(), Error> {
+pub async fn run(cx: Context, cmd: ProfileCommand) -> Result<(), Error> {
     match &cmd.subcommand {
         // Initiating a profile doesn't requires an active profile.
         ProfileSubcommand::Init {
@@ -82,31 +82,29 @@ pub async fn run(mut cx: Context, cmd: ProfileCommand) -> Result<(), Error> {
             endpoint,
         } => {
             mz::command::profile::init(
-                &mut cx,
+                &cx,
                 *no_browser,
                 endpoint.admin_endpoint.clone(),
                 endpoint.cloud_endpoint.clone(),
             )
             .await
         }
-        ProfileSubcommand::List => mz::command::profile::list(&mut cx),
-        ProfileSubcommand::Remove => mz::command::profile::remove(&mut cx).await,
+        ProfileSubcommand::List => mz::command::profile::list(&cx),
+        ProfileSubcommand::Remove => mz::command::profile::remove(&cx).await,
         _ => {
-            let mut cx = cx.activate_profile()?;
+            let cx = cx.activate_profile()?;
 
             match &cmd.subcommand {
                 ProfileSubcommand::Config(cmd) => match cmd {
                     ProfileConfigSubcommand::Get { name } => {
-                        mz::command::profile::config_get(&mut cx, ConfigGetArgs { name })
+                        mz::command::profile::config_get(&cx, ConfigGetArgs { name })
                     }
-                    ProfileConfigSubcommand::List => mz::command::profile::config_list(&mut cx),
+                    ProfileConfigSubcommand::List => mz::command::profile::config_list(&cx),
                     ProfileConfigSubcommand::Set { name, value } => {
-                        mz::command::profile::config_set(&mut cx, ConfigSetArgs { name, value })
-                            .await
+                        mz::command::profile::config_set(&cx, ConfigSetArgs { name, value }).await
                     }
                     ProfileConfigSubcommand::Remove { name } => {
-                        mz::command::profile::config_remove(&mut cx, ConfigRemoveArgs { name })
-                            .await
+                        mz::command::profile::config_remove(&cx, ConfigRemoveArgs { name }).await
                     }
                 },
                 ProfileSubcommand::Init {

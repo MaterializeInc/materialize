@@ -30,9 +30,9 @@ pub struct SqlCommand {
 }
 
 pub async fn run(cx: Context, cmd: SqlCommand) -> Result<(), Error> {
-    let mut cx = cx.activate_profile()?.activate_region()?;
+    let cx = cx.activate_profile()?.activate_region()?;
     mz::command::sql::run(
-        &mut cx,
+        &cx,
         RunArgs {
             cluster: cmd.cluster,
             psql_args: cmd.psql_args,

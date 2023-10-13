@@ -144,7 +144,7 @@ type RefinedScope<'g, G> = Child<'g, G, (<G as ScopeParent>::Timestamp, u64)>;
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
 #[allow(clippy::needless_borrow)]
 pub fn persist_source_core<'g, G, YFn>(
-    scope: &mut RefinedScope<'g, G>,
+    scope: &RefinedScope<'g, G>,
     source_id: GlobalId,
     persist_clients: Arc<PersistClientCache>,
     metadata: CollectionMetadata,

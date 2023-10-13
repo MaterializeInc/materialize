@@ -188,7 +188,7 @@ pub(crate) trait HealthStatus: timely::ExchangeData + Debug + Ord {
 /// The `OutputIndex` values that come across `health_stream` must be a strict subset of thosema,
 /// `configs`'s keys.
 pub(crate) fn health_operator<'g, G, O>(
-    scope: &mut Child<'g, G, mz_repr::Timestamp>,
+    scope: &Child<'g, G, mz_repr::Timestamp>,
     storage_state: &crate::storage_state::StorageState,
     // A set of id's that should be marked as `HealthStatus::starting()` during startup.
     mark_starting: BTreeSet<GlobalId>,

@@ -70,7 +70,7 @@ where
     /// and `V2`.
     pub(crate) async fn migrate_to<K2, V2>(
         &self,
-        tx: &mut Transaction<'_>,
+        tx: &Transaction<'_>,
         f: impl for<'a> FnOnce(&'a BTreeMap<K, V>) -> Vec<MigrationAction<K, K2, V2>>,
     ) -> Result<(), StashError>
     where
@@ -137,7 +137,7 @@ where
     #[allow(unused)]
     pub(crate) async fn migrate_compat<K2, V2>(
         &self,
-        tx: &mut Transaction<'_>,
+        tx: &Transaction<'_>,
         f: impl for<'a> FnOnce(&'a BTreeMap<K2, V2>) -> Vec<MigrationAction<K2, K2, V2>>,
     ) -> Result<(), StashError>
     where
@@ -195,7 +195,7 @@ where
     /// * If the [`TypedCollection`] is not empty.
     pub async fn initialize(
         &self,
-        tx: &mut Transaction<'_>,
+        tx: &Transaction<'_>,
         values: impl IntoIterator<Item = (K, V)>,
     ) -> Result<(), StashError> {
         self.migrate_to(tx, |entries| {
@@ -213,7 +213,7 @@ where
 }
 
 impl TypedCollection<ConfigKey, ConfigValue> {
-    pub(crate) async fn version(&self, tx: &mut Transaction<'_>) -> Result<u64, StashError> {
+    pub(crate) async fn version(&self, tx: &Transaction<'_>) -> Result<u64, StashError> {
         let key = ConfigKey {
             key: USER_VERSION_KEY.to_string(),
         };
@@ -230,7 +230,7 @@ impl TypedCollection<ConfigKey, ConfigValue> {
 
     pub(crate) async fn set_version(
         &self,
-        tx: &mut Transaction<'_>,
+        tx: &Transaction<'_>,
         version: u64,
     ) -> Result<(), StashError> {
         let key = ConfigKey {

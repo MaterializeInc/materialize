@@ -538,6 +538,7 @@ by Materialize Cloud:
 
   * aws:us-east-1
   * aws:eu-west-1
+  * aws:us-west-2
 
 ### Cluster
 

@@ -324,7 +324,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                 for (idx_id, dependencies, idx) in indexes {
                     context.export_index_iterative(
                         compute_state,
-                        &mut tokens,
+                        &tokens,
                         dependencies,
                         idx_id,
                         &idx,
@@ -336,7 +336,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                 for (sink_id, dependencies, sink) in sinks {
                     context.export_sink(
                         compute_state,
-                        &mut tokens,
+                        &tokens,
                         dependencies,
                         sink_id,
                         &sink,
@@ -383,7 +383,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                 for (idx_id, dependencies, idx) in indexes {
                     context.export_index(
                         compute_state,
-                        &mut tokens,
+                        &tokens,
                         dependencies,
                         idx_id,
                         &idx,
@@ -395,7 +395,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                 for (sink_id, dependencies, sink) in sinks {
                     context.export_sink(
                         compute_state,
-                        &mut tokens,
+                        &tokens,
                         dependencies,
                         sink_id,
                         &sink,
@@ -495,7 +495,7 @@ where
     pub(crate) fn export_index(
         &mut self,
         compute_state: &mut ComputeState,
-        tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
+        tokens: &BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
         dependency_ids: BTreeSet<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,
@@ -565,7 +565,7 @@ where
     pub(crate) fn export_index_iterative(
         &mut self,
         compute_state: &mut ComputeState,
-        tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
+        tokens: &BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
         dependency_ids: BTreeSet<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,

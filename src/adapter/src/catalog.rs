@@ -5272,7 +5272,7 @@ mod tests {
                                 );
                             }
 
-                            let imp_return_oid = imp.return_typ.map(|item| resolve_type_oid(item));
+                            let imp_return_oid = imp.return_typ.map(resolve_type_oid);
 
                             assert!(
                                 is_same_type(imp.oid, imp_return_oid, pg_fn.ret_oid),
@@ -5307,10 +5307,8 @@ mod tests {
 
                     assert_eq!(*op, pg_op.name);
 
-                    let imp_return_oid = imp
-                        .return_typ
-                        .map(|item| resolve_type_oid(item))
-                        .expect("must have oid");
+                    let imp_return_oid =
+                        imp.return_typ.map(resolve_type_oid).expect("must have oid");
                     if imp_return_oid != pg_op.oprresult {
                         panic!(
                             "operators with oid {} ({}) don't match return typs: {} in mz, {} in pg",
@@ -5402,7 +5400,7 @@ mod tests {
 
                     let return_oid = details
                         .return_typ
-                        .map(|item| resolve_type_oid(item))
+                        .map(resolve_type_oid)
                         .expect("must exist");
                     let return_styp = mz_pgrepr::Type::from_oid(return_oid)
                         .ok()

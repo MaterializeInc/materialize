@@ -192,7 +192,7 @@ pub fn text_string_at<'a, T: DisplayText<C>, C, F: Fn() -> C>(t: &'a T, f: F) ->
 fn write_first_rows(
     f: &mut fmt::Formatter<'_>,
     first_rows: &Vec<(&Row, &crate::Diff)>,
-    ctx: &mut Indent,
+    ctx: &Indent,
 ) -> fmt::Result {
     for (row, diff) in first_rows {
         if **diff == 1 {

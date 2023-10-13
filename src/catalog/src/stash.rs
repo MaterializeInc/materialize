@@ -49,7 +49,7 @@ use crate::transaction::{
     TransactionBatch,
 };
 use crate::{
-    initialize, BootstrapArgs, DurableCatalogState, Error, OpenableDurableCatalogState,
+    initialize, BootstrapArgs, CatalogError, DurableCatalogState, OpenableDurableCatalogState,
     ReadOnlyDurableCatalogState,
 };
 
@@ -191,7 +191,7 @@ impl OpenableDurableCatalogState<Connection> for OpenableConnection {
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
-    ) -> Result<Connection, Error> {
+    ) -> Result<Connection, CatalogError> {
         self.open_stash_savepoint().await?;
         let stash = self.stash.take().expect("opened above");
         retry_open(stash, now, bootstrap_args, deploy_generation).await
@@ -202,7 +202,7 @@ impl OpenableDurableCatalogState<Connection> for OpenableConnection {
         &mut self,
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
-    ) -> Result<Connection, Error> {
+    ) -> Result<Connection, CatalogError> {
         self.open_stash_read_only().await?;
         let stash = self.stash.take().expect("opened above");
         retry_open(stash, now, bootstrap_args, None).await
@@ -214,13 +214,13 @@ impl OpenableDurableCatalogState<Connection> for OpenableConnection {
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
-    ) -> Result<Connection, Error> {
+    ) -> Result<Connection, CatalogError> {
         self.open_stash().await?;
         let stash = self.stash.take().expect("opened above");
         retry_open(stash, now, bootstrap_args, deploy_generation).await
     }
 
-    async fn is_initialized(&mut self) -> Result<bool, Error> {
+    async fn is_initialized(&mut self) -> Result<bool, CatalogError> {
         let stash = match &mut self.stash {
             None => match self.open_stash_read_only().await {
                 Ok(stash) => stash,
@@ -232,7 +232,7 @@ impl OpenableDurableCatalogState<Connection> for OpenableConnection {
         stash.is_initialized().await.err_into()
     }
 
-    async fn get_deployment_generation(&mut self) -> Result<Option<u64>, Error> {
+    async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError> {
         let stash = match &mut self.stash {
             None => match self.open_stash_read_only().await {
                 Ok(stash) => stash,
@@ -266,7 +266,7 @@ async fn retry_open(
     now: NowFn,
     bootstrap_args: &BootstrapArgs,
     deploy_generation: Option<u64>,
-) -> Result<Connection, Error> {
+) -> Result<Connection, CatalogError> {
     let retry = Retry::default()
         .clamp_backoff(Duration::from_secs(1))
         .max_duration(Duration::from_secs(30))
@@ -280,7 +280,7 @@ async fn retry_open(
             }
             Err((given_stash, err)) => {
                 stash = given_stash;
-                let should_retry = matches!(&err, Error::Stash(se) if se.should_retry());
+                let should_retry = matches!(&err, CatalogError::Durable(e) if e.should_retry());
                 if !should_retry || retry.next().await.is_none() {
                     return Err(err);
                 }
@@ -295,7 +295,7 @@ async fn open_inner(
     now: NowFn,
     bootstrap_args: &BootstrapArgs,
     deploy_generation: Option<u64>,
-) -> Result<Connection, (Stash, Error)> {
+) -> Result<Connection, (Stash, CatalogError)> {
     // Initialize the Stash if it hasn't been already
     let is_init = match stash.is_initialized().await {
         Ok(is_init) => is_init,
@@ -392,7 +392,7 @@ pub struct Connection {
 }
 
 impl Connection {
-    async fn get_setting(&mut self, key: &str) -> Result<Option<String>, Error> {
+    async fn get_setting(&mut self, key: &str) -> Result<Option<String>, CatalogError> {
         let v = SETTING_COLLECTION
             .peek_key_one(
                 &mut self.stash,
@@ -404,7 +404,7 @@ impl Connection {
         Ok(v.map(|v| v.value))
     }
 
-    async fn set_setting(&mut self, key: &str, value: &str) -> Result<(), Error> {
+    async fn set_setting(&mut self, key: &str, value: &str) -> Result<(), CatalogError> {
         let key = proto::SettingKey {
             name: key.to_string(),
         };
@@ -420,16 +420,18 @@ impl Connection {
 
 #[async_trait]
 impl ReadOnlyDurableCatalogState for Connection {
-    fn epoch(&mut self) -> Option<NonZeroI64> {
-        self.stash.epoch()
+    fn epoch(&mut self) -> NonZeroI64 {
+        self.stash
+            .epoch()
+            .expect("a opened stash should always have an epoch number")
     }
 
-    async fn get_catalog_content_version(&mut self) -> Result<Option<String>, Error> {
+    async fn get_catalog_content_version(&mut self) -> Result<Option<String>, CatalogError> {
         self.get_setting("catalog_content_version").await
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    async fn get_clusters(&mut self) -> Result<Vec<Cluster>, Error> {
+    async fn get_clusters(&mut self) -> Result<Vec<Cluster>, CatalogError> {
         let entries = CLUSTER_COLLECTION.peek_one(&mut self.stash).await?;
         let clusters = entries
             .into_iter()
@@ -441,7 +443,7 @@ impl ReadOnlyDurableCatalogState for Connection {
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    async fn get_cluster_replicas(&mut self) -> Result<Vec<ClusterReplica>, Error> {
+    async fn get_cluster_replicas(&mut self) -> Result<Vec<ClusterReplica>, CatalogError> {
         let entries = CLUSTER_REPLICA_COLLECTION.peek_one(&mut self.stash).await?;
         let replicas = entries
             .into_iter()
@@ -453,7 +455,7 @@ impl ReadOnlyDurableCatalogState for Connection {
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    async fn get_databases(&mut self) -> Result<Vec<Database>, Error> {
+    async fn get_databases(&mut self) -> Result<Vec<Database>, CatalogError> {
         let entries = DATABASES_COLLECTION.peek_one(&mut self.stash).await?;
         let databases = entries
             .into_iter()
@@ -465,7 +467,7 @@ impl ReadOnlyDurableCatalogState for Connection {
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    async fn get_schemas(&mut self) -> Result<Vec<Schema>, Error> {
+    async fn get_schemas(&mut self) -> Result<Vec<Schema>, CatalogError> {
         let entries = SCHEMAS_COLLECTION.peek_one(&mut self.stash).await?;
         let schemas = entries
             .into_iter()
@@ -477,7 +479,7 @@ impl ReadOnlyDurableCatalogState for Connection {
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    async fn get_system_items(&mut self) -> Result<Vec<SystemObjectMapping>, Error> {
+    async fn get_system_items(&mut self) -> Result<Vec<SystemObjectMapping>, CatalogError> {
         let entries = SYSTEM_GID_MAPPING_COLLECTION
             .peek_one(&mut self.stash)
             .await?;
@@ -493,7 +495,7 @@ impl ReadOnlyDurableCatalogState for Connection {
     async fn get_introspection_source_indexes(
         &mut self,
         cluster_id: ClusterId,
-    ) -> Result<BTreeMap<String, GlobalId>, Error> {
+    ) -> Result<BTreeMap<String, GlobalId>, CatalogError> {
         let entries = CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION
             .peek_one(&mut self.stash)
             .await?;
@@ -518,7 +520,7 @@ impl ReadOnlyDurableCatalogState for Connection {
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    async fn get_roles(&mut self) -> Result<Vec<Role>, Error> {
+    async fn get_roles(&mut self) -> Result<Vec<Role>, CatalogError> {
         let entries = ROLES_COLLECTION.peek_one(&mut self.stash).await?;
         let roles = entries
             .into_iter()
@@ -530,7 +532,7 @@ impl ReadOnlyDurableCatalogState for Connection {
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    async fn get_default_privileges(&mut self) -> Result<Vec<DefaultPrivilege>, Error> {
+    async fn get_default_privileges(&mut self) -> Result<Vec<DefaultPrivilege>, CatalogError> {
         Ok(DEFAULT_PRIVILEGES_COLLECTION
             .peek_one(&mut self.stash)
             .await?
@@ -541,7 +543,7 @@ impl ReadOnlyDurableCatalogState for Connection {
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    async fn get_system_privileges(&mut self) -> Result<Vec<MzAclItem>, Error> {
+    async fn get_system_privileges(&mut self) -> Result<Vec<MzAclItem>, CatalogError> {
         Ok(SYSTEM_PRIVILEGES_COLLECTION
             .peek_one(&mut self.stash)
             .await?
@@ -552,7 +554,9 @@ impl ReadOnlyDurableCatalogState for Connection {
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    async fn get_system_configurations(&mut self) -> Result<Vec<SystemConfiguration>, Error> {
+    async fn get_system_configurations(
+        &mut self,
+    ) -> Result<Vec<SystemConfiguration>, CatalogError> {
         Ok(SYSTEM_CONFIGURATION_COLLECTION
             .peek_one(&mut self.stash)
             .await?
@@ -563,7 +567,7 @@ impl ReadOnlyDurableCatalogState for Connection {
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    async fn get_comments(&mut self) -> Result<Vec<Comment>, Error> {
+    async fn get_comments(&mut self) -> Result<Vec<Comment>, CatalogError> {
         let comments = COMMENTS_COLLECTION
             .peek_one(&mut self.stash)
             .await?
@@ -576,7 +580,7 @@ impl ReadOnlyDurableCatalogState for Connection {
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    async fn get_timestamps(&mut self) -> Result<Vec<TimelineTimestamp>, Error> {
+    async fn get_timestamps(&mut self) -> Result<Vec<TimelineTimestamp>, CatalogError> {
         let entries = TIMESTAMP_COLLECTION.peek_one(&mut self.stash).await?;
         let timestamps = entries
             .into_iter()
@@ -588,7 +592,10 @@ impl ReadOnlyDurableCatalogState for Connection {
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    async fn get_timestamp(&mut self, timeline: &Timeline) -> Result<Option<Timestamp>, Error> {
+    async fn get_timestamp(
+        &mut self,
+        timeline: &Timeline,
+    ) -> Result<Option<Timestamp>, CatalogError> {
         let key = proto::TimestampKey {
             id: timeline.to_string(),
         };
@@ -602,7 +609,7 @@ impl ReadOnlyDurableCatalogState for Connection {
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    async fn get_audit_logs(&mut self) -> Result<Vec<VersionedEvent>, Error> {
+    async fn get_audit_logs(&mut self) -> Result<Vec<VersionedEvent>, CatalogError> {
         let entries = AUDIT_LOG_COLLECTION.peek_one(&mut self.stash).await?;
         let logs: Vec<_> = entries
             .into_keys()
@@ -614,7 +621,7 @@ impl ReadOnlyDurableCatalogState for Connection {
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn get_next_id(&mut self, id_type: &str) -> Result<u64, Error> {
+    async fn get_next_id(&mut self, id_type: &str) -> Result<u64, CatalogError> {
         ID_ALLOCATOR_COLLECTION
             .peek_key_one(
                 &mut self.stash,
@@ -629,7 +636,7 @@ impl ReadOnlyDurableCatalogState for Connection {
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn snapshot(&mut self) -> Result<Snapshot, Error> {
+    async fn snapshot(&mut self) -> Result<Snapshot, CatalogError> {
         let (
             databases,
             schemas,
@@ -728,13 +735,16 @@ impl DurableCatalogState for Connection {
     }
 
     #[tracing::instrument(name = "storage::transaction", level = "debug", skip_all)]
-    async fn transaction(&mut self) -> Result<Transaction, Error> {
+    async fn transaction(&mut self) -> Result<Transaction, CatalogError> {
         let snapshot = self.snapshot().await?;
         Transaction::new(self, snapshot)
     }
 
     #[tracing::instrument(name = "storage::transaction", level = "debug", skip_all)]
-    async fn commit_transaction(&mut self, txn_batch: TransactionBatch) -> Result<(), Error> {
+    async fn commit_transaction(
+        &mut self,
+        txn_batch: TransactionBatch,
+    ) -> Result<(), CatalogError> {
         async fn add_batch<'tx, K, V>(
             tx: &'tx mz_stash::Transaction<'tx>,
             batches: &mut Vec<AppendBatch>,
@@ -934,7 +944,7 @@ impl DurableCatalogState for Connection {
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn confirm_leadership(&mut self) -> Result<(), Error> {
+    async fn confirm_leadership(&mut self) -> Result<(), CatalogError> {
         Ok(self.stash.confirm_leadership().await?)
     }
 
@@ -943,7 +953,7 @@ impl DurableCatalogState for Connection {
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn set_catalog_content_version(&mut self, new_version: &str) -> Result<(), Error> {
+    async fn set_catalog_content_version(&mut self, new_version: &str) -> Result<(), CatalogError> {
         self.set_setting("catalog_content_version", new_version)
             .await
     }
@@ -953,7 +963,7 @@ impl DurableCatalogState for Connection {
         &mut self,
         retention_period: Option<Duration>,
         boot_ts: Timestamp,
-    ) -> Result<Vec<VersionedStorageUsage>, Error> {
+    ) -> Result<Vec<VersionedStorageUsage>, CatalogError> {
         // If no usage retention period is set, set the cutoff to MIN so nothing
         // is removed.
         let cutoff_ts = match retention_period {
@@ -990,7 +1000,10 @@ impl DurableCatalogState for Connection {
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn set_system_items(&mut self, mappings: Vec<SystemObjectMapping>) -> Result<(), Error> {
+    async fn set_system_items(
+        &mut self,
+        mappings: Vec<SystemObjectMapping>,
+    ) -> Result<(), CatalogError> {
         if mappings.is_empty() {
             return Ok(());
         }
@@ -1009,7 +1022,7 @@ impl DurableCatalogState for Connection {
     async fn set_introspection_source_indexes(
         &mut self,
         mappings: Vec<IntrospectionSourceIndex>,
-    ) -> Result<(), Error> {
+    ) -> Result<(), CatalogError> {
         if mappings.is_empty() {
             return Ok(());
         }
@@ -1032,7 +1045,7 @@ impl DurableCatalogState for Connection {
         name: String,
         config: ReplicaConfig,
         owner_id: RoleId,
-    ) -> Result<(), Error> {
+    ) -> Result<(), CatalogError> {
         let key = ClusterReplicaKey { id: replica_id }.into_proto();
         let val = ClusterReplicaValue {
             cluster_id,
@@ -1042,7 +1055,7 @@ impl DurableCatalogState for Connection {
         }
         .into_proto();
         CLUSTER_REPLICA_COLLECTION
-            .upsert_key(&mut self.stash, key, |_| Ok::<_, Error>(val))
+            .upsert_key(&mut self.stash, key, |_| Ok::<_, CatalogError>(val))
             .await??;
         Ok(())
     }
@@ -1052,13 +1065,13 @@ impl DurableCatalogState for Connection {
         &mut self,
         timeline: &Timeline,
         timestamp: Timestamp,
-    ) -> Result<(), Error> {
+    ) -> Result<(), CatalogError> {
         let key = proto::TimestampKey {
             id: timeline.to_string(),
         };
         let (prev, next) = TIMESTAMP_COLLECTION
             .upsert_key(&mut self.stash, key, move |_| {
-                Ok::<_, Error>(TimestampValue { ts: timestamp }.into_proto())
+                Ok::<_, CatalogError>(TimestampValue { ts: timestamp }.into_proto())
             })
             .await??;
         if let Some(prev) = prev {
@@ -1068,7 +1081,7 @@ impl DurableCatalogState for Connection {
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn set_deploy_generation(&mut self, deploy_generation: u64) -> Result<(), Error> {
+    async fn set_deploy_generation(&mut self, deploy_generation: u64) -> Result<(), CatalogError> {
         CONFIG_COLLECTION
             .upsert_key(
                 &mut self.stash,
@@ -1076,7 +1089,7 @@ impl DurableCatalogState for Connection {
                     key: DEPLOY_GENERATION.into(),
                 },
                 move |_| {
-                    Ok::<_, Error>(proto::ConfigValue {
+                    Ok::<_, CatalogError>(proto::ConfigValue {
                         value: deploy_generation,
                     })
                 },
@@ -1086,7 +1099,7 @@ impl DurableCatalogState for Connection {
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn allocate_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, Error> {
+    async fn allocate_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, CatalogError> {
         if amount == 0 {
             return Ok(Vec::new());
         }
@@ -1099,7 +1112,7 @@ impl DurableCatalogState for Connection {
                 let id = prev.expect("must exist").next_id;
                 match id.checked_add(amount) {
                     Some(next_gid) => Ok(IdAllocValue { next_id: next_gid }.into_proto()),
-                    None => Err(Error::from(SqlCatalogError::IdExhaustion)),
+                    None => Err(CatalogError::from(SqlCatalogError::IdExhaustion)),
                 }
             })
             .await??;
@@ -1160,7 +1173,7 @@ impl OpenableDurableCatalogState<Connection> for DebugOpenableConnection<'_> {
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
-    ) -> Result<Connection, Error> {
+    ) -> Result<Connection, CatalogError> {
         self.openable_connection
             .open_savepoint(now, bootstrap_args, deploy_generation)
             .await
@@ -1170,7 +1183,7 @@ impl OpenableDurableCatalogState<Connection> for DebugOpenableConnection<'_> {
         &mut self,
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
-    ) -> Result<Connection, Error> {
+    ) -> Result<Connection, CatalogError> {
         self.openable_connection
             .open_read_only(now, bootstrap_args)
             .await
@@ -1181,17 +1194,17 @@ impl OpenableDurableCatalogState<Connection> for DebugOpenableConnection<'_> {
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
-    ) -> Result<Connection, Error> {
+    ) -> Result<Connection, CatalogError> {
         self.openable_connection
             .open(now, bootstrap_args, deploy_generation)
             .await
     }
 
-    async fn is_initialized(&mut self) -> Result<bool, Error> {
+    async fn is_initialized(&mut self) -> Result<bool, CatalogError> {
         self.openable_connection.is_initialized().await
     }
 
-    async fn get_deployment_generation(&mut self) -> Result<Option<u64>, Error> {
+    async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError> {
         self.openable_connection.get_deployment_generation().await
     }
 }

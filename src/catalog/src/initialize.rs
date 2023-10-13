@@ -29,11 +29,11 @@ use mz_storage_types::sources::Timeline;
 use crate::builtin::BUILTIN_ROLES;
 use crate::objects::{DefaultPrivilegesKey, DefaultPrivilegesValue};
 use crate::{
-    BootstrapArgs, ClusterConfig, ClusterVariant, ClusterVariantManaged, Error, ReplicaConfig,
-    ReplicaLocation, Role, Schema, Transaction, AUDIT_LOG_ID_ALLOC_KEY, DATABASE_ID_ALLOC_KEY,
-    SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY,
-    SYSTEM_REPLICA_ID_ALLOC_KEY, USER_CLUSTER_ID_ALLOC_KEY, USER_REPLICA_ID_ALLOC_KEY,
-    USER_ROLE_ID_ALLOC_KEY,
+    BootstrapArgs, CatalogError, ClusterConfig, ClusterVariant, ClusterVariantManaged,
+    ReplicaConfig, ReplicaLocation, Role, Schema, Transaction, AUDIT_LOG_ID_ALLOC_KEY,
+    DATABASE_ID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY,
+    SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY, USER_CLUSTER_ID_ALLOC_KEY,
+    USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
 
 /// The key used within the "config" collection where we store the deploy generation.
@@ -66,7 +66,7 @@ pub async fn initialize(
     options: &BootstrapArgs,
     now: EpochMillis,
     deploy_generation: Option<u64>,
-) -> Result<(), Error> {
+) -> Result<(), CatalogError> {
     // Collect audit events so we can commit them once at the very end.
     let mut audit_events = vec![];
 
