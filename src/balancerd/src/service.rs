@@ -29,7 +29,7 @@ pub struct Args {
     #[clap(flatten)]
     tls: TlsCliArgs,
 
-    /// Static resolver address to use for local testing.
+    /// Static pgwire resolver address to use for local testing.
     #[clap(long, value_name = "HOST:PORT")]
     static_resolver_addr: Option<SocketAddr>,
     /// Frontegg resolver address template. `{}` is replaced with the user's frontegg tenant id to
@@ -39,6 +39,11 @@ pub struct Args {
         requires_all = &["frontegg-jwk", "frontegg-api-token-url", "frontegg-admin-role"],
     )]
     frontegg_resolver_template: Option<String>,
+    /// HTTPS resolver address template. `{}` is replaced with the first subdomain of the HTTPS SNI
+    /// host address to get a DNS address. The first IP that address resolves to is the proxy
+    /// destinaiton.
+    #[clap(long, value_name = "HOST.{}.NAME:PORT")]
+    https_resolver_template: String,
 
     /// JWK used to validate JWTs during Frontegg authentication as a PEM public
     /// key. Can optionally be base64 encoded with the URL-safe alphabet.
@@ -92,6 +97,7 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
         args.pgwire_listen_addr,
         args.https_listen_addr,
         resolver,
+        args.https_resolver_template,
         args.tls.into_config()?,
     );
     let metrics = Metrics::new(&config, &metrics_registry);
