@@ -1413,6 +1413,45 @@ impl Coordinator {
                             .entry(idx.cluster_id)
                             .or_insert_with(BTreeSet::new)
                             .insert(entry.id());
+                    } else if enable_unified_optimizer_api {
+                        let (mut df, df_metainfo) = self
+                            .dataflow_builder(idx.cluster_id)
+                            .build_index_dataflow(entry.id())?;
+
+                        // Note: ideally, the optimized_plan should be computed and
+                        // set when the CatalogItem is re-constructed (in
+                        // parse_item).
+                        //
+                        // However, it's not clear how exactly to change
+                        // `load_catalog_items` to accommodate for the
+                        // `build_index_dataflow` call above.
+                        self.catalog_mut()
+                            .set_optimized_plan(entry.id(), df.clone());
+                        self.catalog_mut()
+                            .set_dataflow_metainfo(entry.id(), df_metainfo);
+
+                        let as_of = self.bootstrap_index_as_of(
+                            &df,
+                            idx.cluster_id,
+                            idx.is_retained_metrics_object,
+                        );
+                        df.set_as_of(as_of);
+
+                        // What follows is morally equivalent to `self.ship_dataflow(df, idx.cluster_id)`,
+                        // but we cannot call that as it will also downgrade the read hold on the index.
+                        policy_entry
+                            .compute_ids
+                            .entry(idx.cluster_id)
+                            .or_insert_with(Default::default)
+                            .extend(df.export_ids());
+
+                        let df = self.must_finalize_dataflow(df, idx.cluster_id);
+                        self.catalog_mut().set_physical_plan(entry.id(), df.clone());
+
+                        self.controller
+                            .active_compute()
+                            .create_dataflow(idx.cluster_id, df)
+                            .unwrap_or_terminate("cannot fail to create dataflows");
                     } else {
                         let (mut df, df_metainfo) = self
                             .dataflow_builder(idx.cluster_id)
