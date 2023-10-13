@@ -1849,10 +1849,6 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         self.name()
     }
 
-    fn has_columns(&self) -> bool {
-        self.has_columns()
-    }
-
     fn id(&self) -> GlobalId {
         self.id()
     }

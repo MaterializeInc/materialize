@@ -619,9 +619,6 @@ pub trait CatalogItem {
     /// an index), it returns an error.
     fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, CatalogError>;
 
-    /// Reports whether this catalog item has columns.
-    fn has_columns(&self) -> bool;
-
     /// Returns the resolved function.
     ///
     /// If the catalog item is not of a type that produces functions (i.e.,
