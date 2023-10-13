@@ -7,65 +7,68 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Optimizer implementation for `CREATE MATERIALIZED VIEW` statements.
+//! Optimizer implementation for `CREATE INDEX` statements.
 
 use std::sync::Arc;
 
-use differential_dataflow::lattice::Lattice;
 use maplit::btreemap;
+use mz_compute_types::dataflows::IndexDesc;
 use mz_compute_types::plan::Plan;
 use mz_compute_types::ComputeInstanceId;
-use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
-use mz_ore::soft_assert_or_log;
-use mz_repr::explain::trace_plan;
-use mz_repr::{ColumnName, GlobalId, RelationDesc, Timestamp};
-use mz_sql::plan::HirRelationExpr;
+use mz_repr::{GlobalId, Timestamp};
+use mz_sql::names::QualifiedItemName;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
+use mz_transform::optimizer_notices::OptimizerNotice;
 use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
-use mz_transform::Optimizer as TransformOptimizer;
 use timely::progress::Antichain;
-use tracing::{span, Level};
 
 use crate::catalog::Catalog;
-use crate::coord::dataflows::{ComputeInstanceSnapshot, DataflowBuilder};
+use crate::coord::dataflows::{
+    prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot, DataflowBuilder, ExprPrepStyle,
+};
 use crate::optimize::{
     LirDataflowDescription, MirDataflowDescription, Optimize, OptimizerConfig, OptimizerError,
 };
 use crate::CollectionIdBundle;
 
-pub struct OptimizeMaterializedView {
+pub struct OptimizeIndex {
     /// A typechecking context to use throughout the optimizer pipeline.
-    typecheck_ctx: TypecheckContext,
+    _typecheck_ctx: TypecheckContext,
     /// A snapshot of the catalog state.
     catalog: Arc<Catalog>,
     /// A snapshot of the compute instance that will run the dataflows.
     compute_instance: ComputeInstanceSnapshot,
-    /// A durable GlobalId to be used with the exported materialized view sink.
-    exported_sink_id: GlobalId,
-    /// A transient GlobalId to be used when constructing the dataflow.
-    internal_view_id: GlobalId,
-    /// The resulting column names.
-    column_names: Vec<ColumnName>,
-    /// Output columns that are asserted to be not null in the `CREATE VIEW`
-    /// statement.
-    non_null_assertions: Vec<usize>,
-    /// A human-readable name exposed internally (useful for debugging).
-    debug_name: String,
+    /// A durable GlobalId to be used with the exported index arrangement.
+    exported_index_id: GlobalId,
     // Optimizer config.
     config: OptimizerConfig,
 }
 
-/// The (sealed intermediate) result after HIR ⇒ MIR lowering and decorrelation
-/// and MIR optimization.
-#[derive(Clone)]
-pub struct LocalMirPlan {
-    expr: MirRelationExpr,
+/// A wrapper of index parts needed to start the optimization process.
+pub struct Index {
+    name: QualifiedItemName,
+    on: GlobalId,
+    keys: Vec<mz_expr::MirScalarExpr>,
+}
+
+impl Index {
+    pub fn new(
+        name: &QualifiedItemName,
+        on: &GlobalId,
+        keys: &Vec<mz_expr::MirScalarExpr>,
+    ) -> Self {
+        Self {
+            name: name.clone(),
+            on: on.clone(),
+            keys: keys.clone(),
+        }
+    }
 }
 
 /// The (sealed intermediate) result after:
 ///
-/// 1. embedding a [`LocalMirPlan`] into a [`MirDataflowDescription`],
+/// 1. embedding an [`Index`] into a [`MirDataflowDescription`],
 /// 2. transitively inlining referenced views, and
 /// 3. jointly optimizing the `MIR` plans in the [`MirDataflowDescription`].
 #[derive(Clone)]
@@ -98,100 +101,66 @@ pub struct GlobalLirPlan {
     df_meta: DataflowMetainfo,
 }
 
-impl OptimizeMaterializedView {
+impl OptimizeIndex {
     pub fn new(
         catalog: Arc<Catalog>,
         compute_instance: ComputeInstanceSnapshot,
-        exported_sink_id: GlobalId,
-        internal_view_id: GlobalId,
-        column_names: Vec<ColumnName>,
-        non_null_assertions: Vec<usize>,
-        debug_name: String,
+        exported_index_id: GlobalId,
         config: OptimizerConfig,
     ) -> Self {
         Self {
-            typecheck_ctx: empty_context(),
+            _typecheck_ctx: empty_context(),
             catalog,
             compute_instance,
-            exported_sink_id,
-            internal_view_id,
-            column_names,
-            non_null_assertions,
-            debug_name,
+            exported_index_id,
             config,
         }
     }
 }
 
-impl<'ctx> Optimize<'ctx, HirRelationExpr> for OptimizeMaterializedView {
-    type To = LocalMirPlan;
-
-    fn optimize<'s: 'ctx>(&'s mut self, expr: HirRelationExpr) -> Result<Self::To, OptimizerError> {
-        // HIR ⇒ MIR lowering and decorrelation
-        let config = mz_sql::plan::OptimizerConfig {};
-        let expr = expr.optimize_and_lower(&config)?;
-
-        // MIR ⇒ MIR optimization (local)
-        let expr = span!(target: "optimizer", Level::TRACE, "local").in_scope(|| {
-            let optimizer = TransformOptimizer::logical_optimizer(&self.typecheck_ctx);
-            let expr = optimizer.optimize(expr)?.into_inner();
-
-            // Trace the result of this phase.
-            trace_plan(&expr);
-
-            Ok::<_, OptimizerError>(expr)
-        })?;
-
-        // Return the (sealed) plan at the end of this optimization step.
-        Ok(LocalMirPlan { expr })
-    }
-}
-
-impl LocalMirPlan {
-    pub fn expr(&self) -> OptimizedMirRelationExpr {
-        OptimizedMirRelationExpr(self.expr.clone())
-    }
-}
-
-/// This is needed only because the pipeline in the bootstrap code starts from an
-/// [`OptimizedMirRelationExpr`] attached to a [`crate::catalog::CatalogItem`].
-impl<'ctx> Optimize<'ctx, OptimizedMirRelationExpr> for OptimizeMaterializedView {
+impl<'ctx> Optimize<'ctx, Index> for OptimizeIndex {
     type To = GlobalMirPlan<Unresolved>;
 
-    fn optimize<'s: 'ctx>(
-        &'s mut self,
-        expr: OptimizedMirRelationExpr,
-    ) -> Result<Self::To, OptimizerError> {
-        let expr = expr.into_inner();
-        self.optimize(LocalMirPlan { expr })
-    }
-}
+    fn optimize<'a: 'ctx>(&'a mut self, index: Index) -> Result<Self::To, OptimizerError> {
+        let state = self.catalog.state();
+        let on_entry = state.get_entry(&index.on);
+        let full_name = state.resolve_full_name(&index.name, on_entry.conn_id());
+        let on_desc = on_entry
+            .desc(&full_name)
+            .expect("can only create indexes on items with a valid description");
 
-impl<'ctx> Optimize<'ctx, LocalMirPlan> for OptimizeMaterializedView {
-    type To = GlobalMirPlan<Unresolved>;
+        let mut df_builder = DataflowBuilder::new(state, self.compute_instance.clone());
+        let mut df_desc = MirDataflowDescription::new(full_name.to_string());
 
-    fn optimize<'s: 'ctx>(&'s mut self, plan: LocalMirPlan) -> Result<Self::To, OptimizerError> {
-        let LocalMirPlan { expr } = plan;
+        df_builder.import_into_dataflow(&index.on, &mut df_desc)?;
 
-        let mut rel_typ = expr.typ();
-        for &i in self.non_null_assertions.iter() {
-            rel_typ.column_types[i].nullable = false;
+        for desc in df_desc.objects_to_build.iter_mut() {
+            prep_relation_expr(state, &mut desc.plan, ExprPrepStyle::Index)?;
         }
-        let rel_desc = RelationDesc::new(rel_typ, self.column_names.clone());
 
-        let mut df_builder =
-            DataflowBuilder::new(self.catalog.state(), self.compute_instance.clone());
+        let mut index_desc = IndexDesc {
+            on_id: index.on,
+            key: index.keys.clone(),
+        };
 
-        let (df_desc, df_meta) = df_builder.build_materialized_view(
-            self.exported_sink_id,
-            self.internal_view_id,
-            self.debug_name.clone(),
-            &OptimizedMirRelationExpr(expr),
-            &rel_desc,
-            &self.non_null_assertions,
+        for key in index_desc.key.iter_mut() {
+            prep_scalar_expr(state, key, ExprPrepStyle::Index)?;
+        }
+
+        df_desc.export_index(self.exported_index_id, index_desc, on_desc.typ().clone());
+
+        // Optimize the dataflow across views, and any other ways that appeal.
+        let mut df_meta = mz_transform::optimize_dataflow(
+            &mut df_desc,
+            &df_builder,
+            &mz_transform::EmptyStatisticsOracle,
         )?;
 
-        // Return the (sealed) plan at the end of this optimization step.
+        if index.keys.is_empty() {
+            df_meta.push_optimizer_notice_dedup(OptimizerNotice::IndexKeyEmpty);
+        }
+
+        // Return.
         Ok(GlobalMirPlan {
             df_desc,
             df_meta,
@@ -219,19 +188,6 @@ impl GlobalMirPlan<Unresolved> {
         // Set the `as_of` timestamp for the dataflow.
         self.df_desc.set_as_of(as_of);
 
-        soft_assert_or_log!(
-            self.df_desc.index_exports.is_empty(),
-            "unexpectedly setting until for a DataflowDescription with an index",
-        );
-
-        // The only outputs of the dataflow are sinks, so we might be able to
-        // turn off the computation early, if they all have non-trivial
-        // `up_to`s.
-        self.df_desc.until = Antichain::from_elem(Timestamp::MIN);
-        for (_, sink) in &self.df_desc.sink_exports {
-            self.df_desc.until.join_assign(&sink.up_to);
-        }
-
         GlobalMirPlan {
             df_desc: self.df_desc,
             df_meta: self.df_meta,
@@ -256,7 +212,7 @@ impl GlobalMirPlan<Unresolved> {
     }
 }
 
-impl<'ctx> Optimize<'ctx, GlobalMirPlan<Resolved>> for OptimizeMaterializedView {
+impl<'ctx> Optimize<'ctx, GlobalMirPlan<Resolved>> for OptimizeIndex {
     type To = GlobalLirPlan;
 
     fn optimize<'s: 'ctx>(
@@ -301,11 +257,5 @@ impl GlobalLirPlan {
 
     pub fn df_meta(&self) -> &DataflowMetainfo {
         &self.df_meta
-    }
-
-    pub fn desc(&self) -> RelationDesc {
-        let sink_exports = &self.df_desc.sink_exports;
-        let sink = sink_exports.values().next().expect("valid sink");
-        sink.from_desc.clone()
     }
 }
