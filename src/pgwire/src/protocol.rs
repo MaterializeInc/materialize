@@ -324,7 +324,22 @@ where
     };
 
     select! {
-        r = machine.run() => r,
+        r = machine.run() => {
+            // Errors produced internally (like MAX_REQUEST_SIZE being exceeded) should send an
+            // error to the client informing them why the connection was closed. We still want to
+            // return the original error up the stack, though, so we skip error checking during conn
+            // operations.
+            if let Err(err) = &r {
+                let _ = conn
+                    .send(ErrorResponse::fatal(
+                        SqlState::CONNECTION_FAILURE,
+                        err.to_string(),
+                    ))
+                    .await;
+                let _ = conn.flush().await;
+            }
+            r
+        },
         _ = is_expired => {
             conn
                 .send(ErrorResponse::fatal(SqlState::INVALID_AUTHORIZATION_SPECIFICATION, "authentication expired"))
