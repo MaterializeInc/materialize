@@ -529,6 +529,25 @@ where
                 }
                 return x;
             }
+            Err(err)
+                if err
+                    .to_string()
+                    .contains("\"timestamp_oracle\" does not exist") =>
+            {
+                // TODO(aljoscha): Re-consider this before enabling the oracle
+                // in production.
+                // It's a policy question whether this actually _is_ an
+                // unrecoverable error: an operator could go in an re-create the
+                // `timestamp_oracle` table once the problem is noticed.
+                // However, our tests currently assume that materialize will
+                // fail unrecoverably in cases where we do a rug-pull/remove
+                // expected tables from CRDB.
+                panic!(
+                    "external operation {} failed unrecoverably, someone removed our database/schema/table: {}",
+                    metrics.name,
+                    err.display_with_causes()
+                );
+            }
             Err(err) => {
                 if retry.attempt() >= INFO_MIN_ATTEMPTS {
                     info!(
