@@ -700,9 +700,7 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, AdapterError> {
         // Insert can be queued, so we need to re-verify the id exists.
         let desc = match catalog.try_get_entry(&id) {
-            Some(table) => {
-                table.desc(&catalog.resolve_full_name(table.name(), Some(session.conn_id())))?
-            }
+            Some(table) => table.desc()?,
             None => {
                 return Err(AdapterError::Catalog(catalog::Error {
                     kind: ErrorKind::Sql(CatalogError::UnknownItem(id.to_string())),

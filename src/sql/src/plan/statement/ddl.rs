@@ -2230,7 +2230,7 @@ pub fn plan_create_sink(
     }
     let from_name = &from;
     let from = scx.get_item_by_resolved_name(&from)?;
-    let desc = from.desc(&scx.catalog.resolve_full_name(from.name()))?;
+    let desc = from.desc()?;
     let key_indices = match &connection {
         CreateSinkConnection::Kafka { key, .. } => {
             if let Some(key) = key.clone() {
@@ -2416,7 +2416,7 @@ fn update_avro_format_with_comments(
                     | CatalogItemType::Table
                     | CatalogItemType::View
                     | CatalogItemType::MaterializedView => {
-                        let desc = item.desc(&full_name)?;
+                        let desc = item.desc()?;
                         for (pos, column_name) in desc.iter_names().enumerate() {
                             let comment = comments_map.get(&Some(pos + 1));
                             if let Some(comment_str) = comment {
@@ -2798,13 +2798,13 @@ pub fn plan_create_index(
         )
     }
 
-    let on_desc = on.desc(&scx.catalog.resolve_full_name(on.name()))?;
+    let on_desc = on.desc()?;
 
     let filled_key_parts = match key_parts {
         Some(kp) => kp.to_vec(),
         None => {
             // `key_parts` is None if we're creating a "default" index.
-            on.desc(&scx.catalog.resolve_full_name(on.name()))?
+            on.desc()?
                 .typ()
                 .default_key()
                 .iter()

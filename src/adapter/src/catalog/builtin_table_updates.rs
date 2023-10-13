@@ -422,7 +422,7 @@ impl CatalogState {
             }
         }
 
-        if let Ok(desc) = entry.desc(&self.resolve_full_name(entry.name(), entry.conn_id())) {
+        if let Ok(desc) = entry.desc() {
             let defaults = match entry.item() {
                 CatalogItem::Table(table) => Some(&table.defaults),
                 _ => None,
@@ -850,7 +850,7 @@ impl CatalogState {
             let nullable = key
                 .typ(
                     &on_entry
-                        .desc(&self.resolve_full_name(on_entry.name(), on_entry.conn_id()))
+                        .desc()
                         .expect("can only create indexes on items with a valid description")
                         .typ()
                         .column_types,

@@ -1744,7 +1744,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             ResolvedItemName::Item { id, full_name, .. } => {
                 let item = self.catalog.get_item(id);
 
-                let desc = match item.desc(full_name) {
+                let desc = match item.desc() {
                     Ok(desc) => desc,
                     Err(e) => {
                         if self.status.is_ok() {

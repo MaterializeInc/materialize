@@ -4021,8 +4021,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
             .try_map(|entry| {
                 Ok::<_, SqlCatalogError>(
                     entry
-                        .item()
-                        .desc(&self.resolve_full_name(entry.name()))?
+                        .desc()?
                         .iter_names()
                         .cloned()
                         .map(|col_name| col_name.to_string())
@@ -5643,11 +5642,7 @@ mod tests {
                     })
                     .expect("unable to resolve view");
                 let full_name = conn_catalog.resolve_full_name(item.name());
-                for col_type in item
-                    .desc(&full_name)
-                    .expect("invalid item type")
-                    .iter_types()
-                {
+                for col_type in item.desc().expect("invalid item type").iter_types() {
                     match &col_type.scalar_type {
                         typ @ ScalarType::UInt16
                         | typ @ ScalarType::UInt32

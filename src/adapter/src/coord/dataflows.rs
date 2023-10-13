@@ -358,11 +358,7 @@ impl<'a> DataflowBuilder<'a> {
                     };
                     let entry = self.catalog.get_entry(id);
                     let desc = entry
-                        .desc(
-                            &self
-                                .catalog
-                                .resolve_full_name(entry.name(), entry.conn_id()),
-                        )
+                        .desc()
                         .expect("indexes can only be built on items with descs");
                     let monotonic = self.monotonic_view(*id);
                     dataflow.import_index(index_id, index_desc, desc.typ().clone(), monotonic);
@@ -432,11 +428,7 @@ impl<'a> DataflowBuilder<'a> {
         };
         let on_entry = self.catalog.get_entry(&index.on);
         let on_type = on_entry
-            .desc(
-                &self
-                    .catalog
-                    .resolve_full_name(on_entry.name(), on_entry.conn_id()),
-            )
+            .desc()
             .expect("can only create indexes on items with a valid description")
             .typ()
             .clone();

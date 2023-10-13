@@ -2822,11 +2822,7 @@ impl Coordinator {
             SubscribeFrom::Id(from_id) => {
                 let from = self.catalog().get_entry(&from_id);
                 let from_desc = from
-                    .desc(
-                        &self
-                            .catalog()
-                            .resolve_full_name(from.name(), Some(ctx.session().conn_id())),
-                    )
+                    .desc()
                     .expect("subscribes can only be run on items with descs")
                     .into_owned();
                 let sink_id = self.allocate_transient_id()?;
@@ -3641,7 +3637,7 @@ impl Coordinator {
         let on_entry = self.catalog.get_entry(&index.on);
         let full_name = self.catalog.resolve_full_name(&name, on_entry.conn_id());
         let on_desc = on_entry
-            .desc(&full_name)
+            .desc()
             .expect("can only create indexes on items with a valid description");
 
         // Create a transient catalog item
@@ -3964,14 +3960,7 @@ impl Coordinator {
             // All non-constant values must be planned as read-then-writes.
             selection => {
                 let desc_arity = match self.catalog().try_get_entry(&plan.id) {
-                    Some(table) => table
-                        .desc(
-                            &self
-                                .catalog()
-                                .resolve_full_name(table.name(), Some(ctx.session().conn_id())),
-                        )
-                        .expect("desc called on table")
-                        .arity(),
+                    Some(table) => table.desc().expect("desc called on table").arity(),
                     None => {
                         ctx.retire(Err(AdapterError::Catalog(catalog::Error {
                             kind: catalog::ErrorKind::Sql(CatalogError::UnknownItem(
@@ -4037,9 +4026,6 @@ impl Coordinator {
         let desc = match self.catalog().try_get_entry(&id) {
             Some(table) => table
                 .desc(
-                    &self
-                        .catalog()
-                        .resolve_full_name(table.name(), Some(ctx.session().conn_id())),
                 )
                 .expect("desc called on table")
                 .into_owned(),

@@ -197,7 +197,7 @@ pub fn plan_insert_query(
             table_name.full_name_str()
         );
     }
-    let desc = table.desc(&scx.catalog.resolve_full_name(table.name()))?;
+    let desc = table.desc()?;
     let mut defaults = table
         .table_details()
         .expect("attempted to insert into non-table")
@@ -329,7 +329,7 @@ pub fn plan_insert_query(
 
     let returning = {
         let (scope, typ) = if let ResolvedItemName::Item { full_name, .. } = table_name {
-            let desc = table.desc(&full_name)?;
+            let desc = table.desc()?;
             let scope = Scope::from_source(Some(full_name.clone().into()), desc.iter_names());
             let typ = desc.typ().clone();
             (scope, typ)
@@ -400,9 +400,7 @@ pub fn plan_copy_from(
             table_name.full_name_str()
         );
     }
-    let mut desc = table
-        .desc(&scx.catalog.resolve_full_name(table.name()))?
-        .into_owned();
+    let mut desc = table.desc()?.into_owned();
     let _ = table
         .table_details()
         .expect("attempted to insert into non-table");
@@ -464,7 +462,7 @@ pub fn plan_copy_from_rows(
     let scx = StatementContext::new(Some(pcx), catalog);
 
     let table = catalog.get_item(&id);
-    let desc = table.desc(&catalog.resolve_full_name(table.name()))?;
+    let desc = table.desc()?;
 
     let mut defaults = table
         .table_details()
@@ -603,7 +601,7 @@ pub fn plan_mutation_query_inner(
     // Derive structs for operation from validated table
     let (mut get, scope) = qcx.resolve_table_name(table_name)?;
     let scope = plan_table_alias(scope, alias.as_ref())?;
-    let desc = item.desc(&qcx.scx.catalog.resolve_full_name(item.name()))?;
+    let desc = item.desc()?;
     let relation_type = qcx.relation_type(&get);
 
     if using.is_empty() {
@@ -5779,9 +5777,7 @@ impl<'a> QueryContext<'a> {
             ResolvedItemName::Item { id, full_name, .. } => {
                 let name = full_name.into();
                 let item = self.scx.get_item(&id);
-                let desc = item
-                    .desc(&self.scx.catalog.resolve_full_name(item.name()))?
-                    .clone();
+                let desc = item.desc()?.clone();
                 let expr = HirRelationExpr::Get {
                     id: Id::Global(item.id()),
                     typ: desc.typ().clone(),

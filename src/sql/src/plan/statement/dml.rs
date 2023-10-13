@@ -474,8 +474,7 @@ pub fn describe_subscribe(
     let relation_desc = match stmt.relation {
         SubscribeRelation::Name(name) => {
             let item = scx.get_item_by_resolved_name(&name)?;
-            item.desc(&scx.catalog.resolve_full_name(item.name()))?
-                .into_owned()
+            item.desc()?.into_owned()
         }
         SubscribeRelation::Query(query) => {
             let query::PlannedQuery { desc, .. } =
@@ -556,7 +555,7 @@ pub fn plan_subscribe(
     let (from, desc, scope) = match relation {
         SubscribeRelation::Name(name) => {
             let entry = scx.get_item_by_resolved_name(&name)?;
-            let desc = match entry.desc(&scx.catalog.resolve_full_name(entry.name())) {
+            let desc = match entry.desc() {
                 Ok(desc) => desc,
                 Err(..) => sql_bail!(
                     "'{}' cannot be subscribed to because it is a {}",

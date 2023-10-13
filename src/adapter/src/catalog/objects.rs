@@ -744,7 +744,7 @@ impl CatalogItem {
         }
     }
 
-    pub fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, SqlCatalogError> {
+    fn desc(&self, name: &str) -> Result<Cow<RelationDesc>, SqlCatalogError> {
         match &self {
             CatalogItem::Source(src) => Ok(Cow::Borrowed(&src.desc)),
             CatalogItem::Log(log) => Ok(Cow::Owned(log.variant.desc())),
@@ -1086,8 +1086,8 @@ impl CatalogItem {
 
 impl CatalogEntry {
     /// Reports the description of the datums produced by this catalog item.
-    pub fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, SqlCatalogError> {
-        self.item.desc(name)
+    pub fn desc(&self) -> Result<Cow<RelationDesc>, SqlCatalogError> {
+        self.item.desc(&self.name().item) // TODO fix
     }
 
     /// Returns the [`mz_sql::func::Func`] associated with this `CatalogEntry`.
@@ -1829,8 +1829,8 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         self.oid()
     }
 
-    fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, SqlCatalogError> {
-        self.desc(name)
+    fn desc(&self) -> Result<Cow<RelationDesc>, SqlCatalogError> {
+        self.desc()
     }
 
     fn func(&self) -> Result<&'static mz_sql::func::Func, SqlCatalogError> {
