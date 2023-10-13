@@ -131,9 +131,34 @@
     {%- endif %};
 {%- endmacro %}
 
+{% macro materialize__persist_docs(relation, model, for_relation, for_columns) -%}
+  {% if for_relation and config.persist_relation_docs() and model.description %}
+    {% do run_query(alter_relation_comment(relation, model.description)) %}
+  {% endif %}
+
+  {% if for_columns and config.persist_column_docs() and model.columns %}
+    {% set existing_columns = adapter.get_columns_in_relation(relation) | map(attribute="name") | list %}
+    {% set column_dict = model.columns %}
+    -- Materialize does not support running multiple COMMENT ON commands in a
+    -- transaction, so we work around that by forcing a transaction per comment
+    -- instead
+    -- See: https://github.com/MaterializeInc/materialize/issues/22379
+    {% for column_name in column_dict if (column_name in existing_columns) %}
+      {% set comment = column_dict[column_name]['description'] %}
+      {% set quote = column_dict[column_name]['quote'] %}
+      {% do run_query(materialize__alter_column_comment_single(relation, column_name, quote, comment)) %}
+    {% endfor %}
+  {% endif %}
+{% endmacro %}
+
+{% macro materialize__alter_column_comment_single(relation, column_name, quote, comment) %}
+  {% set escaped_comment = postgres_escape_comment(comment) %}
+  comment on column {{ relation }}.{{ adapter.quote(column_name) if quote else column_name }} is {{ escaped_comment }};
+{% endmacro %}
+
 {% macro materialize__alter_relation_comment(relation, comment) -%}
   {% set escaped_comment = postgres_escape_comment(comment) %}
-  {% if relation.type == 'materializedview' -%}
+  {% if relation.is_materialized_view -%}
     {% set relation_type = "materialized view" %}
   {%- else -%}
     {%- set relation_type = relation.type -%}
