@@ -211,10 +211,20 @@ impl Coordinator {
                 }
             }
             Plan::CreateIndex(plan) => {
-                let result = self
-                    .sequence_create_index(ctx.session_mut(), plan, resolved_ids)
-                    .await;
-                ctx.retire(result);
+                if enable_unified_optimizer_api {
+                    let result = self
+                        .sequence_create_index(ctx.session_mut(), plan, resolved_ids)
+                        .await;
+                    ctx.retire(result);
+                } else {
+                    // Allow while the introduction of the new optimizer API in
+                    // #20569 is in progress.
+                    #[allow(deprecated)]
+                    let result = self
+                        .sequence_create_index_deprecated(ctx.session_mut(), plan, resolved_ids)
+                        .await;
+                    ctx.retire(result);
+                }
             }
             Plan::CreateType(plan) => {
                 let result = self
