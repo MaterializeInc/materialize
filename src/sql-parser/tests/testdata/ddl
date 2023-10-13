@@ -1771,9 +1771,9 @@ DropObjects(DropObjectsStatement { object_type: Cluster, if_exists: true, names:
 parse-statement
 DROP CLUSTER REPLICA r1, r2
 ----
-error: Expected dot, found comma
+error: Expected cluster_identifier.replica_identifier, found identifier "r1"
 DROP CLUSTER REPLICA r1, r2
-                       ^
+                     ^
 
 parse-statement
 DROP CLUSTER REPLICA IF EXISTS cluster.replica
@@ -1785,9 +1785,9 @@ DropObjects(DropObjectsStatement { object_type: ClusterReplica, if_exists: true,
 parse-statement
 DROP CLUSTER REPLICA IF EXISTS replica
 ----
-error: Expected dot, found EOF
+error: Expected cluster_identifier.replica_identifier, found REPLICA
 DROP CLUSTER REPLICA IF EXISTS replica
-                                      ^
+                               ^
 
 parse-statement
 DROP CLUSTER IF EXISTS cluster CASCADE
