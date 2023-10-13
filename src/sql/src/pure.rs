@@ -20,14 +20,16 @@ use anyhow::anyhow;
 use mz_ccsr::{Client, GetByIdError, GetBySubjectError, Schema as CcsrSchema};
 use mz_kafka_util::client::MzClientContext;
 use mz_ore::error::ErrorExt;
+use mz_ore::iter::IteratorExt;
 use mz_ore::str::StrExt;
 use mz_proto::RustType;
 use mz_repr::{strconv, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    AlterSourceAction, AlterSourceAddSubsourceOptionName, AlterSourceStatement,
-    CreateSubsourceOption, CreateSubsourceOptionName, CsrConnection, CsrSeedAvro, CsrSeedProtobuf,
-    CsrSeedProtobufSchema, DbzMode, DeferredItemName, Envelope, KafkaConfigOption,
+    AlterSourceAction, AlterSourceAddSubsourceOptionName, AlterSourceStatement, AvroDocOn,
+    CreateSinkStatement, CreateSubsourceOption, CreateSubsourceOptionName, CsrConfigOption,
+    CsrConfigOptionName, CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema,
+    DbzMode, DeferredItemName, DocOnIdentifier, DocOnSchema, Envelope, KafkaConfigOption,
     KafkaConfigOptionName, KafkaConnection, KafkaSourceConnection, PgConfigOption,
     PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy, Statement, UnresolvedItemName,
 };
@@ -47,9 +49,9 @@ use crate::ast::{
     CreateSourceSubsource, CreateSubsourceStatement, CsrConnectionAvro, CsrConnectionProtobuf,
     Format, ProtobufSchema, ReferencedSubsources, Value, WithOptionValue,
 };
-use crate::catalog::{ErsatzCatalog, SessionCatalog};
+use crate::catalog::{CatalogItemType, ErsatzCatalog, SessionCatalog};
 use crate::kafka_util::KafkaConfigOptionExtracted;
-use crate::names::Aug;
+use crate::names::{Aug, ResolvedColumnName, ResolvedItemName};
 use crate::plan::error::PlanError;
 use crate::plan::statement::ddl::load_generator_ast_to_generator;
 use crate::plan::StatementContext;
@@ -152,8 +154,112 @@ pub async fn purify_statement(
         Statement::AlterSource(stmt) => {
             purify_alter_source(catalog, stmt, connection_context).await
         }
+        Statement::CreateSink(stmt) => purify_create_sink(catalog, stmt),
         o => unreachable!("{:?} does not need to be purified", o),
     }
+}
+
+pub fn purify_create_sink(
+    catalog: impl SessionCatalog,
+    mut stmt: CreateSinkStatement<Aug>,
+) -> Result<
+    (
+        Vec<(GlobalId, CreateSubsourceStatement<Aug>)>,
+        Statement<Aug>,
+    ),
+    PlanError,
+> {
+    // updating avro format with comments so that they are frozen in the `create_sql`
+    // only if the feature is enabled
+    if catalog.system_vars().enable_sink_doc_on_option() {
+        let from_id = stmt.from.item_id();
+        let from = catalog.get_item(from_id);
+        let object_ids = from.uses().0.iter().map(|id| *id).chain_one(from.id());
+
+        // add comments to the avro doc comments
+        if let Some(Format::Avro(AvroSchema::Csr {
+            csr_connection:
+                CsrConnectionAvro {
+                    connection:
+                        CsrConnection {
+                            connection: _,
+                            options,
+                        },
+                    ..
+                },
+        })) = &mut stmt.format
+        {
+            let user_provided_comments = &options
+                .iter()
+                .filter_map(|CsrConfigOption { name, .. }| match name {
+                    CsrConfigOptionName::AvroDocOn(doc_on) => Some(doc_on.clone()),
+                    _ => None,
+                })
+                .collect::<BTreeSet<_>>();
+
+            // Adding existing comments if not already provided by user
+            for object_id in object_ids {
+                let item = catalog.get_item(&object_id);
+                let full_name = catalog.resolve_full_name(item.name());
+                let full_resolved_name = ResolvedItemName::Item {
+                    id: object_id,
+                    qualifiers: item.name().qualifiers.clone(),
+                    full_name: full_name.clone(),
+                    print_id: !matches!(
+                        item.item_type(),
+                        CatalogItemType::Func | CatalogItemType::Type
+                    ),
+                };
+
+                if let Some(comments_map) = catalog.get_item_comments(&object_id) {
+                    // Getting comment on the item
+                    let doc_on_item_key = AvroDocOn {
+                        identifier: DocOnIdentifier::Type(full_resolved_name.clone()),
+                        for_schema: DocOnSchema::All,
+                    };
+                    if !user_provided_comments.contains(&doc_on_item_key) {
+                        if let Some(root_comment) = comments_map.get(&None) {
+                            options.push(CsrConfigOption {
+                                name: CsrConfigOptionName::AvroDocOn(doc_on_item_key),
+                                value: Some(mz_sql_parser::ast::WithOptionValue::Value(
+                                    Value::String(root_comment.clone()),
+                                )),
+                            });
+                        }
+                    }
+
+                    // Getting comments on columns in the item
+                    if let Ok(desc) = item.desc(&full_name) {
+                        for (pos, column_name) in desc.iter_names().enumerate() {
+                            let comment = comments_map.get(&Some(pos + 1));
+                            if let Some(comment_str) = comment {
+                                let doc_on_column_key = AvroDocOn {
+                                    identifier: DocOnIdentifier::Column(
+                                        ResolvedColumnName::Column {
+                                            relation: full_resolved_name.clone(),
+                                            name: column_name.to_owned(),
+                                            index: pos,
+                                        },
+                                    ),
+                                    for_schema: DocOnSchema::All,
+                                };
+                                if !user_provided_comments.contains(&doc_on_column_key) {
+                                    options.push(CsrConfigOption {
+                                        name: CsrConfigOptionName::AvroDocOn(doc_on_column_key),
+                                        value: Some(mz_sql_parser::ast::WithOptionValue::Value(
+                                            Value::String(comment_str.clone()),
+                                        )),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok((vec![], Statement::CreateSink(stmt)))
 }
 
 async fn purify_create_source(

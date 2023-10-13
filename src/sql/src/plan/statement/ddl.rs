@@ -22,7 +22,6 @@ use mz_expr::CollectionPlan;
 use mz_interchange::avro::{AvroSchemaGenerator, AvroSchemaOptions, DocTarget};
 use mz_ore::cast::{self, CastFrom, TryCastFrom};
 use mz_ore::collections::HashSet;
-use mz_ore::iter::IteratorExt;
 use mz_ore::str::StrExt;
 use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
@@ -35,7 +34,7 @@ use mz_sql_parser::ast::{
     AlterClusterAction, AlterClusterStatement, AlterRoleOption, AlterRoleStatement,
     AlterSetClusterStatement, AlterSinkAction, AlterSinkStatement, AlterSourceAction,
     AlterSourceAddSubsourceOption, AlterSourceAddSubsourceOptionName, AlterSourceStatement,
-    AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement, AvroDocOn,
+    AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement,
     CommentObjectType, CommentStatement, CreateConnectionOption, CreateConnectionOptionName,
     CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
     DeferredItemName, DocOnIdentifier, DocOnSchema, DropOwnedStatement, SetRoleVar,
@@ -2172,14 +2171,8 @@ generate_extracted_config!(CreateSinkOption, (Size, String), (Snapshot, bool));
 
 pub fn plan_create_sink(
     scx: &StatementContext,
-    mut stmt: CreateSinkStatement<Aug>,
+    stmt: CreateSinkStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    // updating avro format with comments so that they are frozen in the `create_sql`
-    // only if the feature is enabled
-    if scx.catalog.system_vars().enable_sink_doc_on_option() {
-        update_avro_format_with_comments(scx, &mut stmt)?;
-    }
-
     let create_sql = normalize::create_statement(scx, Statement::CreateSink(stmt.clone()))?;
 
     let CreateSinkStatement {
@@ -2348,96 +2341,6 @@ pub fn plan_create_sink(
         if_not_exists,
         cluster_config,
     }))
-}
-
-fn update_avro_format_with_comments(
-    scx: &StatementContext,
-    stmt: &mut CreateSinkStatement<Aug>,
-) -> Result<(), PlanError> {
-    let from_name = &stmt.from;
-    let from: &dyn CatalogItem = scx.get_item_by_resolved_name(from_name)?;
-    let object_ids = from.uses().0.iter().map(|id| *id).chain_one(from.id());
-
-    // add comments to the avro doc comments
-    if let Some(Format::Avro(AvroSchema::Csr {
-        csr_connection:
-            CsrConnectionAvro {
-                connection:
-                    CsrConnection {
-                        connection: _,
-                        options,
-                    },
-                ..
-            },
-    })) = &mut stmt.format
-    {
-        let user_provided_comments = &options
-            .iter()
-            .filter_map(|CsrConfigOption { name, .. }| match name {
-                CsrConfigOptionName::AvroDocOn(doc_on) => Some(doc_on.clone()),
-                _ => None,
-            })
-            .collect::<BTreeSet<_>>();
-
-        // Adding existing comments if not already provided by user
-        for object_id in object_ids {
-            let item = scx.catalog.get_item(&object_id);
-            let full_name = scx.catalog.resolve_full_name(item.name());
-            let full_resolved_name = ResolvedItemName::Item {
-                id: object_id,
-                qualifiers: item.name().qualifiers.clone(),
-                full_name: full_name.clone(),
-                print_id: !matches!(
-                    item.item_type(),
-                    CatalogItemType::Func | CatalogItemType::Type
-                ),
-            };
-
-            if let Some(comments_map) = scx.catalog.get_item_comments(&object_id) {
-                // Getting comment on the item
-                let doc_on_item_key = AvroDocOn {
-                    identifier: DocOnIdentifier::Type(full_resolved_name.clone()),
-                    for_schema: DocOnSchema::All,
-                };
-                if !user_provided_comments.contains(&doc_on_item_key) {
-                    if let Some(root_comment) = comments_map.get(&None) {
-                        options.push(CsrConfigOption {
-                            name: CsrConfigOptionName::AvroDocOn(doc_on_item_key),
-                            value: Some(mz_sql_parser::ast::WithOptionValue::Value(Value::String(
-                                root_comment.clone(),
-                            ))),
-                        });
-                    }
-                }
-
-                // Getting comments on columns in the item
-                if let Ok(desc) = item.desc(&full_name) {
-                    for (pos, column_name) in desc.iter_names().enumerate() {
-                        let comment = comments_map.get(&Some(pos + 1));
-                        if let Some(comment_str) = comment {
-                            let doc_on_column_key = AvroDocOn {
-                                identifier: DocOnIdentifier::Column(ResolvedColumnName::Column {
-                                    relation: full_resolved_name.clone(),
-                                    name: column_name.to_owned(),
-                                    index: pos,
-                                }),
-                                for_schema: DocOnSchema::All,
-                            };
-                            if !user_provided_comments.contains(&doc_on_column_key) {
-                                options.push(CsrConfigOption {
-                                    name: CsrConfigOptionName::AvroDocOn(doc_on_column_key),
-                                    value: Some(mz_sql_parser::ast::WithOptionValue::Value(
-                                        Value::String(comment_str.clone()),
-                                    )),
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    Ok(())
 }
 
 fn key_constraint_err(desc: &RelationDesc, user_keys: &[ColumnName]) -> PlanError {
