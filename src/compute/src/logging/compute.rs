@@ -30,7 +30,6 @@ use timely::dataflow::channels::pushers::{Counter, Tee};
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::{Filter, InspectCore, Operator};
 use timely::dataflow::{Scope, Stream, StreamCore};
-use timely::logging::WorkerIdentifier;
 use timely::scheduling::Scheduler;
 use timely::worker::Worker;
 use timely::{Container, Data};
@@ -42,7 +41,7 @@ use crate::logging::{ComputeLog, EventQueue, LogVariant, PermutedRowPacker, Shar
 use crate::typedefs::{KeysValsHandle, RowSpine};
 
 /// Type alias for a logger of compute events.
-pub type Logger = timely::logging_core::Logger<ComputeEvent, WorkerIdentifier>;
+pub type Logger = timely::logging_core::Logger<ComputeEvent>;
 
 /// A logged compute event.
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
@@ -221,12 +220,7 @@ pub(super) fn construct<A: Allocate + 'static>(
                         error_count: error_count.session(&cap),
                     };
 
-                    for (time, logger_id, event) in demux_buffer.drain(..) {
-                        // We expect the logging infrastructure to not shuffle events between
-                        // workers and this code relies on the assumption that each worker handles
-                        // its own events.
-                        assert_eq!(logger_id, worker_id);
-
+                    for (time, event) in demux_buffer.drain(..) {
                         DemuxHandler {
                             state: &mut demux_state,
                             shared_state: &mut shared_state.borrow_mut(),

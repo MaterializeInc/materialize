@@ -24,7 +24,7 @@ use mz_repr::{Datum, Diff, Timestamp};
 use mz_timely_util::buffer::ConsolidateBuffer;
 use mz_timely_util::replay::MzReplay;
 use timely::communication::Allocate;
-use timely::dataflow::channels::pact::{Exchange, Pipeline};
+use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::{Filter, InputCapability};
@@ -93,12 +93,7 @@ pub(super) fn construct<A: Allocate>(
                 input.for_each(|cap, data| {
                     data.swap(&mut demux_buffer);
 
-                    for (time, logger_id, event) in demux_buffer.drain(..) {
-                        // We expect the logging infrastructure to not shuffle events between
-                        // workers and this code relies on the assumption that each worker handles
-                        // its own events.
-                        assert_eq!(logger_id, worker_id);
-
+                    for (time, event) in demux_buffer.drain(..) {
                         DemuxHandler {
                             state: &mut demux_state,
                             output: &mut output_buffers,
@@ -133,7 +128,7 @@ pub(super) fn construct<A: Allocate>(
         let sharing = sharing
             .as_collection()
             .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
-                Exchange::new(move |_| u64::cast_from(worker_id)),
+                Pipeline,
                 "PreArrange Differential sharing",
             );
 

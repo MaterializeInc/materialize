@@ -148,67 +148,49 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
 
     fn simple_logger<E: 'static>(&self, event_queue: EventQueue<E>) -> Logger<E> {
         let mut logger = BatchLogger::new(event_queue.link, self.interval_ms);
-        Logger::new(
-            self.now,
-            self.start_offset,
-            self.worker.index(),
-            move |time, data| {
-                logger.publish_batch(time, data);
-                event_queue.activator.activate();
-            },
-        )
+        Logger::new(self.now, self.start_offset, move |time, data| {
+            logger.publish_batch(time, data);
+            event_queue.activator.activate();
+        })
     }
 
     fn reachability_logger(&self) -> Logger<TrackerEvent> {
         let event_queue = self.r_event_queue.clone();
         let mut logger = BatchLogger::new(event_queue.link, self.interval_ms);
-        Logger::new(
-            self.now,
-            self.start_offset,
-            self.worker.index(),
-            move |time, data| {
-                let mut converted_updates = Vec::new();
-                for event in data.drain(..) {
-                    match event.2 {
-                        TrackerEvent::SourceUpdate(update) => {
-                            let massaged: Vec<_> = update
-                                .updates
-                                .iter()
-                                .map(|(node, port, time, diff)| {
-                                    let ts = time.as_any().downcast_ref::<Timestamp>().copied();
-                                    let is_source = true;
-                                    (*node, *port, is_source, ts, *diff)
-                                })
-                                .collect();
+        Logger::new(self.now, self.start_offset, move |time, data| {
+            let mut converted_updates = Vec::new();
+            for (time, event) in data.drain(..) {
+                match event {
+                    TrackerEvent::SourceUpdate(update) => {
+                        let massaged: Vec<_> = update
+                            .updates
+                            .iter()
+                            .map(|(node, port, time, diff)| {
+                                let ts = time.as_any().downcast_ref::<Timestamp>().copied();
+                                let is_source = true;
+                                (*node, *port, is_source, ts, *diff)
+                            })
+                            .collect();
 
-                            converted_updates.push((
-                                event.0,
-                                event.1,
-                                (update.tracker_id, massaged),
-                            ));
-                        }
-                        TrackerEvent::TargetUpdate(update) => {
-                            let massaged: Vec<_> = update
-                                .updates
-                                .iter()
-                                .map(|(node, port, time, diff)| {
-                                    let ts = time.as_any().downcast_ref::<Timestamp>().copied();
-                                    let is_source = false;
-                                    (*node, *port, is_source, ts, *diff)
-                                })
-                                .collect();
+                        converted_updates.push((time, (update.tracker_id, massaged)));
+                    }
+                    TrackerEvent::TargetUpdate(update) => {
+                        let massaged: Vec<_> = update
+                            .updates
+                            .iter()
+                            .map(|(node, port, time, diff)| {
+                                let ts = time.as_any().downcast_ref::<Timestamp>().copied();
+                                let is_source = false;
+                                (*node, *port, is_source, ts, *diff)
+                            })
+                            .collect();
 
-                            converted_updates.push((
-                                event.0,
-                                event.1,
-                                (update.tracker_id, massaged),
-                            ));
-                        }
+                        converted_updates.push((time, (update.tracker_id, massaged)));
                     }
                 }
-                logger.publish_batch(time, &mut converted_updates);
-                event_queue.activator.activate();
-            },
-        )
+            }
+            logger.publish_batch(time, &mut converted_updates);
+            event_queue.activator.activate();
+        })
     }
 }
