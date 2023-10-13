@@ -1269,6 +1269,18 @@ impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {
             f.write_node(cluster);
         }
 
+        if !self.non_null_assertions.is_empty() {
+            f.write_str(" WITH (");
+            for (i, nna) in self.non_null_assertions.iter().enumerate() {
+                f.write_str("ASSERT NOT NULL ");
+                f.write_node(nna);
+                if i + 1 != self.non_null_assertions.len() {
+                    f.write_str(", ")
+                }
+            }
+            f.write_str(")");
+        }
+
         f.write_str(" AS ");
         f.write_node(&self.query);
     }

@@ -141,6 +141,7 @@ class View(DBObject):
     materialized: bool
     join_column: Column | None
     join_column2: Column | None
+    assert_not_null: list[Column]
 
     def __init__(
         self,
@@ -166,6 +167,18 @@ class View(DBObject):
 
         self.materialized = rng.choice([True, False])
 
+        self.assert_not_null = (
+            [
+                column
+                for column in rng.sample(
+                    self.columns, k=rng.randint(1, len(self.columns))
+                )
+                if not column.nullable
+            ]
+            if self.materialized
+            else []
+        )
+
         if base_object2:
             self.join_column = rng.choice(base_object.columns)
             self.join_column2 = None
@@ -189,7 +202,16 @@ class View(DBObject):
             f"{source_column} AS {column.name(True)}"
             for source_column, column in zip(self.source_columns, self.columns)
         )
-        query += f" {self} AS SELECT {columns_str} FROM {self.base_object}"
+
+        query += f" {self}"
+
+        if self.assert_not_null:
+            assert_not_null_strs = [
+                f"ASSERT NOT NULL {c.name(True)}" for c in self.assert_not_null
+            ]
+            query += f" WITH ({', '.join(assert_not_null_strs)})"
+
+        query += f" AS SELECT {columns_str} FROM {self.base_object}"
         if self.base_object2:
             query += f" JOIN {self.base_object2}"
             if self.join_column2:
