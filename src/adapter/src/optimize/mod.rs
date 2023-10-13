@@ -52,11 +52,13 @@
 
 mod index;
 mod materialized_view;
+mod subscribe;
 mod view;
 
 // Re-export optimzier structs
 pub use index::{Index, OptimizeIndex};
 pub use materialized_view::OptimizeMaterializedView;
+pub use subscribe::OptimizeSubscribe;
 pub use view::OptimizeView;
 
 use mz_catalog::memory::objects::CatalogItem;
