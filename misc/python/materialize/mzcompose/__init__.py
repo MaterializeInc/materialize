@@ -71,6 +71,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_jemalloc_profiling": "true",
     "enable_comment": "true",
     "enable_sink_doc_on_option": "true",
+    "enable_assert_not_null": "true",
 }
 
 DEFAULT_CRDB_ENVIRONMENT = [
