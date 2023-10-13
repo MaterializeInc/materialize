@@ -235,7 +235,7 @@ EXPLAIN WITH(arity, join_impls) SELECT date_trunc('day', ts) FROM date_trunc_tim
 Explained Query:
   Project (#1) // { arity: 1 }
     Map (date_trunc_day_ts(#0)) // { arity: 2 }
-      Get materialize.public.date_trunc_timestamps // { arity: 1 }
+      ReadStorage materialize.public.date_trunc_timestamps // { arity: 1 }
 
 EOF
 
@@ -249,9 +249,9 @@ Explained Query:
         implementation
           %0:date_trunc_fields[×] » %1:date_trunc_timestamps[×]
         ArrangeBy keys=[[]] // { arity: 1 }
-          Get materialize.public.date_trunc_fields // { arity: 1 }
+          ReadStorage materialize.public.date_trunc_fields // { arity: 1 }
         ArrangeBy keys=[[]] // { arity: 1 }
-          Get materialize.public.date_trunc_timestamps // { arity: 1 }
+          ReadStorage materialize.public.date_trunc_timestamps // { arity: 1 }
 
 EOF
 
@@ -387,29 +387,34 @@ SELECT cbrt(NULL)
 NULL
 
 query R
-SELECT cbrt(1.23783::float)
+SELECT cbrt(1.23783::float)::float4
 ----
-1.0737100084353584
+1.07371
 
 query R
-SELECT cbrt(1.23783::double)
+SELECT cbrt(1.23783::double)::float4
 ----
-1.0737100084353584
+1.07371
 
 query R
-SELECT cbrt(1.23783::decimal(15,5))
+SELECT cbrt(1.23783::decimal(15,5))::float4
 ----
-1.0737100084353584
+1.07371
 
 query R
-SELECT cbrt(-8::double)
+SELECT cbrt(-8::double)::float4
 ----
 -2
 
 query R
-SELECT cbrt(3::int)
+SELECT cbrt(3::int)::float4
 ----
-1.4422495703074083
+1.4422495
+
+query R
+SELECT cbrt(27::int)::float4
+----
+3
 
 # Test coalesce.
 query I
@@ -722,7 +727,7 @@ EXPLAIN WITH(arity, join_impls) SELECT a IS NULL FROM t
 Explained Query:
   Project (#2) // { arity: 1 }
     Map ((#0) IS NULL) // { arity: 3 }
-      Get materialize.public.t // { arity: 2 }
+      ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -732,7 +737,7 @@ EXPLAIN WITH(arity, join_impls) SELECT a + a + a + a + a IS NULL FROM t
 Explained Query:
   Project (#2) // { arity: 1 }
     Map ((#0) IS NULL) // { arity: 3 }
-      Get materialize.public.t // { arity: 2 }
+      ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -742,7 +747,7 @@ EXPLAIN WITH(arity, join_impls) SELECT a + b IS NULL FROM t
 Explained Query:
   Project (#2) // { arity: 1 }
     Map ((#0) IS NULL) // { arity: 3 }
-      Get materialize.public.t // { arity: 2 }
+      ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -756,7 +761,7 @@ EXPLAIN WITH(arity, join_impls) SELECT (a::bool AND b::bool) IS NULL FROM t
 Explained Query:
   Project (#2) // { arity: 1 }
     Map (((integer_to_boolean(#0) AND integer_to_boolean(#1))) IS NULL) // { arity: 3 }
-      Get materialize.public.t // { arity: 2 }
+      ReadStorage materialize.public.t // { arity: 2 }
 
 EOF
 
@@ -779,7 +784,7 @@ SELECT materialize.pg_catalog.abs(1)
 ----
 1
 
-query error function mz_catalog.abs\(integer\) does not exist
+query error db error: ERROR: function "mz_catalog\.abs" does not exist
 SELECT mz_catalog.abs(1)
 
 query error unknown database 'noexist'
@@ -798,7 +803,7 @@ SELECT pg_catalog.mod(7, 4)
 ----
 3
 
-query error function mz_catalog.mod\(integer, integer\) does not exist
+query error db error: ERROR: function "mz_catalog\.mod" does not exist
 SELECT mz_catalog.mod(7, 4)
 
 query error unknown database 'noexist'
@@ -1451,6 +1456,12 @@ SELECT exp(ln(2::decimal(15, 5)))
 ----
 2
 
+query error value out of range: overflow
+SELECT exp(10000::float)
+
+query error value out of range: underflow
+SELECT exp(-10000::float)
+
 query R
 SELECT power(382, 5);
 ----
@@ -1487,6 +1498,17 @@ SELECT pow(9::decimal(15, 5), 0.5::decimal(15, 5));
 ----
 3
 
+query error value out of range: overflow
+SELECT pow(3::float, 10000)
+
+query T
+SELECT pow(0::float, 10000)
+----
+0.000
+
+query error value out of range: underflow
+SELECT pow(3::float, -10000)
+
 query T
 SELECT pg_column_size(NULL)
 ----
@@ -1495,12 +1517,12 @@ NULL
 query IIII
 SELECT pg_column_size(1::int4), pg_column_size(2::int8), pg_column_size('a'), pg_column_size('ab')
 ----
-5 9 3 4
+2 2 3 4
 
 query I
 SELECT pg_column_size((1, 2))
 ----
-19
+13
 
 statement ok
 CREATE TABLE col_size (a INT, b INT, c TEXT)
@@ -1511,7 +1533,7 @@ INSERT INTO col_size VALUES (1, 2, 'some string longer than 32 chars.'), (NULL, 
 query IIIIII
 SELECT a, b, pg_column_size(col_size.*), pg_column_size(col_size.a), pg_column_size(col_size.b), pg_column_size(col_size.c) FROM col_size ORDER BY a
 ----
-1  2  54  5  5  35
+1  2  48  2  2  35
 NULL  NULL  12  NULL  NULL  NULL
 
 statement error mz_row_size requires a record type
@@ -1527,12 +1549,12 @@ NULL
 query III
 SELECT mz_row_size((1, 2)), mz_row_size((1, 2, 3, 4)), mz_row_size((1, 2, 3, 4, 5))
 ----
-32  32  57
+32  32  32
 
 query III
 SELECT a, b, mz_row_size(col_size.*) FROM col_size ORDER BY a
 ----
-1  2  77
+1  2  71
 NULL  NULL  32
 
 query error mz_errored
@@ -1543,7 +1565,95 @@ SELECT mz_internal.mz_error_if_null(1, '')
 ----
 1
 
+query error unexpected NULL
+SELECT mz_internal.mz_error_if_null(NULL, NULL)
+
 query B
 SELECT pg_backend_pid() > 0
 ----
 true
+
+query B
+SELECT pg_is_in_recovery()
+----
+false
+
+query B
+SELECT pg_tablespace_location(0) IS NULL
+----
+true
+
+query B
+SELECT pg_get_ruledef(0) IS NULL
+----
+true
+
+query I
+SELECT pg_relation_size('pg_views'::regclass)
+----
+-1
+
+query I
+SELECT pg_relation_size('pg_views'::regclass::oid)
+----
+-1
+
+query I
+SELECT pg_relation_size('pg_views'::regclass, 'main')
+----
+-1
+
+query I
+SELECT pg_relation_size('pg_views'::regclass::oid, 'main')
+----
+-1
+
+query I
+SELECT pg_stat_get_numscans('pg_views'::regclass::oid)
+----
+-1
+
+# mz_internal functions can't be executed with the enable_dangerous_functions flag turned off
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_dangerous_functions = false
+----
+COMPLETE 0
+
+statement error executing potentially dangerous functions is not supported
+SELECT mz_internal.mz_sleep(10)
+
+statement error executing potentially dangerous functions is not supported
+SELECT mz_internal.mz_panic('hello')
+
+statement ok
+CREATE TABLE dangerous_table (a INT, b TEXT)
+
+statement ok
+INSERT INTO dangerous_table (a) VALUES (1)
+
+statement error executing potentially dangerous functions is not supported
+SELECT mz_internal.mz_any(a) FROM dangerous_table
+
+statement error executing potentially dangerous functions is not supported
+INSERT INTO dangerous_table (b) VALUES (mz_internal.mz_panic('hello'))
+
+statement ok
+DROP TABLE dangerous_table
+
+statement error executing potentially dangerous functions is not supported
+SELECT * FROM mz_internal.mz_resolve_object_name('t');
+
+statement error executing potentially dangerous functions is not supported
+SELECT mz_internal.mz_resolve_object_name('t');
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_dangerous_functions = true
+----
+COMPLETE 0
+
+query error function textrecv\(\) does not exist
+SELECT textrecv()
+
+query error cannot call function with arguments of type internal
+SELECT textrecv('abc')

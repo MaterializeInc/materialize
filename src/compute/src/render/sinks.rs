@@ -14,18 +14,23 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use differential_dataflow::Collection;
-use timely::dataflow::{scopes::Child, Scope};
+use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc};
+use mz_expr::{permutation_for_arrangement, EvalError, MapFilterProject};
+use mz_ore::soft_assert;
+use mz_ore::vec::PartialOrdVecExt;
+use mz_repr::{Diff, GlobalId, Row};
+use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::errors::DataflowError;
+use mz_timely_util::operator::CollectionExt;
+use mz_timely_util::probe;
+use timely::dataflow::scopes::Child;
+use timely::dataflow::Scope;
 use timely::progress::Antichain;
 
-use mz_compute_client::types::sinks::{ComputeSinkConnection, ComputeSinkDesc};
-use mz_expr::{permutation_for_arrangement, MapFilterProject};
-use mz_repr::{Diff, GlobalId, Row};
-use mz_storage_client::controller::CollectionMetadata;
-use mz_storage_client::types::errors::DataflowError;
-use mz_timely_util::probe;
-
 use crate::compute_state::SinkToken;
-use crate::render::{context::Context, RenderTimestamp};
+use crate::logging::compute::LogDataflowErrors;
+use crate::render::context::Context;
+use crate::render::RenderTimestamp;
 
 impl<'g, G, T> Context<Child<'g, G, T>, Row>
 where
@@ -36,16 +41,17 @@ where
     pub(crate) fn export_sink(
         &mut self,
         compute_state: &mut crate::compute_state::ComputeState,
-        tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
-        import_ids: BTreeSet<GlobalId>,
+        tokens: &BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
+        dependency_ids: BTreeSet<GlobalId>,
         sink_id: GlobalId,
         sink: &ComputeSinkDesc<CollectionMetadata>,
         probes: Vec<probe::Handle<mz_repr::Timestamp>>,
     ) {
+        soft_assert!(sink.non_null_assertions.is_strictly_sorted());
         // put together tokens that belong to the export
         let mut needed_tokens = Vec::new();
-        for import_id in import_ids {
-            if let Some(token) = tokens.get(&import_id) {
+        for dep_id in dependency_ids {
+            if let Some(token) = tokens.get(&dep_id) {
                 needed_tokens.push(Rc::clone(token))
             }
         }
@@ -57,7 +63,7 @@ where
         let bundle = self
             .lookup_id(mz_expr::Id::Global(sink.from))
             .expect("Sink source collection not loaded");
-        let (ok_collection, err_collection) = if let Some(collection) = &bundle.collection {
+        let (ok_collection, mut err_collection) = if let Some(collection) = &bundle.collection {
             collection.clone()
         } else {
             let (key, _arrangement) = bundle
@@ -72,13 +78,45 @@ where
             bundle.as_collection_core(mfp, Some((key.clone(), None)), self.until.clone())
         };
 
-        let ok_collection = ok_collection.leave();
-        let err_collection = err_collection.leave();
+        // Attach logging of dataflow errors.
+        if let Some(logger) = compute_state.compute_logger.clone() {
+            err_collection = err_collection.log_dataflow_errors(logger, sink_id);
+        }
 
+        let mut ok_collection = ok_collection.leave();
+        let mut err_collection = err_collection.leave();
+
+        let non_null_assertions = sink.non_null_assertions.clone();
+        if !non_null_assertions.is_empty() {
+            let (oks, null_errs) =
+                ok_collection.map_fallible("NullAssertions({sink_id:?})", move |row| {
+                    let mut idx = 0;
+                    let mut iter = row.iter();
+                    for &i in &non_null_assertions {
+                        let skip = i - idx;
+                        let datum = iter.nth(skip).unwrap();
+                        idx += skip + 1;
+                        if datum.is_null() {
+                            // TODO[btv] can we plumb the column name through to here?
+                            return Err(DataflowError::EvalError(Box::new(
+                                EvalError::MustNotBeNull(format!("column {}", i + 1)),
+                            )));
+                        }
+                    }
+                    Ok(row)
+                });
+            ok_collection = oks;
+            err_collection = err_collection.concat(&null_errs);
+        }
+
+        let region_name = match sink.connection {
+            ComputeSinkConnection::Subscribe(_) => format!("SubscribeSink({:?})", sink_id),
+            ComputeSinkConnection::Persist(_) => format!("PersistSink({:?})", sink_id),
+        };
         self.scope
             .parent
             .clone()
-            .region_named(&format!("PersistSink({:?})", sink_id), |inner| {
+            .region_named(&region_name, |inner| {
                 let sink_render = get_sink_render_for::<_>(&sink.connection);
 
                 let sink_token = sink_render.render_continuous_sink(
@@ -95,16 +133,8 @@ where
                     needed_tokens.push(sink_token);
                 }
 
-                compute_state.sink_tokens.insert(
-                    sink_id,
-                    SinkToken {
-                        token: Box::new(needed_tokens),
-                        is_subscribe: matches!(
-                            sink.connection,
-                            ComputeSinkConnection::Subscribe(_)
-                        ),
-                    },
-                );
+                let collection = compute_state.expect_collection_mut(sink_id);
+                collection.sink_token = Some(SinkToken::new(Box::new(needed_tokens)));
             });
     }
 }

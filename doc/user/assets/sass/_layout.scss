@@ -309,7 +309,7 @@
 }
 
 .toc {
-    max-width: 280px;
+    max-width: fit-content;
     min-width: 180px;
     padding: var(--x-small) 2rem;
     position: sticky;

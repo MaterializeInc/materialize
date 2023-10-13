@@ -7,9 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize import ROOT, ci_util
-from materialize.mzcompose import Composition
-from materialize.mzcompose.services import Cockroach, SqlLogicTest
+import os
+
+from materialize import MZ_ROOT, ci_util
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.sql_logic_test import SqlLogicTest
 
 SERVICES = [Cockroach(in_memory=True), SqlLogicTest()]
 
@@ -27,13 +30,24 @@ def workflow_sqllogictest(c: Composition) -> None:
 def run_sqllogictest(c: Composition, command: str) -> None:
     c.up("cockroach")
 
+    shard = os.environ.get("BUILDKITE_PARALLEL_JOB")
+    shard_count = os.environ.get("BUILDKITE_PARALLEL_JOB_COUNT")
+
+    junit_report = ci_util.junit_report_filename(c.name)
+
+    args = [
+        "sqllogictest",
+        command,
+        f"--junit-report={junit_report}",
+        "--postgres-url=postgres://root@cockroach:26257",
+    ]
+
+    if shard:
+        args += [f"--shard={shard}"]
+    if shard_count:
+        args += [f"--shard-count={shard_count}"]
+
     try:
-        junit_report = ci_util.junit_report_filename(c.name)
-        c.run(
-            "sqllogictest",
-            command,
-            f"--junit-report={junit_report}",
-            "--postgres-url=postgres://root@cockroach:26257",
-        )
+        c.run(*args)
     finally:
-        ci_util.upload_junit_report(c.name, ROOT / junit_report)
+        ci_util.upload_junit_report(c.name, MZ_ROOT / junit_report)

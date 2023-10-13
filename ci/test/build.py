@@ -11,12 +11,14 @@
 
 from pathlib import Path
 
-from materialize import mzbuild, spawn
+from materialize import mzbuild, spawn, ui
 from materialize.xcompile import Arch
 
 
 def main() -> None:
-    repo = mzbuild.Repository(Path("."))
+    coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
+    stable = ui.env_is_truthy("BUILDKITE_TAG")
+    repo = mzbuild.Repository(Path("."), coverage=coverage, stable=stable)
 
     # Build and push any images that are not already available on Docker Hub,
     # so they are accessible to other build agents.

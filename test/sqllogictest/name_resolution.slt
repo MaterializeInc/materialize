@@ -9,6 +9,11 @@
 
 mode cockroach
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_connection_validation_syntax TO true;
+----
+COMPLETE 0
+
 # over qualified objects should return an error
 query error qualified name did not have between 1 and 3 components
 SELECT * FROM universe.db.schema.foo
@@ -22,19 +27,19 @@ statement ok
 CREATE TABLE not_a_secret (a int);
 
 statement ok
-CREATE CONNECTION kafka_conn TO KAFKA (BROKER 'broker');
+CREATE CONNECTION kafka_conn TO KAFKA (BROKER 'broker') WITH (VALIDATE = false);
 
 statement error connection "materialize.public.kafka_conn" already exists
-CREATE CONNECTION kafka_conn TO KAFKA (BROKER 'broker');
+CREATE CONNECTION kafka_conn TO KAFKA (BROKER 'broker') WITH (VALIDATE = false);
 
 statement ok
-CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER 'broker');
+CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER 'broker') WITH (VALIDATE = false);
 
 statement error materialize.public.not_a_secret is not a secret
-CREATE CONNECTION kafka_conn2 TO KAFKA (BROKER 'broker', SASL PASSWORD = SECRET not_a_secret);
+CREATE CONNECTION kafka_conn2 TO KAFKA (BROKER 'broker', SASL PASSWORD = SECRET not_a_secret) WITH (VALIDATE = false);
 
 statement error unknown catalog item 'not_an_object_at_all'
-CREATE CONNECTION kafka_conn2 TO KAFKA (BROKER 'broker', SASL PASSWORD = SECRET not_an_object_at_all);
+CREATE CONNECTION kafka_conn2 TO KAFKA (BROKER 'broker', SASL PASSWORD = SECRET not_an_object_at_all) WITH (VALIDATE = false);
 
 statement ok
 CREATE SECRET pgpass AS 'postgres'
@@ -47,7 +52,7 @@ CREATE CONNECTION pg TO POSTGRES (
   PASSWORD SECRET pgpass,
   SSL MODE require,
   SSH TUNNEL not_an_object_at_all
-)
+ ) WITH (VALIDATE = false)
 
 statement ok
 CREATE TABLE object_reference (a int);
@@ -58,4 +63,4 @@ CREATE CONNECTION pg TO POSTGRES (
   HOST object_reference,
   DATABASE postgres,
   USER postgres
-)
+) WITH (VALIDATE = false)

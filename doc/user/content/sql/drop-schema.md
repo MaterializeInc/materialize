@@ -1,12 +1,12 @@
 ---
 title: "DROP SCHEMA"
-description: "`DROP SCHEMA` removes a schema from your Materialize instances."
+description: "`DROP SCHEMA` removes a schema from Materialize."
 menu:
   main:
     parent: commands
 ---
 
-`DROP SCHEMA` removes a schema from your Materialize instances.
+`DROP SCHEMA` removes a schema from Materialize.
 
 ## Syntax
 
@@ -65,7 +65,15 @@ You can use either of the following commands:
 DROP SCHEMA IF EXISTS my_schema;
 ```
 
+## Privileges
+
+The privileges required to execute this statement are:
+
+- Ownership of the dropped schema.
+- `USAGE` privileges on the containing database.
+
 ## Related pages
 
 - [`SHOW SCHEMAS`](../show-schemas)
 - [`CREATE SCHEMA`](../create-schema)
+- [DROP OWNED](../drop-owned)

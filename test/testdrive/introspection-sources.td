@@ -31,7 +31,7 @@ SELECT '${arg.default-replica-size}' != '4-4'
         FROM
             mz_materialized_views AS views,
             mz_internal.mz_compute_exports as compute_exports,
-            mz_internal.mz_worker_compute_delays_histogram AS delays
+            mz_internal.mz_compute_delays_histogram_per_worker AS delays
         WHERE
             views.name = 'mv' AND
             views.id = compute_exports.export_id AND
@@ -42,7 +42,7 @@ true
   FROM
     mz_materialized_views AS views,
     mz_internal.mz_compute_exports AS compute_exports,
-    mz_internal.mz_compute_import_frontiers AS import_frontiers
+    mz_internal.mz_compute_import_frontiers_per_worker AS import_frontiers
   WHERE
     views.name = 'mv' AND
     views.id = compute_exports.export_id AND
@@ -55,13 +55,13 @@ true
 > SELECT COUNT(*)
   FROM (SELECT DISTINCT delays.export_id, delays.import_id
         FROM
-            mz_internal.mz_worker_compute_delays_histogram AS delays)
+            mz_internal.mz_compute_delays_histogram AS delays)
 1
 
 > SELECT COUNT(*)
-  FROM (SELECT DISTINCT import_frontiers.export_id, import_frontiers.import_id
+  FROM (SELECT import_frontiers.export_id, import_frontiers.import_id
         FROM
-            mz_internal.mz_worker_compute_import_frontiers AS import_frontiers)
+            mz_internal.mz_compute_import_frontiers AS import_frontiers)
 1
 
 > CREATE DEFAULT INDEX ON vv
@@ -69,13 +69,13 @@ true
 > SELECT COUNT(*)
   FROM (SELECT DISTINCT delays.export_id, delays.import_id
         FROM
-            mz_internal.mz_worker_compute_delays_histogram AS delays)
+            mz_internal.mz_compute_delays_histogram AS delays)
 2
 
 > SELECT COUNT(*)
-  FROM (SELECT DISTINCT import_frontiers.export_id, import_frontiers.import_id
+  FROM (SELECT import_frontiers.export_id, import_frontiers.import_id
         FROM
-            mz_internal.mz_worker_compute_import_frontiers AS import_frontiers)
+            mz_internal.mz_compute_import_frontiers AS import_frontiers)
 2
 
 > SELECT count_all > 0
@@ -84,7 +84,7 @@ true
             mz_views AS views,
             mz_indexes AS indexes,
             mz_internal.mz_compute_exports AS compute_exports,
-            mz_internal.mz_worker_compute_delays_histogram AS delays
+            mz_internal.mz_compute_delays_histogram_per_worker AS delays
         WHERE
             views.name = 'vv' AND
             views.id = indexes.on_id AND
@@ -96,8 +96,8 @@ true
   FROM
     mz_views AS views,
     mz_indexes AS indexes,
-   mz_internal. mz_compute_exports compute_exports,
-    mz_internal.mz_compute_import_frontiers AS import_frontiers
+    mz_internal.mz_compute_exports compute_exports,
+    mz_internal.mz_compute_import_frontiers_per_worker AS import_frontiers
   WHERE
     views.name = 'vv' AND
     views.id = indexes.on_id AND
@@ -111,13 +111,13 @@ true
 > SELECT COUNT(*)
   FROM (SELECT DISTINCT delays.export_id, delays.import_id
         FROM
-            mz_internal.mz_worker_compute_delays_histogram AS delays)
+            mz_internal.mz_compute_delays_histogram AS delays)
 3
 
 > SELECT COUNT(*)
-  FROM (SELECT DISTINCT import_frontiers.export_id, import_frontiers.import_id
+  FROM (SELECT import_frontiers.export_id, import_frontiers.import_id
         FROM
-            mz_internal.mz_worker_compute_import_frontiers AS import_frontiers)
+            mz_internal.mz_compute_import_frontiers AS import_frontiers)
 3
 
 > DROP MATERIALIZED VIEW mvv
@@ -125,13 +125,13 @@ true
 > SELECT COUNT(*)
   FROM (SELECT DISTINCT delays.export_id, delays.import_id
         FROM
-            mz_internal.mz_worker_compute_delays_histogram AS delays)
+            mz_internal.mz_compute_delays_histogram AS delays)
 2
 
 > SELECT COUNT(*)
-  FROM (SELECT DISTINCT import_frontiers.export_id, import_frontiers.import_id
+  FROM (SELECT import_frontiers.export_id, import_frontiers.import_id
         FROM
-            mz_internal.mz_worker_compute_import_frontiers AS import_frontiers)
+            mz_internal.mz_compute_import_frontiers AS import_frontiers)
 2
 
 > DROP INDEX vv_primary_idx
@@ -139,13 +139,13 @@ true
 > SELECT COUNT(*)
   FROM (SELECT DISTINCT delays.export_id, delays.import_id
         FROM
-            mz_internal.mz_worker_compute_delays_histogram AS delays)
+            mz_internal.mz_compute_delays_histogram AS delays)
 1
 
 > SELECT COUNT(*)
-  FROM (SELECT DISTINCT import_frontiers.export_id, import_frontiers.import_id
+  FROM (SELECT import_frontiers.export_id, import_frontiers.import_id
         FROM
-            mz_internal.mz_worker_compute_import_frontiers AS import_frontiers)
+            mz_internal.mz_compute_import_frontiers AS import_frontiers)
 1
 
 > DROP MATERIALIZED VIEW mv
@@ -153,13 +153,13 @@ true
 > SELECT COUNT(*)
   FROM (SELECT DISTINCT delays.export_id, delays.import_id
         FROM
-            mz_internal.mz_worker_compute_delays_histogram AS delays)
+            mz_internal.mz_compute_delays_histogram AS delays)
 0
 
 > SELECT COUNT(*)
-  FROM (SELECT DISTINCT import_frontiers.export_id, import_frontiers.import_id
+  FROM (SELECT import_frontiers.export_id, import_frontiers.import_id
         FROM
-            mz_internal.mz_worker_compute_import_frontiers AS import_frontiers)
+            mz_internal.mz_compute_import_frontiers AS import_frontiers)
 0
 
 # Test that frontiers of introspection sources advance at all.
@@ -172,32 +172,17 @@ contains: Timestamp (0) is not valid for all inputs
 $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 > BEGIN
-> DECLARE c CURSOR FOR SUBSCRIBE (SELECT true FROM mz_internal.mz_compute_frontiers WHERE export_id LIKE 't%' AND time > 0)
-> FETCH 1 c WITH (timeout='5s');
+> DECLARE c CURSOR FOR SUBSCRIBE (
+  SELECT true
+  FROM mz_internal.mz_compute_frontiers f, mz_internal.mz_subscriptions s
+  WHERE f.export_id = s.id AND time > 0)
+> FETCH 1 c WITH (timeout='5s')
 <TIMESTAMP> 1 true
 > COMMIT
 
-# Test that the contents of mz_worker_compute_dependencies are correct.
-
-> CREATE TABLE t1 (a int)
-> CREATE TABLE t2 (b int)
-> CREATE MATERIALIZED VIEW mv1 AS SELECT * FROM t1, t2
-> CREATE DEFAULT INDEX ON mv1
-> CREATE MATERIALIZED VIEW mv2 AS SELECT 1;
-
-> SELECT export.name, import.name
-  FROM mz_internal.mz_worker_compute_dependencies dep
-  LEFT JOIN mz_objects export ON dep.export_id = export.id
-  LEFT JOIN mz_objects import ON dep.import_id = import.id
-  WHERE dep.worker_id = 0
-  ORDER BY export.name, import.name
-mv1             t1
-mv1             t2
-mv1_primary_idx mv1
-
 # Test that mz_compute_exports contains correct dataflow IDs.
 
-> CREATE MATERIALIZED VIEW my_unique_mv_name AS SELECT * FROM t1;
+> CREATE MATERIALIZED VIEW my_unique_mv_name AS SELECT * FROM t
 
 > SELECT count(*)
   FROM
@@ -207,10 +192,8 @@ mv1_primary_idx mv1
   WHERE
     mv.name = 'my_unique_mv_name' AND
     mv.id = exp.export_id AND
-    exp.worker_id = 0 AND
-    exp.dataflow_id = df.local_id AND
-    df.worker_id = 0 AND
-    df.name LIKE '%my_unique_mv_name%';
+    exp.dataflow_id = df.id AND
+    df.name LIKE '%my_unique_mv_name%'
 1
 
 # Test that each operator has at most one parent
@@ -218,5 +201,241 @@ mv1_primary_idx mv1
 > SELECT max(count) FROM (
     SELECT count(*)
     FROM mz_internal.mz_dataflow_operator_parents
-    GROUP BY id, worker_id) counts
+    GROUP BY id) counts
 1
+
+# Test that certain `*_per_worker` relations include the same data for each
+# worker. The corresponding global relations rely on this to justify showing
+# only the data from worker 0.
+
+> SELECT DISTINCT count(*)
+  FROM mz_internal.mz_dataflows_per_worker
+  GROUP BY id, name
+16
+
+> SELECT DISTINCT count(*)
+  FROM mz_internal.mz_dataflow_addresses_per_worker
+  GROUP BY id, address
+16
+
+> SELECT DISTINCT count(*)
+  FROM mz_internal.mz_dataflow_channels_per_worker
+  GROUP BY id, from_index, from_port, to_index, to_port
+16
+
+> SELECT DISTINCT count(*)
+  FROM mz_internal.mz_dataflow_operators_per_worker
+  GROUP BY id, name
+16
+
+> SELECT DISTINCT count(*)
+  FROM mz_internal.mz_dataflow_operator_dataflows_per_worker
+  GROUP BY id, name, dataflow_id, dataflow_name
+16
+
+> SELECT DISTINCT count(*)
+  FROM mz_internal.mz_dataflow_channel_operators_per_worker
+  GROUP BY id, from_operator_id, to_operator_id
+16
+
+> SELECT DISTINCT count(*)
+  FROM mz_internal.mz_compute_exports_per_worker
+  GROUP BY export_id, dataflow_id
+16
+
+> CREATE DEFAULT INDEX ON t
+> SELECT DISTINCT count(*)
+  FROM mz_internal.mz_arrangement_sharing_per_worker
+  GROUP BY operator_id, count
+16
+
+> DROP INDEX t_primary_idx
+
+# Test that the roll-up of arrangement sizes is correct
+
+> INSERT INTO t SELECT * FROM generate_series(1, 100)
+
+> CREATE TABLE t2 (b int)
+> INSERT INTO t2 SELECT * FROM generate_series(1, 200)
+
+> CREATE VIEW vv_arr AS SELECT sum(a) FROM t JOIN t2 ON t.a = t2.b
+
+> CREATE MATERIALIZED VIEW mv_arr AS SELECT * FROM vv_arr
+
+> CREATE DEFAULT INDEX ii_arr ON vv_arr
+
+> SELECT records >= 300, size >= 300*96, capacity >= 300*96 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_arr' OR name LIKE '%mv_arr'
+true true true
+true true true
+
+# Test that non-arranging dataflows show up in `mz_dataflow_arrangement_sizes`
+
+> CREATE TABLE t3 (c int)
+
+> CREATE DEFAULT INDEX ii_empty ON t3
+
+> SELECT records, batches, size < 1024, capacity < 1024, allocations < 512 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_empty'
+0 32 true true true
+
+# Tests that arrangement sizes are approximate
+
+> CREATE TABLE t4 (c int8)
+
+> CREATE INDEX ii_t4 ON t4(c)
+
+> SELECT records, batches, size < 1024, capacity < 1024, allocations < 512 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
+0 32 true true true
+
+> INSERT INTO t4 SELECT 1
+
+> SELECT records, batches, size < 1024, capacity > 96, allocations > 0 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
+1 32 true true true
+
+> INSERT INTO t4 SELECT generate_series(1, 1000)
+
+> SELECT records >= 1000 AND records <= 1001, batches > 0, size > 96*1000 AND size < 2*96*1000, capacity > 96*1000, allocations > 0 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
+true true true true true
+
+> DROP INDEX ii_t4
+
+> SELECT records, batches, size, capacity, allocations FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
+
+# Test arrangement size logging for error dataflows
+
+> CREATE TABLE t5(a int)
+
+> INSERT INTO t5 SELECT -a FROM generate_series(1, 10000) g(a)
+
+> CREATE VIEW vt5 AS SELECT a::uint2 FROM t5
+
+> CREATE INDEX vt5_idx ON vt5(a)
+
+> SELECT records, (size/1024/1024)::int FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%vt5_idx'
+10000 1
+
+> DROP TABLE t5 CASCADE
+
+# Test that `mz_dataflow_arrangement_sizes` shows dataflows not contained in the catalog.
+
+> CREATE TABLE t6 (a int)
+> INSERT INTO t6 SELECT generate_series(1, 1000)
+> CREATE INDEX ii_t6 ON t6 (a)
+> CREATE VIEW t6_plus_1 AS SELECT a + 1 AS b FROM t6
+> CREATE INDEX ii_t6_plus_1 ON t6_plus_1 (b)
+> DROP INDEX ii_t6
+
+> SELECT name, records > 0 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t6%'
+"Dataflow: materialize.public.ii_t6"        true
+"Dataflow: materialize.public.ii_t6_plus_1" true
+
+# Test dataflow error introspection.
+
+> CREATE TABLE zeros (a int)
+> CREATE VIEW v_div_by_zero AS SELECT 1 / a AS x FROM zeros
+> CREATE INDEX idx1_div_by_zero ON v_div_by_zero (x)
+> CREATE MATERIALIZED VIEW mv_div_by_zero AS SELECT 1 / a AS x FROM zeros
+> CREATE INDEX idx2_div_by_zero ON mv_div_by_zero (x)
+
+> SELECT name, count
+  FROM mz_internal.mz_compute_error_counts c
+  JOIN mz_objects o ON (c.export_id = o.id)
+  ORDER BY name
+
+> INSERT INTO zeros VALUES (0)
+
+> SELECT name, count
+  FROM mz_internal.mz_compute_error_counts c
+  JOIN mz_objects o ON (c.export_id = o.id)
+  ORDER BY name
+idx1_div_by_zero 1
+idx2_div_by_zero 1
+mv_div_by_zero   1
+
+> INSERT INTO zeros VALUES (0), (0)
+
+> SELECT name, count
+  FROM mz_internal.mz_compute_error_counts c
+  JOIN mz_objects o ON (c.export_id = o.id)
+  ORDER BY name
+idx1_div_by_zero 3
+idx2_div_by_zero 3
+mv_div_by_zero   3
+
+> DELETE FROM zeros
+
+> SELECT name, count
+  FROM mz_internal.mz_compute_error_counts c
+  JOIN mz_objects o ON (c.export_id = o.id)
+  ORDER BY name
+
+# Test that error logging is retracted when objects are dropped.
+
+> INSERT INTO zeros VALUES (0), (0)
+
+> SELECT name, count
+  FROM mz_internal.mz_compute_error_counts c
+  JOIN mz_objects o ON (c.export_id = o.id)
+  ORDER BY name
+idx1_div_by_zero 2
+idx2_div_by_zero 2
+mv_div_by_zero   2
+
+> DROP INDEX idx1_div_by_zero
+
+> SELECT name, count
+  FROM mz_internal.mz_compute_error_counts c
+  JOIN mz_objects o ON (c.export_id = o.id)
+  ORDER BY name
+idx2_div_by_zero 2
+mv_div_by_zero   2
+
+> DROP MATERIALIZED VIEW mv_div_by_zero
+
+> SELECT name, count
+  FROM mz_internal.mz_compute_error_counts c
+  JOIN mz_objects o ON (c.export_id = o.id)
+  ORDER BY name
+
+# Test logging of errors in things that advance to the empty frontier.
+
+> CREATE MATERIALIZED VIEW mv_zero AS SELECT 0 AS x
+> CREATE MATERIALIZED VIEW mv2_div_by_zero AS SELECT 1 / x FROM mv_zero
+
+> SELECT name, count
+  FROM mz_internal.mz_compute_error_counts c
+  JOIN mz_objects o ON (c.export_id = o.id)
+  ORDER BY name
+mv2_div_by_zero 1
+
+> DROP MATERIALIZED VIEW mv_zero CASCADE
+
+# Test logging of errors in reused indexes.
+
+> CREATE INDEX idx1_div_by_zero ON v_div_by_zero (x)
+> CREATE INDEX idx2_div_by_zero ON v_div_by_zero (x)
+> CREATE INDEX idx3_div_by_zero ON v_div_by_zero (x)
+
+> SELECT name, count
+  FROM mz_internal.mz_compute_error_counts c
+  JOIN mz_objects o ON (c.export_id = o.id)
+  ORDER BY name
+idx1_div_by_zero 2
+idx2_div_by_zero 2
+idx3_div_by_zero 2
+
+> INSERT INTO zeros VALUES (0)
+
+> SELECT name, count
+  FROM mz_internal.mz_compute_error_counts c
+  JOIN mz_objects o ON (c.export_id = o.id)
+  ORDER BY name
+idx1_div_by_zero 3
+idx2_div_by_zero 3
+idx3_div_by_zero 3
+
+> DROP TABLE zeros CASCADE
+
+> SELECT name, count
+  FROM mz_internal.mz_compute_error_counts c
+  JOIN mz_objects o ON (c.export_id = o.id)
+  ORDER BY name

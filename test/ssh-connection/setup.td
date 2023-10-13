@@ -10,6 +10,9 @@
 # Basic connection setup for most workflows.
 # Done here instead of in the workflow to ensure the state is reset.
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_connection_validation_syntax = true
+
 > CREATE CONNECTION IF NOT EXISTS thancred TO SSH TUNNEL (
     HOST 'ssh-bastion-host',
     USER 'mz',

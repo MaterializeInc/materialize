@@ -17,9 +17,8 @@ use std::fmt;
 
 use aho_corasick::AhoCorasickBuilder;
 use enum_iterator::Sequence;
-use num_enum::{IntoPrimitive, TryFromPrimitive};
-
 use mz_ore::cast::CastFrom;
+use num_enum::{IntoPrimitive, TryFromPrimitive};
 
 use crate::scalar::func::TimestampLike;
 
@@ -136,7 +135,7 @@ enum DateTimeToken {
 impl DateTimeToken {
     /// Returns the literal sequence of characters that this `DateTimeToken`
     /// matches.
-    fn pattern(&self) -> &'static str {
+    const fn pattern(&self) -> &'static str {
         match self {
             DateTimeToken::AD => "AD",
             DateTimeToken::ad => "ad",

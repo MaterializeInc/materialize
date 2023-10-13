@@ -6,6 +6,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_envelope_materialize = true
+
 # Note these are nonsense schemas, as this error happens before schema verification of any form
 $ set keyschema={}
 
@@ -22,17 +25,8 @@ $ kafka-create-topic topic=headers_src
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE HEADERS
-  ENVELOPE DEBEZIUM
-contains:INCLUDE HEADERS requires ENVELOPE UPSERT or no ENVELOPE
-
-! CREATE SOURCE headers_src
-  FROM KAFKA CONNECTION kafka_conn (TOPIC
-  'testdrive-headers_src-${testdrive.seed}')
-  KEY FORMAT AVRO USING SCHEMA '${keyschema}'
-  VALUE FORMAT AVRO USING SCHEMA '${schema}'
-  INCLUDE HEADERS
-  ENVELOPE DEBEZIUM
-contains:INCLUDE HEADERS requires ENVELOPE UPSERT or no ENVELOPE
+  ENVELOPE MATERIALIZE
+contains:INCLUDE <metadata> requires ENVELOPE (NONE|UPSERT|DEBEZIUM)
 
 ! CREATE SOURCE headers_src
   FROM KAFKA CONNECTION kafka_conn (TOPIC
@@ -41,34 +35,9 @@ contains:INCLUDE HEADERS requires ENVELOPE UPSERT or no ENVELOPE
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE HEADERS
   ENVELOPE MATERIALIZE
-contains:INCLUDE HEADERS requires ENVELOPE UPSERT or no ENVELOPE
+contains:INCLUDE <metadata> requires ENVELOPE (NONE|UPSERT|DEBEZIUM)
 
 ! CREATE SOURCE headers_src
-  FROM KAFKA CONNECTION kafka_conn (TOPIC
-  'testdrive-headers_src-${testdrive.seed}')
-  KEY FORMAT AVRO USING SCHEMA '${keyschema}'
-  VALUE FORMAT AVRO USING SCHEMA '${schema}'
-  INCLUDE HEADERS
-  ENVELOPE MATERIALIZE
-contains:INCLUDE HEADERS requires ENVELOPE UPSERT or no ENVELOPE
-
-# even the csv header validation doesn't happen before this error
-$ s3-create-bucket bucket=test
-$ s3-put-object bucket=test key=static.csv
-
-> CREATE SECRET s3_conn_secret_access_key AS '${testdrive.aws-secret-access-key}';
-
-> CREATE CONNECTION s3_conn TO AWS (
-    ACCESS KEY ID = '${testdrive.aws-access-key-id}',
-    SECRET ACCESS KEY = SECRET s3_conn_secret_access_key,
-    TOKEN = '${testdrive.aws-token}',
-    REGION = '${testdrive.aws-region}',
-    ENDPOINT = '${testdrive.aws-endpoint}'
-  );
-
-! CREATE SOURCE headers_src
-  FROM S3 CONNECTION s3_conn
-  DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
-  FORMAT CSV WITH HEADER (city, state, zip)
+  FROM LOAD GENERATOR COUNTER
   INCLUDE HEADERS
 contains:INCLUDE HEADERS with non-Kafka sources not supported

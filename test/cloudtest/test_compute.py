@@ -7,12 +7,17 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import logging
+
 import pytest
 from pg8000.exceptions import InterfaceError
 
-from materialize.cloudtest.application import MaterializeApplication
-from materialize.cloudtest.exists import exists, not_exists
-from materialize.cloudtest.wait import wait
+from materialize.cloudtest.app.materialize_application import MaterializeApplication
+from materialize.cloudtest.util.cluster import cluster_pod_name, cluster_service_name
+from materialize.cloudtest.util.exists import exists, not_exists
+from materialize.cloudtest.util.wait import wait
+
+LOGGER = logging.getLogger(__name__)
 
 
 def test_cluster_sizing(mz: MaterializeApplication) -> None:
@@ -33,7 +38,7 @@ def test_cluster_sizing(mz: MaterializeApplication) -> None:
     assert replica_id is not None
 
     for compute_id in range(0, SIZE):
-        compute_pod = f"pod/cluster-{cluster_id}-replica-{replica_id}-{compute_id}"
+        compute_pod = cluster_pod_name(cluster_id, replica_id, compute_id)
         wait(condition="condition=Ready", resource=compute_pod)
 
     mz.environmentd.sql("DROP CLUSTER sized1 CASCADE")
@@ -47,7 +52,7 @@ def test_cluster_sizing(mz: MaterializeApplication) -> None:
 def test_cluster_shutdown(mz: MaterializeApplication, failpoint: str) -> None:
     """Test that dropping a cluster or replica causes the associated clusterds to shut down."""
 
-    print(f"Testing cluster shutdown with failpoint={failpoint}")
+    LOGGER.info(f"Testing cluster shutdown with failpoint={failpoint}")
 
     mz.set_environmentd_failpoints(failpoint)
 
@@ -58,7 +63,7 @@ def test_cluster_shutdown(mz: MaterializeApplication, failpoint: str) -> None:
         try:
             mz.environmentd.sql(sql)
         except InterfaceError as e:
-            print(f"Expected SQL error: {e}")
+            LOGGER.error(f"Expected SQL error: {e}")
 
     mz.environmentd.sql(
         "CREATE CLUSTER shutdown1 REPLICAS (shutdown_replica1 (SIZE '1'), shutdown_replica2 (SIZE '1'))"
@@ -77,11 +82,11 @@ def test_cluster_shutdown(mz: MaterializeApplication, failpoint: str) -> None:
         )[0][0]
         assert replica_id is not None
 
-        compute_pod = f"pod/cluster-{cluster_id}-replica-{replica_id}-0"
+        compute_pod = cluster_pod_name(cluster_id, replica_id)
         compute_pods[replica_name] = compute_pod
         wait(condition="condition=Ready", resource=compute_pod)
 
-        compute_svc = f"service/cluster-{cluster_id}-replica-{replica_id}"
+        compute_svc = cluster_service_name(cluster_id, replica_id)
         compute_svcs[replica_name] = compute_svc
         exists(resource=compute_svc)
 

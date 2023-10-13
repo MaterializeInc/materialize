@@ -14,16 +14,34 @@
 set -euo pipefail
 
 . misc/shlib/shlib.bash
+. misc/buildkite/git.bash
 
-ci_try bin/lint
-ci_try cargo --locked fmt -- --check
-ci_try cargo --locked deny check licenses bans sources
-ci_try cargo hakari generate --diff
-ci_try cargo hakari manage-deps --dry-run
+try bin/lint
+try cargo --locked fmt -- --check
+try cargo --locked deny check licenses bans sources
+try cargo hakari generate --diff
+try cargo hakari manage-deps --dry-run
+try cargo deplint Cargo.lock ci/test/lint-deps.toml
 
 # Smoke out failures in generating the license metadata page, even though we
 # don't care about its output in the test pipeline, so that we don't only
 # discover the failures after a merge to main.
-ci_try cargo --locked about generate ci/deploy/licenses.hbs > /dev/null
+try cargo --locked about generate ci/deploy/licenses.hbs > /dev/null
 
-ci_status_report
+
+if [[ "${BUILDKITE_PULL_REQUEST:-true}" != "false" ]]; then
+  # see ./ci/test/lint-buf/README.md
+
+  fetch_pr_target_branch
+
+  ci_collapsed_heading "Verify that protobuf config is up-to-date"
+  try bin/pyactivate ./ci/test/lint-buf/generate-buf-config.py
+  try yamllint src/buf.yaml
+  try git diff --name-only --exit-code src/buf.yaml
+
+  ci_collapsed_heading "Lint protobuf"
+  COMMON_ANCESTOR="$(get_common_ancestor_commit_of_pr_and_target)"
+  try buf breaking src --against ".git#ref=$COMMON_ANCESTOR,subdir=src" --verbose
+fi
+
+try_status_report

@@ -14,7 +14,7 @@ user documentation, if you haven't already:
 
   1. [Get Started](https://materialize.com/docs/get-started/)
   2. [What Is Materialized?](https://materialize.com/docs/overview/what-is-materialize/)
-  3. [Architecture Overview](https://materialize.com/docs/overview/architecture/)
+  3. [Architecture Overview](https://materialize.com/blog/materialize-architecture/)
 
 Then, once you're up to speed, dive into the [developer guide](guide.md). The
 guide is intended to be skimmed from start to finish, to give you the lay of the
@@ -22,11 +22,14 @@ land, and then browsed as reference material as you skill up on the codebase.
 
 ## Table of contents
 
+* [change-data-capture.md](change-data-capture.md) describes our change data
+  capture (CDC) requirements.
+
 * [ci-regexp.md](ci-regexp.md) describes how to mark a CI issue with a regular
   expression to ignore it in future CI runs.
 
-* [change-data-capture.md](change-data-capture.md) describes our change data
-  capture (CDC) requirements.
+* [code-coverage.md](code-coverage.md) explains the system we have in place in
+  CI for code coverage of pull requests.
 
 * [debugging.md](debugging.md) is a guide to debugging Materialize using
   rust-gdb / rust-lldb.
@@ -43,6 +46,8 @@ land, and then browsed as reference material as you skill up on the codebase.
 * [fast-compiles.md](fast-compiles.md) describes various tricks for speeding
   up Rust compilation.
 
+* [feature-lifecycle.md](feature-lifecycle.md) outlines how we ship features.
+
 * [guide.md](guide.md) walks you through hacking on this codebase and our
   development philosophy.
 
@@ -56,6 +61,9 @@ land, and then browsed as reference material as you skill up on the codebase.
 
 * [mzbuild.md](mzbuild.md) describes the custom build system we use to manage
   our Docker images and Docker Compose configurations.
+
+* [project-management.md](project-management.md) describes our processes for
+  organizing, prioritizing, and shipping projects.
 
 * [publishing.md](publishing.md) details how to publish packages, like Rust
   crates or Docker images.

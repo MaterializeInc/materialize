@@ -38,6 +38,8 @@ import subprocess
 from pathlib import Path
 
 ALLOW_LINTS = [
+    # Allows us to allow/deny new lints and support older versions of rust/clippy.
+    "unknown_lints",
     # The style and complexity lints frustrated too many engineers and caused
     # more bikeshedding than they saved. These lint categories are largely a
     # matter of opinion. A few of the worthwhile lints in these categories are
@@ -66,6 +68,9 @@ ALLOW_LINTS = [
     # when some types implement `Default` and others do not.
     # TODO(guswynn): benchmark the performance gain.
     "clippy::box_default",
+    # This suggestion misses the point of `.drain(..).collect()` entirely:
+    # to keep the capacity of the original collection the same.
+    "clippy::drain_collect",
 ]
 
 WARN_LINTS = [
@@ -121,9 +126,6 @@ WARN_LINTS = [
     "clippy::unnecessary_mut_passed",
     # Purely redundant tokens; probably a mistake.
     "clippy::wildcard_in_or_patterns",
-    # Semantically wrong level of nesting.
-    "clippy::collapsible_if",
-    "clippy::collapsible_else_if",
     # Transmuting between T and T* seems 99% likely to be buggy code.
     "clippy::crosspointer_transmute",
     # Confusing and likely buggy.

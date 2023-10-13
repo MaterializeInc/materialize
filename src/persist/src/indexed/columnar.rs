@@ -479,13 +479,14 @@ impl ColumnarRecordsBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use mz_persist_types::Codec64;
+
+    use super::*;
 
     /// Smoke test some edge cases around empty sets of records and empty keys/vals
     ///
     /// Most of this functionality is also well-exercised in other unit tests as well.
-    #[test]
+    #[mz_ore::test]
     fn columnar_records() {
         let builder = ColumnarRecordsBuilder::default();
 

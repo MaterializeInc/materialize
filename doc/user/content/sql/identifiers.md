@@ -20,7 +20,7 @@ like sources, views, and indexes.
   (`a`-`z` and `A`-`Z`), ASCII digits (`0`-`9`), underscores (`_`),
   dollar signs (`$`), or any non-ASCII characters.
 
-You can circumvent any of the above rules by double-quoting the the identifier,
+You can circumvent any of the above rules by double-quoting the identifier,
 e.g. `"123_source"` or `"fun_source_@"`. All characters inside a quoted
 identifier are taken literally, except that double-quotes must be escaped by
 writing two adjacent double-quotes, as in `"includes""quote"`.

@@ -9,11 +9,10 @@
 
 use std::fmt;
 
-use serde::{Deserialize, Serialize};
-
 use mz_lowertest::MzReflect;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::{strconv, ColumnType, ScalarType};
+use serde::{Deserialize, Serialize};
 
 use crate::scalar::func::EagerUnaryFunc;
 use crate::EvalError;
@@ -22,6 +21,7 @@ sqlfunc!(
     #[sqlname = "-"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(NegFloat32)]
+    #[is_monotone = true]
     fn neg_float32(a: f32) -> f32 {
         -a
     }
@@ -72,6 +72,7 @@ sqlfunc!(
     #[sqlname = "real_to_smallint"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastInt16ToFloat32)]
+    #[is_monotone = true]
     fn cast_float32_to_int16(a: f32) -> Result<i16, EvalError> {
         let f = round_float32(a);
         // TODO(benesch): remove potentially dangerous usage of `as`.
@@ -79,7 +80,7 @@ sqlfunc!(
         if (f >= (i16::MIN as f32)) && (f < -(i16::MIN as f32)) {
             Ok(f as i16)
         } else {
-            Err(EvalError::Int16OutOfRange)
+            Err(EvalError::Int16OutOfRange(f.to_string()))
         }
     }
 );
@@ -88,6 +89,7 @@ sqlfunc!(
     #[sqlname = "real_to_integer"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastInt32ToFloat32)]
+    #[is_monotone = true]
     fn cast_float32_to_int32(a: f32) -> Result<i32, EvalError> {
         let f = round_float32(a);
         // This condition is delicate because i32::MIN can be represented exactly by
@@ -99,7 +101,7 @@ sqlfunc!(
         if (f >= (i32::MIN as f32)) && (f < -(i32::MIN as f32)) {
             Ok(f as i32)
         } else {
-            Err(EvalError::Int32OutOfRange)
+            Err(EvalError::Int32OutOfRange(f.to_string()))
         }
     }
 );
@@ -108,6 +110,7 @@ sqlfunc!(
     #[sqlname = "real_to_bigint"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastInt64ToFloat32)]
+    #[is_monotone = true]
     fn cast_float32_to_int64(a: f32) -> Result<i64, EvalError> {
         let f = round_float32(a);
         // This condition is delicate because i64::MIN can be represented exactly by
@@ -119,7 +122,7 @@ sqlfunc!(
         if (f >= (i64::MIN as f32)) && (f < -(i64::MIN as f32)) {
             Ok(f as i64)
         } else {
-            Err(EvalError::Int64OutOfRange)
+            Err(EvalError::Int64OutOfRange(f.to_string()))
         }
     }
 );
@@ -128,6 +131,7 @@ sqlfunc!(
     #[sqlname = "real_to_double"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastFloat64ToFloat32)]
+    #[is_monotone = true]
     fn cast_float32_to_float64(a: f32) -> f64 {
         a.into()
     }
@@ -148,6 +152,7 @@ sqlfunc!(
     #[sqlname = "real_to_uint2"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastUint16ToFloat32)]
+    #[is_monotone = true]
     fn cast_float32_to_uint16(a: f32) -> Result<u16, EvalError> {
         let f = round_float32(a);
         // TODO(benesch): remove potentially dangerous usage of `as`.
@@ -155,7 +160,7 @@ sqlfunc!(
         if (f >= 0.0) && (f <= (u16::MAX as f32)) {
             Ok(f as u16)
         } else {
-            Err(EvalError::UInt16OutOfRange)
+            Err(EvalError::UInt16OutOfRange(f.to_string()))
         }
     }
 );
@@ -164,6 +169,7 @@ sqlfunc!(
     #[sqlname = "real_to_uint4"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastUint32ToFloat32)]
+    #[is_monotone = true]
     fn cast_float32_to_uint32(a: f32) -> Result<u32, EvalError> {
         let f = round_float32(a);
         // TODO(benesch): remove potentially dangerous usage of `as`.
@@ -171,7 +177,7 @@ sqlfunc!(
         if (f >= 0.0) && (f <= (u32::MAX as f32)) {
             Ok(f as u32)
         } else {
-            Err(EvalError::UInt32OutOfRange)
+            Err(EvalError::UInt32OutOfRange(f.to_string()))
         }
     }
 );
@@ -180,6 +186,7 @@ sqlfunc!(
     #[sqlname = "real_to_uint8"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastUint64ToFloat32)]
+    #[is_monotone = true]
     fn cast_float32_to_uint64(a: f32) -> Result<u64, EvalError> {
         let f = round_float32(a);
         // TODO(benesch): remove potentially dangerous usage of `as`.
@@ -187,7 +194,7 @@ sqlfunc!(
         if (f >= 0.0) && (f <= (u64::MAX as f32)) {
             Ok(f as u64)
         } else {
-            Err(EvalError::UInt64OutOfRange)
+            Err(EvalError::UInt64OutOfRange(f.to_string()))
         }
     }
 );
@@ -221,6 +228,10 @@ impl<'a> EagerUnaryFunc<'a> for CastFloat32ToNumeric {
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastNumericToFloat32)
+    }
+
+    fn is_monotone(&self) -> bool {
+        true
     }
 }
 

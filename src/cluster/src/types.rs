@@ -11,10 +11,9 @@
 
 use std::sync::Arc;
 
-use timely::worker::Worker as TimelyWorker;
-
-use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
+use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
+use timely::worker::Worker as TimelyWorker;
 
 /// A trait for letting specific server implementations hook
 /// into handling of `CreateTimely` commands. Usually implemented by
@@ -30,7 +29,7 @@ pub trait AsRunnableWorker<C, R> {
 
     /// Build and continuously run a worker. Called on each timely
     /// thread.
-    fn build_and_run<A: timely::communication::Allocate>(
+    fn build_and_run<A: timely::communication::Allocate + 'static>(
         config: Self,
         timely_worker: &mut TimelyWorker<A>,
         client_rx: crossbeam_channel::Receiver<(
@@ -39,38 +38,6 @@ pub trait AsRunnableWorker<C, R> {
             crossbeam_channel::Sender<Self::Activatable>,
         )>,
         persist_clients: Arc<PersistClientCache>,
+        tracing_handle: Arc<TracingHandle>,
     );
-}
-
-/// A trait for specific cluster commands that can be unpacked into
-/// `CreateTimely` variants.
-pub trait TryIntoTimelyConfig {
-    /// Attempt to unpack `self` into a `(TimelyConfig, ClusterStartupEpoch)`. Otherwise,
-    /// fail and return `self` back.
-    fn try_into_timely_config(self) -> Result<(TimelyConfig, ClusterStartupEpoch), Self>
-    where
-        Self: Sized;
-}
-
-impl TryIntoTimelyConfig for mz_compute_client::protocol::command::ComputeCommand {
-    fn try_into_timely_config(self) -> Result<(TimelyConfig, ClusterStartupEpoch), Self> {
-        match self {
-            mz_compute_client::protocol::command::ComputeCommand::CreateTimely {
-                config,
-                epoch,
-            } => Ok((config, epoch)),
-            cmd => Err(cmd),
-        }
-    }
-}
-
-impl TryIntoTimelyConfig for mz_storage_client::client::StorageCommand {
-    fn try_into_timely_config(self) -> Result<(TimelyConfig, ClusterStartupEpoch), Self> {
-        match self {
-            mz_storage_client::client::StorageCommand::CreateTimely { config, epoch } => {
-                Ok((config, epoch))
-            }
-            cmd => Err(cmd),
-        }
-    }
 }

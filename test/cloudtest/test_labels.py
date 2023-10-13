@@ -9,11 +9,11 @@
 
 import json
 
-from materialize.cloudtest.application import MaterializeApplication
+from materialize.cloudtest.app.materialize_application import MaterializeApplication
 
 
 # NOTE [btv] - Quick and dirty hack: assume s1 is always mz_system and
-# s2 is always mz_introspection.
+# s2 is always mz_support.
 #
 # This will need to be done properly (i.e., by actually looking up
 # the cluster id->name mapping in SQL) if that assumption ever changes.

@@ -9,7 +9,7 @@
 
 //! Structs and traits for `EXPLAIN AS JSON`.
 
-use super::*;
+use crate::explain::*;
 
 /// A trait implemented by explanation types that can be rendered as
 /// [`ExplainFormat::Json`].

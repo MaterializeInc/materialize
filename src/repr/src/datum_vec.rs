@@ -93,7 +93,7 @@ impl<'outer> std::ops::DerefMut for DatumVecBorrow<'outer> {
 mod test {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn miri_test_datum_vec() {
         let mut d = DatumVec::new();
 

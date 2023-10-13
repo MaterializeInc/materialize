@@ -10,7 +10,7 @@
 use std::fmt;
 
 use mz_ore::str::StrExt;
-use mz_repr::GlobalId;
+use mz_proto::TryFromProtoError;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 
 #[derive(Debug, thiserror::Error)]
@@ -24,34 +24,24 @@ pub struct Error {
 pub enum ErrorKind {
     #[error("corrupt catalog: {detail}")]
     Corruption { detail: String },
-    #[error("id counter overflows i64")]
-    IdExhaustion,
     #[error("oid counter overflows i64")]
     OidExhaustion,
     #[error(transparent)]
     Sql(#[from] SqlCatalogError),
-    #[error("database '{0}' already exists")]
-    DatabaseAlreadyExists(String),
-    #[error("schema '{0}' already exists")]
-    SchemaAlreadyExists(String),
-    #[error("role '{0}' already exists")]
-    RoleAlreadyExists(String),
-    #[error("cluster '{0}' already exists")]
-    ClusterAlreadyExists(String),
-    #[error("cannot create multiple replicas named '{0}' on cluster '{1}'")]
-    DuplicateReplica(String, String),
-    #[error("catalog item '{1}' already exists")]
-    ItemAlreadyExists(GlobalId, String),
     #[error("unacceptable schema name '{0}'")]
     ReservedSchemaName(String),
     #[error("role name {} is reserved", .0.quoted())]
     ReservedRoleName(String),
+    #[error("role name {} is reserved", .0.quoted())]
+    ReservedSystemRoleName(String),
     #[error("cluster name {} is reserved", .0.quoted())]
     ReservedClusterName(String),
     #[error("replica name {} is reserved", .0.quoted())]
     ReservedReplicaName(String),
     #[error("system cluster '{0}' cannot be modified")]
     ReadOnlyCluster(String),
+    #[error("system database '{0}' cannot be modified")]
+    ReadOnlyDatabase(String),
     #[error("system schema '{0}' cannot be modified")]
     ReadOnlySystemSchema(String),
     #[error("system item '{0}' cannot be modified")]
@@ -74,16 +64,12 @@ pub enum ErrorKind {
         this_version: &'static str,
         cause: String,
     },
-    #[error("failed to migrate schema of builtin objects: {0}")]
-    FailedBuiltinSchemaMigration(String),
     #[error("failpoint {0} reached)")]
     FailpointReached(String),
     #[error("{0}")]
     Unstructured(String),
     #[error(transparent)]
-    Stash(#[from] mz_stash::StashError),
-    #[error("stash in unexpected state")]
-    UnexpectedStashState,
+    Durable(#[from] mz_catalog::DurableCatalogError),
     #[error(transparent)]
     Uuid(#[from] uuid::Error),
     #[error("role \"{role_name}\" is a member of role \"{member_name}\"")]
@@ -91,6 +77,8 @@ pub enum ErrorKind {
         role_name: String,
         member_name: String,
     },
+    #[error("cluster '{0}' is managed and cannot be directly modified")]
+    ManagedCluster(String),
 }
 
 impl Error {
@@ -106,6 +94,9 @@ impl Error {
             }
             ErrorKind::ReservedRoleName(_) => {
                 Some("The role \"public\" and the prefixes \"mz_\" and \"pg_\" are reserved for system roles.".into())
+            }
+            ErrorKind::ReservedSystemRoleName(_) => {
+                Some("The role prefixes \"mz_\" and \"pg_\" are reserved for system roles.".into())
             }
             ErrorKind::ReservedClusterName(_) => {
                 Some("The prefixes \"mz_\" and \"pg_\" are reserved for system clusters.".into())
@@ -126,15 +117,24 @@ impl From<SqlCatalogError> for Error {
     }
 }
 
-impl From<mz_stash::StashError> for Error {
-    fn from(e: mz_stash::StashError) -> Error {
-        Error::new(ErrorKind::from(e))
+impl From<TryFromProtoError> for Error {
+    fn from(e: TryFromProtoError) -> Error {
+        Error::from(mz_catalog::CatalogError::from(e))
     }
 }
 
 impl From<uuid::Error> for Error {
     fn from(e: uuid::Error) -> Error {
         Error::new(ErrorKind::from(e))
+    }
+}
+
+impl From<mz_catalog::CatalogError> for Error {
+    fn from(e: mz_catalog::CatalogError) -> Self {
+        match e {
+            mz_catalog::CatalogError::Catalog(e) => Error::new(ErrorKind::from(e)),
+            mz_catalog::CatalogError::Durable(e) => Error::new(ErrorKind::from(e)),
+        }
     }
 }
 

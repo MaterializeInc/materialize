@@ -11,9 +11,10 @@
 
 // TODO(frank): evaluate for redundancy with projection hoisting.
 
-use crate::TransformArgs;
 use mz_expr::visit::Visit;
 use mz_expr::MirRelationExpr;
+
+use crate::TransformCtx;
 
 /// Fuses Project operators with parent operators when possible.
 #[derive(Debug)]
@@ -29,7 +30,7 @@ impl crate::Transform for Project {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
+        _: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
         relation.visit_mut_pre(&mut Self::action)?;
         mz_repr::explain::trace_plan(&*relation);

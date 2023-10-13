@@ -1,0 +1,40 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Test for `SHOW CLUSTERS`.
+
+mode standard
+
+# Start from a pristine state
+reset-server
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_unmanaged_cluster_replicas = on;
+----
+COMPLETE 0
+
+statement ok
+CREATE CLUSTER foo REPLICAS ()
+
+statement ok
+CREATE CLUSTER bar REPLICAS (r1 (SIZE '1'), r2 (SIZE '1'))
+
+query TT rowsort
+SELECT name, replicas FROM (SHOW CLUSTERS)
+----
+bar
+r1 (1), r2 (1)
+default
+r1 (1)
+foo
+NULL
+mz_introspection
+r1 (1)
+mz_system
+r1 (1)

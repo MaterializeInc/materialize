@@ -280,4 +280,4 @@ contains:operator does not exist: mz_timestamp + integer
   WHERE mz_now() > 1927418240000.1;
 
 ! SELECT * FROM numeric_trunc;
-contains:Evaluation error: mz_timestamp out of range
+contains:Evaluation error: "1927418240000.1" mz_timestamp out of range

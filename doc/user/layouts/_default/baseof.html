@@ -77,9 +77,35 @@ Apache License, Version 2.0. */}}
     <div class="backdrop"></div>
 
     <script>
+      /* Add anchor links to headings */
       anchors.add(
         ".content h2, .content h3, .content h4, .content h5, .content h6"
       );
+
+      /* Copy anchor links to clipboard on click */
+      document.addEventListener("click", function (e) {
+        const target = e.target;
+        if (target.classList.contains("anchorjs-link")) {
+          const initialIcon = e.target.getAttribute("data-anchorjs-icon");
+          e.target.setAttribute("data-anchorjs-icon", "\u2713");
+          setTimeout(() => {
+            e.target.setAttribute("data-anchorjs-icon", initialIcon);
+          }, 1000);
+          e.preventDefault();
+          const copyText = target.href;
+
+          navigator.clipboard
+            .writeText(copyText)
+            .then(() => {
+              // Successful copy
+              console.log("Text copied to clipboard: " + copyText);
+            })
+            .catch((error) => {
+              // Error occurred
+              console.error("Failed to copy text: " + error);
+            });
+        }
+      });
 
       $(".content ol:has(p)").addClass("has-p");
 
@@ -140,11 +166,11 @@ Apache License, Version 2.0. */}}
       const sidebarCloseButton = document.querySelector("button.close-topics");
       const sidebarWrapper = document.querySelector(".sidebar-wrapper");
       const backdrop = document.querySelector(".backdrop");
-      const allTables  = document.querySelectorAll("table");
+      const allTables = document.querySelectorAll("table");
 
-      allTables.forEach(table => {
-       table.outerHTML = `<div class="table-container">${table.outerHTML}</div>`;
-      })
+      allTables.forEach((table) => {
+        table.outerHTML = `<div class="table-container">${table.outerHTML}</div>`;
+      });
 
       const toggleBodyOverflow = (boolean) => {
         if (boolean) {
@@ -192,7 +218,7 @@ Apache License, Version 2.0. */}}
           mobileLinks.style.display = "none";
           menuToggle.classList.remove("open");
           toggleBodyOverflow(true);
-          backdrop.style.display = 'none'
+          backdrop.style.display = "none";
         }
       });
 
@@ -246,17 +272,17 @@ Apache License, Version 2.0. */}}
         highlightButton("dark");
       });
 
-      const allLinks = document.querySelectorAll('a')
-      console.log(allLinks.length)
+      const allLinks = document.querySelectorAll("a");
+      console.log(allLinks.length);
 
       allLinks.forEach((link) => {
         const firstChild = link.children[0];
-        if(firstChild) {
-          if (firstChild.nodeName === 'CODE') {
-            link.classList.add("link-with-code")
+        if (firstChild) {
+          if (firstChild.nodeName === "CODE") {
+            link.classList.add("link-with-code");
           }
         }
-      })
+      });
     </script>
   </body>
 </html>

@@ -13,36 +13,43 @@ use std::backtrace::Backtrace;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::trace::Description;
 use futures::Stream;
 use mz_ore::now::EpochMillis;
 use mz_ore::task::RuntimeExt;
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::{Codec, Codec64};
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
-use tracing::{debug, debug_span, instrument, trace_span, warn, Instrument};
+use tracing::{debug_span, instrument, warn, Instrument};
 use uuid::Uuid;
 
+use crate::cfg::PersistFeatureFlag;
 use crate::fetch::{
-    fetch_leased_part, BatchFetcher, FetchedPart, LeasedBatchPart, SerdeLeasedBatchPart,
-    SerdeLeasedBatchPartMetadata,
+    fetch_leased_part, BatchFetcher, FetchBatchFilter, FetchedPart, LeasedBatchPart,
+    SerdeLeasedBatchPart, SerdeLeasedBatchPartMetadata,
 };
 use crate::internal::encoding::Schemas;
 use crate::internal::machine::Machine;
-use crate::internal::metrics::{Metrics, MetricsRetryStream};
-use crate::internal::state::{HollowBatch, Since};
-use crate::{parse_id, GarbageCollector, PersistConfig};
+use crate::internal::metrics::Metrics;
+use crate::internal::state::{HollowBatch, HollowBatchPart};
+use crate::internal::watch::StateWatch;
+use crate::iter::Consolidator;
+use crate::{parse_id, GarbageCollector, PersistConfig, ShardId};
+
+pub use crate::internal::state::Since;
 
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Arbitrary, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct LeasedReaderId(pub(crate) [u8; 16]);
 
@@ -230,6 +237,7 @@ where
     D: Semigroup + Codec64 + Send + Sync,
 {
     handle: ReadHandle<K, V, T, D>,
+    watch: StateWatch<K, V, T, D>,
 
     as_of: Antichain<T>,
     since: Antichain<T>,
@@ -250,8 +258,10 @@ where
         // isn't). Be a good citizen and downgrade early.
         handle.downgrade_since(&since).await;
 
+        let watch = handle.machine.applier.watch();
         Listen {
             handle,
+            watch,
             since,
             frontier: as_of.clone(),
             as_of,
@@ -284,7 +294,15 @@ where
     /// The returned `Antichain` represents the subscription progress as it will
     /// be _after_ the returned parts are fetched.
     pub async fn next(&mut self) -> (Vec<LeasedBatchPart<T>>, Antichain<T>) {
-        let batch = self.handle.next_listen_batch(&self.frontier).await;
+        let batch = self
+            .handle
+            .machine
+            .next_listen_batch(
+                &self.frontier,
+                &mut self.watch,
+                Some(&self.handle.reader_id),
+            )
+            .await;
 
         // A lot of things across mz have to line up to hold the following
         // invariant and violations only show up as subtle correctness errors,
@@ -397,6 +415,7 @@ where
             self.handle.blob.as_ref(),
             Arc::clone(&self.handle.metrics),
             &self.handle.metrics.read.listen,
+            &self.handle.machine.applier.shard_metrics,
             Some(&self.handle.reader_id),
             self.handle.schemas.clone(),
         )
@@ -526,7 +545,7 @@ where
     explicitly_expired: bool,
     lease_returner: SubscriptionLeaseReturner,
 
-    pub(crate) heartbeat_task: Option<JoinHandle<()>>,
+    pub(crate) heartbeat_tasks: Option<Vec<JoinHandle<()>>>,
 }
 
 impl<K, V, T, D> ReadHandle<K, V, T, D>
@@ -563,8 +582,13 @@ where
                 reader_id: reader_id.clone(),
                 metrics,
             },
-            heartbeat_task: Some(machine.start_reader_heartbeat_task(reader_id, gc).await),
+            heartbeat_tasks: Some(machine.start_reader_heartbeat_tasks(reader_id, gc).await),
         }
+    }
+
+    /// This handle's shard id.
+    pub fn shard_id(&self) -> ShardId {
+        self.machine.shard_id()
     }
 
     /// This handle's `since` frontier.
@@ -615,7 +639,13 @@ where
                     self.reader_id,
                     outstanding_seqno,
                     _seqno,
-                    self.lease_returner.leased_seqnos,
+                    self.lease_returner
+                        .leased_seqnos
+                        .lock()
+                        .expect("lock")
+                        .iter()
+                        .take(10)
+                        .collect::<Vec<_>>(),
                     // The Debug impl of backtrace is less aesthetic, but will put the trace
                     // on a single line and play more nicely with our Honeycomb quota
                     Backtrace::capture(),
@@ -708,22 +738,35 @@ where
         Ok(Subscribe::new(snapshot_parts, listen))
     }
 
+    fn lease_batch_part(
+        &mut self,
+        desc: Description<T>,
+        part: HollowBatchPart,
+        metadata: SerdeLeasedBatchPartMetadata,
+    ) -> LeasedBatchPart<T> {
+        LeasedBatchPart {
+            metrics: Arc::clone(&self.metrics),
+            shard_id: self.machine.shard_id(),
+            reader_id: self.reader_id.clone(),
+            metadata,
+            desc,
+            key: part.key,
+            stats: part.stats,
+            encoded_size_bytes: part.encoded_size_bytes,
+            leased_seqno: Some(self.lease_seqno()),
+            filter_pushdown_audit: false,
+        }
+    }
+
     fn lease_batch_parts(
         &mut self,
         batch: HollowBatch<T>,
         metadata: SerdeLeasedBatchPartMetadata,
     ) -> impl Iterator<Item = LeasedBatchPart<T>> + '_ {
-        batch.parts.into_iter().map(move |part| LeasedBatchPart {
-            metrics: Arc::clone(&self.metrics),
-            shard_id: self.machine.shard_id(),
-            reader_id: self.reader_id.clone(),
-            metadata: metadata.clone(),
-            desc: batch.desc.clone(),
-            key: part.key,
-            stats: part.stats,
-            encoded_size_bytes: part.encoded_size_bytes,
-            leased_seqno: Some(self.lease_seqno()),
-        })
+        batch
+            .parts
+            .into_iter()
+            .map(move |part| self.lease_batch_part(batch.desc.clone(), part, metadata.clone()))
     }
 
     /// Tracks that the `ReadHandle`'s machine's current `SeqNo` is being
@@ -756,7 +799,7 @@ where
     /// # Panics
     /// - If `self` does not have record of issuing the [`LeasedBatchPart`], e.g.
     ///   it originated from from another `ReadHandle`.
-    pub(crate) fn process_returned_leased_part(&mut self, leased_part: LeasedBatchPart<T>) {
+    pub fn process_returned_leased_part(&mut self, leased_part: LeasedBatchPart<T>) {
         self.lease_returner.return_leased_part(leased_part)
     }
 
@@ -772,7 +815,7 @@ where
             .register_leased_reader(
                 &new_reader_id,
                 purpose,
-                self.cfg.reader_lease_duration,
+                self.cfg.dynamic.reader_lease_duration(),
                 heartbeat_ts,
             )
             .await;
@@ -808,7 +851,7 @@ where
         // NB: min_elapsed is intentionally smaller than the one in
         // maybe_heartbeat_reader (this is the preferential treatment mentioned
         // above).
-        let min_elapsed = self.cfg.reader_lease_duration / 4;
+        let min_elapsed = self.cfg.dynamic.reader_lease_duration() / 4;
         let elapsed_since_last_heartbeat =
             Duration::from_millis((self.cfg.now)().saturating_sub(self.last_heartbeat));
         if elapsed_since_last_heartbeat >= min_elapsed {
@@ -823,12 +866,14 @@ where
     /// or [Self::maybe_downgrade_since] on some interval that is "frequent"
     /// compared to PersistConfig::FAKE_READ_LEASE_DURATION.
     pub(crate) async fn maybe_heartbeat_reader(&mut self) {
-        let min_elapsed = self.cfg.reader_lease_duration / 2;
+        let min_elapsed = self.cfg.dynamic.reader_lease_duration() / 2;
         let heartbeat_ts = (self.cfg.now)();
         let elapsed_since_last_heartbeat =
             Duration::from_millis(heartbeat_ts.saturating_sub(self.last_heartbeat));
         if elapsed_since_last_heartbeat >= min_elapsed {
-            if elapsed_since_last_heartbeat > self.machine.applier.cfg.reader_lease_duration {
+            if elapsed_since_last_heartbeat
+                > self.machine.applier.cfg.dynamic.reader_lease_duration()
+            {
                 warn!(
                     "reader ({}) of shard ({}) went {}s between heartbeats",
                     self.reader_id,
@@ -841,7 +886,7 @@ where
                 .machine
                 .heartbeat_leased_reader(&self.reader_id, heartbeat_ts)
                 .await;
-            if !existed && !self.machine.applier.state().collections.is_tombstone() {
+            if !existed && !self.machine.applier.is_tombstone() {
                 // It's probably surprising to the caller that the shard
                 // becoming a tombstone expired this reader. Possibly the right
                 // thing to do here is pass up a bool to the caller indicating
@@ -874,50 +919,6 @@ where
         self.explicitly_expired = true;
     }
 
-    async fn next_listen_batch(&mut self, frontier: &Antichain<T>) -> HollowBatch<T> {
-        let mut retry: Option<MetricsRetryStream> = None;
-        loop {
-            if let Some(b) = self.machine.next_listen_batch(frontier) {
-                return b;
-            }
-            // Only sleep after the first fetch, because the first time through
-            // maybe our state was just out of date.
-            retry = Some(match retry.take() {
-                None => self.metrics.retries.next_listen_batch.stream(
-                    self.cfg
-                        .dynamic
-                        .next_listen_batch_retry_params()
-                        .into_retry(SystemTime::now())
-                        .into_retry_stream(),
-                ),
-                Some(retry) => {
-                    // Wait a bit and try again. Intentionally don't ever log
-                    // this at info level.
-                    //
-                    // TODO: See if we can watch for changes in Consensus to be
-                    // more reactive here.
-                    debug!(
-                        "{}: next_listen_batch didn't find new data, retrying in {:?}",
-                        self.reader_id,
-                        retry.next_sleep()
-                    );
-                    let retry = retry.sleep().instrument(trace_span!("listen::sleep")).await;
-
-                    // There might be some holdup in the next batch being
-                    // produced. Perhaps we've quiesced a table or maybe a
-                    // dataflow is taking a long time to start up because it has
-                    // to read a lot of data. Heartbeat ourself so we don't
-                    // accidentally lose our lease while we wait for things to
-                    // resume.
-                    self.maybe_heartbeat_reader().await;
-
-                    retry
-                }
-            });
-            self.machine.applier.fetch_and_update_state().await;
-        }
-    }
-
     /// Test helper for a [Self::listen] call that is expected to succeed.
     #[cfg(test)]
     #[track_caller]
@@ -925,6 +926,38 @@ where
         self.listen(Antichain::from_elem(as_of))
             .await
             .expect("cannot serve requested as_of")
+    }
+}
+
+/// An incremental cursor through a particular shard, returned from [ReadHandle::snapshot_cursor].
+///
+/// To read an entire dataset, the
+/// client should call `next` until it returns `None`, which signals all data has been returned...
+/// but it's also free to abandon the instance at any time if it eg. only needs a few entries.
+#[derive(Debug)]
+pub struct Cursor<K: Codec, V: Codec, T: Timestamp + Codec64, D> {
+    consolidator: Consolidator<T, D>,
+    _schemas: Schemas<K, V>,
+}
+
+impl<K, V, T, D> Cursor<K, V, T, D>
+where
+    K: Debug + Codec + Ord,
+    V: Debug + Codec + Ord,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
+{
+    /// Grab the next batch of consolidated data.
+    pub async fn next(
+        &mut self,
+    ) -> Option<impl Iterator<Item = ((Result<K, String>, Result<V, String>), T, D)> + '_> {
+        let iter = self
+            .consolidator
+            .next()
+            .await
+            .expect("fetching a leased part")?;
+        let iter = iter.map(|(k, v, t, d)| ((K::decode(k), V::decode(v)), t, d));
+        Some(iter)
     }
 }
 
@@ -946,15 +979,22 @@ where
     ///   like an MFP you might be pushing down. Reason being that if you are
     ///   projecting or transforming in a way that allows further consolidation,
     ///   amazing.
-    /// - The parts are already sorted by `(K, V, T)`, which means we could do a
-    ///   streaming consolidate within a part by walking through each `(K, V)`
-    ///   pair. (This would be pushed up into FetchedPart.)
     /// - Reuse any code we write to streaming-merge consolidate in
     ///   persist_source here.
     pub async fn snapshot_and_fetch(
         &mut self,
         as_of: Antichain<T>,
     ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, Since<T>> {
+        if self
+            .machine
+            .applier
+            .cfg
+            .dynamic
+            .enabled(PersistFeatureFlag::STREAMING_SNAPSHOT_AND_FETCH)
+        {
+            return self.snapshot_and_fetch_streaming(as_of).await;
+        }
+
         let snap = self.snapshot(as_of).await?;
 
         let mut contents = Vec::new();
@@ -966,23 +1006,19 @@ where
                 self.blob.as_ref(),
                 Arc::clone(&self.metrics),
                 &self.metrics.read.snapshot,
+                &self.machine.applier.shard_metrics,
                 Some(&self.reader_id),
                 self.schemas.clone(),
             )
             .await;
             self.process_returned_leased_part(part);
             contents.extend(fetched_part);
-            // NB: If FetchedPart learns to streaming consolidate its output,
-            // this can stay true for the first part (and more generally as long
-            // as contents was empty before we added it to contents).
+            // NB: FetchedPart streaming consolidates its output, but it's possible
+            // that decoding introduces duplicates again.
             is_consolidated = false;
 
             // If the size of contents has doubled since the last consolidated
             // size, try consolidating it again.
-            //
-            // Note that parts are internally consolidated, but we advance the
-            // timestamp to the as_of, so even the first part might benefit from
-            // consolidation.
             if contents.len() >= last_consolidate_len * 2 {
                 consolidate_updates(&mut contents);
                 last_consolidate_len = contents.len();
@@ -996,6 +1032,125 @@ where
             consolidate_updates(&mut contents);
         }
         Ok(contents)
+    }
+
+    /// Generates a [Self::snapshot], and fetches all of the batches it
+    /// contains.
+    ///
+    /// The output is consolidated. Furthermore, to keep memory usage down when
+    /// reading a snapshot that consolidates well, this consolidates as it goes.
+    async fn snapshot_and_fetch_streaming(
+        &mut self,
+        as_of: Antichain<T>,
+    ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, Since<T>> {
+        let mut cursor = self.snapshot_cursor(as_of).await?;
+        let mut contents = Vec::new();
+        while let Some(iter) = cursor.next().await {
+            contents.extend(iter);
+        }
+
+        // We don't currently guarantee that encoding is one-to-one, so we still need to
+        // consolidate the decoded outputs. However, let's report if this isn't a noop.
+        let old_len = contents.len();
+        consolidate_updates(&mut contents);
+        if old_len != contents.len() {
+            // TODO(bkirwi): do we need more / finer-grained metrics for this?
+            self.machine
+                .applier
+                .shard_metrics
+                .unconsolidated_snapshot
+                .inc();
+        }
+
+        Ok(contents)
+    }
+
+    /// Generates a [Self::snapshot], and fetches all of the batches it
+    /// contains.
+    ///
+    /// To keep memory usage down when reading a snapshot that consolidates well, this consolidates
+    /// as it goes. However, note that only the serialized data is consolidated: the deserialized
+    /// data will only be consolidated if your K/V codecs are one-to-one.
+    pub async fn snapshot_cursor(
+        &mut self,
+        as_of: Antichain<T>,
+    ) -> Result<Cursor<K, V, T, D>, Since<T>> {
+        let batches = self.machine.snapshot(&as_of).await?;
+
+        let mut consolidator = Consolidator::new(
+            Arc::clone(&self.metrics),
+            FetchBatchFilter::Snapshot {
+                as_of: as_of.clone(),
+            },
+            self.cfg.dynamic.compaction_memory_bound_bytes(),
+        );
+
+        let metadata = SerdeLeasedBatchPartMetadata::Snapshot {
+            as_of: as_of.iter().map(T::encode).collect(),
+        };
+
+        for batch in batches {
+            for run in batch.runs() {
+                let leased_parts: Vec<_> = run
+                    .into_iter()
+                    .map(|part| {
+                        self.lease_batch_part(batch.desc.clone(), part.clone(), metadata.clone())
+                    })
+                    .collect();
+                consolidator.enqueue_leased_run(
+                    &self.blob,
+                    |m| &m.snapshot,
+                    &self.machine.applier.shard_metrics,
+                    &self.lease_returner,
+                    leased_parts.into_iter(),
+                );
+            }
+        }
+
+        Ok(Cursor {
+            consolidator,
+            _schemas: self.schemas.clone(),
+        })
+    }
+
+    /// Generates a [Self::snapshot], and streams out all of the updates
+    /// it contains in bounded memory.
+    ///
+    /// The output is not consolidated.
+    pub async fn snapshot_and_stream(
+        &mut self,
+        as_of: Antichain<T>,
+    ) -> Result<impl Stream<Item = ((Result<K, String>, Result<V, String>), T, D)>, Since<T>> {
+        let snap = self.snapshot(as_of).await?;
+
+        let blob = Arc::clone(&self.blob);
+        let metrics = Arc::clone(&self.metrics);
+        let snapshot_metrics = self.metrics.read.snapshot.clone();
+        let shard_metrics = Arc::clone(&self.machine.applier.shard_metrics);
+        let reader_id = self.reader_id.clone();
+        let schemas = self.schemas.clone();
+        let mut lease_returner = self.lease_returner.clone();
+        let stream = async_stream::stream! {
+            for part in snap {
+                let (part, mut fetched_part) = fetch_leased_part(
+                    part,
+                    blob.as_ref(),
+                    Arc::clone(&metrics),
+                    &snapshot_metrics,
+                    &shard_metrics,
+                    Some(&reader_id),
+                    schemas.clone(),
+                )
+                .await;
+                lease_returner.return_leased_part(part);
+
+                while let Some(next) = fetched_part.next() {
+                    yield next;
+                }
+            }
+        };
+
+        Ok(stream)
     }
 }
 
@@ -1033,8 +1188,10 @@ where
     D: Semigroup + Codec64 + Send + Sync,
 {
     fn drop(&mut self) {
-        if let Some(heartbeat_task) = self.heartbeat_task.take() {
-            heartbeat_task.abort();
+        if let Some(heartbeat_tasks) = self.heartbeat_tasks.take() {
+            for heartbeat_task in heartbeat_tasks {
+                heartbeat_task.abort();
+            }
         }
         if self.explicitly_expired {
             return;
@@ -1068,6 +1225,9 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::pin;
+    use std::str::FromStr;
+
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_ore::cast::CastFrom;
     use mz_ore::metrics::MetricsRegistry;
@@ -1076,18 +1236,20 @@ mod tests {
     use mz_persist::unreliable::{UnreliableConsensus, UnreliableHandle};
     use serde::{Deserialize, Serialize};
     use serde_json::json;
-    use std::str::FromStr;
+    use tokio_stream::StreamExt;
 
-    use crate::async_runtime::CpuHeavyRuntime;
+    use crate::async_runtime::IsolatedRuntime;
+    use crate::cache::StateCache;
     use crate::internal::metrics::Metrics;
+    use crate::rpc::NoopPubSubSender;
     use crate::tests::{all_ok, new_test_client};
     use crate::{PersistClient, PersistConfig, ShardId};
 
     use super::*;
 
     // Verifies `Subscribe` can be dropped while holding snapshot batches.
-    #[tokio::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn drop_unused_subscribe() {
         let data = vec![
             (("0".to_owned(), "zero".to_owned()), 0, 1),
@@ -1115,10 +1277,98 @@ mod tests {
         drop(subscribe);
     }
 
+    // Verifies that we streaming-consolidate away identical key-values in the same batch.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn streaming_consolidate() {
+        let data = &[
+            // Identical records should sum together...
+            (("k".to_owned(), "v".to_owned()), 0, 1),
+            (("k".to_owned(), "v".to_owned()), 1, 1),
+            (("k".to_owned(), "v".to_owned()), 2, 1),
+            // ...and when they cancel out entirely they should be omitted.
+            (("k2".to_owned(), "v".to_owned()), 0, 1),
+            (("k2".to_owned(), "v".to_owned()), 1, -1),
+        ];
+
+        let (mut write, read) = {
+            let client = new_test_client().await;
+            client.cfg.dynamic.set_blob_target_size(1000); // So our batch stays together!
+            client
+                .expect_open::<String, String, u64, i64>(crate::ShardId::new())
+                .await
+        };
+
+        write.expect_compare_and_append(data, 0, 5).await;
+
+        let mut snapshot = read
+            .subscribe(timely::progress::Antichain::from_elem(4))
+            .await
+            .unwrap();
+
+        let mut updates = vec![];
+        'outer: loop {
+            for event in snapshot.fetch_next().await {
+                match event {
+                    ListenEvent::Progress(t) => {
+                        if !t.less_than(&4) {
+                            break 'outer;
+                        }
+                    }
+                    ListenEvent::Updates(data) => {
+                        updates.extend(data);
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            updates,
+            &[((Ok("k".to_owned()), Ok("v".to_owned())), 4u64, 3i64)],
+        )
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn snapshot_and_stream() {
+        let data = &mut [
+            (("k1".to_owned(), "v1".to_owned()), 0, 1),
+            (("k2".to_owned(), "v2".to_owned()), 1, 1),
+            (("k3".to_owned(), "v3".to_owned()), 2, 1),
+            (("k4".to_owned(), "v4".to_owned()), 2, 1),
+            (("k5".to_owned(), "v5".to_owned()), 3, 1),
+        ];
+
+        let (mut write, mut read) = {
+            let client = new_test_client().await;
+            client.cfg.dynamic.set_blob_target_size(0); // split batches across multiple parts
+            client
+                .expect_open::<String, String, u64, i64>(crate::ShardId::new())
+                .await
+        };
+
+        write.expect_compare_and_append(&data[0..2], 0, 2).await;
+        write.expect_compare_and_append(&data[2..4], 2, 3).await;
+        write.expect_compare_and_append(&data[4..], 3, 4).await;
+
+        let as_of = Antichain::from_elem(3);
+        let mut snapshot = pin::pin!(read.snapshot_and_stream(as_of.clone()).await.unwrap());
+
+        let mut snapshot_rows = vec![];
+        while let Some(((k, v), t, d)) = snapshot.next().await {
+            snapshot_rows.push(((k.expect("valid key"), v.expect("valid key")), t, d));
+        }
+
+        for ((_k, _v), t, _d) in data.as_mut_slice() {
+            t.advance_by(as_of.borrow());
+        }
+
+        assert_eq!(data.as_slice(), snapshot_rows.as_slice());
+    }
+
     // Verifies the semantics of `SeqNo` leases + checks dropping `LeasedBatchPart` semantics.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // https://github.com/MaterializeInc/materialize/issues/19983
     async fn seqno_leases() {
-        mz_ore::test::init_logging();
         let mut data = vec![];
         for i in 0..20 {
             data.push(((i.to_string(), i.to_string()), i, 1))
@@ -1154,7 +1404,7 @@ mod tests {
             .expect("cannot serve requested as_of");
 
         // Determine sequence number at outset.
-        let original_seqno_since = subscribe.listen.handle.machine.seqno_since();
+        let original_seqno_since = subscribe.listen.handle.machine.applier.seqno_since();
 
         let mut parts = vec![];
 
@@ -1184,14 +1434,14 @@ mod tests {
 
             // SeqNo is not downgraded
             assert_eq!(
-                subscribe.listen.handle.machine.seqno_since(),
+                subscribe.listen.handle.machine.applier.seqno_since(),
                 original_seqno_since
             );
         }
 
         offset += width;
 
-        let mut seqno_since = subscribe.listen.handle.machine.seqno_since();
+        let mut seqno_since = subscribe.listen.handle.machine.applier.seqno_since();
 
         // We're starting out with the original, non-downgraded SeqNo
         assert_eq!(seqno_since, original_seqno_since);
@@ -1253,7 +1503,7 @@ mod tests {
                 .get(&part_seqno)
                 .is_none();
 
-            let new_seqno_since = subscribe.listen.handle.machine.seqno_since();
+            let new_seqno_since = subscribe.listen.handle.machine.applier.seqno_since();
             if expect_downgrade {
                 assert!(new_seqno_since > seqno_since);
             } else {
@@ -1273,7 +1523,7 @@ mod tests {
         drop(subscribe);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn reader_id_human_readable_serde() {
         #[derive(Debug, Serialize, Deserialize)]
         struct Container {
@@ -1309,9 +1559,9 @@ mod tests {
     // Verifies performance optimizations where a Listener doesn't fetch the
     // latest Consensus state if the one it currently has can serve the next
     // request.
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
     async fn skip_consensus_fetch_optimization() {
-        mz_ore::test::init_logging();
         let data = vec![
             (("0".to_owned(), "zero".to_owned()), 0, 1),
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1325,12 +1575,15 @@ mod tests {
         unreliable.totally_available();
         let consensus = Arc::new(UnreliableConsensus::new(consensus, unreliable.clone()));
         let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
+        let pubsub_sender = Arc::new(NoopPubSubSender);
         let (mut write, mut read) = PersistClient::new(
             cfg,
             blob,
             consensus,
             metrics,
-            Arc::new(CpuHeavyRuntime::new()),
+            Arc::new(IsolatedRuntime::new()),
+            Arc::new(StateCache::new_no_metrics()),
+            pubsub_sender,
         )
         .expect("client construction failed")
         .expect_open::<String, String, u64, i64>(ShardId::new())

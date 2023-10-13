@@ -13,10 +13,7 @@ use tokio_postgres::types::Type;
 use crate::action::{ControlFlow, State};
 use crate::parser::BuiltinCommand;
 
-pub async fn run_skip_if(
-    cmd: BuiltinCommand,
-    state: &mut State,
-) -> Result<ControlFlow, anyhow::Error> {
+pub async fn run_skip_if(cmd: BuiltinCommand, state: &State) -> Result<ControlFlow, anyhow::Error> {
     let query = cmd.input.join("\n");
     let stmt = state
         .pgclient

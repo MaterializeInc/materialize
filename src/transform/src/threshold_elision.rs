@@ -15,12 +15,11 @@
 //! The Subset(X) notation means that the collection is a multiset subset of X:
 //! multiplicities of each record in Subset(X) are at most that of X.
 
-use crate::attribute::{DerivedAttributes, RequiredAttributes};
-use crate::attribute::{NonNegative, SubtreeSize};
-use crate::TransformArgs;
-
 use mz_expr::visit::{Visit, Visitor, VisitorMut};
 use mz_expr::MirRelationExpr;
+
+use crate::attribute::{DerivedAttributes, DerivedAttributesBuilder, NonNegative, SubtreeSize};
+use crate::TransformCtx;
 
 /// Remove Threshold operators that have no effect.
 #[derive(Debug)]
@@ -36,7 +35,7 @@ impl crate::Transform for ThresholdElision {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
+        _: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
         let mut visitor = ThresholdElisionAction::default();
         let result = relation.visit_mut(&mut visitor).map_err(From::from);
@@ -46,14 +45,14 @@ impl crate::Transform for ThresholdElision {
 }
 
 struct ThresholdElisionAction {
-    deriver: DerivedAttributes,
+    deriver: DerivedAttributes<'static>,
 }
 
 impl Default for ThresholdElisionAction {
     fn default() -> Self {
-        let mut builder = RequiredAttributes::default();
-        builder.require::<NonNegative>();
-        builder.require::<SubtreeSize>();
+        let mut builder = DerivedAttributesBuilder::default();
+        builder.require(NonNegative::default());
+        builder.require(SubtreeSize::default());
         Self {
             deriver: builder.finish(),
         }

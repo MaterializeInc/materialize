@@ -11,18 +11,21 @@
 //!
 //! Maintenance operations for persist, shared among active handles
 
-use crate::internal::compact::CompactReq;
-use crate::internal::gc::GcReq;
-use crate::{Compactor, GarbageCollector, Machine};
+use std::fmt::Debug;
+use std::mem;
+use std::sync::Arc;
+
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures_util::future::BoxFuture;
 use futures_util::FutureExt;
 use mz_persist::location::SeqNo;
 use mz_persist_types::{Codec, Codec64};
-use std::fmt::Debug;
-use std::mem;
 use timely::progress::Timestamp;
+
+use crate::internal::compact::CompactReq;
+use crate::internal::gc::GcReq;
+use crate::{Compactor, GarbageCollector, Machine};
 
 /// Every handle to this shard may be occasionally asked to perform
 /// routine maintenance after a successful compare_and_set operation.
@@ -75,8 +78,16 @@ impl RoutineMaintenance {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
     {
+        let mut more_maintenance = RoutineMaintenance::default();
         for future in self.perform_in_background(machine, gc) {
-            let _ = future.await;
+            more_maintenance.merge(future.await);
+        }
+
+        while !more_maintenance.is_empty() {
+            let maintenance = mem::take(&mut more_maintenance);
+            for future in maintenance.perform_in_background(machine, gc) {
+                more_maintenance.merge(future.await);
+            }
         }
     }
 
@@ -106,23 +117,26 @@ impl RoutineMaintenance {
 
         if let Some(rollup_seqno) = self.write_rollup {
             let mut machine = machine.clone();
+            let isolated_runtime = Arc::clone(&machine.isolated_runtime);
             futures.push(
-                mz_ore::task::spawn(|| "persist::write_rollup", async move {
-                    if machine.seqno() < rollup_seqno {
-                        machine.applier.fetch_and_update_state().await;
-                    }
-                    // We don't have to write at exactly rollup_seqno, just need
-                    // something recent.
-                    assert!(
-                        machine.seqno() >= rollup_seqno,
-                        "{} vs {}",
-                        machine.seqno(),
-                        rollup_seqno
-                    );
-                    machine.add_rollup_for_current_seqno().await
-                })
-                .map(Result::unwrap_or_default)
-                .boxed(),
+                isolated_runtime
+                    .spawn_named(|| "persist::write_rollup", async move {
+                        machine
+                            .applier
+                            .fetch_and_update_state(Some(rollup_seqno))
+                            .await;
+                        // We don't have to write at exactly rollup_seqno, just need
+                        // something recent.
+                        assert!(
+                            machine.seqno() >= rollup_seqno,
+                            "{} vs {}",
+                            machine.seqno(),
+                            rollup_seqno
+                        );
+                        machine.add_rollup_for_current_seqno().await
+                    })
+                    .map(Result::unwrap_or_default)
+                    .boxed(),
             );
         }
 

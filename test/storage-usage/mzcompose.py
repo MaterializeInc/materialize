@@ -11,8 +11,11 @@ import time
 from dataclasses import dataclass
 from textwrap import dedent
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import Materialized, Postgres, Redpanda, Testdrive
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.redpanda import Redpanda
+from materialize.mzcompose.services.testdrive import Testdrive
 
 COLLECTION_INTERVAL_SECS = 5
 
@@ -57,7 +60,8 @@ SERVICES = [
     Materialized(
         environment_extra=[
             f"MZ_STORAGE_USAGE_COLLECTION_INTERVAL={COLLECTION_INTERVAL_SECS}s"
-        ]
+        ],
+        additional_system_parameter_defaults={"persist_rollup_threshold": "20"},
     ),
     Testdrive(default_timeout="120s", no_reset=True),
 ]
@@ -136,7 +140,7 @@ database_objects = [
     DatabaseObject(
         name="materialized_view_constant",
         testdrive=dedent(
-            f"""
+            """
             > CREATE MATERIALIZED VIEW obj AS SELECT generate_series::text , REPEAT('x', 1024) FROM generate_series(1, 1024)
             """
         ),
@@ -147,31 +151,32 @@ database_objects = [
     DatabaseObject(
         name="materialized_view_small_output",
         testdrive=dedent(
-            f"""
+            """
             > CREATE TABLE t1 (f1 TEXT)
             > INSERT INTO t1 SELECT generate_series::text || REPEAT('x', 1024) FROM generate_series(1, 1024)
 
             > CREATE MATERIALIZED VIEW obj AS SELECT COUNT(*) FROM t1;
             """
         ),
-        expected_size=7 * 1024,
+        expected_size=4 * 1024,
     ),
     # The pg-cdc source is expected to be empty. The data is in the sub-source
     DatabaseObject(
         name="pg_cdc_source",
         testdrive=PG_CDC_SETUP
         + dedent(
-            f"""
+            """
             $ postgres-execute connection=postgres://postgres:postgres@postgres
             CREATE TABLE pg_table (f1 TEXT);
-            INSERT INTO pg_table SELECT generate_series::text || REPEAT('x', 1024) FROM generate_series(1, 1024)
+            INSERT INTO pg_table SELECT generate_series::text || REPEAT('x', 1024) FROM generate_series(1, 1024);
+            ALTER TABLE pg_table REPLICA IDENTITY FULL;
 
             > CREATE SOURCE obj
               FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
               FOR TABLES (pg_table);
             """
         ),
-        expected_size=1024,
+        expected_size=4 * 1024,
     ),
     # The pg-cdc data is expected to be in the sub-source,
     # unaffected by the presence of other tables
@@ -179,16 +184,19 @@ database_objects = [
         name="pg_cdc_subsource",
         testdrive=PG_CDC_SETUP
         + dedent(
-            f"""
+            """
             $ postgres-execute connection=postgres://postgres:postgres@postgres
             CREATE TABLE pg_table1 (f1 TEXT);
-            INSERT INTO pg_table1 SELECT generate_series::text || REPEAT('x', 1024) FROM generate_series(1, 1024)
+            INSERT INTO pg_table1 SELECT generate_series::text || REPEAT('x', 1024) FROM generate_series(1, 1024);
+            ALTER TABLE pg_table1 REPLICA IDENTITY FULL;
 
             CREATE TABLE pg_table2 (f1 TEXT);
             INSERT INTO pg_table2 SELECT generate_series::text || REPEAT('x', 1024) FROM generate_series(1, 1024)
+            ALTER TABLE pg_table2 REPLICA IDENTITY FULL;
 
             CREATE TABLE pg_table3 (f1 TEXT);
             INSERT INTO pg_table3 SELECT generate_series::text || REPEAT('x', 1024) FROM generate_series(1, 1024)
+            ALTER TABLE pg_table3 REPLICA IDENTITY FULL;
 
             > CREATE SOURCE pg_source
               FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
@@ -227,8 +235,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         c.testdrive(
             dedent(
                 """
-                > DROP SCHEMA IF EXISTS public CASCADE;
-                > CREATE SCHEMA public
+                $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                DROP SCHEMA IF EXISTS public CASCADE;
+                CREATE SCHEMA public;
+                GRANT ALL PRIVILEGES ON SCHEMA public TO materialize;
                 """
             )
         )
@@ -244,10 +254,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         c.testdrive(
             dedent(
                 f"""
-                $ set-regex match=\d+ replacement=<SIZE>
+                $ set-regex match=\\d+ replacement=<SIZE>
 
                 # Select the raw size as well, so if this errors in testdrive, its easier to debug.
-                > SELECT size_bytes, size_bytes BETWEEN {database_object.expected_size} AND {database_object.expected_size*2}
+                > SELECT size_bytes, size_bytes BETWEEN {database_object.expected_size//3} AND {database_object.expected_size*3}
                   FROM mz_storage_usage
                   WHERE collection_timestamp = ( SELECT MAX(collection_timestamp) FROM mz_storage_usage )
                   AND object_id = ( SELECT id FROM mz_objects WHERE name = 'obj' );

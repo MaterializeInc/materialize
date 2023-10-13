@@ -18,7 +18,7 @@ use mz_expr::visit::Visit;
 use mz_expr::{AggregateExpr, ColumnOrder, EvalError, MirRelationExpr, MirScalarExpr, TableFunc};
 use mz_repr::{ColumnType, Datum, Diff, RelationType, Row, RowArena};
 
-use crate::{TransformArgs, TransformError};
+use crate::{TransformCtx, TransformError};
 
 /// Replace operators on constant collections with constant collections.
 #[derive(Debug)]
@@ -41,7 +41,7 @@ impl crate::Transform for FoldConstants {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
+        _: &mut TransformCtx,
     ) -> Result<(), TransformError> {
         let mut type_stack = Vec::new();
         let result = relation.try_visit_mut_post(&mut |e| -> Result<(), TransformError> {
@@ -80,9 +80,9 @@ impl FoldConstants {
         match relation {
             MirRelationExpr::Constant { .. } => { /* handled after match */ }
             MirRelationExpr::Get { .. } => {}
-            MirRelationExpr::Let { .. } => { /* constant prop done in NormalizeLets */ }
-            MirRelationExpr::LetRec { .. } => {
-                Err(crate::TransformError::LetRecUnsupported)?;
+            MirRelationExpr::Let { .. } | MirRelationExpr::LetRec { .. } => {
+                // Constant propagation through bindings is currently handled by in NormalizeLets.
+                // Maybe we should move it / replicate it here (see #18180 for context)?
             }
             MirRelationExpr::Reduce {
                 input,
@@ -502,8 +502,7 @@ impl FoldConstants {
                                 agg.func.eval(
                                     vals.iter()
                                         .map(|val| val[i].unpack_first())
-                                        .collect::<BTreeSet<_>>()
-                                        .into_iter(),
+                                        .collect::<BTreeSet<_>>(),
                                     &temp_storage,
                                 )
                             } else {

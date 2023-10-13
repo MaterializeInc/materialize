@@ -9,41 +9,36 @@
 
 //! Implementation of [Consensus] backed by Postgres.
 
-use crate::cfg::ConsensusKnobs;
-use anyhow::{anyhow, bail};
+use std::fmt::Formatter;
+use std::sync::Arc;
+use std::time::Duration;
+
+use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
-use deadpool_postgres::tokio_postgres::config::SslMode;
 use deadpool_postgres::tokio_postgres::types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
-use deadpool_postgres::tokio_postgres::Config;
-use deadpool_postgres::{
-    Hook, HookError, HookErrorCause, ManagerConfig, Object, PoolError, RecyclingMethod,
-};
-use deadpool_postgres::{Manager, Pool};
+use deadpool_postgres::{Object, PoolError};
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::SYSTEM_TIME;
-use openssl::pkey::PKey;
-use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
-use openssl::x509::X509;
-use postgres_openssl::MakeTlsConnector;
-use std::fmt::Formatter;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-use tracing::debug;
+use mz_postgres_client::metrics::PostgresClientMetrics;
+use mz_postgres_client::{PostgresClient, PostgresClientConfig, PostgresClientKnobs};
 
 use crate::error::Error;
 use crate::location::{CaSResult, Consensus, ExternalError, SeqNo, VersionedData};
-use crate::metrics::PostgresConsensusMetrics;
 
+// These `sql_stats_automatic_collection_enabled` are for the cost-based
+// optimizer but all the queries against this table are single-table and very
+// carefully tuned to hit the primary index, so the cost-based optimizer doesn't
+// really get us anything. OTOH, the background jobs that crdb creates to
+// collect these stats fill up the jobs table (slowing down all sorts of
+// things).
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS consensus (
     shard text NOT NULL,
     sequence_number bigint NOT NULL,
     data bytea NOT NULL,
     PRIMARY KEY(shard, sequence_number)
-);
+) WITH (sql_stats_automatic_collection_enabled = false);
 ";
 
 impl ToSql for SeqNo {
@@ -86,8 +81,14 @@ impl<'a> FromSql<'a> for SeqNo {
 #[derive(Clone, Debug)]
 pub struct PostgresConsensusConfig {
     url: String,
-    knobs: Arc<dyn ConsensusKnobs>,
-    metrics: PostgresConsensusMetrics,
+    knobs: Arc<dyn PostgresClientKnobs>,
+    metrics: PostgresClientMetrics,
+}
+
+impl From<PostgresConsensusConfig> for PostgresClientConfig {
+    fn from(config: PostgresConsensusConfig) -> Self {
+        PostgresClientConfig::new(config.url, config.knobs, config.metrics)
+    }
 }
 
 impl PostgresConsensusConfig {
@@ -97,8 +98,8 @@ impl PostgresConsensusConfig {
     /// Returns a new [PostgresConsensusConfig] for use in production.
     pub fn new(
         url: &str,
-        knobs: Box<dyn ConsensusKnobs>,
-        metrics: PostgresConsensusMetrics,
+        knobs: Box<dyn PostgresClientKnobs>,
+        metrics: PostgresClientMetrics,
     ) -> Result<Self, Error> {
         Ok(PostgresConsensusConfig {
             url: url.to_string(),
@@ -133,7 +134,7 @@ impl PostgresConsensusConfig {
                 f.debug_struct("TestConsensusKnobs").finish_non_exhaustive()
             }
         }
-        impl ConsensusKnobs for TestConsensusKnobs {
+        impl PostgresClientKnobs for TestConsensusKnobs {
             fn connection_pool_max_size(&self) -> usize {
                 2
             }
@@ -146,12 +147,15 @@ impl PostgresConsensusConfig {
             fn connect_timeout(&self) -> Duration {
                 Duration::MAX
             }
+            fn tcp_user_timeout(&self) -> Duration {
+                Duration::ZERO
+            }
         }
 
         let config = PostgresConsensusConfig::new(
             &url,
             Box::new(TestConsensusKnobs),
-            PostgresConsensusMetrics::new(&MetricsRegistry::new()),
+            PostgresClientMetrics::new(&MetricsRegistry::new(), "mz_persist"),
         )?;
         Ok(Some(config))
     }
@@ -159,8 +163,7 @@ impl PostgresConsensusConfig {
 
 /// Implementation of [Consensus] over a Postgres database.
 pub struct PostgresConsensus {
-    pool: Pool,
-    metrics: PostgresConsensusMetrics,
+    postgres_client: PostgresClient,
 }
 
 impl std::fmt::Debug for PostgresConsensus {
@@ -173,65 +176,9 @@ impl PostgresConsensus {
     /// Open a Postgres [Consensus] instance with `config`, for the collection
     /// named `shard`.
     pub async fn open(config: PostgresConsensusConfig) -> Result<Self, ExternalError> {
-        let mut pg_config: Config = config.url.parse()?;
-        pg_config.connect_timeout(config.knobs.connect_timeout());
-        let tls = make_tls(&pg_config)?;
+        let postgres_client = PostgresClient::open(config.into())?;
 
-        let manager = Manager::from_config(
-            pg_config,
-            tls,
-            ManagerConfig {
-                recycling_method: RecyclingMethod::Fast,
-            },
-        );
-
-        let last_ttl_connection = AtomicU64::new(0);
-        let connections_created = config.metrics.connpool_connections_created.clone();
-        let ttl_reconnections = config.metrics.connpool_ttl_reconnections.clone();
-        let pool = Pool::builder(manager)
-            .max_size(config.knobs.connection_pool_max_size())
-            .post_create(Hook::async_fn(move |client, _| {
-                connections_created.inc();
-                Box::pin(async move {
-                    debug!("opened new consensus postgres connection");
-                    client.batch_execute(
-                        "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE",
-                    ).await.map_err(|e| HookError::Abort(HookErrorCause::Backend(e)))
-                })
-            }))
-            .pre_recycle(Hook::sync_fn(move |_client, conn_metrics| {
-                // proactively TTL connections to rebalance load to Postgres/CRDB. this helps
-                // fix skew when downstream DB operations (e.g. CRDB rolling restart) result
-                // in uneven load to each node, and works to reduce the # of connections
-                // maintained by the pool after bursty workloads.
-
-                // add a bias towards TTLing older connections first
-                if conn_metrics.age() < config.knobs.connection_pool_ttl() {
-                    return Ok(());
-                }
-
-                let last_ttl = last_ttl_connection.load(Ordering::SeqCst);
-                let now = (SYSTEM_TIME)();
-                let elapsed_since_last_ttl = Duration::from_millis(now.saturating_sub(last_ttl));
-
-                // stagger out reconnections to avoid stampeding the DB
-                if elapsed_since_last_ttl > config.knobs.connection_pool_ttl_stagger()
-                    && last_ttl_connection
-                        .compare_exchange_weak(last_ttl, now, Ordering::SeqCst, Ordering::SeqCst)
-                        .is_ok()
-                {
-                    ttl_reconnections.inc();
-                    return Err(HookError::Continue(Some(HookErrorCause::Message(
-                        "connection has been TTLed".to_string(),
-                    ))));
-                }
-
-                Ok(())
-            }))
-            .build()
-            .expect("postgres connection pool built with incorrect parameters");
-
-        let client = pool.get().await?;
+        let client = postgres_client.get_connection().await?;
 
         // The `consensus` table creates and deletes rows at a high frequency, generating many
         // tombstoned rows. If Cockroach's GC interval is set high (the default is 25h) and
@@ -242,15 +189,12 @@ impl PostgresConsensus {
         // See: https://www.cockroachlabs.com/docs/stable/configure-zone.html#variables
         client
             .batch_execute(&format!(
-                "{}; {}",
-                SCHEMA, "ALTER TABLE consensus CONFIGURE ZONE USING gc.ttlseconds = 600;"
+                "{} {}",
+                SCHEMA, "ALTER TABLE consensus CONFIGURE ZONE USING gc.ttlseconds = 600;",
             ))
             .await?;
 
-        Ok(PostgresConsensus {
-            pool,
-            metrics: config.metrics,
-        })
+        Ok(PostgresConsensus { postgres_client })
     }
 
     /// Drops and recreates the `consensus` table in Postgres
@@ -265,81 +209,8 @@ impl PostgresConsensus {
     }
 
     async fn get_connection(&self) -> Result<Object, PoolError> {
-        let start = Instant::now();
-        let res = self.pool.get().await;
-        if let Err(PoolError::Backend(err)) = &res {
-            debug!("error establishing connection: {}", err);
-            self.metrics.connpool_connection_errors.inc();
-        }
-        self.metrics
-            .connpool_acquire_seconds
-            .inc_by(start.elapsed().as_secs_f64());
-        self.metrics.connpool_acquires.inc();
-        // note that getting the pool size here requires briefly locking the pool
-        self.metrics
-            .connpool_size
-            .set(u64::cast_from(self.pool.status().size));
-        res
+        self.postgres_client.get_connection().await
     }
-}
-
-// This function is copied from mz-postgres-util because of a cyclic dependency
-// difficulty that we don't want to deal with now.
-// TODO: Untangle that and remove this copy.
-fn make_tls(config: &Config) -> Result<MakeTlsConnector, anyhow::Error> {
-    let mut builder = SslConnector::builder(SslMethod::tls_client())?;
-    // The mode dictates whether we verify peer certs and hostnames. By default, Postgres is
-    // pretty relaxed and recommends SslMode::VerifyCa or SslMode::VerifyFull for security.
-    //
-    // For more details, check out Table 33.1. SSL Mode Descriptions in
-    // https://postgresql.org/docs/current/libpq-ssl.html#LIBPQ-SSL-PROTECTION.
-    let (verify_mode, verify_hostname) = match config.get_ssl_mode() {
-        SslMode::Disable | SslMode::Prefer => (SslVerifyMode::NONE, false),
-        SslMode::Require => match config.get_ssl_root_cert() {
-            // If a root CA file exists, the behavior of sslmode=require will be the same as
-            // that of verify-ca, meaning the server certificate is validated against the CA.
-            //
-            // For more details, check out the note about backwards compatibility in
-            // https://postgresql.org/docs/current/libpq-ssl.html#LIBQ-SSL-CERTIFICATES.
-            Some(_) => (SslVerifyMode::PEER, false),
-            None => (SslVerifyMode::NONE, false),
-        },
-        SslMode::VerifyCa => (SslVerifyMode::PEER, false),
-        SslMode::VerifyFull => (SslVerifyMode::PEER, true),
-        _ => panic!("unexpected sslmode {:?}", config.get_ssl_mode()),
-    };
-
-    // Configure peer verification
-    builder.set_verify(verify_mode);
-
-    // Configure certificates
-    match (config.get_ssl_cert(), config.get_ssl_key()) {
-        (Some(ssl_cert), Some(ssl_key)) => {
-            builder.set_certificate(&*X509::from_pem(ssl_cert)?)?;
-            builder.set_private_key(&*PKey::private_key_from_pem(ssl_key)?)?;
-        }
-        (None, Some(_)) => bail!("must provide both sslcert and sslkey, but only provided sslkey"),
-        (Some(_), None) => bail!("must provide both sslcert and sslkey, but only provided sslcert"),
-        _ => {}
-    }
-    if let Some(ssl_root_cert) = config.get_ssl_root_cert() {
-        builder
-            .cert_store_mut()
-            .add_cert(X509::from_pem(ssl_root_cert)?)?;
-    }
-
-    let mut tls_connector = MakeTlsConnector::new(builder.build());
-
-    // Configure hostname verification
-    match (verify_mode, verify_hostname) {
-        (SslVerifyMode::PEER, false) => tls_connector.set_callback(|connect, _| {
-            connect.set_verify_hostname(false);
-            Ok(())
-        }),
-        _ => {}
-    }
-
-    Ok(tls_connector)
 }
 
 #[async_trait]
@@ -434,8 +305,9 @@ impl Consensus for PostgresConsensus {
              ORDER BY sequence_number ASC LIMIT $3";
         let Ok(limit) = i64::try_from(limit) else {
             return Err(ExternalError::from(anyhow!(
-                    "limit must be [0, i64::MAX]. was: {:?}", limit
-                )));
+                "limit must be [0, i64::MAX]. was: {:?}",
+                limit
+            )));
         };
         let rows = {
             let client = self.get_connection().await?;
@@ -494,14 +366,15 @@ impl Consensus for PostgresConsensus {
 
 #[cfg(test)]
 mod tests {
-    use crate::location::tests::consensus_impl_test;
     use tracing::info;
     use uuid::Uuid;
 
+    use crate::location::tests::consensus_impl_test;
+
     use super::*;
 
-    #[tokio::test(flavor = "multi_thread")]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn postgres_consensus() -> Result<(), ExternalError> {
         let config = match PostgresConsensusConfig::new_for_test()? {
             Some(config) => config,

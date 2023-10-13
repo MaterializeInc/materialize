@@ -10,9 +10,7 @@
 use std::collections::BTreeSet;
 use std::ops::Range;
 
-use core::option::Option;
 use itertools::Itertools;
-
 use mz_repr::RelationType;
 
 use crate::visit::Visit;
@@ -449,11 +447,13 @@ impl JoinInputMapper {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{BinaryFunc, MirScalarExpr, UnaryFunc};
     use mz_repr::{Datum, ScalarType};
 
-    #[test]
+    use crate::{BinaryFunc, MirScalarExpr, UnaryFunc};
+
+    use super::*;
+
+    #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn try_map_to_input_with_bound_expr_test() {
         let input_mapper = JoinInputMapper {

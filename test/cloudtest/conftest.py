@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 import pytest
 
-from materialize.cloudtest.application import MaterializeApplication
+from materialize.cloudtest.app.materialize_application import MaterializeApplication
 
 
 def pytest_configure(config: "Config") -> None:
@@ -28,9 +28,20 @@ def pytest_configure(config: "Config") -> None:
 def mz(pytestconfig: pytest.Config) -> MaterializeApplication:
     return MaterializeApplication(
         release_mode=(not pytestconfig.getoption("dev")),
-        aws_region=pytestconfig.getoption("aws_region"),
-        log_filter=pytestconfig.getoption("log_filter"),
+        # NOTE(necaris): pyright doesn't like that the `getoption` default type is `Notset`
+        aws_region=pytestconfig.getoption("aws_region", None),  # type: ignore
+        log_filter=pytestconfig.getoption("log_filter", None),  # type: ignore
     )
+
+
+@pytest.fixture(scope="session")
+def log_filter(pytestconfig: pytest.Config) -> Any:
+    return pytestconfig.getoption("log_filter")
+
+
+@pytest.fixture(scope="session")
+def dev(pytestconfig: pytest.Config) -> Any:
+    return pytestconfig.getoption("dev")
 
 
 @pytest.fixture(scope="session")

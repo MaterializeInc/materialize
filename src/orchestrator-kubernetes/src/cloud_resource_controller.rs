@@ -9,19 +9,20 @@
 
 //! Management of K8S objects, such as VpcEndpoints.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use kube::api::{DeleteParams, ListParams, ObjectMeta, Patch, PatchParams};
-use kube::ResourceExt;
-
+use kube::{Api, ResourceExt};
 use maplit::btreemap;
-use mz_cloud_resources::crd::vpc_endpoint::v1::{VpcEndpoint, VpcEndpointSpec};
-use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig};
 use mz_repr::GlobalId;
 
-use crate::{KubernetesOrchestrator, FIELD_MANAGER};
+use mz_cloud_resources::crd::vpc_endpoint::v1::{VpcEndpoint, VpcEndpointSpec, VpcEndpointStatus};
+use mz_cloud_resources::{CloudResourceController, CloudResourceReader, VpcEndpointConfig};
+
+use crate::{util, KubernetesOrchestrator, FIELD_MANAGER};
 
 #[async_trait]
 impl CloudResourceController for KubernetesOrchestrator {
@@ -82,20 +83,62 @@ impl CloudResourceController for KubernetesOrchestrator {
         }
     }
 
-    async fn list_vpc_endpoints(&self) -> Result<BTreeSet<GlobalId>, anyhow::Error> {
-        Ok(self
-            .vpc_endpoint_api
-            .list(&ListParams::default())
-            .await?
-            .iter()
-            .filter_map(|vpc_endpoint| {
-                vpc_endpoint
-                    .name_any()
-                    .split_once('-')
-                    // Ignore any whom's name can't be parsed into a GlobalId
-                    .map(|(_, id_str)| GlobalId::from_str(id_str).ok())
-            })
-            .flatten()
-            .collect())
+    async fn list_vpc_endpoints(
+        &self,
+    ) -> Result<BTreeMap<GlobalId, VpcEndpointStatus>, anyhow::Error> {
+        let objects = self.vpc_endpoint_api.list(&ListParams::default()).await?;
+        let mut endpoints = BTreeMap::new();
+        for object in objects {
+            let maybe_id = object
+                .name_any()
+                .split_once('-')
+                .and_then(|(_, id_str)| GlobalId::from_str(id_str).ok());
+            let id = match maybe_id {
+                Some(id) => id,
+                // Ignore any object whose name can't be parsed as a GlobalId
+                None => continue,
+            };
+            endpoints.insert(id, object.status.unwrap_or_default());
+        }
+        Ok(endpoints)
+    }
+
+    fn reader(&self) -> Arc<dyn CloudResourceReader> {
+        let reader = Arc::clone(&self.resource_reader);
+        reader
+    }
+}
+
+#[async_trait]
+impl CloudResourceReader for KubernetesOrchestrator {
+    async fn read(&self, id: GlobalId) -> Result<VpcEndpointStatus, anyhow::Error> {
+        self.resource_reader.read(id).await
+    }
+}
+
+/// Reads cloud resources managed by a [`KubernetesOrchestrator`].
+#[derive(Debug)]
+pub struct KubernetesResourceReader {
+    vpc_endpoint_api: Api<VpcEndpoint>,
+}
+
+impl KubernetesResourceReader {
+    /// Constructs a new Kubernetes cloud resource reader.
+    ///
+    /// The `context` parameter works like
+    /// [`KubernetesOrchestratorConfig::context`](crate::KubernetesOrchestratorConfig::context).
+    pub async fn new(context: String) -> Result<KubernetesResourceReader, anyhow::Error> {
+        let (client, _) = util::create_client(context).await?;
+        let vpc_endpoint_api: Api<VpcEndpoint> = Api::default_namespaced(client);
+        Ok(KubernetesResourceReader { vpc_endpoint_api })
+    }
+}
+
+#[async_trait]
+impl CloudResourceReader for KubernetesResourceReader {
+    async fn read(&self, id: GlobalId) -> Result<VpcEndpointStatus, anyhow::Error> {
+        let name = mz_cloud_resources::vpc_endpoint_name(id);
+        let endpoint = self.vpc_endpoint_api.get(&name).await?;
+        Ok(endpoint.status.unwrap_or_default())
     }
 }

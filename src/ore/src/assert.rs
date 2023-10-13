@@ -181,17 +181,17 @@ macro_rules! assert_contains {
 
 #[cfg(test)]
 mod tests {
-    #[test]
+    #[mz_test_macro::test]
     fn test_assert_contains_str() {
         assert_contains!("hello", "ello");
     }
 
-    #[test]
+    #[mz_test_macro::test]
     fn test_assert_contains_slice() {
         assert_contains!(&[1, 2, 3], 2);
     }
 
-    #[test]
+    #[mz_test_macro::test]
     #[should_panic(expected = "assertion failed: `left.contains(right)`:
   left: `\"hello\"`
  right: `\"yellow\"`")]

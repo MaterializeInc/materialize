@@ -49,9 +49,9 @@ Explained Query:
   CrossJoin type=differential
     ArrangeBy keys=[[]]
       Filter (#0) IS NOT NULL
-        Get materialize.public.t1
+        ReadStorage materialize.public.t1
     ArrangeBy keys=[[]]
-      Get materialize.public.t1
+      ReadStorage materialize.public.t1
 
 ! SELECT * FROM u1234;
 contains:unknown catalog item 'UID'
@@ -200,3 +200,12 @@ COMMIT;
 
 > SELECT COUNT(*) FROM postgres_connect;
 2
+
+# Comments don't affect following lines
+> CREATE TABLE t (x int)
+
+> INSERT INTO t VALUES (0)
+
+> SELECT *
+  FROM t -- this is a comment
+  WHERE x = 1

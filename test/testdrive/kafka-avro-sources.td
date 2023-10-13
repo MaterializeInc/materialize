@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_create_source_denylist_with_options = true
+ALTER SYSTEM SET enable_kafka_config_denylist_options = true
+
 # Test support for Avro sources without using the Confluent Schema Registry.
 
 $ set key-schema={
@@ -117,8 +121,8 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
   TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > SHOW SOURCES
-name    type   size
--------------------
+name    type   size   cluster
+-----------------------------
 
 # [btv] uncomment if we bring back classic debezium mode
 # ! CREATE SOURCE fast_forwarded
@@ -157,13 +161,6 @@ a b
 2 3
 
 # test INCLUDE metadata
-
-! CREATE SOURCE non_dbz_data_metadata
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-non-dbz-data-${testdrive.seed}')
-  FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
-  INCLUDE TOPIC
-  ENVELOPE NONE
-contains:INCLUDE TOPIC not yet supported
 
 > CREATE SOURCE non_dbz_data_metadata
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-non-dbz-data-${testdrive.seed}')

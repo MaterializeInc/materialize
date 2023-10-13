@@ -674,12 +674,112 @@ time
 query T
 SELECT format_type(1114, NULL)
 ----
-timestamp
+timestamp without time zone
+
+query T
+SELECT format_type(1114, -2)
+----
+timestamp without time zone
+
+query T
+SELECT format_type(1114, -1)
+----
+timestamp without time zone
+
+query T
+SELECT format_type(1114, 0)
+----
+timestamp(0) without time zone
+
+query T
+SELECT format_type(1114, 1)
+----
+timestamp(1) without time zone
+
+query T
+SELECT format_type(1114, 2)
+----
+timestamp(2) without time zone
+
+query T
+SELECT format_type(1114, 3)
+----
+timestamp(3) without time zone
+
+query T
+SELECT format_type(1114, 4)
+----
+timestamp(4) without time zone
+
+query T
+SELECT format_type(1114, 5)
+----
+timestamp(5) without time zone
+
+query T
+SELECT format_type(1114, 6)
+----
+timestamp(6) without time zone
+
+query T
+SELECT format_type(1114, 7)
+----
+timestamp(7) without time zone
 
 query T
 SELECT format_type(1184, NULL)
 ----
 timestamp with time zone
+
+query T
+SELECT format_type(1184, -2)
+----
+timestamp with time zone
+
+query T
+SELECT format_type(1184, -1)
+----
+timestamp with time zone
+
+query T
+SELECT format_type(1184, 0)
+----
+timestamp(0) with time zone
+
+query T
+SELECT format_type(1184, 1)
+----
+timestamp(1) with time zone
+
+query T
+SELECT format_type(1184, 2)
+----
+timestamp(2) with time zone
+
+query T
+SELECT format_type(1184, 3)
+----
+timestamp(3) with time zone
+
+query T
+SELECT format_type(1184, 4)
+----
+timestamp(4) with time zone
+
+query T
+SELECT format_type(1184, 5)
+----
+timestamp(5) with time zone
+
+query T
+SELECT format_type(1184, 6)
+----
+timestamp(6) with time zone
+
+query T
+SELECT format_type(1184, 7)
+----
+timestamp(7) with time zone
 
 query T
 SELECT format_type(1186, NULL)
@@ -759,7 +859,7 @@ time[]
 query T
 SELECT format_type(1115, NULL)
 ----
-timestamp[]
+timestamp without time zone[]
 
 query T
 SELECT format_type(1185, NULL)
@@ -1102,3 +1202,73 @@ true
 true
 true
 true
+
+## coalesce nullability
+
+statement ok
+CREATE TABLE t1(key int, val int, n int NOT NULL);
+
+# coalesce's output type should be non-nullable when any of its input types are non-nullable
+query T multiline
+EXPLAIN WITH(types)
+SELECT coalesce(key, 0)
+FROM t1;
+----
+Explained Query:
+  Project (#3) // { types: "(integer)" }
+    Map (coalesce(#0, 0)) // { types: "(integer?, integer?, integer, integer)" }
+      ReadStorage materialize.public.t1 // { types: "(integer?, integer?, integer)" }
+
+EOF
+
+query T multiline
+EXPLAIN WITH(types)
+SELECT coalesce(key, n)
+FROM t1;
+----
+Explained Query:
+  Project (#3) // { types: "(integer)" }
+    Map (coalesce(#0, #2)) // { types: "(integer?, integer?, integer, integer)" }
+      ReadStorage materialize.public.t1 // { types: "(integer?, integer?, integer)" }
+
+EOF
+
+query T multiline
+EXPLAIN WITH(types)
+SELECT coalesce(key, 0), sum(val)
+FROM t1
+GROUP BY key;
+----
+Explained Query:
+  Project (#2, #1) // { types: "(integer, bigint?)" }
+    Map (coalesce(#0, 0)) // { types: "(integer?, bigint?, integer)" }
+      Reduce group_by=[#0] aggregates=[sum(#1)] // { types: "(integer?, bigint?)" }
+        Project (#0, #1) // { types: "(integer?, integer?)" }
+          ReadStorage materialize.public.t1 // { types: "(integer?, integer?, integer)" }
+
+EOF
+
+# coalesce's output type should be nullable when all of its input types are nullable
+query T multiline
+EXPLAIN WITH(types)
+SELECT coalesce(key, val)
+FROM t1;
+----
+Explained Query:
+  Project (#3) // { types: "(integer?)" }
+    Map (coalesce(#0, #1)) // { types: "(integer?, integer?, integer, integer?)" }
+      ReadStorage materialize.public.t1 // { types: "(integer?, integer?, integer)" }
+
+EOF
+
+query T multiline
+EXPLAIN WITH(types)
+SELECT coalesce(key, val + 5)
+FROM t1;
+----
+Explained Query:
+  Project (#3) // { types: "(integer?)" }
+    Map (coalesce(#0, (#1 + 5))) // { types: "(integer?, integer?, integer, integer?)" }
+      ReadStorage materialize.public.t1 // { types: "(integer?, integer?, integer)" }
+
+EOF

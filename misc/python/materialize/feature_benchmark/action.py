@@ -7,14 +7,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import Callable, Iterator, List, Optional
+from collections.abc import Callable, Iterator
 
 from materialize.feature_benchmark.executor import Executor
 
 
 class Action:
     def __init__(self) -> None:
-        self._executor: Optional[Executor] = None
+        self._executor: Executor | None = None
 
     def __iter__(self) -> Iterator[None]:
         return self
@@ -28,7 +28,7 @@ class Action:
 
     def run(
         self,
-        executor: Optional[Executor] = None,
+        executor: Executor | None = None,
     ) -> None:
         assert False
 
@@ -39,7 +39,7 @@ class LambdaAction(Action):
 
     def run(
         self,
-        executor: Optional[Executor] = None,
+        executor: Executor | None = None,
     ) -> None:
         e = executor or self._executor
         assert e is not None
@@ -48,18 +48,18 @@ class LambdaAction(Action):
 
 
 class Kgen(Action):
-    def __init__(self, topic: str, args: List[str]) -> None:
+    def __init__(self, topic: str, args: list[str]) -> None:
         self._topic: str = topic
-        self._args: List[str] = args
-        self._executor: Optional[Executor] = None
+        self._args: list[str] = args
+        self._executor: Executor | None = None
 
     def run(
         self,
-        executor: Optional[Executor] = None,
+        executor: Executor | None = None,
     ) -> None:
-        getattr((executor or self._executor), "Kgen")(
-            topic=self._topic, args=self._args
-        )
+        executor = executor or self._executor
+        assert executor
+        executor.Kgen(topic=self._topic, args=self._args)
 
 
 class TdAction(Action):
@@ -67,18 +67,25 @@ class TdAction(Action):
 
     def __init__(self, td_str: str) -> None:
         self._td_str = td_str
-        self._executor: Optional[Executor] = None
+        self._executor: Executor | None = None
 
     def run(
         self,
-        executor: Optional[Executor] = None,
+        executor: Executor | None = None,
     ) -> None:
-        getattr((executor or self._executor), "Td")(self._td_str)
+        executor = executor or self._executor
+        assert executor
+        # Print each query once so that it is easier to reproduce regressions
+        # based on just the logs from CI
+        if executor.add_known_fragment(self._td_str):
+            print(self._td_str)
+
+        executor.Td(self._td_str)
 
 
 class DummyAction(Action):
     def run(
         self,
-        executor: Optional[Executor] = None,
+        executor: Executor | None = None,
     ) -> None:
         return None

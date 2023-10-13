@@ -16,11 +16,17 @@ on the underlying relations based on common query patterns.
 
 ## Syntax
 
+### select_stmt
+
 {{< diagram "select-stmt.svg" >}}
+
+### simple_select_stmt
+
+{{< diagram "simple-select-stmt.svg" >}}
 
 Field | Use
 ------|-----
-**WITH** ... **AS** ... | [Common table expressions](#common-table-expressions-ctes) (CTEs) for this query.
+_select&lowbar;with&lowbar;ctes_, _select&lowbar;with&lowbar;recursive&lowbar;ctes_ | [Common table expressions](#common-table-expressions-ctes) (CTEs) for this query.
 **(** _col&lowbar;ident_... **)** | Rename the CTE's columns to the list of identifiers, both of which must be the same length.
 **ALL** | Return all rows from query _(Default)_.
 **DISTINCT** | Return only distinct values.
@@ -47,7 +53,7 @@ have on Materialize.
 
 ### Creating materialized views
 
-Creating a materialized view generates a persistent dataflow, which has a
+Creating a [materialized view](/sql/create-materialized-view) generates a persistent dataflow, which has a
 different performance profile from performing a `SELECT` in an RDBMS.
 
 A materialized view has resource and latency costs that should
@@ -55,48 +61,59 @@ be carefully considered depending on its main usage. Materialize must maintain
 the results of the query in durable storage, but often it must also maintain
 additional intermediate state.
 
-### Reading from indexed relations
+### Creating indexes
+
+Creating an [index](/sql/create-index) also generates a persistent dataflow. The difference from a materialized view is that the results are maintained in memory rather than on persistent storage. This allows ad hoc queries to perform efficient point-lookups in indexes.
+
+### Ad hoc queries
+
+An ad hoc query (a.k.a. one-off `SELECT`) simply performs the query once and returns the results. Ad hoc queries can either read from an existing index, or they can start an ephemeral dataflow to compute the results.
 
 Performing a `SELECT` on an **indexed** source, view or materialized view is
 Materialize's ideal operation. When Materialize receives such a `SELECT` query,
 it quickly returns the maintained results from memory.
+Materialize also quickly returns results for queries that only filter, project, transform with scalar functions,
+and re-order data that is maintained by an index.
 
-Materialize also quickly returns results for queries that only filter, project,
-and re-order results.
-
-### Ad hoc queries
-
-Queries over non-materialized views will create an ephemeral dataflow to compute
-the results. These dataflows are bound to the active [cluster](/overview/key-concepts#clusters),
+Queries that can't simply read out from an index will create an ephemeral dataflow to compute
+the results. These dataflows are bound to the active [cluster](/get-started/key-concepts#clusters),
  which you can change using:
 
 ```sql
 SET cluster = <cluster name>;
 ```
 
-Performing a `SELECT` query that does not directly read out of a dataflow
-requires Materialize to evaluate your query. Materialize will construct a
-temporary dataflow to materialize your query, and remove the dataflow as soon as
-it returns the query results to you.
+Materialize will remove the dataflow as soon as it has returned the query results to you.
 
 ### Common table expressions (CTEs)
 
-Common table expressions, also known as CTEs or `WITH` queries, create aliases
-for statements that subsequent expressions can refer to (including subsequent
-CTEs). This can enhance legibility of complex queries, but doesn't alter the
-queries' semantics.
+Common table expressions, also known as CTEs or `WITH` queries, create aliases for statements.
 
-For an example, see [Using CTEs](#using-ctes).
+#### Regular CTEs
+
+{{< diagram "with-ctes.svg" >}}
+
+##### cte_binding
+
+{{< diagram "cte-binding.svg" >}}
+
+With _regular CTEs_, any `cte_ident` alias can be referenced in subsequent `cte_binding` definitions and in the final `select_stmt`.
+Regular CTEs can enhance legibility of complex queries, but doesn't alter the queries' semantics.
+For an example, see [Using regular CTEs](#using-regular-ctes).
+
+#### Recursive CTEs
+
+
+In addition, Materialize also provides support for _recursive CTEs_ that can mutually reference each other.
+Recursive CTEs can be used to define computations on recursively defined structures (such as trees or graphs) implied by your data.
+For details and examples, see the [Recursive CTEs](../recursive-ctes) page.
 
 #### Known limitations
 
 CTEs have the following limitations, which we are working to improve:
 
-- CTEs only support `SELECT` queries. {{% gh 4867 %}}
-- Materialize inlines the CTE where it's referenced, which could cause
-  unexpected performance characteristics for especially complex expressions. {{%
-  gh 4867 %}}
-- `WITH RECURSIVE` CTEs are not available yet. {{% gh 2516 %}}
+- `INSERT`/`UPDATE`/`DELETE` (with `RETURNING`) is not supported inside a CTE. {{% gh 19486 %}}
+- SQL99-compliant `WITH RECURSIVE` CTEs are not supported (use the [non-standard flavor](../recursive-ctes) instead).
 
 ### Query hints
 
@@ -107,9 +124,11 @@ The following query hints are valid within the `OPTION` clause.
 
 Hint | Value type | Description
 ------|------------|------------
-`EXPECTED GROUP SIZE` | `int` | How many rows will have the same group key. Materialize can render `min` and `max` expressions more efficiently with this information.
+`AGGREGATE INPUT GROUP SIZE` | `uint8` | How many rows will have the same group key in an aggregation. Materialize can render `min` and `max` expressions more efficiently with this information.
+`DISTINCT ON INPUT GROUP SIZE` | `uint8` | How many rows will have the same group key in a `DISTINCT ON` expression. Materialize can render [Top K patterns](/guides/top-k) based on `DISTINCT ON` more efficiently with this information.
+`LIMIT INPUT GROUP SIZE` | `uint8` | How many rows will be given as a group to a `LIMIT` restriction. Materialize can render [Top K patterns](/guides/top-k) based on `LIMIT` more efficiently with this information.
 
-For an example, see [Using query hints](#using-query-hints).
+For examples, see the [Optimization](/transform-data/optimization/#query-hints) page.
 
 ### Column references
 
@@ -132,38 +151,39 @@ columns. If an unqualified name refers to both an input and output column,
 
 ## Examples
 
-### Creating a view
+### Creating an indexed view
 
 This assumes you've already [created a source](../create-source).
 
-The following query creates a materialized view representing the total of all
-purchases made by users per region.
+The following query creates a view representing the total of all
+purchases made by users per region, and then creates an index on this view.
 
-``` sql
-CREATE MATERIALIZED VIEW mat_view AS
+```sql
+CREATE VIEW purchases_by_region AS
     SELECT region.id, sum(purchase.total)
     FROM mysql_simple_purchase AS purchase
     JOIN mysql_simple_user AS user ON purchase.user_id = user.id
     JOIN mysql_simple_region AS region ON user.region_id = region.id
     GROUP BY region.id;
+
+CREATE INDEX purchases_by_region_idx ON purchases_by_region(id);
 ```
 
-In this case, Materialized will create a dataflow to maintain the results of
-this query, and that dataflow will live on until the view it's maintaining is
+In this case, Materialize will create a dataflow to maintain the results of
+this query, and that dataflow will live on until the index it's maintaining is
 dropped.
 
 ### Reading from a view
 
-Assuming you create the view listed above, named `mat_view`:
+Assuming you've created the indexed view listed above, named `purchases_by_region`, you can simply read from the index with an ad hoc `SELECT` query:
 
 ```sql
-SELECT * FROM mat_view
+SELECT * FROM purchases_by_region;
 ```
 
-In this case, Materialized simply returns the results of the dataflow you
-created to maintain the view.
+In this case, Materialize simply returns the results that the index is maintaining, by reading from memory.
 
-### Querying views
+### Ad hoc querying
 
 ```sql
 SELECT region.id, sum(purchase.total)
@@ -173,12 +193,12 @@ JOIN mysql_simple_region AS region ON user.region_id = region.id
 GROUP BY region.id;
 ```
 
-In this case, Materialized will spin up the same dataflow as it did for creating
-a materialized view, but it will tear down the dataflow once it's returned its
+In this case, Materialize will spin up a similar dataflow as it did for creating
+the above indexed view, but it will tear down the dataflow once it's returned its
 results to the client. If you regularly want to view the results of this query,
-you may want to [create a view](../create-view) for it.
+you may want to create an [index](/sql/create-index) (in memory) and/or a [materialized view](/sql/create-materialized-view) (on persistent storage) for it.
 
-### Using CTEs
+### Using regular CTEs
 
 ```sql
 WITH
@@ -206,22 +226,19 @@ Both `regional_sales` and `top_regions` are CTEs. You could write a query that
 produces the same results by replacing references to the CTE with the query it
 names, but the CTEs make the entire query simpler to understand.
 
-With regard to dataflows, this is similar to [Querying views](#querying-views)
+With regard to dataflows, this is similar to [ad hoc querying](#ad-hoc-querying)
 above: Materialize tears down the created dataflow after returning the results.
 
-### Using query hints
+## Privileges
 
-```sql
-SELECT a,
-       min(b) AS min
-FROM example
-GROUP BY a
-OPTIONS (EXPECTED GROUP SIZE = 100)
-```
+The privileges required to execute this statement are:
 
-Here the hint indicates that there may be up to a hundred distinct `(a, b)` pairs
-for each `a` value, and Materialize can optimize its dataflow rendering with that
-knowledge.
+- `USAGE` privileges on the schemas that all relations and types in the query are contained in.
+- `SELECT` privileges on all relations in the query.
+ - NOTE: if any item is a view, then the view owner must also have the necessary privileges to
+   execute the view definition.
+- `USAGE` privileges on all types used in the query.
+- `USAGE` privileges on the active cluster.
 
 ## Related pages
 

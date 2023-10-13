@@ -193,7 +193,7 @@ Note the extra double quotes on the right-hand side of the comparison.
 
 The type of JSON element you're accessing dictates the RHS's type.
 
-- JSON objects require a `string`:
+- Use a `string` to return the value for a specific key:
 
   ```sql
   SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb->'1' AS field_jsonb;
@@ -201,10 +201,10 @@ The type of JSON element you're accessing dictates the RHS's type.
   ```nofmt
    field_jsonb
   -------------
-   2.0
+   2
   ```
 
-- JSON arrays require an `int`:
+- Use an `int` to return the value in an array at a specific index:
 
   ```sql
   SELECT '["1", "a", 2]'::jsonb->1 AS field_jsonb;
@@ -233,7 +233,7 @@ Note that all returned values are `jsonb`.
 
 The type of JSON element you're accessing dictates the RHS's type.
 
-- JSON objects require `text`:
+- Use a `string` to return the value for a specific key:
 
   ```sql
   SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb->>'1' AS field_text;
@@ -241,13 +241,13 @@ The type of JSON element you're accessing dictates the RHS's type.
   ```nofmt
    field_text
   -------------
-   2.0
+   2
   ```
 
-- JSON arrays require an `int`:
+- Use an `int` to return the value in an array at a specific index:
 
   ```sql
-  SELECT '["1", "a", 2]'::text->>1 AS field_text;
+  SELECT '["1", "a", 2]'::jsonb->>1 AS field_text;
   ```
   ```nofmt
    field_text
@@ -312,7 +312,7 @@ SELECT '{"1": 2}'::jsonb ||
 ```nofmt
              concat
 ---------------------------------
- {"1":2.0,"a":["b","c"]}
+ {"1":2,"a":["b","c"]}
 ```
 
 <hr/>
@@ -325,12 +325,14 @@ SELECT '{"1": 2}'::jsonb ||
 ```nofmt
   rm_key
 -----------
- {"1":2.0}
+ {"1":2}
 ```
 
 <hr/>
 
 #### LHS contains RHS (`@>`)
+
+Here, the left hand side does contain the right hand side, so the result is `t` for true.
 
 ```sql
 SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb @>
@@ -345,6 +347,8 @@ SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb @>
 <hr/>
 
 #### RHS contains LHS (`<@`)
+
+Here, the right hand side does contain the left hand side, so the result is `t` for true.
 
 ```sql
 SELECT '{"1": 2}'::jsonb <@
@@ -400,21 +404,15 @@ SELECT * FROM jsonb_array_elements('[true, 1, "a", {"b": 2}, null]'::jsonb);
 ##### Flattening a JSON array
 
 ```sql
-SELECT * FROM flatten_json;
-```
-
-```nofmt
- id |           json_col
-----+-------------------------------
-  1 | [{"a":1,"b":2},{"a":3,"b":4}]
-  2 | [{"a":5,"b":6},{"a":7,"b":8}]
-```
-
-```sql
-SELECT id,
+SELECT t.id,
        obj->>'a' AS a,
        obj->>'b' AS b
-FROM flatten_json, jsonb_array_elements(json_col) obj;
+FROM (
+  VALUES
+    (1, '[{"a":1,"b":2},{"a":3,"b":4}]'::jsonb),
+    (2, '[{"a":5,"b":6},{"a":7,"b":8}]'::jsonb)
+) AS t(id, json_col)
+CROSS JOIN jsonb_array_elements(t.json_col) AS obj;
 ```
 
 ```nofmt
@@ -475,12 +473,12 @@ SELECT jsonb_build_array('a', 1::float, 2.0::float, true);
 #### `jsonb_build_object`
 
 ```sql
-SELECT jsonb_build_object(2::float, 'b', 'a', 1::float);
+SELECT jsonb_build_object(2.0::float, 'b', 'a', 1.1::float);
 ```
 ```nofmt
  jsonb_build_object
 --------------------
- {"2":true,"a":1.0}
+ {"2":"b","a":1.1}
 ```
 
 <hr/>
@@ -488,12 +486,12 @@ SELECT jsonb_build_object(2::float, 'b', 'a', 1::float);
 #### `jsonb_each`
 
 ```sql
-SELECT * FROM jsonb_each('{"1": 2, "a": ["b", "c"]}'::jsonb);
+SELECT * FROM jsonb_each('{"1": 2.1, "a": ["b", "c"]}'::jsonb);
 ```
 ```nofmt
  key |   value
 -----+-----------
- 1   | 2.0
+ 1   | 2.1
  a   | ["b","c"]
 ```
 
@@ -504,12 +502,12 @@ Note that the `value` column is `jsonb`.
 #### `jsonb_each_text`
 
 ```sql
-SELECT * FROM jsonb_each_text('{"1": 2, "a": ["b", "c"]}'::jsonb);
+SELECT * FROM jsonb_each_text('{"1": 2.1, "a": ["b", "c"]}'::jsonb);
 ```
 ```nofmt
  key |   value
 -----+-----------
- 1   | 2.0
+ 1   | 2.1
  a   | ["b","c"]
 ```
 
@@ -540,7 +538,7 @@ SELECT jsonb_pretty('{"1": 2, "a": ["b", "c"]}'::jsonb);
  jsonb_pretty
 --------------
  {           +
-   "1": 2.0, +
+   "1": 2,   +
    "a": [    +
      "b",    +
      "c"     +
@@ -588,12 +586,21 @@ SELECT jsonb_strip_nulls('[{"1":"a","2":null},"b",null,"c"]'::jsonb);
 #### `to_jsonb`
 
 ```sql
-SELECT to_jsonb('hello');
+SELECT to_jsonb(t) AS jsonified_row
+FROM (
+  VALUES
+  (1, 'hey'),
+  (2, NULL),
+  (3, 'hi'),
+  (4, 'salutations')
+  ) AS t(id, content)
+WHERE t.content LIKE 'h%';
 ```
 ```nofmt
- to_jsonb
-----------
- "hello"
+      jsonified_row
+--------------------------
+ {"content":"hi","id":3}
+ {"content":"hey","id":1}
 ```
 
 Note that the output is `jsonb`.

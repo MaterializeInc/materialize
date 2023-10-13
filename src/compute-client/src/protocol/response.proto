@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+// buf breaking: ignore (does currently not require backward-compatibility)
+
 syntax = "proto3";
 
 import "proto/src/proto.proto";
@@ -32,7 +34,7 @@ message ProtoComputeResponse {
     }
 
     oneof kind {
-        mz_storage_client.client.ProtoFrontierUppersKind frontier_uppers = 1;
+        mz_storage_client.client.ProtoTrace frontier_upper = 1;
         ProtoPeekResponseKind peek_response = 2;
         ProtoSubscribeResponseKind subscribe_response = 3;
     }

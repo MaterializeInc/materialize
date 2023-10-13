@@ -11,28 +11,30 @@ use std::borrow::Cow;
 use std::fmt;
 
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
-use once_cell::sync::Lazy;
-use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
-
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
 use mz_ore::str::StrExt;
-use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::char::{format_str_trim, Char};
 use mz_repr::adt::date::Date;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
+use mz_repr::adt::pg_legacy_name::PgLegacyName;
 use mz_repr::adt::regex::Regex;
 use mz_repr::adt::system::{Oid, PgLegacyChar};
-use mz_repr::adt::timestamp::CheckedTimestamp;
+use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampPrecision};
 use mz_repr::adt::varchar::{VarChar, VarCharMaxLength};
-use mz_repr::{strconv, ColumnType, Datum, Row, RowArena, ScalarType};
+use mz_repr::{strconv, ColumnType, Datum, RowArena, ScalarType};
+use once_cell::sync::Lazy;
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
-use crate::scalar::func::{array_create_scalar, EagerUnaryFunc, LazyUnaryFunc};
+use crate::func::regexp_match_static;
+use crate::scalar::func::{
+    array_create_scalar, regexp_split_to_array_re, EagerUnaryFunc, LazyUnaryFunc,
+};
 use crate::{like_pattern, EvalError, MirScalarExpr, UnaryFunc};
 
 sqlfunc!(
@@ -50,6 +52,14 @@ sqlfunc!(
     #[inverse = to_unary!(super::CastPgLegacyCharToString)]
     fn cast_string_to_pg_legacy_char<'a>(a: &'a str) -> PgLegacyChar {
         PgLegacyChar(a.as_bytes().get(0).copied().unwrap_or(0))
+    }
+);
+
+sqlfunc!(
+    #[sqlname = "text_to_name"]
+    #[preserves_uniqueness = true]
+    fn cast_string_to_pg_legacy_name<'a>(a: &'a str) -> PgLegacyName<String> {
+        PgLegacyName(strconv::parse_pg_legacy_name(a))
     }
 );
 
@@ -195,27 +205,82 @@ sqlfunc!(
     }
 );
 
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
+pub struct CastStringToTimestamp(pub Option<TimestampPrecision>);
+
+impl<'a> EagerUnaryFunc<'a> for CastStringToTimestamp {
+    type Input = &'a str;
+    type Output = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
+
+    fn call(&self, a: &'a str) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
+        let out = strconv::parse_timestamp(a)?;
+        let updated = out.round_to_precision(self.0)?;
+        Ok(updated)
+    }
+
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::Timestamp { precision: self.0 }.nullable(input.nullable)
+    }
+
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
+        to_unary!(super::CastTimestampToString)
+    }
+}
+
+impl fmt::Display for CastStringToTimestamp {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("text_to_timestamp")
+    }
+}
+
 sqlfunc!(
-    #[sqlname = "text_to_timestamp"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastTimestampToString)]
-    fn cast_string_to_timestamp<'a>(
+    #[sqlname = "try_parse_monotonic_iso8601_timestamp"]
+    // TODO: Pretty sure this preserves uniqueness, but not 100%.
+    //
+    // Ironically, even though this has "monotonic" in the name, it's not quite
+    // eligible for `#[is_monotone = true]` because any input could also be
+    // mapped to null. So, handle it via SpecialUnary in the interpreter.
+    fn try_parse_monotonic_iso8601_timestamp<'a>(
         a: &'a str,
-    ) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
-        strconv::parse_timestamp(a).err_into()
+    ) -> Option<CheckedTimestamp<NaiveDateTime>> {
+        let ts = mz_persist_types::timestamp::try_parse_monotonic_iso8601_timestamp(a)?;
+        let ts = CheckedTimestamp::from_timestamplike(ts)
+            .expect("monotonic_iso8601 range is a subset of CheckedTimestamp domain");
+        Some(ts)
     }
 );
 
-sqlfunc!(
-    #[sqlname = "text_to_timestamp_with_time_zone"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastTimestampTzToString)]
-    fn cast_string_to_timestamp_tz<'a>(
-        a: &'a str,
-    ) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
-        strconv::parse_timestamptz(a).err_into()
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
+pub struct CastStringToTimestampTz(pub Option<TimestampPrecision>);
+
+impl<'a> EagerUnaryFunc<'a> for CastStringToTimestampTz {
+    type Input = &'a str;
+    type Output = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
+
+    fn call(&self, a: &'a str) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
+        let out = strconv::parse_timestamptz(a)?;
+        let updated = out.round_to_precision(self.0)?;
+        Ok(updated)
     }
-);
+
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::TimestampTz { precision: self.0 }.nullable(input.nullable)
+    }
+
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
+        to_unary!(super::CastTimestampTzToString)
+    }
+}
+
+impl fmt::Display for CastStringToTimestampTz {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("text_to_timestamp_with_time_zone")
+    }
+}
 
 sqlfunc!(
     #[sqlname = "text_to_interval"]
@@ -255,7 +320,7 @@ impl LazyUnaryFunc for CastStringToArray {
         if a.is_null() {
             return Ok(Datum::Null);
         }
-        let datums = strconv::parse_array(
+        let (datums, dims) = strconv::parse_array(
             a.unwrap_str(),
             || Datum::Null,
             |elem_text| {
@@ -267,7 +332,8 @@ impl LazyUnaryFunc for CastStringToArray {
                     .eval(&[Datum::String(elem_text)], temp_storage)
             },
         )?;
-        array_create_scalar(&datums, temp_storage)
+
+        Ok(temp_storage.try_make_datum(|packer| packer.push_array(&dims, datums))?)
     }
 
     /// The output ColumnType of this function
@@ -294,6 +360,10 @@ impl LazyUnaryFunc for CastStringToArray {
         to_unary!(super::CastArrayToString {
             ty: self.return_ty.clone(),
         })
+    }
+
+    fn is_monotone(&self) -> bool {
+        false
     }
 }
 
@@ -367,6 +437,10 @@ impl LazyUnaryFunc for CastStringToList {
         to_unary!(super::CastListToString {
             ty: self.return_ty.clone(),
         })
+    }
+
+    fn is_monotone(&self) -> bool {
+        false
     }
 }
 
@@ -448,6 +522,10 @@ impl LazyUnaryFunc for CastStringToMap {
         to_unary!(super::CastMapToString {
             ty: self.return_ty.clone(),
         })
+    }
+
+    fn is_monotone(&self) -> bool {
+        false
     }
 }
 
@@ -562,6 +640,10 @@ impl LazyUnaryFunc for CastStringToRange {
             ty: self.return_ty.clone(),
         })
     }
+
+    fn is_monotone(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Display for CastStringToRange {
@@ -674,6 +756,10 @@ impl LazyUnaryFunc for CastStringToInt2Vector {
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastInt2VectorToString)
     }
+
+    fn is_monotone(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Display for CastStringToInt2Vector {
@@ -730,21 +816,24 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "char_length"]
     fn char_length<'a>(a: &'a str) -> Result<i32, EvalError> {
-        i32::try_from(a.chars().count()).or(Err(EvalError::Int32OutOfRange))
+        let length = a.chars().count();
+        i32::try_from(length).or(Err(EvalError::Int32OutOfRange(length.to_string())))
     }
 );
 
 sqlfunc!(
     #[sqlname = "bit_length"]
     fn bit_length_string<'a>(a: &'a str) -> Result<i32, EvalError> {
-        i32::try_from(a.as_bytes().len() * 8).or(Err(EvalError::Int32OutOfRange))
+        let length = a.as_bytes().len() * 8;
+        i32::try_from(length).or(Err(EvalError::Int32OutOfRange(length.to_string())))
     }
 );
 
 sqlfunc!(
     #[sqlname = "octet_length"]
     fn byte_length_string<'a>(a: &'a str) -> Result<i32, EvalError> {
-        i32::try_from(a.as_bytes().len()).or(Err(EvalError::Int32OutOfRange))
+        let length = a.as_bytes().len();
+        i32::try_from(length).or(Err(EvalError::Int32OutOfRange(length.to_string())))
     }
 );
 
@@ -778,7 +867,12 @@ impl<'a> EagerUnaryFunc<'a> for IsLikeMatch {
 
 impl fmt::Display for IsLikeMatch {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{} ~~", self.0.pattern.quoted())
+        write!(
+            f,
+            "{}like[{}]",
+            if self.0.case_insensitive { "i" } else { "" },
+            self.0.pattern.quoted()
+        )
     }
 }
 
@@ -800,7 +894,12 @@ impl<'a> EagerUnaryFunc<'a> for IsRegexpMatch {
 
 impl fmt::Display for IsRegexpMatch {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{} ~", self.0.as_str().quoted())
+        write!(
+            f,
+            "is_regexp_match[{}, case_insensitive={}]",
+            self.0.pattern.quoted(),
+            self.0.case_insensitive
+        )
     }
 }
 
@@ -818,42 +917,7 @@ impl LazyUnaryFunc for RegexpMatch {
         if haystack.is_null() {
             return Ok(Datum::Null);
         }
-        let mut row = Row::default();
-        let mut packer = row.packer();
-        if self.0.captures_len() > 1 {
-            // The regex contains capture groups, so return an array containing the
-            // matched text in each capture group, unless the entire match fails.
-            // Individual capture groups may also be null if that group did not
-            // participate in the match.
-            match self.0.captures(haystack.unwrap_str()) {
-                None => packer.push(Datum::Null),
-                Some(captures) => packer.push_array(
-                    &[ArrayDimension {
-                        lower_bound: 1,
-                        length: captures.len() - 1,
-                    }],
-                    // Skip the 0th capture group, which is the whole match.
-                    captures.iter().skip(1).map(|mtch| match mtch {
-                        None => Datum::Null,
-                        Some(mtch) => Datum::String(mtch.as_str()),
-                    }),
-                )?,
-            }
-        } else {
-            // The regex contains no capture groups, so return a one-element array
-            // containing the match, or null if there is no match.
-            match self.0.find(haystack.unwrap_str()) {
-                None => packer.push(Datum::Null),
-                Some(mtch) => packer.push_array(
-                    &[ArrayDimension {
-                        lower_bound: 1,
-                        length: 1,
-                    }],
-                    std::iter::once(Datum::String(mtch.as_str())),
-                )?,
-            };
-        };
-        Ok(temp_storage.push_unary_row(row))
+        regexp_match_static(haystack, temp_storage, &self.0)
     }
 
     /// The output ColumnType of this function
@@ -880,11 +944,77 @@ impl LazyUnaryFunc for RegexpMatch {
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         None
     }
+
+    fn is_monotone(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Display for RegexpMatch {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "regexp_match[{}]", self.0.as_str())
+        write!(
+            f,
+            "regexp_match[{}, case_insensitive={}]",
+            self.0.pattern.quoted(),
+            self.0.case_insensitive
+        )
+    }
+}
+
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+pub struct RegexpSplitToArray(pub Regex);
+
+impl LazyUnaryFunc for RegexpSplitToArray {
+    fn eval<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+        a: &'a MirScalarExpr,
+    ) -> Result<Datum<'a>, EvalError> {
+        let haystack = a.eval(datums, temp_storage)?;
+        if haystack.is_null() {
+            return Ok(Datum::Null);
+        }
+        regexp_split_to_array_re(haystack.unwrap_str(), &self.0, temp_storage)
+    }
+
+    /// The output ColumnType of this function
+    fn output_type(&self, input_type: ColumnType) -> ColumnType {
+        ScalarType::Array(Box::new(ScalarType::String)).nullable(input_type.nullable)
+    }
+
+    /// Whether this function will produce NULL on NULL input
+    fn propagates_nulls(&self) -> bool {
+        true
+    }
+
+    /// Whether this function will produce NULL on non-NULL input
+    fn introduces_nulls(&self) -> bool {
+        false
+    }
+
+    /// Whether this function preserves uniqueness
+    fn preserves_uniqueness(&self) -> bool {
+        false
+    }
+
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
+        None
+    }
+
+    fn is_monotone(&self) -> bool {
+        false
+    }
+}
+
+impl fmt::Display for RegexpSplitToArray {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "regexp_split_to_array[{}, case_insensitive={}]",
+            self.0.pattern.quoted(),
+            self.0.case_insensitive
+        )
     }
 }
 
@@ -895,3 +1025,61 @@ sqlfunc!(
         panic!("{}", a)
     }
 );
+
+#[derive(
+    Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect, Arbitrary,
+)]
+pub struct QuoteIdent;
+
+impl LazyUnaryFunc for QuoteIdent {
+    fn eval<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+        a: &'a MirScalarExpr,
+    ) -> Result<Datum<'a>, EvalError> {
+        let d = a.eval(datums, temp_storage)?;
+        if d.is_null() {
+            return Ok(Datum::Null);
+        }
+        let v = d.unwrap_str();
+        let i = mz_sql_parser::ast::Ident::from(v);
+        let r = temp_storage.push_string(i.to_string());
+
+        Ok(Datum::String(r))
+    }
+
+    /// The output ColumnType of this function
+    fn output_type(&self, input_type: ColumnType) -> ColumnType {
+        ScalarType::String.nullable(input_type.nullable)
+    }
+
+    /// Whether this function will produce NULL on NULL input
+    fn propagates_nulls(&self) -> bool {
+        true
+    }
+
+    /// Whether this function will produce NULL on non-NULL input
+    fn introduces_nulls(&self) -> bool {
+        false
+    }
+
+    /// Whether this function preserves uniqueness
+    fn preserves_uniqueness(&self) -> bool {
+        true
+    }
+
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
+        None
+    }
+
+    fn is_monotone(&self) -> bool {
+        false
+    }
+}
+
+impl fmt::Display for QuoteIdent {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "quote_ident")
+    }
+}

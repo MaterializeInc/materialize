@@ -9,7 +9,7 @@ draft: true
     #parent: "advanced"
 ---
 
-{{< beta />}}
+{{< public-preview />}}
 
 Change data capture (CDC) tools provide feeds that record any changes to a database. Typically, the feeds are then saved to another platform, like Kafka, for storage or processing. However, sometimes the stream can have missing or duplicate records, or records can be received out of order. For example, if a CDC tool crashes while writing a record, it may retry and write the record again, resulting in a duplicate entry.
 

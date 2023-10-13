@@ -15,30 +15,36 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
+use itertools::Itertools;
 use mz_expr::MirRelationExpr;
-use mz_ore::collections::CollectionExt;
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::{RelationDesc, ScalarType};
+use mz_sql_parser::ast::{
+    ExplainTimestampStatement, Expr, IfExistsBehavior, OrderByExpr, SubscribeOutput,
+};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
     AstInfo, CopyDirection, CopyOption, CopyOptionName, CopyRelation, CopyStatement, CopyTarget,
-    CreateMaterializedViewStatement, CreateViewStatement, DeleteStatement, ExplainStage,
-    ExplainStatement, Explainee, Ident, InsertStatement, Query, SelectStatement, Statement,
-    SubscribeOption, SubscribeOptionName, SubscribeRelation, SubscribeStatement, UpdateStatement,
-    ViewDefinition,
+    DeleteStatement, ExplainPlanStatement, ExplainStage, Explainee, Ident, InsertStatement, Query,
+    SelectStatement, SubscribeOption, SubscribeOptionName, SubscribeRelation, SubscribeStatement,
+    UpdateStatement,
 };
 use crate::catalog::CatalogItemType;
-use crate::names::{self, Aug, ResolvedObjectName};
-use crate::plan::query::{plan_up_to, QueryLifetime};
-use crate::plan::statement::{StatementContext, StatementDesc};
+use crate::names::{Aug, ResolvedItemName};
+use crate::normalize;
+use crate::plan::query::{plan_up_to, ExprContext, QueryLifetime};
+use crate::plan::scope::Scope;
+use crate::plan::statement::{ddl, StatementContext, StatementDesc};
 use crate::plan::with_options::TryFromValue;
+use crate::plan::{self, side_effecting_func, ExplainTimestampPlan};
 use crate::plan::{
-    query, CopyFormat, CopyFromPlan, ExplainPlan, InsertPlan, MutationKind, Params, PeekPlan, Plan,
-    PlanError, QueryContext, ReadThenWritePlan, SubscribeFrom, SubscribePlan,
+    query, CopyFormat, CopyFromPlan, ExplainPlanPlan, InsertPlan, MutationKind, Params, Plan,
+    PlanError, QueryContext, ReadThenWritePlan, SelectPlan, SubscribeFrom, SubscribePlan,
 };
+use crate::session::vars;
 
 // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
 // plans the whole query to determine its shape and parameter types,
@@ -77,7 +83,7 @@ pub fn plan_insert(
     let (id, mut expr, returning) =
         query::plan_insert_query(scx, table_name, columns, source, returning)?;
     expr.bind_parameters(params)?;
-    let expr = expr.optimize_and_lower(&scx.into())?;
+    let expr = expr.optimize_and_lower(&crate::plan::OptimizerConfig {})?;
     let returning = returning
         .expr
         .into_iter()
@@ -105,7 +111,7 @@ pub fn plan_delete(
     params: &Params,
 ) -> Result<Plan, PlanError> {
     let rtw_plan = query::plan_delete_query(scx, stmt)?;
-    plan_read_then_write(MutationKind::Delete, scx, params, rtw_plan)
+    plan_read_then_write(MutationKind::Delete, params, rtw_plan)
 }
 
 pub fn describe_update(
@@ -122,12 +128,11 @@ pub fn plan_update(
     params: &Params,
 ) -> Result<Plan, PlanError> {
     let rtw_plan = query::plan_update_query(scx, stmt)?;
-    plan_read_then_write(MutationKind::Update, scx, params, rtw_plan)
+    plan_read_then_write(MutationKind::Update, params, rtw_plan)
 }
 
 pub fn plan_read_then_write(
     kind: MutationKind,
-    scx: &StatementContext,
     params: &Params,
     query::ReadThenWritePlan {
         id,
@@ -137,7 +142,7 @@ pub fn plan_read_then_write(
     }: query::ReadThenWritePlan,
 ) -> Result<Plan, PlanError> {
     selection.bind_parameters(params)?;
-    let selection = selection.optimize_and_lower(&scx.into())?;
+    let selection = selection.optimize_and_lower(&crate::plan::OptimizerConfig {})?;
     let mut assignments_outer = BTreeMap::new();
     for (idx, mut set) in assignments {
         set.bind_parameters(params)?;
@@ -159,22 +164,30 @@ pub fn describe_select(
     scx: &StatementContext,
     stmt: SelectStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
+    if let Some(desc) = side_effecting_func::describe_select_if_side_effecting(scx, &stmt)? {
+        return Ok(StatementDesc::new(Some(desc)));
+    }
+
     let query::PlannedQuery { desc, .. } =
-        query::plan_root_query(scx, stmt.query, QueryLifetime::OneShot(scx.pcx()?))?;
+        query::plan_root_query(scx, stmt.query, QueryLifetime::OneShot)?;
     Ok(StatementDesc::new(Some(desc)))
 }
 
 pub fn plan_select(
     scx: &StatementContext,
-    SelectStatement { query, as_of }: SelectStatement<Aug>,
+    select: SelectStatement<Aug>,
     params: &Params,
     copy_to: Option<CopyFormat>,
 ) -> Result<Plan, PlanError> {
+    if let Some(f) = side_effecting_func::plan_select_if_side_effecting(scx, &select, params)? {
+        return Ok(Plan::SideEffectingFunc(f));
+    }
+
     let query::PlannedQuery {
         expr, finishing, ..
-    } = plan_query(scx, query, params, QueryLifetime::OneShot(scx.pcx()?))?;
-    let when = query::plan_as_of(scx, as_of)?;
-    Ok(Plan::Peek(PeekPlan {
+    } = plan_query(scx, select.query, params, QueryLifetime::OneShot)?;
+    let when = query::plan_as_of(scx, select.as_of)?;
+    Ok(Plan::Select(SelectPlan {
         source: expr,
         when,
         finishing,
@@ -182,11 +195,11 @@ pub fn plan_select(
     }))
 }
 
-pub fn describe_explain(
+pub fn describe_explain_plan(
     scx: &StatementContext,
-    ExplainStatement {
+    ExplainPlanStatement {
         stage, explainee, ..
-    }: ExplainStatement<Aug>,
+    }: ExplainPlanStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     let mut relation_desc = RelationDesc::empty();
 
@@ -207,10 +220,6 @@ pub fn describe_explain(
             relation_desc =
                 relation_desc.with_column("Physical Plan", ScalarType::String.nullable(false));
         }
-        ExplainStage::Timestamp => {
-            relation_desc =
-                relation_desc.with_column("Timestamp", ScalarType::String.nullable(false));
-        }
         ExplainStage::Trace => {
             relation_desc = relation_desc
                 .with_column("Time", ScalarType::UInt64.nullable(false))
@@ -221,11 +230,11 @@ pub fn describe_explain(
 
     Ok(
         StatementDesc::new(Some(relation_desc)).with_params(match explainee {
-            Explainee::Query(q) => {
+            Explainee::Query(q, _) => {
                 describe_select(
                     scx,
                     SelectStatement {
-                        query: q,
+                        query: *q,
                         as_of: None,
                     },
                 )?
@@ -236,101 +245,28 @@ pub fn describe_explain(
     )
 }
 
-pub fn plan_explain(
+pub fn describe_explain_timestamp(
     scx: &StatementContext,
-    ExplainStatement {
+    ExplainTimestampStatement { query, .. }: ExplainTimestampStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    let mut relation_desc = RelationDesc::empty();
+    relation_desc = relation_desc.with_column("Timestamp", ScalarType::String.nullable(false));
+
+    Ok(StatementDesc::new(Some(relation_desc))
+        .with_params(describe_select(scx, SelectStatement { query, as_of: None })?.param_types))
+}
+
+pub fn plan_explain_plan(
+    scx: &StatementContext,
+    ExplainPlanStatement {
         stage,
         config_flags,
         format,
-        no_errors,
         explainee,
-    }: ExplainStatement<Aug>,
+    }: ExplainPlanStatement<Aug>,
     params: &Params,
 ) -> Result<Plan, PlanError> {
-    let is_view = matches!(explainee, Explainee::View(_));
-    let (explainee, query) = match explainee {
-        Explainee::View(name) => {
-            let view = scx.get_item_by_resolved_name(&name)?;
-            let item_type = view.item_type();
-            // Return a more helpful error on `EXPLAIN [...] VIEW <materialized-view>`.
-            if item_type == CatalogItemType::MaterializedView {
-                return Err(PlanError::ExplainViewOnMaterializedView(
-                    name.full_name_str(),
-                ));
-            } else if item_type != CatalogItemType::View {
-                sql_bail!(
-                    "Expected {} to be a view, not a {}",
-                    name.full_name_str(),
-                    item_type
-                );
-            }
-            let parsed = crate::parse::parse(view.create_sql())
-                .expect("Sql for existing view should be valid sql");
-            let query = match parsed.into_last() {
-                Statement::CreateView(CreateViewStatement {
-                    definition: ViewDefinition { query, .. },
-                    ..
-                }) => query,
-                _ => panic!("Sql for existing view should parse as a view"),
-            };
-            let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
-            (
-                mz_repr::explain::Explainee::Dataflow(view.id()),
-                names::resolve(qcx.scx.catalog, query)?.0,
-            )
-        }
-        Explainee::MaterializedView(name) => {
-            let mview = scx.get_item_by_resolved_name(&name)?;
-            let item_type = mview.item_type();
-            if item_type != CatalogItemType::MaterializedView {
-                sql_bail!(
-                    "Expected {} to be a materialized view, not a {}",
-                    name,
-                    item_type
-                );
-            }
-            let parsed = crate::parse::parse(mview.create_sql())
-                .expect("Sql for existing materialized view should be valid sql");
-            let query = match parsed.into_last() {
-                Statement::CreateMaterializedView(CreateMaterializedViewStatement {
-                    query,
-                    ..
-                }) => query,
-                _ => {
-                    panic!("Sql for existing materialized view should parse as a materialized view")
-                }
-            };
-            let qcx = QueryContext::root(scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
-            (
-                mz_repr::explain::Explainee::Dataflow(mview.id()),
-                names::resolve(qcx.scx.catalog, query)?.0,
-            )
-        }
-        Explainee::Query(query) => (mz_repr::explain::Explainee::Query, query),
-    };
-    // Previously we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
-    // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
-    let query::PlannedQuery {
-        mut expr,
-        desc,
-        finishing,
-    } = query::plan_root_query(scx, query, QueryLifetime::OneShot(scx.pcx()?))?;
-    let finishing = if is_view {
-        // views don't use a separate finishing
-        expr.finish(finishing);
-        None
-    } else if finishing.is_trivial(desc.arity()) {
-        None
-    } else {
-        Some(finishing)
-    };
-    expr.bind_parameters(params)?;
-
-    let config_flags = config_flags
-        .iter()
-        .map(|ident| ident.to_string().to_lowercase())
-        .collect::<BTreeSet<_>>();
-    let config = ExplainConfig::try_from(config_flags)?;
+    use crate::plan::ExplaineeStatement;
 
     let format = match format {
         mz_sql_parser::ast::ExplainFormat::Text => ExplainFormat::Text,
@@ -338,14 +274,171 @@ pub fn plan_explain(
         mz_sql_parser::ast::ExplainFormat::Dot => ExplainFormat::Dot,
     };
 
-    Ok(Plan::Explain(ExplainPlan {
-        raw_plan: expr,
-        row_set_finishing: finishing,
+    let config = {
+        let config_flags = config_flags
+            .iter()
+            .map(|ident| ident.to_string().to_lowercase())
+            .collect::<BTreeSet<_>>();
+
+        let mut config = ExplainConfig::try_from(config_flags)?;
+
+        if config.filter_pushdown {
+            scx.require_feature_flag(&vars::ENABLE_MFP_PUSHDOWN_EXPLAIN)?;
+            // If filtering is disabled, explain plans should not include pushdown info.
+            config.filter_pushdown = scx.catalog.system_vars().persist_stats_filter_enabled();
+        }
+
+        config
+    };
+
+    let explainee = match explainee {
+        Explainee::View(_) => {
+            bail_never_supported!(
+                "EXPLAIN ... VIEW <view_name>",
+                "sql/explain-plan",
+                "Use `EXPLAIN ... SELECT * FROM <view_name>` (if the view is not indexed) or `EXPLAIN ... INDEX <idx_name>` (if the view is indexed) instead."
+            );
+        }
+        Explainee::MaterializedView(name) => {
+            let item = scx.get_item_by_resolved_name(&name)?;
+            let item_type = item.item_type();
+            if item_type != CatalogItemType::MaterializedView {
+                sql_bail!("Expected {name} to be a materialized view, not a {item_type}");
+            }
+            crate::plan::Explainee::MaterializedView(item.id())
+        }
+        Explainee::Index(name) => {
+            let item = scx.get_item_by_resolved_name(&name)?;
+            let item_type = item.item_type();
+            if item_type != CatalogItemType::Index {
+                sql_bail!("Expected {name} to be an index, not a {item_type}");
+            }
+            crate::plan::Explainee::Index(item.id())
+        }
+        Explainee::Query(query, broken) => {
+            let query::PlannedQuery {
+                expr: mut raw_plan,
+                desc,
+                finishing,
+                scope: _,
+            } = query::plan_root_query(scx, *query, QueryLifetime::OneShot)?;
+            raw_plan.bind_parameters(params)?;
+
+            let row_set_finishing = if finishing.is_trivial(desc.arity()) {
+                None
+            } else {
+                Some(finishing)
+            };
+
+            if broken {
+                scx.require_feature_flag(&vars::ENABLE_EXPLAIN_BROKEN)?;
+            }
+
+            crate::plan::Explainee::Statement(ExplaineeStatement::Query {
+                raw_plan,
+                row_set_finishing,
+                broken,
+            })
+        }
+        Explainee::CreateMaterializedView(mut stmt, broken) => {
+            if stmt.if_exists != IfExistsBehavior::Skip {
+                // If we don't force this parameter to Skip planning will
+                // fail for names that already exist in the catalog. This
+                // can happen even in `Replace` mode if the existing item
+                // has dependencies.
+                stmt.if_exists = IfExistsBehavior::Skip;
+            } else {
+                sql_bail!(
+                    "Cannot EXPLAIN a CREATE MATERIALIZED VIEW that explictly sets IF NOT EXISTS \
+                     (the behavior is implied within the scope of an enclosing EXPLAIN)"
+                );
+            }
+
+            let Plan::CreateMaterializedView(plan::CreateMaterializedViewPlan {
+                name,
+                materialized_view:
+                    plan::MaterializedView {
+                        expr: raw_plan,
+                        column_names,
+                        cluster_id,
+                        non_null_assertions,
+                        ..
+                    },
+                ..
+            }) = ddl::plan_create_materialized_view(scx, *stmt, params)?
+            else {
+                sql_bail!("expected CreateMaterializedViewPlan plan");
+            };
+
+            crate::plan::Explainee::Statement(ExplaineeStatement::CreateMaterializedView {
+                name,
+                raw_plan,
+                column_names,
+                cluster_id,
+                broken,
+                non_null_assertions,
+            })
+        }
+        Explainee::CreateIndex(mut stmt, broken) => {
+            if !stmt.if_not_exists {
+                // If we don't force this parameter to true planning will
+                // fail for index items that already exist in the catalog.
+                stmt.if_not_exists = true;
+            } else {
+                sql_bail!(
+                    "Cannot EXPLAIN a CREATE INDEX that explictly sets IF NOT EXISTS \
+                     (the behavior is implied within the scope of an enclosing EXPLAIN)"
+                );
+            }
+
+            let Plan::CreateIndex(plan::CreateIndexPlan { name, index, .. }) =
+                ddl::plan_create_index(scx, *stmt)?
+            else {
+                sql_bail!("expected CreateIndexPlan plan");
+            };
+
+            crate::plan::Explainee::Statement(ExplaineeStatement::CreateIndex {
+                name,
+                index,
+                broken,
+            })
+        }
+    };
+
+    Ok(Plan::ExplainPlan(ExplainPlanPlan {
         stage,
         format,
         config,
-        no_errors,
         explainee,
+    }))
+}
+
+pub fn plan_explain_timestamp(
+    scx: &StatementContext,
+    ExplainTimestampStatement { format, query }: ExplainTimestampStatement<Aug>,
+    params: &Params,
+) -> Result<Plan, PlanError> {
+    let format = match format {
+        mz_sql_parser::ast::ExplainFormat::Text => ExplainFormat::Text,
+        mz_sql_parser::ast::ExplainFormat::Json => ExplainFormat::Json,
+        mz_sql_parser::ast::ExplainFormat::Dot => ExplainFormat::Dot,
+    };
+
+    let raw_plan = {
+        let query::PlannedQuery {
+            expr: mut raw_plan,
+            desc: _,
+            finishing: _,
+            scope: _,
+        } = query::plan_root_query(scx, query, QueryLifetime::OneShot)?;
+        raw_plan.bind_parameters(params)?;
+
+        raw_plan
+    };
+
+    Ok(Plan::ExplainTimestamp(ExplainTimestampPlan {
+        format,
+        raw_plan,
     }))
 }
 
@@ -361,12 +454,14 @@ pub fn plan_query(
         mut expr,
         desc,
         finishing,
+        scope,
     } = query::plan_root_query(scx, query, lifetime)?;
     expr.bind_parameters(params)?;
     Ok(query::PlannedQuery {
-        expr: expr.optimize_and_lower(&scx.into())?,
+        expr: expr.optimize_and_lower(&crate::plan::OptimizerConfig {})?,
         desc,
         finishing,
+        scope,
     })
 }
 
@@ -384,7 +479,7 @@ pub fn describe_subscribe(
         }
         SubscribeRelation::Query(query) => {
             let query::PlannedQuery { desc, .. } =
-                query::plan_root_query(scx, query, QueryLifetime::OneShot(scx.pcx()?))?;
+                query::plan_root_query(scx, query, QueryLifetime::Subscribe)?;
             desc
         }
     };
@@ -400,12 +495,48 @@ pub fn describe_subscribe(
     if progress {
         desc = desc.with_column("mz_progressed", ScalarType::Bool.nullable(false));
     }
-    desc = desc.with_column("mz_diff", ScalarType::Int64.nullable(true));
-    for (name, mut ty) in relation_desc.into_iter() {
-        if progress {
-            ty.nullable = true;
+
+    let debezium = matches!(stmt.output, SubscribeOutput::EnvelopeDebezium { .. });
+    match stmt.output {
+        SubscribeOutput::Diffs | SubscribeOutput::WithinTimestampOrderBy { .. } => {
+            desc = desc.with_column("mz_diff", ScalarType::Int64.nullable(true));
+            for (name, mut ty) in relation_desc.into_iter() {
+                if progress {
+                    ty.nullable = true;
+                }
+                desc = desc.with_column(name, ty);
+            }
         }
-        desc = desc.with_column(name, ty);
+        SubscribeOutput::EnvelopeUpsert { key_columns }
+        | SubscribeOutput::EnvelopeDebezium { key_columns } => {
+            desc = desc.with_column("mz_state", ScalarType::String.nullable(true));
+            let key_columns = key_columns
+                .into_iter()
+                .map(normalize::column_name)
+                .collect_vec();
+            let mut before_values_desc = RelationDesc::empty();
+            let mut after_values_desc = RelationDesc::empty();
+            for (mut name, mut ty) in relation_desc.into_iter() {
+                if key_columns.contains(&name) {
+                    if progress {
+                        ty.nullable = true;
+                    }
+                    desc = desc.with_column(name, ty);
+                } else {
+                    ty.nullable = true;
+                    before_values_desc =
+                        before_values_desc.with_column(format!("before_{}", name), ty.clone());
+                    if debezium {
+                        name = format!("after_{}", name).into();
+                    }
+                    after_values_desc = after_values_desc.with_column(name, ty);
+                }
+            }
+            if debezium {
+                desc = desc.concat(before_values_desc);
+            }
+            desc = desc.concat(after_values_desc);
+        }
     }
     Ok(StatementDesc::new(Some(desc)))
 }
@@ -417,51 +548,147 @@ pub fn plan_subscribe(
         options,
         as_of,
         up_to,
+        output,
     }: SubscribeStatement<Aug>,
+    params: &Params,
     copy_to: Option<CopyFormat>,
 ) -> Result<Plan, PlanError> {
-    let from = match relation {
+    let (from, desc, scope) = match relation {
         SubscribeRelation::Name(name) => {
             let entry = scx.get_item_by_resolved_name(&name)?;
-            match entry.item_type() {
-                CatalogItemType::Table
-                | CatalogItemType::Source
-                | CatalogItemType::View
-                | CatalogItemType::MaterializedView => SubscribeFrom::Id(entry.id()),
-                CatalogItemType::Func
-                | CatalogItemType::Index
-                | CatalogItemType::Sink
-                | CatalogItemType::Type
-                | CatalogItemType::Secret
-                | CatalogItemType::Connection => sql_bail!(
+            let desc = match entry.desc(&scx.catalog.resolve_full_name(entry.name())) {
+                Ok(desc) => desc,
+                Err(..) => sql_bail!(
                     "'{}' cannot be subscribed to because it is a {}",
                     name.full_name_str(),
                     entry.item_type(),
                 ),
-            }
+            };
+            let item_name = match name {
+                ResolvedItemName::Item { full_name, .. } => Some(full_name.into()),
+                _ => None,
+            };
+            let scope = Scope::from_source(item_name, desc.iter().map(|(name, _type)| name));
+            (SubscribeFrom::Id(entry.id()), desc.into_owned(), scope)
         }
         SubscribeRelation::Query(query) => {
-            // There's no way to apply finishing operations to a `SUBSCRIBE`
-            // directly. So we wrap the query in another query so that the
-            // user-supplied query is planned as a subquery whose `ORDER
-            // BY`/`LIMIT`/`OFFSET` clauses turn into a TopK operator.
-            let query = Query::query(query);
-            let query = plan_query(
-                scx,
-                query,
-                &Params::empty(),
-                QueryLifetime::OneShot(scx.pcx()?),
-            )?;
+            let query = plan_query(scx, query, params, QueryLifetime::Subscribe)?;
+            // There's no way to apply finishing operations to a `SUBSCRIBE` directly, so the
+            // finishing should have already been turned into a `TopK` by
+            // `plan_query` / `plan_root_query`, upon seeing the `QueryLifetime::Subscribe`.
             assert!(query.finishing.is_trivial(query.desc.arity()));
-            SubscribeFrom::Query {
-                expr: query.expr,
-                desc: query.desc,
-            }
+            let desc = query.desc.clone();
+            (
+                SubscribeFrom::Query {
+                    expr: query.expr,
+                    desc: query.desc,
+                },
+                desc,
+                query.scope,
+            )
         }
     };
 
     let when = query::plan_as_of(scx, as_of)?;
     let up_to = up_to.map(|up_to| plan_up_to(scx, up_to)).transpose()?;
+
+    let qcx = QueryContext::root(scx, QueryLifetime::Subscribe);
+    let ecx = ExprContext {
+        qcx: &qcx,
+        name: "",
+        scope: &scope,
+        relation_type: desc.typ(),
+        allow_aggregates: false,
+        allow_subqueries: true,
+        allow_parameters: true,
+        allow_windows: false,
+    };
+
+    let output_columns: Vec<_> = scope.column_names().enumerate().collect();
+    let output = match output {
+        SubscribeOutput::Diffs => plan::SubscribeOutput::Diffs,
+        SubscribeOutput::EnvelopeUpsert { key_columns } => {
+            let order_by = key_columns
+                .iter()
+                .map(|ident| OrderByExpr {
+                    expr: Expr::Identifier(vec![ident.clone()]),
+                    asc: None,
+                    nulls_last: None,
+                })
+                .collect_vec();
+            let (order_by, map_exprs) = query::plan_order_by_exprs(
+                &ExprContext {
+                    name: "ENVELOPE UPSERT KEY clause",
+                    ..ecx
+                },
+                &order_by[..],
+                &output_columns[..],
+            )?;
+            if !map_exprs.is_empty() {
+                return Err(PlanError::InvalidKeysInSubscribeEnvelopeUpsert);
+            }
+            plan::SubscribeOutput::EnvelopeUpsert {
+                order_by_keys: order_by,
+            }
+        }
+        SubscribeOutput::EnvelopeDebezium { key_columns } => {
+            scx.require_feature_flag(&vars::ENABLE_ENVELOPE_DEBEZIUM_IN_SUBSCRIBE)?;
+            let order_by = key_columns
+                .iter()
+                .map(|ident| OrderByExpr {
+                    expr: Expr::Identifier(vec![ident.clone()]),
+                    asc: None,
+                    nulls_last: None,
+                })
+                .collect_vec();
+            let (order_by, map_exprs) = query::plan_order_by_exprs(
+                &ExprContext {
+                    name: "ENVELOPE DEBEZIUM KEY clause",
+                    ..ecx
+                },
+                &order_by[..],
+                &output_columns[..],
+            )?;
+            if !map_exprs.is_empty() {
+                return Err(PlanError::InvalidKeysInSubscribeEnvelopeDebezium);
+            }
+            plan::SubscribeOutput::EnvelopeDebezium {
+                order_by_keys: order_by,
+            }
+        }
+        SubscribeOutput::WithinTimestampOrderBy { order_by } => {
+            scx.require_feature_flag(&vars::ENABLE_WITHIN_TIMESTAMP_ORDER_BY_IN_SUBSCRIBE)?;
+            let mz_diff = "mz_diff".into();
+            let output_columns = std::iter::once((0, &mz_diff))
+                .chain(output_columns.into_iter().map(|(i, c)| (i + 1, c)))
+                .collect_vec();
+            match query::plan_order_by_exprs(
+                &ExprContext {
+                    name: "WITHIN TIMESTAMP ORDER BY clause",
+                    ..ecx
+                },
+                &order_by[..],
+                &output_columns[..],
+            ) {
+                Err(PlanError::UnknownColumn {
+                    table: None,
+                    column,
+                }) if &column == &mz_diff => {
+                    // mz_diff is being used in an expression. Since mz_diff isn't part of the table
+                    // it looks like an unknown column. Instead, return a better error
+                    return Err(PlanError::InvalidOrderByInSubscribeWithinTimestampOrderBy);
+                }
+                Err(e) => return Err(e),
+                Ok((order_by, map_exprs)) => {
+                    if !map_exprs.is_empty() {
+                        return Err(PlanError::InvalidOrderByInSubscribeWithinTimestampOrderBy);
+                    }
+
+                    plan::SubscribeOutput::WithinTimestampOrderBy { order_by }
+                }
+            }
+        }
+    };
 
     let SubscribeOptionExtracted {
         progress, snapshot, ..
@@ -473,12 +700,13 @@ pub fn plan_subscribe(
         with_snapshot: snapshot.unwrap_or(true),
         copy_to,
         emit_progress: progress.unwrap_or(false),
+        output,
     }))
 }
 
 pub fn describe_table(
     scx: &StatementContext,
-    table_name: <Aug as AstInfo>::ObjectName,
+    table_name: <Aug as AstInfo>::ItemName,
     columns: Vec<Ident>,
 ) -> Result<StatementDesc, PlanError> {
     let (_, desc, _) = query::plan_copy_from(scx, table_name, columns)?;
@@ -499,7 +727,7 @@ pub fn describe_copy(
 
 fn plan_copy_from(
     scx: &StatementContext,
-    table_name: ResolvedObjectName,
+    table_name: ResolvedItemName,
     columns: Vec<Ident>,
     format: CopyFormat,
     options: CopyOptionExtracted,
@@ -612,7 +840,9 @@ pub fn plan_copy(
             CopyRelation::Select(stmt) => {
                 Ok(plan_select(scx, stmt, &Params::empty(), Some(format))?)
             }
-            CopyRelation::Subscribe(stmt) => Ok(plan_subscribe(scx, stmt, Some(format))?),
+            CopyRelation::Subscribe(stmt) => {
+                Ok(plan_subscribe(scx, stmt, &Params::empty(), Some(format))?)
+            }
         },
         (CopyDirection::From, CopyTarget::Stdin) => match relation {
             CopyRelation::Table { name, columns } => {

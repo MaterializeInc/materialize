@@ -14,10 +14,9 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use once_cell::sync::Lazy;
-
 #[cfg(feature = "chrono")]
 use chrono::{DateTime, TimeZone, Utc};
+use once_cell::sync::Lazy;
 
 /// A type representing the number of milliseconds since the Unix epoch.
 pub type EpochMillis = u64;
@@ -102,7 +101,7 @@ mod tests {
 
     use super::to_datetime;
 
-    #[test]
+    #[mz_test_macro::test]
     fn test_to_datetime() {
         let test_cases = [
             (

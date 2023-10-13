@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 from textwrap import dedent
-from typing import List
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
@@ -54,8 +53,6 @@ class KafkaFormats(Check):
                   format=protobuf descriptor-file=test.proto message=Value
                 {"key1": "key1A", "key2": "key1B"} {"value1": "value1A", "value2": "value1B"}
 
-                > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
-
                 > CREATE SOURCE format_bytes1
                   IN CLUSTER kafka_formats
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-bytes-${testdrive.seed}')
@@ -94,7 +91,7 @@ class KafkaFormats(Check):
             )
         )
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(PROTOBUF + dedent(s))
             for s in [

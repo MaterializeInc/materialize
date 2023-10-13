@@ -97,7 +97,7 @@ Materialized views compute and maintain the results of a query incrementally. Us
 
 Reuse your `psql` session and build the analytics:
 
-1. Create a [`MATERIALIZED VIEW`](/sql/create-materialized-view/) to aggregate the purchase prices for vip users that haver not been refunded.
+1. Create a [`MATERIALIZED VIEW`](/sql/create-materialized-view/) to aggregate the purchase prices for vip users that have not been refunded.
 
     A `MATERIALIZED VIEW` is persisted in durable storage and is incrementally updated as new data arrives.
 

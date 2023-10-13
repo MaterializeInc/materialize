@@ -7,16 +7,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.mzcompose import Composition
-from materialize.mzcompose.services import (
-    Kafka,
-    Localstack,
-    Materialized,
-    Redpanda,
-    SchemaRegistry,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.localstack import Localstack
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.redpanda import Redpanda
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 REDPANDA_VERSIONS = ["v23.1.2", "v22.2.11", "v22.1.11"]
 
@@ -41,7 +39,7 @@ SERVICES = [
 
 
 TD_CMD = [
-    f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}",
+    f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
     *[f"testdrive/{td}" for td in ["kafka-sinks.td", "kafka-upsert-sources.td"]],
 ]
 

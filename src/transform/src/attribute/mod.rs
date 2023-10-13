@@ -9,36 +9,33 @@
 
 //! Derived attributes framework and definitions.
 
-use std::{collections::BTreeMap, marker::PhantomData};
+use std::collections::{BTreeMap, BTreeSet};
 
-use mz_ore::{
-    stack::RecursionLimitError,
-    str::{bracketed, separated},
-};
-use mz_repr::explain::{AnnotatedPlan, Attributes, ExplainConfig};
-use num_traits::FromPrimitive;
-use typemap_rev::{TypeMap, TypeMapKey};
+use mz_expr::explain::ExplainContext;
+use mz_expr::visit::{Visit, Visitor};
+use mz_expr::{LocalId, MirRelationExpr};
+use mz_ore::stack::RecursionLimitError;
+use mz_repr::explain::{AnnotatedPlan, Attributes};
 
-use mz_expr::{
-    explain::ExplainContext,
-    visit::{Visit, Visitor},
-    LocalId, MirRelationExpr,
-};
+mod arity;
+pub mod cardinality;
+mod column_names;
+mod non_negative;
+mod relation_type;
+mod subtree_size;
+mod unique_keys;
 
 // Attributes should have shortened paths when exported.
-mod arity;
 pub use arity::Arity;
-mod non_negative;
+pub use cardinality::Cardinality;
+pub use column_names::ColumnNames;
 pub use non_negative::NonNegative;
-mod relation_type;
 pub use relation_type::RelationType;
-mod subtree_size;
 pub use subtree_size::SubtreeSize;
-mod unique_keys;
 pub use unique_keys::UniqueKeys;
 
 /// A common interface to be implemented by all derived attributes.
-pub trait Attribute: 'static + Default + Send + Sync {
+pub trait Attribute {
     /// The domain of the attribute values.
     type Value: Clone + Eq + PartialEq;
 
@@ -47,7 +44,7 @@ pub trait Attribute: 'static + Default + Send + Sync {
 
     /// Schedule environment maintenance tasks.
     ///
-    /// Deletate to [`Env::schedule_tasks`] if this attribute has an [`Env`] field.
+    /// Delegate to [`Env::schedule_tasks`] if this attribute has an [`Env`] field.
     fn schedule_env_tasks(&mut self, _expr: &MirRelationExpr) {}
 
     /// Handle scheduled environment maintenance tasks.
@@ -56,7 +53,7 @@ pub trait Attribute: 'static + Default + Send + Sync {
     fn handle_env_tasks(&mut self) {}
 
     /// The attribute ids of all other attributes that this attribute depends on.
-    fn add_dependencies(builder: &mut RequiredAttributes)
+    fn add_dependencies(builder: &mut DerivedAttributesBuilder)
     where
         Self: Sized;
 
@@ -70,14 +67,6 @@ pub trait Attribute: 'static + Default + Send + Sync {
     fn take(self) -> Vec<Self::Value>;
 }
 
-#[allow(missing_debug_implementations)]
-/// Converts an Attribute into a Key that can be looked up in [DerivedAttributes]
-struct AsKey<A: Attribute>(PhantomData<A>);
-
-impl<A: Attribute + 'static> TypeMapKey for AsKey<A> {
-    type Value = A;
-}
-
 /// A map that keeps the computed `A` values for all `LocalId`
 /// bindings in the current environment.
 #[derive(Default)]
@@ -86,81 +75,109 @@ pub struct Env<A: Attribute> {
     /// The [`BTreeMap`] backing this environment.
     env: BTreeMap<LocalId, A::Value>,
     // A stack of tasks to maintain the `env` map.
-    env_tasks: Vec<EnvTask<A::Value>>,
+    env_tasks: Vec<EnvTask>,
 }
 
 impl<A: Attribute> Env<A> {
+    pub(crate) fn empty() -> Self {
+        Self {
+            env: Default::default(),
+            env_tasks: Default::default(),
+        }
+    }
+
     pub(crate) fn get(&self, id: &LocalId) -> Option<&A::Value> {
         self.env.get(id)
     }
 }
 
 impl<A: Attribute> Env<A> {
-    /// Schedules environment maintenance tasks.
+    /// Schedules exactly one environment maintenance task associated with the
+    /// given `expr`.
     ///
-    /// Should be called from a `Visitor<MirRelationExpr>::pre_visit` implementaion.
+    /// This should be:
+    /// 1. Called from a `Visitor<MirRelationExpr>::pre_visit` implementation.
+    /// 2. A `Bind` task for `MirRelationExpr` variants that represent a change
+    ///    to the environment (in other words, `Let*` variants).
+    /// 3. A `Done` task for all other `MirRelationExpr` variants.
     pub fn schedule_tasks(&mut self, expr: &MirRelationExpr) {
         match expr {
             MirRelationExpr::Let { id, .. } => {
-                // Add an Extend task to be handled in the post_visit the node children.
-                self.env_tasks.push(EnvTask::Extend(id.clone()));
+                // Add a `Bind` task for the `LocalId` bound by this node.
+                self.env_tasks.push(EnvTask::bind_one(id));
+            }
+            MirRelationExpr::LetRec { ids, .. } => {
+                // Add a `Bind` task for all `LocalId`s bound by this node. This
+                // will result in attribute derivation corresponding to a single
+                // sequential pass through all bindings (one iteration).
+                self.env_tasks.push(EnvTask::bind_seq(ids));
             }
             _ => {
-                // Don not do anything with the environment in this node's children.
-                self.env_tasks.push(EnvTask::NoOp);
+                // Do not do anything with the environment.
+                self.env_tasks.push(EnvTask::Done);
             }
         }
     }
 
-    /// Handles scheduled evinronment maintenance tasks.
+    /// Handles scheduled environment maintenance tasks.
     ///
-    /// Should be called from a `Visitor<MirRelationExpr>::post_visit` implementaion.
+    /// Should be called from a `Visitor<MirRelationExpr>::post_visit` implementation.
     pub fn handle_tasks(&mut self, results: &Vec<A::Value>) {
-        // Pop the env task for this element's children.
+        // Pop the env task associated with the just visited node.
         let parent = self.env_tasks.pop();
-        // This should be always be NoOp, as this is either the original value or the
-        // terminal state of the state machine that Let children implement (see the
-        // code at the end of this method).
-        debug_assert!(parent.is_some() && parent.unwrap() == EnvTask::NoOp);
+        // This should always be a Done, as this is either the original value or
+        // the terminal state of the state machine that should be reached after
+        // all children of the current node have been visited, which should
+        // always be the case if handle_tasks is called from post_visit.
+        assert!(parent.is_some() && parent.unwrap() == EnvTask::Done);
 
-        // Handle EnvTask initiated by the parent.
+        // Update the state machine associated with the parent.
+        // This should always exist when post-visiting non-root nodes.
         if let Some(env_task) = self.env_tasks.pop() {
             // Compute a task to represent the next state of the state machine associated with
             // this task.
             let env_task = match env_task {
-                // An Extend indicates that the parent of the current node is a Let binding
-                // and we are about to leave a Let binding value.
-                EnvTask::Extend(id) => {
-                    // Before descending to the next sibling (the Let binding body), do as follows:
-                    // 1. Update the env map with the attribute derived for the Let binding value.
-                    let result = results.last().expect("unexpected empty results vector");
-                    let oldval = self.env.insert(id, result.clone());
-                    // 2. Create a task to be handled after visiting the Let binding body.
-                    match oldval {
-                        Some(val) => EnvTask::Reset(id, val), // reset old value if present
-                        None => EnvTask::Remove(id),          // remove key otherwise
+                // A Bind state indicates that the parent of the current node is
+                // a Let or a LetRec, and we are about to leave a Let or LetRec
+                // binding value.
+                EnvTask::Bind(mut unbound, mut bound) => {
+                    let id = unbound.pop().expect("non-empty unbound vector");
+                    // Update the env map with the attribute value derived for
+                    // the Let or LetRec binding value.
+                    let result = results.last().expect("non-empty attribute results vector");
+                    let oldval = self.env.insert(id.clone(), result.clone());
+                    // No shadowing
+                    assert!(oldval.is_none());
+                    // Mark this LocalId as bound
+                    bound.insert(id);
+
+                    if unbound.is_empty() {
+                        // The next sibling is a Let / LetRec body. Advance the
+                        // state machine to a state where after the next sibling
+                        // is visited all bound LocalIds associated with this
+                        // state machine will be removed from the environment.
+                        EnvTask::Unbind(bound)
+                    } else {
+                        // The next sibling is a LetRec value bound to the last
+                        // element of `unbound`. Advance the state machine to a
+                        // state where this LocalId will be bound after visiting
+                        // that value.
+                        EnvTask::Bind(unbound, bound)
                     }
                 }
-                // An Reset task indicates that we are about to leave the Let binding body
-                // and the id of the Let parent shadowed another `id` in the environment.
-                EnvTask::Reset(id, val) => {
-                    // Before moving to the post_visit of the enclosing Let parent, do as follows:
-                    // 1. Reset the entry in the env map with the shadowed value.
-                    self.env.insert(id, val);
-                    // 2. Create a NoOp task indicating that there is nothing more to be done.
-                    EnvTask::NoOp
+                // An Unbind state indicates that we are about to leave the Let or LetRec body.
+                EnvTask::Unbind(ids) => {
+                    // Remove values associated with the given `ids`.
+                    for id in ids {
+                        self.env.remove(&id);
+                    }
+
+                    // Advance to a Done task indicating that there is nothing
+                    // more to be done.
+                    EnvTask::Done
                 }
-                // An Remove task indicates that we are about to leave the Let binding body
-                // and the id of the Let parent did not shadow another `id` in the environment.
-                EnvTask::Remove(id) => {
-                    // Before moving to the post_visit of the enclosing Let parent, do as follows:
-                    // 1. Remove the value assciated with the given `id` from the environment.
-                    self.env.remove(&id);
-                    // 2. Create a NoOp task indicating that there is nothing more to be done.
-                    EnvTask::NoOp
-                }
-                // A NoOp task indicates that we don't need to do anyting.
-                EnvTask::NoOp => EnvTask::NoOp,
+                // A Done state indicates that we don't need to do anything.
+                EnvTask::Done => EnvTask::Done,
             };
             // Advance the state machine.
             self.env_tasks.push(env_task);
@@ -168,53 +185,70 @@ impl<A: Attribute> Env<A> {
     }
 }
 
-/// Models an environment maintenence task that needs to be executed
-/// after visiting a [`MirRelationExpr`].
+/// Models an environment maintenance task that needs to be executed after
+/// visiting a [`MirRelationExpr`]. Each task is a state of a finite state
+/// machine.
 ///
-/// The [`Env::schedule_tasks`] hook installs such a task for each node,
-/// and the [`Env::handle_tasks`] hook removes it.
+/// The [`Env::schedule_tasks`] hook installs exactly one such task for each
+/// subexpression, and the [`Env::handle_tasks`] hook removes it.
 ///
-/// In addition, the [`Env::handle_tasks`] looks at the task installed
-/// by its parent and modifies it if needed, advancing it through the
-/// following state machinge from left to right:
+/// In addition, the [`Env::handle_tasks`] looks at the task installed by the
+/// parent expression and modifies it if needed, advancing it through the
+/// following states from left to right:
+///
 /// ```text
-/// Set --- Reset ---- NoOp
-///     \            /
-///      -- Remove --
+/// Bind([...,x], {...}) --> Bind([...], {...,x}) --> Unbind({...}) --> Done
 /// ```
 #[derive(Eq, PartialEq, Debug)]
-enum EnvTask<T> {
-    /// Add the latest attribute to the environment under the given key.
-    Extend(LocalId),
-    /// Reset value of an environment entry.
-    Reset(LocalId, T),
-    /// Remove an entry from the environment.
-    Remove(LocalId),
+enum EnvTask {
+    /// Extend the environment by binding the last derived attribute under
+    /// the key given the tail of the lhs Vec and move that key from the
+    /// lhs Vec to the rhs BTreeSet.
+    Bind(Vec<LocalId>, BTreeSet<LocalId>),
+    /// Remove all LocalId entries in the given set from the environment.
+    Unbind(BTreeSet<LocalId>),
     /// Do not do anything.
-    NoOp,
+    Done,
 }
 
+impl EnvTask {
+    /// Create an [`EnvTask::Bind`] state for a single binding.
+    fn bind_one(id: &LocalId) -> Self {
+        EnvTask::Bind(vec![id.clone()], BTreeSet::new())
+    }
+
+    /// Create an [`EnvTask::Bind`] state for a sequence of bindings.
+    fn bind_seq(ids: &Vec<LocalId>) -> Self {
+        EnvTask::Bind(ids.iter().rev().cloned().collect(), BTreeSet::new())
+    }
+}
+
+/// A builder for `DerivedAttributes` instances.
 #[allow(missing_debug_implementations)]
 #[derive(Default)]
 /// Builds an [DerivedAttributes]
-pub struct RequiredAttributes {
-    attributes: TypeMap,
+pub struct DerivedAttributesBuilder<'c> {
+    attributes: Box<AttributeStore<'c>>,
 }
 
-impl RequiredAttributes {
+impl<'c> DerivedAttributesBuilder<'c> {
     /// Add an attribute that [DerivedAttributes] should derive
-    pub fn require<A: Attribute>(&mut self) {
-        if !self.attributes.contains_key::<AsKey<A>>() {
+    pub fn require<A>(&mut self, attribute: A)
+    where
+        A: Attribute,
+        AttributeStore<'c>: AttributeContainer<A>,
+    {
+        if !self.attributes.attribute_is_enabled() {
             A::add_dependencies(self);
-            self.attributes.insert::<AsKey<A>>(A::default());
+            self.attributes.push_attribute(attribute);
         }
     }
 
     /// Consume `self`, producing an [DerivedAttributes]
-    pub fn finish(self) -> DerivedAttributes {
+    pub fn finish(self) -> DerivedAttributes<'c> {
         DerivedAttributes {
-            attributes: Box::new(self.attributes),
-            to_be_derived: Box::new(TypeMap::default()),
+            store: self.attributes,
+            buffer: Box::new(AttributeStore::default()),
         }
     }
 }
@@ -222,59 +256,76 @@ impl RequiredAttributes {
 #[allow(missing_debug_implementations)]
 /// Derives an attribute and any attribute it depends on.
 ///
-/// Can be constructed either manually from an [RequiredAttributes] or directly
-/// from an [ExplainConfig].
-pub struct DerivedAttributes {
-    attributes: Box<TypeMap>,
-    /// Holds attributes that have not yet been derived for a given
-    /// subexpression.
-    to_be_derived: Box<TypeMap>,
+/// Can be constructed either manually from a [DerivedAttributesBuilder] or
+/// directly from an [ExplainContext].
+pub struct DerivedAttributes<'c> {
+    /// Holds the attributes derived for all subexpressions so far.
+    store: Box<AttributeStore<'c>>,
+    /// A buffer to be used for the next subexpresion. For every subexpressions
+    /// we swap the `store` and `buffer` state and then process items from
+    /// `buffer` one by one, moving them back to `store`.
+    buffer: Box<AttributeStore<'c>>,
 }
 
-impl From<&ExplainConfig> for DerivedAttributes {
-    fn from(config: &ExplainConfig) -> DerivedAttributes {
-        let mut builder = RequiredAttributes::default();
-        if config.subtree_size {
-            builder.require::<SubtreeSize>();
+impl<'c> From<&ExplainContext<'c>> for DerivedAttributes<'c> {
+    fn from(context: &ExplainContext<'c>) -> DerivedAttributes<'c> {
+        let mut builder = DerivedAttributesBuilder::default();
+        if context.config.subtree_size {
+            builder.require(SubtreeSize::default());
         }
-        if config.non_negative {
-            builder.require::<NonNegative>();
+        if context.config.non_negative {
+            builder.require(NonNegative::default());
         }
-        if config.types {
-            builder.require::<RelationType>();
+        if context.config.types {
+            builder.require(RelationType::default());
         }
-        if config.arity {
-            builder.require::<Arity>();
+        if context.config.arity {
+            builder.require(Arity::default());
         }
-        if config.keys {
-            builder.require::<UniqueKeys>();
+        if context.config.keys {
+            builder.require(UniqueKeys::default());
+        }
+        if context.config.cardinality {
+            builder.require(Cardinality::default());
+        }
+        if context.config.column_names || context.config.humanized_exprs {
+            builder.require(ColumnNames::new(context.humanizer));
         }
         builder.finish()
     }
 }
 
-impl DerivedAttributes {
+impl<'c> DerivedAttributes<'c> {
     /// Get a reference to the attributes derived so far.
-    pub fn get_results<A: Attribute>(&self) -> &Vec<A::Value> {
-        self.attributes.get::<AsKey<A>>().unwrap().get_results()
+    pub fn get_results<'a, A>(&'a self) -> &Vec<A::Value>
+    where
+        A: Attribute + 'a,
+        AttributeStore<'c>: AttributeContainer<A>,
+    {
+        self.store.get_attribute().unwrap().get_results()
     }
 
     /// Get a mutable reference to the attributes derived so far.
     ///
     /// Calling this and modifying the result risks messing up subsequent
     /// derivations.
-    pub fn get_results_mut<A: Attribute>(&mut self) -> &mut Vec<A::Value> {
-        self.attributes
-            .get_mut::<AsKey<A>>()
-            .unwrap()
-            .get_results_mut()
+    pub fn get_results_mut<'a, A>(&'a mut self) -> &mut Vec<A::Value>
+    where
+        A: Attribute + 'a,
+        AttributeStore<'c>: AttributeContainer<A>,
+    {
+        self.store.get_mut_attribute().unwrap().get_results_mut()
     }
 
     /// Extract the vector of attributes derived so far
     ///
     /// After this call, no further attributes of this type will be derived.
-    pub fn remove_results<A: Attribute>(&mut self) -> Vec<A::Value> {
-        self.attributes.remove::<AsKey<A>>().unwrap().take()
+    pub fn remove_results<A>(&mut self) -> Vec<A::Value>
+    where
+        A: Attribute,
+        AttributeStore<'c>: AttributeContainer<A>,
+    {
+        self.store.take_attribute().unwrap().take()
     }
 
     /// Call when the most recently exited node of the [MirRelationExpr]
@@ -282,117 +333,171 @@ impl DerivedAttributes {
     ///
     /// For each attribute, removes the last value derived.
     pub fn trim(&mut self) {
-        for i in 0..TOTAL_ATTRIBUTES {
-            match FromPrimitive::from_usize(i) {
-                Some(AttributeId::SubtreeSize) => self.trim_attr::<AsKey<SubtreeSize>>(),
-                Some(AttributeId::NonNegative) => self.trim_attr::<AsKey<NonNegative>>(),
-                Some(AttributeId::RelationType) => self.trim_attr::<AsKey<RelationType>>(),
-                Some(AttributeId::Arity) => self.trim_attr::<AsKey<Arity>>(),
-                Some(AttributeId::UniqueKeys) => self.trim_attr::<AsKey<UniqueKeys>>(),
-                None => {}
-            }
-        }
+        self.trim_attr::<SubtreeSize>();
+        self.trim_attr::<NonNegative>();
+        self.trim_attr::<RelationType>();
+        self.trim_attr::<Arity>();
+        self.trim_attr::<UniqueKeys>();
+        self.trim_attr::<Cardinality>();
+        self.trim_attr::<ColumnNames>();
     }
 }
 
-impl Visitor<MirRelationExpr> for DerivedAttributes {
+impl<'c> Visitor<MirRelationExpr> for DerivedAttributes<'c> {
     /// Does derivation work required upon entering a subexpression.
     fn pre_visit(&mut self, expr: &MirRelationExpr) {
-        for i in 0..TOTAL_ATTRIBUTES {
-            match FromPrimitive::from_usize(i) {
-                Some(AttributeId::SubtreeSize) => {
-                    self.pre_visit_attr::<AsKey<SubtreeSize>>(expr);
-                }
-                Some(AttributeId::NonNegative) => {
-                    self.pre_visit_attr::<AsKey<NonNegative>>(expr);
-                }
-                Some(AttributeId::RelationType) => {
-                    self.pre_visit_attr::<AsKey<RelationType>>(expr);
-                }
-                Some(AttributeId::Arity) => {
-                    self.pre_visit_attr::<AsKey<Arity>>(expr);
-                }
-                Some(AttributeId::UniqueKeys) => {
-                    self.pre_visit_attr::<AsKey<UniqueKeys>>(expr);
-                }
-                None => {}
-            }
-        }
+        // The `pre_visit` methods must be called in dependency order!
+        self.pre_visit::<SubtreeSize>(expr);
+        self.pre_visit::<NonNegative>(expr);
+        self.pre_visit::<RelationType>(expr);
+        self.pre_visit::<Arity>(expr);
+        self.pre_visit::<UniqueKeys>(expr);
+        self.pre_visit::<Cardinality>(expr);
+        self.pre_visit::<ColumnNames>(expr);
     }
 
     /// Does derivation work required upon exiting a subexpression.
     fn post_visit(&mut self, expr: &MirRelationExpr) {
-        std::mem::swap(&mut self.attributes, &mut self.to_be_derived);
-        for i in 0..TOTAL_ATTRIBUTES {
-            match FromPrimitive::from_usize(i) {
-                Some(AttributeId::SubtreeSize) => {
-                    self.post_visit_attr::<AsKey<SubtreeSize>>(expr);
-                }
-                Some(AttributeId::NonNegative) => {
-                    self.post_visit_attr::<AsKey<NonNegative>>(expr);
-                }
-                Some(AttributeId::RelationType) => {
-                    self.post_visit_attr::<AsKey<RelationType>>(expr);
-                }
-                Some(AttributeId::Arity) => {
-                    self.post_visit_attr::<AsKey<Arity>>(expr);
-                }
-                Some(AttributeId::UniqueKeys) => {
-                    self.post_visit_attr::<AsKey<UniqueKeys>>(expr);
-                }
-                None => {}
-            }
-        }
+        std::mem::swap(&mut self.store, &mut self.buffer);
+        // The `post_visit` methods must be called in dependency order!
+        self.post_visit::<SubtreeSize>(expr);
+        self.post_visit::<NonNegative>(expr);
+        self.post_visit::<RelationType>(expr);
+        self.post_visit::<Arity>(expr);
+        self.post_visit::<UniqueKeys>(expr);
+        self.post_visit::<Cardinality>(expr);
+        self.post_visit::<ColumnNames>(expr);
     }
 }
 
-impl DerivedAttributes {
-    fn pre_visit_attr<T: TypeMapKey>(&mut self, expr: &MirRelationExpr)
+impl<'c> DerivedAttributes<'c> {
+    fn pre_visit<A>(&mut self, expr: &MirRelationExpr)
     where
-        T::Value: Attribute,
+        A: Attribute,
+        AttributeStore<'c>: AttributeContainer<A>,
     {
-        if let Some(attr) = self.attributes.get_mut::<T>() {
+        if let Some(attr) = self.store.get_mut_attribute() {
             attr.schedule_env_tasks(expr)
         }
     }
 
-    fn post_visit_attr<T: TypeMapKey>(&mut self, expr: &MirRelationExpr)
+    fn post_visit<A>(&mut self, expr: &MirRelationExpr)
     where
-        T::Value: Attribute,
+        A: Attribute,
+        AttributeStore<'c>: AttributeContainer<A>,
     {
-        if let Some(mut attr) = self.to_be_derived.remove::<T>() {
+        if let Some(mut attr) = self.buffer.take_attribute() {
             attr.derive(expr, self);
             attr.handle_env_tasks();
-            self.attributes.insert::<T>(attr);
+            self.store.push_attribute(attr);
         }
     }
 
-    fn trim_attr<T: TypeMapKey>(&mut self)
+    fn trim_attr<A>(&mut self)
     where
-        T::Value: Attribute,
+        A: Attribute,
+        AttributeStore<'c>: AttributeContainer<A>,
     {
-        self.attributes.get_mut::<T>().iter_mut().for_each(|a| {
+        if let Some(a) = self.store.get_mut_attribute() {
             a.get_results_mut().pop();
-        });
+        };
     }
 }
 
-/// A topological sort of extant attributes.
-///
-/// The attribute assigned value 0 depends on no other attributes.
-/// We expect the attributes to be assigned numbers in the range
-/// 0..TOTAL_ATTRIBUTES with no gaps in between.
-#[derive(FromPrimitive)]
-enum AttributeId {
-    SubtreeSize = 0,
-    NonNegative = 1,
-    Arity = 2,
-    RelationType = 3,
-    UniqueKeys = 4,
+/// An API for manipulating the of type `A` an enclosing store.
+pub trait AttributeContainer<A: Attribute> {
+    /// Push the attribute to the store.
+    fn push_attribute(&mut self, value: A);
+
+    /// Take the attribute from the store, leaving its slot empty.
+    fn take_attribute(&mut self) -> Option<A>;
+
+    /// Check if the attribute is enabled.
+    fn attribute_is_enabled(&self) -> bool;
+
+    /// Get an immutable reference to the attribute.
+    fn get_attribute(&self) -> Option<&A>;
+
+    /// Get a mutable reference to the attribute.
+    fn get_mut_attribute(&mut self) -> Option<&mut A>;
 }
 
-/// Should always be equal to the number of attributes
-const TOTAL_ATTRIBUTES: usize = 5;
+/// A store of attribute derivation algorithms.
+///
+/// Values of `Some(attribute)` in the individual fields represent attributes
+/// that should be derived.
+///
+/// The definition order of the fields must respect dependencies (the first
+/// attribute cannot have dependencies, the second can only depend on the first,
+/// and so forth).
+#[allow(missing_debug_implementations)]
+#[derive(Default)]
+pub struct AttributeStore<'c> {
+    subtree_size: Option<SubtreeSize>,
+    non_negative: Option<NonNegative>,
+    arity: Option<Arity>,
+    relation_type: Option<RelationType>,
+    unique_keys: Option<UniqueKeys>,
+    cardinality: Option<Cardinality>,
+    column_names: Option<ColumnNames<'c>>,
+}
+
+macro_rules! attribute_store_container_for {
+    ($field:expr) => {
+        paste::paste! {
+            impl<'c> AttributeContainer<[<$field:camel>]> for AttributeStore<'c> {
+                fn push_attribute(&mut self, value: [<$field:camel>]) {
+                    self.$field = Some(value);
+                }
+
+                fn take_attribute(&mut self) -> Option<[<$field:camel>]> {
+                    std::mem::take(&mut self.$field)
+                }
+
+                fn attribute_is_enabled(&self) -> bool {
+                    self.$field.is_some()
+                }
+
+                fn get_attribute(&self) -> Option<&[<$field:camel>]> {
+                    self.$field.as_ref()
+                }
+
+                fn get_mut_attribute(&mut self) -> Option<&mut [<$field:camel>]> {
+                    self.$field.as_mut()
+                }
+            }
+        }
+    };
+}
+
+attribute_store_container_for!(subtree_size);
+attribute_store_container_for!(non_negative);
+attribute_store_container_for!(arity);
+attribute_store_container_for!(relation_type);
+attribute_store_container_for!(unique_keys);
+attribute_store_container_for!(cardinality);
+
+impl<'a> AttributeContainer<ColumnNames<'a>> for AttributeStore<'a> {
+    fn push_attribute(&mut self, value: ColumnNames<'a>) {
+        self.column_names = Some(value);
+    }
+
+    fn take_attribute(&mut self) -> Option<ColumnNames<'a>> {
+        std::mem::take(&mut self.column_names)
+    }
+
+    fn attribute_is_enabled(&self) -> bool {
+        self.column_names.is_some()
+    }
+
+    fn get_attribute(&self) -> Option<&ColumnNames<'a>> {
+        self.column_names.as_ref()
+    }
+
+    fn get_mut_attribute(&mut self) -> Option<&mut ColumnNames<'a>> {
+        self.column_names.as_mut()
+    }
+}
 
 /// Produce an [`AnnotatedPlan`] wrapping the given [`MirRelationExpr`] along
 /// with [`Attributes`] derived from the given context configuration.
@@ -403,20 +508,24 @@ pub fn annotate_plan<'a>(
     let mut annotations = BTreeMap::<&MirRelationExpr, Attributes>::default();
     let config = context.config;
 
-    if config.requires_attributes() {
+    // We want to annotate the plan with attributes in the following cases:
+    // 1. An attribute was explicitly requested in the ExplainConfig.
+    // 2. Humanized expressions were requested in the ExplainConfig (in which
+    //    case we need to derive the ColumnNames attribute).
+    if config.requires_attributes() || config.humanized_exprs {
         // get the annotation keys
         let subtree_refs = plan.post_order_vec();
         // get the annotation values
-        let mut attributes = DerivedAttributes::from(config);
+        let mut attributes = DerivedAttributes::from(context);
         plan.visit(&mut attributes)?;
 
         if config.subtree_size {
-            for (expr, attr) in std::iter::zip(
+            for (expr, subtree_size) in std::iter::zip(
                 subtree_refs.iter(),
                 attributes.remove_results::<SubtreeSize>().into_iter(),
             ) {
                 let attributes = annotations.entry(expr).or_default();
-                attributes.subtree_size = Some(attr);
+                attributes.subtree_size = Some(subtree_size);
             }
         }
         if config.non_negative {
@@ -430,12 +539,12 @@ pub fn annotate_plan<'a>(
         }
 
         if config.arity {
-            for (expr, attr) in std::iter::zip(
+            for (expr, arity) in std::iter::zip(
                 subtree_refs.iter(),
                 attributes.remove_results::<Arity>().into_iter(),
             ) {
                 let attrs = annotations.entry(expr).or_default();
-                attrs.arity = Some(attr);
+                attrs.arity = Some(arity);
             }
         }
 
@@ -444,13 +553,8 @@ pub fn annotate_plan<'a>(
                 subtree_refs.iter(),
                 attributes.remove_results::<RelationType>().into_iter(),
             ) {
-                let humanized_columns = types
-                    .into_iter()
-                    .map(|c| context.humanizer.humanize_column_type(&c))
-                    .collect::<Vec<_>>();
-                let attr = bracketed("(", ")", separated(", ", humanized_columns)).to_string();
                 let attrs = annotations.entry(expr).or_default();
-                attrs.types = Some(attr);
+                attrs.types = Some(types);
             }
         }
 
@@ -459,12 +563,36 @@ pub fn annotate_plan<'a>(
                 subtree_refs.iter(),
                 attributes.remove_results::<UniqueKeys>().into_iter(),
             ) {
-                let formatted_keys = keys
-                    .into_iter()
-                    .map(|key_set| bracketed("[", "]", separated(", ", key_set)).to_string());
-                let attr = bracketed("(", ")", separated(", ", formatted_keys)).to_string();
                 let attrs = annotations.entry(expr).or_default();
-                attrs.keys = Some(attr);
+                attrs.keys = Some(keys);
+            }
+        }
+
+        if config.cardinality {
+            for (expr, cardinality) in std::iter::zip(
+                subtree_refs.iter(),
+                attributes.remove_results::<Cardinality>().into_iter(),
+            ) {
+                let cardinality =
+                    cardinality::HumanizedSymbolicExpression::new(&cardinality, context.humanizer)
+                        .to_string();
+                let attrs = annotations.entry(expr).or_default();
+                attrs.cardinality = Some(cardinality);
+            }
+        }
+
+        if config.column_names || config.humanized_exprs {
+            for (expr, column_names) in std::iter::zip(
+                subtree_refs.iter(),
+                attributes.remove_results::<ColumnNames>().into_iter(),
+            ) {
+                let column_names = column_names
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, c)| if c.is_empty() { format!("#{i}") } else { c })
+                    .collect();
+                let attrs = annotations.entry(expr).or_default();
+                attrs.column_names = Some(column_names);
             }
         }
     }

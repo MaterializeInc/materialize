@@ -9,6 +9,11 @@
 
 # Regression test for https://github.com/MaterializeInc/materialize/issues/13857
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO false;
+----
+COMPLETE 0
+
 statement ok
 DROP CLUSTER default CASCADE
 

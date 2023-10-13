@@ -10,18 +10,17 @@
 use std::time::Duration;
 
 use anyhow::{bail, Context};
-use rdkafka::consumer::{Consumer, StreamConsumer};
-use rdkafka::topic_partition_list::{Offset, TopicPartitionList};
-
 use mz_ore::retry::Retry;
 use mz_ore::str::StrExt;
+use rdkafka::consumer::{Consumer, StreamConsumer};
+use rdkafka::topic_partition_list::{Offset, TopicPartitionList};
 
 use crate::action::{ControlFlow, State};
 use crate::parser::BuiltinCommand;
 
 pub async fn run_verify_commit(
     mut cmd: BuiltinCommand,
-    state: &mut State,
+    state: &State,
 ) -> Result<ControlFlow, anyhow::Error> {
     let consumer_group_id = cmd.args.string("consumer-group-id")?;
     let topic = cmd.args.string("topic")?;

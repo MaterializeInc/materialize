@@ -79,4 +79,15 @@ COPY t FROM STDIN (FORMAT CSV);
 COPY t FROM STDIN (DELIMITER '|');
 ```
 
+## Privileges
+
+The privileges required to execute this statement are:
+
+- `USAGE` privileges on the schema containing the table.
+- `INSERT` privileges on the table.
+
 [pg-copy-from]: https://www.postgresql.org/docs/14/sql-copy.html
+
+## Limits
+
+You can only copy up to 1 GiB of data at a time. If you need this limit increased, please [chat with our team](http://materialize.com/convert-account/).

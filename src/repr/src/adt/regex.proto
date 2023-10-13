@@ -12,5 +12,6 @@ syntax = "proto3";
 package mz_repr.adt.regex;
 
 message ProtoRegex {
-    string regex = 1;
+    string pattern = 1;
+    bool case_insensitive = 2;
 }

@@ -22,23 +22,8 @@ body:
     attributes:
       label: What version of Materialize are you using?
       description: |
-        From the shell, run: `materialized -v`
         From the SQL console, run: `SELECT mz_version();`
       placeholder: v0.9.0
-    validations:
-      required: true
-  - type: dropdown
-    id: installation-method
-    attributes:
-      label: How did you install Materialize?
-      options:
-      - Docker image
-      - Linux release tarball
-      - macOS release tarball
-      - APT package
-      - Homebrew tap
-      - Built from source
-      - Materialize Cloud
     validations:
       required: true
   - type: textarea
@@ -50,12 +35,3 @@ body:
         If the issue is reproducible, **please provide reproduction instructions.** A precise set of instructions that demonstrates the issue vastly increases the likelihood that we will be able to find and fix it.
     validations:
       required: true
-  - type: textarea
-    id: logs
-    attributes:
-      label: Relevant log output
-      description: |
-        Please include any relevant [log output](https://materialize.com/docs/ops/monitoring/#logging) from Materialize.
-
-        If the bug involves sources or sinks, please also include relevant log output from associated services (Kafka, PostgreSQL, Debezium, etc.).
-      render: source

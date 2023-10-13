@@ -10,7 +10,10 @@
 import os
 from pathlib import Path
 
-import semver
+try:
+    from semver.version import Version
+except ImportError:
+    from semver import VersionInfo as Version  # type: ignore
 
 from materialize import git, mzbuild
 from materialize.xcompile import Arch
@@ -18,8 +21,8 @@ from materialize.xcompile import Arch
 
 def main() -> None:
     repos = [
-        mzbuild.Repository(Path("."), Arch.X86_64),
-        mzbuild.Repository(Path("."), Arch.AARCH64),
+        mzbuild.Repository(Path("."), Arch.X86_64, coverage=False),
+        mzbuild.Repository(Path("."), Arch.AARCH64, coverage=False),
     ]
     buildkite_tag = os.environ["BUILDKITE_TAG"]
 
@@ -29,7 +32,7 @@ def main() -> None:
         # tags.
         return image.publish and (not buildkite_tag or image.mainline)
 
-    print(f"--- Tagging Docker images")
+    print("--- Tagging Docker images")
     deps = [
         repo.resolve_dependencies(image for image in repo if include_image(image))
         for repo in repos
@@ -40,7 +43,7 @@ def main() -> None:
         mzbuild.publish_multiarch_images(buildkite_tag, deps)
 
         # Also tag the images as `latest` if this is the latest version.
-        version = semver.VersionInfo.parse(buildkite_tag.lstrip("v"))
+        version = Version.parse(buildkite_tag.lstrip("v"))
         latest_version = next(t for t in git.get_version_tags() if t.prerelease is None)
         if version == latest_version:
             mzbuild.publish_multiarch_images("latest", deps)

@@ -6,19 +6,8 @@ menu:
     parent: commands
 ---
 
-`GRANT` grants membership of one role to another role.
-
-## Conceptual framework
-
-Roles can be members of other roles and inherit all the attributes and
-privileges of the other roles.
-
-{{< warning >}}
-Roles in Materialize are currently limited in functionality. In the future they
-will be used for role-based access control. See GitHub issue {{% gh 11579 %}}
-for details.
-{{< /warning >}}
-
+`GRANT` grants membership of one role to another role. Roles can be members of
+other roles, as well as inherit all the privileges of those roles.
 
 ## Syntax
 
@@ -35,6 +24,21 @@ _member_name_ | The role name to add to _role_name_ as a member.
 GRANT data_scientist TO joe;
 ```
 
+```sql
+GRANT data_scientist TO joe, mike;
+```
+
+## Privileges
+
+The privileges required to execute this statement are:
+
+- `CREATEROLE` privileges on the systems.
+
+## Useful views
+
+- [`mz_internal.mz_show_role_members`](/sql/system-catalog/mz_internal/#mz_show_role_members)
+- [`mz_internal.mz_show_my_role_members`](/sql/system-catalog/mz_internal/#mz_show_my_role_members)
+
 ## Related pages
 
 - [CREATE ROLE](../create-role)
@@ -42,3 +46,6 @@ GRANT data_scientist TO joe;
 - [DROP ROLE](../drop-role)
 - [DROP USER](../drop-user)
 - [REVOKE ROLE](../revoke-role)
+- [ALTER OWNER](../alter-owner)
+- [GRANT PRIVILEGE](../grant-privilege)
+- [REVOKE PRIVILEGE](../revoke-privilege)

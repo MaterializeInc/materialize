@@ -48,22 +48,21 @@ CREATE VIEW bar AS SELECT jsonb_agg(foo_view.bar) FROM foo_view;
 ## Examples
 
 ```sql
-SELECT jsonb_agg(1);
+SELECT
+  jsonb_agg(t) FILTER (WHERE t.content LIKE 'h%')
+    AS my_agg
+FROM (
+  VALUES
+  (1, 'hey'),
+  (2, NULL),
+  (3, 'hi'),
+  (4, 'salutations')
+  ) AS t(id, content);
 ```
 ```nofmt
- jsonb_agg
------------
- [1]
-```
-<hr/>
-
-```sql
-SELECT jsonb_agg('example'::text);
-```
-```nofmt
-  jsonb_agg
--------------
- ["example"]
+                       my_agg
+----------------------------------------------------
+ [{"content":"hi","id":3},{"content":"hey","id":1}]
 ```
 
 ## See also

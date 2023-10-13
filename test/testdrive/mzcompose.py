@@ -10,16 +10,14 @@
 from pathlib import Path
 
 from materialize import ci_util
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import (
-    Kafka,
-    Localstack,
-    Materialized,
-    Redpanda,
-    SchemaRegistry,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.localstack import Localstack
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.redpanda import Redpanda
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
     Zookeeper(),
@@ -82,13 +80,15 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         validate_postgres_stash="materialized",
     )
 
-    materialized = Materialized(default_size=args.default_size)
+    materialized = Materialized(
+        default_size=args.default_size,
+    )
 
     with c.override(testdrive, materialized):
         c.up(*dependencies)
 
         if args.replicas > 1:
-            c.sql("DROP CLUSTER default CASCADE")
+            c.sql("DROP CLUSTER default CASCADE", user="mz_system", port=6877)
             # Make sure a replica named 'r1' always exists
             replica_names = [
                 "r1" if replica_id == 0 else f"replica{replica_id}"
@@ -98,18 +98,26 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 f"{replica_name} (SIZE '{materialized.default_replica_size}')"
                 for replica_name in replica_names
             )
-            c.sql(f"CREATE CLUSTER default REPLICAS ({replica_string})")
+            c.sql(
+                f"CREATE CLUSTER default REPLICAS ({replica_string})",
+                user="mz_system",
+                port=6877,
+            )
+
+        junit_report = ci_util.junit_report_filename(c.name)
 
         try:
             junit_report = ci_util.junit_report_filename(c.name)
-            c.run(
-                "testdrive",
-                f"--junit-report={junit_report}",
-                f"--var=replicas={args.replicas}",
-                f"--var=default-replica-size={materialized.default_replica_size}",
-                f"--var=default-storage-size={materialized.default_storage_size}",
-                *args.files,
-            )
+            for file in args.files:
+                c.run(
+                    "testdrive",
+                    f"--junit-report={junit_report}",
+                    f"--var=replicas={args.replicas}",
+                    f"--var=default-replica-size={materialized.default_replica_size}",
+                    f"--var=default-storage-size={materialized.default_storage_size}",
+                    file,
+                )
+                c.sanity_restart_mz()
         finally:
             ci_util.upload_junit_report(
                 "testdrive", Path(__file__).parent / junit_report

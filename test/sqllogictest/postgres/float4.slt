@@ -296,7 +296,7 @@ SELECT '2147483520'::float4::int4;
 ----
 2147483520
 
-query error integer out of range
+query error "2147483600" integer out of range
 SELECT '2147483647'::float4::int4
 
 query I
@@ -304,7 +304,7 @@ SELECT '-2147483648.5'::float4::int4
 ----
 -2147483648
 
-query error integer out of range
+query error "-2147484000" integer out of range
 SELECT '-2147483900'::float4::int4
 
 query I
@@ -312,7 +312,7 @@ SELECT '9223369837831520256'::float4::int8
 ----
 9223369837831520256
 
-query error bigint out of range
+query error "9223372000000000000" bigint out of range
 SELECT '9223372036854775807'::float4::int8;
 
 query I
@@ -320,7 +320,7 @@ SELECT '-9223372036854775808.5'::float4::int8;
 ----
 -9223372036854775808
 
-query error bigint out of range
+query error "-9223380000000000000" bigint out of range
 SELECT '-9223380000000000000'::float4::int8
 
 query T

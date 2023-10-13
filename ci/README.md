@@ -258,7 +258,7 @@ Launched instances:
 ```
 
 <small>* You may need to update the instance type and AMI above as we upgrade our Buildkite agents. The latest Buildkite AMI is available [here][elastic-yml] under
-the `AWSRegion2AMI` heading. Use the AMI for `us-east-2` and `linuxamd64`.</small>
+the `AWSRegion2AMI` heading. Use the AMI for `us-east-1` and `linuxamd64`.</small>
 
 This will create an EC2 instance that looks like a CI agent and push your local
 copy of the repository to it. You can SSH in to the agent using the instance ID

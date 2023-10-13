@@ -11,7 +11,6 @@ use std::cmp;
 use std::time::Duration;
 
 use anyhow::{bail, Context};
-
 use mz_ore::retry::Retry;
 
 use crate::action::{ControlFlow, State};
@@ -20,14 +19,14 @@ use crate::util::postgres::postgres_client;
 
 pub async fn run_verify_slot(
     mut cmd: BuiltinCommand,
-    state: &mut State,
+    state: &State,
 ) -> Result<ControlFlow, anyhow::Error> {
     let connection = cmd.args.string("connection")?;
     let slot = cmd.args.string("slot")?;
     let active: bool = cmd.args.parse("active")?;
     cmd.args.done()?;
 
-    let (client, conn_handle) = postgres_client(&connection).await?;
+    let (client, conn_handle) = postgres_client(&connection, state.default_timeout).await?;
 
     Retry::default()
         .initial_backoff(Duration::from_millis(50))

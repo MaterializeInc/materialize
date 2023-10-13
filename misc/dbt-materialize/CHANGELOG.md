@@ -1,5 +1,77 @@
 # dbt-materialize Changelog
 
+## 1.6.0 - 2023-10-12
+
+* Upgrade to `dbt-postgres` v1.6.0:
+
+  * Support [model contracts](https://docs.getdbt.com/docs/collaborate/govern/model-contracts)
+    for `view`, `materialized_view` and `table` materializations.
+    Materialize does not have a notion of constraints, so [model- and column-level constraints](https://docs.getdbt.com/reference/resource-properties/constraints)
+    are **not supported**.
+
+  * Deprecate the custom `materializedview` materialization name in favor of
+    `materialized_view`, which is built-in from dbt v1.6.
+
+    **New**
+
+    ```sql
+    {{ config( materialized = 'materialized_view' )}}
+    ```
+
+    **Deprecated**
+
+    ```sql
+    {{ config( materialized = 'materializedview' )}}
+    ```
+
+    The deprecated materialization name will be removed in a future release of the
+    adapter.
+
+* Enable the `cluster` configuration for tests, which allows specifying a target
+  cluster for `dbt test` to run against (for both one-shot and [continuous testing](https://materialize.com/docs/manage/dbt/#configure-continuous-testing)).
+
+  ```yaml
+  tests:
+    example:
+      +store_failures: true
+      +schema: 'dbt_test_schema'
+      +cluster: 'dbt_test_cluster'
+  ```
+
+* Override the `dbt init` command to generate a project based on the [quickstart](https://materialize.com/docs/get-started/quickstart/),
+  instead of the default project generated in `dbt-core`.
+
+* **Breaking change.** Set 255 as the maximum identifier length for relation
+    names, after [#20999](https://github.com/MaterializeInc/materialize/pull/20999)
+    introduced a `max_identifier_length` session variable that enforces this
+    limit in Materialize.
+
+* Support cancelling outstanding queries when pressing Ctrl+C.
+
+## 1.5.1 - 2023-07-24
+
+* Enable the `indexes` config for `table` materializations.
+
+## 1.5.0 - 2023-07-13
+
+* Upgrade to `dbt-postgres` v1.5.0. dbt contracts and dbt constraints are **not
+  supported** in this release (see [dbt-core #7213](https://github.com/dbt-labs/dbt-core/discussions/7213#discussioncomment-5903205)).
+
+* Fix a bug in the `materialize__list_relations_without_caching` macro which
+  could cause the adapter to break for multi-output sources ([#20483](https://github.com/MaterializeInc/materialize/issues/20483)).
+
+* Expose `owner` in the dbt documentation, now that Materialize supports
+  [role-based access control (RBAC)](https://materialize.com/docs/manage/access-control/).
+
+## 1.4.1 - 2023-04-28
+
+* Let Materialize automatically run introspection queries in the
+  `mz_introspection` cluster via the new `auto_route_introspection_queries`
+  session variable, instead of hardcoding the cluster on connection.
+
+  This change requires [Materialize >=0.49.0](https://materialize.com/docs/releases/v0.49/).
+  **Users of older versions should pin `dbt-materialize` to `v1.4.0`.**
+
 ## 1.4.0 - 2023-02-03
 
 * Upgrade to `dbt-postgres` v1.4.0.
@@ -48,15 +120,14 @@
 
 * Add `cluster` to the connection parameters returned on `dbt debug`.
 
-
 * Disallow the `cluster` option for `view` materializations. In the new
   architecture, only materialized views and indexes are associated with a
   cluster.
 
 ## 1.2.0 - 2022-08-31
 
-* Enable additional configuration for indexes created on view,
-  materializedview, or source materializations. Fix to use Materialize's
+* Enable additional configuration for indexes created on `view`,
+  `materializedview`, or `source` materializations. Fix to use Materialize's
   internal naming convention when creating indexes without providing
   explicit names.
 
@@ -92,7 +163,7 @@
   ```
 
   * A new `cluster` option for indexes on view, materializedview, or source
-    materializations. If 'cluster' is not supplied, indexes will be created
+    materializations. If `cluster` is not supplied, indexes will be created
     in the cluster used to create the materialization.
 
   ```sql
@@ -246,7 +317,7 @@
 
 * Support the `sslcert`, `sslkey`, and `sslrootcert` parameters for specifying a
   TLS client certificate. Notably, this allows using `dbt-materialize` with the
-  new architecture of [Materialize](https://cloud.materialize.com).
+  new architecture of [Materialize](https://console.materialize.com).
 
 ## 0.18.1.post2 - 2021-04-21
 

@@ -9,33 +9,30 @@
 
 use std::fmt::Debug;
 
-use tokio::sync::mpsc::UnboundedSender;
-use tokio::sync::oneshot;
-
 use mz_compute_client::controller::error::{
     CollectionUpdateError, DataflowCreationError, InstanceMissing, PeekError, SubscribeTargetError,
 };
-use mz_controller::clusters::ClusterId;
-use mz_ore::halt;
-use mz_ore::soft_assert;
-use mz_repr::{GlobalId, RelationDesc, Row, ScalarType};
-use mz_sql::names::FullObjectName;
+use mz_controller_types::ClusterId;
+use mz_ore::{halt, soft_assert};
+use mz_repr::{GlobalId, RelationDesc, ScalarType};
+use mz_sql::names::FullItemName;
 use mz_sql::plan::StatementDesc;
 use mz_sql::session::vars::Var;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    CreateIndexStatement, FetchStatement, Ident, Raw, RawClusterName, RawObjectName, Statement,
+    CreateIndexStatement, FetchStatement, Ident, Raw, RawClusterName, RawItemName, Statement,
 };
-use mz_stash::StashError;
-use mz_storage_client::controller::StorageError;
+use mz_storage_types::controller::StorageError;
 use mz_transform::TransformError;
+use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::oneshot;
 
 use crate::catalog::{Catalog, CatalogState};
 use crate::command::{Command, Response};
-use crate::coord::Message;
+use crate::coord::{Message, PendingTxnResponse};
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, Session};
-use crate::{ExecuteResponse, PeekResponseUnary};
+use crate::{ExecuteContext, ExecuteResponse};
 
 /// Handles responding to clients.
 #[derive(Debug)]
@@ -47,7 +44,7 @@ pub struct ClientTransmitter<T: Transmittable> {
     allowed: Option<Vec<T::Allowed>>,
 }
 
-impl<T: Transmittable> ClientTransmitter<T> {
+impl<T: Transmittable + std::fmt::Debug> ClientTransmitter<T> {
     /// Creates a new client transmitter.
     pub fn new(
         tx: oneshot::Sender<Response<T>>,
@@ -73,7 +70,7 @@ impl<T: Transmittable> ClientTransmitter<T> {
                 (Ok(ref t), Some(allowed)) => allowed.contains(&t.to_allowed()),
                 _ => true,
             },
-            "tried to send disallowed value through ClientTransmitter; \
+            "tried to send disallowed value {result:?} through ClientTransmitter; \
             see ClientTransmitter::set_allowed"
         );
 
@@ -87,7 +84,7 @@ impl<T: Transmittable> ClientTransmitter<T> {
         {
             self.internal_cmd_tx
                 .send(Message::Command(Command::Terminate {
-                    session: res.session,
+                    conn_id: res.session.conn_id().clone(),
                     tx: None,
                 }))
                 .expect("coordinator unexpectedly gone");
@@ -124,36 +121,51 @@ pub trait Transmittable {
     fn to_allowed(&self) -> Self::Allowed;
 }
 
+impl Transmittable for () {
+    type Allowed = bool;
+
+    fn to_allowed(&self) -> Self::Allowed {
+        true
+    }
+}
+
 /// `ClientTransmitter` with a response to send.
 #[derive(Debug)]
-pub struct CompletedClientTransmitter<T: Transmittable> {
-    client_transmitter: ClientTransmitter<T>,
-    response: Result<T, AdapterError>,
-    session: Session,
+pub struct CompletedClientTransmitter {
+    ctx: ExecuteContext,
+    response: Result<PendingTxnResponse, AdapterError>,
     action: EndTransactionAction,
 }
 
-impl<T: Transmittable> CompletedClientTransmitter<T> {
+impl CompletedClientTransmitter {
     /// Creates a new completed client transmitter.
     pub fn new(
-        client_transmitter: ClientTransmitter<T>,
-        response: Result<T, AdapterError>,
-        session: Session,
+        ctx: ExecuteContext,
+        response: Result<PendingTxnResponse, AdapterError>,
         action: EndTransactionAction,
     ) -> Self {
         CompletedClientTransmitter {
-            client_transmitter,
+            ctx,
             response,
-            session,
             action,
         }
     }
 
-    /// Transmits `result` to the client, returning ownership of the session
-    /// `session` as well.
-    pub fn send(mut self) {
-        self.session.vars_mut().end_transaction(self.action);
-        self.client_transmitter.send(self.response, self.session);
+    /// Returns the execute context to be finalized, and the result to send it.
+    pub fn finalize(mut self) -> (ExecuteContext, Result<ExecuteResponse, AdapterError>) {
+        let changed = self
+            .ctx
+            .session_mut()
+            .vars_mut()
+            .end_transaction(self.action);
+
+        // Append any parameters that changed to the response.
+        let response = self.response.map(|mut r| {
+            r.extend_params(changed);
+            ExecuteResponse::from(r)
+        });
+
+        (self.ctx, response)
     }
 }
 
@@ -165,22 +177,12 @@ impl<T: Transmittable> Drop for ClientTransmitter<T> {
     }
 }
 
-/// Constructs an [`ExecuteResponse`] that that will send some rows to the
-/// client immediately, as opposed to asking the dataflow layer to send along
-/// the rows after some computation.
-pub(crate) fn send_immediate_rows(rows: Vec<Row>) -> ExecuteResponse {
-    ExecuteResponse::SendingRows {
-        future: Box::pin(async { PeekResponseUnary::Rows(rows) }),
-        span: tracing::Span::none(),
-    }
-}
-
 // TODO(benesch): constructing the canonical CREATE INDEX statement should be
 // the responsibility of the SQL package.
 pub fn index_sql(
     index_name: String,
     cluster_id: ClusterId,
-    view_name: FullObjectName,
+    view_name: FullItemName,
     view_desc: &RelationDesc,
     keys: &[usize],
 ) -> String {
@@ -188,7 +190,7 @@ pub fn index_sql(
 
     CreateIndexStatement::<Raw> {
         name: Some(Ident::new(index_name)),
-        on_name: RawObjectName::Name(mz_sql::normalize::unresolve(view_name)),
+        on_name: RawItemName::Name(mz_sql::normalize::unresolve(view_name)),
         in_cluster: Some(RawClusterName::Resolved(cluster_id.to_string())),
         key_parts: Some(
             keys.iter()
@@ -225,7 +227,12 @@ pub fn describe(
                 .get_portal_unverified(name.as_str())
                 .map(|p| p.desc.clone())
             {
-                Some(desc) => Ok(desc),
+                Some(mut desc) => {
+                    // Parameters are already bound to the portal and will not be accepted through
+                    // FETCH.
+                    desc.param_types = Vec::new();
+                    Ok(desc)
+                }
                 None => Err(AdapterError::UnknownCursor(name.to_string())),
             }
         }
@@ -287,13 +294,22 @@ impl ShouldHalt for AdapterError {
 impl ShouldHalt for crate::catalog::Error {
     fn should_halt(&self) -> bool {
         match &self.kind {
-            crate::catalog::ErrorKind::Stash(e) => e.should_halt(),
+            crate::catalog::ErrorKind::Durable(e) => e.should_halt(),
             _ => false,
         }
     }
 }
 
-impl ShouldHalt for StashError {
+impl ShouldHalt for mz_catalog::CatalogError {
+    fn should_halt(&self) -> bool {
+        match &self {
+            Self::Durable(e) => e.should_halt(),
+            _ => false,
+        }
+    }
+}
+
+impl ShouldHalt for mz_catalog::DurableCatalogError {
     fn should_halt(&self) -> bool {
         self.is_unrecoverable()
     }
@@ -305,13 +321,19 @@ impl ShouldHalt for StorageError {
             StorageError::UpdateBeyondUpper(_)
             | StorageError::ReadBeforeSince(_)
             | StorageError::InvalidUppers(_)
-            | StorageError::InvalidUsage(_) => true,
+            | StorageError::InvalidUsage(_)
+            | StorageError::ResourceExhausted(_) => true,
             StorageError::SourceIdReused(_)
             | StorageError::SinkIdReused(_)
             | StorageError::IdentifierMissing(_)
-            | StorageError::ClientError(_)
-            | StorageError::DataflowError(_) => false,
-            StorageError::IOError(e) => e.should_halt(),
+            | StorageError::IdentifierInvalid(_)
+            | StorageError::IngestionInstanceMissing { .. }
+            | StorageError::ExportInstanceMissing { .. }
+            | StorageError::Generic(_)
+            | StorageError::DataflowError(_)
+            | StorageError::InvalidAlterSource { .. }
+            | StorageError::ShuttingDown(_) => false,
+            StorageError::IOError(e) => e.is_unrecoverable(),
         }
     }
 }
@@ -361,9 +383,7 @@ impl ShouldHalt for SubscribeTargetError {
 impl ShouldHalt for TransformError {
     fn should_halt(&self) -> bool {
         match self {
-            TransformError::Internal(_)
-            | TransformError::LetRecUnsupported
-            | TransformError::IdentifierMissing(_) => false,
+            TransformError::Internal(_) | TransformError::IdentifierMissing(_) => false,
         }
     }
 }
@@ -383,6 +403,8 @@ pub(crate) fn viewable_variables<'a>(
         .vars()
         .iter()
         .chain(catalog.system_config().iter())
-        .filter(|v| !v.experimental() && v.visible(session.user()))
-        .filter(|v| v.safe() || catalog.unsafe_mode())
+        .filter(|v| {
+            v.visible(session.user(), Some(catalog.system_config()))
+                .is_ok()
+        })
 }

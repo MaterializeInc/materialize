@@ -11,18 +11,17 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use criterion::{black_box, Criterion, Throughput};
-use mz_persist_types::codec_impls::VecU8Schema;
-use timely::progress::Antichain;
-use tokio::runtime::Runtime;
-use tokio::sync::mpsc;
-use tracing::debug;
-
 use mz_ore::cast::{CastFrom, TryCastFrom};
 use mz_ore::task;
 use mz_persist::workload::DataGenerator;
 use mz_persist_client::read::ListenEvent;
-use mz_persist_client::{PersistClient, ShardId};
+use mz_persist_client::{Diagnostics, PersistClient, ShardId};
+use mz_persist_types::codec_impls::VecU8Schema;
 use mz_persist_types::Codec64;
+use timely::progress::Antichain;
+use tokio::runtime::Runtime;
+use tokio::sync::mpsc;
+use tracing::debug;
 
 use crate::{bench_all_clients, load};
 
@@ -68,9 +67,9 @@ async fn bench_writes_one_iter(
     let mut write = client
         .open_writer::<Vec<u8>, Vec<u8>, u64, i64>(
             ShardId::new(),
-            "bench",
             Arc::new(VecU8Schema),
             Arc::new(VecU8Schema),
+            Diagnostics::from_purpose("bench"),
         )
         .await?;
 
@@ -122,9 +121,9 @@ async fn bench_write_to_listen_one_iter(
     let (mut write, read) = client
         .open::<Vec<u8>, Vec<u8>, u64, i64>(
             ShardId::new(),
-            "bench",
             Arc::new(VecU8Schema),
             Arc::new(VecU8Schema),
+            Diagnostics::from_purpose("bench"),
         )
         .await?;
 
@@ -213,9 +212,9 @@ pub fn bench_snapshot(
             let mut write = client
                 .open_writer::<Vec<u8>, Vec<u8>, u64, i64>(
                     shard_id,
-                    "bench",
                     Arc::new(VecU8Schema),
                     Arc::new(VecU8Schema),
+                    Diagnostics::from_purpose("bench"),
                 )
                 .await
                 .expect("failed to open shard");
@@ -238,9 +237,9 @@ async fn bench_snapshot_one_iter(
     let mut read = client
         .open_leased_reader::<Vec<u8>, Vec<u8>, u64, i64>(
             *shard_id,
-            "bench",
             Arc::new(VecU8Schema),
             Arc::new(VecU8Schema),
+            Diagnostics::from_purpose("bench"),
         )
         .await?;
 

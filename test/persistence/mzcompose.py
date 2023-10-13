@@ -10,17 +10,15 @@
 import os
 import time
 from argparse import Namespace
-from typing import Union
+from textwrap import dedent
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import (
-    Kafka,
-    Materialized,
-    Redpanda,
-    SchemaRegistry,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.redpanda import Redpanda
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
     Zookeeper(),
@@ -35,7 +33,7 @@ td_test = os.environ.pop("TD_TEST", "*")
 
 
 def start_deps(
-    c: Composition, args_or_parser: Union[WorkflowArgumentParser, Namespace]
+    c: Composition, args_or_parser: WorkflowArgumentParser | Namespace
 ) -> None:
 
     if isinstance(args_or_parser, Namespace):
@@ -57,7 +55,7 @@ def start_deps(
 
 
 def workflow_kafka_sources(
-    c: Composition, args_or_parser: Union[WorkflowArgumentParser, Namespace]
+    c: Composition, args_or_parser: WorkflowArgumentParser | Namespace
 ) -> None:
     start_deps(c, args_or_parser)
 
@@ -86,7 +84,7 @@ def workflow_kafka_sources(
 
 
 def workflow_user_tables(
-    c: Composition, args_or_parser: Union[WorkflowArgumentParser, Namespace]
+    c: Composition, args_or_parser: WorkflowArgumentParser | Namespace
 ) -> None:
     start_deps(c, args_or_parser)
 
@@ -171,3 +169,52 @@ def workflow_compaction(c: Composition) -> None:
     c.rm("materialized", "testdrive", destroy_volumes=True)
 
     c.rm_volumes("mzdata")
+
+
+def workflow_inspect_shard(c: Composition) -> None:
+    """Regression test for https://github.com/MaterializeInc/materialize/pull/21098"""
+    c.up("materialized")
+    c.sql(
+        dedent(
+            """
+            CREATE TABLE foo (
+                big0 string, big1 string, big2 string, big3 string, big4 string, big5 string,
+                barTimestamp string,
+                big6 string, big7 string
+            );
+            INSERT INTO foo VALUES (
+                repeat('x', 1024), repeat('x', 1024), repeat('x', 1024), repeat('x', 1024), repeat('x', 1024), repeat('x', 1024),
+                repeat('SENTINEL', 2048),
+                repeat('x', 1024), repeat('x', 1024)
+            );
+            """
+        )
+    )
+    json_dict = c.sql_query("INSPECT SHARD 'u1'", port=6877, user="mz_system")[0][0]
+
+    cols = json_dict["batches"][1]["part_runs"][0][0]["stats"]["cols"]["ok"]
+
+    # Leading columns are present in the stats
+    assert "SENTINEL" in cols["bartimestamp"]["lower"]
+    assert "SENTINEL" in cols["bartimestamp"]["upper"]
+
+    for col_name in ["big0", "big1", "big2"]:
+        assert cols[col_name]["lower"].endswith("xxx")
+        assert cols[col_name]["upper"].endswith("xxy")
+
+    # Trailing columns not represented because of stats size limits
+    for col_name in ["big3", "big4", "big5"]:
+        assert col_name not in cols
+
+
+def workflow_default(c: Composition) -> None:
+    for workflow in [
+        "inspect-shard",
+        "kafka-sources",
+        "user-tables",
+        # Legacy tests, not currently operational
+        # "failpoints",
+        # "compaction"
+    ]:
+        c.down(destroy_volumes=True)
+        c.workflow(workflow)

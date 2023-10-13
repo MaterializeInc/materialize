@@ -9,12 +9,11 @@
 
 use std::fmt;
 
-use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
-
 use mz_lowertest::MzReflect;
 use mz_repr::adt::char::{format_str_pad, Char, CharLength};
 use mz_repr::{ColumnType, ScalarType};
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
 
 use crate::scalar::func::EagerUnaryFunc;
 

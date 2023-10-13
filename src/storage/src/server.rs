@@ -12,19 +12,19 @@
 use std::sync::Arc;
 use std::thread::Thread;
 
-use timely::communication::initialize::WorkerGuards;
-
 use mz_cluster::server::TimelyContainerRef;
 use mz_ore::now::NowFn;
+use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
-use mz_storage_client::client::StorageClient;
-use mz_storage_client::client::{StorageCommand, StorageResponse};
-use mz_storage_client::types::connections::ConnectionContext;
+use mz_rocksdb::config::SharedWriteBufferManager;
+use mz_storage_client::client::{StorageClient, StorageCommand, StorageResponse};
+use mz_storage_types::connections::ConnectionContext;
+use timely::communication::initialize::WorkerGuards;
 use timely::worker::Worker as TimelyWorker;
 
 use crate::sink::SinkBaseMetrics;
 use crate::source::metrics::SourceBaseMetrics;
-use crate::storage_state::Worker;
+use crate::storage_state::{StorageInstanceContext, Worker};
 use crate::DecodeMetrics;
 
 /// Configures a dataflow server.
@@ -34,6 +34,8 @@ pub struct Config {
     pub now: NowFn,
     /// Configuration for source and sink connection.
     pub connection_context: ConnectionContext,
+    /// Other configuration for storage instances.
+    pub instance_context: StorageInstanceContext,
 
     /// Metrics for sources.
     pub source_metrics: SourceBaseMetrics,
@@ -41,6 +43,8 @@ pub struct Config {
     pub sink_metrics: SinkBaseMetrics,
     /// Metrics for decoding.
     pub decode_metrics: DecodeMetrics,
+    /// Shared rocksdb write buffer manager
+    pub shared_rocksdb_write_buffer_manager: SharedWriteBufferManager,
 }
 
 /// A handle to a running dataflow server.
@@ -55,6 +59,7 @@ pub fn serve(
     generic_config: mz_cluster::server::ClusterConfig,
     now: NowFn,
     connection_context: ConnectionContext,
+    instance_context: StorageInstanceContext,
 ) -> Result<
     (
         TimelyContainerRef<StorageCommand, StorageResponse, Thread>,
@@ -66,13 +71,18 @@ pub fn serve(
     let source_metrics = SourceBaseMetrics::register_with(&generic_config.metrics_registry);
     let sink_metrics = SinkBaseMetrics::register_with(&generic_config.metrics_registry);
     let decode_metrics = DecodeMetrics::register_with(&generic_config.metrics_registry);
+    let shared_rocksdb_write_buffer_manager = Default::default();
 
     let config = Config {
         now,
         connection_context,
+        instance_context,
         source_metrics,
         sink_metrics,
         decode_metrics,
+        // The shared RocksDB `WriteBufferManager` is shared between the workers.
+        // It protects (behind a shared mutex) a `Weak` that will be upgraded and shared when the first worker attempts to initialize it.
+        shared_rocksdb_write_buffer_manager,
     };
 
     let (timely_container, client_builder) = mz_cluster::server::serve::<
@@ -101,6 +111,7 @@ impl mz_cluster::types::AsRunnableWorker<StorageCommand, StorageResponse> for Co
             crossbeam_channel::Sender<std::thread::Thread>,
         )>,
         persist_clients: Arc<PersistClientCache>,
+        tracing_handle: Arc<TracingHandle>,
     ) {
         Worker::new(
             timely_worker,
@@ -110,7 +121,10 @@ impl mz_cluster::types::AsRunnableWorker<StorageCommand, StorageResponse> for Co
             config.sink_metrics,
             config.now.clone(),
             config.connection_context,
+            config.instance_context,
             persist_clients,
+            tracing_handle,
+            config.shared_rocksdb_write_buffer_manager,
         )
         .run();
     }

@@ -11,7 +11,7 @@ $ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-pass
 
 $ mysql-execute name=mysql
 USE test;
-CREATE TABLE t1 (f1 INTEGER PRIMARY KEY, f2 INTEGER);
-INSERT INTO t1 VALUES (123, 123);
-INSERT INTO t1 VALUES (234, 234);
+CREATE TABLE t1 (f1 INTEGER PRIMARY KEY, f2 INTEGER, f3 BIGINT UNSIGNED);
+INSERT INTO t1 VALUES (123, 123, 123);
+INSERT INTO t1 VALUES (234, 234, 234);
 COMMIT;

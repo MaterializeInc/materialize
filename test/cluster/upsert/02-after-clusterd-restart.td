@@ -54,22 +54,36 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 
 # Verify that the errors from before are still there
 ! SELECT * FROM upsert
-contains: Value error
-
-# Update the bad value
-$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema}
-{"id": 2} {"before": null, "after": {"row": {"id": 2, "creature": "cow"}}}
-
-# There is still an error, due to the bad key.
-! SELECT * FROM upsert
 contains: Key decode
 
 # Retract the bad key
 $ kafka-ingest format=bytes topic=dbzupsert key-format=bytes omit-value=true
 broken-key:
 
+# There is still an error, due to the bad key.
+! SELECT * FROM upsert
+contains: Value error
+
+# Update the bad value
+$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema}
+{"id": 2} {"before": null, "after": {"row": {"id": 2, "creature": "cow"}}}
+
 > SELECT * FROM upsert
 id creature
 -----------
 1  dragon
 2  cow
+
+# Verify that we still can't query, because of the NULL-key error.
+! select * from upsert_nullkey
+contains: record with NULL key in UPSERT source
+
+# Ingest a NULL value for our null key, to retract it.
+$ kafka-ingest format=bytes topic=upsert-nullkey key-format=bytes key-terminator=:
+:
+
+# Now we should be able to query the source.
+> select * from upsert_nullkey
+key           text
+-------------------
+bird1         goose

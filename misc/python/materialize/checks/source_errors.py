@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 from textwrap import dedent
-from typing import List
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
@@ -19,14 +18,6 @@ class SourceErrors(Check):
         return Testdrive(
             dedent(
                 """
-                > CREATE SECRET source_errors_secret AS 'postgres';
-
-                > CREATE CONNECTION source_errors_connection FOR POSTGRES
-                  HOST 'postgres',
-                  DATABASE postgres,
-                  USER source_errors_user1,
-                  PASSWORD SECRET source_errors_secret
-
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 # In order to avoid conflicts, user must be unique
                 CREATE USER source_errors_user1 WITH SUPERUSER PASSWORD 'postgres';
@@ -43,6 +34,14 @@ class SourceErrors(Check):
 
                 CREATE PUBLICATION source_errors_publicationA FOR ALL TABLES;
                 CREATE PUBLICATION source_errors_publicationB FOR ALL TABLES;
+
+                > CREATE SECRET source_errors_secret AS 'postgres';
+
+                > CREATE CONNECTION source_errors_connection FOR POSTGRES
+                  HOST 'postgres',
+                  DATABASE postgres,
+                  USER source_errors_user1,
+                  PASSWORD SECRET source_errors_secret
 
                 > CREATE SOURCE source_errors_sourceA
                   FROM POSTGRES CONNECTION source_errors_connection
@@ -67,7 +66,7 @@ class SourceErrors(Check):
             )
         )
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(dedent(s))
             for s in [
@@ -91,6 +90,8 @@ class SourceErrors(Check):
                 > SELECT status, error ~* 'publication .+ does not exist'
                   FROM mz_internal.mz_source_statuses
                   WHERE name LIKE 'source_errors_source%'
+                  AND type != 'subsource'
+                  AND type != 'progress';
                 stalled true
                 stalled true
                 """

@@ -34,10 +34,10 @@ Explained Query:
         %0:t1[×] » %1:t2[×]
       ArrangeBy keys=[[]] // { arity: 2 }
         Filter (#0) IS NOT NULL // { arity: 2 }
-          Get materialize.public.t1 // { arity: 2 }
+          ReadStorage materialize.public.t1 // { arity: 2 }
       ArrangeBy keys=[[]] // { arity: 1 }
         Project (#0) // { arity: 1 }
-          Get materialize.public.t2 // { arity: 2 }
+          ReadStorage materialize.public.t2 // { arity: 2 }
 
 Source materialize.public.t1
   filter=((#0) IS NOT NULL)
@@ -83,12 +83,12 @@ Explained Query:
                 %3:l0 » %0:t2[×]A » %1:l1[×]A » %2:t1[×]A
               ArrangeBy keys=[[]] // { arity: 1 }
                 Project (#1) // { arity: 1 }
-                  Get materialize.public.t2 // { arity: 2 }
+                  ReadStorage materialize.public.t2 // { arity: 2 }
               ArrangeBy keys=[[]] // { arity: 1 }
                 Get l1 // { arity: 1 }
               ArrangeBy keys=[[]] // { arity: 0 }
                 Project () // { arity: 0 }
-                  Get materialize.public.t1 // { arity: 2 }
+                  ReadStorage materialize.public.t1 // { arity: 2 }
               ArrangeBy keys=[[]] // { arity: 1 }
                 Get l0 // { arity: 1 }
     cte l1 =
@@ -96,6 +96,6 @@ Explained Query:
         Get l0 // { arity: 1 }
     cte l0 =
       Project (#1) // { arity: 1 }
-        Get materialize.public.t1 // { arity: 2 }
+        ReadStorage materialize.public.t1 // { arity: 2 }
 
 EOF

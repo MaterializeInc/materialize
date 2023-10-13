@@ -7,32 +7,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 from textwrap import dedent
-from typing import List
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
+from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
 
 
 def schemas() -> str:
-    return dedent(
-        """
-       $ set keyschema={
-           "type": "record",
-           "name": "Key",
-           "fields": [
-               {"name": "key1", "type": "string"}
-           ]
-         }
-
-       $ set schema={
-           "type" : "record",
-           "name" : "test",
-           "fields" : [
-               {"name":"f1", "type":"string"}
-           ]
-         }
-    """
-    )
+    return dedent(KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD)
 
 
 class UpsertInsert(Check):
@@ -48,10 +30,6 @@ class UpsertInsert(Check):
                 $ kafka-ingest format=avro key-format=avro topic=upsert-insert key-schema=${keyschema} schema=${schema} repeat=10000
                 {"key1": "A${kafka-ingest.iteration}"} {"f1": "A${kafka-ingest.iteration}"}
 
-                > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
-
-                > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
-
                 > CREATE SOURCE upsert_insert
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-insert-${testdrive.seed}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -62,7 +40,7 @@ class UpsertInsert(Check):
             )
         )
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(schemas() + dedent(s))
             for s in [
@@ -102,10 +80,6 @@ class UpsertUpdate(Check):
                 $ kafka-ingest format=avro key-format=avro topic=upsert-update key-schema=${keyschema} schema=${schema} repeat=10000
                 {"key1": "${kafka-ingest.iteration}"} {"f1": "A${kafka-ingest.iteration}"}
 
-                > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
-
-                > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
-
                 > CREATE SOURCE upsert_update
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-update-${testdrive.seed}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -116,7 +90,7 @@ class UpsertUpdate(Check):
             )
         )
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(schemas() + dedent(s))
             for s in [
@@ -153,10 +127,6 @@ class UpsertDelete(Check):
                 $ kafka-ingest format=avro key-format=avro topic=upsert-delete key-schema=${keyschema} schema=${schema} repeat=30000
                 {"key1": "${kafka-ingest.iteration}"} {"f1": "${kafka-ingest.iteration}"}
 
-                > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
-
-                > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
-
                 > CREATE SOURCE upsert_delete
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-delete-${testdrive.seed}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -167,7 +137,7 @@ class UpsertDelete(Check):
             )
         )
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(schemas() + dedent(s))
             for s in [

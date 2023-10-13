@@ -4,7 +4,7 @@ description: "Human-readable license for Materialize"
 menu:
   main:
     parent: 'about'
-    weight: 40
+    weight: 15
 ---
 
 Materialize is licensed under the Business Source License agreement [available

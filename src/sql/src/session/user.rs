@@ -7,27 +7,41 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
+use mz_repr::role_id::RoleId;
+use mz_repr::user::ExternalUserMetadata;
 use once_cell::sync::Lazy;
-use uuid::Uuid;
 
+pub const SYSTEM_USER_NAME: &str = "mz_system";
 pub static SYSTEM_USER: Lazy<User> = Lazy::new(|| User {
-    name: "mz_system".into(),
+    name: SYSTEM_USER_NAME.into(),
     external_metadata: None,
 });
 
-pub static INTROSPECTION_USER: Lazy<User> = Lazy::new(|| User {
-    name: "mz_introspection".into(),
+pub const SUPPORT_USER_NAME: &str = "mz_support";
+pub static SUPPORT_USER: Lazy<User> = Lazy::new(|| User {
+    name: SUPPORT_USER_NAME.into(),
     external_metadata: None,
 });
 
 pub static INTERNAL_USER_NAMES: Lazy<BTreeSet<String>> = Lazy::new(|| {
-    [&SYSTEM_USER, &INTROSPECTION_USER]
+    [&SYSTEM_USER, &SUPPORT_USER]
         .into_iter()
         .map(|user| user.name.clone())
         .collect()
 });
+
+pub static INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER: Lazy<BTreeMap<String, String>> =
+    Lazy::new(|| {
+        [
+            (&SYSTEM_USER, "mz_system"),
+            (&SUPPORT_USER, "mz_introspection"),
+        ]
+        .into_iter()
+        .map(|(user, cluster)| (user.name.clone(), cluster.to_string()))
+        .collect()
+    });
 
 pub static HTTP_DEFAULT_USER: Lazy<User> = Lazy::new(|| User {
     name: "anonymous_http_user".into(),
@@ -41,17 +55,6 @@ pub struct User {
     pub name: String,
     /// Metadata about this user in an external system.
     pub external_metadata: Option<ExternalUserMetadata>,
-}
-
-/// Metadata about a [`User`] in an external system.
-#[derive(Debug, Clone)]
-pub struct ExternalUserMetadata {
-    /// The ID of the user in the external system.
-    pub user_id: Uuid,
-    /// The ID of the user's active group in the external system.
-    pub group_id: Uuid,
-    /// Indicates if the user is an admin in the external system.
-    pub admin: bool,
 }
 
 impl PartialEq for User {
@@ -84,4 +87,29 @@ impl User {
     pub fn is_system_user(&self) -> bool {
         self == &*SYSTEM_USER
     }
+
+    /// Returns whether we should limit this user's connections to max_connections
+    pub fn limit_max_connections(&self) -> bool {
+        !self.is_internal() && !self.is_external_admin()
+    }
+}
+
+pub const MZ_SYSTEM_ROLE_ID: RoleId = RoleId::System(1);
+pub const MZ_SUPPORT_ROLE_ID: RoleId = RoleId::System(2);
+
+/// Metadata about a Session's role.
+///
+/// Modeled after PostgreSQL role hierarchy:
+/// <https://github.com/postgres/postgres/blob/9089287aa037fdecb5a52cec1926e5ae9569e9f9/src/backend/utils/init/miscinit.c#L461-L493>
+#[derive(Debug, Clone)]
+pub struct RoleMetadata {
+    /// The role that initiated the database context. Fixed for the duration of the connection.
+    pub authenticated_role: RoleId,
+    /// Initially the same as `authenticated_role`, but can be changed by SET SESSION AUTHORIZATION
+    /// (not yet implemented). Used to determine what roles can be used for SET ROLE
+    /// (not yet implemented).
+    pub session_role: RoleId,
+    /// The role of the current execution context. This role is used for all normal privilege
+    /// checks.
+    pub current_role: RoleId,
 }

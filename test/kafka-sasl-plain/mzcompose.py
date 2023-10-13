@@ -7,15 +7,13 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.mzcompose import Composition
-from materialize.mzcompose.services import (
-    Kafka,
-    Materialized,
-    SchemaRegistry,
-    TestCerts,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.test_certs import TestCerts
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
     TestCerts(),
@@ -42,6 +40,10 @@ SERVICES = [
             "KAFKA_SSL_CLIENT_AUTH=required",
             "KAFKA_SECURITY_INTER_BROKER_PROTOCOL=SASL_SSL",
             "KAFKA_OPTS=-Djava.security.auth.login.config=/etc/kafka/sasl.jaas.config",
+            # -Dauthorizer.class.name=kafka.security.authorizer.AclAuthorizer",
+            "KAFKA_AUTHORIZER_CLASS_NAME=kafka.security.authorizer.AclAuthorizer",
+            "KAFKA_ALLOW_EVERYONE_IF_NO_ACL_FOUND=true",
+            "KAFKA_SUPER_USERS=User:materialize;User:broker",
             # Standard options we don't want to overwrite!
             "KAFKA_MIN_INSYNC_REPLICAS=1",
             "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1",
@@ -51,6 +53,7 @@ SERVICES = [
         volumes=[
             "secrets:/etc/kafka/secrets",
             "./sasl.jaas.config:/etc/kafka/sasl.jaas.config",
+            "./no-describe-configs.properties:/etc/kafka/no-describe-configs.properties",
         ],
     ),
     SchemaRegistry(
@@ -118,4 +121,22 @@ def workflow_default(c: Composition) -> None:
     c.up("test-certs")
     c.up("zookeeper", "kafka", "schema-registry")
     c.up("materialized")
-    c.run("testdrive", "*.td")
+
+    c.run("testdrive", "smoketest.td")
+
+    # Deny the DescribeConfigs cluster privilege to user no_describe_configs
+    c.exec(
+        "kafka",
+        "kafka-acls",
+        "--bootstrap-server",
+        "kafka:9092",
+        "--add",
+        "--deny-principal",
+        "User:CN=no_describe_configs",
+        "--operation",
+        "DescribeConfigs",
+        "--cluster",
+        "--command-config",
+        "/etc/kafka/no-describe-configs.properties",
+    )
+    c.run("testdrive", "no-describe-configs.td")

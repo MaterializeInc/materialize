@@ -341,10 +341,10 @@ Here are the tests for `MyStruct` and `MyEnum`.
 ```rust
 #[cfg(test)]
 mod tests {
-    use super::*;
     use proptest::prelude::*;
-
     use mz_proto::protobuf_roundtrip;
+
+    use super::*;
 
     // snip
 

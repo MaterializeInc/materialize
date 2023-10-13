@@ -13,12 +13,11 @@
 
 use std::num::NonZeroI64;
 
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::{any, Arbitrary};
 use proptest::strategy::{BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_cluster_client.client.rs"));
 
@@ -140,6 +139,8 @@ pub struct TimelyConfig {
     ///
     /// See `differential_dataflow::Config::idle_merge_effort`.
     pub idle_arrangement_merge_effort: u32,
+    /// Whether to enable variable-length row encoding.
+    pub variable_length_row_encoding: bool,
 }
 
 impl RustType<ProtoTimelyConfig> for TimelyConfig {
@@ -149,6 +150,7 @@ impl RustType<ProtoTimelyConfig> for TimelyConfig {
             addresses: self.addresses.into_proto(),
             process: self.process.into_proto(),
             idle_arrangement_merge_effort: self.idle_arrangement_merge_effort,
+            variable_length_row_encoding: self.variable_length_row_encoding,
         }
     }
 
@@ -158,6 +160,7 @@ impl RustType<ProtoTimelyConfig> for TimelyConfig {
             workers: proto.workers.into_rust()?,
             addresses: proto.addresses.into_rust()?,
             idle_arrangement_merge_effort: proto.idle_arrangement_merge_effort,
+            variable_length_row_encoding: proto.variable_length_row_encoding,
         })
     }
 }
@@ -171,6 +174,16 @@ impl TimelyConfig {
             })
             .collect()
     }
+}
+
+/// A trait for specific cluster commands that can be unpacked into
+/// `CreateTimely` variants.
+pub trait TryIntoTimelyConfig {
+    /// Attempt to unpack `self` into a `(TimelyConfig, ClusterStartupEpoch)`. Otherwise,
+    /// fail and return `self` back.
+    fn try_into_timely_config(self) -> Result<(TimelyConfig, ClusterStartupEpoch), Self>
+    where
+        Self: Sized;
 }
 
 /// Specifies the location of a cluster replica.
@@ -191,17 +204,16 @@ pub struct ClusterReplicaLocation {
 
 #[cfg(test)]
 mod tests {
+    use mz_proto::protobuf_roundtrip;
     use proptest::prelude::ProptestConfig;
     use proptest::proptest;
-
-    use mz_proto::protobuf_roundtrip;
 
     use super::*;
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(32))]
 
-        #[test]
+        #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // slow
         fn timely_config_protobuf_roundtrip(expect in any::<TimelyConfig>() ) {
             let actual = protobuf_roundtrip::<_, ProtoTimelyConfig>(&expect);
@@ -209,7 +221,8 @@ mod tests {
             assert_eq!(actual.unwrap(), expect);
         }
 
-        #[test]
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // slow
         fn cluster_startup_epoch_protobuf_roundtrip(expect in any::<ClusterStartupEpoch>() ) {
             let actual = protobuf_roundtrip::<_, ProtoClusterStartupEpoch>(&expect);
             assert!(actual.is_ok());

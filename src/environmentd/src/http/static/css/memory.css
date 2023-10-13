@@ -12,3 +12,10 @@ svg {
     width: 100%;
     height: auto;
 }
+
+table.dataflows td {
+    text-align: right;
+}
+table.dataflows td:nth-child(1), table.dataflows td:nth-child(2) {
+    text-align: left;
+}

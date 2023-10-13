@@ -222,15 +222,15 @@ impl SshKeyPairSet {
 
 #[cfg(test)]
 mod tests {
-    use super::SshKeyPair;
-    use super::SshKeyPairSet;
     use openssl::pkey::{PKey, Private};
     use serde::{Deserialize, Serialize};
     use ssh_key::private::{Ed25519Keypair, Ed25519PrivateKey, KeypairData};
     use ssh_key::public::Ed25519PublicKey;
     use ssh_key::{LineEnding, PrivateKey};
 
-    #[test]
+    use super::{SshKeyPair, SshKeyPairSet};
+
+    #[mz_ore::test]
     fn test_key_pair_generation() -> anyhow::Result<()> {
         for _ in 0..100 {
             let key_pair = SshKeyPair::new()?;
@@ -247,7 +247,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_unique_keys() -> anyhow::Result<()> {
         for _ in 0..100 {
             let key_set = SshKeyPairSet::new()?;
@@ -256,7 +256,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_key_pair_serialization_roundtrip() -> anyhow::Result<()> {
         for _ in 0..100 {
             let key_pair = SshKeyPair::new()?;
@@ -269,7 +269,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_key_set_serialization_roundtrip() -> anyhow::Result<()> {
         for _ in 0..100 {
             let key_set = SshKeyPairSet::new()?;
@@ -280,7 +280,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_key_rotation() -> anyhow::Result<()> {
         for _ in 0..100 {
             let key_set = SshKeyPairSet::new()?;
@@ -294,7 +294,7 @@ mod tests {
     }
 
     /// Ensure the new code can read legacy generated Keypairs
-    #[test]
+    #[mz_ore::test]
     fn test_deserializing_legacy_key_pairs() -> anyhow::Result<()> {
         for _ in 0..100 {
             let legacy_key_pair = LegacySshKeyPair::new()?;
@@ -312,7 +312,7 @@ mod tests {
     }
 
     /// Ensure the legacy code can read newly generated Keypairs, e.g. if we have to rollback
-    #[test]
+    #[mz_ore::test]
     fn test_serializing_legacy_key_pairs() -> anyhow::Result<()> {
         for _ in 0..100 {
             let key_pair = SshKeyPair::new()?;
@@ -329,7 +329,7 @@ mod tests {
     }
 
     /// Ensure the new code can read legacy generated Keysets
-    #[test]
+    #[mz_ore::test]
     fn test_deserializing_legacy_key_sets() -> anyhow::Result<()> {
         for _ in 0..100 {
             let legacy_key_pair = LegacySshKeyPairSet::new()?;
@@ -355,7 +355,7 @@ mod tests {
     }
 
     /// Ensure the legacy code can read newly generated Keysets, e.g. if we have to rollback
-    #[test]
+    #[mz_ore::test]
     fn test_serializing_legacy_key_sets() -> anyhow::Result<()> {
         for _ in 0..100 {
             let key_pair = SshKeyPairSet::new()?;

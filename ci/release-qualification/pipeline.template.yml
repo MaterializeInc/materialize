@@ -1,0 +1,157 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+steps:
+  - id: build-x86_64
+    label: Build x86_64
+    command: bin/ci-builder run stable bin/pyactivate -m ci.test.build x86_64
+    timeout_in_minutes: 60
+    agents:
+      queue: builder-linux-x86_64
+    # Don't build for "trigger_job" source, which indicates that this release
+    # qualification pipeline was triggered automatically by the tests pipeline
+    # because there is a new tag on a v* branch. In this case we want to make
+    # sure we use the exact same version for testing here as was tagged and
+    # will be released, and don't build our own version just for the tests.
+    if: build.source == "ui" || build.source == "schedule"
+
+  - wait: ~
+
+  - command: bin/ci-builder run stable bin/pyactivate -m materialize.ci_util.trim_pipeline release-qualification
+    if: build.source == "ui"
+    agents:
+      queue: linux
+
+  - wait: ~
+
+  - id: zippy-kafka-sources-large
+    label: "Large Zippy Kafka Sources"
+    # 48h
+    timeout_in_minutes: 2880
+    agents:
+      queue: linux-x86_64-large
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: zippy
+          args: [--scenario=KafkaSourcesLarge, --actions=100000]
+
+  - id: zippy-dataflows-large
+    label: "Large Zippy w/ complex dataflows"
+    # 48h
+    timeout_in_minutes: 2880
+    agents:
+      queue: linux-x86_64-large
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: zippy
+          args: [--scenario=DataflowsLarge, --actions=35000]
+
+  - id: zippy-pg-cdc-large
+    label: "Large Zippy PogresCdc"
+    timeout_in_minutes: 2880
+    agents:
+      queue: linux-x86_64-large
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: zippy
+          args: [--scenario=PostgresCdcLarge, --actions=200000]
+
+  - id: zippy-cluster-replicas-long
+    label: "Longer Zippy ClusterReplicas"
+    timeout_in_minutes: 2880
+    agents:
+      queue: linux-x86_64-large
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: zippy
+          # Execution times longer than 4h are apparently not feasible at this time due to #17845
+          args: [--scenario=ClusterReplicas, --actions=10000, --max-execution-time=4h]
+
+  - id: zippy-user-tables-large
+    label: "Large Zippy w/ user tables"
+    timeout_in_minutes: 2880
+    agents:
+      queue: linux-x86_64-large
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: zippy
+          args: [--scenario=UserTablesLarge, --actions=200000]
+
+  - id: zippy-debezium-postgres-long
+    label: "Longer Zippy Debezium Postgres"
+    timeout_in_minutes: 2880
+    agents:
+      queue: linux-x86_64
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: zippy
+          args: [--scenario=DebeziumPostgres, --actions=1000000]
+
+  - id: zippy-kafka-parallel-insert
+    label: "Longer Zippy Kafka Parallel Insert"
+    timeout_in_minutes: 2880
+    agents:
+      queue: linux-x86_64-large
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: zippy
+          args: [--scenario=KafkaParallelInsert, --transaction-isolation=serializable, --actions=100000, --max-execution-time=8h]
+
+  - id: feature-benchmark-scale-plus-one
+    label: "Feature benchmark against 'latest' with --scale=+1"
+    timeout_in_minutes: 2880
+    agents:
+      queue: linux-x86_64-large
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: feature-benchmark
+          args: [--other-tag=latest, --scale=+1]
+
+  - id: sqlsmith-long
+    label: "Longer SQLsmith"
+    artifact_paths: junit_*.xml
+    timeout_in_minutes: 120
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sqlsmith
+          args: [--max-joins=2, --runtime=6000]
+
+  - id: sqlsmith-explain-long
+    label: "Longer SQLsmith explain"
+    artifact_paths: junit_*.xml
+    timeout_in_minutes: 120
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sqlsmith
+          args: [--max-joins=15, --explain-only, --runtime=6000]
+
+
+  - wait: ~
+    continue_on_failure: true
+
+  - id: analyze
+    label: Analyze tests
+    plugins:
+      - junit-annotate#v2.0.2:
+          artifacts: "*junit_*.xml"
+          job-uuid-file-pattern: _([^_]*).xml
+    priority: 1
+    agents:
+      queue: linux-x86_64

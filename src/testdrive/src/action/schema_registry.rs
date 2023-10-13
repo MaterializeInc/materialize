@@ -10,7 +10,6 @@
 use std::time::Duration;
 
 use anyhow::{bail, Context};
-
 use mz_ccsr::{SchemaReference, SchemaType};
 use mz_ore::retry::Retry;
 use mz_ore::str::StrExt;
@@ -21,7 +20,7 @@ use crate::parser::BuiltinCommand;
 
 pub async fn run_publish(
     mut cmd: BuiltinCommand,
-    state: &mut State,
+    state: &State,
 ) -> Result<ControlFlow, anyhow::Error> {
     // Parse arguments.
     let subject = cmd.args.string("subject")?;
@@ -66,7 +65,7 @@ pub async fn run_publish(
 
 pub async fn run_verify(
     mut cmd: BuiltinCommand,
-    state: &mut State,
+    state: &State,
 ) -> Result<ControlFlow, anyhow::Error> {
     // Parse arguments.
     let subject = cmd.args.string("subject")?;
@@ -106,7 +105,7 @@ pub async fn run_verify(
 
 pub async fn run_wait(
     mut cmd: BuiltinCommand,
-    state: &mut State,
+    state: &State,
 ) -> Result<ControlFlow, anyhow::Error> {
     // Parse arguments.
     let subject = cmd.args.string("subject")?;

@@ -15,8 +15,7 @@
 
 //! Formatting utilities.
 
-use std::fmt;
-use std::io;
+use std::{fmt, io};
 
 #[cfg(feature = "network")]
 use bytes::{BufMut, BytesMut};

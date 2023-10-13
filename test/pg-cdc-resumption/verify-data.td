@@ -12,5 +12,19 @@
 > SELECT COUNT(*) FROM t2;
 500000
 
-! SELECT * FROM to_be_altered;
-contains:altered
+# We can encounter different errors here:
+# - encounter an alter table error if the NOT NULL constraint dropped
+# - a NULL decoding failure if the NOT NULL constraint is re-instated
+#   after being dropped and MZ reboots.
+! SELECT * FROM alter_fail_drop_constraint;
+contains:Source error
+
+! SELECT * FROM alter_fail_drop_col;
+contains:has been altered
+
+# Ensure non-definite errors are cleared.
+> SELECT COUNT(*) = 0 FROM mz_internal.mz_source_statuses WHERE error LIKE '%Connection refused%';
+true
+
+! SELECT * FROM t0
+contains:unknown catalog item 't0'

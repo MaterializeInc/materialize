@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 from textwrap import dedent
-from typing import List
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
@@ -26,7 +25,7 @@ class RenameView(Check):
             )
         )
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(dedent(s))
             for s in [
@@ -37,6 +36,13 @@ class RenameView(Check):
                 > INSERT INTO rename_view_table VALUES (3,3);
                 """,
                 """
+                # When upgrading from old version without roles the views are
+                # owned by default_role, thus we have to change the owner
+                # before dropping them:
+                $[version>=4700] postgres-execute connection=postgres://mz_system:materialize@materialized:6877
+                ALTER VIEW rename_view_viewB2 OWNER TO materialize;
+                ALTER VIEW rename_view_viewA2 OWNER TO materialize;
+
                 > INSERT INTO rename_view_table VALUES (4,4);
                 > ALTER VIEW rename_view_viewB2 RENAME TO rename_view_viewB3;
                 > ALTER VIEW rename_view_viewA2 RENAME TO rename_view_viewA3;

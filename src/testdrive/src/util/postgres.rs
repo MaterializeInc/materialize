@@ -8,15 +8,16 @@
 // by the Apache License, Version 2.0.
 
 use std::str::FromStr;
+use std::time::Duration;
 
-use anyhow::{bail, Context};
+use anyhow::{anyhow, bail, Context};
+use mz_ore::retry::Retry;
+use mz_ore::task;
+use mz_tls_util::make_tls;
 use tokio::task::JoinHandle;
 use tokio_postgres::config::Host;
 use tokio_postgres::{Client, Config};
 use url::Url;
-
-use mz_ore::task;
-use mz_postgres_util::make_tls;
 
 /// Constructs a URL from PostgreSQL configuration parameters.
 ///
@@ -51,11 +52,17 @@ pub fn config_url(config: &Config) -> Result<Url, anyhow::Error> {
 
 pub async fn postgres_client(
     url: &str,
+    default_timeout: Duration,
 ) -> Result<(Client, JoinHandle<Result<(), tokio_postgres::Error>>), anyhow::Error> {
-    let tls = make_tls(&Config::from_str(url)?)?;
-    let (client, connection) = tokio_postgres::connect(url, tls)
-        .await
-        .context("connecting to postgres")?;
+    let (client, connection) = Retry::default()
+        .max_duration(default_timeout)
+        .retry_async_canceling(|_| async move {
+            let pgconfig = &mut Config::from_str(url)?;
+            pgconfig.connect_timeout(default_timeout);
+            let tls = make_tls(pgconfig)?;
+            pgconfig.connect(tls).await.map_err(|e| anyhow!(e))
+        })
+        .await?;
 
     println!("Connecting to PostgreSQL server at {}...", url);
     let handle = task::spawn(|| "postgres_client_task", connection);

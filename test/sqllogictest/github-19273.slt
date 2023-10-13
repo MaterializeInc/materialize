@@ -1,0 +1,85 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for #19273 and #19283.
+
+# The query from #19273.
+
+statement ok
+CREATE SOURCE tpch
+              FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.00001)
+              FOR ALL TABLES
+              WITH (SIZE = '1');
+
+statement ok
+select
+  subq_0."c2" as c0,
+  (select "id" from mz_internal.mz_records_per_dataflow limit 1 offset 62)
+     as c1,
+  subq_0."c2" as c2
+from
+  (select
+        ref_0."id" as c0,
+        ref_0."name" as c1,
+        (select "count" from mz_internal.mz_scheduling_parks_histogram_per_worker limit 1 offset 3)
+           as c2,
+        ref_0."name" as c3,
+        ref_0."records" as c4,
+        ref_0."batches" as c5
+      from
+        mz_internal.mz_dataflow_arrangement_sizes as ref_0
+      where pg_catalog.date(
+          CAST((select "updated_at" from mz_internal.mz_cluster_replica_statuses limit 1 offset 5)
+             as timestamptz)) < (select "o_orderdate" from public.orders limit 1 offset 1)
+      limit 140) as subq_0
+where subq_0."c5" > subq_0."c5"
+limit 21;
+
+# The query from #19283.
+
+statement ok
+CREATE TABLE t (a int, b int);
+
+statement ok
+select
+  96 as c0,
+  subq_0."c1" as c1
+from
+  (select
+        ref_0."name" as c0,
+        21 as c1
+      from
+        mz_internal.mz_dataflow_operator_dataflows as ref_0
+      where (select pg_catalog.count("batches") from mz_internal.mz_arrangement_sizes_per_worker)
+           = cast(coalesce((select "a" from public.t limit 1 offset 6)
+            ,
+          pg_catalog.pg_backend_pid()) as int4)) as subq_0
+where (subq_0."c1" <= subq_0."c1")
+  or (pg_catalog.mod(
+      CAST(cast(null as uint2) as uint2),
+      CAST(pg_catalog.mod(
+        CAST(pg_catalog.mod(
+          CAST(cast(nullif(cast(null as uint2),
+            cast(null as uint2)) as uint2) as uint2),
+          CAST(cast(nullif(cast(null as uint2),
+            cast(null as uint2)) as uint2) as uint2)) as uint2),
+        CAST(pg_catalog.mod(
+          CAST(case when (cast(null as uuid) <= (select "id" from mz_internal.mz_active_peeks limit 1 offset 1)
+                  )
+              or ((false)
+                and (subq_0."c1" is not NULL)) then cast(null as uint2) else cast(null as uint2) end
+             as uint2),
+          CAST(cast(null as uint2) as uint2)) as uint2)) as uint2)) <> cast(nullif(cast(nullif(cast(null as uint2),
+        pg_catalog.mod(
+          CAST(case when (select "count" from mz_internal.mz_compute_operator_durations_histogram limit 1 offset 6)
+                 > cast(null as numeric) then cast(null as uint2) else cast(null as uint2) end
+             as uint2),
+          CAST(cast(null as uint2) as uint2))) as uint2),
+      cast(null as uint2)) as uint2))
+limit 99;

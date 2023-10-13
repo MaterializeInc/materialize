@@ -7,8 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import Materialized, Postgres, TestCerts, Testdrive
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.test_certs import TestCerts
+from materialize.mzcompose.services.testdrive import Testdrive
 
 SERVICES = [
     Materialized(volumes_extra=["secrets:/share/secrets"]),
@@ -37,7 +40,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-certs", "cat", "/secrets/postgres.key", capture=True
     ).stdout
 
-    c.up("materialized", "test-certs", "testdrive", "postgres")
+    c.up("materialized", "test-certs", "postgres")
     c.run(
         "testdrive",
         f"--var=ssl-ca={ssl_ca}",
@@ -45,5 +48,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         f"--var=ssl-key={ssl_key}",
         f"--var=ssl-wrong-cert={ssl_wrong_cert}",
         f"--var=ssl-wrong-key={ssl_wrong_key}",
+        f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
         *args.filter,
     )

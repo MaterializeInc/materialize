@@ -15,6 +15,8 @@
 
 # Create a clean replica to inspect dataflow state on.
 
+> DROP CLUSTER IF EXISTS test
+
 > CREATE CLUSTER test REPLICAS (r1 (SIZE '1', INTROSPECTION INTERVAL '10ms'))
 > SET cluster = test
 > SELECT count(*) > 0 FROM mz_internal.mz_dataflow_operators
@@ -93,11 +95,11 @@ false
 true
 > SELECT mz_internal.mz_sleep(1)
 <null>
-> SELECT count(*) > 0 FROM mz_internal.mz_dataflow_operators
-false
+> SELECT count(*) FROM mz_internal.mz_dataflow_operators
+0
 > DROP MATERIALIZED VIEW q14
-> SELECT count(*) > 0 FROM mz_internal.mz_dataflow_operators
-false
+> SELECT count(*)  FROM mz_internal.mz_dataflow_operators
+0
 
 # Clean up.
 > DROP CLUSTER test CASCADE

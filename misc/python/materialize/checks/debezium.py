@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 from textwrap import dedent
-from typing import List
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
@@ -26,7 +25,7 @@ class DebeziumPostgres(Check):
 
                 $ http-request method=POST url=http://debezium:8083/connectors content-type=application/json
                 {
-                    "name": "psql-connector",
+                  "name": "psql-connector",
                   "config": {
                     "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
                     "database.hostname": "postgres",
@@ -43,15 +42,12 @@ class DebeziumPostgres(Check):
                     "database.history.kafka.bootstrap.servers": "kafka:9092",
                     "database.history.kafka.topic": "schema-changes.history",
                     "truncate.handling.mode": "include",
-                    "decimal.handling.mode": "precise"
+                    "decimal.handling.mode": "precise",
+                    "topic.prefix": "postgres"
                   }
                 }
 
                 $ schema-registry-wait subject=postgres.public.debezium_table-value
-
-                > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
-
-                > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
 
                 # UPSERT is requred due to https://github.com/MaterializeInc/materialize/issues/14211
                 > CREATE SOURCE debezium_source1
@@ -71,7 +67,7 @@ class DebeziumPostgres(Check):
             )
         )
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(dedent(s))
             for s in [
@@ -111,7 +107,7 @@ class DebeziumPostgres(Check):
                 BEGIN;
                 INSERT INTO debezium_table SELECT 'F', generate_series, 1, REPEAT('X', 16) FROM generate_series(1,1000);
                 UPDATE debezium_table SET f3 = f3 + 1;
-                COMMIT
+                COMMIT;
 
                 > CREATE MATERIALIZED VIEW debezium_view3 AS SELECT f1, f3, SUM(LENGTH(f4)) FROM debezium_source3 GROUP BY f1, f3;
                 """,

@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 from textwrap import dedent
-from typing import List
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
@@ -24,7 +23,7 @@ class TextByteaTypes(Check):
             )
         )
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(dedent(s))
             for s in [
@@ -34,6 +33,7 @@ class TextByteaTypes(Check):
                   FROM text_bytea_types_table
                   WHERE text_col >= ''::TEXT AND bytea_col >= ''::BYTEA;
 
+                > SET statement_timeout = '60s';
                 > INSERT INTO text_bytea_types_table SELECT DISTINCT text_col, bytea_col FROM text_bytea_types_table;
                 """,
                 """
@@ -42,6 +42,7 @@ class TextByteaTypes(Check):
                   FROM text_bytea_types_table
                   WHERE text_col >= ''::TEXT AND bytea_col >= ''::BYTEA;
 
+                > SET statement_timeout = '60s';
                 > INSERT INTO text_bytea_types_table SELECT DISTINCT text_col, bytea_col FROM text_bytea_types_table;
                 """,
             ]

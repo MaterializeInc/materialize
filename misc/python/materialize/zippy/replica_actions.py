@@ -8,9 +8,9 @@
 # by the Apache License, Version 2.0.
 
 import random
-from typing import List, Optional, Set, Type
+from textwrap import dedent
 
-from materialize.mzcompose import Composition
+from materialize.mzcompose.composition import Composition
 from materialize.zippy.framework import Action, Capabilities, Capability
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.replica_capabilities import ReplicaExists, ReplicaSizeType
@@ -20,18 +20,28 @@ class DropDefaultReplica(Action):
     """Drops the default replica."""
 
     @classmethod
-    def requires(self) -> Set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {MzIsRunning}
 
     def run(self, c: Composition) -> None:
-        c.testdrive("> DROP CLUSTER REPLICA default.r1;")
+        # Default cluster is not owned by materialize, thus can't be dropped by
+        # it if enable_rbac_checks is on.
+        c.testdrive(
+            dedent(
+                """
+            $ postgres-execute connection=postgres://mz_system:materialize@materialized:6877
+            ALTER CLUSTER default SET (MANAGED = false)
+            DROP CLUSTER REPLICA default.r1
+            """
+            )
+        )
 
 
 class CreateReplica(Action):
     """Creates a replica on the default cluster."""
 
     @classmethod
-    def requires(self) -> Set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {MzIsRunning}
 
     def __init__(self, capabilities: Capabilities) -> None:
@@ -75,21 +85,28 @@ class CreateReplica(Action):
 
     def run(self, c: Composition) -> None:
         if self.new_replica:
+            # Default cluster is not owned by materialize, thus can't have a replica
+            # added if enable_rbac_checks is on.
             c.testdrive(
-                f"> CREATE CLUSTER REPLICA default.{self.replica.name} SIZE '{self.replica.size}'"
+                dedent(
+                    f"""
+                $ postgres-execute connection=postgres://mz_system:materialize@materialized:6877
+                CREATE CLUSTER REPLICA default.{self.replica.name} SIZE '{self.replica.size}'
+                """
+                )
             )
 
-    def provides(self) -> List[Capability]:
+    def provides(self) -> list[Capability]:
         return [self.replica] if self.new_replica else []
 
 
 class DropReplica(Action):
     """Drops a replica from the default cluster."""
 
-    replica: Optional[ReplicaExists]
+    replica: ReplicaExists | None
 
     @classmethod
-    def requires(self) -> Set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {MzIsRunning, ReplicaExists}
 
     def __init__(self, capabilities: Capabilities) -> None:
@@ -105,4 +122,13 @@ class DropReplica(Action):
 
     def run(self, c: Composition) -> None:
         if self.replica is not None:
-            c.testdrive(f"> DROP CLUSTER REPLICA IF EXISTS default.{self.replica.name}")
+            # Default cluster is not owned by materialize, thus can't have a replica
+            # removed if enable_rbac_checks is on.
+            c.testdrive(
+                dedent(
+                    f"""
+                $ postgres-execute connection=postgres://mz_system:materialize@materialized:6877
+                DROP CLUSTER REPLICA IF EXISTS default.{self.replica.name}
+                """
+                )
+            )

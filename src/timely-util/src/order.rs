@@ -18,9 +18,11 @@
 use std::cmp::Ordering;
 use std::fmt;
 
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use timely::order::Product;
 use timely::progress::timestamp::{PathSummary, Refines, Timestamp};
+use timely::progress::Antichain;
 use timely::PartialOrder;
 
 /// A partially ordered timestamp that is partitioned by an arbitrary number of partitions
@@ -161,6 +163,7 @@ impl<P: Eq, T: PartialOrder> PartialOrder for Partitioned<P, T>
 where
     Interval<P>: PartialOrder,
 {
+    #[inline]
     fn less_equal(&self, other: &Self) -> bool {
         self.0.less_equal(&other.0)
     }
@@ -181,16 +184,19 @@ impl<P: Partition, T: Timestamp> Default for PartitionedSummary<P, T> {
 }
 
 impl<P: Partition, T: Timestamp> PartialOrder for PartitionedSummary<P, T> {
+    #[inline]
     fn less_equal(&self, other: &Self) -> bool {
         self.0.less_equal(&other.0)
     }
 }
 
 impl<P: Partition, T: Timestamp> PathSummary<Partitioned<P, T>> for PartitionedSummary<P, T> {
+    #[inline]
     fn results_in(&self, src: &Partitioned<P, T>) -> Option<Partitioned<P, T>> {
         self.0.results_in(&src.0).map(Partitioned)
     }
 
+    #[inline]
     fn followed_by(&self, other: &Self) -> Option<Self> {
         PathSummary::<Product<Interval<P>, T>>::followed_by(&self.0, &other.0)
             .map(PartitionedSummary)
@@ -222,6 +228,7 @@ pub enum Interval<P> {
 }
 
 impl<P: Ord + Eq> PartialOrder for Interval<P> {
+    #[inline]
     fn less_equal(&self, other: &Self) -> bool {
         use Interval::*;
         match (self, other) {
@@ -237,8 +244,10 @@ impl<P: Ord + Eq> PartialOrder for Interval<P> {
 }
 
 impl<P: Partition> PathSummary<Interval<P>> for Interval<P> {
+    #[inline]
     fn results_in(&self, src: &Interval<P>) -> Option<Interval<P>> {
         use std::cmp::{max, min};
+
         use Interval::*;
         match (self, src) {
             // A range followed by another range contraints the range
@@ -271,6 +280,7 @@ impl<P: Partition> PathSummary<Interval<P>> for Interval<P> {
         }
     }
 
+    #[inline]
     fn followed_by(&self, other: &Self) -> Option<Self> {
         self.results_in(other)
     }
@@ -279,12 +289,14 @@ impl<P: Partition> PathSummary<Interval<P>> for Interval<P> {
 impl<P: Partition> Timestamp for Interval<P> {
     type Summary = Interval<P>;
 
+    #[inline]
     fn minimum() -> Self {
         Self::default()
     }
 }
 
 impl<P> Default for Interval<P> {
+    #[inline]
     fn default() -> Self {
         Self::Range(RangeBound::Bottom, RangeBound::Top)
     }
@@ -302,6 +314,7 @@ pub enum RangeBound<P> {
 }
 
 impl<P: PartialEq> PartialEq<P> for RangeBound<P> {
+    #[inline]
     fn eq(&self, other: &P) -> bool {
         match self {
             RangeBound::Bottom => false,
@@ -312,6 +325,7 @@ impl<P: PartialEq> PartialEq<P> for RangeBound<P> {
 }
 
 impl<P: PartialOrd> PartialOrd<P> for RangeBound<P> {
+    #[inline]
     fn partial_cmp(&self, other: &P) -> Option<Ordering> {
         match self {
             RangeBound::Bottom => Some(Ordering::Less),
@@ -348,13 +362,40 @@ impl<P> Partition for P where
 {
 }
 
+/// A helper struct for reverse partial ordering.
+///
+/// This struct is a helper that can be used with `Antichain` when the maximum inclusive frontier
+/// needs to be maintained as opposed to the mininimum inclusive.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct Reverse<T>(pub T);
+
+impl<T: PartialOrder> PartialOrder for Reverse<T> {
+    #[inline]
+    fn less_equal(&self, other: &Self) -> bool {
+        PartialOrder::less_equal(&other.0, &self.0)
+    }
+}
+impl<T: PartialOrd> PartialOrd for Reverse<T> {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        other.0.partial_cmp(&self.0)
+    }
+}
+
+impl<T: Ord> Ord for Reverse<T> {
+    #[inline]
+    fn cmp(&self, other: &Self) -> Ordering {
+        other.0.cmp(&self.0)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use timely::progress::Antichain;
 
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn basic_properties() {
         let minimum: Partitioned<u64, u64> = Partitioned::minimum();
         assert_eq!(minimum, Partitioned::with_range(None, None, 0));
@@ -392,7 +433,7 @@ mod test {
         assert!(PartialOrder::less_equal(&upper, &upper));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn antichain_properties() {
         let mut frontier = Antichain::new();
 
@@ -430,7 +471,7 @@ mod test {
         assert!(!frontier.less_than(&Partitioned::with_range(Some(2), Some(6), 4)));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn summary_properties() {
         let summary1 = PartitionedSummary::with_range(Some(10), Some(100), 5);
         let summary2 = PartitionedSummary::with_range(Some(20), Some(30), 5);
@@ -526,4 +567,13 @@ mod test {
         // Different Point summaries result into nothing
         assert_eq!(part_summary1.results_in(&ts4), None);
     }
+}
+
+/// Refine an `Antichain<T>` into a `Antichain<Inner>`, using a `Refines`
+/// implementation (in the case of tuple-style timestamps, this usually
+/// means appending a minimum time).
+pub fn refine_antichain<T: Timestamp, Inner: Timestamp + Refines<T>>(
+    frontier: &Antichain<T>,
+) -> Antichain<Inner> {
+    Antichain::from_iter(frontier.iter().map(|t| Refines::to_inner(t.clone())))
 }

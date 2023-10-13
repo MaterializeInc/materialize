@@ -11,3 +11,7 @@ FROM ubuntu:jammy-20230126
 
 # Ensure any Rust binaries that crash print a backtrace.
 ENV RUST_BACKTRACE=1
+
+RUN sed -i -e 's#http://archive\.ubuntu\.com#http://us-east-1.ec2.archive.ubuntu.com#' \
+           -e 's#http://security\.ubuntu\.com#http://us-east-1.ec2.archive.ubuntu.com#' \
+           -e 's#http://ports\.ubuntu\.com#http://us-east-1.ec2.ports.ubuntu.com#' /etc/apt/sources.list

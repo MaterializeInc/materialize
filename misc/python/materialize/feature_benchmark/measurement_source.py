@@ -9,7 +9,7 @@
 
 import re
 import time
-from typing import Callable, List, Optional, Union
+from collections.abc import Callable
 
 from materialize.feature_benchmark.executor import Executor
 
@@ -18,12 +18,12 @@ Timestamp = float
 
 class MeasurementSource:
     def __init__(self) -> None:
-        self._executor: Optional[Executor] = None
+        self._executor: Executor | None = None
 
     def run(
         self,
-        executor: Optional[Executor] = None,
-    ) -> Union[None, Timestamp, List[Timestamp]]:
+        executor: Executor | None = None,
+    ) -> None | Timestamp | list[Timestamp]:
         assert False
 
 
@@ -43,16 +43,21 @@ class Td(MeasurementSource):
 
     def __init__(self, td_str: str) -> None:
         self._td_str = td_str
-        self._executor: Optional[Executor] = None
+        self._executor: Executor | None = None
 
     def run(
         self,
-        executor: Optional[Executor] = None,
-    ) -> List[Timestamp]:
-        assert not (executor is None and self._executor is None)
+        executor: Executor | None = None,
+    ) -> list[Timestamp]:
         assert not (executor is not None and self._executor is not None)
+        executor = executor or self._executor
+        assert executor
 
-        td_output = getattr((executor or self._executor), "Td")(self._td_str)
+        td_output = executor.Td(self._td_str)
+        # Print each query once so that it is easier to reproduce regressions
+        # based on just the logs from CI
+        if executor.add_known_fragment(self._td_str):
+            print(td_output)
 
         lines = td_output.splitlines()
         lines = [l for l in lines if l]
@@ -65,9 +70,7 @@ class Td(MeasurementSource):
 
         return timestamps
 
-    def _get_time_for_marker(
-        self, lines: List[str], marker: str
-    ) -> Union[None, Timestamp]:
+    def _get_time_for_marker(self, lines: list[str], marker: str) -> None | Timestamp:
         matched_line_id = None
         for id, line in enumerate(lines):
             if f"/* {marker} */" in line:
@@ -96,7 +99,7 @@ class Lambda(MeasurementSource):
 
     def run(
         self,
-        executor: Optional[Executor] = None,
+        executor: Executor | None = None,
     ) -> Timestamp:
         e = executor or self._executor
         assert e is not None

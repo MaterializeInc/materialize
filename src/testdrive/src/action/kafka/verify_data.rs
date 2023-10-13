@@ -7,10 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::cmp;
 use std::fmt::Debug;
-use std::str;
 use std::time::Duration;
+use std::{cmp, str};
 
 use anyhow::{anyhow, bail, ensure, Context};
 use itertools::Itertools;
@@ -42,11 +41,7 @@ struct Record<A> {
     value: Option<A>,
 }
 
-async fn get_topic(
-    sink: &str,
-    topic_field: &str,
-    state: &mut State,
-) -> Result<String, anyhow::Error> {
+async fn get_topic(sink: &str, topic_field: &str, state: &State) -> Result<String, anyhow::Error> {
     let query = format!(
         "SELECT {} FROM mz_sinks JOIN mz_kafka_sinks \
         ON mz_sinks.id = mz_kafka_sinks.id \
@@ -72,7 +67,7 @@ async fn get_topic(
 
 pub async fn run_verify_data(
     mut cmd: BuiltinCommand,
-    state: &mut State,
+    state: &State,
 ) -> Result<ControlFlow, anyhow::Error> {
     let format = match cmd.args.string("format")?.as_str() {
         "avro" => Format::Avro,

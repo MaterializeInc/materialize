@@ -22,29 +22,41 @@ from dbt.dataclass_schema import StrEnum
 from dbt.utils import classproperty
 
 
+# types in ./misc/dbt-materialize need to import generic types from typing
 class MaterializeRelationType(StrEnum):
     # Built-in materialization types.
     Table = "table"
     View = "view"
     CTE = "cte"
     External = "external"
+    MaterializedView = "materialized_view"
 
     # Materialize-specific materialization types.
     Source = "source"
-    MaterializedView = "materializedview"
-    Index = "index"
     Sink = "sink"
+    # NOTE(morsapaes): dbt supports materialized views as a built-in
+    # materialization since v1.6.0, so we deprecate the legacy materialization
+    # name but keep it around for backwards compatibility.
+    MaterializedViewLegacy = "materializedview"
 
 
 @dataclass(frozen=True, eq=False, repr=False)
 class MaterializeRelation(PostgresRelation):
     type: Optional[MaterializeRelationType] = None
 
-    # Materialize does not have a 63-character limit for relation
-    # names, unlike PostgreSQL (see dbt-core #2727)
+    # Materialize does not have a 63-character limit for relation names, unlike
+    # PostgreSQL (see dbt-core #2727). Instead, we set 255 as the maximum
+    # identifier length (see #20931).
     def relation_max_name_length(self):
-        return 16384
+        return 255
 
     @classproperty
     def get_relation_type(cls) -> Type[MaterializeRelationType]:
         return MaterializeRelationType
+
+    @property
+    def is_materialized_view(self) -> bool:
+        return self.type in [
+            MaterializeRelationType.MaterializedView,
+            MaterializeRelationType.MaterializedViewLegacy,
+        ]

@@ -7,11 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+// buf breaking: ignore (does currently not require backward-compatibility)
+
 syntax = "proto3";
 
 import "google/protobuf/empty.proto";
 import "repr/src/global_id.proto";
-import "storage-client/src/controller.proto";
 import "proto/src/proto.proto";
 
 package mz_compute_client.logging;
@@ -19,12 +20,6 @@ package mz_compute_client.logging;
 message ProtoIndexLog {
     ProtoLogVariant key = 1;
     mz_repr.global_id.ProtoGlobalId value = 2;
-}
-
-message ProtoSinkLog {
-    ProtoLogVariant key = 1;
-    mz_repr.global_id.ProtoGlobalId value_id = 2;
-    mz_storage_client.controller.ProtoCollectionMetadata value_meta = 3;
 }
 
 message ProtoTimelyLog {
@@ -38,6 +33,8 @@ message ProtoTimelyLog {
         google.protobuf.Empty messages_sent = 7;
         google.protobuf.Empty messages_received = 8;
         google.protobuf.Empty reachability = 9;
+        google.protobuf.Empty batches_sent = 10;
+        google.protobuf.Empty batches_received = 11;
     }
 }
 
@@ -52,12 +49,16 @@ message ProtoDifferentialLog {
 message ProtoComputeLog {
     oneof kind {
         google.protobuf.Empty dataflow_current = 1;
-        google.protobuf.Empty dataflow_dependency = 2;
         google.protobuf.Empty frontier_current = 3;
         google.protobuf.Empty peek_current = 4;
         google.protobuf.Empty peek_duration = 5;
         google.protobuf.Empty frontier_delay = 6;
         google.protobuf.Empty import_frontier_current = 7;
+        google.protobuf.Empty arrangement_heap_size = 8;
+        google.protobuf.Empty arrangement_heap_capacity = 9;
+        google.protobuf.Empty arrangement_heap_allocations = 10;
+        google.protobuf.Empty shutdown_duration = 11;
+        google.protobuf.Empty error_count = 12;
     }
 }
 message ProtoLogVariant {
@@ -73,5 +74,4 @@ message ProtoLoggingConfig {
     bool enable_logging = 2;
     bool log_logging = 3;
     repeated ProtoIndexLog index_logs = 4;
-    repeated ProtoSinkLog sink_logs = 5;
 }

@@ -21,13 +21,23 @@ CREATE VIEW v AS
 SELECT * FROM t WHERE a IS NOT NULL
 
 statement ok
-CREATE DEFAULT INDEX ON v
+CREATE INDEX v_a_idx ON v(a)
 
 statement ok
 CREATE MATERIALIZED VIEW mv AS
 SELECT * FROM t WHERE a IS NOT NULL
 
 mode cockroach
+
+# EXPLAIN INDEX is not supported for decorrelated plans
+statement error cannot EXPLAIN DECORRELATED PLAN FOR INDEX
+EXPLAIN DECORRELATED PLAN AS TEXT FOR
+INDEX v_a_idx
+
+# EXPLAIN CREATE INDEX is not supported for decorrelated plans
+statement error cannot EXPLAIN DECORRELATED PLAN FOR CREATE INDEX
+EXPLAIN DECORRELATED PLAN AS TEXT FOR
+CREATE INDEX v_a_idx ON v(a)
 
 # Test constant error.
 query T multiline
@@ -134,20 +144,6 @@ Threshold
           Constant
             - ()
           Get materialize.public.mv
-
-EOF
-
-# Test TopK.
-query T multiline
-EXPLAIN DECORRELATED PLAN AS TEXT FOR
-VIEW ov
-----
-Project (#0, #1)
-  TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5 monotonic=false
-    CrossJoin
-      Constant
-        - ()
-      Get materialize.public.t
 
 EOF
 
@@ -345,7 +341,7 @@ With
               Get l7
   cte l7 =
     Project (#0, #1)
-      TopK group_by=[#0] limit=1 monotonic=false
+      TopK group_by=[#0] limit=1
         Filter (#2 = #0)
           CrossJoin
             Get l6
@@ -366,7 +362,7 @@ With
               Get l3
   cte l3 =
     Project (#0, #1)
-      TopK group_by=[#0] limit=1 monotonic=false
+      TopK group_by=[#0] limit=1
         Filter (#2 = #0)
           CrossJoin
             Get l2
@@ -815,7 +811,7 @@ Explained Query:
     cte l0 =
       ArrangeBy keys=[[#0, #2..=#4, #6, #8, #9, #11..=#13, #15, #16]]
         Filter (#0) IS NOT NULL AND (#2) IS NOT NULL AND (#3) IS NOT NULL AND (#4) IS NOT NULL AND (#6) IS NOT NULL AND (#8) IS NOT NULL AND (#9) IS NOT NULL AND (#11) IS NOT NULL AND (#12) IS NOT NULL AND (#13) IS NOT NULL AND (#15) IS NOT NULL AND (#16) IS NOT NULL
-          Get materialize.public.r
+          ReadStorage materialize.public.r
 
 Source materialize.public.r
   filter=((#0) IS NOT NULL AND (#2) IS NOT NULL AND (#3) IS NOT NULL AND (#4) IS NOT NULL AND (#6) IS NOT NULL AND (#8) IS NOT NULL AND (#9) IS NOT NULL AND (#11) IS NOT NULL AND (#12) IS NOT NULL AND (#13) IS NOT NULL AND (#15) IS NOT NULL AND (#16) IS NOT NULL)

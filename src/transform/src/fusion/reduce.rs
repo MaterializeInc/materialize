@@ -8,9 +8,10 @@
 // by the Apache License, Version 2.0.
 
 //! Fuses reduce operators with parent operators if possible.
-use crate::{TransformArgs, TransformError};
 use mz_expr::visit::Visit;
 use mz_expr::{MirRelationExpr, MirScalarExpr};
+
+use crate::{TransformCtx, TransformError};
 
 /// Fuses reduce operators with parent operators if possible.
 #[derive(Debug)]
@@ -26,7 +27,7 @@ impl crate::Transform for Reduce {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
+        _: &mut TransformCtx,
     ) -> Result<(), TransformError> {
         let result = relation.try_visit_mut_pre(&mut |e| self.action(e));
         mz_repr::explain::trace_plan(&*relation);

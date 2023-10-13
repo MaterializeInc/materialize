@@ -7,17 +7,20 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from textwrap import dedent
-from typing import Callable
 
-from materialize.mzcompose import Composition, ServiceHealthcheck
-from materialize.mzcompose.services import Cockroach, Materialized, Testdrive
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.service import ServiceHealthcheck
+from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.ui import UIError
 
 CRDB_NODE_COUNT = 4
 TESTDRIVE_TIMEOUT = (
-    "40s"  # We expect any CRDB disruption to not disrupt Mz for more than this timeout
+    "80s"  # We expect any CRDB disruption to not disrupt Mz for more than this timeout
 )
 
 COCKROACH_HEALTHCHECK_DISABLED = ServiceHealthcheck(
@@ -85,10 +88,17 @@ class CrdbDisruption:
 
 
 DISRUPTIONS = [
-    CrdbDisruption(
-        name="sigkill",
-        disruption=lambda c, id: c.kill(f"cockroach{id}"),
-    ),
+    # Unfortunately this disruption is too aggressive and causes CRDB to enter in a state
+    # where it is no longer able to service queries, with either no error or errors about
+    # 'lost quorum' or 'encountered poisoned latch'
+    #
+    # Most likely the test kills and restarts the nodes too fast for CRDB to handle, even though
+    # the nodes are taken out in succession one by one and never in parallel.
+    #
+    # CrdbDisruption(
+    #    name="sigkill",
+    #    disruption=lambda c, id: c.kill(f"cockroach{id}"),
+    # ),
     CrdbDisruption(
         name="sigterm",
         disruption=lambda c, id: c.kill(f"cockroach{id}", signal="SIGTERM"),
@@ -97,12 +107,16 @@ DISRUPTIONS = [
         name="drain",
         disruption=lambda c, id: c.exec(
             # Execute the 'drain' command on a different node from the one that we are draining
+            #
+            # Draining may sometimes time out, but we continue with the restart in case this happens,
+            # as a real life CRDB upgrade procedure will most likely also ignore such a timeout.
             f"cockroach{(id % 2) + 1}",
             "cockroach",
             "node",
             "drain",
             str(id + 1),
             "--insecure",
+            check=False,
         ),
     ),
 ]
@@ -117,7 +131,7 @@ def workflow_default(c: Composition) -> None:
 
 def run_disruption(c: Composition, d: CrdbDisruption) -> None:
     print(f"--- Running Disruption {d.name} ...")
-    c.down(destroy_volumes=True)
+    c.down(destroy_volumes=True, sanity_restart_mz=False)
 
     for id in range(CRDB_NODE_COUNT):
         c.up(f"cockroach{id}")

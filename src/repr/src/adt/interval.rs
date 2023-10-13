@@ -774,7 +774,7 @@ impl fmt::Display for Interval {
 mod test {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn interval_fmt() {
         fn mon(mon: i32) -> String {
             Interval {
@@ -1019,7 +1019,7 @@ mod test {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_interval_value_truncate_low_fields() {
         use DateTimeField::*;
 
@@ -1133,7 +1133,7 @@ mod test {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_interval_value_truncate_high_fields() {
         use DateTimeField::*;
 
@@ -1226,7 +1226,7 @@ mod test {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_convert_date_time_unit() {
         assert_eq!(
             Some(1_123_200_000_000),

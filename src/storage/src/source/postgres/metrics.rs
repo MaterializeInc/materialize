@@ -7,10 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use prometheus::core::AtomicU64;
-
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use mz_repr::GlobalId;
+use prometheus::core::AtomicU64;
 
 use crate::source::metrics::SourceBaseMetrics;
 

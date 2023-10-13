@@ -13,11 +13,8 @@
 
 > SET cluster=cluster1;
 
-> SHOW CLUSTERS;
-mz_system
-mz_introspection
-default
-cluster1
+> SHOW CLUSTERS LIKE 'cluster1';
+cluster1 "replica1 (3xsmall), replica2 (3xsmall)"
 
 > SHOW CLUSTER REPLICAS WHERE cluster = 'cluster1';
 cluster1 replica1 3xsmall true
@@ -25,7 +22,7 @@ cluster1 replica2 3xsmall true
 
 > CREATE MATERIALIZED VIEW cluster_view1 AS SELECT COUNT(*) AS cnt FROM mz_tables;
 
+> CREATE DEFAULT INDEX ON cluster_view1;
+
 > SELECT cnt > 0 FROM cluster_view1;
 true
-
-> DROP CLUSTER cluster1 CASCADE;

@@ -10,8 +10,11 @@
 //! A source that reads from a persist shard.
 
 use std::any::Any;
+use std::collections::hash_map::DefaultHasher;
 use std::convert::Infallible;
 use std::fmt::Debug;
+use std::future::Future;
+use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
@@ -23,23 +26,23 @@ use futures::StreamExt;
 use futures_util::future::Either;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
-use mz_ore::vec::VecExt;
 use mz_persist_types::{Codec, Codec64};
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
-use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Feedback};
-use timely::dataflow::{Scope, ScopeParent, Stream};
+use timely::dataflow::channels::pact::Exchange;
+use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Enter, Feedback, Leave};
+use timely::dataflow::scopes::Child;
+use timely::dataflow::{Scope, Stream};
 use timely::order::TotalOrder;
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::{timestamp::Refines, Antichain, Timestamp};
+use timely::scheduling::Activator;
 use timely::PartialOrder;
 use tokio::sync::mpsc;
-use tracing::{info, trace};
+use tracing::{debug, trace};
 
-use crate::cache::PersistClientCache;
 use crate::fetch::{FetchedPart, SerdeLeasedBatchPart};
 use crate::read::ListenEvent;
-use crate::stats::{FetchAllPartFilter, PartFilter};
-use crate::{PersistLocation, ShardId};
+use crate::stats::PartStats;
+use crate::{Diagnostics, PersistClient, ShardId};
 
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.
@@ -63,25 +66,39 @@ use crate::{PersistLocation, ShardId};
 /// using [`timely::dataflow::operators::generic::operator::empty`].
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
-pub fn shard_source<K, V, D, G>(
-    scope: &mut G,
+pub fn shard_source<'g, K, V, T, D, F, DT, G, C>(
+    scope: &mut Child<'g, G, T>,
     name: &str,
-    clients: Arc<PersistClientCache>,
-    location: PersistLocation,
+    client: impl Fn() -> C,
     shard_id: ShardId,
     as_of: Option<Antichain<G::Timestamp>>,
     until: Antichain<G::Timestamp>,
-    flow_control: Option<FlowControl<G>>,
+    desc_transformer: Option<DT>,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
-) -> (Stream<G, FetchedPart<K, V, G::Timestamp, D>>, Rc<dyn Any>)
+    should_fetch_part: F,
+) -> (
+    Stream<Child<'g, G, T>, FetchedPart<K, V, G::Timestamp, D>>,
+    Rc<dyn Any>,
+)
 where
     K: Debug + Codec,
     V: Debug + Codec,
     D: Semigroup + Codec64 + Send + Sync,
+    F: FnMut(&PartStats) -> bool + 'static,
     G: Scope,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
     G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder,
+    T: Refines<G::Timestamp>,
+    DT: FnOnce(
+        Child<'g, G, T>,
+        &Stream<Child<'g, G, T>, (usize, SerdeLeasedBatchPart)>,
+        usize,
+    ) -> (
+        Stream<Child<'g, G, T>, (usize, SerdeLeasedBatchPart)>,
+        Rc<dyn Any>,
+    ),
+    C: Future<Output = PersistClient> + 'static,
 {
     // WARNING! If emulating any of this code, you should read the doc string on
     // [`LeasedBatchPart`] and [`Subscribe`] or will likely run into intentional
@@ -103,33 +120,42 @@ where
     // we can safely pass along a zero summary from this feedback edge,
     // as the input is disconnected from the operator's output
     let (completed_fetches_feedback_handle, completed_fetches_feedback_stream) =
-        scope.feedback(<<G as ScopeParent>::Timestamp as Timestamp>::Summary::default());
+        scope.feedback(T::Summary::default());
 
-    let filter = FetchAllPartFilter;
     let (descs, descs_token) = shard_source_descs::<K, V, D, _, G>(
-        scope,
+        &scope.parent,
         name,
-        Arc::clone(&clients),
-        location.clone(),
+        client(),
         shard_id.clone(),
         as_of,
         until,
-        flow_control,
-        completed_fetches_feedback_stream,
+        completed_fetches_feedback_stream.leave(),
         chosen_worker,
         Arc::clone(&key_schema),
         Arc::clone(&val_schema),
-        filter,
+        should_fetch_part,
     );
-    let (parts, completed_fetches_stream) = shard_source_fetch(
-        &descs, name, clients, location, shard_id, key_schema, val_schema,
-    );
+    let descs = descs.enter(scope);
+    let (descs, backpressure_token) = match desc_transformer {
+        Some(desc_transformer) => desc_transformer(scope.clone(), &descs, chosen_worker),
+        None => {
+            let token: Rc<dyn Any> = Rc::new(());
+            (descs, token)
+        }
+    };
+
+    let (parts, completed_fetches_stream, fetch_token) =
+        shard_source_fetch(&descs, name, client(), shard_id, key_schema, val_schema);
     completed_fetches_stream.connect_loop(completed_fetches_feedback_handle);
 
-    (parts, descs_token)
+    (
+        parts,
+        Rc::new((descs_token, fetch_token, backpressure_token)),
+    )
 }
 
 /// Flow control configuration.
+/// TODO(guswynn): move to `persist_source`
 #[derive(Debug)]
 pub struct FlowControl<G: Scope> {
     /// Stream providing in-flight frontier updates.
@@ -140,33 +166,45 @@ pub struct FlowControl<G: Scope> {
     pub progress_stream: Stream<G, Infallible>,
     /// Maximum number of in-flight bytes.
     pub max_inflight_bytes: usize,
+    /// TODO(guswynn): explain
+    pub summary: <G::Timestamp as Timestamp>::Summary,
+}
+
+#[derive(Debug)]
+struct ActivateOnDrop {
+    token_rx: tokio::sync::mpsc::Receiver<()>,
+    activator: Activator,
+}
+
+impl Drop for ActivateOnDrop {
+    fn drop(&mut self) {
+        self.token_rx.close();
+        self.activator.activate();
+    }
 }
 
 pub(crate) fn shard_source_descs<K, V, D, F, G>(
     scope: &G,
     name: &str,
-    clients: Arc<PersistClientCache>,
-    location: PersistLocation,
+    client: impl Future<Output = PersistClient> + 'static,
     shard_id: ShardId,
     as_of: Option<Antichain<G::Timestamp>>,
     until: Antichain<G::Timestamp>,
-    flow_control: Option<FlowControl<G>>,
     completed_fetches_stream: Stream<G, SerdeLeasedBatchPart>,
     chosen_worker: usize,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
-    mut filter: F,
+    mut should_fetch_part: F,
 ) -> (Stream<G, (usize, SerdeLeasedBatchPart)>, Rc<dyn Any>)
 where
     K: Debug + Codec,
     V: Debug + Codec,
     D: Semigroup + Codec64 + Send + Sync,
-    F: PartFilter<K, V>,
+    F: FnMut(&PartStats) -> bool + 'static,
     G: Scope,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
     G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder,
 {
-    let cfg = clients.cfg().clone();
     let worker_index = scope.index();
     let num_workers = scope.peers();
 
@@ -174,30 +212,10 @@ where
     // values that are `yield`-ed from it's body.
     let name_owned = name.to_owned();
 
-    let (flow_control_stream, flow_control_bytes) = match flow_control {
-        Some(fc) => (fc.progress_stream, Some(fc.max_inflight_bytes)),
-        None => (
-            timely::dataflow::operators::generic::operator::empty(scope),
-            None,
-        ),
-    };
-
     let mut builder =
         AsyncOperatorBuilder::new(format!("shard_source_descs({})", name), scope.clone());
     let (mut descs_output, descs_stream) = builder.new_output();
 
-    let mut flow_control_input = builder.new_input_connection(
-        &flow_control_stream,
-        Pipeline,
-        // Disconnect the flow_control_input from the output capabilities of the
-        // operator. We could leave it connected without risking deadlock so
-        // long as there is a non zero summary on the feedback edge. But it may
-        // be less efficient because the pipeline will be moving in increments
-        // of SUMMARY even though we have potentially dumped a lot more data in
-        // the pipeline because of batch boundaries. Leaving it unconnected
-        // means the pipeline will be able to retire bigger chunks of work.
-        vec![Antichain::new()],
-    );
     let mut completed_fetches = builder.new_input_connection(
         &completed_fetches_stream,
         // We must ensure all completed fetches are fed into
@@ -213,19 +231,20 @@ where
     // NB: It is not safe to use the shutdown button, due to the possibility
     // of the Subscribe handle's SeqNo hold releasing before `shard_source_fetch`
     // has completed fetches to each outstanding part. Instead, we create a
-    // channel that we pass along as a token. Dropping the Receiver informs this
+    // channel that we pass along as a token. Closing the Receiver informs this
     // operator that the dataflow is being shutdown, and allows for a graceful
     // termination where we wait for `shard_source_fetch` to complete all of
     // its fetches before expiring our Subscribe handle and its SeqNo hold.
+    // We wrap the token with `ActivateOnDrop` to ensure that the operator is
+    // activated after the Receiver is closed.
     let (token_tx, token_rx) = mpsc::channel::<()>(1);
+    let activate_on_drop = Rc::new(ActivateOnDrop {
+        activator: builder.activator().clone(),
+        token_rx,
+    });
+
     let _shutdown_button = builder.build(move |caps| async move {
         let mut cap_set = CapabilitySet::from_elem(caps.into_element());
-
-        let mut current_ts = timely::progress::Timestamp::minimum();
-        let mut inflight_bytes = 0;
-        let mut inflight_parts: Vec<(Antichain<G::Timestamp>, usize)> = Vec::new();
-
-        let max_inflight_bytes = flow_control_bytes.unwrap_or(usize::MAX);
 
         // Only one worker is responsible for distributing parts
         if worker_index != chosen_worker {
@@ -236,22 +255,77 @@ where
             return;
         }
 
-        let create_subscribe = async {
-            let client = clients
-                .open(location)
-                .await
-                .expect("location should be valid");
-            let read = client
+        let token_is_dropped = token_tx.closed();
+        tokio::pin!(token_is_dropped);
+
+        let create_read_handle = async {
+            let read = client.await
                 .open_leased_reader::<K, V, G::Timestamp, D>(
                     shard_id,
-                    &format!("shard_source({})", name_owned),
                     key_schema,
                     val_schema,
+                    Diagnostics {
+                        shard_name: name_owned.clone(),
+                        handle_purpose: format!("shard_source({})", name_owned),
+                    }
                 )
                 .await
                 .expect("could not open persist shard");
-            let as_of = as_of.unwrap_or_else(|| read.since().clone());
-            (read.subscribe(as_of.clone()).await, as_of)
+
+            read
+        };
+
+        tokio::pin!(create_read_handle);
+
+        // Creating a ReadHandle can take indefinitely long, so we race its creation with our token
+        // to ensure any async work is dropped once the token is dropped.
+        //
+        // NB: Reading from a channel (token_is_dropped) is cancel-safe. `create_read_handle` is NOT
+        // cancel-safe, but we will not retry it if it is dropped.
+        let read = match futures::future::select(token_is_dropped, create_read_handle).await {
+            Either::Left(_) => {
+                // The token dropped before we finished creating our `ReadHandle.
+                // We can return immediately, as we could not have emitted any
+                // parts to fetch.
+                cap_set.downgrade(&[]);
+                return;
+            }
+            Either::Right((read, _)) => {
+                read
+            }
+        };
+        let cfg = read.cfg.clone();
+        let metrics = Arc::clone(&read.metrics);
+
+        let as_of = as_of.unwrap_or_else(|| read.since().clone());
+
+
+        // Eagerly downgrade our frontier to the initial as_of. This makes sure
+        // that the output frontier of the `persist_source` closely tracks the
+        // `upper` frontier of the persist shard. It might be that the snapshot
+        // for `as_of` is not initially available yet, but this makes sure we
+        // already downgrade to it.
+        //
+        // Downstream consumers might rely on close frontier tracking for making
+        // progress. For example, the `persist_sink` needs to know the
+        // up-to-date upper of the output shard to make progress because it will
+        // only write out new data once it knows that earlier writes went
+        // through, including the initial downgrade of the shard upper to the
+        // `as_of`.
+        //
+        // NOTE: We have to do this before our `subscribe()` call (which
+        // internally calls `snapshot()` because that call will block when there
+        // is no data yet available in the shard.
+        cap_set.downgrade(as_of.clone());
+        let mut current_ts = match as_of.clone().into_option() {
+            Some(ts) => ts,
+            None => {
+                return;
+            }
+        };
+
+        let create_subscribe = async {
+            read.subscribe(as_of.clone()).await
         };
         tokio::pin!(create_subscribe);
         let token_is_dropped = token_tx.closed();
@@ -263,7 +337,7 @@ where
         //
         // NB: reading from a channel (token_is_dropped) is cancel-safe.
         //     create_subscribe is NOT cancel-safe, but we will not retry it if it is dropped.
-        let (subscription, as_of) = match futures::future::select(token_is_dropped, create_subscribe).await {
+        let subscription = match futures::future::select(token_is_dropped, create_subscribe).await {
             Either::Left(_) => {
                 // the token dropped before we finished creating our Subscribe.
                 // we can return immediately, as we could not have emitted any
@@ -271,8 +345,8 @@ where
                 cap_set.downgrade(&[]);
                 return;
             }
-            Either::Right(((subscription, as_of), _)) => {
-                (subscription, as_of)
+            Either::Right((subscription, _)) => {
+                subscription
             }
         };
 
@@ -287,19 +361,6 @@ where
         let mut lease_returner = subscription.lease_returner().clone();
         let (_keep_subscribe_alive_tx, keep_subscribe_alive_rx) = tokio::sync::oneshot::channel::<()>();
         let subscription_stream = async_stream::stream! {
-            // Eagerly yield the initial as_of. This makes sure that the output
-            // frontier of the `persist_source` closely tracks the `upper` frontier
-            // of the persist shard. It might be that the snapshot for `as_of` is
-            // not initially available yet, but this makes sure we already downgrade
-            // to it.
-            //
-            // Downstream consumers might rely on close frontier tracking for making
-            // progress. For example, the `persist_sink` needs to know the
-            // up-to-date upper of the output shard to make progress because it
-            // will only write out new data once it knows that earlier writes went
-            // through, including the initial downgrade of the shard upper to the
-            // `as_of`.
-            yield ListenEvent::Progress(as_of.clone());
 
             let mut done = false;
             while !done {
@@ -328,11 +389,6 @@ where
         loop {
             // Notes on this select!:
             //
-            // We have two mutually exclusive preconditions based on our flow
-            // control state to determine whether we emit new batch parts, vs
-            // applying flow control and waiting for downstream operators to
-            // complete their work.
-            //
             // We use a `biased` select, not for correctness, but to minimize
             // the work we need to do (e.g. check if the dataflow has been
             // dropped before reading more data from CRDB).
@@ -352,76 +408,77 @@ where
                 // to advance our SeqNo hold as we continue to emit batches.
                 //
                 // NB: AsyncInputHandle::next is cancel safe
-                Some(completed_fetch) = completed_fetches.next_mut() => {
+                completed_fetch = completed_fetches.next_mut() => {
                     match completed_fetch {
-                        Event::Data(_cap, data) => {
+                        Some(Event::Data(_cap, data)) => {
                             for part in data.drain(..) {
                                 lease_returner.return_leased_part(lease_returner.leased_part_from_exchangeable::<G::Timestamp>(part));
                             }
                         }
-                        Event::Progress(frontier) => {
+                        Some(Event::Progress(frontier)) => {
                             if frontier.is_empty() {
                                 return;
                             }
                         }
+                        None => {
+                            // the downstream operator has been dropped, nothing more to do
+                            return;
+                        }
                     }
                 }
-                // While we have budget left for fetching more parts, read from the
-                // subscription and pass them on.
+                // Read from the subscription and pass them on.
                 //
                 // NB: StreamExt::next is cancel safe
-                event = subscription_stream.next(), if inflight_bytes < max_inflight_bytes => {
+                event = subscription_stream.next() => {
                     match event {
                         Some(ListenEvent::Updates(mut parts)) => {
                             batch_parts.append(&mut parts);
                         }
                         Some(ListenEvent::Progress(progress)) => {
+                            // Emit the part at the `(ts, 0)` time. The `granular_backpressure`
+                            // operator will refine this further, if its enabled.
                             let session_cap = cap_set.delayed(&current_ts);
 
-                            // NB: in order to play nice with downstream operators whose invariants
-                            // depend on seeing the full contents of an individual batch, we must
-                            // atomically emit all parts here (e.g. no awaits).
-                            let bytes_emitted = {
-                                let mut bytes_emitted = 0;
-                                for part_desc in std::mem::take(&mut batch_parts) {
-                                    // TODO(mfp): Push the filter down into the Subscribe?
-                                    if cfg.dynamic.stats_filter_enabled() {
-                                        let should_fetch = part_desc.stats.as_ref().map_or(true, |stats| filter.should_fetch(stats));
-                                        if !should_fetch {
-                                            // TODO(mfp): Downgrade this to debug! at some point.
-                                            info!("skipping part because of stats filter {:?}", part_desc.stats);
+                            for mut part_desc in std::mem::take(&mut batch_parts) {
+                                // TODO: Push the filter down into the Subscribe?
+                                if cfg.dynamic.stats_filter_enabled() {
+                                    let should_fetch = part_desc.stats.as_ref().map_or(true, |stats| {
+                                        should_fetch_part(&stats.decode())
+                                    });
+                                    let bytes = u64::cast_from(part_desc.encoded_size_bytes);
+                                    if should_fetch {
+                                        metrics.pushdown.parts_fetched_count.inc();
+                                        metrics.pushdown.parts_fetched_bytes.inc_by(bytes);
+                                    } else {
+                                        metrics.pushdown.parts_filtered_count.inc();
+                                        metrics.pushdown.parts_filtered_bytes.inc_by(bytes);
+                                        let should_audit = {
+                                            let mut h = DefaultHasher::new();
+                                            part_desc.key.hash(&mut h);
+                                            usize::cast_from(h.finish()) % 100 < cfg.dynamic.stats_audit_percent()
+                                        };
+                                        if should_audit {
+                                            metrics.pushdown.parts_audited_count.inc();
+                                            metrics.pushdown.parts_audited_bytes.inc_by(bytes);
+                                            part_desc.request_filter_pushdown_audit();
+                                        } else {
+                                            debug!("skipping part because of stats filter {:?}", part_desc.stats);
                                             lease_returner.return_leased_part(part_desc);
                                             continue;
                                         }
                                     }
-
-                                    bytes_emitted += part_desc.encoded_size_bytes();
-                                    // Give the part to a random worker. This isn't
-                                    // round robin in an attempt to avoid skew issues:
-                                    // if your parts alternate size large, small, then
-                                    // you'll end up only using half of your workers.
-                                    //
-                                    // There's certainly some other things we could be
-                                    // doing instead here, but this has seemed to work
-                                    // okay so far. Continue to revisit as necessary.
-                                    let worker_idx = usize::cast_from(Instant::now().hashed()) % num_workers;
-                                    descs_output.give(&session_cap, (worker_idx, part_desc.into_exchangeable_part())).await;
                                 }
-                                bytes_emitted
-                            };
 
-                            // Only track in-flight parts if flow control is enabled. Otherwise we
-                            // would leak memory, as tracked parts would never be drained.
-                            if flow_control_bytes.is_some() && bytes_emitted > 0 {
-                                inflight_parts.push((progress.clone(), bytes_emitted));
-                                inflight_bytes += bytes_emitted;
-                                trace!(
-                                    "shard {} putting {} bytes inflight. total: {}. batch frontier {:?}",
-                                    shard_id,
-                                    bytes_emitted,
-                                    inflight_bytes,
-                                    progress,
-                                );
+                                // Give the part to a random worker. This isn't
+                                // round robin in an attempt to avoid skew issues:
+                                // if your parts alternate size large, small, then
+                                // you'll end up only using half of your workers.
+                                //
+                                // There's certainly some other things we could be
+                                // doing instead here, but this has seemed to work
+                                // okay so far. Continue to revisit as necessary.
+                                let worker_idx = usize::cast_from(Instant::now().hashed()) % num_workers;
+                                descs_output.give(&session_cap, (worker_idx, part_desc.into_exchangeable_part())).await;
                             }
 
                             cap_set.downgrade(progress.iter());
@@ -442,44 +499,6 @@ where
                             break 'emitting_parts;
                         }
                     }
-                }
-                // We've exhausted our budget, listen for updates to the flow_control
-                // input's frontier until we free up new budget. Progress ChangeBatches
-                // are consumed even if you don't interact with the handle, so even if
-                // we never make it to this block (e.g. budget of usize::MAX), because
-                // the stream has no data, we don't cause unbounded buffering in timely.
-                //
-                // NB: AsyncInputHandle::next is cancel safe
-                flow_control_upper = flow_control_input.next(), if inflight_bytes >= max_inflight_bytes => {
-                    // We can never get here when flow control is disabled, as we are not tracking
-                    // in-flight bytes in this case.
-                    assert!(flow_control_bytes.is_some());
-
-                    // Get an upper bound until which we should produce data
-                    let flow_control_upper = match flow_control_upper {
-                        Some(Event::Progress(frontier)) => frontier,
-                        Some(Event::Data(_, _)) => unreachable!("flow_control_input should not contain data"),
-                        None => Antichain::new(),
-                    };
-
-                    let retired_parts = inflight_parts.drain_filter_swapping(|(upper, _size)| {
-                        PartialOrder::less_equal(&*upper, &flow_control_upper)
-                    });
-
-                    for (_upper, size_in_bytes) in retired_parts {
-                        inflight_bytes -= size_in_bytes;
-                        trace!(
-                            "shard {} returning {} bytes. total: {}. batch frontier {:?} less_equal to {:?}",
-                            shard_id,
-                            size_in_bytes,
-                            inflight_bytes,
-                            _upper,
-                            flow_control_upper,
-                        );
-                    }
-                }
-                else => {
-                    break 'emitting_parts;
                 }
             }
         }
@@ -506,27 +525,28 @@ where
         }
     });
 
-    (descs_stream, Rc::new(token_rx))
+    (descs_stream, activate_on_drop)
 }
 
 pub(crate) fn shard_source_fetch<K, V, T, D, G>(
     descs: &Stream<G, (usize, SerdeLeasedBatchPart)>,
     name: &str,
-    clients: Arc<PersistClientCache>,
-    location: PersistLocation,
+    client: impl Future<Output = PersistClient> + 'static,
     shard_id: ShardId,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
 ) -> (
     Stream<G, FetchedPart<K, V, T, D>>,
     Stream<G, SerdeLeasedBatchPart>,
+    Rc<dyn Any>,
 )
 where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
-    G: Scope<Timestamp = T>,
+    G: Scope,
+    G::Timestamp: Refines<T>,
 {
     let mut builder =
         AsyncOperatorBuilder::new(format!("shard_source_fetch({})", name), descs.scope());
@@ -536,30 +556,21 @@ where
     );
     let (mut fetched_output, fetched_stream) = builder.new_output();
     let (mut completed_fetches_output, completed_fetches_stream) = builder.new_output();
+    let name_owned = name.to_owned();
 
-    // NB: we intentionally do _not_ pass along the shutdown button here so that
-    // we can be assured we always emit the full contents of a batch. If we used
-    // the shutdown token, on Drop, it is possible we'd only partially emit the
-    // contents of a batch which could lead to downstream operators seeing records
-    // and collections that never existed, which may break their invariants.
-    //
-    // The downside of this approach is that we may be left doing (considerable)
-    // work if the dataflow is dropped but we have a large numbers of parts left
-    // in the batch to fetch and yield.
-    //
-    // This also means that a pre-requisite to this operator is for the input to
-    // atomically provide the parts for each batch.
-    //
-    // Note that this requirement would not be necessary if we were emitting
-    // fully consolidated data: https://github.com/MaterializeInc/materialize/issues/16860#issuecomment-1366094925
-    let _shutdown_button = builder.build(move |_capabilities| async move {
+    let shutdown_button = builder.build(move |_capabilities| async move {
         let fetcher = {
-            let client = clients
-                .open(location.clone())
-                .await
-                .expect("location should be valid");
             client
-                .create_batch_fetcher::<K, V, T, D>(shard_id, key_schema, val_schema)
+                .await
+                .create_batch_fetcher::<K, V, T, D>(
+                    shard_id,
+                    key_schema,
+                    val_schema,
+                    Diagnostics {
+                        shard_name: name_owned.clone(),
+                        handle_purpose: format!("shard_source_fetch batch fetcher {}", name_owned),
+                    },
+                )
                 .await
         };
 
@@ -588,5 +599,177 @@ where
         }
     });
 
-    (fetched_stream, completed_fetches_stream)
+    (
+        fetched_stream,
+        completed_fetches_stream,
+        Rc::new(shutdown_button.press_on_drop()),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    use timely::dataflow::operators::Leave;
+    use timely::dataflow::operators::Probe;
+    use timely::dataflow::Scope;
+    use timely::progress::Antichain;
+
+    use crate::operators::shard_source::shard_source;
+    use crate::{Diagnostics, ShardId};
+
+    /// Verifies that a `shard_source` will downgrade it's output frontier to
+    /// the `since` of the shard when no explicit `as_of` is given. Even if
+    /// there is no data/no snapshot available in the
+    /// shard.
+    ///
+    /// NOTE: This test is weird: if everything is good it will pass. If we
+    /// break the assumption that we test this will time out and we will notice.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn test_shard_source_implicit_initial_as_of() {
+        let persist_client = PersistClient::new_for_tests().await;
+
+        let expected_frontier = 42;
+        let shard_id = ShardId::new();
+
+        initialize_shard(
+            &persist_client,
+            shard_id,
+            Antichain::from_elem(expected_frontier),
+        )
+        .await;
+
+        let res = timely::execute::execute_directly(move |worker| {
+            let until = Antichain::new();
+
+            let (probe, _token) = worker.dataflow::<u64, _, _>(|scope| {
+                let (stream, token) = scope.scoped::<u64, _, _>("hybrid", |scope| {
+                    let transformer = move |_, descs: &Stream<_, _>, _| {
+                        let token: Rc<dyn Any> = Rc::new(());
+                        (descs.clone(), token)
+                    };
+                    let (stream, token) = shard_source::<String, String, u64, u64, _, _, _, _>(
+                        scope,
+                        "test_source",
+                        move || std::future::ready(persist_client.clone()),
+                        shard_id,
+                        None, // No explicit as_of!
+                        until,
+                        Some(transformer),
+                        Arc::new(
+                            <std::string::String as mz_persist_types::Codec>::Schema::default(),
+                        ),
+                        Arc::new(
+                            <std::string::String as mz_persist_types::Codec>::Schema::default(),
+                        ),
+                        |_fetch| true,
+                    );
+                    (stream.leave(), token)
+                });
+
+                let probe = stream.probe();
+
+                (probe, token)
+            });
+
+            while probe.less_than(&expected_frontier) {
+                worker.step();
+            }
+
+            let mut probe_frontier = Antichain::new();
+            probe.with_frontier(|f| probe_frontier.extend(f.iter().cloned()));
+
+            probe_frontier
+        });
+
+        assert_eq!(res, Antichain::from_elem(expected_frontier));
+    }
+
+    /// Verifies that a `shard_source` will downgrade it's output frontier to
+    /// the given `as_of`. Even if there is no data/no snapshot available in the
+    /// shard.
+    ///
+    /// NOTE: This test is weird: if everything is good it will pass. If we
+    /// break the assumption that we test this will time out and we will notice.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn test_shard_source_explicit_initial_as_of() {
+        let persist_client = PersistClient::new_for_tests().await;
+
+        let expected_frontier = 42;
+        let shard_id = ShardId::new();
+
+        initialize_shard(
+            &persist_client,
+            shard_id,
+            Antichain::from_elem(expected_frontier),
+        )
+        .await;
+
+        let res = timely::execute::execute_directly(move |worker| {
+            let as_of = Antichain::from_elem(expected_frontier);
+            let until = Antichain::new();
+
+            let (probe, _token) = worker.dataflow::<u64, _, _>(|scope| {
+                let (stream, token) = scope.scoped::<u64, _, _>("hybrid", |scope| {
+                    let transformer = move |_, descs: &Stream<_, _>, _| {
+                        let token: Rc<dyn Any> = Rc::new(());
+                        (descs.clone(), token)
+                    };
+                    let (stream, token) = shard_source::<String, String, u64, u64, _, _, _, _>(
+                        scope,
+                        "test_source",
+                        move || std::future::ready(persist_client.clone()),
+                        shard_id,
+                        Some(as_of), // We specify the as_of explicitly!
+                        until,
+                        Some(transformer),
+                        Arc::new(
+                            <std::string::String as mz_persist_types::Codec>::Schema::default(),
+                        ),
+                        Arc::new(
+                            <std::string::String as mz_persist_types::Codec>::Schema::default(),
+                        ),
+                        |_fetch| true,
+                    );
+                    (stream.leave(), token)
+                });
+
+                let probe = stream.probe();
+
+                (probe, token)
+            });
+
+            while probe.less_than(&expected_frontier) {
+                worker.step();
+            }
+
+            let mut probe_frontier = Antichain::new();
+            probe.with_frontier(|f| probe_frontier.extend(f.iter().cloned()));
+
+            probe_frontier
+        });
+
+        assert_eq!(res, Antichain::from_elem(expected_frontier));
+    }
+
+    async fn initialize_shard(
+        persist_client: &PersistClient,
+        shard_id: ShardId,
+        since: Antichain<u64>,
+    ) {
+        let mut read_handle = persist_client
+            .open_leased_reader::<String, String, u64, u64>(
+                shard_id,
+                Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
+                Arc::new(<std::string::String as mz_persist_types::Codec>::Schema::default()),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("invalid usage");
+
+        read_handle.downgrade_since(&since).await;
+    }
 }

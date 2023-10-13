@@ -8,6 +8,7 @@ _shtab_scratch_commands() {
     "completion:Generate shell completion script"
     "create:Create a new scratch instance"
     "destroy:Destroy a scratch instance"
+    "forward:Forward local ports remotely"
     "login:Log in to AWS SSO"
     "mine:Show active scratch instance"
     "push:Push current HEAD (or a specific git commit) to scratch instance"
@@ -46,6 +47,12 @@ _shtab_scratch_destroy_options=(
   {-y,--yes}"[Don\'t ask for confirmation before destroying]"
   "--output-format[]:output_format:(table csv)"
   "(*)::Instance IDs to destroy:"
+)
+
+_shtab_scratch_forward_options=(
+  "(- : *)"{-h,--help}"[show this help message and exit]"
+  ":The ID of the instance to connect to:"
+  "(*)::The remote ports to forward locally:"
 )
 
 _shtab_scratch_login_options=(
@@ -94,6 +101,7 @@ _shtab_scratch() {
         completion) _arguments -C $_shtab_scratch_completion_options ;;
         create) _arguments -C $_shtab_scratch_create_options ;;
         destroy) _arguments -C $_shtab_scratch_destroy_options ;;
+        forward) _arguments -C $_shtab_scratch_forward_options ;;
         login) _arguments -C $_shtab_scratch_login_options ;;
         mine) _arguments -C $_shtab_scratch_mine_options ;;
         push) _arguments -C $_shtab_scratch_push_options ;;

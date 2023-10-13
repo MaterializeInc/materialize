@@ -8,7 +8,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.66"
-async-trait = "0.1.59"
+async-trait = "0.1.68"
 bytesize = "1.1.0"
 chrono = { version = "0.4.23", default_features = false, features = ["serde"] }
 derivative = "2.2.0"
@@ -20,7 +20,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [build-dependencies]
 protobuf-src = "1.1.0"
-tonic-build = "0.8.0"
+tonic-build = "0.9.2"
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

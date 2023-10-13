@@ -24,9 +24,9 @@ use crate::{ProfStartTime, StackProfile};
 
 cfg_if! {
     if #[cfg(any(target_os = "macos", not(feature = "jemalloc"), miri))] {
-        use disabled::{handle_get, handle_post};
+        use disabled::{handle_get, handle_post, handle_get_heap};
     } else {
-        use enabled::{handle_get, handle_post};
+        use enabled::{handle_get, handle_post, handle_get_heap};
     }
 }
 
@@ -58,6 +58,7 @@ pub fn router(build_info: &'static BuildInfo) -> Router {
             "/",
             routing::post(move |form| handle_post(form, build_info)),
         )
+        .route("/heap", routing::get(handle_get_heap))
         .route("/static/*path", routing::get(handle_static))
 }
 
@@ -84,7 +85,7 @@ pub struct FlamegraphTemplate<'a> {
     pub mzfg: &'a str,
 }
 
-#[allow(clippy::drop_copy)]
+#[allow(dropping_copy_types)]
 async fn time_prof<'a>(
     merge_threads: bool,
     build_info: &BuildInfo,
@@ -157,12 +158,12 @@ mod disabled {
     use axum::response::IntoResponse;
     use http::header::HeaderMap;
     use http::StatusCode;
+    use mz_build_info::BuildInfo;
     use serde::Deserialize;
 
-    use mz_build_info::BuildInfo;
+    use crate::ever_symbolicated;
 
     use super::{time_prof, MemProfilingStatus, ProfTemplate};
-    use crate::ever_symbolicated;
 
     #[derive(Deserialize)]
     pub struct ProfQuery {
@@ -224,6 +225,14 @@ mod disabled {
             )),
         }
     }
+
+    #[allow(clippy::unused_async)]
+    pub async fn handle_get_heap() -> Result<(), (StatusCode, String)> {
+        Err((
+            StatusCode::BAD_REQUEST,
+            "This software was compiled without heap profiling support.".to_string(),
+        ))
+    }
 }
 
 #[cfg(all(not(target_os = "macos"), feature = "jemalloc", not(miri)))]
@@ -238,6 +247,8 @@ mod enabled {
     use headers::ContentType;
     use http::header::{HeaderMap, CONTENT_DISPOSITION};
     use http::{HeaderValue, StatusCode};
+    use mz_build_info::BuildInfo;
+    use mz_ore::cast::CastFrom;
     use serde::Deserialize;
     use tokio::sync::Mutex;
 
@@ -245,8 +256,6 @@ mod enabled {
     use crate::jemalloc::{parse_jeheap, JemallocProfCtl, JemallocStats, PROF_CTL};
 
     use super::{flamegraph, time_prof, MemProfilingStatus, ProfTemplate};
-    use mz_build_info::BuildInfo;
-    use mz_ore::cast::CastFrom;
 
     #[derive(Deserialize)]
     pub struct ProfForm {
@@ -312,6 +321,7 @@ mod enabled {
             }
             "dump_jeheap" => {
                 let mut borrow = prof_ctl.lock().await;
+                require_profiling_activated(&borrow)?;
                 let mut f = borrow
                     .dump()
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -329,6 +339,7 @@ mod enabled {
             }
             "dump_sym_mzfg" => {
                 let mut borrow = prof_ctl.lock().await;
+                require_profiling_activated(&borrow)?;
                 let f = borrow
                     .dump()
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -356,6 +367,7 @@ mod enabled {
             }
             "mem_fg" => {
                 let mut borrow = prof_ctl.lock().await;
+                require_profiling_activated(&borrow)?;
                 let f = borrow
                     .dump()
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -433,6 +445,19 @@ mod enabled {
         }
     }
 
+    pub async fn handle_get_heap() -> Result<impl IntoResponse, (StatusCode, String)> {
+        let mut prof_ctl = PROF_CTL.as_ref().unwrap().lock().await;
+        require_profiling_activated(&prof_ctl)?;
+        let dump_file = prof_ctl
+            .dump()
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+        let dump_reader = BufReader::new(dump_file);
+        let profile = parse_jeheap(dump_reader)
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+        let pprof = profile.to_pprof(("inuse_space", "bytes"), ("space", "bytes"), None);
+        Ok(pprof)
+    }
+
     async fn render_template(
         prof_ctl: &Arc<Mutex<JemallocProfCtl>>,
         build_info: &'static BuildInfo,
@@ -444,5 +469,14 @@ mod enabled {
             mem_prof: MemProfilingStatus::Enabled(prof_md.start_time),
             ever_symbolicated: ever_symbolicated(),
         })
+    }
+
+    /// Checks whether jemalloc profiling is activated an returns an error response if not.
+    fn require_profiling_activated(prof_ctl: &JemallocProfCtl) -> Result<(), (StatusCode, String)> {
+        if prof_ctl.activated() {
+            Ok(())
+        } else {
+            Err((StatusCode::FORBIDDEN, "heap profiling not activated".into()))
+        }
     }
 }

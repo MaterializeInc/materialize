@@ -13,9 +13,11 @@ use std::fmt;
 
 use mz_ore::str::{Indent, IndentLike};
 
+use crate::explain::{
+    CompactScalarSeq, ExprHumanizer, IndexUsageType, Indices, ScalarOps, UnsupportedFormat,
+    UsedIndexes,
+};
 use crate::Row;
-
-use super::{CompactScalarSeq, ExprHumanizer, Indices, ScalarOps, UnsupportedFormat, UsedIndexes};
 
 /// A trait implemented by explanation types that can be rendered as
 /// [`super::ExplainFormat::Text`].
@@ -70,12 +72,13 @@ where
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
         writeln!(f, "{}Used Indexes:", ctx.as_mut())?;
         *ctx.as_mut() += 1;
-        for id in &self.0 {
-            let index_name = ctx
-                .as_ref()
-                .humanize_id(*id)
-                .unwrap_or_else(|| id.to_string());
-            writeln!(f, "{}- {}", ctx.as_mut(), index_name)?;
+        for (id, usage_types) in &self.0 {
+            let usage_types = IndexUsageType::display_vec(usage_types);
+            if let Some(name) = ctx.as_ref().humanize_id(*id) {
+                writeln!(f, "{}- {} ({})", ctx.as_mut(), name, usage_types)?;
+            } else {
+                writeln!(f, "{}- [DELETED INDEX] ({})", ctx.as_mut(), usage_types)?;
+            }
         }
         *ctx.as_mut() -= 1;
         Ok(())
@@ -189,7 +192,7 @@ pub fn text_string_at<'a, T: DisplayText<C>, C, F: Fn() -> C>(t: &'a T, f: F) ->
 fn write_first_rows(
     f: &mut fmt::Formatter<'_>,
     first_rows: &Vec<(&Row, &crate::Diff)>,
-    ctx: &mut Indent,
+    ctx: &Indent,
 ) -> fmt::Result {
     for (row, diff) in first_rows {
         if **diff == 1 {

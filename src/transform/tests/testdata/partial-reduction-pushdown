@@ -15,7 +15,7 @@
 # decided that we need to spend more time on formalizing the proposed
 # approach, to ensure it is actually correct. Until we have done so,
 # the tests here only exercise the non-partial reduction pushdown
-# optimizationand are mostly equivalent to the tests in
+# optimization and are mostly equivalent to the tests in
 # `reduction-pushdown`.
 
 cat

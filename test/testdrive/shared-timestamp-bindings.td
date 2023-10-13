@@ -7,6 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_create_source_denylist_with_options = true
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET min_timestamp_interval = '90ms'
+
 #
 # Make sure that all materialized views dealing with the same source
 # see the same records at the same timestamp.
@@ -156,5 +162,5 @@ $ kafka-ingest format=avro topic=data partition=15 schema=${schema}
 # In case the environment has other replicas
 > SET cluster_replica = r1
 
-> SELECT COUNT(*) FROM mz_internal.mz_records_per_dataflow_global WHERE name LIKE '%check_v%' AND records > 0;
+> SELECT COUNT(*) FROM mz_internal.mz_records_per_dataflow WHERE name LIKE '%check_v%' AND records > 0;
 0

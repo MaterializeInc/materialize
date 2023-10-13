@@ -10,15 +10,13 @@ from textwrap import dedent
 
 import pg8000.exceptions
 
-from materialize.mzcompose import Composition
-from materialize.mzcompose.services import (
-    Cockroach,
-    Kafka,
-    Materialized,
-    SchemaRegistry,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 testdrive_no_reset = Testdrive(name="testdrive_no_reset", no_reset=True)
 
@@ -177,6 +175,10 @@ def workflow_stash(c: Composition) -> None:
             if str(e) != "network error":
                 raise e
 
+        # No implicit restart as sanity check here, will panic:
+        # https://github.com/MaterializeInc/materialize/issues/20510
+        c.down(sanity_restart_mz=False)
+
 
 def workflow_storage_managed_collections(c: Composition) -> None:
     c.up("materialized")
@@ -281,6 +283,119 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
             """
             > SHOW allowed_cluster_replica_sizes
             "\\"1\\", \\"2\\""
+
+            $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+
+            # Reset for following tests
+            $ postgres-execute connection=mz_system
+            ALTER SYSTEM RESET allowed_cluster_replica_sizes
+            """
+        ),
+    )
+
+
+def workflow_drop_materialize_database(c: Composition) -> None:
+    c.up("materialized")
+
+    # Drop materialize database
+    c.sql(
+        "DROP DATABASE materialize",
+        port=6877,
+        user="mz_system",
+    )
+
+    # Restart mz.
+    c.kill("materialized")
+    c.up("materialized")
+
+    # Verify that materialize hasn't blown up
+    c.sql("SELECT 1")
+
+    # Restore for next tests
+    c.sql(
+        "CREATE DATABASE materialize",
+        port=6877,
+        user="mz_system",
+    )
+    c.sql(
+        "GRANT ALL PRIVILEGES ON SCHEMA materialize.public TO materialize",
+        port=6877,
+        user="mz_system",
+    )
+
+
+def workflow_bound_size_mz_status_history(c: Composition) -> None:
+    c.up("zookeeper", "kafka", "schema-registry", "materialized")
+    c.up("testdrive_no_reset", persistent=True)
+
+    c.testdrive(
+        service="testdrive_no_reset",
+        input=dedent(
+            """
+            $ kafka-create-topic topic=status-history
+
+            > CREATE CONNECTION kafka_conn
+              TO KAFKA (BROKER '${testdrive.kafka-addr}');
+
+            > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
+                URL '${testdrive.schema-registry-url}'
+              );
+
+            > CREATE SOURCE kafka_source
+              FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-status-history-${testdrive.seed}')
+              FORMAT TEXT
+
+            > CREATE SINK kafka_sink FROM kafka_source
+              INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-${testdrive.seed}')
+              FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+              ENVELOPE DEBEZIUM
+            """
+        ),
+    )
+
+    # Fill mz_source_status_history and mz_sink_status_history up with enough events
+    for i in range(10):
+        c.testdrive(
+            service="testdrive_no_reset",
+            input=dedent(
+                """
+                > ALTER SOURCE kafka_source SET (SIZE = '1')
+
+                > ALTER SINK kafka_sink SET (SIZE = '1')
+                """
+            ),
+        )
+
+    # Verify that we have enough events so that they can be truncated
+    c.testdrive(
+        service="testdrive_no_reset",
+        input=dedent(
+            """
+            > SELECT COUNT(*) > 7 FROM mz_internal.mz_source_status_history
+            true
+
+            > SELECT COUNT(*) > 7 FROM mz_internal.mz_sink_status_history
+            true
+            """
+        ),
+    )
+
+    # Restart mz.
+    c.kill("materialized")
+    c.up("materialized")
+
+    # Verify that we have fewer events now
+    # 7 because the truncation default is 5, and the restarted
+    # objects produce a new starting and running event.
+    c.testdrive(
+        service="testdrive_no_reset",
+        input=dedent(
+            """
+            > SELECT COUNT(*) FROM mz_internal.mz_source_status_history
+            7
+
+            > SELECT COUNT(*) FROM mz_internal.mz_sink_status_history
+            7
             """
         ),
     )
@@ -293,3 +408,5 @@ def workflow_default(c: Composition) -> None:
     c.workflow("timelines")
     c.workflow("stash")
     c.workflow("allowed-cluster-replica-sizes")
+    c.workflow("drop-materialize-database")
+    c.workflow("bound-size-mz-status-history")

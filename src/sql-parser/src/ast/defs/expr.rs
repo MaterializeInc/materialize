@@ -18,11 +18,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt;
-use std::mem;
+use std::{fmt, mem};
+
+use mz_ore::soft_assert_eq;
+use mz_sql_lexer::keywords::*;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::{AstInfo, Ident, OrderByExpr, Query, UnresolvedObjectName, Value};
+use crate::ast::{AstInfo, Ident, OrderByExpr, Query, UnresolvedItemName, Value};
 
 /// An SQL expression of any type.
 ///
@@ -66,7 +68,7 @@ pub enum Expr<T: AstInfo> {
     /// `IS {NULL, TRUE, FALSE, UNKNOWN}` expression
     IsExpr {
         expr: Box<Expr<T>>,
-        construct: IsExprConstruct,
+        construct: IsExprConstruct<T>,
         negated: bool,
     },
     /// `[ NOT ] IN (val1, val2, ...)`
@@ -110,7 +112,7 @@ pub enum Expr<T: AstInfo> {
     /// `expr COLLATE collation`
     Collate {
         expr: Box<Expr<T>>,
-        collation: UnresolvedObjectName,
+        collation: UnresolvedItemName,
     },
     /// `COALESCE(<expr>, ...)` or `GREATEST(<expr>, ...)` or `LEAST(<expr>`, ...)
     ///
@@ -273,21 +275,18 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 negated,
             } => {
                 f.write_node(&expr);
-                f.write_str(match (*case_insensitive, *negated) {
-                    (false, false) => " ~~ ",
-                    (false, true) => " !~~ ",
-                    (true, false) => " ~~* ",
-                    (true, true) => " !~~* ",
-                });
-                match escape {
-                    Some(escape) => {
-                        f.write_str("like_escape(");
-                        f.write_node(&pattern);
-                        f.write_str(", ");
-                        f.write_node(escape);
-                        f.write_str(")");
-                    }
-                    None => f.write_node(&pattern),
+                f.write_str(" ");
+                if *negated {
+                    f.write_str("NOT ");
+                }
+                if *case_insensitive {
+                    f.write_str("I");
+                }
+                f.write_str("LIKE ");
+                f.write_node(&pattern);
+                if let Some(escape) = escape {
+                    f.write_str(" ESCAPE ");
+                    f.write_node(escape);
                 }
             }
             Expr::Between {
@@ -420,7 +419,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_node(&left);
                 f.write_str(" ");
                 f.write_str(op);
-                f.write_str("ANY (");
+                f.write_str(" ANY (");
                 f.write_node(&right);
                 f.write_str(")");
             }
@@ -428,7 +427,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 f.write_node(&left);
                 f.write_str(" ");
                 f.write_str(op);
-                f.write_str("ANY (");
+                f.write_str(" ANY (");
                 f.write_node(&right);
                 f.write_str(")");
             }
@@ -585,9 +584,9 @@ impl<T: AstInfo> Expr<T> {
         }
     }
 
-    pub fn call(name: Vec<&str>, args: Vec<Expr<T>>) -> Expr<T> {
+    pub fn call(name: T::ItemName, args: Vec<Expr<T>>) -> Expr<T> {
         Expr::Function(Function {
-            name: UnresolvedObjectName(name.into_iter().map(Into::into).collect()),
+            name,
             args: FunctionArgs::args(args),
             filter: None,
             over: None,
@@ -595,11 +594,11 @@ impl<T: AstInfo> Expr<T> {
         })
     }
 
-    pub fn call_nullary(name: Vec<&str>) -> Expr<T> {
+    pub fn call_nullary(name: T::ItemName) -> Expr<T> {
         Expr::call(name, vec![])
     }
 
-    pub fn call_unary(self, name: Vec<&str>) -> Expr<T> {
+    pub fn call_unary(self, name: T::ItemName) -> Expr<T> {
         Expr::call(name, vec![self])
     }
 
@@ -612,23 +611,23 @@ impl<T: AstInfo> Expr<T> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Op {
     /// Any namespaces that preceded the operator.
-    pub namespace: Vec<Ident>,
+    pub namespace: Option<Vec<Ident>>,
     /// The operator itself.
     pub op: String,
 }
 
 impl AstDisplay for Op {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        if self.namespace.is_empty() {
-            f.write_str(&self.op)
-        } else {
+        if let Some(namespace) = &self.namespace {
             f.write_str("OPERATOR(");
-            for name in &self.namespace {
+            for name in namespace {
                 f.write_node(name);
                 f.write_str(".");
             }
             f.write_str(&self.op);
             f.write_str(")");
+        } else {
+            f.write_str(&self.op)
         }
     }
 }
@@ -641,7 +640,7 @@ impl Op {
         S: Into<String>,
     {
         Op {
-            namespace: vec![],
+            namespace: None,
             op: op.into(),
         }
     }
@@ -689,15 +688,27 @@ impl<T: AstInfo> AstDisplay for SubscriptPosition<T> {
 impl_display_t!(SubscriptPosition);
 
 /// A window specification (i.e. `OVER (PARTITION BY .. ORDER BY .. etc.)`)
+/// Includes potential IGNORE NULLS or RESPECT NULLS from before the OVER clause.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct WindowSpec<T: AstInfo> {
     pub partition_by: Vec<Expr<T>>,
     pub order_by: Vec<OrderByExpr<T>>,
     pub window_frame: Option<WindowFrame>,
+    // Note that IGNORE NULLS and RESPECT NULLS are mutually exclusive. We validate that not both
+    // are present during HIR planning.
+    pub ignore_nulls: bool,
+    pub respect_nulls: bool,
 }
 
 impl<T: AstInfo> AstDisplay for WindowSpec<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        if self.ignore_nulls {
+            f.write_str(" IGNORE NULLS");
+        }
+        if self.respect_nulls {
+            f.write_str(" RESPECT NULLS");
+        }
+        f.write_str(" OVER (");
         let mut delim = "";
         if !self.partition_by.is_empty() {
             delim = " ";
@@ -725,6 +736,7 @@ impl<T: AstInfo> AstDisplay for WindowSpec<T> {
                 f.write_node(&window_frame.start_bound);
             }
         }
+        f.write_str(")");
     }
 }
 impl_display_t!(WindowSpec);
@@ -796,7 +808,7 @@ impl_display!(WindowFrameBound);
 /// A function call
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Function<T: AstInfo> {
-    pub name: UnresolvedObjectName,
+    pub name: T::ItemName,
     pub args: FunctionArgs<T>,
     // aggregate functions may specify e.g. `COUNT(DISTINCT X) FILTER (WHERE ...)`
     pub filter: Option<Box<Expr<T>>>,
@@ -807,6 +819,33 @@ pub struct Function<T: AstInfo> {
 
 impl<T: AstInfo> AstDisplay for Function<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        // This block handles printing function calls that have special parsing. In stable mode, the
+        // name is quoted and so won't get the special parsing. We only need to print the special
+        // formats in non-stable mode.
+        if !f.stable() {
+            let special: Option<(&str, &[Option<Keyword>])> =
+                match self.name.to_ast_string_stable().as_str() {
+                    r#""extract""# if self.args.len() == Some(2) => {
+                        Some(("extract", &[None, Some(FROM)]))
+                    }
+                    r#""position""# if self.args.len() == Some(2) => {
+                        Some(("position", &[None, Some(IN)]))
+                    }
+
+                    // "trim" doesn't need to appear here because it changes the function name (to
+                    // "btrim", "ltrim", or "rtrim"), but only "trim" is parsed specially. "substring"
+                    // supports comma-delimited arguments, so doesn't need to be here.
+                    _ => None,
+                };
+            if let Some((name, kws)) = special {
+                f.write_str(name);
+                f.write_str("(");
+                self.args.intersperse_function_argument_keywords(f, kws);
+                f.write_str(")");
+                return;
+            }
+        }
+
         f.write_node(&self.name);
         f.write_str("(");
         if self.distinct {
@@ -820,9 +859,7 @@ impl<T: AstInfo> AstDisplay for Function<T> {
             f.write_str(")");
         }
         if let Some(o) = &self.over {
-            f.write_str(" OVER (");
             f.write_node(o);
-            f.write_str(")");
         }
     }
 }
@@ -847,6 +884,38 @@ impl<T: AstInfo> FunctionArgs<T> {
             order_by: vec![],
         }
     }
+
+    /// Returns the number of arguments. Star (`*`) is None.
+    fn len(&self) -> Option<usize> {
+        match self {
+            FunctionArgs::Star => None,
+            FunctionArgs::Args { args, .. } => Some(args.len()),
+        }
+    }
+
+    /// Prints associated keywords before each argument
+    fn intersperse_function_argument_keywords<W: fmt::Write>(
+        &self,
+        f: &mut AstFormatter<W>,
+        kws: &[Option<Keyword>],
+    ) {
+        let args = match self {
+            FunctionArgs::Star => unreachable!(),
+            FunctionArgs::Args { args, .. } => args,
+        };
+        soft_assert_eq!(args.len(), kws.len());
+        let mut delim = "";
+        for (arg, kw) in args.iter().zip(kws) {
+            if let Some(kw) = kw {
+                f.write_str(delim);
+                f.write_str(kw.as_str());
+                delim = " ";
+            }
+            f.write_str(delim);
+            f.write_node(arg);
+            delim = " ";
+        }
+    }
 }
 
 impl<T: AstInfo> AstDisplay for FunctionArgs<T> {
@@ -865,31 +934,27 @@ impl<T: AstInfo> AstDisplay for FunctionArgs<T> {
 }
 impl_display_t!(FunctionArgs);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum IsExprConstruct {
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum IsExprConstruct<T: AstInfo> {
     Null,
     True,
     False,
     Unknown,
+    DistinctFrom(Box<Expr<T>>),
 }
 
-impl IsExprConstruct {
-    pub fn requires_boolean_expr(&self) -> bool {
-        match self {
-            IsExprConstruct::Null => false,
-            IsExprConstruct::True | IsExprConstruct::False | IsExprConstruct::Unknown => true,
-        }
-    }
-}
-
-impl AstDisplay for IsExprConstruct {
+impl<T: AstInfo> AstDisplay for IsExprConstruct<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             IsExprConstruct::Null => f.write_str("NULL"),
             IsExprConstruct::True => f.write_str("TRUE"),
             IsExprConstruct::False => f.write_str("FALSE"),
             IsExprConstruct::Unknown => f.write_str("UNKNOWN"),
+            IsExprConstruct::DistinctFrom(e) => {
+                f.write_str("DISTINCT FROM ");
+                e.fmt(f);
+            }
         }
     }
 }
-impl_display!(IsExprConstruct);
+impl_display_t!(IsExprConstruct);

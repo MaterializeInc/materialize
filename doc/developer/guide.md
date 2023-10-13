@@ -12,12 +12,14 @@ Kubernetes to orchestrate interactions with other systems, like [Apache Kafka].
 ### C components
 
 Materialize depends on several components that are written in C and C++, so
-you'll need a working C and C++ toolchain. You'll also need to install the
-[CMake] build system.
+you'll need a working C and C++ toolchain. You'll also need to install:
+* The [CMake] build system
+* libclang
+* PostgreSQL
 
 On macOS, if you install [Homebrew], you'll be guided through the process of
-installing Apple's developer tools, which includes a C compiler. Then it's a
-cinch to install CMake:
+installing Apple's developer tools, which includes a C compiler and libclang.
+Then it's a cinch to install CMake and PostgreSQL.
 
 ```
 brew install cmake postgresql
@@ -27,7 +29,7 @@ On Debian-based Linux variants, it's even easier:
 
 ```shell
 sudo apt update
-sudo apt install build-essential cmake postgresql-client
+sudo apt install build-essential cmake postgresql-client libclang-dev
 ```
 
 On other platforms, you'll have to figure out how to get these tools yourself.
@@ -83,6 +85,22 @@ Confluent Platform, as it is a rather heavy dependency. Most Materialize
 employees, or other major contributors, will probably need to run the full test
 suite and should therefore install the Confluent Platform.
 
+
+### WebAssembly / WASM
+
+Some crates are compiled to WebAssembly and published to npm. This is
+accomplished through `wasm-pack`. Install it by running:
+
+```shell
+cargo install wasm-pack
+```
+
+WASM builds can then be initiated through
+
+```shell
+./bin/wasm-build <path/to/crate>
+```
+
 #### All platforms
 
 First, install the CLI. As of early July 2022 you can run this command on
@@ -103,17 +121,17 @@ You will need JDK 8 or 11. The easiest way to install this is via Homebrew:
 brew install --cask homebrew/cask-versions/temurin11
 ```
 
-Then, download and extract the Confluent Platform tarball:
+Then, download and extract the Confluent Platform tarball (when using bash, replace `~/.zshrc` with `~/.bashrc`):
 
 ```shell
 INSTALL_DIR=$HOME/confluent  # You can choose somewhere else if you like.
 mkdir $INSTALL_DIR
-curl http://packages.confluent.io/archive/7.0/confluent-7.0.1.tar.gz | tar -xC $INSTALL_DIR --strip-components=1
-echo export CONFLUENT_HOME=$(cd $INSTALL_DIR && pwd) >> ~/.bashrc
-source ~/.bashrc
+curl http://packages.confluent.io/archive/7.0/confluent-7.0.1.tar.gz | tar -xzC $INSTALL_DIR --strip-components=1
+echo export CONFLUENT_HOME=$(cd $INSTALL_DIR && pwd) >> ~/.zshrc
+source ~/.zshrc
 confluent local services start
 ```
-Note that you need to create a `.bash_profile` that sources `.bashrc` to ensure
+When using bash, note that you need to create a `.bash_profile` that sources `.bashrc` to ensure
 the above works with the Terminal app.
 
 If you have multiple JDKs installed and your current JAVA_HOME points to an incompatible version,
@@ -201,7 +219,7 @@ Still, it's reliable enough to be more convenient than managing each service
 manually.
 
 When the confluent local services are running, they can be examined via a web
-UI which defaults to `localhost:9021`.
+UI which defaults to http://localhost:9021.
 
 It might happen that the start script says that it failed to start
 zookeeper/kafka/schema-registry, but it actually starts them successfully, it
@@ -229,10 +247,10 @@ In this mode, every request for a static file will reload the file from disk.
 Changes to standalone CSS and JS files will be reflected immediately upon
 reload, without requiring a recompile!
 
-Note that `dev-web` can only hot-reload the the files in
+Note that `dev-web` can only hot-reload the files in
 `src/environmentd/src/static`. The HTML templates in
 `src/environmentd/src/templates` use a compile-time templating library called
-[`askama`], and so changes to those templates necessarily require a recompile.
+[askama], and so changes to those templates necessarily require a recompile.
 
 For details about adding a new JavaScript/CSS dependency, see the comment in
 [`src/environmentd/build/npm.rs`](/src/environmentd/build/npm.rs).
@@ -246,12 +264,12 @@ own document. See [Developer guide: testing](guide-testing.md).
 
 We use the following tools to perform automatic code style checks:
 
-Tool                  | Use                                | Run locally with
-----------------------|------------------------------------|------------------
-[Clippy]              | Rust semantic nits                 | `cargo clippy`
-[rustfmt]             | Rust code formatter                | `cargo fmt`
-Linter                | General formatting nits            | `bin/lint`
-[cargo-udeps]         | Check for unused Rust dependencies | `bin/unused-deps`
+| Tool          | Use                                | Run locally with    |
+|---------------|------------------------------------|---------------------|
+| [Clippy]      | Rust semantic nits                 | `cargo clippy`      |
+| [rustfmt]     | Rust code formatter                | `cargo fmt`         |
+| Linter        | General formatting nits            | `bin/lint`          |
+| [cargo-udeps] | Check for unused Rust dependencies | `bin/unused-deps`   |
 
 See the [style guide](style.md) for additional recommendations on code style.
 
@@ -297,8 +315,8 @@ because they are the level at which `pub` visibility operates.
 We make a best-effort attempt to document the ownership of the Rust code in this
 repository using GitHub's [CODEOWNERS](/.github/CODEOWNERS) file.
 
-You can view a relationship diagram of our crates by running the following
-command:
+You can create and view a relationship diagram of our crates by running the following
+command (this will require [graphviz]):
 
 ```shell
 bin/crate-diagram
@@ -316,7 +334,7 @@ bin/crate-diagram --roots mz-sql,mz-dataflow
 The [`workspace-hack`](../../src/workspace-hack/) crate speeds up rebuilds by
 ensuring that all crates use the same features of all transitive dependencies in
 the graph. This prevents Cargo from recompiling huge chunks of the dependency
-graph when you move between crates in the worksapce. For details, see the
+graph when you move between crates in the workspace. For details, see the
 [hakari documentation].
 
 If you add or remove dependencies on crates, you will likely need to regenerate
@@ -365,7 +383,7 @@ acceptable for:
 
 In principle, any text editor can be used to edit Rust code.
 
-By default, we recomend that developers without a strong preference of editor use
+By default, we recommend that developers without a strong preference of editor use
 Visual Studio Code with the Rust-Analyzer plugin. This is the most mainstream
 setup for developing Materialize, and the one for which you are the most likely
 to be able to get help if something goes wrong. It's important to note that you
@@ -394,6 +412,12 @@ If you prefer to use another editor, such as Vim or Emacs, we recommend that
 you install an LSP plugin with Rust-Analyzer. How to do so is beyond the scope
 of this document; if you have any issues, ask in one of the engineering channels
 on Slack.
+
+If you are using Rust-Analyzer, you should configure it to conform to our
+[style guide](style.md) by setting the following options:
+
+* `imports.granularity.group` = `module`
+* `imports.prefix` = `crate`
 
 Besides Rust-Analyzer, the only other known tool with good code navigation features
 is CLion along with its Rust plugin. This is a good choice for developers who prefer
@@ -468,6 +492,7 @@ source /path/to/materialize/misc/completions/zsh/*
 [demos]: https://github.com/MaterializeInc/demos
 [Docker Compose]: https://docs.docker.com/compose/
 [github-https]: https://help.github.com/en/github/authenticating-to-github/creating-a-personal-access-token-for-the-command-line
+[graphviz]: https://graphviz.org/
 [hakari documentation]: https://docs.rs/cargo-hakari/latest/cargo_hakari/about/index.html
 [Homebrew]: https://brew.sh
 [forked-cockroach-tap]: https://github.com/materializeInc/homebrew-cockroach

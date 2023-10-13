@@ -14,8 +14,17 @@
 //! struct in order to provide alternate [`mz_repr::explain::Explain`]
 //! implementations for some structs (see the [`mir`]) module for details.
 
+use std::time::Duration;
+
+use mz_compute_types::dataflows::DataflowDescription;
 use mz_expr::explain::ExplainContext;
-use mz_repr::explain::UsedIndexes;
+use mz_repr::explain::{
+    Explain, ExplainConfig, ExplainError, ExplainFormat, ExprHumanizer, UsedIndexes,
+};
+use mz_transform::dataflow::DataflowMetainfo;
+use mz_transform::optimizer_notices::OptimizerNotice;
+
+use crate::AdapterError;
 
 pub(crate) mod fast_path;
 pub(crate) mod hir;
@@ -31,4 +40,43 @@ impl<'a, T> Explainable<'a, T> {
     pub(crate) fn new(t: &'a mut T) -> Explainable<'a, T> {
         Explainable(t)
     }
+}
+
+/// Convenience method to derive an `ExplainContext` from the `index_imports` in
+/// the given `plan` and all other input parameters, wrap the `plan` in an
+/// `Explainable`, and finally compute and return the `explain(...)` result.
+pub(crate) fn explain_dataflow<T>(
+    mut plan: DataflowDescription<T>,
+    format: ExplainFormat,
+    config: &ExplainConfig,
+    humanizer: &dyn ExprHumanizer,
+    dataflow_metainfo: &DataflowMetainfo,
+) -> Result<String, AdapterError>
+where
+    for<'a> Explainable<'a, DataflowDescription<T>>: Explain<'a, Context = ExplainContext<'a>>,
+{
+    // Collect the list of indexes used by the dataflow at this point.
+    let used_indexes = UsedIndexes::new(
+        plan.index_imports
+            .iter()
+            .map(|(id, _index_import)| {
+                (*id, dataflow_metainfo.index_usage_types.get(id).expect("prune_and_annotate_dataflow_index_imports should have been called already").clone())
+            })
+            .collect(),
+    );
+
+    let optimizer_notices =
+        OptimizerNotice::explain(&dataflow_metainfo.optimizer_notices, humanizer)
+            .map_err(ExplainError::FormatError)?;
+
+    let context = ExplainContext {
+        config,
+        humanizer,
+        used_indexes,
+        finishing: None,
+        duration: Duration::default(),
+        optimizer_notices,
+    };
+
+    Ok(Explainable::new(&mut plan).explain(&format, &context)?)
 }

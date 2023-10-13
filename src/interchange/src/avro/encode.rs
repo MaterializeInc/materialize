@@ -10,22 +10,22 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+use anyhow::Ok;
 use byteorder::{NetworkEndian, WriteBytesExt};
 use chrono::Timelike;
 use itertools::Itertools;
-use once_cell::sync::Lazy;
-use serde_json::json;
-
 use mz_avro::types::{DecimalValue, ToAvro, Value};
 use mz_avro::Schema;
 use mz_ore::cast::CastFrom;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::numeric::{self, NUMERIC_AGG_MAX_PRECISION, NUMERIC_DATUM_MAX_PRECISION};
-use mz_repr::{ColumnName, ColumnType, Datum, RelationDesc, Row, ScalarType};
+use mz_repr::{ColumnName, ColumnType, Datum, GlobalId, RelationDesc, Row, ScalarType};
+use once_cell::sync::Lazy;
+use serde_json::json;
 
 use crate::encode::{column_names_and_types, Encode, TypedDatum};
-use crate::envelopes::{self, ENVELOPE_CUSTOM_NAMES};
-use crate::json::build_row_schema_json;
+use crate::envelopes::{self, DBZ_ROW_TYPE_ID, ENVELOPE_CUSTOM_NAMES};
+use crate::json::{build_row_schema_json, SchemaOptions};
 
 // TODO(rkhaitan): this schema intentionally omits the data_collections field
 // that is typically present in Debezium transaction metadata topics. See
@@ -93,6 +93,7 @@ fn encode_avro_header(buf: &mut Vec<u8>, schema_id: i32) {
         .expect("writing to vec cannot fail");
 }
 
+#[derive(Debug)]
 struct KeyInfo {
     columns: Vec<(ColumnName, ColumnType)>,
     schema: Schema,
@@ -111,6 +112,44 @@ fn encode_message_unchecked(
     buf
 }
 
+#[derive(Debug, Default)]
+pub struct AvroSchemaOptions {
+    /// Optional avro fullname on the generated key schema.
+    pub avro_key_fullname: Option<String>,
+    /// Optional avro fullname on the generated value schema.
+    pub avro_value_fullname: Option<String>,
+    /// Boolean flag to set null defaults for nullable types
+    pub set_null_defaults: bool,
+    /// Boolean flag to indicate debezium envelope
+    pub is_debezium: bool,
+    /// The global ID of the item in the sink. This is used
+    /// to lookup corresponding documentation for objects and fields
+    /// in the `value_doc_options` and `key_doc_options`.
+    pub sink_from: Option<GlobalId>,
+    /// Comments for generated avro schema for value.
+    pub value_doc_options: BTreeMap<DocTarget, String>,
+    /// Comments for generated avro schema for key.
+    pub key_doc_options: BTreeMap<DocTarget, String>,
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
+pub enum DocTarget {
+    Type(GlobalId),
+    Field {
+        object_id: GlobalId,
+        column_name: ColumnName,
+    },
+}
+
+impl DocTarget {
+    fn id(&self) -> GlobalId {
+        match self {
+            DocTarget::Type(object_id) => *object_id,
+            DocTarget::Field { object_id, .. } => *object_id,
+        }
+    }
+}
+
 /// Generates key and value Avro schemas
 pub struct AvroSchemaGenerator {
     value_columns: Vec<(ColumnName, ColumnType)>,
@@ -120,20 +159,57 @@ pub struct AvroSchemaGenerator {
 
 impl AvroSchemaGenerator {
     pub fn new(
-        key_fullname: Option<&str>,
-        value_fullname: Option<&str>,
         key_desc: Option<RelationDesc>,
         value_desc: RelationDesc,
-        debezium: bool,
+        AvroSchemaOptions {
+            is_debezium,
+            avro_value_fullname,
+            avro_key_fullname,
+            set_null_defaults,
+            sink_from,
+            mut value_doc_options,
+            key_doc_options,
+        }: AvroSchemaOptions,
     ) -> Result<Self, anyhow::Error> {
         let mut value_columns = column_names_and_types(value_desc);
-        if debezium {
+        if is_debezium {
             value_columns = envelopes::dbz_envelope(value_columns);
+            // With DEBEZIUM envelope the message is wrapped into "before" and "after"
+            // with `DBZ_ROW_TYPE_ID` instead of `sink_from`.
+            // Replacing comments for the columns and type in `sink_from` to `DBZ_ROW_TYPE_ID`.
+            if let Some(sink_from_id) = sink_from {
+                let mut new_column_docs = BTreeMap::new();
+                value_doc_options.iter().for_each(|(k, v)| {
+                    if k.id() == sink_from_id {
+                        match k {
+                            DocTarget::Field { column_name, .. } => {
+                                new_column_docs.insert(
+                                    DocTarget::Field {
+                                        object_id: DBZ_ROW_TYPE_ID,
+                                        column_name: column_name.clone(),
+                                    },
+                                    v.clone(),
+                                );
+                            }
+                            DocTarget::Type(_) => {
+                                new_column_docs.insert(DocTarget::Type(DBZ_ROW_TYPE_ID), v.clone());
+                            }
+                        }
+                    }
+                });
+                value_doc_options.append(&mut new_column_docs);
+                value_doc_options.retain(|k, _v| k.id() != sink_from_id);
+            }
         }
         let row_schema = build_row_schema_json(
             &value_columns,
-            value_fullname.unwrap_or("envelope"),
+            avro_value_fullname.as_deref().unwrap_or("envelope"),
             &ENVELOPE_CUSTOM_NAMES,
+            sink_from,
+            &SchemaOptions {
+                set_null_defaults,
+                doc_comments: value_doc_options,
+            },
         )?;
         let writer_schema = Schema::parse(&row_schema).expect("valid schema constructed");
         let key_info = match key_desc {
@@ -142,8 +218,13 @@ impl AvroSchemaGenerator {
                 let columns = column_names_and_types(key_desc);
                 let row_schema = build_row_schema_json(
                     &columns,
-                    key_fullname.unwrap_or("row"),
+                    avro_key_fullname.as_deref().unwrap_or("row"),
                     &BTreeMap::new(),
+                    sink_from,
+                    &SchemaOptions {
+                        set_null_defaults,
+                        doc_comments: key_doc_options,
+                    },
                 )?;
                 Some(KeyInfo {
                     schema: Schema::parse(&row_schema).expect("valid schema constructed"),
@@ -269,6 +350,7 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
             }
         } else {
             let mut val = match &typ.scalar_type {
+                ScalarType::AclItem => Value::String(datum.unwrap_acl_item().to_string()),
                 ScalarType::Bool => Value::Boolean(datum.unwrap_bool()),
                 ScalarType::PgLegacyChar => {
                     Value::Fixed(1, datum.unwrap_uint8().to_le_bytes().into())
@@ -321,8 +403,12 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                     i64::from(time.num_seconds_from_midnight()) * 1_000_000
                         + i64::from(time.nanosecond()) / 1_000
                 }),
-                ScalarType::Timestamp => Value::Timestamp(datum.unwrap_timestamp().to_naive()),
-                ScalarType::TimestampTz => Value::Timestamp(datum.unwrap_timestamptz().to_naive()),
+                ScalarType::Timestamp { .. } => {
+                    Value::Timestamp(datum.unwrap_timestamp().to_naive())
+                }
+                ScalarType::TimestampTz { .. } => {
+                    Value::Timestamp(datum.unwrap_timestamptz().to_naive())
+                }
                 // SQL intervals and Avro durations differ quite a lot (signed
                 // vs unsigned, different int sizes), so SQL intervals are their
                 // own bespoke type.
@@ -336,7 +422,7 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                     buf
                 }),
                 ScalarType::Bytes => Value::Bytes(Vec::from(datum.unwrap_bytes())),
-                ScalarType::String | ScalarType::VarChar { .. } => {
+                ScalarType::String | ScalarType::VarChar { .. } | ScalarType::PgLegacyName => {
                     Value::String(datum.unwrap_str().to_owned())
                 }
                 ScalarType::Char { length } => {
@@ -391,7 +477,7 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                     let list = datum.unwrap_list();
                     let fields = fields
                         .iter()
-                        .zip(list.into_iter())
+                        .zip(&list)
                         .map(|((name, typ), datum)| {
                             let name = name.to_string();
                             let datum = TypedDatum::new(datum, typ);
@@ -403,6 +489,7 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                 }
                 ScalarType::MzTimestamp => Value::String(datum.unwrap_mz_timestamp().to_string()),
                 ScalarType::Range { .. } => Value::String(datum.unwrap_range().to_string()),
+                ScalarType::MzAclItem => Value::String(datum.unwrap_mz_acl_item().to_string()),
             };
             if typ.nullable {
                 val = Value::Union {

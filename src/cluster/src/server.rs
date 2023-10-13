@@ -10,25 +10,26 @@
 //! An interactive cluster server.
 
 use std::fmt::{Debug, Formatter};
-use std::sync::{Arc, Mutex};
+use std::sync::{atomic, Arc, Mutex};
 
 use anyhow::{anyhow, Error};
 use async_trait::async_trait;
 use futures::future;
+use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
+use mz_ore::cast::CastFrom;
+use mz_ore::error::ErrorExt;
+use mz_ore::halt;
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::tracing::TracingHandle;
+use mz_persist_client::cache::PersistClientCache;
+use mz_service::client::{GenericClient, Partitionable, Partitioned};
+use mz_service::local::LocalClient;
 use timely::communication::initialize::WorkerGuards;
 use timely::execute::execute_from;
 use timely::WorkerConfig;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
-
-use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
-use mz_ore::cast::CastFrom;
-use mz_ore::halt;
-use mz_ore::metrics::MetricsRegistry;
-use mz_persist_client::cache::PersistClientCache;
-use mz_service::client::{GenericClient, Partitionable, Partitioned};
-use mz_service::local::LocalClient;
 
 use crate::communication::initialize_networking;
 
@@ -41,6 +42,8 @@ pub struct ClusterConfig {
     pub metrics_registry: MetricsRegistry,
     /// `persist` client cache.
     pub persist_clients: Arc<PersistClientCache>,
+    /// A process-global handle to tracing configuration.
+    pub tracing_handle: Arc<TracingHandle>,
 }
 
 /// A client managing access to the local portion of a Timely cluster
@@ -56,6 +59,8 @@ where
     persist_clients: Arc<PersistClientCache>,
     /// The handle to the Tokio runtime.
     tokio_handle: tokio::runtime::Handle,
+    /// A process-global handle to tracing configuration.
+    tracing_handle: Arc<TracingHandle>,
     worker: Worker,
 }
 
@@ -106,6 +111,7 @@ where
                 Arc::clone(&timely_container),
                 Arc::clone(&config.persist_clients),
                 tokio_executor.clone(),
+                Arc::clone(&config.tracing_handle),
                 worker_config,
             );
             let client = Box::new(client);
@@ -127,6 +133,7 @@ where
         timely_container: TimelyContainerRef<C, R, Worker::Activatable>,
         persist_clients: Arc<PersistClientCache>,
         tokio_handle: tokio::runtime::Handle,
+        tracing_handle: Arc<TracingHandle>,
         worker_config: Worker,
     ) -> Self {
         Self {
@@ -134,6 +141,7 @@ where
             inner: None,
             persist_clients,
             tokio_handle,
+            tracing_handle,
             worker: worker_config,
         }
     }
@@ -143,6 +151,7 @@ where
         config: TimelyConfig,
         epoch: ClusterStartupEpoch,
         persist_clients: Arc<PersistClientCache>,
+        tracing_handle: Arc<TracingHandle>,
         tokio_executor: Handle,
     ) -> Result<TimelyContainer<C, R, Worker::Activatable>, Error> {
         info!("Building timely container with config {config:?}");
@@ -159,12 +168,15 @@ where
         )
         .await?;
 
+        let idle_merge_effort = isize::cast_from(config.idle_arrangement_merge_effort);
+        // We want a value of `0` to disable idle merging. DD will only disable idle merging if we
+        // configure the effort to `None`, not when we set it to `Some(0)`.
+        let idle_merge_effort = (idle_merge_effort > 0).then_some(idle_merge_effort);
+
         let mut worker_config = WorkerConfig::default();
         differential_dataflow::configure(
             &mut worker_config,
-            &differential_dataflow::Config {
-                idle_merge_effort: Some(isize::cast_from(config.idle_arrangement_merge_effort)),
-            },
+            &differential_dataflow::Config { idle_merge_effort },
         );
 
         let worker_guards = execute_from(builders, other, worker_config, move |timely_worker| {
@@ -175,11 +187,13 @@ where
                 .unwrap();
             let persist_clients = Arc::clone(&persist_clients);
             let user_worker_config = user_worker_config.clone();
+            let tracing_handle = Arc::clone(&tracing_handle);
             Worker::build_and_run(
                 user_worker_config,
                 timely_worker,
                 client_rx,
                 persist_clients,
+                tracing_handle,
             )
         })
         .map_err(|e| anyhow!("{e}"))?;
@@ -206,6 +220,7 @@ where
 
         let persist_clients = Arc::clone(&self.persist_clients);
         let handle = self.tokio_handle.clone();
+        let tracing_handle = Arc::clone(&self.tracing_handle);
 
         let worker_config = self.worker.clone();
         let mut timely_lock = self.timely_container.lock().await;
@@ -222,15 +237,25 @@ where
                 existing
             }
             None => {
-                let build_timely_result =
-                    Self::build_timely(worker_config, config, epoch, persist_clients, handle).await;
-                match build_timely_result {
-                    Err(e) => {
-                        warn!("timely initialization failed: {e:#}");
-                        return Err(e);
-                    }
-                    Ok(ok) => ok,
-                }
+                // Configure variable-length row encoding.
+                mz_repr::VARIABLE_LENGTH_ROW_ENCODING.store(
+                    config.variable_length_row_encoding,
+                    atomic::Ordering::SeqCst,
+                );
+
+                Self::build_timely(
+                    worker_config,
+                    config,
+                    epoch,
+                    persist_clients,
+                    tracing_handle,
+                    handle,
+                )
+                .await
+                .map_err(|e| {
+                    warn!("timely initialization failed: {}", e.display_with_causes());
+                    e
+                })?
             }
         };
 
@@ -278,7 +303,7 @@ impl<Client: Debug, Worker: crate::types::AsRunnableWorker<C, R>, C, R> Debug
 impl<Worker, C, R> GenericClient<C, R>
     for ClusterClient<PartitionedClient<C, R, Worker::Activatable>, Worker, C, R>
 where
-    C: Send + Debug + crate::types::TryIntoTimelyConfig + 'static,
+    C: Send + Debug + mz_cluster_client::client::TryIntoTimelyConfig + 'static,
     R: Send + Debug + 'static,
     (C, R): Partitionable<C, R>,
     Worker: crate::types::AsRunnableWorker<C, R> + Send + Sync + Clone + 'static,

@@ -8,9 +8,10 @@
 // by the Apache License, Version 2.0.
 
 use mz_interchange::protobuf::{DecodedDescriptors, Decoder};
+use mz_ore::error::ErrorExt;
 use mz_repr::Row;
-use mz_storage_client::types::errors::DecodeErrorKind;
-use mz_storage_client::types::sources::encoding::ProtobufEncoding;
+use mz_storage_types::errors::DecodeErrorKind;
+use mz_storage_types::sources::encoding::ProtobufEncoding;
 
 #[derive(Debug)]
 pub struct ProtobufDecoderState {
@@ -51,8 +52,8 @@ impl ProtobufDecoderState {
             Err(err) => {
                 self.events_error += 1;
                 Some(Err(DecodeErrorKind::Text(format!(
-                    "protobuf deserialization error: {:#}",
-                    err
+                    "protobuf deserialization error: {}",
+                    err.display_with_causes()
                 ))))
             }
         }

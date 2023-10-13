@@ -12,6 +12,7 @@
 set -euo pipefail
 
 . misc/shlib/shlib.bash
+. test/cloudtest/config.bash
 
 run_args=(
     "--junitxml=junit_cloudtest_$BUILDKITE_JOB_ID.xml"
@@ -30,6 +31,10 @@ date +"%Y-%m-%d %H:%M:%S" > step_start_timestamp
 ci_collapsed_heading ":docker: Purging all existing docker containers and volumes, regardless of origin"
 docker ps --all --quiet | xargs --no-run-if-empty docker rm --force --volumes
 
+ci_collapsed_heading "kind: Increase system limits..."
+sudo sysctl fs.inotify.max_user_watches=524288
+sudo sysctl fs.inotify.max_user_instances=512
+
 ci_collapsed_heading "kind: Make sure kind is running..."
 bin/ci-builder run stable test/cloudtest/setup
 
@@ -39,5 +44,8 @@ ci_collapsed_heading "kind: Purging state from previous builds..."
 bin/ci-builder run stable test/cloudtest/reset
 rm -f kubectl-*.log
 
-ci_uncollapsed_heading "+++ cloudtest: Running \`bin/pytest ${run_args[*]}\`"
+ci_collapsed_heading "kail: Start a new instance"
+NO_COLOR=1 bin/ci-builder run stable --detach --name "kail" kail --context "$K8S_CONTEXT" --log-level info
+
+ci_uncollapsed_heading "cloudtest: Running \`bin/pytest ${run_args[*]}\`"
 bin/ci-builder run stable bin/pytest "${run_args[@]}" |& tee run.log

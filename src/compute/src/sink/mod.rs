@@ -9,5 +9,3 @@
 
 mod persist_sink;
 mod subscribe;
-
-pub(crate) use persist_sink::persist_sink;

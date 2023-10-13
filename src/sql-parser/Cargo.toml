@@ -1,6 +1,6 @@
 [package]
 name = "mz-sql-parser"
-description = "The lexer and parser for Materialize's SQL dialect."
+description = "The parser for Materialize's SQL dialect."
 version = "0.0.0"
 exclude = ["tests/testdata"]
 edition.workspace = true
@@ -9,29 +9,30 @@ publish = false
 
 [dependencies]
 bytesize = "1.1.0"
+datadriven = { version = "0.6.0", optional = true }
 enum-kinds = "0.5.1"
 itertools = "0.10.5"
 mz-ore = { path = "../ore", default-features = false, features = ["stack"] }
+mz-sql-lexer = { path = "../sql-lexer" }
 phf = { version = "0.11.1", features = ["uncased"] }
 serde = { version = "1.0.152", features = ["derive"] }
 tracing = "0.1.37"
 uncased = "0.9.7"
+unicode-width = { version = "0.1.10", optional = true }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
-datadriven = "0.6.0"
-unicode-width = "0.1.10"
+mz-ore = { path = "../ore", default-features = false, features = ["test"] }
+mz-sql-parser = { path = ".", features = ["test"] }
 
 [build-dependencies]
 anyhow = "1.0.66"
 mz-ore = { path = "../ore", default-features = false }
-mz-walkabout = { path = "../walkabout" }
-phf = { version = "0.11.1", features = ["uncased"] }
-phf_codegen = "0.11.1"
-uncased = "0.9.7"
+mz-walkabout = { path = "../walkabout", default-features = false }
 
 [features]
 default = ["workspace-hack"]
+test = ["datadriven", "unicode-width"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

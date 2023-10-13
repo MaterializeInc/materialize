@@ -13,20 +13,19 @@ use std::sync::Arc;
 
 use mz_ore::cast::{CastFrom, TryCastFrom};
 use mz_ore::metric;
-use mz_ore::metrics::DeleteOnDropHistogram;
-use mz_ore::metrics::HistogramVecExt;
-use mz_ore::metrics::MetricsRegistry;
+use mz_ore::metrics::{DeleteOnDropHistogram, HistogramVecExt, MetricsRegistry};
 use mz_ore::stats::HISTOGRAM_BYTE_BUCKETS;
 use mz_service::codec::StatsCollector;
+use mz_storage_types::instances::StorageInstanceId;
 
 use crate::client::{ProtoStorageCommand, ProtoStorageResponse};
-use crate::types::instances::StorageInstanceId;
 
 /// Storage controller metrics
 #[derive(Debug, Clone)]
 pub struct StorageControllerMetrics {
     messages_sent_bytes: prometheus::HistogramVec,
     messages_received_bytes: prometheus::HistogramVec,
+    startup_prepared_statements_kept: prometheus::IntGauge,
 }
 
 impl StorageControllerMetrics {
@@ -45,6 +44,11 @@ impl StorageControllerMetrics {
                 var_labels: ["instance"],
                 buckets: HISTOGRAM_BYTE_BUCKETS.to_vec()
             )),
+
+            startup_prepared_statements_kept: metrics_registry.register(metric!(
+                name: "mz_storage_startup_prepared_statements_kept",
+                help: "number of prepared statements kept on startup",
+            )),
         }
     }
 
@@ -60,6 +64,11 @@ impl StorageControllerMetrics {
                     .get_delete_on_drop_histogram(labels),
             }),
         }
+    }
+
+    pub fn set_startup_prepared_statements_kept(&mut self, n: u64) {
+        let n: i64 = n.try_into().expect("realistic number");
+        self.startup_prepared_statements_kept.set(n);
     }
 }
 

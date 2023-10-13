@@ -1,14 +1,12 @@
 ---
 title: "SHOW VIEWS"
-description: "`SHOW VIEWS` returns a list of views in your Materialize instances."
+description: "`SHOW VIEWS` returns a list of views in Materialize."
 menu:
   main:
     parent: commands
 ---
 
-{{< show-command-note >}}
-
-`SHOW VIEWS` returns a list of views in your Materialize instances.
+`SHOW VIEWS` returns a list of views in Materialize.
 
 ## Syntax
 
@@ -16,7 +14,7 @@ menu:
 
 Field | Use
 ------|-----
-_schema&lowbar;name_ | The schema to show views from. Defaults to `public` in the current database. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+_schema&lowbar;name_ | The schema to show views from. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
 
 ## Details
 

@@ -7,6 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_table_keys = true
+----
+COMPLETE 0
+
 statement ok
 CREATE TABLE warehouse (
     w_id integer,
@@ -260,14 +265,14 @@ ORDER BY ol_number
 Explained Query:
   Finish order_by=[#0 asc nulls_last] output=[#0..=#5]
     Project (#0..=#2, #6, #7, #5) // { arity: 6 }
-      Map ((bigint_to_double(#1) / bigint_to_double(case when (#3 = 0) then null else #3 end)), (numeric_to_double(#2) / bigint_to_double(case when (#4 = 0) then null else #4 end))) // { arity: 8 }
+      Map ((bigint_to_numeric(#1) / bigint_to_numeric(case when (#3 = 0) then null else #3 end)), (#2 / bigint_to_numeric(case when (#4 = 0) then null else #4 end))) // { arity: 8 }
         Reduce group_by=[#0] aggregates=[sum(#1), sum(#2), count(#1), count(#2), count(*)] // { arity: 6 }
           Project (#3, #7, #8) // { arity: 3 }
             Filter (date_to_timestamp(#6) > 2007-01-02 00:00:00) // { arity: 10 }
-              Get materialize.public.orderline // { arity: 10 }
+              ReadIndex on=orderline fk_orderline_order=[*** full scan ***] // { arity: 10 }
 
 Used Indexes:
-  - materialize.public.fk_orderline_order
+  - materialize.public.fk_orderline_order (*** full scan ***)
 
 EOF
 
@@ -308,18 +313,18 @@ Explained Query:
               %5[#0]UKA » %0:item[#0]UKlf » %2:stock[#0, #1]KKlf » %1:supplier[#0]UKlf » %3:nation[#0]UKlf » %4:l0[#0]UKlf
             ArrangeBy keys=[[#0]] // { arity: 2 }
               Project (#0, #2) // { arity: 2 }
-                Filter "%b" ~~(padchar(#4)) // { arity: 5 }
-                  Get materialize.public.item // { arity: 5 }
+                Filter like["%b"](padchar(#4)) // { arity: 5 }
+                  ReadStorage materialize.public.item // { arity: 5 }
             ArrangeBy keys=[[#0]] // { arity: 6 }
               Project (#0..=#4, #6) // { arity: 6 }
-                Get materialize.public.supplier // { arity: 7 }
+                ReadIndex on=supplier fk_supplier_nationkey=[*** full scan ***] // { arity: 7 }
             ArrangeBy keys=[[#0, #1]] // { arity: 3 }
               Project (#0, #2, #17) // { arity: 3 }
                 Filter (#2) IS NOT NULL // { arity: 18 }
-                  Get materialize.public.stock // { arity: 18 }
+                  ReadIndex on=stock fk_stock_supplier=[*** full scan ***] // { arity: 18 }
             ArrangeBy keys=[[#0]] // { arity: 3 }
               Project (#0..=#2) // { arity: 3 }
-                Get materialize.public.nation // { arity: 4 }
+                ReadIndex on=nation fk_nation_regionkey=[*** full scan ***] // { arity: 4 }
             Get l0 // { arity: 1 }
             ArrangeBy keys=[[#0]] // { arity: 2 }
               Reduce group_by=[#0] aggregates=[min(#1)] // { arity: 2 }
@@ -328,28 +333,28 @@ Explained Query:
                     implementation
                       %3:l0[#0]UKlf » %2:nation[#2]KAlf » %1:supplier[#3]KAlf » %0:stock[#17]KAlf
                     ArrangeBy keys=[[#17]] // { arity: 18 }
-                      Get materialize.public.stock // { arity: 18 }
+                      ReadIndex on=stock fk_stock_supplier=[differential join] // { arity: 18 }
                     ArrangeBy keys=[[#3]] // { arity: 7 }
-                      Get materialize.public.supplier // { arity: 7 }
+                      ReadIndex on=supplier fk_supplier_nationkey=[differential join] // { arity: 7 }
                     ArrangeBy keys=[[#2]] // { arity: 4 }
-                      Get materialize.public.nation // { arity: 4 }
+                      ReadIndex on=nation fk_nation_regionkey=[differential join] // { arity: 4 }
                     Get l0 // { arity: 1 }
     With
       cte l0 =
         ArrangeBy keys=[[#0]] // { arity: 1 }
           Project (#0) // { arity: 1 }
-            Filter "EUROP%" ~~(padchar(#1)) // { arity: 3 }
-              Get materialize.public.region // { arity: 3 }
+            Filter like["EUROP%"](padchar(#1)) // { arity: 3 }
+              ReadStorage materialize.public.region // { arity: 3 }
 
 Source materialize.public.item
-  filter=("%b" ~~(padchar(#4)))
+  filter=(like["%b"](padchar(#4)))
 Source materialize.public.region
-  filter=("EUROP%" ~~(padchar(#1)))
+  filter=(like["EUROP%"](padchar(#1)))
 
 Used Indexes:
-  - materialize.public.fk_stock_supplier
-  - materialize.public.fk_nation_regionkey
-  - materialize.public.fk_supplier_nationkey
+  - materialize.public.fk_stock_supplier (*** full scan ***, differential join)
+  - materialize.public.fk_nation_regionkey (*** full scan ***, differential join)
+  - materialize.public.fk_supplier_nationkey (*** full scan ***, differential join)
 
 EOF
 
@@ -383,19 +388,19 @@ Explained Query:
                 %0:customer[#2, #1, #0]UKKKlf » %2:order[#2, #1, #3]KKKAlif » %1:neworder[#0..=#2]UKKKlif » %3:orderline[#2, #1, #0]KKKAlif
               ArrangeBy keys=[[#2, #1, #0]] // { arity: 3 }
                 Project (#0..=#2) // { arity: 3 }
-                  Filter "A%" ~~(padchar(#9)) // { arity: 22 }
-                    Get materialize.public.customer // { arity: 22 }
+                  Filter like["A%"](padchar(#9)) // { arity: 22 }
+                    ReadIndex on=customer fk_customer_district=[*** full scan ***] // { arity: 22 }
               ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
-                Get materialize.public.neworder // { arity: 3 }
+                ReadStorage materialize.public.neworder // { arity: 3 }
               ArrangeBy keys=[[#2, #1, #3]] // { arity: 8 }
-                Get materialize.public.order // { arity: 8 }
+                ReadIndex on=order fk_order_customer=[differential join] // { arity: 8 }
               ArrangeBy keys=[[#2, #1, #0]] // { arity: 10 }
-                Get materialize.public.orderline // { arity: 10 }
+                ReadIndex on=orderline fk_orderline_order=[differential join] // { arity: 10 }
 
 Used Indexes:
-  - materialize.public.fk_customer_district
-  - materialize.public.fk_order_customer
-  - materialize.public.fk_orderline_order
+  - materialize.public.fk_customer_district (*** full scan ***)
+  - materialize.public.fk_order_customer (differential join)
+  - materialize.public.fk_orderline_order (differential join)
 
 EOF
 
@@ -439,16 +444,16 @@ Explained Query:
                         Project (#0..=#2, #4) // { arity: 4 }
                           Get l0 // { arity: 9 }
                       ArrangeBy keys=[[#2, #1, #0]] // { arity: 10 }
-                        Get materialize.public.orderline // { arity: 10 }
+                        ReadIndex on=orderline fk_orderline_order=[differential join] // { arity: 10 }
     With
       cte l0 =
         Filter (#8 < 2012-01-02 00:00:00) AND (#8 >= 2007-01-02 00:00:00) // { arity: 9 }
           Map (date_to_timestamp(#4)) // { arity: 9 }
-            Get materialize.public.order // { arity: 8 }
+            ReadIndex on=order fk_order_customer=[*** full scan ***] // { arity: 8 }
 
 Used Indexes:
-  - materialize.public.fk_order_customer
-  - materialize.public.fk_orderline_order
+  - materialize.public.fk_order_customer (*** full scan ***)
+  - materialize.public.fk_orderline_order (differential join)
 
 EOF
 
@@ -487,37 +492,37 @@ Explained Query:
             ArrangeBy keys=[[#0..=#2]] // { arity: 4 }
               Project (#0..=#2, #21) // { arity: 4 }
                 Filter (#21) IS NOT NULL // { arity: 22 }
-                  Get materialize.public.customer // { arity: 22 }
+                  ReadIndex on=customer fk_customer_district=[*** full scan ***] // { arity: 22 }
             ArrangeBy keys=[[#3, #1, #2]] // { arity: 4 }
               Project (#0..=#3) // { arity: 4 }
                 Filter (#3) IS NOT NULL AND (date_to_timestamp(#4) >= 2007-01-02 00:00:00) // { arity: 8 }
-                  Get materialize.public.order // { arity: 8 }
+                  ReadIndex on=order fk_order_customer=[*** full scan ***] // { arity: 8 }
             ArrangeBy keys=[[#2, #1, #0]] // { arity: 10 }
-              Get materialize.public.orderline // { arity: 10 }
+              ReadIndex on=orderline fk_orderline_order=[differential join] // { arity: 10 }
             ArrangeBy keys=[[#0, #1]] // { arity: 3 }
               Project (#0, #1, #17) // { arity: 3 }
-                Get materialize.public.stock // { arity: 18 }
+                ReadIndex on=stock fk_stock_warehouse=[*** full scan ***] // { arity: 18 }
             ArrangeBy keys=[[#0, #1]] // { arity: 2 }
               Project (#0, #3) // { arity: 2 }
-                Get materialize.public.supplier // { arity: 7 }
+                ReadIndex on=supplier fk_supplier_nationkey=[*** full scan ***] // { arity: 7 }
             ArrangeBy keys=[[#0]] // { arity: 3 }
               Project (#0..=#2) // { arity: 3 }
-                Get materialize.public.nation // { arity: 4 }
+                ReadIndex on=nation fk_nation_regionkey=[*** full scan ***] // { arity: 4 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Project (#0) // { arity: 1 }
                 Filter (#1 = "EUROPE") // { arity: 3 }
-                  Get materialize.public.region // { arity: 3 }
+                  ReadStorage materialize.public.region // { arity: 3 }
 
 Source materialize.public.region
   filter=((#1 = "EUROPE"))
 
 Used Indexes:
-  - materialize.public.fk_customer_district
-  - materialize.public.fk_order_customer
-  - materialize.public.fk_orderline_order
-  - materialize.public.fk_stock_warehouse
-  - materialize.public.fk_nation_regionkey
-  - materialize.public.fk_supplier_nationkey
+  - materialize.public.fk_customer_district (*** full scan ***)
+  - materialize.public.fk_order_customer (*** full scan ***)
+  - materialize.public.fk_orderline_order (differential join)
+  - materialize.public.fk_stock_warehouse (*** full scan ***)
+  - materialize.public.fk_nation_regionkey (*** full scan ***)
+  - materialize.public.fk_supplier_nationkey (*** full scan ***)
 
 EOF
 
@@ -547,10 +552,10 @@ Explained Query:
         Project (#8) // { arity: 1 }
           Filter (#10 < 2020-01-01 00:00:00) AND (#7 <= 100000) AND (#7 >= 1) AND (#10 >= 1999-01-01 00:00:00) // { arity: 11 }
             Map (date_to_timestamp(#6)) // { arity: 11 }
-              Get materialize.public.orderline // { arity: 10 }
+              ReadIndex on=orderline fk_orderline_order=[*** full scan ***] // { arity: 10 }
 
 Used Indexes:
-  - materialize.public.fk_orderline_order
+  - materialize.public.fk_orderline_order (*** full scan ***)
 
 EOF
 
@@ -594,23 +599,23 @@ Explained Query:
                 %2:orderline[#0..=#2]KKKiif » %3:order[#0..=#2]UKKKiif » %4:customer[#0..=#2]UKKKiif » %1:stock[#0, #1]UKKiif » %6:l0[#0]UKeiif » %0:supplier[#0]UKeiif » %5:l0[#0]UKeiif
               ArrangeBy keys=[[#0]] // { arity: 2 }
                 Project (#0, #3) // { arity: 2 }
-                  Get materialize.public.supplier // { arity: 7 }
+                  ReadIndex on=supplier fk_supplier_nationkey=[*** full scan ***] // { arity: 7 }
               ArrangeBy keys=[[#0, #1]] // { arity: 3 }
                 Project (#0, #1, #17) // { arity: 3 }
-                  Get materialize.public.stock // { arity: 18 }
+                  ReadIndex on=stock fk_stock_warehouse=[*** full scan ***] // { arity: 18 }
               ArrangeBy keys=[[#0..=#2]] // { arity: 6 }
                 Project (#0..=#2, #4, #5, #8) // { arity: 6 }
                   Filter (#10 <= 2012-01-02 00:00:00) AND (#10 >= 2007-01-02 00:00:00) AND (#4) IS NOT NULL AND (#5) IS NOT NULL // { arity: 11 }
                     Map (date_to_timestamp(#6)) // { arity: 11 }
-                      Get materialize.public.orderline // { arity: 10 }
+                      ReadIndex on=orderline fk_orderline_order=[*** full scan ***] // { arity: 10 }
               ArrangeBy keys=[[#0..=#2]] // { arity: 5 }
                 Project (#0..=#4) // { arity: 5 }
                   Filter (#3) IS NOT NULL // { arity: 8 }
-                    Get materialize.public.order // { arity: 8 }
+                    ReadIndex on=order fk_order_customer=[*** full scan ***] // { arity: 8 }
               ArrangeBy keys=[[#0..=#2]] // { arity: 5 }
                 Project (#0..=#2, #9, #21) // { arity: 5 }
                   Filter (#21) IS NOT NULL // { arity: 22 }
-                    Get materialize.public.customer // { arity: 22 }
+                    ReadIndex on=customer fk_customer_district=[*** full scan ***] // { arity: 22 }
               Get l0 // { arity: 2 }
               Get l0 // { arity: 2 }
     With
@@ -618,15 +623,15 @@ Explained Query:
         ArrangeBy keys=[[#0]] // { arity: 2 }
           Project (#0, #1) // { arity: 2 }
             Filter ((#1 = "GERMANY") OR (#1 = "CAMBODIA")) // { arity: 4 }
-              Get materialize.public.nation // { arity: 4 }
+              ReadIndex on=nation fk_nation_regionkey=[*** full scan ***] // { arity: 4 }
 
 Used Indexes:
-  - materialize.public.fk_customer_district
-  - materialize.public.fk_order_customer
-  - materialize.public.fk_orderline_order
-  - materialize.public.fk_stock_warehouse
-  - materialize.public.fk_nation_regionkey
-  - materialize.public.fk_supplier_nationkey
+  - materialize.public.fk_customer_district (*** full scan ***)
+  - materialize.public.fk_order_customer (*** full scan ***)
+  - materialize.public.fk_orderline_order (*** full scan ***)
+  - materialize.public.fk_stock_warehouse (*** full scan ***)
+  - materialize.public.fk_nation_regionkey (*** full scan ***)
+  - materialize.public.fk_supplier_nationkey (*** full scan ***)
 
 EOF
 
@@ -670,49 +675,49 @@ Explained Query:
                   %4:order[#3, #1, #2]KKKiif » %5:customer[#0..=#2]UKKKiif » %6:nation[#0]UKiif » %8:region[#0]UKeiif » %3:orderline[#2, #1, #0]KKKAeiiif » %2:stock[#0, #1]UKKeiiiif » %0:item[#0]UKeliiiiif » %1:supplier[#0]UKeliiiiif » %7:nation[#0]UKeliiiiif
                 ArrangeBy keys=[[#0]] // { arity: 1 }
                   Project (#0) // { arity: 1 }
-                    Filter (#0 < 1000) AND "%b" ~~(padchar(#4)) // { arity: 5 }
-                      Get materialize.public.item // { arity: 5 }
+                    Filter (#0 < 1000) AND like["%b"](padchar(#4)) // { arity: 5 }
+                      ReadStorage materialize.public.item // { arity: 5 }
                 ArrangeBy keys=[[#0]] // { arity: 2 }
                   Project (#0, #3) // { arity: 2 }
-                    Get materialize.public.supplier // { arity: 7 }
+                    ReadIndex on=supplier fk_supplier_nationkey=[*** full scan ***] // { arity: 7 }
                 ArrangeBy keys=[[#0, #1]] // { arity: 3 }
                   Project (#0, #1, #17) // { arity: 3 }
                     Filter (#0 < 1000) // { arity: 18 }
-                      Get materialize.public.stock // { arity: 18 }
+                      ReadIndex on=stock fk_stock_warehouse=[*** full scan ***] // { arity: 18 }
                 ArrangeBy keys=[[#2, #1, #0]] // { arity: 10 }
-                  Get materialize.public.orderline // { arity: 10 }
+                  ReadIndex on=orderline fk_orderline_order=[differential join] // { arity: 10 }
                 ArrangeBy keys=[[#3, #1, #2]] // { arity: 5 }
                   Project (#0..=#4) // { arity: 5 }
                     Filter (#8 <= 2012-01-02 00:00:00) AND (#8 >= 2007-01-02 00:00:00) AND (#3) IS NOT NULL // { arity: 9 }
                       Map (date_to_timestamp(#4)) // { arity: 9 }
-                        Get materialize.public.order // { arity: 8 }
+                        ReadIndex on=order fk_order_customer=[*** full scan ***] // { arity: 8 }
                 ArrangeBy keys=[[#0..=#2]] // { arity: 4 }
                   Project (#0..=#2, #21) // { arity: 4 }
                     Filter (#21) IS NOT NULL // { arity: 22 }
-                      Get materialize.public.customer // { arity: 22 }
+                      ReadIndex on=customer fk_customer_district=[*** full scan ***] // { arity: 22 }
                 ArrangeBy keys=[[#0]] // { arity: 2 }
                   Project (#0, #2) // { arity: 2 }
-                    Get materialize.public.nation // { arity: 4 }
+                    ReadIndex on=nation fk_nation_regionkey=[*** full scan ***] // { arity: 4 }
                 ArrangeBy keys=[[#0]] // { arity: 2 }
                   Project (#0, #1) // { arity: 2 }
-                    Get materialize.public.nation // { arity: 4 }
+                    ReadIndex on=nation fk_nation_regionkey=[*** full scan ***] // { arity: 4 }
                 ArrangeBy keys=[[#0]] // { arity: 1 }
                   Project (#0) // { arity: 1 }
                     Filter (#1 = "EUROPE") // { arity: 3 }
-                      Get materialize.public.region // { arity: 3 }
+                      ReadStorage materialize.public.region // { arity: 3 }
 
 Source materialize.public.item
-  filter=((#0 < 1000) AND "%b" ~~(padchar(#4)))
+  filter=((#0 < 1000) AND like["%b"](padchar(#4)))
 Source materialize.public.region
   filter=((#1 = "EUROPE"))
 
 Used Indexes:
-  - materialize.public.fk_customer_district
-  - materialize.public.fk_order_customer
-  - materialize.public.fk_orderline_order
-  - materialize.public.fk_stock_warehouse
-  - materialize.public.fk_nation_regionkey
-  - materialize.public.fk_supplier_nationkey
+  - materialize.public.fk_customer_district (*** full scan ***)
+  - materialize.public.fk_order_customer (*** full scan ***)
+  - materialize.public.fk_orderline_order (differential join)
+  - materialize.public.fk_stock_warehouse (*** full scan ***)
+  - materialize.public.fk_nation_regionkey (*** full scan ***)
+  - materialize.public.fk_supplier_nationkey (*** full scan ***)
 
 EOF
 
@@ -745,32 +750,32 @@ Explained Query:
               %4:order[#2, #1, #0]UKKK » %3:orderline[#2, #1, #0]KKKA » %1:stock[#0, #1]UKK » %0:item[#0]UKlf » %2:supplier[#0]UKlf » %5:nation[#0]UKlf
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Project (#0) // { arity: 1 }
-                Filter "%BB" ~~(padchar(#4)) // { arity: 5 }
-                  Get materialize.public.item // { arity: 5 }
+                Filter like["%BB"](padchar(#4)) // { arity: 5 }
+                  ReadStorage materialize.public.item // { arity: 5 }
             ArrangeBy keys=[[#0, #1]] // { arity: 3 }
               Project (#0, #1, #17) // { arity: 3 }
-                Get materialize.public.stock // { arity: 18 }
+                ReadIndex on=stock fk_stock_warehouse=[*** full scan ***] // { arity: 18 }
             ArrangeBy keys=[[#0]] // { arity: 2 }
               Project (#0, #3) // { arity: 2 }
-                Get materialize.public.supplier // { arity: 7 }
+                ReadIndex on=supplier fk_supplier_nationkey=[*** full scan ***] // { arity: 7 }
             ArrangeBy keys=[[#2, #1, #0]] // { arity: 10 }
-              Get materialize.public.orderline // { arity: 10 }
+              ReadIndex on=orderline fk_orderline_order=[differential join] // { arity: 10 }
             ArrangeBy keys=[[#2, #1, #0]] // { arity: 4 }
               Project (#0..=#2, #4) // { arity: 4 }
-                Get materialize.public.order // { arity: 8 }
+                ReadIndex on=order fk_order_customer=[*** full scan ***] // { arity: 8 }
             ArrangeBy keys=[[#0]] // { arity: 2 }
               Project (#0, #1) // { arity: 2 }
-                Get materialize.public.nation // { arity: 4 }
+                ReadIndex on=nation fk_nation_regionkey=[*** full scan ***] // { arity: 4 }
 
 Source materialize.public.item
-  filter=("%BB" ~~(padchar(#4)))
+  filter=(like["%BB"](padchar(#4)))
 
 Used Indexes:
-  - materialize.public.fk_order_customer
-  - materialize.public.fk_orderline_order
-  - materialize.public.fk_stock_warehouse
-  - materialize.public.fk_nation_regionkey
-  - materialize.public.fk_supplier_nationkey
+  - materialize.public.fk_order_customer (*** full scan ***)
+  - materialize.public.fk_orderline_order (differential join)
+  - materialize.public.fk_stock_warehouse (*** full scan ***)
+  - materialize.public.fk_nation_regionkey (*** full scan ***)
+  - materialize.public.fk_supplier_nationkey (*** full scan ***)
 
 EOF
 
@@ -804,22 +809,22 @@ Explained Query:
               ArrangeBy keys=[[#0..=#2]] // { arity: 7 }
                 Project (#0..=#2, #5, #8, #11, #21) // { arity: 7 }
                   Filter (#21) IS NOT NULL // { arity: 22 }
-                    Get materialize.public.customer // { arity: 22 }
+                    ReadIndex on=customer fk_customer_district=[*** full scan ***] // { arity: 22 }
               ArrangeBy keys=[[#3, #1, #2]] // { arity: 5 }
                 Project (#0..=#4) // { arity: 5 }
                   Filter (#3) IS NOT NULL AND (date_to_timestamp(#4) >= 2007-01-02 00:00:00) // { arity: 8 }
-                    Get materialize.public.order // { arity: 8 }
+                    ReadIndex on=order fk_order_customer=[*** full scan ***] // { arity: 8 }
               ArrangeBy keys=[[#2, #1, #0]] // { arity: 10 }
-                Get materialize.public.orderline // { arity: 10 }
+                ReadIndex on=orderline fk_orderline_order=[differential join] // { arity: 10 }
               ArrangeBy keys=[[#0]] // { arity: 2 }
                 Project (#0, #1) // { arity: 2 }
-                  Get materialize.public.nation // { arity: 4 }
+                  ReadIndex on=nation fk_nation_regionkey=[*** full scan ***] // { arity: 4 }
 
 Used Indexes:
-  - materialize.public.fk_customer_district
-  - materialize.public.fk_order_customer
-  - materialize.public.fk_orderline_order
-  - materialize.public.fk_nation_regionkey
+  - materialize.public.fk_customer_district (*** full scan ***)
+  - materialize.public.fk_order_customer (*** full scan ***)
+  - materialize.public.fk_orderline_order (differential join)
+  - materialize.public.fk_nation_regionkey (*** full scan ***)
 
 EOF
 
@@ -863,18 +868,18 @@ Explained Query:
             implementation
               %2:nation[#0]UKef » %1:supplier[#3]KAef » %0:stock[#17]KAef
             ArrangeBy keys=[[#17]] // { arity: 18 }
-              Get materialize.public.stock // { arity: 18 }
+              ReadIndex on=stock fk_stock_supplier=[differential join] // { arity: 18 }
             ArrangeBy keys=[[#3]] // { arity: 7 }
-              Get materialize.public.supplier // { arity: 7 }
+              ReadIndex on=supplier fk_supplier_nationkey=[differential join] // { arity: 7 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Project (#0) // { arity: 1 }
                 Filter (#1 = "GERMANY") // { arity: 4 }
-                  Get materialize.public.nation // { arity: 4 }
+                  ReadIndex on=nation fk_nation_regionkey=[*** full scan ***] // { arity: 4 }
 
 Used Indexes:
-  - materialize.public.fk_stock_supplier
-  - materialize.public.fk_nation_regionkey
-  - materialize.public.fk_supplier_nationkey
+  - materialize.public.fk_stock_supplier (differential join)
+  - materialize.public.fk_nation_regionkey (*** full scan ***)
+  - materialize.public.fk_supplier_nationkey (differential join)
 
 EOF
 
@@ -905,13 +910,13 @@ Explained Query:
               %0:order[#2, #1, #0]UKKK » %1:orderline[#2, #1, #0]KKKAif
             ArrangeBy keys=[[#2, #1, #0]] // { arity: 6 }
               Project (#0..=#2, #4..=#6) // { arity: 6 }
-                Get materialize.public.order // { arity: 8 }
+                ReadIndex on=order fk_order_customer=[*** full scan ***] // { arity: 8 }
             ArrangeBy keys=[[#2, #1, #0]] // { arity: 10 }
-              Get materialize.public.orderline // { arity: 10 }
+              ReadIndex on=orderline fk_orderline_order=[differential join] // { arity: 10 }
 
 Used Indexes:
-  - materialize.public.fk_order_customer
-  - materialize.public.fk_orderline_order
+  - materialize.public.fk_order_customer (*** full scan ***)
+  - materialize.public.fk_orderline_order (differential join)
 
 EOF
 
@@ -948,7 +953,7 @@ Explained Query:
                         Project (#0..=#21) // { arity: 22 }
                           Get l0 // { arity: 23 }
                   Project (#0) // { arity: 1 }
-                    Get materialize.public.customer // { arity: 22 }
+                    ReadIndex on=customer fk_customer_district=[*** full scan ***] // { arity: 22 }
     With
       cte l0 =
         Project (#0..=#22) // { arity: 23 }
@@ -957,13 +962,13 @@ Explained Query:
               implementation
                 %0:customer[#2, #1, #0]UKKK » %1:order[#2, #1, #3]KKKAif
               ArrangeBy keys=[[#2, #1, #0]] // { arity: 22 }
-                Get materialize.public.customer // { arity: 22 }
+                ReadIndex on=customer fk_customer_district=[*** full scan ***] // { arity: 22 }
               ArrangeBy keys=[[#2, #1, #3]] // { arity: 8 }
-                Get materialize.public.order // { arity: 8 }
+                ReadIndex on=order fk_order_customer=[differential join] // { arity: 8 }
 
 Used Indexes:
-  - materialize.public.fk_customer_district
-  - materialize.public.fk_order_customer
+  - materialize.public.fk_customer_district (*** full scan ***)
+  - materialize.public.fk_order_customer (differential join)
 
 EOF
 
@@ -992,7 +997,7 @@ Explained Query:
                 - ()
   With
     cte l0 =
-      Reduce aggregates=[sum(case when "PR%" ~~(padchar(#1)) then #0 else 0 end), sum(#0)] // { arity: 2 }
+      Reduce aggregates=[sum(case when like["PR%"](padchar(#1)) then #0 else 0 end), sum(#0)] // { arity: 2 }
         Project (#8, #11) // { arity: 2 }
           Filter (#12 < 2020-01-02 00:00:00) AND (#12 >= 2007-01-02 00:00:00) AND (#4) IS NOT NULL // { arity: 13 }
             Map (date_to_timestamp(#6)) // { arity: 13 }
@@ -1000,13 +1005,13 @@ Explained Query:
                 implementation
                   %1:item[#0]UK » %0:orderline[#4]KAiif
                 ArrangeBy keys=[[#4]] // { arity: 10 }
-                  Get materialize.public.orderline // { arity: 10 }
+                  ReadIndex on=orderline fk_orderline_item=[differential join] // { arity: 10 }
                 ArrangeBy keys=[[#0]] // { arity: 2 }
                   Project (#0, #4) // { arity: 2 }
-                    Get materialize.public.item // { arity: 5 }
+                    ReadStorage materialize.public.item // { arity: 5 }
 
 Used Indexes:
-  - materialize.public.fk_orderline_item
+  - materialize.public.fk_orderline_item (differential join)
 
 EOF
 
@@ -1052,7 +1057,7 @@ Explained Query:
               %1:l0[#0]UKA » %0:supplier[#0]UK » %2[#0]UK
             ArrangeBy keys=[[#0]] // { arity: 4 }
               Project (#0..=#2, #4) // { arity: 4 }
-                Get materialize.public.supplier // { arity: 7 }
+                ReadIndex on=supplier fk_supplier_nationkey=[*** full scan ***] // { arity: 7 }
             ArrangeBy keys=[[#0]] // { arity: 2 }
               Get l0 // { arity: 2 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
@@ -1069,15 +1074,15 @@ Explained Query:
                 implementation
                   %1:stock[#1, #0]UKK » %0:orderline[#5, #4]KKAif
                 ArrangeBy keys=[[#5, #4]] // { arity: 10 }
-                  Get materialize.public.orderline // { arity: 10 }
+                  ReadIndex on=orderline fk_orderline_stock=[differential join] // { arity: 10 }
                 ArrangeBy keys=[[#1, #0]] // { arity: 3 }
                   Project (#0, #1, #17) // { arity: 3 }
-                    Get materialize.public.stock // { arity: 18 }
+                    ReadIndex on=stock fk_stock_warehouse=[*** full scan ***] // { arity: 18 }
 
 Used Indexes:
-  - materialize.public.fk_orderline_stock
-  - materialize.public.fk_stock_warehouse
-  - materialize.public.fk_supplier_nationkey
+  - materialize.public.fk_orderline_stock (differential join)
+  - materialize.public.fk_stock_warehouse (*** full scan ***)
+  - materialize.public.fk_supplier_nationkey (*** full scan ***)
 
 EOF
 
@@ -1119,8 +1124,8 @@ Explained Query:
                         Get l1 // { arity: 1 }
                       ArrangeBy keys=[[#0]] // { arity: 1 }
                         Project (#0) // { arity: 1 }
-                          Filter "%bad%" ~~(padchar(#6)) // { arity: 7 }
-                            Get materialize.public.supplier // { arity: 7 }
+                          Filter like["%bad%"](padchar(#6)) // { arity: 7 }
+                            ReadIndex on=supplier fk_supplier_nationkey=[*** full scan ***] // { arity: 7 }
                 Get l1 // { arity: 1 }
     With
       cte l1 =
@@ -1133,18 +1138,18 @@ Explained Query:
             implementation
               %1:item[#0]UKf » %0:stock[#0]KAf
             ArrangeBy keys=[[#0]] // { arity: 18 }
-              Get materialize.public.stock // { arity: 18 }
+              ReadIndex on=stock fk_stock_item=[differential join] // { arity: 18 }
             ArrangeBy keys=[[#0]] // { arity: 4 }
               Project (#0, #2..=#4) // { arity: 4 }
-                Filter NOT("zz%" ~~(padchar(#4))) // { arity: 5 }
-                  Get materialize.public.item // { arity: 5 }
+                Filter NOT(like["zz%"](padchar(#4))) // { arity: 5 }
+                  ReadStorage materialize.public.item // { arity: 5 }
 
 Source materialize.public.item
-  filter=(NOT("zz%" ~~(padchar(#4))))
+  filter=(NOT(like["zz%"](padchar(#4))))
 
 Used Indexes:
-  - materialize.public.fk_stock_item
-  - materialize.public.fk_supplier_nationkey
+  - materialize.public.fk_stock_item (differential join)
+  - materialize.public.fk_supplier_nationkey (*** full scan ***)
 
 EOF
 
@@ -1181,7 +1186,7 @@ Explained Query:
     cte l1 =
       Reduce aggregates=[sum(#0)] // { arity: 1 }
         Project (#8) // { arity: 1 }
-          Filter (#4) IS NOT NULL AND (integer_to_double(#7) < (bigint_to_double(#11) / bigint_to_double(case when (#12 = 0) then null else #12 end))) // { arity: 13 }
+          Filter (#4) IS NOT NULL AND (integer_to_numeric(#7) < (bigint_to_numeric(#11) / bigint_to_numeric(case when (#12 = 0) then null else #12 end))) // { arity: 13 }
             Join on=(#4 = #10) type=differential // { arity: 13 }
               implementation
                 %1[#0]UKA » %0:l0[#4]KA
@@ -1195,18 +1200,18 @@ Explained Query:
                           %0:item[#0]UKlf » %1:l0[#4]KAlf
                         ArrangeBy keys=[[#0]] // { arity: 1 }
                           Project (#0) // { arity: 1 }
-                            Filter "%b" ~~(padchar(#4)) // { arity: 5 }
-                              Get materialize.public.item // { arity: 5 }
+                            Filter like["%b"](padchar(#4)) // { arity: 5 }
+                              ReadStorage materialize.public.item // { arity: 5 }
                         Get l0 // { arity: 10 }
     cte l0 =
       ArrangeBy keys=[[#4]] // { arity: 10 }
-        Get materialize.public.orderline // { arity: 10 }
+        ReadIndex on=orderline fk_orderline_item=[differential join] // { arity: 10 }
 
 Source materialize.public.item
-  filter=("%b" ~~(padchar(#4)))
+  filter=(like["%b"](padchar(#4)))
 
 Used Indexes:
-  - materialize.public.fk_orderline_item
+  - materialize.public.fk_orderline_item (differential join)
 
 EOF
 
@@ -1237,16 +1242,16 @@ Explained Query:
                   %0:customer[#2, #1, #0]UKKK » %1:order[#2, #1, #3]KKKA » %2:orderline[#2, #1, #0]KKKA
                 ArrangeBy keys=[[#2, #1, #0]] // { arity: 4 }
                   Project (#0..=#2, #5) // { arity: 4 }
-                    Get materialize.public.customer // { arity: 22 }
+                    ReadIndex on=customer fk_customer_district=[*** full scan ***] // { arity: 22 }
                 ArrangeBy keys=[[#2, #1, #3]] // { arity: 8 }
-                  Get materialize.public.order // { arity: 8 }
+                  ReadIndex on=order fk_order_customer=[differential join] // { arity: 8 }
                 ArrangeBy keys=[[#2, #1, #0]] // { arity: 10 }
-                  Get materialize.public.orderline // { arity: 10 }
+                  ReadIndex on=orderline fk_orderline_order=[differential join] // { arity: 10 }
 
 Used Indexes:
-  - materialize.public.fk_customer_district
-  - materialize.public.fk_order_customer
-  - materialize.public.fk_orderline_order
+  - materialize.public.fk_customer_district (*** full scan ***)
+  - materialize.public.fk_order_customer (differential join)
+  - materialize.public.fk_orderline_order (differential join)
 
 EOF
 
@@ -1293,25 +1298,29 @@ Explained Query:
     cte l0 =
       Reduce aggregates=[sum(#0)] // { arity: 1 }
         Project (#8) // { arity: 1 }
-          Filter (#7 <= 10) AND (#7 >= 1) AND (#4) IS NOT NULL AND (#12 OR #13 OR #14 OR #15 OR #16) AND (("%a" ~~(#17) AND (#12 OR #13 OR #14)) OR ("%b" ~~(#17) AND (#12 OR #13 OR #15)) OR ("%c" ~~(#17) AND (#12 OR #14 OR #16))) // { arity: 18 }
+          Filter (#7 <= 10) AND (#7 >= 1) AND (#4) IS NOT NULL AND (#12 OR #13 OR #14 OR #15 OR #16) AND ((like["%a"](#17) AND (#12 OR #13 OR #14)) OR (like["%b"](#17) AND (#12 OR #13 OR #15)) OR (like["%c"](#17) AND (#12 OR #14 OR #16))) // { arity: 18 }
             Map ((#2 = 1), (#2 = 2), (#2 = 3), (#2 = 4), (#2 = 5), padchar(#11)) // { arity: 18 }
               Join on=(#4 = #10) type=differential // { arity: 12 }
                 implementation
                   %1:item[#0]UKliif » %0:orderline[#4]KAeliiiif
                 ArrangeBy keys=[[#4]] // { arity: 10 }
-                  Get materialize.public.orderline // { arity: 10 }
+                  ReadIndex on=orderline fk_orderline_item=[differential join] // { arity: 10 }
                 ArrangeBy keys=[[#0]] // { arity: 2 }
                   Project (#0, #4) // { arity: 2 }
-                    Filter (#3 <= 400000) AND (#3 >= 1) AND ("%a" ~~(#5) OR "%b" ~~(#5) OR "%c" ~~(#5)) // { arity: 6 }
+                    Filter (#3 <= 400000) AND (#3 >= 1) AND (like["%a"](#5) OR like["%b"](#5) OR like["%c"](#5)) // { arity: 6 }
                       Map (padchar(#4)) // { arity: 6 }
-                        Get materialize.public.item // { arity: 5 }
+                        ReadStorage materialize.public.item // { arity: 5 }
 
 Source materialize.public.item
-  filter=((#3 <= 400000) AND (#3 >= 1) AND ("%a" ~~(#5) OR "%b" ~~(#5) OR "%c" ~~(#5)))
+  filter=((#3 <= 400000) AND (#3 >= 1) AND (like["%a"](#5) OR like["%b"](#5) OR like["%c"](#5)))
   map=(padchar(#4))
 
 Used Indexes:
-  - materialize.public.fk_orderline_item
+  - materialize.public.fk_orderline_item (differential join)
+
+Notices:
+  - Notice: Index materialize.public.fk_orderline_order on orderline(ol_w_id, ol_d_id, ol_o_id) is too wide to use for literal equalities `ol_w_id IN (1, 2, 3, 4, 5)`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (ol_w_id).
 
 EOF
 
@@ -1346,24 +1355,24 @@ Explained Query:
           ArrangeBy keys=[[#0]] // { arity: 1 }
             Distinct group_by=[#0] // { arity: 1 }
               Project (#0) // { arity: 1 }
-                Filter (integer_to_bigint((2 * #3)) > #4) AND (#0 = ((#1 * #2) % 10000)) // { arity: 5 }
+                Filter (integer_to_bigint((2 * #3)) > #4) // { arity: 5 }
                   Reduce group_by=[#0..=#3] aggregates=[sum(#4)] // { arity: 5 }
                     Project (#0..=#3, #26) // { arity: 5 }
                       Filter (#1) IS NOT NULL AND (date_to_timestamp(#25) > 2010-05-23 12:00:00) // { arity: 30 }
-                        Join on=(eq(#1, #23, #29)) type=differential // { arity: 30 }
+                        Join on=(#0 = ((#1 * #2) % 10000) AND eq(#1, #23, #29)) type=differential // { arity: 30 }
                           implementation
-                            %3:item[#0]UKlf » %2:orderline[#4]KAlif » %1:stock[#0]KAlif » %0:l0[×]lif
-                          ArrangeBy keys=[[]] // { arity: 1 }
+                            %3:item[#0]UKlf » %2:orderline[#4]KAlif » %1:stock[#0]KAlif » %0:l0[#0]UKlif
+                          ArrangeBy keys=[[#0]] // { arity: 1 }
                             Project (#0) // { arity: 1 }
                               Get l0 // { arity: 3 }
                           ArrangeBy keys=[[#0]] // { arity: 18 }
-                            Get materialize.public.stock // { arity: 18 }
+                            ReadIndex on=stock fk_stock_item=[differential join] // { arity: 18 }
                           ArrangeBy keys=[[#4]] // { arity: 10 }
-                            Get materialize.public.orderline // { arity: 10 }
+                            ReadIndex on=orderline fk_orderline_item=[differential join] // { arity: 10 }
                           ArrangeBy keys=[[#0]] // { arity: 1 }
                             Project (#0) // { arity: 1 }
-                              Filter "co%" ~~(padchar(#4)) // { arity: 5 }
-                                Get materialize.public.item // { arity: 5 }
+                              Filter like["co%"](padchar(#4)) // { arity: 5 }
+                                ReadStorage materialize.public.item // { arity: 5 }
     With
       cte l0 =
         Project (#0..=#2) // { arity: 3 }
@@ -1371,20 +1380,20 @@ Explained Query:
             implementation
               %1:nation[#0]UKef » %0:supplier[#3]KAef
             ArrangeBy keys=[[#3]] // { arity: 7 }
-              Get materialize.public.supplier // { arity: 7 }
+              ReadIndex on=supplier fk_supplier_nationkey=[differential join] // { arity: 7 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Project (#0) // { arity: 1 }
                 Filter (#1 = "GERMANY") // { arity: 4 }
-                  Get materialize.public.nation // { arity: 4 }
+                  ReadIndex on=nation fk_nation_regionkey=[*** full scan ***] // { arity: 4 }
 
 Source materialize.public.item
-  filter=("co%" ~~(padchar(#4)))
+  filter=(like["co%"](padchar(#4)))
 
 Used Indexes:
-  - materialize.public.fk_orderline_item
-  - materialize.public.fk_stock_item
-  - materialize.public.fk_nation_regionkey
-  - materialize.public.fk_supplier_nationkey
+  - materialize.public.fk_orderline_item (differential join)
+  - materialize.public.fk_stock_item (differential join)
+  - materialize.public.fk_nation_regionkey (*** full scan ***)
+  - materialize.public.fk_supplier_nationkey (differential join)
 
 EOF
 
@@ -1451,28 +1460,28 @@ Explained Query:
                 %2:order[#2, #1, #0]UKKK » %1:l0[#2, #1, #0]KKKA » %3:stock[#0, #1]UKK » %0:supplier[#0]UK » %4:nation[#0]UKef
               ArrangeBy keys=[[#0]] // { arity: 3 }
                 Project (#0, #1, #3) // { arity: 3 }
-                  Get materialize.public.supplier // { arity: 7 }
+                  ReadIndex on=supplier fk_supplier_nationkey=[*** full scan ***] // { arity: 7 }
               Get l0 // { arity: 10 }
               ArrangeBy keys=[[#2, #1, #0]] // { arity: 4 }
                 Project (#0..=#2, #4) // { arity: 4 }
-                  Get materialize.public.order // { arity: 8 }
+                  ReadIndex on=order fk_order_customer=[*** full scan ***] // { arity: 8 }
               ArrangeBy keys=[[#0, #1]] // { arity: 3 }
                 Project (#0, #1, #17) // { arity: 3 }
-                  Get materialize.public.stock // { arity: 18 }
+                  ReadIndex on=stock fk_stock_warehouse=[*** full scan ***] // { arity: 18 }
               ArrangeBy keys=[[#0]] // { arity: 1 }
                 Project (#0) // { arity: 1 }
                   Filter (#1 = "GERMANY") // { arity: 4 }
-                    Get materialize.public.nation // { arity: 4 }
+                    ReadIndex on=nation fk_nation_regionkey=[*** full scan ***] // { arity: 4 }
       cte l0 =
         ArrangeBy keys=[[#2, #1, #0]] // { arity: 10 }
-          Get materialize.public.orderline // { arity: 10 }
+          ReadIndex on=orderline fk_orderline_order=[differential join] // { arity: 10 }
 
 Used Indexes:
-  - materialize.public.fk_order_customer
-  - materialize.public.fk_orderline_order
-  - materialize.public.fk_stock_warehouse
-  - materialize.public.fk_nation_regionkey
-  - materialize.public.fk_supplier_nationkey
+  - materialize.public.fk_order_customer (*** full scan ***)
+  - materialize.public.fk_orderline_order (differential join)
+  - materialize.public.fk_stock_warehouse (*** full scan ***)
+  - materialize.public.fk_nation_regionkey (*** full scan ***)
+  - materialize.public.fk_supplier_nationkey (*** full scan ***)
 
 EOF
 
@@ -1522,7 +1531,7 @@ Explained Query:
                         Distinct group_by=[#2, #0, #1] // { arity: 3 }
                           Project (#1..=#3) // { arity: 3 }
                             Filter (#3) IS NOT NULL // { arity: 8 }
-                              Get materialize.public.order // { arity: 8 }
+                              ReadIndex on=order fk_order_customer=[*** full scan ***] // { arity: 8 }
                 Get l2 // { arity: 3 }
     With
       cte l2 =
@@ -1530,7 +1539,7 @@ Explained Query:
           Get l1 // { arity: 5 }
       cte l1 =
         Project (#0..=#4) // { arity: 5 }
-          Filter (numeric_to_double(#4) > (numeric_to_double(#5) / bigint_to_double(case when (#6 = 0) then null else #6 end))) // { arity: 7 }
+          Filter (#4 > (#5 / bigint_to_numeric(case when (#6 = 0) then null else #6 end))) // { arity: 7 }
             CrossJoin type=differential // { arity: 7 }
               implementation
                 %1[×]UA » %0:l0[×]ef
@@ -1545,10 +1554,10 @@ Explained Query:
                       Get l0 // { arity: 23 }
       cte l0 =
         Map (substr(char_to_text(#11), 1, 1)) // { arity: 23 }
-          Get materialize.public.customer // { arity: 22 }
+          ReadIndex on=customer fk_customer_district=[*** full scan ***] // { arity: 22 }
 
 Used Indexes:
-  - materialize.public.fk_customer_district
-  - materialize.public.fk_order_customer
+  - materialize.public.fk_customer_district (*** full scan ***)
+  - materialize.public.fk_order_customer (*** full scan ***)
 
 EOF

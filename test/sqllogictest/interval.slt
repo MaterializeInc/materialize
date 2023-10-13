@@ -704,10 +704,10 @@ SELECT INTERVAL '1' YEAR * 13/12
 ----
 1 year 1 month
 
-query error interval out of range
+query error "10 years \* 10000000000" interval out of range
 SELECT INTERVAL '10 years' *  9999999999.999999999;
 
-query error interval out of range
+query error "10 years / 0.000000000000000001" interval out of range
 SELECT INTERVAL '10 years' / 0.000000000000000001;
 
 # In an idiosyncratic fashion when dividing/multiplying an interval,
@@ -781,16 +781,16 @@ SELECT INTERVAL '-2147483648 days -2562047788 hours -60 min'
 statement error Overflows maximum microseconds;
 SELECT INTERVAL '-2147483648 days -2562047788 hours -59 min -60 sec'
 
-statement error interval out of range
+statement error "2147483647 days 2562047788:00:54 \+ 00:00:01" interval out of range
 SELECT INTERVAL '2147483647 days 2562047788 hours 54 seconds' + INTERVAL '1'
 
-statement error interval out of range
+statement error "-2147483648 days -2562047788:00:54 - 00:00:01" interval out of range
 SELECT INTERVAL '-2147483648 days -2562047788 hours -54 seconds' - INTERVAL '1'
 
-statement error interval out of range
+statement error "178956970 years 7 months / 0.99" interval out of range
 SELECT INTERVAL '2147483647' MONTH / 0.99
 
-statement error interval out of range
+statement error "-178956970 years -7 months \* 1.01" interval out of range
 SELECT INTERVAL '-2147483647' MONTH * 1.01
 
 # Largest number of cumulative nanoseconds
@@ -1192,25 +1192,25 @@ SELECT INTERVAL '1 millenniums 2 centuries 3 decades 4 years'
 ----
 1234 years
 
-query error interval out of range
+query error "-178956970 years -8 months" interval out of range
 SELECT -INTERVAL '-2147483648 months';
 
-query error interval out of range
+query error "-2147483648 days" interval out of range
 SELECT -INTERVAL '-2147483648 days';
 
-query error interval out of range
+query error "-2562047788:00:54.775808" interval out of range
 SELECT -INTERVAL '-9223372036854775808 microseconds';
 
-query error interval out of range
+query error "-1 months - -178956970 years -8 months" interval out of range
 SELECT INTERVAL '-1 months' - INTERVAL '-2147483648 months';
 
-query error interval out of range
+query error "-1 days - -2147483648 days" interval out of range
 SELECT INTERVAL '-1 day' - INTERVAL '-2147483648 days';
 
-query error interval out of range
+query error "-01:00:00 \+ -2562047788:00:00" interval out of range
 SELECT INTERVAL '-1 hours' + INTERVAL '-2562047788 hours';
 
-query error interval out of range
+query error "-2147483648 days -2562047787:59:59.999999" interval out of range
 SELECT -INTERVAL '-2147483648 days -2562047787 hours -59 minutes -59.999999 seconds';
 
 # Cast Interval to time
@@ -1360,10 +1360,10 @@ SELECT justify_interval(interval '1 month -1 hour');
 ----
 29 days 23:00:00
 
-query error interval out of range
+query error "2147483647 days 24:00:00" interval out of range
 SELECT justify_hours(interval '2147483647 days 24 hrs');
 
-query error interval out of range
+query error "178956970 years 7 months 30 days" interval out of range
 SELECT justify_days(interval '2147483647 months 30 days');
 
 query T
@@ -1376,10 +1376,10 @@ SELECT justify_interval(interval '-2147483648 days -24 hrs');
 ----
 -5965232 years -4 months -9 days
 
-query error interval out of range
+query error "178956970 years 7 months 30 days" interval out of range
 SELECT justify_interval(interval '2147483647 months 30 days');
 
-query error interval out of range
+query error "-178956970 years -8 months -30 days" interval out of range
 SELECT justify_interval(interval '-2147483648 months -30 days');
 
 query T
@@ -1392,8 +1392,45 @@ SELECT justify_interval(interval '-2147483648 months -30 days 24 hrs');
 ----
 -178956970 years -8 months -29 days
 
-query error interval out of range
+query error "178956970 years 7 months -30 days \+1440:00:00" interval out of range
 SELECT justify_interval(interval '2147483647 months -30 days 1440 hrs');
 
-query error interval out of range
+query error "-178956970 years -8 months \+30 days -1440:00:00" interval out of range
 SELECT justify_interval(interval '-2147483648 months 30 days -1440 hrs');
+
+# TIMESTAMP/DATE builtins.
+
+query T
+SELECT age('2001-04-10 22:06:45', '1957-06-13')
+----
+43 years 9 months 27 days 22:06:45
+
+query T
+SELECT age('2017-12-10'::timestamptz, '2017-12-01'::timestamptz)
+----
+9 days
+
+query T
+SELECT age('2017-12-10 04:05:01.555'::timestamp, '2017-12-10 04:05:01.550'::timestamp);
+----
+00:00:00.005
+
+query T
+SELECT age('0001-06-01 08:10:56.555'::timestamp, '9999-12-10 04:05:01.550'::timestamp);
+----
+-9998 years -6 months -8 days -19:54:04.995
+
+query B
+SELECT age('2020-04-05'::date + '03:00'::time, '2020-04-05'::date + '02:00'::time) = '1 hour'::interval;
+----
+true
+
+query T
+SELECT age(to_timestamp(-210833720368), to_timestamp(8200000000000));
+----
+-266528 years -8 months -17 days -12:06:08
+
+query T
+SELECT age(to_timestamp(8200000000000), to_timestamp(-210833720368));
+----
+266528 years 8 months 17 days 12:06:08

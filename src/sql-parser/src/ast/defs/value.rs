@@ -62,6 +62,23 @@ pub enum Value {
 
 impl AstDisplay for Value {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        if f.redacted() {
+            // When adding branches to this match statement, think about whether it is OK for us to collect
+            // the value as part of our telemetry. Check the data management policy to be sure!
+            match self {
+                Value::Number(_) | Value::String(_) | Value::HexString(_) => {
+                    f.write_str("<REDACTED>");
+                    return;
+                }
+                Value::Interval(_) => {
+                    f.write_str("INTERVAL <REDACTED>");
+                    return;
+                }
+                Value::Boolean(_) | Value::Null => {
+                    // These are fine to log, so just fall through.
+                }
+            }
+        }
         match self {
             Value::Number(v) => f.write_str(v),
             Value::String(v) => {
@@ -75,18 +92,6 @@ impl AstDisplay for Value {
                 f.write_str("'");
             }
             Value::Boolean(v) => f.write_str(v),
-            Value::Interval(IntervalValue {
-                value,
-                precision_high: _,
-                precision_low: _,
-                fsec_max_precision: Some(fsec_max_precision),
-            }) => {
-                f.write_str("INTERVAL '");
-                f.write_node(&display::escape_single_quote_string(value));
-                f.write_str("' SECOND (");
-                f.write_str(fsec_max_precision);
-                f.write_str(")");
-            }
             Value::Interval(IntervalValue {
                 value,
                 precision_high,

@@ -11,14 +11,12 @@ from dataclasses import dataclass
 from string import ascii_lowercase
 from textwrap import dedent
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import (
-    Clusterd,
-    Materialized,
-    Postgres,
-    Redpanda,
-    Testdrive,
-)
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.redpanda import Redpanda
+from materialize.mzcompose.services.testdrive import Testdrive
 
 # Those defaults have been carefully chosen to avoid known OOMs
 # such as #15093 and #15044 while hopefully catching any further
@@ -49,7 +47,7 @@ class Scenario:
 
 class PgCdcScenario(Scenario):
     PG_SETUP = dedent(
-        f"""
+        """
         > CREATE SECRET pgpass AS 'postgres'
         > CREATE CONNECTION pg FOR POSTGRES
           HOST postgres,
@@ -67,7 +65,7 @@ class PgCdcScenario(Scenario):
         """
     )
     MZ_SETUP = dedent(
-        f"""
+        """
         > CREATE SOURCE mz_source
           IN CLUSTER clusterd
           FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
@@ -124,9 +122,9 @@ class KafkaScenario(Scenario):
     )
 
     END_MARKER = dedent(
-        f"""
-        $ kafka-ingest format=avro key-format=avro topic=topic1 schema=${{value-schema}} key-schema=${{key-schema}}
-        "ZZZ" {{"f1": "END MARKER"}}
+        """
+        $ kafka-ingest format=avro key-format=avro topic=topic1 schema=${value-schema} key-schema=${key-schema}
+        "ZZZ" {"f1": "END MARKER"}
         """
     )
 
@@ -187,7 +185,7 @@ SCENARIOS = [
         + "\n".join(
             [
                 dedent(
-                    f"""
+                    """
                     $ postgres-execute connection=postgres://postgres:postgres@postgres
                     UPDATE t1 SET f2 = f2 + 1;
                     """
@@ -289,7 +287,7 @@ SCENARIOS = [
         )
         + KafkaScenario.END_MARKER
         + dedent(
-            f"""
+            """
             # Expect just the two MARKERs
             > SELECT * FROM v1;
             2
@@ -323,7 +321,7 @@ SCENARIOS = [
             ]
         )
         + dedent(
-            f"""
+            """
             > SELECT * FROM v1;
             0
             """
@@ -364,6 +362,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         c.down(destroy_volumes=True)
 
         c.up("redpanda", "materialized", "postgres", "clusterd")
+
+        c.sql(
+            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
+        )
 
         c.sql(
             """

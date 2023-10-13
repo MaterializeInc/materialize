@@ -1,0 +1,29 @@
+[package]
+name = "mz-aws-secrets-controller"
+version = "0.1.0"
+authors = ["Materialize, Inc."]
+license = "proprietary"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.66"
+async-trait = "0.1.68"
+aws-config = { version = "0.55", default-features = false, features = ["native-tls"] }
+aws-credential-types = { version = "0.55", features = ["hardcoded-credentials"] }
+aws-sdk-secretsmanager = { version = "0.26", default-features = false, features = ["native-tls", "rt-tokio"] }
+aws-types = "0.55"
+futures = { version = "0.3.25" }
+mz-secrets = { path = "../secrets" }
+mz-repr = { path = "../repr" }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+tracing = "0.1.37"
+
+[features]
+default = ["workspace-hack"]
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]

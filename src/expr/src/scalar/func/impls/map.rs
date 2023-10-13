@@ -9,11 +9,10 @@
 
 use std::fmt;
 
-use proptest_derive::Arbitrary;
-use serde::{Deserialize, Serialize};
-
 use mz_lowertest::MzReflect;
 use mz_repr::{ColumnType, Datum, RowArena, ScalarType};
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
 
 use crate::scalar::func::{stringify_datum, LazyUnaryFunc};
 use crate::{EvalError, MirScalarExpr};
@@ -61,6 +60,10 @@ impl LazyUnaryFunc for CastMapToString {
         // TODO? If we moved typeconv into expr, we could evaluate this
         None
     }
+
+    fn is_monotone(&self) -> bool {
+        false
+    }
 }
 
 impl fmt::Display for CastMapToString {
@@ -85,9 +88,10 @@ impl LazyUnaryFunc for MapLength {
         if a.is_null() {
             return Ok(Datum::Null);
         }
-        match a.unwrap_map().iter().count().try_into() {
+        let count = a.unwrap_map().iter().count();
+        match count.try_into() {
             Ok(c) => Ok(Datum::Int32(c)),
-            Err(_) => Err(EvalError::Int32OutOfRange),
+            Err(_) => Err(EvalError::Int32OutOfRange(count.to_string())),
         }
     }
 
@@ -109,6 +113,10 @@ impl LazyUnaryFunc for MapLength {
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         None
+    }
+
+    fn is_monotone(&self) -> bool {
+        false
     }
 }
 

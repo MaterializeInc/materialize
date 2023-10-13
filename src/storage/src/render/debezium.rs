@@ -12,18 +12,17 @@ use std::collections::{BTreeMap, VecDeque};
 use std::str::FromStr;
 
 use differential_dataflow::{AsCollection, Collection, Hashable};
-use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::{Capability, OkErr, Operator};
-use timely::dataflow::{Scope, ScopeParent};
-
 use mz_expr::EvalError;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Row, Timestamp};
-use mz_storage_client::types::errors::{DataflowError, EnvelopeError};
-use mz_storage_client::types::sources::{
+use mz_storage_types::errors::{DataflowError, EnvelopeError};
+use mz_storage_types::sources::{
     DebeziumDedupProjection, DebeziumEnvelope, DebeziumSourceProjection,
     DebeziumTransactionMetadata, MzOffset,
 };
+use timely::dataflow::channels::pact::{Exchange, Pipeline};
+use timely::dataflow::operators::{Capability, OkErr, Operator};
+use timely::dataflow::{Scope, ScopeParent};
 
 use crate::source::types::DecodeResult;
 
@@ -39,8 +38,7 @@ where
     let (oks, errs) = input
         .inner
         .unary(Pipeline, "envelope-debezium", move |_, _| {
-            let mut dedup_state = BTreeMap::new();
-            let envelope = envelope.clone();
+            let mut dedup_state = DebeziumDeduplicationState::new(envelope.clone());
             let mut data = vec![];
             move |input, output| {
                 while let Some((cap, refmut_data)) = input.next() {
@@ -63,10 +61,7 @@ where
                         };
 
                         // TODO(#11664): Dedup and process the data before combining / merging data with tx metadata
-                        let partition_dedup = dedup_state
-                            .entry(result.partition.clone())
-                            .or_insert_with(|| DebeziumDeduplicationState::new(envelope.clone()));
-                        let should_use = match partition_dedup {
+                        let should_use = match dedup_state {
                             Some(ref mut s) => {
                                 let res = s.should_use_record(&value);
                                 match res {
@@ -182,11 +177,10 @@ where
             Exchange::new(data_dist),
             "envelope-debezium-tx",
             {
-                let envelope = envelope.clone();
                 let mut tx_data = vec![];
                 let mut data = vec![];
                 let mut data_buffer = VecDeque::new();
-                let mut dedup_state = BTreeMap::new();
+                let mut dedup_state = DebeziumDeduplicationState::new(envelope.clone());
 
                 // Keep mapping of `transaction_id`s to the timestamp at which that transaction END record was read from
                 // the transaction metadata stream.  That stored timestamp will be the timestamp for all data records
@@ -297,12 +291,7 @@ where
                                 _ => panic!("Previously validated to be nullable list"),
                             };
 
-                            let partition_dedup = dedup_state
-                                .entry(result.partition.clone())
-                                .or_insert_with(|| {
-                                    DebeziumDeduplicationState::new(envelope.clone())
-                                });
-                            let should_use = match partition_dedup {
+                            let should_use = match dedup_state {
                                 Some(ref mut s) => {
                                     let res = s.should_use_record(
                                         &value,

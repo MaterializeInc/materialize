@@ -68,11 +68,17 @@ This is a note.
 This is a warning.
 {{</ warning >}}
 
-### `beta` shortcode
+### `private-preview` shortcode
 
-{{< beta >}}
-This is a beta notice.
-{{</ beta >}}
+{{< private-preview >}}
+This is a private preview notice.
+{{</ private-preview >}}
+
+### `public-preview` shortcode
+
+{{< public-preview >}}
+This is a public preview notice.
+{{</ public-preview >}}
 
 
 ### `cta` shortcode

@@ -9,6 +9,9 @@
 #
 # Test SSH key generation and management for SSH connections
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_connection_validation_syntax = true
+
 > SELECT * FROM mz_ssh_tunnel_connections;
 id public_key_1 public_key_2
 ----------------------------
@@ -82,7 +85,7 @@ name     pkey1 pkey2
     DATABASE 'source',
     USER 'yshtola',
     SSH TUNNEL phoenix
-  );
+  ) WITH (VALIDATE = false);
 
 ! CREATE CONNECTION papalymo TO POSTGRES (
     HOST 'gridania.example.com',

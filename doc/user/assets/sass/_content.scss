@@ -90,6 +90,10 @@ p+p {
 
     ul {
         margin: var(--micro) 0;
+    }
+
+    ul,
+    ol {
         padding-left: var(--small);
     }
 
@@ -383,18 +387,29 @@ p+p {
         }
     }
 
-    ol.has-p {
+    ol.has-p:not(ol.has-p ol.has-p) {
         list-style-type: none;
         counter-reset: list-counter;
         margin: 0;
         padding: 0;
 
-        li {
+         >li {
             counter-increment: list-counter;
             min-height: 5rem;
             position: relative;
             padding: 1.6rem 0 1.6rem 6rem;
             border-top: 1px solid var(--divider-light);
+
+            ul,
+            ol {
+                padding-left: var(--milli);
+            }
+
+            ol {
+                li {
+                    list-style-type: lower-alpha;
+                }
+            }
 
             @media(max-width: 850px) {
                 padding-left: 4.5rem;
@@ -442,7 +457,7 @@ p+p {
     }
 
     .warning,
-    .alpha {
+    .private-preview {
         background: rgba(238, 134, 96, 0.05);
         border: 1px solid rgba(238, 134, 96, 0.2);
 
@@ -484,7 +499,7 @@ p+p {
         }
     }
 
-    .beta {
+    .public-preview {
         background: #d8fad9;
         border: 1px solid #c0d8c5;
         color: var(--black);
@@ -501,8 +516,8 @@ p+p {
 
     .warning,
     .note,
-    .alpha,
-    .beta {
+    .private-preview,
+    .public-preview {
         box-sizing: border-box;
         margin: 1.6rem 0;
         padding: 1.6rem 1.6rem 1.6rem 9.6rem;
@@ -714,37 +729,6 @@ p+p {
         }
     }
 
-
-    .table-scrollable {
-        box-shadow: inset 0 -4px 3px -3px $medium-grey-v2;
-        margin: 1rem 0 3rem;
-        overflow: auto;
-
-        table {
-            width: 100%;
-        }
-
-        thead th {
-            background: #fff;
-            border: 0;
-            position: sticky;
-            top: 0;
-
-            &:after {
-                border-bottom: 2px $purple-v2 solid;
-                content: "";
-                bottom: -1px;
-                left: 0;
-                right: 0;
-                position: absolute;
-            }
-        }
-
-        &+* {
-            margin-top: 3rem !important;
-        }
-    }
-
     #subscribe_dialog {
         display: none;
         z-index: 10;
@@ -821,6 +805,40 @@ p+p {
     }
 }
 
+.table-scrollable {
+    box-shadow: inset 0 -4px 3px -3px $medium-grey-v2;
+    margin: 1rem 0 3rem;
+    overflow: auto;
+
+    .table-container {
+        overflow: visible;
+    }
+
+    table {
+        width: 100%;
+    }
+
+    thead th {
+        background: #fff;
+        position: sticky;
+        top: 0;
+
+        &:after {
+            border-bottom: 1px var(--highlight) solid;
+            content: "";
+            bottom: -1px;
+            left: 0;
+            right: 0;
+            position: absolute;
+        }
+    }
+
+    &+* {
+        margin-top: 3rem !important;
+    }
+}
+
+
 .level-of-support {
     display: inline-block;
     width: 17px;
@@ -854,6 +872,7 @@ p+p {
     font-weight: 300;
     border: none;
     background-color: $grey-light;
+    color: var(--black);
     height: 26px;
     padding: 0 12px;
     cursor: pointer;
@@ -918,6 +937,134 @@ p+p {
     }
 }
 
+div.json_widget {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+
+    position: relative;
+
+    .input_container {
+        display: inline-flex;
+        flex-direction: row;
+
+        margin: 16px;
+
+        .input_container-text {
+            display: inline-flex;
+            flex-direction: column;
+            flex-grow: 3;
+
+            input {
+                width: 100%;
+
+                border: 1px solid #E0DEE3;
+                border-radius: 8px;
+                margin: 8px 0;
+                padding: 8px;
+
+                background-color: #F7F7F8;
+                box-shadow: none;
+                font-size: 16px;
+            }
+
+            .light & input {
+                background-color: #F7F7F8;
+            }
+            .dark & input {
+                background-color: #000000;
+            }
+
+            input::placeholder {
+                color: #BCB9C0;
+            }
+        }
+
+        .input_container-radio {
+            display: inline-flex;
+            flex-direction: column;
+            flex-grow: 1;
+            justify-content: center;
+
+            margin: 0 16px 12px;
+            padding: 16px;
+
+            border: 1px solid #E0DEE3;
+            border-radius: 8px;
+
+            legend {
+                padding: 0 4px;
+            }
+        }
+    }
+
+    .json {
+        display: flex;
+        position: relative;
+        width: 100%;
+
+        margin-top: 16px;
+
+        textarea {
+            height: 400px;
+            width: 100%;
+            resize: none;
+
+            border: 1px solid #E0DEE3;
+            border-radius: 8px;
+            margin: 16px;
+            padding: 8px;
+        }
+
+        textarea::placeholder {
+            opacity: 0.1;
+            font-size: 4vw;
+            text-align: center;
+            line-height: 350px;
+        }
+
+        .error {
+            position: absolute;
+            bottom: 32px;
+
+            // Hack to center the error dialog.
+            left: 50%;
+            transform: translateX(-50%);
+
+            opacity: 80%;
+            width: calc(100% - 64px);
+
+            p {
+                background-color: rgba(229, 6, 68, 0.4);
+                border-radius: 8px;
+                font-weight: 500;
+                padding: 8px;
+            }
+
+            .light & p {
+                color: #803737;
+            }
+
+            .dark & p {
+                color: #fe1d5e;
+            }
+        }
+
+        .error-visible {
+            opacity: 1;
+            transition: opacity 100ms ease-in;
+        }
+
+        .error-hidden {
+            opacity: 0;
+            transition: opacity 100ms ease-in;
+        }
+    }
+
+    .sql_output {
+        margin: 16px;
+    }
+}
 
 .notify_button {
     font-size: 1rem;
@@ -957,17 +1104,9 @@ body.dark .content {
     }
 
     .warning,
-    .alpha {
+    .private-preview {
         .gutter {
             color: #ff8504;
-        }
-    }
-
-    .table-scrollable {
-        thead th {
-            &:after {
-                border-bottom: 2px solid var(--link);
-            }
         }
     }
 

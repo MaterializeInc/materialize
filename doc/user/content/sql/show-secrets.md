@@ -6,8 +6,6 @@ menu:
     parent: commands
 ---
 
-{{< show-command-note >}}
-
 `SHOW SECRETS` lists the names of the secrets securely stored in Materialize's secret management system. There is no way to show the contents of an existing secret, though you can override it using the [`ALTER SECRET`](../alter-secret) statement.
 
 ## Syntax

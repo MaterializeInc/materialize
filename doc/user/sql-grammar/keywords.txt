@@ -1,1 +1,1 @@
-../../../src/sql-parser/src/keywords.txt
+../../../src/sql-lexer/src/keywords.txt

@@ -7,15 +7,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import (
-    Kafka,
-    Materialized,
-    SchemaRegistry,
-    TestCerts,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
+from materialize.mzcompose.services.test_certs import TestCerts
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
     TestCerts(),
@@ -95,26 +94,48 @@ SERVICES = [
             "--ccsr-username=materialize "
             '--var=materialized-kafka-key="$$(</share/secrets/materialized-kafka.key)" '
             '--var=materialized-kafka-crt="$$(</share/secrets/materialized-kafka.crt)" '
+            '--var=materialized-kafka1-key="$$(</share/secrets/materialized-kafka1.key)" '
+            '--var=materialized-kafka1-crt="$$(</share/secrets/materialized-kafka1.crt)" '
             '--var=materialized-schema-registry-key="$$(</share/secrets/materialized-schema-registry.key)" '
             '--var=materialized-schema-registry-crt="$$(</share/secrets/materialized-schema-registry.crt)" '
             '--var=ca-crt="$$(</share/secrets/ca.crt)" '
+            '--var=ca-alt-crt="$$(</share/secrets/ca-selective.crt)" '
             '"$$@"',
         ],
         volumes_extra=["secrets:/share/secrets"],
         # Required to install root certs above
         propagate_uid_gid=False,
     ),
+    SshBastionHost(),
 ]
 
 
-def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    """ "Run testdrive against an SSL-enabled Confluent Platform."""
-    parser.add_argument(
-        "files",
-        nargs="*",
-        default=["*.td"],
-        help="run against the specified files",
-    )
-    args = parser.parse_args()
+def workflow_default(c: Composition) -> None:
+    """Run testdrive against an SSL-enabled Confluent Platform."""
+    c.workflow("smoketest")
+    c.workflow("ssh-tunnel")
+
+
+def workflow_smoketest(c: Composition) -> None:
+    c.down(destroy_volumes=True)
     c.up("zookeeper", "kafka", "schema-registry", "materialized")
-    c.run("testdrive", *args.files)
+    c.run("testdrive", "multi.td", "smoketest.td")
+
+
+def workflow_ssh_tunnel(c: Composition) -> None:
+    # NOTE(benesch): This workflow and supporting testdrive scripts duplicate
+    # too much code with the tests in test/ssh-bastion for my liking, but it
+    # was the best I could do on a tight deadline.
+    c.down(destroy_volumes=True)
+    c.up("zookeeper", "kafka", "schema-registry", "materialized", "ssh-bastion-host")
+    c.run("testdrive", "ssh-tunnel-setup.td")
+    public_key = c.sql_query("select public_key_1 from mz_ssh_tunnel_connections;")[0][
+        0
+    ]
+    c.exec(
+        "ssh-bastion-host",
+        "bash",
+        "-c",
+        f"echo '{public_key}' > /etc/authorized_keys/mz",
+    )
+    c.run("testdrive", "--no-reset", "ssh-tunnel-test.td")

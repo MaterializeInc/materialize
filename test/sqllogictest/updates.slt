@@ -83,3 +83,24 @@ query I
 SELECT * FROM t1
 ----
 4
+
+# Test UPDATE AS
+
+statement ok
+UPDATE t1 AS m SET x = 5 WHERE m.x < 10
+
+query I
+SELECT * FROM t1
+----
+5
+
+statement ok
+UPDATE t1 AS m SET x = 6 WHERE x < 10
+
+query I
+SELECT * FROM t1
+----
+6
+
+statement error db error: ERROR: column "t1\.x" does not exist
+UPDATE t1 AS m SET x = 5 WHERE t1.x < 10

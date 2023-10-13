@@ -8,21 +8,20 @@
 # by the Apache License, Version 2.0.
 
 import random
+from collections.abc import Callable
 from dataclasses import dataclass
 from textwrap import dedent
-from typing import Callable, List, Optional, Protocol
+from typing import Protocol
 
-from materialize.mzcompose import Composition
-from materialize.mzcompose.services import (
-    Clusterd,
-    Kafka,
-    Materialized,
-    Postgres,
-    Redpanda,
-    SchemaRegistry,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.redpanda import Redpanda
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
     Redpanda(),
@@ -80,6 +79,7 @@ class KafkaTransactionLogGreaterThan1:
             self.assert_error(
                 c, "retriable transaction error", "running a single Kafka broker"
             )
+            c.down(sanity_restart_mz=False)
 
     def populate(self, c: Composition) -> None:
         # Create a source and a sink
@@ -111,12 +111,11 @@ class KafkaTransactionLogGreaterThan1:
         c.testdrive(
             dedent(
                 f"""
-                > SELECT status, error ~* '{error}', details::json#>>'{{hint}}' ~* '{hint}'
+                > SELECT bool_or(error ~* '{error}'), bool_or(details::json#>>'{{hint}}' ~* '{hint}')
                   FROM mz_internal.mz_sink_status_history
                   JOIN mz_sinks ON mz_sinks.id = sink_id
                   WHERE name = 'kafka_sink' and status = 'stalled'
-                  ORDER BY occurred_at DESC LIMIT 1
-                stalled true true
+                true true
                 """
             )
         )
@@ -127,13 +126,13 @@ class KafkaDisruption:
     name: str
     breakage: Callable
     expected_error: str
-    fixage: Optional[Callable]
+    fixage: Callable | None
 
     def run_test(self, c: Composition) -> None:
         print(f"+++ Running disruption scenario {self.name}")
         seed = random.randint(0, 256**4)
 
-        c.down(destroy_volumes=True)
+        c.down(destroy_volumes=True, sanity_restart_mz=False)
         c.up("testdrive", persistent=True)
         c.up("redpanda", "materialized", "clusterd")
 
@@ -181,6 +180,12 @@ class KafkaDisruption:
                   ENVELOPE NONE
                 # WITH ( REMOTE 'clusterd:2100' ) https://github.com/MaterializeInc/materialize/issues/16582
 
+                # Ensure the source makes _real_ progress before we disrupt it. This also
+                # ensures the sink makes progress, which is required to hit certain stalls.
+                # As of implementing correctness property #2, this is required.
+                > SELECT count(*) from source1
+                1
+
                 > CREATE SINK sink1 FROM source1
                   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-topic-${testdrive.seed}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -201,13 +206,12 @@ class KafkaDisruption:
 
                 # Sinks generally halt after receiving an error, which means that they may alternate
                 # between `stalled` and `starting`. Instead of relying on the current status, we
-                # check that the latest stall has the error we expect.
-                > SELECT status, error ~* '{error}'
+                # check that there is a stalled status with the expected error.
+                > SELECT bool_or(error ~* '{error}')
                   FROM mz_internal.mz_sink_status_history
                   JOIN mz_sinks ON mz_sinks.id = sink_id
                   WHERE name = 'sink1' and status = 'stalled'
-                  ORDER BY occurred_at DESC LIMIT 1
-                stalled true
+                true
                 """
             )
         )
@@ -241,13 +245,13 @@ class PgDisruption:
     name: str
     breakage: Callable
     expected_error: str
-    fixage: Optional[Callable]
+    fixage: Callable | None
 
     def run_test(self, c: Composition) -> None:
         print(f"+++ Running disruption scenario {self.name}")
         seed = random.randint(0, 256**4)
 
-        c.down(destroy_volumes=True)
+        c.down(destroy_volumes=True, sanity_restart_mz=False)
         c.up("testdrive", persistent=True)
         c.up("postgres", "materialized", "clusterd")
 
@@ -287,14 +291,14 @@ class PgDisruption:
                 DROP PUBLICATION IF EXISTS mz_source;
                 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-                CREATE TABLE t1 (f1 INTEGER PRIMARY KEY, f2 integer[]);
-                INSERT INTO t1 VALUES (1, NULL);
-                ALTER TABLE t1 REPLICA IDENTITY FULL;
-                INSERT INTO t1 VALUES (2, NULL);
+                CREATE TABLE source1 (f1 INTEGER PRIMARY KEY, f2 integer[]);
+                INSERT INTO source1 VALUES (1, NULL);
+                ALTER TABLE source1 REPLICA IDENTITY FULL;
+                INSERT INTO source1 VALUES (2, NULL);
 
-                > CREATE SOURCE "source1"
+                > CREATE SOURCE "pg_source"
                   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-                  FOR TABLES ("t1");
+                  FOR TABLES ("source1");
                 """
             )
         )
@@ -321,14 +325,14 @@ class PgDisruption:
             dedent(
                 """
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                INSERT INTO t1 VALUES (3);
+                INSERT INTO source1 VALUES (3);
 
                 > SELECT status, error
                   FROM mz_internal.mz_source_statuses
                   WHERE name = 'source1'
                 running <null>
 
-                > SELECT f1 FROM t1;
+                > SELECT f1 FROM source1;
                 1
                 2
                 3
@@ -337,7 +341,7 @@ class PgDisruption:
         )
 
 
-disruptions: List[Disruption] = [
+disruptions: list[Disruption] = [
     KafkaDisruption(
         name="delete-topic",
         breakage=lambda c, seed: redpanda_topics(c, "delete", seed),
@@ -355,7 +359,7 @@ disruptions: List[Disruption] = [
     KafkaDisruption(
         name="kill-redpanda",
         breakage=lambda c, _: c.kill("redpanda"),
-        expected_error="BrokerTransportFailure|Resolve",
+        expected_error="BrokerTransportFailure|Resolve|Broker transport failure|Timed out",
         fixage=lambda c, _: c.up("redpanda"),
     ),
     # https://github.com/MaterializeInc/materialize/issues/16582
@@ -368,7 +372,7 @@ disruptions: List[Disruption] = [
     PgDisruption(
         name="kill-postgres",
         breakage=lambda c, _: c.kill("postgres"),
-        expected_error="error connecting to server",
+        expected_error="error connecting to server|connection closed|deadline has elapsed",
         fixage=lambda c, _: c.up("postgres"),
     ),
     PgDisruption(
@@ -378,7 +382,7 @@ disruptions: List[Disruption] = [
                 """
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 DROP PUBLICATION mz_source;
-                INSERT INTO t1 VALUES (3, NULL);
+                INSERT INTO source1 VALUES (3, NULL);
                 """
             )
         ),
@@ -389,7 +393,7 @@ disruptions: List[Disruption] = [
     PgDisruption(
         name="alter-postgres",
         breakage=lambda c, _: alter_pg_table(c),
-        expected_error="source table t1 with oid .+ has been altered",
+        expected_error="source table source1 with oid .+ has been altered",
         fixage=None,
     ),
     PgDisruption(
@@ -424,8 +428,8 @@ def alter_pg_table(c: Composition) -> None:
         dedent(
             """
                  $ postgres-execute connection=postgres://postgres:postgres@postgres
-                 ALTER TABLE t1 ADD COLUMN f3 INTEGER;
-                 INSERT INTO t1 VALUES (3, NULL, 4)
+                 ALTER TABLE source1 DROP COLUMN f1;
+                 INSERT INTO source1 VALUES (NULL)
                  """
         )
     )
@@ -436,7 +440,7 @@ def unsupported_pg_table(c: Composition) -> None:
         dedent(
             """
                  $ postgres-execute connection=postgres://postgres:postgres@postgres
-                 INSERT INTO t1 VALUES (3, '{{1},{2}}')
+                 INSERT INTO source1 VALUES (3, '[2:3]={2,2}')
                  """
         )
     )

@@ -6,27 +6,36 @@ members = [
     "src/avro",
     "src/avro-derive",
     "src/aws-s3-util",
+    "src/aws-secrets-controller",
+    "src/balancerd",
     "src/build-id",
     "src/build-info",
     "src/ccsr",
+    "src/catalog",
+    "src/cloud-api",
     "src/cluster",
     "src/clusterd",
     "src/cluster-client",
     "src/compute",
     "src/compute-client",
+    "src/compute-types",
     "src/controller",
+    "src/controller-types",
     "src/environmentd",
     "src/expr",
+    "src/expr-parser",
     "src/expr-test-util",
     "src/frontegg-auth",
+    "src/frontegg-client",
     "src/http-util",
     "src/interchange",
     "src/kafka-util",
-    "src/kinesis-util",
     "src/lowertest",
     "src/lowertest-derive",
     "src/metabase",
     "src/mz",
+    "src/lsp-server",
+    "src/metrics",
     "src/npm",
     "src/orchestrator",
     "src/orchestrator-kubernetes",
@@ -34,40 +43,62 @@ members = [
     "src/orchestrator-tracing",
     "src/ore",
     "src/persist",
+    "src/persist-cli",
     "src/persist-client",
+    "src/persist-txn",
     "src/persist-types",
     "src/pgcopy",
     "src/pgrepr",
+    "src/pgrepr-consts",
     "src/pgtest",
     "src/pgwire",
+    "src/pgwire-common",
     "src/pid-file",
+    "src/postgres-client",
     "src/postgres-util",
     "src/prof",
     "src/proto",
     "src/repr",
     "src/repr-test-util",
+    "src/rocksdb",
+    "src/rocksdb-types",
     "src/s3-datagen",
     "src/secrets",
     "src/segment",
     "src/service",
     "src/ssh-util",
     "src/sql",
+    "src/sql-lexer",
     "src/sql-parser",
+    "src/sql-pretty",
     "src/sqllogictest",
     "src/stash",
     "src/stash-debug",
+    "src/stash-types",
     "src/storage",
     "src/storage-client",
+    "src/storage-controller",
+    "src/storage-operators",
+    "src/storage-types",
+    "src/test-macro",
     "src/testdrive",
     "src/timely-util",
+    "src/tls-util",
+    "src/tracing",
     "src/transform",
     "src/cloud-resources",
     "src/walkabout",
     "src/workspace-hack",
     "test/metabase/smoketest",
-    "test/perf-kinesis",
     "test/test-util",
+    "src/regexp",
 ]
+
+exclude = [
+    # Exclude the wasm crate to avoid needless cache invalidations.
+    "src/sql-lexer-wasm",
+]
+
 # Use Cargo's new feature resolver, which can handle target-specific features.
 # Explicit opt-in is required even with the 2021 edition because we use a
 # virtual workspace.
@@ -76,10 +107,13 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
-rust-version = "1.67.0"
+# 1.72.0 has a compile time performance regression:
+# https://github.com/rust-lang/rust/issues/115283, so don't use it.
+rust-version = "1.71.0"
 
 [profile.dev]
-# TODO(gusywnn|benesch): remove this when incremental ice's are improved
+# TODO(gusywnn|benesch): incremental is still not reliable as of rust 1.72
+# in our workspace.
 incremental = false
 
 [profile.dev.package]
@@ -95,25 +129,83 @@ object = { opt-level = 3 }
 rustc-demangle = { opt-level = 3 }
 
 [profile.release]
-# Emit only the line info tables, not full debug info, in release builds, to
-# substantially reduce the size of the debug info. Line info tables are enough
-# to correctly symbolicate a backtrace, but do not produce an ideal interactive
-# debugger experience. This seems to be the right tradeoff for release builds:
-# it's unlikely we're going to get interactive access to a debugger in
-# production installations, but we still want useful crash reports.
-debug = 1
+# Compile time seems similar to "lto = false", runtime ~10% faster
+lto = "thin"
 
-# Use this section only to change the source of dependencies that appear as
-# transitive dependencies of other external dependencies in the dependency
-# graph. For everything else (e.g. rust-postgres, rdkafka,
-# differential-dataflow, proptest, timely), use a `git` source directly in each
-# Cargo.toml.
+# Emit full debug info, allowing us to easily analyze core dumps from
+# staging (and, in an emergency, also prod).
 #
-# The reasons for each of these overrides are listed in deny.toml.
+# This does not negatively impact the sizes of the main binaries
+# (clusterd and environmentd), since we split the debuginfo from those
+# and ship it separately to an s3 bucket before building their
+# docker containers.
+debug = 2
+
+# IMPORTANT: when patching a dependency, you should only depend on "main",
+# "master", or an upstream release branch (e.g., "v7.x"). Do *not* depend on a
+# feature/patch branch (e.g., "fix-thing" or "pr-1234"). Feature/patch branches
+# tend to get rewritten or disappear (e.g., because a PR is force pushed or gets
+# merged), after which point it becomes impossible to build that historical
+# version of Materialize.
 [patch.crates-io]
-chrono = { git = "https://github.com/chronotope/chrono.git", branch = "0.4.x" }
-hashbrown = { git = "https://github.com/MaterializeInc/hashbrown.git" }
-postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
+# Projects that do not reliably release to crates.io.
+timely = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
+timely_bytes = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
+timely_communication = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
+timely_container = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
+timely_logging = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
+differential-dataflow = { git = "https://github.com/MaterializeInc/differential-dataflow.git" }
+dogsdogsdogs = { git = "https://github.com/MaterializeInc/differential-dataflow.git" }
+
+# Waiting on https://github.com/sfackler/rust-postgres/pull/752.
+postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array" }
+
+# Waiting on https://github.com/MaterializeInc/serde-value/pull/35.
 serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
-vte = { git = "https://github.com/alacritty/vte" }
+
+# Waiting for a new release of strip-ansi-escapes that avoids the indirect
+# dependency on arrayvec v0.5.2 via a dependency on vte v0.10.1.
+vte = { git = "https://github.com/MaterializeInc/vte", rev = "45670c47cebd7af050def2f80a307bdeec7caba3" }
+
+# Waiting on https://github.com/hyperium/tonic/pull/1398.
+tonic-build = { git = "https://github.com/MaterializeInc/tonic", rev = "0d86e360ab45779770ca150c8487fe7940c299a9" }
+
+# Waiting on https://github.com/MaterializeInc/tracing/pull/1 to be submitted
+# upstream.
+tracing-opentelemetry = { git = "https://github.com/MaterializeInc/tracing-opentelemetry.git" }
+
+# Waiting on https://github.com/launchdarkly/rust-server-sdk/pull/20 to make
+# it into a release.
+launchdarkly-server-sdk = { git = "https://github.com/MaterializeInc/rust-server-sdk" }
+
+# Waiting on https://github.com/AltSysrq/proptest/pull/264.
+proptest = { git = "https://github.com/MaterializeInc/proptest.git" }
+proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git" }
+
+# Waiting on https://github.com/edenhill/librdkafka/pull/4051.
+rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
+rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
+
+# Waiting on https://github.com/openssh-rust/openssh/pull/120 to make it into
+# a release.
+openssh = { git = "https://github.com/MaterializeInc/openssh.git" }
+
+# Waiting for a new release of kube-client compatible with base64 0.21.0
+kube-client = { git = "https://github.com/MaterializeInc/kube-rs.git", rev = "838a7981483005e1af7c1338c48a4d0540a33ce4" }
+kube-core = { git = "https://github.com/MaterializeInc/kube-rs.git", rev = "838a7981483005e1af7c1338c48a4d0540a33ce4" }
+
+# Waiting on `lru` dep to update to `0.11.0`
+mysql_async = { git = "https://github.com/MaterializeInc/mysql_async.git" }
+
+# Removes dependencies required for WASM support that create duplicated deps.
+reqwest-middleware = { git = "https://github.com/MaterializeInc/reqwest-middleware.git" }
+reqwest-retry = { git = "https://github.com/MaterializeInc/reqwest-middleware.git" }
+
+[patch."https://github.com/frankmcsherry/columnation"]
+# Projects that do not reliably release to crates.io.
+columnation = { git = "https://github.com/MaterializeInc/columnation.git" }

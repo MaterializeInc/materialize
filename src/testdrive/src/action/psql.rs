@@ -8,9 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use anyhow::{bail, Context};
-use tokio::process::Command;
-
 use mz_ore::option::OptionExt;
+use tokio::process::Command;
 
 use crate::action::{ControlFlow, State};
 use crate::parser::BuiltinCommand;
@@ -18,7 +17,7 @@ use crate::util::text;
 
 pub async fn run_execute(
     mut cmd: BuiltinCommand,
-    state: &mut State,
+    state: &State,
 ) -> Result<ControlFlow, anyhow::Error> {
     let command = cmd.args.string("command")?;
     cmd.args.done()?;

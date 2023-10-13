@@ -54,55 +54,57 @@ c_time time,
 c_timestamp timestamp,
 c_timestamptz timestamptz,
 c_uuid uuid,
-c_varchar varchar
+c_varchar varchar,
+c_varchar10 varchar(10)
 );
 ----
 
-query IT
-SELECT atttypid, attname FROM pg_attribute WHERE attrelid = (SELECT oid FROM mz_tables WHERE name='coltypes') ORDER BY atttypid
+query ITI
+SELECT atttypid, attname, atttypmod FROM pg_attribute WHERE attrelid = (SELECT oid FROM mz_tables WHERE name='coltypes') ORDER BY atttypid
 ----
-16  c_bool
-17  c_bytea
-20  c_int8
-21  c_int2
-23  c_int4
-24  c_regproc
-25  c_text
-26  c_oid
-700  c_float4
-701  c_float8
-1000  c__bool
-1001  c__bytea
-1002  c__char
-1005  c__int2
-1007  c__int4
-1008  c__regproc
-1009  c__text
-1014  c__bpchar
-1015  c__varchar
-1016  c__int8
-1021  c__float4
-1022  c__float8
-1028  c__oid
-1042  c_char
-1042  c_bpchar
-1043  c_varchar
-1082  c_date
-1083  c_time
-1114  c_timestamp
-1115  c__timestamp
-1182  c__date
-1183  c__time
-1184  c_timestamptz
-1185  c__timestamptz
-1186  c_interval
-1187  c__interval
-1231  c__numeric
-1700  c_numeric
-2950  c_uuid
-2951  c__uuid
-3802  c_jsonb
-3807  c__jsonb
+16  c_bool  -1
+17  c_bytea  -1
+20  c_int8  -1
+21  c_int2  -1
+23  c_int4  -1
+24  c_regproc  -1
+25  c_text  -1
+26  c_oid  -1
+700  c_float4  -1
+701  c_float8  -1
+1000  c__bool  -1
+1001  c__bytea  -1
+1002  c__char  -1
+1005  c__int2  -1
+1007  c__int4  -1
+1008  c__regproc  -1
+1009  c__text  -1
+1014  c__bpchar  -1
+1015  c__varchar  -1
+1016  c__int8  -1
+1021  c__float4  -1
+1022  c__float8  -1
+1028  c__oid  -1
+1042  c_char  5
+1042  c_bpchar  5
+1043  c_varchar  -1
+1043  c_varchar10  14
+1082  c_date  -1
+1083  c_time  -1
+1114  c_timestamp  -1
+1115  c__timestamp  -1
+1182  c__date  -1
+1183  c__time  -1
+1184  c_timestamptz  -1
+1185  c__timestamptz  -1
+1186  c_interval  -1
+1187  c__interval  -1
+1231  c__numeric  -1
+1700  c_numeric  2555947
+2950  c_uuid  -1
+2951  c__uuid  -1
+3802  c_jsonb  -1
+3807  c__jsonb  -1
 
 # Generated queries are unsupported
 query B

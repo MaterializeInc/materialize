@@ -22,6 +22,9 @@
 //! the literal errors will be unconditionally evaluated. For example, the pushdown
 //! will not happen if not all predicates can be pushed down (e.g. reduce and map),
 //! or if we are not certain that the input is non-empty (e.g. join).
+//! Note that this is not addressing the problem in its full generality, because this problem can
+//! occur with any function call that might error (although much more rarely than with literal
+//! errors). See <https://github.com/MaterializeInc/materialize/issues/17189#issuecomment-1547391011>
 //!
 //! ```rust
 //! use mz_expr::{BinaryFunc, MirRelationExpr, MirScalarExpr};
@@ -57,9 +60,13 @@
 //!        predicate012.clone(),
 //!    ]);
 //!
-//! use mz_transform::{Transform, TransformArgs};
-//! PredicatePushdown::default().transform(&mut expr, TransformArgs {
+//! use mz_transform::{Transform, TransformCtx};
+//! use mz_transform::dataflow::DataflowMetainfo;
+//! PredicatePushdown::default().transform(&mut expr, &mut TransformCtx {
 //!   indexes: &mz_transform::EmptyIndexOracle,
+//!   stats: &mz_transform::EmptyStatisticsOracle,
+//!   global_id: None,
+//!   dataflow_metainfo: &mut DataflowMetainfo::default(),
 //! });
 //!
 //! let predicate00 = MirScalarExpr::column(0).call_binary(MirScalarExpr::column(0), BinaryFunc::AddInt64);
@@ -76,15 +83,17 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::{TransformArgs, TransformError};
 use itertools::Itertools;
 use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{
-    func, AggregateFunc, Id, JoinInputMapper, MirRelationExpr, MirScalarExpr, VariadicFunc,
-    RECURSION_LIMIT,
+    func, AggregateFunc, Id, JoinInputMapper, LocalId, MirRelationExpr, MirScalarExpr,
+    VariadicFunc, RECURSION_LIMIT,
 };
-use mz_ore::stack::{CheckedRecursion, RecursionGuard};
+use mz_ore::soft_assert_eq;
+use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_repr::{ColumnType, Datum, ScalarType};
+
+use crate::{TransformCtx, TransformError};
 
 /// Pushes predicates down through other operators.
 #[derive(Debug)]
@@ -116,7 +125,7 @@ impl crate::Transform for PredicatePushdown {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        _: TransformArgs,
+        _: &mut TransformCtx,
     ) -> Result<(), TransformError> {
         let mut empty = BTreeMap::new();
         let result = self.action(relation, &mut empty);
@@ -159,7 +168,8 @@ impl PredicatePushdown {
                     // Depending on the type of `input` we have different
                     // logic to apply to consider pushing `predicates` down.
                     match &mut **input {
-                        MirRelationExpr::Let { body, .. } => {
+                        MirRelationExpr::Let { body, .. }
+                        | MirRelationExpr::LetRec { body, .. } => {
                             // Push all predicates to the body.
                             **body = body
                                 .take_dangerous()
@@ -202,8 +212,7 @@ impl PredicatePushdown {
                             let mut pred_not_translated = Vec::new();
 
                             for mut predicate in predicates.drain(..) {
-                                use mz_expr::BinaryFunc;
-                                use mz_expr::UnaryFunc;
+                                use mz_expr::{BinaryFunc, UnaryFunc};
                                 if let MirScalarExpr::CallBinary {
                                     func: BinaryFunc::Eq,
                                     expr1,
@@ -344,6 +353,7 @@ impl PredicatePushdown {
                             limit: _,
                             offset: _,
                             monotonic: _,
+                            expected_group_size: _,
                         } => {
                             let mut retain = Vec::new();
                             let mut push_down = Vec::new();
@@ -391,12 +401,9 @@ impl PredicatePushdown {
                             input,
                             predicates: predicates2,
                         } => {
-                            *relation = input.take_dangerous().filter(
-                                predicates
-                                    .clone()
-                                    .into_iter()
-                                    .chain(predicates2.clone().into_iter()),
-                            );
+                            *relation = input
+                                .take_dangerous()
+                                .filter(predicates.clone().into_iter().chain(predicates2.clone()));
                             self.action(relation, get_predicates)?;
                         }
                         MirRelationExpr::Map { input, scalars } => {
@@ -442,10 +449,28 @@ impl PredicatePushdown {
                                 self.action(input, get_predicates)?;
                             }
                         }
-                        MirRelationExpr::Negate { input: inner } => {
-                            let predicates = std::mem::take(predicates);
-                            *relation = inner.take_dangerous().filter(predicates).negate();
-                            self.action(relation, get_predicates)?;
+                        MirRelationExpr::Negate { input } => {
+                            // Don't push literal errors past a Negate. The problem is that it's
+                            // hard to appropriately reflect the negation in the error stream:
+                            // - If we don't negate, then errors that should cancel out will not
+                            //   cancel out. For example, see
+                            //   https://github.com/MaterializeInc/materialize/issues/19179
+                            // - If we negate, then unrelated errors might cancel out. E.g., there
+                            //   might be a division-by-0 in both inputs to an EXCEPT ALL, but
+                            //   on different input data. These shouldn't cancel out.
+                            let (retained, pushdown): (Vec<_>, Vec<_>) = std::mem::take(predicates)
+                                .into_iter()
+                                .partition(|p| p.is_literal_err());
+                            let mut result = input.take_dangerous();
+                            if !pushdown.is_empty() {
+                                result = result.filter(pushdown);
+                            }
+                            self.action(&mut result, get_predicates)?;
+                            result = result.negate();
+                            if !retained.is_empty() {
+                                result = result.filter(retained);
+                            }
+                            *relation = result;
                         }
                         x => {
                             x.try_visit_mut_children(|e| self.action(e, get_predicates))?;
@@ -478,32 +503,53 @@ impl PredicatePushdown {
                     // `get_predicates` should now contain the intersection
                     // of predicates at each *use* of the binding. If it is
                     // non-empty, we can move those predicates to the value.
-                    if let Some(list) = get_predicates.remove(&Id::Local(*id)) {
-                        if !list.is_empty() {
-                            // Remove the predicates in `list` from the body.
-                            body.try_visit_mut_post::<_, TransformError>(&mut |e| {
-                                if let MirRelationExpr::Filter { input, predicates } = e {
-                                    if let MirRelationExpr::Get { id: get_id, .. } = **input {
-                                        if get_id == Id::Local(*id) {
-                                            predicates.retain(|p| !list.contains(p));
-                                        }
-                                    }
-                                }
-                                Ok(())
-                            })?;
-                            // Apply the predicates in `list` to value. Canonicalize
-                            // `list` so that plans are always deterministic.
-                            let mut list = list.into_iter().collect::<Vec<_>>();
-                            mz_expr::canonicalize::canonicalize_predicates(
-                                &mut list,
-                                &value.typ().column_types,
-                            );
-                            **value = value.take_dangerous().filter(list);
-                        }
-                    }
+                    Self::push_into_let_binding(get_predicates, id, value, &mut [body])?;
 
                     // Continue recursively on the value.
                     self.action(value, get_predicates)
+                }
+                MirRelationExpr::LetRec {
+                    ids,
+                    values,
+                    limits: _,
+                    body,
+                } => {
+                    // Note: This could be extended to be able to do a little more pushdowns, see
+                    // https://github.com/MaterializeInc/materialize/issues/18167#issuecomment-1477588262
+
+                    // Pre-compute which Ids are used across iterations
+                    let ids_used_across_iterations = MirRelationExpr::recursive_ids(ids, values)?;
+
+                    // Predicate pushdown within the body
+                    self.action(body, get_predicates)?;
+
+                    // `users` will be the body plus the values of those bindings that we have seen
+                    // so far, while going one-by-one through the list of bindings backwards.
+                    // `users` contains those expressions from which we harvested `get_predicates`,
+                    // and therefore we should attend to all of these expressions when pushing down
+                    // a predicate into a Let binding.
+                    let mut users = vec![&mut **body];
+                    for (id, value) in ids.iter_mut().zip(values).rev() {
+                        // Predicate pushdown from Gets in `users` into the value of a Let binding
+                        //
+                        // For now, we simply always avoid pushing into a Let binding that is
+                        // referenced across iterations to avoid soundness problems and infinite
+                        // pushdowns.
+                        //
+                        // Note that `push_into_let_binding` makes a further check based on
+                        // `get_predicates`: We push a predicate into the value of a binding, only
+                        // if all Gets of this Id have this same predicate on top of them.
+                        if !ids_used_across_iterations.contains(id) {
+                            Self::push_into_let_binding(get_predicates, id, value, &mut users)?;
+                        }
+
+                        // Predicate pushdown within a binding
+                        self.action(value, get_predicates)?;
+
+                        users.push(value);
+                    }
+
+                    Ok(())
                 }
                 MirRelationExpr::Join {
                     inputs,
@@ -750,6 +796,44 @@ impl PredicatePushdown {
         *inputs = new_inputs;
     }
 
+    // Checks `get_predicates` to see whether we can push a predicate into the Let binding given
+    // by `id` and `value`.
+    // `users` is the list of those expressions from which we will need to remove a predicate that
+    // is being pushed.
+    fn push_into_let_binding(
+        get_predicates: &mut BTreeMap<Id, BTreeSet<MirScalarExpr>>,
+        id: &LocalId,
+        value: &mut MirRelationExpr,
+        users: &mut [&mut MirRelationExpr],
+    ) -> Result<(), TransformError> {
+        if let Some(list) = get_predicates.remove(&Id::Local(*id)) {
+            if !list.is_empty() {
+                // Remove the predicates in `list` from the users.
+                for user in users {
+                    user.try_visit_mut_post::<_, TransformError>(&mut |e| {
+                        if let MirRelationExpr::Filter { input, predicates } = e {
+                            if let MirRelationExpr::Get { id: get_id, .. } = **input {
+                                if get_id == Id::Local(*id) {
+                                    predicates.retain(|p| !list.contains(p));
+                                }
+                            }
+                        }
+                        Ok(())
+                    })?;
+                }
+                // Apply the predicates in `list` to value. Canonicalize
+                // `list` so that plans are always deterministic.
+                let mut list = list.into_iter().collect::<Vec<_>>();
+                mz_expr::canonicalize::canonicalize_predicates(
+                    &mut list,
+                    &value.typ().column_types,
+                );
+                *value = value.take_dangerous().filter(list);
+            }
+        }
+        Ok(())
+    }
+
     /// Returns `(<predicates to retain>, <predicates to push at each input>)`.
     pub fn push_filters_through_join(
         input_mapper: &JoinInputMapper,
@@ -766,9 +850,18 @@ impl PredicatePushdown {
             // equivalences allow the predicate to be rewritten
             // in terms of only columns from that input.
             for (index, push_down) in push_downs.iter_mut().enumerate() {
-                if predicate.is_literal_err() {
+                if predicate.is_literal_err() || predicate.contains_error_if_null() {
                     // Do nothing. We don't push down literal errors,
                     // as we can't know the join will be non-empty.
+                    //
+                    // We also don't want to push anything that involves `error_if_null`. This is
+                    // for the same reason why in theory we shouldn't really push anything that can
+                    // error, assuming that we want to preserve error semantics. (Because we would
+                    // create a spurious error if some other Join input ends up empty.) We can't fix
+                    // this problem in general (as we can't just not push anything that might
+                    // error), but we decided to fix the specific problem instance involving
+                    // `error_if_null`, because it was very painful:
+                    // <https://github.com/MaterializeInc/materialize/issues/20769>
                 } else {
                     let mut localized = predicate.clone();
                     if input_mapper.try_localize_to_input_with_bound_expr(
@@ -805,49 +898,212 @@ impl PredicatePushdown {
     /// In the case of a Filter { Map {...} }, we can always push down the Filter
     /// by inlining expressions from the Map. We don't want to do this in general,
     /// however, since general inlining can result in exponential blowup in the size
-    /// of expressions, so we only do this in the case where we deem the referenced
-    /// expressions "safe." See the comment above can_inline for more details.
-    /// Note that this means we can always push down filters that only reference
-    /// input columns.
+    /// of expressions, so we only do this in the case where the size after inlining
+    /// is below a certain limit.
     ///
     /// Returns the predicates that can be pushed down, followed by ones that cannot.
     pub fn push_filters_through_map(
-        scalars: &Vec<MirScalarExpr>,
+        map_exprs: &Vec<MirScalarExpr>,
         predicates: &mut Vec<MirScalarExpr>,
         input_arity: usize,
         all_errors: bool,
     ) -> Result<(Vec<MirScalarExpr>, Vec<MirScalarExpr>), TransformError> {
         let mut pushdown = Vec::new();
         let mut retained = Vec::new();
-        for mut predicate in predicates.drain(..) {
-            // First, check if we can push this predicate down. We can do so if each
-            // column it references is either from the input or is generated by an
-            // expression that can be inlined.
-            // We also will not push down literal errors, unless all predicates are.
-            if (!predicate.is_literal_err() || all_errors)
-                && predicate.support().iter().all(|c| {
-                    *c < input_arity
-                        || PredicatePushdown::can_inline(&scalars[*c - input_arity], input_arity)
-                })
-            {
-                predicate.visit_mut_post(&mut |e| {
-                    if let MirScalarExpr::Column(c) = e {
-                        // NB: this inlining would be invalid if can_inline did not
-                        // verify that scalars[*c - input_arity] referenced only
-                        // expressions from the input and not any newly-constructed
-                        // columns from the Map.
-                        if *c >= input_arity {
-                            *e = scalars[*c - input_arity].clone()
-                        }
-                    }
-                })?;
-                pushdown.push(predicate);
+        for predicate in predicates.drain(..) {
+            // We don't push down literal errors, unless all predicates are.
+            if !predicate.is_literal_err() || all_errors {
+                // Consider inlining Map expressions.
+                if let Some(cleaned) =
+                    Self::inline_if_not_too_big(&predicate, input_arity, map_exprs)?
+                {
+                    pushdown.push(cleaned);
+                } else {
+                    retained.push(predicate);
+                }
             } else {
                 retained.push(predicate);
             }
         }
         Ok((retained, pushdown))
     }
+
+    /// This fn should be called with a Filter `expr` that is after a Map. `input_arity` is the
+    /// arity of the input of the Map. This fn eliminates such column refs in `expr` that refer not
+    /// to a column in the input of the Map, but to a column that is created by the Map. It does
+    /// this by transitively inlining Map expressions until no such expression remains that points
+    /// to a Map expression. The return value is the cleaned up expression. The fn bails out with a
+    /// None if the resulting expression would be made too big by the inlinings.
+    ///
+    /// OOO: (Optimizer Optimization Opportunity) This function might do work proportional to the
+    /// total size of the Map expressions. We call this function for each predicate above the Map,
+    /// which will be kind of quadratic, i.e., if there are many predicates and a big Map, then this
+    /// will be slow. We could instead pass a vector of Map expressions and call this fn only once.
+    /// The only downside would be that then the inlining limit being hit in the middle part of this
+    /// function would prevent us from inlining any predicates, even ones that wouldn't hit the
+    /// inlining limit if considered on their own.
+    fn inline_if_not_too_big(
+        expr: &MirScalarExpr,
+        input_arity: usize,
+        map_exprs: &Vec<MirScalarExpr>,
+    ) -> Result<Option<MirScalarExpr>, RecursionLimitError> {
+        let size_limit = 1000;
+
+        // Transitively determine the support of `expr` produced by `map_exprs`
+        // that needs to be inlined.
+        let cols_to_inline = {
+            let mut support = BTreeSet::new();
+
+            // Seed with `map_exprs` support in `expr`.
+            expr.visit_post(&mut |e| {
+                if let MirScalarExpr::Column(c) = e {
+                    if *c >= input_arity {
+                        support.insert(*c);
+                    }
+                }
+            })?;
+
+            // Compute transitive closure of supports in `map_exprs`.
+            let mut workset = support.iter().cloned().collect::<Vec<_>>();
+            let mut buffer = vec![];
+            while !workset.is_empty() {
+                // Swap the (empty) `drained` buffer with the `workset`.
+                std::mem::swap(&mut workset, &mut buffer);
+                // Drain the `buffer` and update `support` and `workset`.
+                for c in buffer.drain(..) {
+                    map_exprs[c - input_arity].visit_post(&mut |e| {
+                        if let MirScalarExpr::Column(c) = e {
+                            if *c >= input_arity {
+                                if support.insert(*c) {
+                                    workset.push(*c);
+                                }
+                            }
+                        }
+                    })?;
+                }
+            }
+            support
+        };
+
+        let mut inlined = BTreeMap::<usize, (MirScalarExpr, usize)>::new();
+        // Populate the memo table in ascending column order (which respects the
+        // dependency order of `map_exprs` references). Break early if memoization
+        // fails for one of the columns in `cols_to_inline`.
+        for c in cols_to_inline.iter() {
+            let mut new_expr = map_exprs[*c - input_arity].clone();
+            let mut new_size = 0;
+            new_expr.visit_mut_post(&mut |expr| {
+                new_size += 1;
+                if let MirScalarExpr::Column(c) = expr {
+                    if *c >= input_arity && new_size <= size_limit {
+                        // (inlined[c] is safe, because we proceed in column order, and we break out
+                        // of the loop when we stop inserting into memo.)
+                        let (m_expr, m_size): &(MirScalarExpr, _) = &inlined[c];
+                        *expr = m_expr.clone();
+                        new_size += m_size - 1; // Adjust for the +1 above.
+                    }
+                }
+            })?;
+
+            if new_size <= size_limit {
+                inlined.insert(*c, (new_expr, new_size));
+            } else {
+                break;
+            }
+        }
+
+        // Try to resolve expr against the memo table.
+        if inlined.len() < cols_to_inline.len() {
+            Ok(None) // We couldn't memoize all map expressions within the given limit.
+        } else {
+            let mut new_expr = expr.clone();
+            let mut new_size = 0;
+            new_expr.visit_mut_post(&mut |expr| {
+                new_size += 1;
+                if let MirScalarExpr::Column(c) = expr {
+                    if *c >= input_arity && new_size <= size_limit {
+                        // (inlined[c] is safe because of the outer if condition.)
+                        let (m_expr, m_size): &(MirScalarExpr, _) = &inlined[c];
+                        *expr = m_expr.clone();
+                        new_size += m_size - 1; // Adjust for the +1 above.
+                    }
+                }
+            })?;
+
+            soft_assert_eq!(new_size, new_expr.size()?);
+            if new_size <= size_limit {
+                Ok(Some(new_expr)) // We managed to stay within the limit.
+            } else {
+                Ok(None) // Limit exceeded.
+            }
+        }
+    }
+    // fn inline_if_not_too_big(
+    //     expr: &MirScalarExpr,
+    //     input_arity: usize,
+    //     map_exprs: &Vec<MirScalarExpr>,
+    // ) -> Result<Option<MirScalarExpr>, RecursionLimitError> {
+    //     let size_limit = 1000;
+    //     // Memoize cleaned up versions of Map expressions. (Not necessarily all the Map expressions
+    //     // will be involved.)
+    //     let mut memo: BTreeMap<MirScalarExpr, MirScalarExpr> = BTreeMap::new();
+    //     fn rec(
+    //         expr: &MirScalarExpr,
+    //         input_arity: usize,
+    //         map_exprs: &Vec<MirScalarExpr>,
+    //         memo: &mut BTreeMap<MirScalarExpr, MirScalarExpr>,
+    //         size_limit: usize,
+    //     ) -> Result<Option<MirScalarExpr>, RecursionLimitError> {
+    //         // (We can't use Entry::or_insert_with, because the closure would need to be fallible.
+    //         // We also can't manually match on the result of memo.entry, because that holds a
+    //         // borrow of memo, but we need to pass memo to the recursive call in the middle.)
+    //         match memo.get(expr) {
+    //             Some(memoized_result) => Ok(Some(memoized_result.clone())),
+    //             None => {
+    //                 let mut expr_size = expr.size()?;
+    //                 let mut cleaned_expr = expr.clone();
+    //                 let mut bail = false;
+    //                 cleaned_expr.try_visit_mut_post(&mut |expr| {
+    //                     Ok(if !bail {
+    //                         match expr {
+    //                             MirScalarExpr::Column(col) => {
+    //                                 if *col >= input_arity {
+    //                                     let to_inline = rec(
+    //                                         &map_exprs[*col - input_arity],
+    //                                         input_arity,
+    //                                         map_exprs,
+    //                                         memo,
+    //                                         size_limit,
+    //                                     )?;
+    //                                     if let Some(to_inline) = to_inline {
+    //                                         // The `-1` is because the expression that we are
+    //                                         // replacing has a size of 1.
+    //                                         expr_size += to_inline.size()? - 1;
+    //                                         *expr = to_inline;
+    //                                         if expr_size > size_limit {
+    //                                             bail = true;
+    //                                         }
+    //                                     } else {
+    //                                         bail = true;
+    //                                     }
+    //                                 }
+    //                             }
+    //                             _ => (),
+    //                         }
+    //                     })
+    //                 })?;
+    //                 soft_assert_eq!(cleaned_expr.size()?, expr_size);
+    //                 if !bail {
+    //                     memo.insert(expr.clone(), cleaned_expr.clone());
+    //                     Ok(Some(cleaned_expr))
+    //                 } else {
+    //                     Ok(None)
+    //                 }
+    //             }
+    //         }
+    //     }
+    //     rec(expr, input_arity, map_exprs, &mut memo, size_limit)
+    // }
 
     /// Computes "safe" predicate to push through a FlatMap.
     ///
@@ -943,35 +1199,6 @@ impl PredicatePushdown {
             exprs
         } else {
             vec![s]
-        }
-    }
-
-    /// Defines a criteria for inlining scalar expressions.
-    // TODO(justin): create a list of which functions are acceptable to inline. We shouldn't
-    // inline ones that are "expensive."
-    fn can_inline(s: &MirScalarExpr, input_arity: usize) -> bool {
-        Self::is_safe_leaf(s, input_arity)
-            || match s {
-                MirScalarExpr::CallUnary { func: _, expr } => Self::can_inline(expr, input_arity),
-                MirScalarExpr::CallBinary {
-                    func: _,
-                    expr1,
-                    expr2,
-                } => {
-                    Self::is_safe_leaf(expr1, input_arity) && Self::is_safe_leaf(expr2, input_arity)
-                }
-                MirScalarExpr::CallVariadic { func: _, exprs } => {
-                    exprs.iter().all(|e| Self::is_safe_leaf(e, input_arity))
-                }
-                _ => false,
-            }
-    }
-
-    fn is_safe_leaf(s: &MirScalarExpr, input_arity: usize) -> bool {
-        match s {
-            MirScalarExpr::Column(c) => *c < input_arity,
-            MirScalarExpr::Literal(_, _) => true,
-            _ => false,
         }
     }
 }

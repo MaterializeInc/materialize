@@ -1,15 +1,12 @@
 ---
 title: "SHOW SOURCES"
-description: "`SHOW SOURCES` returns a list of all sources available to your Materialize instances."
+description: "`SHOW SOURCES` returns a list of all sources available in Materialize."
 menu:
   main:
     parent: commands
 ---
 
-{{< show-command-note >}}
-
-`SHOW SOURCES` returns a list of all sources available to your Materialize
-instances.
+`SHOW SOURCES` returns a list of all sources available in Materialize.
 
 ## Syntax
 
@@ -17,7 +14,8 @@ instances.
 
 Field | Use
 ------|-----
-_schema&lowbar;name_ | The schema to show sources from. Defaults to `public` in the current database. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+_schema&lowbar;name_ | The schema to show sources from. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+_cluster&lowbar;name_ | The cluster to show sources from. If omitted, sources from all clusters are shown. For available clusters, see [`SHOW CLUSTERS`](../show-clusters).
 
 ## Details
 
@@ -26,64 +24,41 @@ _schema&lowbar;name_ | The schema to show sources from. Defaults to `public` in 
 `SHOW SOURCES`'s output is a table, with this structure:
 
 ```nofmt
- name  | type | size
--------+------+-----
- ...   | ...  + ....
+name  | type | size | cluster
+------+------+------+--------
+...   | ...  | ...  | ...
 ```
 
 Field | Meaning
 ------|--------
 **name** | The name of the source.
-**type** | The type of the source: `kafka`, `postgres`, `load-generator`, or `subsource`.
-**size** | The [size](/sql/create-source/#sizing-a-source) of the source.
-
-### Internal statistic sources
-
-Materialize comes with a number of sources that contain internal statistics
-about the instance's behavior. These are kept in a "hidden" schema called
-`mz_catalog`.
-
-To view the internal statistic sources use:
-
-```sql
-SHOW SOURCES FROM mz_catalog;
-```
-
-To select from these sources, you must specify that you want to read from the
-source in the `mz_catalog` schema.
+**type** | The type of the source: `kafka`, `postgres`, `load-generator`, `progress`, or `subsource`.
+**size** | The [size](/sql/create-source/#sizing-a-source) of the source. Null if the source is created using the `IN CLUSTER` clause.
+**cluster** | The cluster the source is associated with.
 
 ## Examples
 
-### Default behavior
-
-```sql
-SHOW SCHEMAS;
-```
-```nofmt
-  name
---------
- public
-```
-```sql
-SHOW SOURCES FROM public;
-```
-```nofmt
-            name    | type
---------------------+---------
- my_kafka_source    | kafka
- my_postgres_source | postgres
-```
 ```sql
 SHOW SOURCES;
 ```
 ```nofmt
-            name    | type
---------------------+---------
- my_kafka_source    | kafka
- my_postgres_source | postgres
+            name    | type     | size  | cluster
+--------------------+----------+-------+---------
+ my_kafka_source    | kafka    |       | c1
+ my_postgres_source | postgres |       | c2
+```
+
+```sql
+SHOW SOURCES IN CLUSTER c2;
+```
+```nofmt
+name               | type     | size     | cluster
+-------------------+----------+----------+--------
+my_postgres_source | postgres |          | c2
 ```
 
 ## Related pages
 
-- [`SHOW CREATE SOURCE`](../show-create-source)
 - [`CREATE SOURCE`](../create-source)
+- [`DROP SOURCE`](../drop-source)
+- [`SHOW CREATE SOURCE`](../show-create-source)

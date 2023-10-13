@@ -36,3 +36,6 @@ contains:map[text=>integer][] not yet supported
 > CREATE TYPE bigint_map AS MAP (KEY TYPE = text, VALUE TYPE = bigint);
 ! CREATE TABLE bigint_map_map_array_table (f1 bigint_map[]);
 contains:type "bigint_map[]" does not exist
+
+> SELECT array_fill(1, ARRAY[2], ARRAY[3]);
+[3:4]={1,1}

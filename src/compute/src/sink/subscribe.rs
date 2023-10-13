@@ -15,19 +15,18 @@ use std::rc::Rc;
 
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::Collection;
+use mz_compute_client::protocol::response::{SubscribeBatch, SubscribeResponse};
+use mz_compute_types::sinks::{ComputeSinkDesc, SubscribeSinkConnection};
+use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::errors::DataflowError;
+use mz_timely_util::probe::{self, ProbeNotify};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::timestamp::Timestamp as TimelyTimestamp;
 use timely::progress::Antichain;
 use timely::PartialOrder;
-
-use mz_compute_client::protocol::response::{SubscribeBatch, SubscribeResponse};
-use mz_compute_client::types::sinks::{ComputeSinkDesc, SubscribeSinkConnection};
-use mz_repr::{Diff, GlobalId, Row, Timestamp};
-use mz_storage_client::controller::CollectionMetadata;
-use mz_storage_client::types::errors::DataflowError;
-use mz_timely_util::probe::{self, ProbeNotify};
 
 use crate::render::sinks::SinkRender;
 
@@ -223,6 +222,7 @@ impl SubscribeProtocol {
             return;
         }
 
+        // The compute protocol requires us to only send out consolidated batches.
         consolidate_updates(rows);
         consolidate_updates(errors);
 

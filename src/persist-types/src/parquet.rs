@@ -102,12 +102,15 @@ pub fn validate_roundtrip<T: Default + PartialEq + Debug, S: Schema<T>>(
 ) -> Result<(), String> {
     let mut part = PartBuilder::new(schema, &UnitSchema);
     {
-        let part_mut = part.get_mut();
+        let mut part_mut = part.get_mut();
         schema.encoder(part_mut.key)?.encode(val);
-        part_mut.ts.push(1);
-        part_mut.diff.push(1);
+        part_mut.ts.push(1u64);
+        part_mut.diff.push(1i64);
     }
     let part = part.finish()?;
+
+    // Sanity check that we can compute stats.
+    let _stats = part.key_stats().expect("stats should be compute-able");
 
     let mut encoded = Vec::new();
     let () = encode_part(&mut encoded, &part).map_err(|err| err.to_string())?;

@@ -1,0 +1,177 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Selecting from scalar functions in FROM clauses
+
+query I
+SELECT length FROM length('str');
+----
+3
+
+query I
+SELECT * FROM length('str');
+----
+3
+
+query T
+SELECT * FROM repeat('x', 2);
+----
+xx
+
+query T
+SELECT repeat FROM repeat('x', 2);
+----
+xx
+
+query T
+SELECT * FROM concat('a','b','c');
+----
+abc
+
+query T
+SELECT concat FROM concat('a','b','c');
+----
+abc
+
+# Passes through decorrelation
+query I
+SELECT lat_len FROM length('abc'), LATERAL (SELECT length AS lat_len) lat;
+----
+3
+
+# Aliases
+
+query I colnames
+SELECT * FROM length('str');
+----
+length
+3
+
+query I colnames
+SELECT * FROM length('str') AS x;
+----
+x
+3
+
+query I colnames
+SELECT * FROM length('str') AS x(a);
+----
+a
+3
+
+# Ordinality
+query II colnames
+SELECT * FROM length('str') WITH ORDINALITY;
+----
+length ordinality
+3
+1
+
+
+# Aliases + ordinality
+query II colnames
+SELECT * FROM length('str') AS x WITH ORDINALITY;
+----
+x ordinality
+3
+1
+
+query II colnames
+SELECT * FROM length('str') AS x(a) WITH ORDINALITY;
+----
+a ordinality
+3
+1
+
+# Nested recursion.
+query I
+SELECT length FROM length('str' || (select length FROM length('str')));
+----
+4
+
+# Cross-joined
+query T
+SELECT concat_ws(' ', l, a, b) FROM length('str') AS l, (values ('a', 'b'), ('c', 'd')) v(a,b);
+----
+3 a b
+3 c d
+
+# Test functions that exist as catalog-only
+query I
+SELECT mod FROM mod(3,4);
+----
+3
+
+query I
+SELECT * FROM mod(3,4);
+----
+3
+
+# Nested recursion.
+query I
+SELECT mod FROM mod((SELECT mod FROM mod(3,4)),4);
+----
+3
+
+# Passes through decorrelation
+query I
+SELECT lat_mod FROM mod(3,4), LATERAL (SELECT mod AS lat_mod) lat;
+----
+3
+
+# Aliases
+query I colnames
+SELECT x FROM mod(3,4) AS x;
+----
+x
+3
+
+query I colnames
+SELECT a FROM mod(3,4) AS x(a);
+----
+a
+3
+
+# Ordinality
+query II colnames
+SELECT * FROM mod(3,4) WITH ORDINALITY;
+----
+mod ordinality
+3
+1
+
+
+# Aliases + ordinality
+query II colnames
+SELECT * FROM mod(3,4) AS x WITH ORDINALITY;
+----
+x ordinality
+3
+1
+
+query II colnames
+SELECT * FROM mod(3,4) AS x(a) WITH ORDINALITY;
+----
+a ordinality
+3
+1
+
+# Aggregates
+query error db error: ERROR: aggregate functions are not supported in functions in FROM
+SELECT * FROM sum(4)
+
+query error db error: ERROR: aggregate functions are not supported in functions in FROM
+SELECT * FROM (VALUES (1), (3)) AS t(a), LATERAL(SELECT * FROM sum(a));
+
+# Aggregates that exist as catalog only
+query error db error: ERROR: aggregate functions are not supported in functions in FROM
+SELECT * FROM avg(4)
+
+query error db error: ERROR: aggregate functions are not supported in functions in FROM
+SELECT * FROM (VALUES (1), (3)) AS t(a), LATERAL(SELECT * FROM avg(a));

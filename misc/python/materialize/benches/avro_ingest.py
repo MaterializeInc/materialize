@@ -13,7 +13,7 @@ import argparse
 import json
 import os
 import time
-from typing import IO, NamedTuple
+from typing import IO, NamedTuple, cast
 
 import docker
 import pg8000
@@ -22,7 +22,7 @@ import requests
 from docker.models.containers import Container
 from pg8000.dbapi import ProgrammingError
 
-from materialize import ROOT, mzbuild
+from materialize import MZ_ROOT, mzbuild, ui
 
 
 def wait_for_confluent(host: str) -> None:
@@ -41,7 +41,8 @@ def wait_for_confluent(host: str) -> None:
 
 def mz_proc(container: Container) -> psutil.Process:
     container.reload()
-    docker_init = psutil.Process(container.attrs["State"]["Pid"])
+    pid = container.attrs["State"]["Pid"]  # type: ignore
+    docker_init = psutil.Process(pid)
     for child in docker_init.children(recursive=True):
         if child.name() == "materialized":
             return child
@@ -90,8 +91,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    os.chdir(ROOT)
-    repo = mzbuild.Repository(ROOT)
+    os.chdir(MZ_ROOT)
+    coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
+    repo = mzbuild.Repository(MZ_ROOT, coverage=coverage)
 
     wait_for_confluent(args.confluent_host)
 
@@ -101,10 +103,15 @@ def main() -> None:
 
     docker_client = docker.from_env()
 
-    mz_container = docker_client.containers.run(
-        deps["materialized"].spec(),
-        detach=True,
-        network_mode="host",
+    # NOTE: We have to override the type below because if `detach=True` it
+    # returns a Container, and the typechecker doesn't know that.
+    mz_container: Container = cast(
+        Container,
+        docker_client.containers.run(
+            deps["materialized"].spec(),
+            detach=True,
+            network_mode="host",
+        ),
     )
 
     docker_client.containers.run(
@@ -126,40 +133,42 @@ def main() -> None:
 
     conn = pg8000.connect(host="localhost", port=6875, user="materialize")
     conn.autocommit = True
-    cur = conn.cursor()
-    cur.execute(
-        f"""CREATE CONNECTION IF NOT EXISTS csr_conn
-        TO CONFLUENT SCHEMA REGISTRY (
-            URL 'http://{args.confluent_host}:8081'
-        )"""
-    )
-    cur.execute(
-        f"""CREATE CONNECTION kafka_conn
-        TO KAFKA (BROKER '{args.confluent_host}:9092')"""
-    )
-    cur.execute(
-        f"""CREATE SOURCE src
-        FROM KAFKA CONNECTION kafka_conn (TOPIC 'bench_data')
-        FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn"""
-    )
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""CREATE CONNECTION IF NOT EXISTS csr_conn
+            TO CONFLUENT SCHEMA REGISTRY (
+                URL 'http://{args.confluent_host}:8081'
+            )"""
+        )
+        cur.execute(
+            f"""CREATE CONNECTION kafka_conn
+            TO KAFKA (BROKER '{args.confluent_host}:9092')"""
+        )
+        cur.execute(
+            """CREATE SOURCE src
+            FROM KAFKA CONNECTION kafka_conn (TOPIC 'bench_data')
+            FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn"""
+        )
 
-    results_file = open("results.csv", "w")
+        results_file = open("results.csv", "w")
 
-    print("Rss,Vms,User Cpu,System Cpu,Wall Time", file=results_file, flush=True)
-    prev = PrevStats(time.time(), 0.0, 0.0)
-    for _ in range(args.trials):
-        cur.execute("DROP VIEW IF EXISTS cnt")
-        cur.execute("CREATE MATERIALIZED VIEW cnt AS SELECT count(*) FROM src")
-        while True:
-            try:
-                cur.execute("SELECT * FROM cnt")
-                n = cur.fetchone()[0]
-                if n >= args.records:
-                    break
-            except ProgrammingError:
-                pass
-            time.sleep(1)
-        prev = print_stats(mz_container, prev, results_file)
+        print("Rss,Vms,User Cpu,System Cpu,Wall Time", file=results_file, flush=True)
+        prev = PrevStats(time.time(), 0.0, 0.0)
+        for _ in range(args.trials):
+            cur.execute("DROP VIEW IF EXISTS cnt")
+            cur.execute("CREATE MATERIALIZED VIEW cnt AS SELECT count(*) FROM src")
+            while True:
+                try:
+                    cur.execute("SELECT * FROM cnt")
+                    row = cur.fetchone()
+                    assert row is not None
+                    n = row[0]
+                    if n >= args.records:
+                        break
+                except ProgrammingError:
+                    pass
+                time.sleep(1)
+            prev = print_stats(mz_container, prev, results_file)
 
 
 KEY_SCHEMA = json.dumps(

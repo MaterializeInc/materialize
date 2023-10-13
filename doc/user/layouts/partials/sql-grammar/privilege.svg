@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="241" height="389">
+   <polygon points="9 17 1 13 1 21"/>
+   <polygon points="17 17 9 13 9 21"/>
+   <rect x="51" y="3" width="74" height="32" rx="10"/>
+   <rect x="49"
+         y="1"
+         width="74"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="59" y="21">SELECT</text>
+   <rect x="51" y="47" width="70" height="32" rx="10"/>
+   <rect x="49"
+         y="45"
+         width="70"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="59" y="65">INSERT</text>
+   <rect x="51" y="91" width="78" height="32" rx="10"/>
+   <rect x="49"
+         y="89"
+         width="78"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="59" y="109">UPDATE</text>
+   <rect x="51" y="135" width="72" height="32" rx="10"/>
+   <rect x="49"
+         y="133"
+         width="72"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="59" y="153">DELETE</text>
+   <rect x="51" y="179" width="76" height="32" rx="10"/>
+   <rect x="49"
+         y="177"
+         width="76"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="59" y="197">CREATE</text>
+   <rect x="51" y="223" width="68" height="32" rx="10"/>
+   <rect x="49"
+         y="221"
+         width="68"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="59" y="241">USAGE</text>
+   <rect x="51" y="267" width="114" height="32" rx="10"/>
+   <rect x="49"
+         y="265"
+         width="114"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="59" y="285">CREATEROLE</text>
+   <rect x="51" y="311" width="96" height="32" rx="10"/>
+   <rect x="49"
+         y="309"
+         width="96"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="59" y="329">CREATEDB</text>
+   <rect x="51" y="355" width="142" height="32" rx="10"/>
+   <rect x="49"
+         y="353"
+         width="142"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="59" y="373">CREATECLUSTER</text>
+   <path class="line"
+         d="m17 17 h2 m20 0 h10 m74 0 h10 m0 0 h68 m-182 0 h20 m162 0 h20 m-202 0 q10 0 10 10 m182 0 q0 -10 10 -10 m-192 10 v24 m182 0 v-24 m-182 24 q0 10 10 10 m162 0 q10 0 10 -10 m-172 10 h10 m70 0 h10 m0 0 h72 m-172 -10 v20 m182 0 v-20 m-182 20 v24 m182 0 v-24 m-182 24 q0 10 10 10 m162 0 q10 0 10 -10 m-172 10 h10 m78 0 h10 m0 0 h64 m-172 -10 v20 m182 0 v-20 m-182 20 v24 m182 0 v-24 m-182 24 q0 10 10 10 m162 0 q10 0 10 -10 m-172 10 h10 m72 0 h10 m0 0 h70 m-172 -10 v20 m182 0 v-20 m-182 20 v24 m182 0 v-24 m-182 24 q0 10 10 10 m162 0 q10 0 10 -10 m-172 10 h10 m76 0 h10 m0 0 h66 m-172 -10 v20 m182 0 v-20 m-182 20 v24 m182 0 v-24 m-182 24 q0 10 10 10 m162 0 q10 0 10 -10 m-172 10 h10 m68 0 h10 m0 0 h74 m-172 -10 v20 m182 0 v-20 m-182 20 v24 m182 0 v-24 m-182 24 q0 10 10 10 m162 0 q10 0 10 -10 m-172 10 h10 m114 0 h10 m0 0 h28 m-172 -10 v20 m182 0 v-20 m-182 20 v24 m182 0 v-24 m-182 24 q0 10 10 10 m162 0 q10 0 10 -10 m-172 10 h10 m96 0 h10 m0 0 h46 m-172 -10 v20 m182 0 v-20 m-182 20 v24 m182 0 v-24 m-182 24 q0 10 10 10 m162 0 q10 0 10 -10 m-172 10 h10 m142 0 h10 m23 -352 h-3"/>
+   <polygon points="231 17 239 13 239 21"/>
+   <polygon points="231 17 223 13 223 21"/>
+</svg>

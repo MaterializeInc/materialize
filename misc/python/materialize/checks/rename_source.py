@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 from textwrap import dedent
-from typing import List
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
@@ -37,10 +36,6 @@ class RenameSource(Check):
                 $ kafka-ingest format=avro topic=rename-source schema=${rename-source-schema}
                 {"f1": "A"}
 
-                > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
-
-                > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
-
                 > CREATE SOURCE rename_source1
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-rename-source-${testdrive.seed}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -57,7 +52,7 @@ class RenameSource(Check):
             )
         )
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(self._source_schema() + dedent(s))
             for s in [
@@ -69,6 +64,12 @@ class RenameSource(Check):
                 {"f1": "E"}
                 """,
                 """
+                # When upgrading from old version without roles the source is
+                # owned by default_role, thus we have to change the owner
+                # before dropping it:
+                $[version>=4700] postgres-execute connection=postgres://mz_system:materialize@materialized:6877
+                ALTER SOURCE rename_source2 OWNER TO materialize;
+
                 $ kafka-ingest format=avro topic=rename-source schema=${rename-source-schema}
                 {"f1": "F"}
                 > ALTER SOURCE rename_source2 RENAME to rename_source3;

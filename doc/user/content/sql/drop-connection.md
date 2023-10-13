@@ -7,7 +7,9 @@ menu:
 
 ---
 
-`DROP CONNECTION` removes a connection from Materialize. If there are sources depending on the connection, you must explicitly drop them first, or use the `CASCADE` option.
+`DROP CONNECTION` removes a connection from Materialize. If there are sources
+depending on the connection, you must explicitly drop them first, or use the
+`CASCADE` option.
 
 ## Syntax
 
@@ -55,6 +57,14 @@ ERROR:  cannot drop materialize.public.kafka_connection: still depended upon by 
 DROP CONNECTION kafka_connection CASCADE;
 ```
 
+## Privileges
+
+The privileges required to execute this statement are:
+
+- Ownership of the dropped connection.
+- `USAGE` privileges on the containing schema.
+
 ## Related pages
 
 - [`SHOW CONNECTIONS`](../show-connections)
+- [DROP OWNED](../drop-owned)

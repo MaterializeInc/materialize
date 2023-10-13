@@ -1,15 +1,12 @@
 ---
 title: "SHOW DATABASES"
-description: "`SHOW DATABASES` returns a list of all databases available to your Materialize instances."
+description: "`SHOW DATABASES` returns a list of all databases in Materialize."
 menu:
   main:
     parent: commands
 ---
 
-{{< show-command-note >}}
-
-`SHOW DATABASES` returns a list of all databases available to your Materialize
-instances.
+`SHOW DATABASES` returns a list of all databases in Materialize.
 
 ## Syntax
 

@@ -7,30 +7,31 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from importlib import resources
 from pathlib import Path
-from typing import List
-
-from pkg_resources import resource_filename
+from typing import cast
 
 
 def resource_path(name: str) -> Path:
-    return Path(resource_filename(__name__, name))
+    # NOTE: we have to do this cast because pyright is not comfortable with the
+    # Traversable protocol.
+    return cast(Path, resources.files(__package__)) / name
 
 
-def scenarios() -> List[str]:
+def scenarios() -> list[str]:
     """
     Determines a list of avilable scenarios based on the intersection
     of files located in both the `schema` and `workload` resource paths.
     """
     schema_files = {
-        p.stem
+        p.name.removesuffix(".sql")
         for p in resource_path("schema").iterdir()
-        if p.is_file() and p.suffix == ".sql"
+        if p.is_file() and p.name.endswith(".sql")
     }
     workload_files = {
-        p.stem
+        p.name.removesuffix(".sql")
         for p in resource_path("workload").iterdir()
-        if p.is_file() and p.suffix == ".sql"
+        if p.is_file() and p.name.endswith(".sql")
     }
 
     return sorted(schema_files.intersection(workload_files))

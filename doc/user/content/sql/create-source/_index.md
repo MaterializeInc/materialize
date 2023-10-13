@@ -11,28 +11,40 @@ menu:
     weight: 20
 ---
 
-A [source](../../overview/key-concepts/#sources) describes an external system you want Materialize to read data from, and provides details about how to decode and interpret that data. To create a source, you must specify a [connector](#connectors), a [format](#formats) and an [envelope](#envelopes).
+A [source](../../get-started/key-concepts/#sources) describes an external system you want Materialize to read data from, and provides details about how to decode and interpret that data. To create a source, you must specify a [connector](#connectors), a [format](#formats) and an [envelope](#envelopes).
+Like other relations, sources are [namespaced](../namespaces/) by a database and schema.
 
 [//]: # "TODO(morsapaes) Add short description about what the command gets going in the background."
 
 ## Connectors
 
-Materialize bundles **native connectors** for the following external systems:
+Materialize bundles **native connectors** that allow ingesting data from the following external systems:
 
 {{< multilinkbox >}}
 {{< linkbox title="Message Brokers" >}}
 - [Kafka](/sql/create-source/kafka)
 - [Redpanda](/sql/create-source/kafka)
+- [Other message brokers](/integrations/#message-brokers)
 {{</ linkbox >}}
 {{< linkbox title="Databases (CDC)" >}}
 - [PostgreSQL](/sql/create-source/postgres)
+- [MySQL](/integrations/#mysql)
+- [Other databases](/integrations/#other-databases)
 {{</ linkbox >}}
-{{< linkbox title="Datagen" >}}
-- [Load generator](/sql/create-source/load-generator)
+{{< linkbox title="Webhooks" >}}
+- [Amazon EventBridge](/sql/create-source/webhook/#connecting-with-amazon-eventbridge)
+- [Segment](/ingest-data/segment/)
+- [Other webhooks](/sql/create-source/webhook)
 {{</ linkbox >}}
 {{</ multilinkbox >}}
 
 For details on the syntax, supported formats and features of each connector, check out the dedicated `CREATE SOURCE` documentation pages.
+
+**Sample data**
+
+To get started with no external dependencies, you can use the [load generator source](/sql/create-source/load-generator/)
+to produce sample data that is suitable for demo and performance test
+scenarios.
 
 ## Formats
 
@@ -62,37 +74,19 @@ Materialize supports all [Avro types](https://avro.apache.org/docs/current/spec.
 
 ### JSON
 
-<p style="font-size:14px"><b>Syntax:</b> <code>FORMAT BYTES</code></p>
+<p style="font-size:14px"><b>Syntax:</b> <code>FORMAT JSON</code></p>
 
-{{< note >}}
-Support for the more ergonomic `FORMAT JSON` is in progress {{% gh 7186 %}}!
-{{</ note >}}
+Materialize can decode JSON messages into a single column named `data` with type
+`jsonb`. Refer to the [`jsonb` type](/sql/types/jsonb) documentation for the
+supported operations on this type.
 
-Materialize cannot decode JSON directly from an external data source. Instead, you must create a source that reads the data as [raw bytes](#bytes), and handle the conversion to primitive types using [`jsonb`](/sql/types/jsonb) as an intermediate representation.
-
-```sql
--- create raw byte array source
-CREATE SOURCE my_bytea_source
-  FROM ...
-  FORMAT BYTES
-  WITH (SIZE='3xsmall');
-
--- convert from byte array to jsonb
-CREATE VIEW my_jsonb_source AS
-  SELECT
-    CONVERT_FROM(data, 'utf8')::jsonb AS data
-  FROM bytea_source;
-```
-
-{{< note >}}
-Raw byte-formatted sources have one column, by default named `data`. For more details on handling JSON-encoded messages, check the [`jsonb` type](/sql/types/jsonb) documentation.
-{{</ note >}}
-
-To avoid redundant processing and ensure a typed representation of the source is available across clusters, you should create a [materialized view](/overview/key-concepts/#materialized-views).
+If your JSON messages have a consistent shape, consider creating a
+[view](/get-started/key-concepts/#views) that extracts the fields of the JSON
+into columns:
 
 ```sql
--- parse jsonb into typed columns
-CREATE MATERIALIZED VIEW my_typed_source AS
+-- extract jsonb into typed columns
+CREATE VIEW my_typed_source AS
   SELECT
     (data->>'field1')::boolean AS field_1,
     (data->>'field2')::int AS field_2,
@@ -108,9 +102,9 @@ Retrieving schemas from a schema registry is not supported yet for JSON-formatte
 
 <p style="font-size:14px"><b>Syntax:</b> <code>FORMAT PROTOBUF</code></p>
 
-Materialize can decode Protobuf messages by integrating with a schema registry to retrieve a `.proto` schema definition, and automatically define the columns and data types to use in the source. Unlike Avro, Protobuf does not serialize a schema with the message, so Materialize expects:
+Materialize can decode Protobuf messages by integrating with a schema registry or parsing an inline schema to retrieve a `.proto` schema definition. It can then automatically define the columns and data types to use in the source. Unlike Avro, Protobuf does not serialize a schema with the message, so Materialize expects:
 
-* A `FileDescriptorSet` that encodes the Protobuf message schema. You can generate the `FileDescriptorSet` with `protoc`, for example:
+* A `FileDescriptorSet` that encodes the Protobuf message schema. You can generate the `FileDescriptorSet` with [`protoc`](https://grpc.io/docs/protoc-installation/), for example:
 
   ```shell
   protoc --include_imports --descriptor_set_out=SCHEMA billing.proto
@@ -233,7 +227,7 @@ Debezium may produce duplicate records if the connector is interrupted. Material
 
 ### Sizing a source
 
-Some sources are low traffic and require relatively few resources to handle data ingestion, while others are high traffic and require hefty resource allocations. You choose the amount of CPU and memory available to a source using the `SIZE` option, and adjust the provisioned size after source creation using the [`ALTER SOURCE`](/sql/alter-source) command.
+Some sources are low traffic and require relatively few resources to handle data ingestion, while others are high traffic and require hefty resource allocations. You choose the amount of CPU, memory, and disk available to a source using the `SIZE` option, and adjust the provisioned size after source creation using the [`ALTER SOURCE`](/sql/alter-source) command.
 
 It's a good idea to size up a source when:
 
@@ -243,15 +237,19 @@ It's a good idea to size up a source when:
 
   * You are using the [upsert envelope](#upsert-envelope) or [Debezium
     envelope](#debezium-envelope), and your source contains **many unique
-    keys**. These envelopes must keep in-memory state proportional to the number
-    of unique keys in the upstream external system. Larger sizes can store more
-    unique keys.
+    keys**. These envelopes maintain state proportional to the number of unique
+    keys in the upstream external system. Larger sizes can store more unique
+    keys.
+
+    In this case, it's also possible to enable _spill to disk_ to accommodate
+    larger state sizes without sizing up. See the [`CREATE CLUSTER`: Disk](/sql/create-cluster#disk)
+    documentation for more details.
 
 Sources that specify the `SIZE` option are linked to a single-purpose cluster
 dedicated to maintaining that source.
 
 You can also choose to place a source in an existing
-[cluster](/overview/key-concepts/#clusters) by using the `IN CLUSTER` option.
+[cluster](/get-started/key-concepts/#clusters) by using the `IN CLUSTER` option.
 Sources in a cluster share the resource allocation of the cluster with all other
 objects in the cluster.
 
@@ -259,9 +257,19 @@ Colocating multiple sources onto the same cluster can be more resource efficient
 when you have many low-traffic sources that occasionally need some burst
 capacity.
 
+## Privileges
+
+The privileges required to execute this statement are:
+
+- `CREATE` privileges on the containing schema.
+- `CREATE` privileges on the containing cluster if the source is created in an existing cluster.
+- `CREATECLUSTER` privileges on the system if the source is not created in an existing cluster.
+- `USAGE` privileges on all connections and secrets used in the source definition.
+- `USAGE` privileges on the schemas that all connections and secrets in the statement are contained in.
+
 ## Related pages
 
-- [Key Concepts](../../overview/key-concepts/)
+- [Key Concepts](../../get-started/key-concepts/)
 - [`SHOW SOURCES`](/sql/show-sources/)
 - [`SHOW COLUMNS`](/sql/show-columns/)
 - [`SHOW CREATE SOURCE`](/sql/show-create-source/)

@@ -106,6 +106,7 @@ impl<'a> DirectiveArgs<'a> {
                 .map(|x| HollowBatchPart {
                     key: PartialBatchKey((*x).to_owned()),
                     encoded_size_bytes: 0,
+                    key_lower: vec![],
                     stats: None,
                 })
                 .collect(),
@@ -144,7 +145,7 @@ impl<'a> DirectiveArgs<'a> {
 mod tests {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn trace() {
         use crate::internal::trace::datadriven as trace_dd;
 
@@ -159,8 +160,8 @@ mod tests {
                     "apply-merge-res" => trace_dd::apply_merge_res(&mut state, args),
                     "downgrade-since" => trace_dd::downgrade_since(&mut state, args),
                     "push-batch" => trace_dd::insert(&mut state, args),
-                    "since-upper" => trace_dd::since_upper(&mut state, args),
-                    "spine-batches" => trace_dd::batches(&mut state, args),
+                    "since-upper" => trace_dd::since_upper(&state, args),
+                    "spine-batches" => trace_dd::batches(&state, args),
                     "take-merge-reqs" => trace_dd::take_merge_req(&mut state, args),
                     _ => panic!("unknown directive {:?}", tc),
                 };
@@ -173,8 +174,8 @@ mod tests {
         });
     }
 
-    #[tokio::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
     async fn machine() {
         use crate::internal::machine::datadriven as machine_dd;
 
@@ -191,20 +192,27 @@ mod tests {
                         };
                         let mut state = state.lock().await;
                         let res = match tc.directive.as_str() {
+                            "add-rollup" => machine_dd::add_rollup(&mut state, args).await,
                             "apply-merge-res" => {
                                 machine_dd::apply_merge_res(&mut state, args).await
                             }
                             "blob-scan-batches" => {
-                                machine_dd::blob_scan_batches(&mut state, args).await
+                                machine_dd::blob_scan_batches(&state, args).await
                             }
                             "compact" => machine_dd::compact(&mut state, args).await,
                             "compare-and-append" => {
                                 machine_dd::compare_and_append(&mut state, args).await
                             }
+                            "compare-and-append-batches" => {
+                                machine_dd::compare_and_append_batches(&state, args).await
+                            }
                             "compare-and-downgrade-since" => {
                                 machine_dd::compare_and_downgrade_since(&mut state, args).await
                             }
-                            "consensus-scan" => machine_dd::consensus_scan(&mut state, args).await,
+                            "consensus-scan" => machine_dd::consensus_scan(&state, args).await,
+                            "consensus-truncate" => {
+                                machine_dd::consensus_truncate(&state, args).await
+                            }
                             "downgrade-since" => {
                                 machine_dd::downgrade_since(&mut state, args).await
                             }
@@ -215,13 +223,10 @@ mod tests {
                                 machine_dd::expire_leased_reader(&mut state, args).await
                             }
                             "expire-writer" => machine_dd::expire_writer(&mut state, args).await,
-                            "fetch-batch" => machine_dd::fetch_batch(&mut state, args).await,
+                            "fetch-batch" => machine_dd::fetch_batch(&state, args).await,
                             "gc" => machine_dd::gc(&mut state, args).await,
                             "heartbeat-leased-reader" => {
                                 machine_dd::heartbeat_leased_reader(&mut state, args).await
-                            }
-                            "heartbeat-writer" => {
-                                machine_dd::heartbeat_writer(&mut state, args).await
                             }
                             "listen-through" => machine_dd::listen_through(&mut state, args).await,
                             "perform-maintenance" => {
@@ -236,18 +241,16 @@ mod tests {
                             "register-leased-reader" => {
                                 machine_dd::register_leased_reader(&mut state, args).await
                             }
-                            "register-writer" => {
-                                machine_dd::register_writer(&mut state, args).await
-                            }
                             "set-batch-parts-size" => {
                                 machine_dd::set_batch_parts_size(&mut state, args).await
                             }
-                            "shard-desc" => machine_dd::shard_desc(&mut state, args).await,
+                            "shard-desc" => machine_dd::shard_desc(&state, args).await,
                             "snapshot" => machine_dd::snapshot(&mut state, args).await,
                             "truncate-batch-desc" => {
                                 machine_dd::truncate_batch_desc(&mut state, args).await
                             }
                             "write-batch" => machine_dd::write_batch(&mut state, args).await,
+                            "write-rollup" => machine_dd::write_rollup(&mut state, args).await,
                             _ => panic!("unknown directive {:?}", tc),
                         };
                         match res {

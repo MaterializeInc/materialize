@@ -23,8 +23,27 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"a": 1}
 
 > CREATE SECRET ssl_key_kafka AS '${arg.materialized-kafka-key}'
+> CREATE SECRET ssl_key_kafka1 AS '${arg.materialized-kafka1-key}'
 > CREATE SECRET ssl_key_csr AS '${arg.materialized-schema-registry-key}'
 > CREATE SECRET password_csr AS 'sekurity'
+
+# Attempt to connect with the wrong certificate
+! CREATE CONNECTION kafka_ssl TO KAFKA (
+    BROKER 'kafka:9092',
+    SSL KEY = SECRET ssl_key_kafka1,
+    SSL CERTIFICATE = '${arg.materialized-kafka1-crt}',
+    SSL CERTIFICATE AUTHORITY = '${arg.ca-crt}'
+  );
+contains:Connection reset: error:1408F119:SSL routines:ssl3_get_record:decryption failed or bad record mac
+
+# Attempt to connect with the wrong CA
+! CREATE CONNECTION kafka_ssl TO KAFKA (
+    BROKER 'kafka:9092',
+    SSL KEY = SECRET ssl_key_kafka,
+    SSL CERTIFICATE = '${arg.materialized-kafka-crt}',
+    SSL CERTIFICATE AUTHORITY = '${arg.ca-alt-crt}'
+  );
+contains:Invalid CA certificate
 
 # Ensure connections track their dependencies
 > CREATE CONNECTION kafka_ssl TO KAFKA (
@@ -130,24 +149,11 @@ a
 
 # Ensure that connectors do not require the certificate authority
 
-> CREATE CONNECTION kafka_sasl_no_ca TO KAFKA (
+# This ensures that the error is not that the CA was required, but simply that
+# not providing it prohibits connecting.
+! CREATE CONNECTION kafka_sasl_no_ca TO KAFKA (
     BROKER 'kafka:9092',
     SSL KEY = SECRET ssl_key_kafka,
     SSL CERTIFICATE = '${arg.materialized-kafka-crt}'
   );
-
-> CREATE CONNECTION csr_ssl_no_ca TO CONFLUENT SCHEMA REGISTRY (
-    URL '${testdrive.schema-registry-url}',
-    SSL KEY = SECRET ssl_key_csr,
-    SSL CERTIFICATE = '${arg.materialized-schema-registry-crt}',
-    USERNAME = 'materialize',
-    PASSWORD = SECRET password_csr
-  );
-
-# This ensures that the error is not that the CA was required, but simply that
-# not providing it prohibits connecting.
-! CREATE SOURCE kafka_ssl_no_ca
-  FROM KAFKA CONNECTION kafka_sasl_no_ca (TOPIC 'testdrive-data-${testdrive.seed}')
-    FORMAT AVRO
-  USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_ssl_no_ca
-contains: broker certificate could not be verified
+contains:Invalid CA certificate

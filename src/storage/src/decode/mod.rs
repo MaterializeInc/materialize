@@ -10,7 +10,7 @@
 //! This module provides functions that
 //! build decoding pipelines from raw source streams.
 //!
-//! The primary exports are [`render_decode`], [`render_decode_delimited`], and
+//! The primary exports are [`render_decode_delimited`], and
 //! [`render_decode_cdcv2`]. See their docs for more details about their differences.
 
 use std::any::Any;
@@ -19,38 +19,31 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 use std::time::Duration;
 
-use chrono::NaiveDateTime;
 use differential_dataflow::capture::YieldingIter;
-use differential_dataflow::Hashable;
-use differential_dataflow::{AsCollection, Collection};
-use futures::StreamExt as AsyncStreamExt;
-use regex::Regex;
-use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::Operator;
-use timely::dataflow::Scope;
-use timely::scheduling::SyncActivator;
-use tokio::runtime::Handle as TokioHandle;
-use tracing::error;
-
+use differential_dataflow::{AsCollection, Collection, Hashable};
 use mz_avro::{AvroDeserializer, GeneralDeserializer};
-use mz_expr::PartitionId;
 use mz_interchange::avro::ConfluentAvroResolver;
-use mz_repr::{adt::timestamp::CheckedTimestamp, Datum};
-use mz_repr::{Diff, Row, Timestamp};
-use mz_storage_client::types::connections::{ConnectionContext, CsrClient};
-use mz_storage_client::types::errors::{DecodeError, DecodeErrorKind};
-use mz_storage_client::types::sources::encoding::{
+use mz_ore::error::ErrorExt;
+use mz_repr::{Datum, Diff, Row, Timestamp};
+use mz_storage_types::connections::{ConnectionContext, CsrConnection};
+use mz_storage_types::errors::{DecodeError, DecodeErrorKind};
+use mz_storage_types::sources::encoding::{
     AvroEncoding, DataEncoding, DataEncodingInner, RegexEncoding,
 };
-use mz_storage_client::types::sources::{IncludedColumnSource, MzOffset};
-use mz_timely_util::builder_async::Event as AsyncEvent;
-use mz_timely_util::operator::StreamExt;
+use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
+use regex::Regex;
+use timely::dataflow::channels::pact::Exchange;
+use timely::dataflow::operators::Map;
+use timely::dataflow::{Scope, Stream};
+use timely::scheduling::SyncActivator;
+use tracing::error;
 
-use self::avro::AvroDecoderState;
-use self::csv::CsvDecoderState;
-use self::metrics::DecodeMetrics;
-use self::protobuf::ProtobufDecoderState;
-use crate::source::types::{ByteStream, DecodeResult, SourceOutput};
+use crate::decode::avro::AvroDecoderState;
+use crate::decode::csv::CsvDecoderState;
+use crate::decode::metrics::DecodeMetrics;
+use crate::decode::protobuf::ProtobufDecoderState;
+use crate::render::sources::OutputIndex;
+use crate::source::types::{DecodeResult, HealthStatus, HealthStatusUpdate, SourceOutput};
 
 mod avro;
 mod csv;
@@ -63,59 +56,73 @@ mod protobuf;
 /// also builds a differential dataflow collection that respects the
 /// data and progress messages in the underlying CDCv2 stream.
 pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
-    input: &Collection<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>, u32>,
-    schema: &str,
-    registry: Option<CsrClient>,
+    input: &Collection<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>, Diff>,
+    schema: String,
+    connection_context: ConnectionContext,
+    csr_connection: Option<CsrConnection>,
     confluent_wire_format: bool,
 ) -> (Collection<G, Row, Diff>, Box<dyn Any + Send + Sync>) {
-    // We will have already checked validity of the schema by now, so this can't fail.
-    let mut resolver = ConfluentAvroResolver::new(schema, registry, confluent_wire_format).unwrap();
-    let channel = Rc::new(RefCell::new(VecDeque::new()));
-    let activator: Rc<RefCell<Option<SyncActivator>>> = Rc::new(RefCell::new(None));
-    let mut vector = Vec::new();
-    input.inner.sink(
-        Exchange::new(|(x, _, _): &(SourceOutput<_, _>, _, _)| x.position.hashed()),
-        "CDCv2-Decode",
-        {
-            let channel = Rc::clone(&channel);
-            let activator = Rc::clone(&activator);
-            let tokio_handle = TokioHandle::current();
-            move |input| {
-                input.for_each(|_time, data| {
-                    data.swap(&mut vector);
-                    for (data, _time, _diff) in vector.drain(..) {
-                        let value = match &data.value {
-                            Some(value) => value,
-                            None => continue,
-                        };
-                        let (mut data, schema, _) =
-                            match tokio_handle.block_on(resolver.resolve(&*value)) {
-                                Ok(ok) => ok,
-                                Err(e) => {
-                                    error!("Failed to get schema info for CDCv2 record: {}", e);
-                                    continue;
-                                }
-                            };
-                        let d = GeneralDeserializer {
-                            schema: schema.top_node(),
-                        };
-                        let dec = mz_interchange::avro::cdc_v2::Decoder;
-                        let message = match d.deserialize(&mut data, dec) {
-                            Ok(ok) => ok,
-                            Err(e) => {
-                                error!("Failed to deserialize avro message: {}", e);
-                                continue;
-                            }
-                        };
-                        channel.borrow_mut().push_back(message);
-                    }
-                });
-                if let Some(activator) = activator.borrow_mut().as_mut() {
-                    activator.activate().unwrap()
-                }
-            }
-        },
+    let channel_rx = Rc::new(RefCell::new(VecDeque::new()));
+    let activator_set: Rc<RefCell<Option<SyncActivator>>> = Rc::new(RefCell::new(None));
+
+    let mut builder = AsyncOperatorBuilder::new("CDCv2-Decode".to_owned(), input.scope());
+
+    let mut input_handle = builder.new_input(
+        &input.inner,
+        Exchange::new(|(x, _, _): &(SourceOutput<Option<Vec<u8>>, _>, _, _)| x.key.hashed()),
     );
+
+    let channel_tx = Rc::clone(&channel_rx);
+    let activator_get = Rc::clone(&activator_set);
+    builder.build(move |_| async move {
+        let registry = match csr_connection {
+            None => None,
+            Some(conn) => Some(
+                conn.connect(&connection_context)
+                    .await
+                    .expect("CSR connection unexpectedly missing secrets"),
+            ),
+        };
+
+        // We have already checked validity of the schema by now, so this can't fail.
+        let mut resolver =
+            ConfluentAvroResolver::new(&schema, registry, confluent_wire_format).unwrap();
+
+        while let Some(event) = input_handle.next_mut().await {
+            let AsyncEvent::Data(_time, data) = event else {
+                continue;
+            };
+
+            for (data, _time, _diff) in data.drain(..) {
+                let value = match &data.value {
+                    Some(value) => value,
+                    None => continue,
+                };
+                let (mut data, schema, _) = match resolver.resolve(&*value).await {
+                    Ok(ok) => ok,
+                    Err(e) => {
+                        error!("Failed to get schema info for CDCv2 record: {}", e);
+                        continue;
+                    }
+                };
+                let d = GeneralDeserializer {
+                    schema: schema.top_node(),
+                };
+                let dec = mz_interchange::avro::cdc_v2::Decoder;
+                let message = match d.deserialize(&mut data, dec) {
+                    Ok(ok) => ok,
+                    Err(e) => {
+                        error!("Failed to deserialize avro message: {}", e);
+                        continue;
+                    }
+                };
+                channel_tx.borrow_mut().push_back(message);
+            }
+            if let Some(activator) = activator_get.borrow_mut().as_mut() {
+                activator.activate().unwrap()
+            }
+        }
+    });
     struct VdIterator<T>(Rc<RefCell<VecDeque<T>>>);
     impl<T> Iterator for VdIterator<T> {
         type Item = T;
@@ -125,8 +132,8 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
     }
     // this operator returns a thread-safe drop-token
     let (token, stream) = differential_dataflow::capture::source::build(input.scope(), move |ac| {
-        *activator.borrow_mut() = Some(ac);
-        YieldingIter::new_from(VdIterator(channel), Duration::from_millis(10))
+        *activator_set.borrow_mut() = Some(ac);
+        YieldingIter::new_from(VdIterator(channel_rx), Duration::from_millis(10))
     });
     (stream.as_collection(), token)
 }
@@ -138,6 +145,7 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
 pub(crate) enum PreDelimitedFormat {
     Bytes,
     Text,
+    Json,
     Regex(Regex, Row),
     Protobuf(ProtobufDecoderState),
 }
@@ -146,6 +154,20 @@ impl PreDelimitedFormat {
     pub fn decode(&mut self, bytes: &[u8]) -> Result<Option<Row>, DecodeErrorKind> {
         match self {
             PreDelimitedFormat::Bytes => Ok(Some(Row::pack(Some(Datum::Bytes(bytes))))),
+            PreDelimitedFormat::Json => {
+                let j = mz_repr::adt::jsonb::Jsonb::from_slice(bytes).map_err(|e| {
+                    DecodeErrorKind::Bytes(format!(
+                        "Failed to decode JSON: {}",
+                        // See if we can output the string that failed to be converted to JSON.
+                        match std::str::from_utf8(bytes) {
+                            Ok(str) => str.to_string(),
+                            // Otherwise produce the nominally helpful error.
+                            Err(_) => e.display_with_causes().to_string(),
+                        }
+                    ))
+                })?;
+                Ok(Some(j.into_row()))
+            }
             PreDelimitedFormat::Text => {
                 let s = std::str::from_utf8(bytes)
                     .map_err(|_| DecodeErrorKind::Text("Failed to decode UTF-8".to_string()))?;
@@ -190,7 +212,7 @@ struct DataDecoder {
 }
 
 impl DataDecoder {
-    pub fn next(&mut self, bytes: &mut &[u8]) -> Result<Option<Row>, DecodeErrorKind> {
+    pub async fn next(&mut self, bytes: &mut &[u8]) -> Result<Option<Row>, DecodeErrorKind> {
         match &mut self.inner {
             DataDecoderInner::DelimitedBytes { delimiter, format } => {
                 let delimiter = *delimiter;
@@ -202,7 +224,7 @@ impl DataDecoder {
                 *bytes = &bytes[chunk_idx + 1..];
                 format.decode(data)
             }
-            DataDecoderInner::Avro(avro) => avro.decode(bytes),
+            DataDecoderInner::Avro(avro) => avro.decode(bytes).await,
             DataDecoderInner::Csv(csv) => csv.decode(bytes),
             DataDecoderInner::PreDelimited(format) => {
                 let result = format.decode(*bytes);
@@ -246,7 +268,7 @@ impl DataDecoder {
     }
 }
 
-fn get_decoder(
+async fn get_decoder(
     encoding: DataEncoding,
     debug_name: &str,
     // Information about optional transformations that can be eagerly done.
@@ -255,8 +277,8 @@ fn get_decoder(
     is_connection_delimited: bool,
     metrics: DecodeMetrics,
     connection_context: &ConnectionContext,
-) -> DataDecoder {
-    match encoding.inner {
+) -> Result<DataDecoder, anyhow::Error> {
+    let decoder = match encoding.inner {
         DataEncodingInner::Avro(AvroEncoding {
             schema,
             csr_connection,
@@ -264,11 +286,7 @@ fn get_decoder(
         }) => {
             let csr_client = match csr_connection {
                 None => None,
-                Some(csr_connection) => Some(
-                    TokioHandle::current()
-                        .block_on(csr_connection.connect(&*connection_context.secrets_reader))
-                        .expect("CSR connection unexpectedly missing secrets"),
-                ),
+                Some(csr_connection) => Some(csr_connection.connect(connection_context).await?),
             };
             let state = avro::AvroDecoderState::new(
                 &schema,
@@ -284,11 +302,12 @@ fn get_decoder(
         }
         DataEncodingInner::Text
         | DataEncodingInner::Bytes
+        | DataEncodingInner::Json
         | DataEncodingInner::Protobuf(_)
         | DataEncodingInner::Regex(_) => {
             let after_delimiting = match encoding.inner {
                 DataEncodingInner::Regex(RegexEncoding { regex }) => {
-                    PreDelimitedFormat::Regex(regex.0, Default::default())
+                    PreDelimitedFormat::Regex(regex.regex, Default::default())
                 }
                 DataEncodingInner::Protobuf(encoding) => {
                     PreDelimitedFormat::Protobuf(ProtobufDecoderState::new(encoding).expect(
@@ -297,6 +316,7 @@ fn get_decoder(
                     ))
                 }
                 DataEncodingInner::Bytes => PreDelimitedFormat::Bytes,
+                DataEncodingInner::Json => PreDelimitedFormat::Json,
                 DataEncodingInner::Text => PreDelimitedFormat::Text,
                 _ => unreachable!(),
             };
@@ -320,25 +340,32 @@ fn get_decoder(
         DataEncodingInner::RowCodec(_) => {
             unreachable!("RowCodec sources should not go through the general decoding path.")
         }
-    }
+    };
+    Ok(decoder)
 }
 
-fn try_decode_delimited(
+async fn decode_delimited(
     decoder: &mut DataDecoder,
-    value: Option<&Vec<u8>>,
-) -> Option<Result<Row, DecodeErrorKind>> {
-    let value_buf = &mut value?.as_slice();
-    let value = decoder.next(value_buf);
-    if value.is_ok() && !value_buf.is_empty() {
-        let err = format!(
-            "Unexpected bytes remaining for decoded value: {:?}",
-            value_buf
-        );
-        return Some(Err(DecodeErrorKind::Text(err)));
+    buf: &[u8],
+) -> Result<Option<Row>, DecodeError> {
+    async fn inner(
+        decoder: &mut DataDecoder,
+        mut buf: &[u8],
+    ) -> Result<Option<Row>, DecodeErrorKind> {
+        let value = decoder.next(&mut buf).await?;
+        if !buf.is_empty() {
+            let err = format!("Unexpected bytes remaining for decoded value: {buf:?}");
+            return Err(DecodeErrorKind::Text(err));
+        }
+        match value {
+            Some(value) => Ok(Some(value)),
+            None => Ok(decoder.eof(&mut buf)?),
+        }
     }
-    value
-        .transpose()
-        .or_else(|| decoder.eof(&mut &[][..]).transpose())
+    inner(decoder, buf).await.map_err(|inner| DecodeError {
+        kind: inner,
+        raw: buf.to_vec(),
+    })
 }
 
 /// Decode already delimited records of data.
@@ -354,15 +381,15 @@ fn try_decode_delimited(
 /// (which is not always possible otherwise, since often gibberish strings can be interpreted as Avro,
 ///  so the only signal is how many bytes you managed to decode).
 pub fn render_decode_delimited<G>(
-    input: &Collection<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>, u32>,
+    input: &Collection<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>, Diff>,
     key_encoding: Option<DataEncoding>,
     value_encoding: DataEncoding,
-    debug_name: &str,
-    metadata_items: Vec<IncludedColumnSource>,
+    debug_name: String,
     metrics: DecodeMetrics,
-    connection_context: &ConnectionContext,
+    connection_context: ConnectionContext,
 ) -> (
     Collection<G, DecodeResult, Diff>,
+    Stream<G, (OutputIndex, HealthStatusUpdate)>,
     Option<Box<dyn Any + Send + Sync>>,
 )
 where
@@ -376,86 +403,84 @@ where
             .unwrap_or(""),
         value_encoding.op_name()
     );
-    let mut key_decoder = key_encoding.map(|key_encoding| {
-        get_decoder(
-            key_encoding,
-            debug_name,
-            true,
-            metrics.clone(),
-            connection_context,
-        )
-    });
-
-    let mut value_decoder = get_decoder(
-        value_encoding,
-        debug_name,
-        true,
-        metrics,
-        connection_context,
-    );
-
     let dist =
         |(x, _, _): &(SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>, _, _)| x.value.hashed();
 
-    let results = input
-        .inner
-        .unary_frontier(Exchange::new(dist), &op_name, move |_, _| {
-            move |input, output| {
+    let mut builder = AsyncOperatorBuilder::new(op_name, input.scope());
+
+    let mut input = builder.new_input(&input.inner, Exchange::new(dist));
+    let (mut output_handle, output) = builder.new_output();
+
+    let (_, transient_errors) = builder.build_fallible(move |caps| {
+        Box::pin(async move {
+            let [cap]: &mut [_; 1] = caps.try_into().unwrap();
+            *cap = None;
+
+            let mut key_decoder = match key_encoding {
+                Some(encoding) => Some(
+                    get_decoder(
+                        encoding,
+                        &debug_name,
+                        true,
+                        metrics.clone(),
+                        &connection_context,
+                    )
+                    .await?,
+                ),
+                None => None,
+            };
+
+            let mut value_decoder = get_decoder(
+                value_encoding,
+                &debug_name,
+                true,
+                metrics,
+                &connection_context,
+            )
+            .await?;
+
+            let mut output_container = Vec::new();
+
+            while let Some(event) = input.next().await {
+                let AsyncEvent::Data(cap, data) = event else {
+                    continue;
+                };
+
                 let mut n_errors = 0;
                 let mut n_successes = 0;
-                input.for_each(|cap, data| {
-                    let mut session = output.session(&cap);
-                    for (output, ts, diff) in data.iter() {
-                        let SourceOutput {
-                            key,
-                            value,
-                            position,
-                            upstream_time_millis,
-                            partition,
-                            headers,
-                        } = output;
+                for (output, ts, diff) in data.iter() {
+                    let SourceOutput {
+                        key,
+                        value,
+                        metadata,
+                        position_for_upsert: position,
+                    } = output;
 
-                        let key = key_decoder.as_mut().and_then(|decoder| {
-                            try_decode_delimited(decoder, key.as_ref()).map(|result| {
-                                result.map_err(|inner| DecodeError {
-                                    kind: inner,
-                                    raw: key.clone(),
-                                })
-                            })
-                        });
+                    let key = match key_decoder.as_mut().zip(key.as_ref()) {
+                        Some((decoder, buf)) => decode_delimited(decoder, buf).await.transpose(),
+                        None => None,
+                    };
 
-                        let value = try_decode_delimited(&mut value_decoder, value.as_ref()).map(
-                            |result| {
-                                result.map_err(|inner| DecodeError {
-                                    kind: inner,
-                                    raw: value.clone(),
-                                })
-                            },
-                        );
+                    let value = match value.as_ref() {
+                        Some(buf) => decode_delimited(&mut value_decoder, buf).await.transpose(),
+                        None => None,
+                    };
 
-                        if matches!(&key, Some(Err(_))) || matches!(&value, Some(Err(_))) {
-                            n_errors += 1;
-                        } else if matches!(&value, Some(Ok(_))) {
-                            n_successes += 1;
-                        }
-
-                        let result = DecodeResult {
-                            key,
-                            value,
-                            position: *position,
-                            upstream_time_millis: *upstream_time_millis,
-                            partition: partition.clone(),
-                            metadata: to_metadata_row(
-                                &metadata_items,
-                                partition.clone(),
-                                *position,
-                                *upstream_time_millis,
-                                headers.as_deref(),
-                            ),
-                        };
-                        session.give((result, ts.clone(), Diff::from(*diff)));
+                    if matches!(&key, Some(Err(_))) || matches!(&value, Some(Err(_))) {
+                        n_errors += 1;
+                    } else if matches!(&value, Some(Ok(_))) {
+                        n_successes += 1;
                     }
-                });
+
+                    let result = DecodeResult {
+                        key,
+                        value,
+                        position_for_upsert: *position,
+                        metadata: metadata.clone(),
+                    };
+                    output_container.push((result, ts.clone(), *diff));
+                }
+
                 // Matching historical practice, we only log metrics on the value decoder.
                 if n_errors > 0 {
                     value_decoder.log_errors(n_errors);
@@ -463,289 +488,26 @@ where
                 if n_successes > 0 {
                     value_decoder.log_successes(n_successes);
                 }
+
+                output_handle
+                    .give_container(&cap, &mut output_container)
+                    .await;
             }
-        });
-    (results.as_collection(), None)
-}
 
-/// Decode arbitrary chunks of bytes into rows.
-///
-/// This decode API is used for upstream connections
-/// that don't discover delimiters themselves; i.e., those
-/// (like CSV files) that need help from the decoding stage to discover where
-/// one record ends and another begins.
-///
-/// As such, the connections simply present arbitrary chunks of bytes about which
-/// we can't assume any alignment properties. The `DataDecoder` API accepts these,
-/// and returns `None` if it needs more bytes to discover the boundary between messages.
-/// In that case, this function remembers the already-seen bytes and waits for new ones
-/// before calling into the decoder again.
-///
-/// If the decoder does find a message, we verify (by asserting) that it consumed some bytes, to avoid
-/// the possibility of infinite loops.
-pub fn render_decode<G>(
-    input: &Collection<G, SourceOutput<(), ByteStream>, u32>,
-    value_encoding: DataEncoding,
-    debug_name: &str,
-    metadata_items: Vec<IncludedColumnSource>,
-    metrics: DecodeMetrics,
-    connection_context: &ConnectionContext,
-) -> (
-    Collection<G, DecodeResult, Diff>,
-    Option<Box<dyn Any + Send + Sync>>,
-)
-where
-    G: Scope<Timestamp = Timestamp>,
-{
-    let op_name = format!("{}Decode", value_encoding.op_name());
+            Ok(())
+        })
+    });
 
-    let mut value_decoder = get_decoder(
-        value_encoding,
-        debug_name,
-        false,
-        metrics,
-        connection_context,
-    );
+    let health = transient_errors.map(|err: Rc<anyhow::Error>| {
+        let halt_status = HealthStatusUpdate {
+            update: HealthStatus::StalledWithError {
+                error: err.display_with_causes().to_string(),
+                hint: None,
+            },
+            should_halt: true,
+        };
+        (0, halt_status)
+    });
 
-    let mut value_buf = vec![];
-
-    // The `position` value from `SourceOutput` is meaningless -- it's just a counter of the number
-    // of files emitted so far.
-    // We therefore ignore it, and keep track ourselves of how many records we've seen (for filling in `mz_line_no`, etc).
-    // Historically, non-delimited sources have their offset start at 1
-    let mut n_seen = 1..;
-    let results = input.inner.unary_async(
-        Pipeline,
-        op_name,
-        move |_, _, mut input, mut output| async move {
-            let metadata_items = metadata_items;
-            let mut n_errors = 0;
-            let mut n_successes = 0;
-            while let Some(event) = input.next_mut().await {
-                let (cap, data) = match event {
-                    AsyncEvent::Data(cap, data) => (cap, data),
-                    AsyncEvent::Progress(_) => continue,
-                };
-
-                // Currently Kafka is the only kind of source that can have metadata, and it is
-                // always delimited, so we will never have metadata in `render_decode`
-                for (item, ts, diff) in data.drain(..) {
-                    let SourceOutput {
-                        key: _,
-                        value,
-                        position: _,
-                        upstream_time_millis,
-                        partition,
-                        headers,
-                    } = item;
-                    let diff = Diff::from(diff);
-
-                    let Ok(mut stream) = Rc::try_unwrap(value.stream) else {
-                        panic!("byte stream cloned unexpectedly");
-                    };
-                    while let Some(chunk) = stream.next().await {
-                        // Check whether we have a partial message from last time.
-                        // If so, we need to prepend it to the bytes we got from _this_ message.
-                        let value = if value_buf.is_empty() {
-                            &chunk
-                        } else {
-                            value_buf.extend_from_slice(&*chunk);
-                            &value_buf
-                        };
-
-                        let value_bytes_remaining = &mut value.as_slice();
-
-                        // The intent is that the below loop runs as long as there are more bytes to decode.
-                        //
-                        // We'd like to be able to write `while !value_cursor.empty()`
-                        // here, but that runs into borrow checker issues, so we use `loop`
-                        // and break manually.
-                        loop {
-                            let old_value_cursor = *value_bytes_remaining;
-                            let value = match value_decoder.next(value_bytes_remaining) {
-                                Err(e) => Err(e),
-                                Ok(None) => {
-                                    let leftover = value_bytes_remaining.to_vec();
-                                    value_buf = leftover;
-                                    break;
-                                }
-                                Ok(Some(value)) => Ok(value),
-                            };
-
-                            // If the decoders decoded a message, they need to have made progress consuming the bytes.
-                            // Otherwise, we risk going into an infinite loop.
-                            assert!(old_value_cursor != *value_bytes_remaining || value.is_err());
-
-                            let is_err = value.is_err();
-                            if is_err {
-                                n_errors += 1;
-                            } else if matches!(&value, Ok(_)) {
-                                n_successes += 1;
-                            }
-                            // `RangeFrom` `Iterator`'s never end
-                            let position = n_seen.next().unwrap();
-                            let metadata = to_metadata_row(
-                                &metadata_items,
-                                partition.clone(),
-                                position.into(),
-                                upstream_time_millis,
-                                headers.as_deref(),
-                            );
-
-                            if value_bytes_remaining.is_empty() {
-                                let result = DecodeResult {
-                                    key: None,
-                                    value: Some(value.map_err(|inner| DecodeError {
-                                        kind: inner,
-                                        raw: None,
-                                    })),
-                                    position: position.into(),
-                                    upstream_time_millis,
-                                    partition: partition.clone(),
-                                    metadata,
-                                };
-                                output.give(&cap, (result, ts, diff)).await;
-                                value_buf = vec![];
-                                break;
-                            } else {
-                                let result = DecodeResult {
-                                    key: None,
-                                    value: Some(value.map_err(|inner| DecodeError {
-                                        kind: inner,
-                                        raw: None,
-                                    })),
-                                    position: position.into(),
-                                    upstream_time_millis,
-                                    partition: partition.clone(),
-                                    metadata,
-                                };
-                                output.give(&cap, (result, ts, diff)).await;
-                            }
-                            if is_err {
-                                // If decoding has gone off the rails, we can no longer be sure that the delimiters are correct, so it
-                                // makes no sense to keep going.
-                                break;
-                            }
-                        }
-                    }
-
-                    let data = &mut &value_buf[..];
-                    let mut result = value_decoder.eof(data);
-                    if result.is_ok() && !data.is_empty() {
-                        result = Err(DecodeErrorKind::Text(format!(
-                            "Saw unexpected EOF with bytes remaining in buffer: {:?}",
-                            data
-                        )));
-                    }
-                    value_buf.clear();
-
-                    match result.transpose() {
-                        None => continue,
-                        Some(value) => {
-                            if value.is_err() {
-                                n_errors += 1;
-                            } else if matches!(&value, Ok(_)) {
-                                n_successes += 1;
-                            }
-                            // `RangeFrom` `Iterator`'s never end
-                            let position = n_seen.next().unwrap();
-                            let metadata = to_metadata_row(
-                                &metadata_items,
-                                partition.clone(),
-                                position.into(),
-                                upstream_time_millis,
-                                headers.as_deref(),
-                            );
-
-                            let result = DecodeResult {
-                                key: None,
-                                value: Some(value.map_err(|inner| DecodeError {
-                                    kind: inner,
-                                    raw: None,
-                                })),
-                                position: position.into(),
-                                upstream_time_millis,
-                                partition: partition.clone(),
-                                metadata,
-                            };
-                            output.give(&cap, (result, ts, diff)).await;
-                        }
-                    }
-                }
-            }
-            // Matching historical practice, we only log metrics on the value decoder.
-            if n_errors > 0 {
-                value_decoder.log_errors(n_errors);
-            }
-            if n_successes > 0 {
-                value_decoder.log_successes(n_errors);
-            }
-        },
-    );
-    (results.as_collection(), None)
-}
-
-fn to_metadata_row(
-    metadata_items: &[IncludedColumnSource],
-    partition: PartitionId,
-    position: MzOffset,
-    upstream_time_millis: Option<i64>,
-    headers: Option<&[(String, Option<Vec<u8>>)]>,
-) -> Row {
-    let position = position.offset;
-    let mut row = Row::default();
-    let mut packer = row.packer();
-    match partition {
-        PartitionId::Kafka(partition) => {
-            for item in metadata_items.iter() {
-                match item {
-                    IncludedColumnSource::Partition => packer.push(Datum::from(partition)),
-                    IncludedColumnSource::Offset => packer.push(Datum::UInt64(position)),
-                    IncludedColumnSource::Timestamp => {
-                        let ts =
-                            upstream_time_millis.expect("kafka sources always have upstream_time");
-
-                        let d: Datum = NaiveDateTime::from_timestamp_millis(ts)
-                            .and_then(|dt| {
-                                let ct: Option<CheckedTimestamp<NaiveDateTime>> =
-                                    dt.try_into().ok();
-                                ct
-                            })
-                            .into();
-                        packer.push(d)
-                    }
-                    IncludedColumnSource::Topic => unreachable!("Topic is not implemented yet"),
-                    IncludedColumnSource::Headers => {
-                        packer.push_list_with(|r| {
-                            // If the source asked for headers, but we didn't get any, we still
-                            // want to run the `push_dict_with`, to produce an empty map value
-                            //
-                            // This is a `BTreeMap`, so the `push_dict_with` ordering invariant is
-                            // upheld
-                            if let Some(headers) = headers {
-                                for (k, v) in headers {
-                                    match v {
-                                        Some(v) => r.push_list_with(|record_row| {
-                                            record_row.push(Datum::String(k));
-                                            record_row.push(Datum::Bytes(v));
-                                        }),
-                                        None => r.push_list_with(|record_row| {
-                                            record_row.push(Datum::String(k));
-                                            record_row.push(Datum::Null);
-                                        }),
-                                    }
-                                }
-                            }
-                        });
-                    }
-                }
-            }
-        }
-        PartitionId::None => {
-            if !metadata_items.is_empty() {
-                unreachable!("Only Kafka supports metadata items");
-            }
-        }
-    }
-    row
+    (output.as_collection(), health, None)
 }

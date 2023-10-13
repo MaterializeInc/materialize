@@ -1,0 +1,132 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+set-compute
+{
+  "s1,s10": {
+    "read": 10,
+    "write": 20
+  }
+}
+----
+
+set-oracle
+5
+----
+
+determine
+{
+  "id_bundle": {
+    "compute_ids": {
+      "s1": [
+        "s10"
+      ]
+    }
+  },
+  "when": "Immediately",
+  "instance": "s1"
+}
+----
+10
+
+set-isolation
+serializable
+----
+
+determine
+{
+  "id_bundle": {
+    "compute_ids": {
+      "s1": [
+        "s10"
+      ]
+    }
+  },
+  "when": "Immediately",
+  "instance": "s1"
+}
+----
+19
+
+set-isolation
+strict serializable
+----
+
+set-oracle
+15
+----
+
+determine
+{
+  "id_bundle": {
+    "compute_ids": {
+      "s1": [
+        "s10"
+      ]
+    }
+  },
+  "when": "Immediately",
+  "instance": "s1"
+}
+----
+15
+
+set-oracle
+25
+----
+
+determine
+{
+  "id_bundle": {
+    "compute_ids": {
+      "s1": [
+        "s10"
+      ]
+    }
+  },
+  "when": "Immediately",
+  "instance": "s1"
+}
+----
+25
+
+determine
+{
+  "id_bundle": {
+    "compute_ids": {
+      "s1": [
+        "s10"
+      ]
+    }
+  },
+  "when": "Freshest",
+  "instance": "s1"
+}
+----
+25
+
+# Test AS OF AT LEAST
+set-oracle
+15
+----
+
+determine
+{
+  "id_bundle": {
+    "compute_ids": {
+      "s1": [
+        "s10"
+      ]
+    }
+  },
+  "when": "AtLeastTimestamp:5",
+  "instance": "s1"
+}
+----
+10

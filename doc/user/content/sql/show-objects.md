@@ -1,6 +1,6 @@
 ---
 title: "SHOW OBJECTS"
-description: "`SHOW OBJECTS` returns a list of all objects available to your Materialize instances."
+description: "`SHOW OBJECTS` returns a list of all objects in Materialize for a given schema."
 menu:
   main:
     parent: commands
@@ -8,10 +8,9 @@ aliases:
     - /sql/show-object
 ---
 
-{{< show-command-note >}}
-
-`SHOW OBJECTS` returns a list of all objects available to your Materialize instances in a given schema.
-Objects include tables, sources, sinks, views, indexes, secrets and connections.
+`SHOW OBJECTS` returns a list of all objects in Materialize for a given schema.
+Objects include tables, sources, sinks, views, materialized views, indexes,
+secrets and connections.
 
 ## Syntax
 
@@ -19,7 +18,7 @@ Objects include tables, sources, sinks, views, indexes, secrets and connections.
 
 Field | Use
 ------|-----
-_schema&lowbar;name_ | The schema to show objects from. Defaults to `public` in the current database. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+_schema&lowbar;name_ | The schema to show objects from. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
 
 ## Details
 

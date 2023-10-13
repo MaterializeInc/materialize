@@ -7,15 +7,22 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
+use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
+use bytes::{Buf, Bytes};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use mz_ore::halt;
 use mz_persist::location::{SeqNo, VersionedData};
+use mz_persist_types::stats::ProtoStructStats;
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use proptest::prelude::Arbitrary;
+use proptest::strategy::Strategy;
 use prost::Message;
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -23,8 +30,6 @@ use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::debug;
 use uuid::Uuid;
-
-use mz_ore::halt;
 
 use crate::critical::CriticalReaderId;
 use crate::error::{CodecMismatch, CodecMismatchT};
@@ -34,17 +39,17 @@ use crate::internal::state::{
     CriticalReaderState, HandleDebugState, HollowBatch, HollowBatchPart, HollowRollup,
     IdempotencyToken, LeasedReaderState, OpaqueState, ProtoCriticalReaderState,
     ProtoHandleDebugState, ProtoHollowBatch, ProtoHollowBatchPart, ProtoHollowRollup,
-    ProtoLeasedReaderState, ProtoStateDiff, ProtoStateField, ProtoStateFieldDiffType,
-    ProtoStateFieldDiffs, ProtoStateRollup, ProtoTrace, ProtoU64Antichain, ProtoU64ColStats,
-    ProtoU64Description, ProtoWriterState, State, StateCollections, TypedState, WriterState,
+    ProtoInlinedDiffs, ProtoLeasedReaderState, ProtoRollup, ProtoStateDiff, ProtoStateField,
+    ProtoStateFieldDiffType, ProtoStateFieldDiffs, ProtoTrace, ProtoU64Antichain,
+    ProtoU64Description, ProtoVersionedData, ProtoWriterState, State, StateCollections, TypedState,
+    WriterState,
 };
 use crate::internal::state_diff::{
-    ProtoStateFieldDiff, StateDiff, StateFieldDiff, StateFieldValDiff,
+    ProtoStateFieldDiff, ProtoStateFieldDiffsWriter, StateDiff, StateFieldDiff, StateFieldValDiff,
 };
 use crate::internal::trace::Trace;
 use crate::read::LeasedReaderId;
 use crate::stats::PartStats;
-use crate::write::WriterEnrichedHollowBatch;
 use crate::{PersistConfig, ShardId, WriterId};
 
 #[derive(Debug)]
@@ -59,6 +64,103 @@ impl<K: Codec, V: Codec> Clone for Schemas<K, V> {
             key: Arc::clone(&self.key),
             val: Arc::clone(&self.val),
         }
+    }
+}
+
+/// A proto that is decoded on use.
+///
+/// Because of the way prost works, decoding a large protobuf may result in a
+/// number of very short lived allocations in our RustType/ProtoType decode path
+/// (e.g. this happens for a repeated embedded message). Not every use of
+/// persist State needs every transitive bit of it to be decoded, so we opt
+/// certain parts of it (initially stats) to be decoded on use.
+///
+/// This has the dual benefit of only paying for the short-lived allocs when
+/// necessary and also allowing decoding to be gated by a feature flag. The
+/// tradeoffs are that we might decode more than once and that we have to handle
+/// invalid proto errors in more places.
+///
+/// Mechanically, this is accomplished by making the field a proto `bytes` types
+/// instead of `ProtoFoo`. These bytes then contain the serialization of
+/// ProtoFoo. NB: Swapping between the two is actually a forward and backward
+/// compatible change.
+///
+/// > Embedded messages are compatible with bytes if the bytes contain an
+/// > encoded version of the message.
+///
+/// (See <https://protobuf.dev/programming-guides/proto3/#updating>)
+#[derive(Clone, Serialize, Deserialize)]
+pub struct LazyProto<T> {
+    buf: Bytes,
+    _phantom: PhantomData<fn() -> T>,
+}
+
+impl<T: Message + Default> Debug for LazyProto<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.decode() {
+            Ok(proto) => Debug::fmt(&proto, f),
+            Err(err) => f
+                .debug_struct(&format!("LazyProto<{}>", std::any::type_name::<T>()))
+                .field("err", &err)
+                .finish(),
+        }
+    }
+}
+
+impl<T> PartialEq for LazyProto<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl<T> Eq for LazyProto<T> {}
+
+impl<T> PartialOrd for LazyProto<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<T> Ord for LazyProto<T> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let LazyProto {
+            buf: self_buf,
+            _phantom: _,
+        } = self;
+        let LazyProto {
+            buf: other_buf,
+            _phantom: _,
+        } = other;
+        self_buf.cmp(other_buf)
+    }
+}
+
+impl<T: Message + Default> From<&T> for LazyProto<T> {
+    fn from(value: &T) -> Self {
+        let buf = Bytes::from(value.encode_to_vec());
+        LazyProto {
+            buf,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<T: Message + Default> LazyProto<T> {
+    pub fn decode(&self) -> Result<T, prost::DecodeError> {
+        T::decode(&*self.buf)
+    }
+}
+
+impl<T: Message + Default> RustType<Bytes> for LazyProto<T> {
+    fn into_proto(&self) -> Bytes {
+        self.buf.clone()
+    }
+
+    fn from_proto(buf: Bytes) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            buf,
+            _phantom: PhantomData,
+        })
     }
 }
 
@@ -100,11 +202,20 @@ pub(crate) fn parse_id(id_prefix: char, id_type: &str, encoded: &str) -> Result<
 // references, too.
 fn check_applier_version(build_version: &Version, applier_version: &Version) {
     if build_version < applier_version {
-        halt!(
-            "{} received persist state from the future {}",
-            build_version,
-            applier_version,
-        );
+        // We can't catch halts, so panic in test, so we can get unit test
+        // coverage.
+        if cfg!(test) {
+            panic!(
+                "{} received persist state from the future {}",
+                build_version, applier_version,
+            );
+        } else {
+            halt!(
+                "{} received persist state from the future {}",
+                build_version,
+                applier_version,
+            );
+        }
     }
 }
 
@@ -203,7 +314,7 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
             .expect("no required fields means no initialization errors");
     }
 
-    pub fn decode(build_version: &Version, buf: &[u8]) -> Self {
+    pub fn decode(build_version: &Version, buf: Bytes) -> Self {
         let proto = ProtoStateDiff::decode(buf)
             // We received a State that we couldn't decode. This could happen if
             // persist messes up backward/forward compatibility, if the durable
@@ -235,23 +346,27 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
             spine,
         } = self;
 
-        let mut field_diffs = ProtoStateFieldDiffs::default();
-        field_diffs_into_proto(ProtoStateField::Hostname, hostname, &mut field_diffs);
-        field_diffs_into_proto(ProtoStateField::LastGcReq, last_gc_req, &mut field_diffs);
-        field_diffs_into_proto(ProtoStateField::Rollups, rollups, &mut field_diffs);
-        field_diffs_into_proto(
-            ProtoStateField::LeasedReaders,
-            leased_readers,
-            &mut field_diffs,
-        );
+        let proto = ProtoStateFieldDiffs::default();
+
+        // Create a writer so we can efficiently encode our data.
+        let mut writer = proto.into_writer();
+
+        field_diffs_into_proto(ProtoStateField::Hostname, hostname, &mut writer);
+        field_diffs_into_proto(ProtoStateField::LastGcReq, last_gc_req, &mut writer);
+        field_diffs_into_proto(ProtoStateField::Rollups, rollups, &mut writer);
+        field_diffs_into_proto(ProtoStateField::LeasedReaders, leased_readers, &mut writer);
         field_diffs_into_proto(
             ProtoStateField::CriticalReaders,
             critical_readers,
-            &mut field_diffs,
+            &mut writer,
         );
-        field_diffs_into_proto(ProtoStateField::Writers, writers, &mut field_diffs);
-        field_diffs_into_proto(ProtoStateField::Since, since, &mut field_diffs);
-        field_diffs_into_proto(ProtoStateField::Spine, spine, &mut field_diffs);
+        field_diffs_into_proto(ProtoStateField::Writers, writers, &mut writer);
+        field_diffs_into_proto(ProtoStateField::Since, since, &mut writer);
+        field_diffs_into_proto(ProtoStateField::Spine, spine, &mut writer);
+
+        // After encoding all of our data, convert back into the proto.
+        let field_diffs = writer.into_proto();
+
         debug_assert_eq!(field_diffs.validate(), Ok(()));
         ProtoStateDiff {
             applier_version: applier_version.to_string(),
@@ -375,7 +490,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoStateDiff> for StateDiff<T> {
 fn field_diffs_into_proto<K, KP, V, VP>(
     field: ProtoStateField,
     diffs: &[StateFieldDiff<K, V>],
-    proto: &mut ProtoStateFieldDiffs,
+    writer: &mut ProtoStateFieldDiffsWriter,
 ) where
     KP: prost::Message,
     K: RustType<KP>,
@@ -383,41 +498,35 @@ fn field_diffs_into_proto<K, KP, V, VP>(
     V: RustType<VP>,
 {
     for diff in diffs.iter() {
-        field_diff_into_proto(field, diff, proto);
+        field_diff_into_proto(field, diff, writer);
     }
 }
 
 fn field_diff_into_proto<K, KP, V, VP>(
     field: ProtoStateField,
     diff: &StateFieldDiff<K, V>,
-    proto: &mut ProtoStateFieldDiffs,
+    writer: &mut ProtoStateFieldDiffsWriter,
 ) where
     KP: prost::Message,
     K: RustType<KP>,
     VP: prost::Message,
     V: RustType<VP>,
 {
-    proto.fields.push(i32::from(field));
-    proto.encode_proto(&diff.key.into_proto());
+    writer.push_field(field);
+    writer.encode_proto(&diff.key.into_proto());
     match &diff.val {
         StateFieldValDiff::Insert(to) => {
-            proto
-                .diff_types
-                .push(i32::from(ProtoStateFieldDiffType::Insert));
-            proto.encode_proto(&to.into_proto());
+            writer.push_diff_type(ProtoStateFieldDiffType::Insert);
+            writer.encode_proto(&to.into_proto());
         }
         StateFieldValDiff::Update(from, to) => {
-            proto
-                .diff_types
-                .push(i32::from(ProtoStateFieldDiffType::Update));
-            proto.encode_proto(&from.into_proto());
-            proto.encode_proto(&to.into_proto());
+            writer.push_diff_type(ProtoStateFieldDiffType::Update);
+            writer.encode_proto(&from.into_proto());
+            writer.encode_proto(&to.into_proto());
         }
         StateFieldValDiff::Delete(from) => {
-            proto
-                .diff_types
-                .push(i32::from(ProtoStateFieldDiffType::Delete));
-            proto.encode_proto(&from.into_proto());
+            writer.push_diff_type(ProtoStateFieldDiffType::Delete);
+            writer.encode_proto(&from.into_proto());
         }
     };
 }
@@ -463,82 +572,10 @@ where
     Ok(())
 }
 
-impl<K, V, T, D> TypedState<K, V, T, D>
-where
-    K: Codec,
-    V: Codec,
-    T: Timestamp + Lattice + Codec64,
-    D: Codec64,
-{
-    pub fn encode<B>(&self, buf: &mut B)
-    where
-        B: bytes::BufMut,
-    {
-        self.into_proto()
-            .encode(buf)
-            .expect("no required fields means no initialization errors");
-    }
-
-    pub(crate) fn into_proto(&self) -> ProtoStateRollup {
-        self.state
-            .into_proto(K::codec_name(), V::codec_name(), D::codec_name())
-    }
-}
-
-impl<T> State<T>
-where
-    T: Timestamp + Lattice + Codec64,
-{
-    pub(crate) fn into_proto(
-        &self,
-        key_codec: String,
-        val_codec: String,
-        diff_codec: String,
-    ) -> ProtoStateRollup {
-        ProtoStateRollup {
-            applier_version: self.applier_version.to_string(),
-            shard_id: self.shard_id.into_proto(),
-            seqno: self.seqno.into_proto(),
-            walltime_ms: self.walltime_ms.into_proto(),
-            hostname: self.hostname.into_proto(),
-            key_codec,
-            val_codec,
-            ts_codec: T::codec_name(),
-            diff_codec,
-            last_gc_req: self.collections.last_gc_req.into_proto(),
-            rollups: self
-                .collections
-                .rollups
-                .iter()
-                .map(|(seqno, key)| (seqno.into_proto(), key.into_proto()))
-                .collect(),
-            deprecated_rollups: Default::default(),
-            leased_readers: self
-                .collections
-                .leased_readers
-                .iter()
-                .map(|(id, state)| (id.into_proto(), state.into_proto()))
-                .collect(),
-            critical_readers: self
-                .collections
-                .critical_readers
-                .iter()
-                .map(|(id, state)| (id.into_proto(), state.into_proto()))
-                .collect(),
-            writers: self
-                .collections
-                .writers
-                .iter()
-                .map(|(id, state)| (id.into_proto(), state.into_proto()))
-                .collect(),
-            trace: Some(self.collections.trace.into_proto()),
-        }
-    }
-}
-
-/// A decoded version of [ProtoStateRollup] for which we have not yet checked
+/// The decoded state of [ProtoRollup] for which we have not yet checked
 /// that codecs match the ones in durable state.
 #[derive(Debug)]
+#[cfg_attr(any(test, debug_assertions), derive(Clone, PartialEq))]
 pub struct UntypedState<T> {
     pub(crate) key_codec: String,
     pub(crate) val_codec: String,
@@ -558,6 +595,10 @@ impl<T: Timestamp + Lattice + Codec64> UntypedState<T> {
 
     pub fn rollups(&self) -> &BTreeMap<SeqNo, HollowRollup> {
         &self.state.collections.rollups
+    }
+
+    pub fn latest_rollup(&self) -> (&SeqNo, &HollowRollup) {
+        self.state.latest_rollup()
     }
 
     pub fn apply_encoded_diffs<'a, I: IntoIterator<Item = &'a VersionedData>>(
@@ -623,29 +664,193 @@ impl<T: Timestamp + Lattice + Codec64> UntypedState<T> {
         Ok(self.state)
     }
 
-    pub fn decode(build_version: &Version, buf: &[u8]) -> Self {
-        let proto = ProtoStateRollup::decode(buf)
+    pub fn decode(build_version: &Version, buf: impl Buf) -> Self {
+        let proto = ProtoRollup::decode(buf)
             // We received a State that we couldn't decode. This could happen if
             // persist messes up backward/forward compatibility, if the durable
             // data was corrupted, or if operations messes up deployment. In any
             // case, fail loudly.
             .expect("internal error: invalid encoded state");
-        let state = Self::from_proto(proto).expect("internal error: invalid encoded state");
+        let state = Rollup::from_proto(proto)
+            .expect("internal error: invalid encoded state")
+            .state;
         check_applier_version(build_version, &state.state.applier_version);
         state
     }
 }
 
-impl<T: Timestamp + Lattice + Codec64> RustType<ProtoStateRollup> for UntypedState<T> {
-    fn into_proto(&self) -> ProtoStateRollup {
-        self.state.into_proto(
-            self.key_codec.clone(),
-            self.val_codec.clone(),
-            self.diff_codec.clone(),
+impl<K, V, T, D> From<TypedState<K, V, T, D>> for UntypedState<T>
+where
+    K: Codec,
+    V: Codec,
+    T: Codec64,
+    D: Codec64,
+{
+    fn from(typed_state: TypedState<K, V, T, D>) -> Self {
+        UntypedState {
+            key_codec: K::codec_name(),
+            val_codec: V::codec_name(),
+            ts_codec: T::codec_name(),
+            diff_codec: D::codec_name(),
+            state: typed_state.state,
+        }
+    }
+}
+
+/// A struct that maps 1:1 with ProtoRollup.
+///
+/// Contains State, and optionally the diffs between (state.latest_rollup.seqno, state.seqno]
+///
+/// `diffs` is always expected to be `Some` when writing new rollups, but may be `None`
+/// when deserializing rollups that were persisted before we started inlining diffs.
+#[derive(Debug)]
+pub struct Rollup<T> {
+    pub(crate) state: UntypedState<T>,
+    pub(crate) diffs: Option<InlinedDiffs>,
+}
+
+impl<T: Timestamp + Lattice + Codec64> Rollup<T> {
+    /// Creates a `StateRollup` from a state and diffs from its last rollup.
+    ///
+    /// The diffs must span the seqno range `(state.last_rollup().seqno, state.seqno]`.
+    pub(crate) fn from(state: UntypedState<T>, diffs: Vec<VersionedData>) -> Self {
+        let latest_rollup_seqno = *state.latest_rollup().0;
+        let mut verify_seqno = latest_rollup_seqno;
+        for diff in &diffs {
+            assert_eq!(verify_seqno.next(), diff.seqno);
+            verify_seqno = diff.seqno;
+        }
+        assert_eq!(verify_seqno, state.seqno());
+
+        let diffs = Some(InlinedDiffs::from(
+            latest_rollup_seqno.next(),
+            state.seqno().next(),
+            diffs,
+        ));
+
+        Self { state, diffs }
+    }
+
+    pub(crate) fn from_untyped_state_without_diffs(state: UntypedState<T>) -> Self {
+        Self { state, diffs: None }
+    }
+
+    pub(crate) fn from_state_without_diffs(
+        state: State<T>,
+        key_codec: String,
+        val_codec: String,
+        ts_codec: String,
+        diff_codec: String,
+    ) -> Self {
+        Self::from_untyped_state_without_diffs(UntypedState {
+            key_codec,
+            val_codec,
+            ts_codec,
+            diff_codec,
+            state,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct InlinedDiffs {
+    pub(crate) lower: SeqNo,
+    pub(crate) upper: SeqNo,
+    pub(crate) diffs: Vec<VersionedData>,
+}
+
+impl InlinedDiffs {
+    pub(crate) fn description(&self) -> Description<SeqNo> {
+        Description::new(
+            Antichain::from_elem(self.lower),
+            Antichain::from_elem(self.upper),
+            Antichain::from_elem(SeqNo::minimum()),
         )
     }
 
-    fn from_proto(x: ProtoStateRollup) -> Result<Self, TryFromProtoError> {
+    fn from(lower: SeqNo, upper: SeqNo, diffs: Vec<VersionedData>) -> Self {
+        for diff in &diffs {
+            assert!(diff.seqno >= lower);
+            assert!(diff.seqno < upper);
+        }
+        Self {
+            lower,
+            upper,
+            diffs,
+        }
+    }
+}
+
+impl RustType<ProtoInlinedDiffs> for InlinedDiffs {
+    fn into_proto(&self) -> ProtoInlinedDiffs {
+        ProtoInlinedDiffs {
+            lower: self.lower.into_proto(),
+            upper: self.upper.into_proto(),
+            diffs: self.diffs.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoInlinedDiffs) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            lower: proto.lower.into_rust()?,
+            upper: proto.upper.into_rust()?,
+            diffs: proto.diffs.into_rust()?,
+        })
+    }
+}
+
+impl<T: Timestamp + Lattice + Codec64> RustType<ProtoRollup> for Rollup<T> {
+    fn into_proto(&self) -> ProtoRollup {
+        ProtoRollup {
+            applier_version: self.state.state.applier_version.to_string(),
+            shard_id: self.state.state.shard_id.into_proto(),
+            seqno: self.state.state.seqno.into_proto(),
+            walltime_ms: self.state.state.walltime_ms.into_proto(),
+            hostname: self.state.state.hostname.into_proto(),
+            key_codec: self.state.key_codec.into_proto(),
+            val_codec: self.state.val_codec.into_proto(),
+            ts_codec: T::codec_name(),
+            diff_codec: self.state.diff_codec.into_proto(),
+            last_gc_req: self.state.state.collections.last_gc_req.into_proto(),
+            rollups: self
+                .state
+                .state
+                .collections
+                .rollups
+                .iter()
+                .map(|(seqno, key)| (seqno.into_proto(), key.into_proto()))
+                .collect(),
+            deprecated_rollups: Default::default(),
+            leased_readers: self
+                .state
+                .state
+                .collections
+                .leased_readers
+                .iter()
+                .map(|(id, state)| (id.into_proto(), state.into_proto()))
+                .collect(),
+            critical_readers: self
+                .state
+                .state
+                .collections
+                .critical_readers
+                .iter()
+                .map(|(id, state)| (id.into_proto(), state.into_proto()))
+                .collect(),
+            writers: self
+                .state
+                .state
+                .collections
+                .writers
+                .iter()
+                .map(|(id, state)| (id.into_proto(), state.into_proto()))
+                .collect(),
+            trace: Some(self.state.state.collections.trace.into_proto()),
+            diffs: self.diffs.as_ref().map(|x| x.into_proto()),
+        }
+    }
+
+    fn from_proto(x: ProtoRollup) -> Result<Self, TryFromProtoError> {
         let applier_version = if x.applier_version.is_empty() {
             // Backward compatibility with versions of ProtoState before we set
             // this field: if it's missing (empty), assume an infinitely old
@@ -701,12 +906,50 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoStateRollup> for UntypedSta
             hostname: x.hostname,
             collections,
         };
-        Ok(UntypedState {
-            state,
-            key_codec: x.key_codec.into_rust()?,
-            val_codec: x.val_codec.into_rust()?,
-            ts_codec: x.ts_codec.into_rust()?,
-            diff_codec: x.diff_codec.into_rust()?,
+
+        let diffs: Option<InlinedDiffs> = x.diffs.map(|diffs| diffs.into_rust()).transpose()?;
+        if let Some(diffs) = &diffs {
+            if diffs.lower != state.latest_rollup().0.next() {
+                return Err(TryFromProtoError::InvalidPersistState(format!(
+                    "diffs lower ({}) should match latest rollup's successor: ({})",
+                    diffs.lower,
+                    state.latest_rollup().0.next()
+                )));
+            }
+            if diffs.upper != state.seqno.next() {
+                return Err(TryFromProtoError::InvalidPersistState(format!(
+                    "diffs upper ({}) should match state's successor: ({})",
+                    diffs.lower,
+                    state.seqno.next()
+                )));
+            }
+        }
+
+        Ok(Rollup {
+            state: UntypedState {
+                state,
+                key_codec: x.key_codec.into_rust()?,
+                val_codec: x.val_codec.into_rust()?,
+                ts_codec: x.ts_codec.into_rust()?,
+                diff_codec: x.diff_codec.into_rust()?,
+            },
+            diffs,
+        })
+    }
+}
+
+impl RustType<ProtoVersionedData> for VersionedData {
+    fn into_proto(&self) -> ProtoVersionedData {
+        ProtoVersionedData {
+            seqno: self.seqno.into_proto(),
+            data: Bytes::clone(&self.data),
+        }
+    }
+
+    fn from_proto(proto: ProtoVersionedData) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            seqno: proto.seqno.into_rust()?,
+            data: proto.data,
         })
     }
 }
@@ -745,7 +988,7 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoTrace> for Trace<T> {
             //
             // Ignore merge_reqs because whichever process generated this diff is
             // assigned the work.
-            let _merge_reqs = ret.push_batch(batch);
+            let () = ret.push_batch_no_merge_reqs(batch);
 
             batches_pushed += 1;
             if batches_pushed % 1000 == 0 {
@@ -754,6 +997,7 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoTrace> for Trace<T> {
                 debug!("Decoded and pushed {batches_pushed} batches; trace size {batch_count}");
             }
         }
+        debug_assert_eq!(ret.validate(), Ok(()), "{:?}", ret);
         Ok(ret)
     }
 }
@@ -897,6 +1141,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
                 .map(|key| HollowBatchPart {
                     key: PartialBatchKey(key),
                     encoded_size_bytes: 0,
+                    key_lower: vec![],
                     stats: None,
                 }),
         );
@@ -911,46 +1156,80 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
 
 impl RustType<ProtoHollowBatchPart> for HollowBatchPart {
     fn into_proto(&self) -> ProtoHollowBatchPart {
-        let key_col_stats = match self.stats.as_ref() {
-            Some(x) => x
-                .key_col_min_max_nulls
-                .iter()
-                .map(|(name, (min, max, nulls))| ProtoU64ColStats {
-                    name: name.into_proto(),
-                    min: min.into_proto(),
-                    max: max.into_proto(),
-                    nulls: nulls.into_proto(),
-                })
-                .collect(),
-            None => Vec::new(),
-        };
         ProtoHollowBatchPart {
             key: self.key.into_proto(),
             encoded_size_bytes: self.encoded_size_bytes.into_proto(),
-            key_col_stats,
+            key_lower: Bytes::copy_from_slice(&self.key_lower),
+            key_stats: self.stats.into_proto(),
         }
     }
 
     fn from_proto(proto: ProtoHollowBatchPart) -> Result<Self, TryFromProtoError> {
-        let stats = if proto.key_col_stats.is_empty() {
-            None
-        } else {
-            let mut key_col_min_max_nulls = BTreeMap::new();
-            for x in proto.key_col_stats {
-                key_col_min_max_nulls.insert(
-                    x.name.into_rust()?,
-                    (x.min.into_rust()?, x.max.into_rust()?, x.nulls.into_rust()?),
-                );
-            }
-            let stats = Arc::new(PartStats {
-                key_col_min_max_nulls,
-            });
-            Some(stats)
-        };
         Ok(HollowBatchPart {
             key: proto.key.into_rust()?,
             encoded_size_bytes: proto.encoded_size_bytes.into_rust()?,
-            stats,
+            key_lower: proto.key_lower.into(),
+            stats: proto.key_stats.into_rust()?,
+        })
+    }
+}
+
+/// Aggregate statistics about data contained in a part.
+///
+/// These are "lazy" in the sense that we don't decode them (or even validate
+/// the encoded version) until they're used.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct LazyPartStats {
+    key: LazyProto<ProtoStructStats>,
+}
+
+impl LazyPartStats {
+    pub fn encode(x: &PartStats, map_proto: impl FnOnce(&mut ProtoStructStats)) -> Self {
+        let PartStats { key } = x;
+        let mut proto_stats = ProtoStructStats::from_rust(key);
+        map_proto(&mut proto_stats);
+        LazyPartStats {
+            key: LazyProto::from(&proto_stats),
+        }
+    }
+    /// Decodes and returns PartStats from the encoded representation.
+    ///
+    /// This does not cache the returned value, it decodes each time it's
+    /// called.
+    pub fn decode(&self) -> PartStats {
+        let key = self.key.decode().expect("valid proto");
+        PartStats {
+            key: key.into_rust().expect("valid stats"),
+        }
+    }
+}
+
+impl RustType<Bytes> for LazyPartStats {
+    fn into_proto(&self) -> Bytes {
+        let LazyPartStats { key } = self;
+        key.into_proto()
+    }
+
+    fn from_proto(proto: Bytes) -> Result<Self, TryFromProtoError> {
+        Ok(LazyPartStats {
+            key: proto.into_rust()?,
+        })
+    }
+}
+
+pub(crate) fn any_some_lazy_part_stats() -> impl Strategy<Value = Option<LazyPartStats>> {
+    proptest::prelude::any::<LazyPartStats>().prop_map(Some)
+}
+
+#[allow(unused_parens)]
+impl Arbitrary for LazyPartStats {
+    type Parameters = ();
+    type Strategy =
+        proptest::strategy::Map<(<PartStats as Arbitrary>::Strategy), fn((PartStats)) -> Self>;
+
+    fn arbitrary_with(_: ()) -> Self::Strategy {
+        Strategy::prop_map((proptest::prelude::any::<PartStats>()), |(x)| {
+            LazyPartStats::encode(&x, |_| {})
         })
     }
 }
@@ -1010,43 +1289,15 @@ impl<T: Timestamp + Codec64> RustType<ProtoU64Antichain> for Antichain<T> {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SerdeWriterEnrichedHollowBatch {
-    pub(crate) shard_id: ShardId,
-    pub(crate) batch: Vec<u8>,
-}
-
-impl<T: Timestamp + Codec64> From<WriterEnrichedHollowBatch<T>> for SerdeWriterEnrichedHollowBatch {
-    fn from(x: WriterEnrichedHollowBatch<T>) -> Self {
-        SerdeWriterEnrichedHollowBatch {
-            shard_id: x.shard_id,
-            batch: x.batch.into_proto().encode_to_vec(),
-        }
-    }
-}
-
-impl<T: Timestamp + Codec64> From<SerdeWriterEnrichedHollowBatch> for WriterEnrichedHollowBatch<T> {
-    fn from(x: SerdeWriterEnrichedHollowBatch) -> Self {
-        let proto_batch = ProtoHollowBatch::decode(x.batch.as_slice())
-            .expect("internal error: could not decode WriterEnrichedHollowBatch");
-        let batch = proto_batch
-            .into_rust()
-            .expect("internal error: could not decode WriterEnrichedHollowBatch");
-        WriterEnrichedHollowBatch {
-            shard_id: x.shard_id,
-            batch,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::Ordering;
-
+    use bytes::Bytes;
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_persist::location::SeqNo;
+    use proptest::prelude::*;
 
     use crate::internal::paths::PartialRollupKey;
+    use crate::internal::state::tests::any_state;
     use crate::internal::state::HandleDebugState;
     use crate::internal::state_diff::StateDiff;
     use crate::tests::new_test_client_cache;
@@ -1054,7 +1305,7 @@ mod tests {
 
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn applier_version_state() {
         let v1 = semver::Version::new(1, 0, 0);
         let v2 = semver::Version::new(2, 0, 0);
@@ -1063,18 +1314,21 @@ mod tests {
         // Code version v2 evaluates and writes out some State.
         let shard_id = ShardId::new();
         let state = TypedState::<(), (), u64, i64>::new(v2.clone(), shard_id, "".to_owned(), 0);
+        let rollup =
+            Rollup::from_untyped_state_without_diffs(state.clone_for_rollup().into()).into_proto();
         let mut buf = Vec::new();
-        state.encode(&mut buf);
+        rollup.encode(&mut buf).expect("serializable");
+        let bytes = Bytes::from(buf);
 
         // We can read it back using persist code v2 and v3.
         assert_eq!(
-            UntypedState::<u64>::decode(&v2, &buf)
+            UntypedState::<u64>::decode(&v2, bytes.clone())
                 .check_codecs(&shard_id)
                 .as_ref(),
             Ok(&state)
         );
         assert_eq!(
-            UntypedState::<u64>::decode(&v3, &buf)
+            UntypedState::<u64>::decode(&v3, bytes.clone())
                 .check_codecs(&shard_id)
                 .as_ref(),
             Ok(&state)
@@ -1083,12 +1337,12 @@ mod tests {
         // But we can't read it back using v1 because v1 might corrupt it by
         // losing or misinterpreting something written out by a future version
         // of code.
-        mz_ore::process::PANIC_ON_HALT.store(true, Ordering::SeqCst);
-        let v1_res = mz_ore::panic::catch_unwind(|| UntypedState::<u64>::decode(&v1, &buf));
+        let v1_res =
+            mz_ore::panic::catch_unwind(|| UntypedState::<u64>::decode(&v1, bytes.clone()));
         assert!(v1_res.is_err());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn applier_version_state_diff() {
         let v1 = semver::Version::new(1, 0, 0);
         let v2 = semver::Version::new(2, 0, 0);
@@ -1104,20 +1358,20 @@ mod tests {
         );
         let mut buf = Vec::new();
         diff.encode(&mut buf);
+        let bytes = Bytes::from(buf);
 
         // We can read it back using persist code v2 and v3.
-        assert_eq!(StateDiff::decode(&v2, &buf), diff);
-        assert_eq!(StateDiff::decode(&v3, &buf), diff);
+        assert_eq!(StateDiff::decode(&v2, bytes.clone()), diff);
+        assert_eq!(StateDiff::decode(&v3, bytes.clone()), diff);
 
         // But we can't read it back using v1 because v1 might corrupt it by
         // losing or misinterpreting something written out by a future version
         // of code.
-        mz_ore::process::PANIC_ON_HALT.store(true, Ordering::SeqCst);
-        let v1_res = mz_ore::panic::catch_unwind(|| StateDiff::<u64>::decode(&v1, &buf));
+        let v1_res = mz_ore::panic::catch_unwind(|| StateDiff::<u64>::decode(&v1, bytes));
         assert!(v1_res.is_err());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn hollow_batch_migration_keys() {
         let x = HollowBatch {
             desc: Description::new(
@@ -1129,6 +1383,7 @@ mod tests {
             parts: vec![HollowBatchPart {
                 key: PartialBatchKey("a".into()),
                 encoded_size_bytes: 5,
+                key_lower: vec![],
                 stats: None,
             }],
             runs: vec![],
@@ -1147,12 +1402,13 @@ mod tests {
         expected.parts.push(HollowBatchPart {
             key: PartialBatchKey("b".into()),
             encoded_size_bytes: 0,
+            key_lower: vec![],
             stats: None,
         });
         assert_eq!(<HollowBatch<u64>>::from_proto(old).unwrap(), expected);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn reader_state_migration_lease_duration() {
         let x = LeasedReaderState {
             seqno: SeqNo(1),
@@ -1174,7 +1430,7 @@ mod tests {
         assert_eq!(<LeasedReaderState<u64>>::from_proto(old).unwrap(), expected);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn writer_state_migration_most_recent_write() {
         let proto = ProtoWriterState {
             last_heartbeat_timestamp_ms: 1,
@@ -1201,7 +1457,7 @@ mod tests {
         assert_eq!(<WriterState<u64>>::from_proto(proto).unwrap(), expected);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn state_migration_rollups() {
         let r1 = HollowRollup {
             key: PartialRollupKey("foo".to_owned()),
@@ -1219,12 +1475,13 @@ mod tests {
             0,
         );
         state.state.collections.rollups.insert(SeqNo(2), r2.clone());
-        let mut proto = state.into_proto();
+        let mut proto = Rollup::from_untyped_state_without_diffs(state.into()).into_proto();
 
         // Manually add the old rollup encoding.
         proto.deprecated_rollups.insert(1, r1.key.0.clone());
 
-        let state = UntypedState::<u64>::from_proto(proto).unwrap();
+        let state: Rollup<u64> = proto.into_rust().unwrap();
+        let state = state.state;
         let state = state.check_codecs::<(), (), i64>(&shard_id).unwrap();
         let expected = vec![(SeqNo(1), r1), (SeqNo(2), r2)];
         assert_eq!(
@@ -1238,9 +1495,9 @@ mod tests {
         );
     }
 
-    #[test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
-    fn state_diff_migration_rollups() {
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn state_diff_migration_rollups() {
         let r1_rollup = HollowRollup {
             key: PartialRollupKey("foo".to_owned()),
             encoded_size_bytes: None,
@@ -1276,6 +1533,9 @@ mod tests {
         diff.rollups.push(r3.clone());
         let mut diff_proto = diff.into_proto();
 
+        let field_diffs = std::mem::take(&mut diff_proto.field_diffs).unwrap();
+        let mut field_diffs_writer = field_diffs.into_writer();
+
         // Manually add the old rollup encoding.
         field_diffs_into_proto(
             ProtoStateField::DeprecatedRollups,
@@ -1283,8 +1543,11 @@ mod tests {
                 key: r1.key,
                 val: StateFieldValDiff::Insert(r1_rollup.key.clone()),
             }],
-            diff_proto.field_diffs.as_mut().unwrap(),
+            &mut field_diffs_writer,
         );
+
+        assert!(diff_proto.field_diffs.is_none());
+        diff_proto.field_diffs = Some(field_diffs_writer.into_proto());
 
         let diff = StateDiff::<u64>::from_proto(diff_proto.clone()).unwrap();
         assert_eq!(
@@ -1302,11 +1565,12 @@ mod tests {
             0,
         );
         state.state.seqno = SeqNo(4);
-        let mut state_proto = state.into_proto();
-        state_proto
+        let mut rollup = Rollup::from_untyped_state_without_diffs(state.into()).into_proto();
+        rollup
             .deprecated_rollups
             .insert(3, r3_rollup.key.into_proto());
-        let state = UntypedState::<u64>::from_proto(state_proto).unwrap();
+        let state: Rollup<u64> = rollup.into_rust().unwrap();
+        let state = state.state;
         let mut state = state.check_codecs::<(), (), i64>(&shard_id).unwrap();
         let cache = new_test_client_cache();
         let encoded_diff = VersionedData {
@@ -1323,5 +1587,25 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![(SeqNo(1), r1_rollup), (SeqNo(2), r2_rollup)]
         );
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn state_proto_roundtrip() {
+        fn testcase<T: Timestamp + Lattice + Codec64>(state: State<T>) {
+            let before = UntypedState {
+                key_codec: <() as Codec>::codec_name(),
+                val_codec: <() as Codec>::codec_name(),
+                ts_codec: <T as Codec64>::codec_name(),
+                diff_codec: <i64 as Codec64>::codec_name(),
+                state,
+            };
+            let proto = Rollup::from_untyped_state_without_diffs(before.clone()).into_proto();
+            let after: Rollup<T> = proto.into_rust().unwrap();
+            let after = after.state;
+            assert_eq!(before, after);
+        }
+
+        proptest!(|(state in any_state::<u64>(0..3))| testcase(state));
     }
 }

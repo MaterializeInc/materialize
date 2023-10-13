@@ -12,9 +12,9 @@ chrono = { version = "0.4.23", default-features = false, features = ["std"] }
 mz-kafka-util = { path = "../../src/kafka-util" }
 mz-ore = { path = "../../src/ore", features = ["async"] }
 rand = "0.8.5"
-rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
+rdkafka = { version = "0.29.0", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 tokio = "1.24.2"
-tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
+tokio-postgres = { version = "0.7.8" }
 tracing = "0.1.37"
 workspace-hack = { version = "0.0.0", path = "../../src/workspace-hack" }
 

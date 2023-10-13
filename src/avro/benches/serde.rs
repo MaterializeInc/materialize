@@ -24,11 +24,9 @@
 #![feature(test)]
 extern crate test;
 
-use mz_avro::{
-    schema::Schema,
-    types::{Record, ToAvro, Value},
-    Reader, Writer,
-};
+use mz_avro::schema::Schema;
+use mz_avro::types::{Record, ToAvro, Value};
+use mz_avro::{Reader, Writer};
 
 static RAW_SMALL_SCHEMA: &'static str = r#"
 {

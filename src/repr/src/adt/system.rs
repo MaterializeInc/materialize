@@ -9,12 +9,17 @@
 
 //! System data types.
 
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
+
 /// A Rust type representing a PostgreSQL "char".
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct PgLegacyChar(pub u8);
 
 /// A Rust type representing a PostgreSQL object identifier (OID).
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(
+    Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, Arbitrary,
+)]
 pub struct Oid(pub u32);
 
 /// A Rust type representing the OID of a PostgreSQL class.

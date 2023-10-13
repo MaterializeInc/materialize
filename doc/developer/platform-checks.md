@@ -105,7 +105,7 @@ All checks are located in the `misc/python/materialize/checks/` directory, funct
 the creation of a particular type of resource is usually placed in the same file as the `Check` that validates the deletion of the
 same resource type.
 
-Checks need to be imported into the `test/platform_checks/mzcompose.py` file:
+Checks need to be imported into the `misc/python/materialize/checks/all_checks.py` file:
 
 ```
 from materialize.checks.my_new_check_file import *  # noqa: F401 F403
@@ -149,9 +149,9 @@ class DropCreateDefaultReplica(Action):
     def execute(self, c: Composition) -> None:
         c.sql(
             """
-           DROP CLUSTER REPLICA default.r1;
-           CREATE CLUSTER REPLICA default.r1 SIZE '1';
-        """
+            ALTER CLUSTER default SET (REPLICATION FACTOR 0);
+            ALTER CLUSTER default SET (SIZE '1', REPLICATION FACTOR 1);
+            """
         )
 ```
 

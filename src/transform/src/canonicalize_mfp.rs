@@ -28,9 +28,10 @@
 //! busywork and less efficiency, but the wins can be substantial when
 //! expressions re-use complex subexpressions.
 
-use crate::{IndexOracle, TransformArgs};
 use mz_expr::visit::VisitChildren;
 use mz_expr::{MapFilterProject, MirRelationExpr};
+
+use crate::{IndexOracle, TransformCtx};
 
 /// Canonicalizes MFPs and performs common sub-expression elimination.
 #[derive(Debug)]
@@ -46,9 +47,9 @@ impl crate::Transform for CanonicalizeMfp {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
-        args: TransformArgs,
+        ctx: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
-        let result = self.action(relation, args.indexes);
+        let result = self.action(relation, ctx.indexes);
         mz_repr::explain::trace_plan(&*relation);
         result
     }

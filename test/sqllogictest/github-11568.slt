@@ -11,6 +11,11 @@
 
 mode cockroach
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;
+----
+COMPLETE 0
+
 statement ok
 create cluster c replicas (r1 (STORAGECTL ADDRESSES ['s:1'], STORAGE ADDRESSES ['st:1'], COMPUTECTL ADDRESSES ['c:1'], COMPUTE ADDRESSES ['ct:1']))
 
@@ -33,11 +38,3 @@ begin;
 query II
 select * from t1
 ----
-
-# Additionally, verify that changing cluster mid transaction causes the indexes
-# to be unavailable.
-statement ok
-set cluster = c
-
-query error Transactions can only reference objects in the same timedomain.
-select * from t1

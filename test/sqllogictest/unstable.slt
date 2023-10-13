@@ -9,13 +9,23 @@
 
 mode cockroach
 
-# mz_view_keys and mz_view_foreign_keys are unstable.
+# Objects in the mz_internal schema are.
 
 statement error cannot create view with unstable dependencies
-CREATE VIEW v AS SELECT object_id, column, key_group FROM mz_internal.mz_view_keys
+CREATE VIEW v AS SELECT id, object_type, comment FROM mz_internal.mz_comments
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO false;
+----
+COMPLETE 0
 
 statement error cannot create index with unstable dependencies
-CREATE DEFAULT INDEX ON mz_internal.mz_view_foreign_keys
+CREATE DEFAULT INDEX ON mz_internal.mz_comments
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_rbac_checks;
+----
+COMPLETE 0
 
 # Other system tables are stable.
 
@@ -25,4 +35,4 @@ CREATE VIEW v AS SELECT id, oid, schema_id, name FROM mz_tables
 # SELECTs from unstable objects are allowed.
 
 statement ok
-SELECT object_id, column, key_group FROM mz_internal.mz_view_keys
+SELECT id, object_type, comment FROM mz_internal.mz_comments

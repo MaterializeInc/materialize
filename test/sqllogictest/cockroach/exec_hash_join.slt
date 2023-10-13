@@ -19,6 +19,11 @@
 
 mode cockroach
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_table_keys = true
+----
+COMPLETE 0
+
 # Test that the exec HashJoiner follows SQL NULL semantics for ON predicate
 # equivalence. The use of sorts here force the planning of merge join.
 

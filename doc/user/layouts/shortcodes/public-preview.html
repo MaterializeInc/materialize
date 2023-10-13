@@ -1,0 +1,6 @@
+<div class="public-preview">
+    <strong class="gutter">PREVIEW</strong>
+    {{ with .Inner}}{{.|$.Page.RenderString}}{{else}}This feature{{ end }}
+    is in <strong>public preview</strong>. It may have performance or stability
+    issues.
+</div>

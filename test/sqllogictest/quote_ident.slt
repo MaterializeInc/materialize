@@ -1,0 +1,345 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+query T
+SELECT quote_ident('xyz');
+----
+xyz
+
+query T
+SELECT quote_ident('XyZ');
+----
+"XyZ"
+
+query T
+SELECT quote_ident('xyZ');
+----
+"xyZ"
+
+query T
+SELECT quote_ident('"xyz"');
+----
+"""xyz"""
+
+query T
+SELECT quote_ident('');
+----
+""
+
+query T
+SELECT quote_ident('""');
+----
+""""""
+
+query T
+SELECT quote_ident('"');
+----
+""""
+
+query T
+SELECT quote_ident(NULL);
+----
+NULL
+
+query T
+SELECT quote_ident('NULL');
+----
+"NULL"
+
+query T
+SELECT quote_ident('"NULL"');
+----
+"""NULL"""
+
+query T
+SELECT quote_ident('"xyz');
+----
+"""xyz"
+
+query T
+SELECT quote_ident('xyz"');
+----
+"xyz"""
+
+query T
+SELECT quote_ident('wx"yz"');
+----
+"wx""yz"""
+
+query T
+SELECT quote_ident('xyz_abc');
+----
+xyz_abc
+
+query T
+SELECT quote_ident('Xyz_Abc');
+----
+"Xyz_Abc"
+
+query T
+SELECT quote_ident('xyZ_Abc');
+----
+"xyZ_Abc"
+
+query T
+SELECT quote_ident('xyz_123');
+----
+xyz_123
+
+query T
+SELECT quote_ident('Xyz_123');
+----
+"Xyz_123"
+
+query T
+SELECT quote_ident('xyz abc');
+----
+"xyz abc"
+
+query T
+SELECT quote_ident('Xyz Abc');
+----
+"Xyz Abc"
+
+query T
+SELECT quote_ident('xyZ Abc');
+----
+"xyZ Abc"
+
+query T
+SELECT quote_ident('xyz_abc123');
+----
+xyz_abc123
+
+query T
+SELECT quote_ident('Xyz_Abc123');
+----
+"Xyz_Abc123"
+
+query T
+SELECT quote_ident('123_xyz');
+----
+"123_xyz"
+
+query T
+SELECT quote_ident('123_Xyz');
+----
+"123_Xyz"
+
+query T
+SELECT quote_ident('xyz_abc_123');
+----
+xyz_abc_123
+
+query T
+SELECT quote_ident('Xyz_Abc_123');
+----
+"Xyz_Abc_123"
+
+query T
+SELECT quote_ident('xyz_123_abc');
+----
+xyz_123_abc
+
+query T
+SELECT quote_ident('Xyz_123_Abc');
+----
+"Xyz_123_Abc"
+
+query T
+SELECT quote_ident('xyz 123 abc');
+----
+"xyz 123 abc"
+
+query T
+SELECT quote_ident('Xyz 123 Abc');
+----
+"Xyz 123 Abc"
+
+query T
+SELECT quote_ident('xyz_abc_123');
+----
+xyz_abc_123
+
+query T
+SELECT quote_ident('Xyz_Abc_123');
+----
+"Xyz_Abc_123"
+
+query T
+SELECT quote_ident('_xyz_abc');
+----
+_xyz_abc
+
+query T
+SELECT quote_ident('_Xyz_Abc');
+----
+"_Xyz_Abc"
+
+query T
+SELECT quote_ident('_xyz_abc_123');
+----
+_xyz_abc_123
+
+query T
+SELECT quote_ident('_Xyz_Abc_123');
+----
+"_Xyz_Abc_123"
+
+query T
+SELECT quote_ident('_123_xyz_abc');
+----
+_123_xyz_abc
+
+query T
+SELECT quote_ident('_123_Xyz_Abc');
+----
+"_123_Xyz_Abc"
+
+query T
+SELECT quote_ident('_xyz_abc_123_');
+----
+_xyz_abc_123_
+
+query T
+SELECT quote_ident('_Xyz_Abc_123_');
+----
+"_Xyz_Abc_123_"
+
+query T
+SELECT quote_ident('_123_xyz_abc_');
+----
+_123_xyz_abc_
+
+query T
+SELECT quote_ident('_123_Xyz_Abc_');
+----
+"_123_Xyz_Abc_"
+
+query T
+SELECT quote_ident('_xyz 123 abc_');
+----
+"_xyz 123 abc_"
+
+query T
+SELECT quote_ident('_Xyz 123 Abc_');
+----
+"_Xyz 123 Abc_"
+
+query T
+SELECT quote_ident('xyz "abc"');
+----
+"xyz ""abc"""
+
+query T
+SELECT quote_ident('Xyz "Abc"');
+----
+"Xyz ""Abc"""
+
+query T
+SELECT quote_ident('xyZ "Abc"');
+----
+"xyZ ""Abc"""
+
+query T
+SELECT quote_ident('he"llo_wor"ld');
+----
+"he""llo_wor""ld"
+
+query T
+SELECT quote_ident('He"Llo_Wor"Ld');
+----
+"He""Llo_Wor""Ld"
+
+query T
+SELECT quote_ident('xyz_123 "abc"');
+----
+"xyz_123 ""abc"""
+
+query T
+SELECT quote_ident('Xyz_123 "Abc"');
+----
+"Xyz_123 ""Abc"""
+
+query T
+SELECT quote_ident('123_xyz_abc');
+----
+"123_xyz_abc"
+
+query T
+SELECT quote_ident('123_Xyz_Abc');
+----
+"123_Xyz_Abc"
+
+query T
+SELECT quote_ident('xyz abc 123');
+----
+"xyz abc 123"
+
+query T
+SELECT quote_ident('Xyz Abc 123');
+----
+"Xyz Abc 123"
+
+query T
+SELECT quote_ident('🌍');
+----
+"🌍"
+
+query T
+SELECT quote_ident(' 🌍 ');
+----
+" 🌍 "
+
+query T
+SELECT quote_ident(' 🌍 " ');
+----
+" 🌍 "" "
+
+query T
+SELECT quote_ident(' 🌍 " ');
+----
+" 🌍 "" "
+
+query T
+SELECT quote_ident(' xyz 🌍 ');
+----
+" xyz 🌍 "
+
+query T
+SELECT quote_ident(' xyZ 🌍 ');
+----
+" xyZ 🌍 "
+
+# Reserved keyword
+query T
+SELECT quote_ident('with');
+----
+"with"
+
+query T
+SELECT quote_ident('natural');
+----
+"natural"
+
+query T
+SELECT quote_ident('second');
+----
+"second"
+
+# Unreserved keyword
+query T
+SELECT quote_ident('materialize');
+----
+materialize
+
+query T
+SELECT quote_ident('table');
+----
+table

@@ -7,32 +7,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 from textwrap import dedent
-from typing import List
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
+from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
 
 
 def schema() -> str:
-    return dedent(
-        """
-       $ set keyschema={
-           "type": "record",
-           "name": "Key",
-           "fields": [
-               {"name": "key1", "type": "string"}
-           ]
-         }
-
-       $ set schema={
-           "type" : "record",
-           "name" : "test",
-           "fields" : [
-               {"name":"f1", "type":"string"}
-           ]
-         }
-    """
-    )
+    return dedent(KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD)
 
 
 class AlterIndex(Check):
@@ -50,10 +32,6 @@ class AlterIndex(Check):
                 $ kafka-ingest format=avro topic=alter-index schema=${schema} repeat=10000
                 {"f1": "A${kafka-ingest.iteration}"}
 
-                > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
-
-                > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
-
                 > CREATE SOURCE alter_index_source
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-alter-index-${testdrive.seed}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -64,11 +42,15 @@ class AlterIndex(Check):
             )
         )
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(schema() + dedent(s))
             for s in [
                 """
+                $[version>=5500] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                ALTER SYSTEM SET enable_index_options = true
+                ALTER SYSTEM SET enable_logical_compaction_window = true
+
                 > INSERT INTO alter_index_table SELECT 'B' || generate_series FROM generate_series(1,10000);
                 $ kafka-ingest format=avro topic=alter-index schema=${schema} repeat=10000
                 {"f1": "B${kafka-ingest.iteration}"}
@@ -81,6 +63,17 @@ class AlterIndex(Check):
                 {"f1": "C${kafka-ingest.iteration}"}
                 """,
                 """
+                # When upgrading from old version without roles the indexes are
+                # owned by default_role, thus we have to change the owner
+                # before altering them:
+                $[version>=4700] postgres-execute connection=postgres://mz_system:materialize@materialized:6877
+                ALTER INDEX alter_index_table_primary_idx OWNER TO materialize;
+                ALTER INDEX alter_index_source_primary_idx OWNER TO materialize;
+
+                $[version>=5500] postgres-execute connection=postgres://mz_system:materialize@materialized:6877
+                ALTER SYSTEM SET enable_index_options = true
+                ALTER SYSTEM SET enable_logical_compaction_window = true
+
                 > INSERT INTO alter_index_table SELECT 'D' || generate_series FROM generate_series(1,10000);
                 $ kafka-ingest format=avro topic=alter-index schema=${schema} repeat=10000
                 {"f1": "D${kafka-ingest.iteration}"}

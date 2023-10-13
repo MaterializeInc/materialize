@@ -1,0 +1,49 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Tests that assert the privileges that are assumed to be always granted to
+# the mz_support user.
+
+statement ok
+CREATE TABLE t (a INT)
+
+simple conn=mz_support,user=mz_support
+SET CLUSTER TO default
+----
+COMPLETE 0
+
+# The mz_support user cannot execute `SELECT ...` commands.
+simple conn=mz_support,user=mz_support
+SELECT * FROM t
+----
+db error: ERROR: permission denied for TABLE "materialize.public.t"
+
+# The mz_support user cannot execute `INSERT ...` commands.
+simple conn=mz_support,user=mz_support
+INSERT INTO t VALUES (42)
+----
+db error: ERROR: permission denied for TABLE "materialize.public.t"
+
+# The mz_support user cannot execute `UPDATE ...` commands.
+simple conn=mz_support,user=mz_support
+UPDATE t SET a = 5
+----
+db error: ERROR: permission denied for TABLE "materialize.public.t"
+
+# The mz_support user cannot execute `DELETE ...` commands.
+simple conn=mz_support,user=mz_support
+DELETE FROM t WHERE a IS NOT NULL
+----
+db error: ERROR: permission denied for TABLE "materialize.public.t"
+
+# The mz_support user cannot execute create objects.
+simple conn=mz_support,user=mz_support
+CREATE VIEW vv AS SELECT 66
+----
+db error: ERROR: permission denied for SCHEMA "materialize.public"

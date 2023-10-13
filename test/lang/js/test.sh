@@ -21,7 +21,7 @@ cd test/lang/js
 
 yarn install --frozen-lockfile
 
-ci_try yarn run fmt-check
-ci_try yarn test
+try yarn run fmt-check
+try yarn test
 
-ci_status_report
+try_status_report

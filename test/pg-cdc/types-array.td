@@ -261,7 +261,7 @@ time[]
 
 # read timestamp
 > SELECT pg_typeof(c) FROM t_timestamp_array LIMIT 1;
-timestamp[]
+"timestamp without time zone[]"
 
 > SELECT * FROM t_timestamp_array;
 "{2007-02-01 15:04:05,2007-02-01 15:04:06}"
@@ -282,5 +282,10 @@ INSERT INTO t_integer_array VALUES ('{{1},{2}}');
 
 INSERT INTO t_integer_array SELECT * FROM t_integer_array;
 
-! SELECT * FROM t_integer_array;
-contains:invalid input syntax for type array
+> SELECT * FROM t_integer_array;
+ {1,2}
+ {1,2}
+ {1,2}
+ {1,2}
+ {{1},{2}}
+ {{1},{2}}

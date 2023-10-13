@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_envelope_materialize = true;
+ALTER SYSTEM SET enable_create_source_denylist_with_options = true;
+
 #
 # A test that timelines with objects that have released all write frontiers work
 #

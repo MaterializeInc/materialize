@@ -15,8 +15,9 @@ import os
 import shlex
 import sys
 import time
+from collections.abc import AsyncGenerator, Callable, Generator, Iterable
 from contextlib import contextmanager
-from typing import Any, AsyncGenerator, Callable, Generator, Iterable, Optional
+from typing import Any
 
 from colored import attr, fg
 
@@ -27,7 +28,7 @@ class Verbosity:
     quiet: bool = False
 
     @classmethod
-    def init_from_env(cls, explicit: Optional[bool]) -> None:
+    def init_from_env(cls, explicit: bool | None) -> None:
         """Set to quiet based on MZ_QUIET being set to almost any value
 
         The only values that this gets set to false for are the empty string, 0, or no
@@ -72,9 +73,7 @@ def confirm(question: str) -> bool:
     return response.lower() in ("y", "yes")
 
 
-def progress(
-    msg: str = "", prefix: Optional[str] = None, *, finish: bool = False
-) -> None:
+def progress(msg: str = "", prefix: str | None = None, *, finish: bool = False) -> None:
     """Print a progress message to stderr, using the same prefix format as speaker"""
     if prefix is not None:
         msg = f"{prefix}> {msg}"
@@ -169,7 +168,7 @@ class UIError(Exception):
         hint: An optional hint to display alongside the error message.
     """
 
-    def __init__(self, message: str, hint: Optional[str] = None):
+    def __init__(self, message: str, hint: str | None = None):
         super().__init__(message)
         self.hint = hint
 

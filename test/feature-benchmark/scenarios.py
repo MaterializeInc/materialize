@@ -9,7 +9,6 @@
 
 
 from math import ceil, floor
-from typing import List
 
 from parameterized import parameterized_class  # type: ignore
 
@@ -23,6 +22,7 @@ from materialize.feature_benchmark.scenario import (
     BenchmarkingSequence,
     Scenario,
     ScenarioBig,
+    ScenarioDisabled,
 )
 
 
@@ -36,15 +36,45 @@ class FastPathFilterNoIndex(FastPath):
     """Measure the time it takes for the fast path to filter our all rows from a materialized view and return"""
 
     SCALE = 7
+    FIXED_SCALE = True  # OOM with 10**8 = 100M records
 
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [
             self.table_ten(),
             TdAction(
                 f"""
-> CREATE MATERIALIZED VIEW v1 (f1, f2) AS SELECT {self.unique_values()} AS f1, 1 AS f2 FROM {self.join()}
+> CREATE MATERIALIZED VIEW v1 (f1, f2) AS SELECT generate_series AS f1, 1 AS f2 FROM generate_series(1, {self.n()});
 
 > CREATE DEFAULT INDEX ON v1;
+
+> SELECT COUNT(*) = {self.n()} FROM v1;
+true
+"""
+            ),
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        return Td(
+            """
+> /* A */ SELECT 1;
+1
+> /* B */ SELECT * FROM v1 WHERE f2 < 0;
+"""
+        )
+
+
+class MFPPushdown(Scenario):
+    """Test MFP pushdown -- WHERE clause with a suitable condition and no index defined."""
+
+    SCALE = 7
+    FIXED_SCALE = True  # OOM with 10**8 = 100M records
+
+    def init(self) -> list[Action]:
+        return [
+            self.table_ten(),
+            TdAction(
+                f"""
+> CREATE MATERIALIZED VIEW v1 (f1, f2) AS SELECT generate_series AS f1, 1 AS f2 FROM generate_series(1, {self.n()});
 
 > SELECT COUNT(*) = {self.n()} FROM v1;
 true
@@ -65,7 +95,7 @@ true
 class FastPathFilterIndex(FastPath):
     """Measure the time it takes for the fast path to filter our all rows from a materialized view using an index and return"""
 
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [
             self.table_ten(),
             TdAction(
@@ -86,7 +116,7 @@ true
 
     def benchmark(self) -> MeasurementSource:
         hundred_selects = "\n".join(
-            f"> SELECT * FROM v1 WHERE f1 = 1;\n1\n" for i in range(0, 1000)
+            "> SELECT * FROM v1 WHERE f1 = 1;\n1\n" for i in range(0, 1000)
         )
 
         return Td(
@@ -109,7 +139,7 @@ true
 class FastPathOrderByLimit(FastPath):
     """Benchmark the case SELECT * FROM materialized_view ORDER BY <key> LIMIT <i>"""
 
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [
             self.table_ten(),
             TdAction(
@@ -214,7 +244,7 @@ class InsertMultiRow(DML):
 class Update(DML):
     """Measure the time it takes for an UPDATE statement to return to client"""
 
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [
             self.table_ten(),
             TdAction(
@@ -344,7 +374,7 @@ true
 
 
 class CountDistinct(Dataflow):
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [
             self.view_ten(),
             TdAction(
@@ -372,7 +402,7 @@ true
 
 
 class MinMax(Dataflow):
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [
             self.view_ten(),
             TdAction(
@@ -399,8 +429,42 @@ true
         )
 
 
+class MinMaxMaintained(Dataflow):
+    """Benchmark MinMax as an indexed view, which renders a dataflow for incremental
+    maintenance, in contrast with one-shot SELECT processing"""
+
+    def init(self) -> list[Action]:
+        return [
+            self.table_ten(),
+            TdAction(
+                f"""
+> CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1 FROM {self.join()};
+
+> SELECT COUNT(*) = {self.n()} FROM v1;
+true
+"""
+            ),
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        return Td(
+            f"""
+> DROP VIEW IF EXISTS v2
+  /* A */
+
+> CREATE VIEW v2 AS SELECT MIN(f1), MAX(f1) AS f1 FROM v1
+
+> CREATE DEFAULT INDEX ON v2
+
+> SELECT * FROM v2
+  /* B */
+0 {self.n()-1}
+"""
+        )
+
+
 class GroupBy(Dataflow):
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [
             self.view_ten(),
             TdAction(
@@ -421,6 +485,40 @@ true
 1
 
 > SELECT COUNT(*), MIN(f1_min), MAX(f1_max) FROM (SELECT f2, MIN(f1) AS f1_min, MAX(f1) AS f1_max FROM v1 GROUP BY f2)
+  /* B */
+{self.n()} 0 {self.n()-1}
+"""
+        )
+
+
+class GroupByMaintained(Dataflow):
+    """Benchmark GroupBy as an indexed view, which renders a dataflow for incremental
+    maintenance, in contrast with one-shot SELECT processing"""
+
+    def init(self) -> list[Action]:
+        return [
+            self.table_ten(),
+            TdAction(
+                f"""
+> CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1, {self.unique_values()} AS f2 FROM {self.join()}
+
+> SELECT COUNT(*) = {self.n()} FROM v1
+true
+"""
+            ),
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        return Td(
+            f"""
+> DROP VIEW IF EXISTS v2;
+  /* A */
+
+> CREATE VIEW v2 AS SELECT COUNT(*), MIN(f1_min), MAX(f1_max) FROM (SELECT f2, MIN(f1) AS f1_min, MAX(f1) AS f1_max FROM v1 GROUP BY f2)
+
+> CREATE DEFAULT INDEX ON v2
+
+> SELECT * FROM v2
   /* B */
 {self.n()} 0 {self.n()-1}
 """
@@ -486,7 +584,7 @@ class CreateIndex(Dataflow):
     it takes for a SELECT query that would use the index to return rows.
     """
 
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [
             self.table_ten(),
             TdAction(
@@ -521,7 +619,7 @@ class CreateIndex(Dataflow):
 
 
 class DeltaJoin(Dataflow):
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [
             self.view_ten(),
             TdAction(
@@ -538,7 +636,7 @@ class DeltaJoin(Dataflow):
   /* A */
 1
 
-# Delta joins require 2+ tables
+# Delta joins require 3+ tables
 > SELECT COUNT(*) FROM v1 AS a1 , v1 AS a2 , v1 AS a3 WHERE a1.f1 = a2.f1 AND a2.f1 = a3.f1
   /* B */
 {self.n()}
@@ -546,8 +644,41 @@ class DeltaJoin(Dataflow):
         )
 
 
+class DeltaJoinMaintained(Dataflow):
+    """Benchmark DeltaJoin as an indexed view with table-based data initialization, where the
+    empty frontier is not emitted, in contrast with one-shot SELECT processing based on data
+    initialized as a constant view"""
+
+    def init(self) -> list[Action]:
+        return [
+            self.table_ten(),
+            TdAction(
+                f"""
+> CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1 FROM {self.join()}
+"""
+            ),
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        return Td(
+            f"""
+> DROP VIEW IF EXISTS v2;
+  /* A */
+
+# Delta joins require 3+ tables
+> CREATE VIEW v2 AS SELECT COUNT(*) FROM v1 AS a1 , v1 AS a2 , v1 AS a3 WHERE a1.f1 = a2.f1 AND a2.f1 = a3.f1
+
+> CREATE DEFAULT INDEX ON v2
+
+> SELECT * FROM v2
+  /* B */
+{self.n()}
+"""
+        )
+
+
 class DifferentialJoin(Dataflow):
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [
             self.view_ten(),
             TdAction(
@@ -618,7 +749,7 @@ class Finish(Scenario):
 class FinishOrderByLimit(Finish):
     """Benchmark ORDER BY + LIMIT without the benefit of an index"""
 
-    def init(self) -> List[Action]:
+    def init(self) -> list[Action]:
         return [
             self.view_ten(),
             TdAction(
@@ -762,7 +893,13 @@ $ kafka-ingest format=avro topic=upsert-unique key-format=avro key-schema=${{key
         )
 
 
-class KafkaRestart(Scenario):
+class KafkaRestart(ScenarioDisabled):
+    """This scenario dates from the pre-persistence era where the entire topic was re-ingested from scratch.
+    With presistence however, no reingestion takes place and the scenario exhibits extreme variability.
+    Instead of re-ingestion, we are measuring mostly the speed of COUNT(*), further obscured by
+    the one second timestamp granularity
+    """
+
     def shared(self) -> Action:
         return TdAction(
             self.keyschema()
@@ -825,7 +962,7 @@ class KafkaRestartBig(ScenarioBig):
 
     SCALE = 8
 
-    def shared(self) -> List[Action]:
+    def shared(self) -> list[Action]:
         return [
             TdAction("$ kafka-create-topic topic=kafka-recovery-big partitions=8"),
             # Ingest 10 ** SCALE records
@@ -897,10 +1034,10 @@ class KafkaEnvelopeNoneBytesScalability(ScenarioBig):
     source but rather just a non-memory-consuming view on top of it.
     """
 
-    def shared(self) -> List[Action]:
+    def shared(self) -> list[Action]:
         return [
             TdAction(
-                f"""
+                """
 $ kafka-create-topic topic=kafka-scalability partitions=8
 """
             ),
@@ -1039,7 +1176,7 @@ ALTER TABLE pk_table REPLICA IDENTITY FULL;
 
     def before(self) -> Action:
         return TdAction(
-            f"""
+            """
 > DROP SOURCE IF EXISTS mz_source_pgcdc;
             """
         )
@@ -1075,7 +1212,7 @@ class PgCdcStreaming(PgCdc):
 
     def shared(self) -> Action:
         return TdAction(
-            f"""
+            """
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER USER postgres WITH replication;
 DROP SCHEMA IF EXISTS public CASCADE;
@@ -1088,7 +1225,7 @@ CREATE PUBLICATION p1 FOR ALL TABLES;
 
     def before(self) -> Action:
         return TdAction(
-            f"""
+            """
 > DROP SOURCE IF EXISTS s1;
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -1144,7 +1281,7 @@ class QueryLatency(Coordinator):
     """Measure the time it takes to run SELECT 1 queries"""
 
     def benchmark(self) -> MeasurementSource:
-        selects = "\n".join(f"> SELECT 1\n1\n" for i in range(0, self.n()))
+        selects = "\n".join("> SELECT 1\n1\n" for i in range(0, self.n()))
 
         return Td(
             f"""
@@ -1170,8 +1307,8 @@ class ConnectionLatency(Coordinator):
 
     def benchmark(self) -> MeasurementSource:
         connections = "\n".join(
-            f"""
-$ postgres-execute connection=postgres://materialize:materialize@${{testdrive.materialize-sql-addr}}
+            """
+$ postgres-execute connection=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
 SELECT 1;
 """
             for i in range(0, self.n())
@@ -1205,7 +1342,7 @@ class StartupEmpty(Startup):
         return [
             Lambda(lambda e: e.RestartMz()),
             Td(
-                f"""
+                """
 > SELECT 1;
   /* B */
 1
@@ -1218,15 +1355,18 @@ class StartupLoaded(Scenario):
     """Measure the time it takes to restart a populated Mz instance and have all the dataflows be ready to return something"""
 
     SCALE = 1.2  # 25 objects of each kind
+    FIXED_SCALE = (
+        True  # Can not scale to 100s of objects, so --size=+N will have no effect
+    )
 
     def shared(self) -> Action:
         return TdAction(
             self.schema()
-            + f"""
+            + """
 $ kafka-create-topic topic=startup-time
 
-$ kafka-ingest format=avro topic=startup-time schema=${{schema}} repeat=1
-{{"f2": 1}}
+$ kafka-ingest format=avro topic=startup-time schema=${schema} repeat=1
+{"f2": 1}
 """
         )
 

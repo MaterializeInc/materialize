@@ -9,22 +9,28 @@
 
 //! Helpers for working with Kafka's client API.
 
-use std::any::Any;
+use fancy_regex::Regex;
 use std::collections::BTreeMap;
 use std::error::Error;
+use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::bail;
+use crossbeam::channel::{unbounded, Receiver, Sender};
 use mz_ore::collections::CollectionExt;
 use rdkafka::client::{BrokerAddr, Client, NativeClient, OAuthToken};
 use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
 use rdkafka::consumer::{ConsumerContext, Rebalance};
-use rdkafka::error::{KafkaError, KafkaResult};
+use rdkafka::error::{KafkaError, KafkaResult, RDKafkaErrorCode};
 use rdkafka::producer::{DefaultProducerContext, DeliveryResult, ProducerContext};
 use rdkafka::types::RDKafkaRespErr;
 use rdkafka::util::Timeout;
 use rdkafka::{ClientContext, Statistics, TopicPartitionList};
 use tracing::{debug, error, info, warn, Level};
+
+/// A reasonable default timeout when fetching metadata or partitions.
+pub const DEFAULT_FETCH_METADATA_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A `ClientContext` implementation that uses `tracing` instead of `log`
 /// macros.
@@ -32,7 +38,132 @@ use tracing::{debug, error, info, warn, Level};
 /// All code in Materialize that constructs Kafka clients should use this
 /// context or a custom context that delegates the `log` and `error` methods to
 /// this implementation.
-pub struct MzClientContext;
+#[derive(Clone)]
+pub struct MzClientContext {
+    /// The last observed error log, if any.
+    error_tx: Sender<MzKafkaError>,
+}
+
+impl Default for MzClientContext {
+    fn default() -> Self {
+        Self::with_errors().0
+    }
+}
+
+impl MzClientContext {
+    /// Constructs a new client context and returns an mpsc `Receiver` that can be used to learn
+    /// about librdkafka errors.
+    // `crossbeam` channel receivers can be cloned, but this is intended to be used as a mpsc,
+    // until we upgrade to `1.72` and the std mpsc sender is `Sync`.
+    pub fn with_errors() -> (Self, Receiver<MzKafkaError>) {
+        let (error_tx, error_rx) = unbounded();
+        (Self { error_tx }, error_rx)
+    }
+
+    fn record_error(&self, msg: &str) {
+        let err = match MzKafkaError::from_str(msg) {
+            Ok(err) => err,
+            Err(()) => {
+                error!(message = msg, "failed to parse kafka error");
+                MzKafkaError::Internal(msg.to_owned())
+            }
+        };
+        // If no one cares about errors we drop them on the floor
+        let _ = self.error_tx.send(err);
+    }
+}
+
+/// A structured error type for errors reported by librdkafka through its logs.
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum MzKafkaError {
+    /// Invalid username or password
+    #[error("Invalid username or password")]
+    InvalidCredentials,
+    /// Missing CA certificate
+    #[error("Invalid CA certificate")]
+    InvalidCACertificate,
+    /// Broker does not support SSL connections
+    #[error("Broker does not support SSL connections")]
+    SSLUnsupported,
+    /// Broker did not provide a certificate
+    #[error("Broker did not provide a certificate")]
+    BrokerCertificateMissing,
+    /// Failed to verify broker certificate
+    #[error("Failed to verify broker certificate")]
+    InvalidBrokerCertificate,
+    /// Connection reset
+    #[error("Connection reset: {0}")]
+    ConnectionReset(String),
+    /// Connection timeout
+    #[error("Connection timeout")]
+    ConnectionTimeout,
+    /// Failed to resolve hostname
+    #[error("Failed to resolve hostname")]
+    HostnameResolutionFailed,
+    /// Unsupported SASL mechanism
+    #[error("Unsupported SASL mechanism")]
+    UnsupportedSASLMechanism,
+    /// Unsupported broker version
+    #[error("Unsupported broker version")]
+    UnsupportedBrokerVersion,
+    /// Connection to broker failed
+    #[error("Broker transport failure")]
+    BrokerTransportFailure,
+    /// All brokers down
+    #[error("All brokers down")]
+    AllBrokersDown,
+    /// SASL authentication required
+    #[error("SASL authentication required")]
+    SASLAuthenticationRequired,
+    /// SSL authentication required
+    #[error("SSL authentication required")]
+    SSLAuthenticationRequired,
+    /// An internal kafka error
+    #[error("Internal kafka error: {0}")]
+    Internal(String),
+}
+
+impl FromStr for MzKafkaError {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.contains("Authentication failed: Invalid username or password") {
+            Ok(Self::InvalidCredentials)
+        } else if s.contains("broker certificate could not be verified") {
+            Ok(Self::InvalidCACertificate)
+        } else if s.contains("client SSL authentication might be required") {
+            Ok(Self::SSLAuthenticationRequired)
+        } else if s.contains("connecting to a PLAINTEXT broker listener") {
+            Ok(Self::SSLUnsupported)
+        } else if s.contains("Broker did not provide a certificate") {
+            Ok(Self::BrokerCertificateMissing)
+        } else if s.contains("Failed to verify broker certificate: ") {
+            Ok(Self::InvalidBrokerCertificate)
+        } else if let Some((_prefix, inner)) = s.split_once("Send failed: ") {
+            Ok(Self::ConnectionReset(inner.to_owned()))
+        } else if let Some((_prefix, inner)) = s.split_once("Receive failed: ") {
+            Ok(Self::ConnectionReset(inner.to_owned()))
+        } else if s.contains("request(s) timed out: disconnect") {
+            Ok(Self::ConnectionTimeout)
+        } else if s.contains("Failed to resolve") {
+            Ok(Self::HostnameResolutionFailed)
+        } else if s.contains("mechanism handshake failed:") {
+            Ok(Self::UnsupportedSASLMechanism)
+        } else if s.contains("verify that security.protocol is correctly configured, broker might require SASL authentication") {
+            Ok(Self::SASLAuthenticationRequired)
+        } else if s.contains("incorrect security.protocol configuration (connecting to a SSL listener?)") {
+            Ok(Self::SSLAuthenticationRequired)
+        } else if s.contains("probably due to broker version < 0.10") {
+            Ok(Self::UnsupportedBrokerVersion)
+        } else if s.contains("Disconnected while requesting ApiVersion") {
+            Ok(Self::BrokerTransportFailure)
+        } else if Regex::new(r"(\d+)/\1 brokers are down").unwrap().is_match(s).unwrap_or_default() {
+            Ok(Self::AllBrokersDown)
+        } else {
+            Err(())
+        }
+    }
+}
 
 impl ClientContext for MzClientContext {
     fn log(&self, level: rdkafka::config::RDKafkaLogLevel, fac: &str, log_message: &str) {
@@ -41,9 +172,14 @@ impl ClientContext for MzClientContext {
         // but using `tracing`
         match level {
             Emerg | Alert | Critical | Error => {
-                error!(target: "librdkafka", "{} {}", fac, log_message);
+                self.record_error(log_message);
+                // We downgrade error messages to `warn!` level to avoid
+                // sending the errors to Sentry. Most errors are customer
+                // configuration problems that are not appropriate to send to
+                // Sentry.
+                warn!(target: "librdkafka", "error: {} {}", fac, log_message);
             }
-            Warning => warn!(target: "librdkafka", "{} {}", fac, log_message),
+            Warning => warn!(target: "librdkafka", "warning: {} {}", fac, log_message),
             Notice => info!(target: "librdkafka", "{} {}", fac, log_message),
             Info => info!(target: "librdkafka", "{} {}", fac, log_message),
             Debug => debug!(target: "librdkafka", "{} {}", fac, log_message),
@@ -51,8 +187,9 @@ impl ClientContext for MzClientContext {
     }
 
     fn error(&self, error: KafkaError, reason: &str) {
+        self.record_error(reason);
         // Refer to the comment in the `log` callback.
-        error!(target: "librdkafka", "{}: {}", error, reason);
+        warn!(target: "librdkafka", "error: {}: {}", error, reason);
     }
 }
 
@@ -69,12 +206,24 @@ impl ProducerContext for MzClientContext {
     }
 }
 
+/// Rewrites a broker address.
+///
+/// For use with [`BrokerRewritingClientContext`].
+#[derive(Debug, Clone)]
+pub struct BrokerRewrite {
+    /// The rewritten hostname.
+    pub host: String,
+    /// The rewritten port.
+    ///
+    /// If unspecified, the broker's original port is left unchanged.
+    pub port: Option<u16>,
+}
+
 /// A client context that supports rewriting broker addresses.
+#[derive(Clone)]
 pub struct BrokerRewritingClientContext<C> {
     inner: C,
-    overrides: BTreeMap<BrokerAddr, BrokerAddr>,
-    /// Opaque tokens to cleanup resources associated with overrides.
-    drop_tokens: Vec<Box<dyn Any + Send + Sync>>,
+    rewrites: BTreeMap<BrokerAddr, Arc<dyn Fn() -> BrokerRewrite + Send + Sync>>,
 }
 
 impl<C> BrokerRewritingClientContext<C> {
@@ -82,61 +231,24 @@ impl<C> BrokerRewritingClientContext<C> {
     pub fn new(inner: C) -> BrokerRewritingClientContext<C> {
         BrokerRewritingClientContext {
             inner,
-            overrides: BTreeMap::new(),
-            drop_tokens: vec![],
+            rewrites: BTreeMap::new(),
         }
     }
 
     /// Adds a broker rewrite rule.
     ///
-    /// Connections to the specified `broker` will be rewritten to connect to
-    /// `rewrite_host` and `rewrite_port` instead. If `rewrite_port` is omitted,
-    /// only the host is rewritten.
-    pub fn add_broker_rewrite(
-        &mut self,
-        broker: &str,
-        rewrite_host: &str,
-        rewrite_port: Option<u16>,
-    ) {
-        self.add_broker_rewrite_inner(broker, rewrite_host, rewrite_port, None)
-    }
-
-    /// The same as `add_broker_rewrite`, but holds onto a token that may perform
-    /// some shutdown on drop.
-    pub fn add_broker_rewrite_with_token<T: Any + Send + Sync>(
-        &mut self,
-        broker: &str,
-        rewrite_host: &str,
-        rewrite_port: Option<u16>,
-        token: T,
-    ) {
-        self.add_broker_rewrite_inner(broker, rewrite_host, rewrite_port, Some(Box::new(token)))
-    }
-
-    fn add_broker_rewrite_inner(
-        &mut self,
-        broker: &str,
-        rewrite_host: &str,
-        rewrite_port: Option<u16>,
-        token: Option<Box<dyn Any + Send + Sync>>,
-    ) {
-        let mut parts = broker.splitn(2, ':');
-        let broker = BrokerAddr {
-            host: parts.next().expect("at least one part").into(),
-            port: parts.next().unwrap_or("9092").into(),
-        };
-        let rewrite = BrokerAddr {
-            host: rewrite_host.into(),
-            port: match rewrite_port {
-                None => broker.port.clone(),
-                Some(port) => port.to_string(),
-            },
-        };
-        self.overrides.insert(broker, rewrite);
-
-        if let Some(token) = token {
-            self.drop_tokens.push(token)
-        }
+    /// `rewrite` is a function that returns a `BrokerRewrite` that specifies
+    /// how to rewrite the address for `broker`.
+    ///
+    /// The function is invoked by librdkafka on every connection attempt to the
+    /// broker. This permits the rewrite to evolve over time, for example, if
+    /// the rewrite is for a tunnel whose address changes if the tunnel fails
+    /// and restarts.
+    pub fn add_broker_rewrite<F>(&mut self, broker: BrokerAddr, rewrite: F)
+    where
+        F: Fn() -> BrokerRewrite + Send + Sync + 'static,
+    {
+        self.rewrites.insert(broker, Arc::new(rewrite));
     }
 
     /// Returns a reference to the wrapped context.
@@ -152,14 +264,22 @@ where
     const ENABLE_REFRESH_OAUTH_TOKEN: bool = C::ENABLE_REFRESH_OAUTH_TOKEN;
 
     fn rewrite_broker_addr(&self, addr: BrokerAddr) -> BrokerAddr {
-        match self.overrides.get(&addr) {
+        match self.rewrites.get(&addr) {
             None => addr,
-            Some(o) => {
+            Some(rewrite) => {
+                let rewrite = rewrite();
+                let new_addr = BrokerAddr {
+                    host: rewrite.host,
+                    port: match rewrite.port {
+                        None => addr.port.clone(),
+                        Some(port) => port.to_string(),
+                    },
+                };
                 info!(
                     "rewriting broker {}:{} to {}:{}",
-                    addr.host, addr.port, o.host, o.port
+                    addr.host, addr.port, new_addr.host, new_addr.port
                 );
-                o.clone()
+                new_addr
             }
         }
     }
@@ -233,12 +353,15 @@ where
     }
 }
 
+/// Id of a partition in a topic.
+pub type PartitionId = i32;
+
 /// Retrieve number of partitions for a given `topic` using the given `client`
 pub fn get_partitions<C: ClientContext>(
     client: &Client<C>,
     topic: &str,
     timeout: Duration,
-) -> Result<Vec<i32>, anyhow::Error> {
+) -> Result<Vec<PartitionId>, anyhow::Error> {
     let meta = client.fetch_metadata(Some(topic), timeout)?;
     if meta.topics().len() != 1 {
         bail!(
@@ -247,7 +370,17 @@ pub fn get_partitions<C: ClientContext>(
             meta.topics().len()
         );
     }
+
+    fn check_err(err: Option<RDKafkaRespErr>) -> anyhow::Result<()> {
+        if let Some(err) = err {
+            Err(RDKafkaErrorCode::from(err))?
+        }
+        Ok(())
+    }
+
     let meta_topic = meta.topics().into_element();
+    check_err(meta_topic.error())?;
+
     if meta_topic.name() != topic {
         bail!(
             "got results for wrong topic {} (expected {})",
@@ -256,11 +389,18 @@ pub fn get_partitions<C: ClientContext>(
         );
     }
 
-    if meta_topic.partitions().len() == 0 {
+    let mut partition_ids = Vec::with_capacity(meta_topic.partitions().len());
+    for partition_meta in meta_topic.partitions() {
+        check_err(partition_meta.error())?;
+
+        partition_ids.push(partition_meta.id());
+    }
+
+    if partition_ids.len() == 0 {
         bail!("topic {} does not exist", topic);
     }
 
-    Ok(meta_topic.partitions().iter().map(|x| x.id()).collect())
+    Ok(partition_ids)
 }
 
 /// A simpler version of [`create_new_client_config`] that defaults

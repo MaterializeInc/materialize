@@ -9,12 +9,11 @@
 
 use std::fmt;
 
-use serde::{Deserialize, Serialize};
-
 use mz_lowertest::MzReflect;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::adt::system::Oid;
 use mz_repr::{strconv, ColumnType, ScalarType};
+use serde::{Deserialize, Serialize};
 
 use crate::scalar::func::EagerUnaryFunc;
 use crate::EvalError;
@@ -23,8 +22,10 @@ sqlfunc!(
     #[sqlname = "-"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(NegInt64)]
+    #[is_monotone = true]
     fn neg_int64(a: i64) -> Result<i64, EvalError> {
-        a.checked_neg().ok_or(EvalError::Int64OutOfRange)
+        a.checked_neg()
+            .ok_or(EvalError::Int64OutOfRange(a.to_string()))
     }
 );
 
@@ -40,7 +41,8 @@ sqlfunc!(
 sqlfunc!(
     #[sqlname = "abs"]
     fn abs_int64(a: i64) -> Result<i64, EvalError> {
-        a.checked_abs().ok_or(EvalError::Int64OutOfRange)
+        a.checked_abs()
+            .ok_or(EvalError::Int64OutOfRange(a.to_string()))
     }
 );
 
@@ -57,8 +59,9 @@ sqlfunc!(
     #[sqlname = "bigint_to_smallint"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastInt16ToInt64)]
+    #[is_monotone = true]
     fn cast_int64_to_int16(a: i64) -> Result<i16, EvalError> {
-        i16::try_from(a).or(Err(EvalError::Int16OutOfRange))
+        i16::try_from(a).or(Err(EvalError::Int16OutOfRange(a.to_string())))
     }
 );
 
@@ -66,8 +69,9 @@ sqlfunc!(
     #[sqlname = "bigint_to_integer"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastInt32ToInt64)]
+    #[is_monotone = true]
     fn cast_int64_to_int32(a: i64) -> Result<i32, EvalError> {
-        i32::try_from(a).or(Err(EvalError::Int32OutOfRange))
+        i32::try_from(a).or(Err(EvalError::Int32OutOfRange(a.to_string())))
     }
 );
 
@@ -78,7 +82,9 @@ sqlfunc!(
     fn cast_int64_to_oid(a: i64) -> Result<Oid, EvalError> {
         // Unlike casting a 16-bit or 32-bit integers to OID, casting a 64-bit
         // integers to an OID rejects negative values.
-        u32::try_from(a).map(Oid).or(Err(EvalError::OidOutOfRange))
+        u32::try_from(a)
+            .map(Oid)
+            .or(Err(EvalError::OidOutOfRange(a.to_string())))
     }
 );
 
@@ -86,8 +92,9 @@ sqlfunc!(
     #[sqlname = "bigint_to_uint2"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastUint16ToInt64)]
+    #[is_monotone = true]
     fn cast_int64_to_uint16(a: i64) -> Result<u16, EvalError> {
-        u16::try_from(a).or(Err(EvalError::UInt16OutOfRange))
+        u16::try_from(a).or(Err(EvalError::UInt16OutOfRange(a.to_string())))
     }
 );
 
@@ -95,8 +102,9 @@ sqlfunc!(
     #[sqlname = "bigint_to_uint4"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastUint32ToInt64)]
+    #[is_monotone = true]
     fn cast_int64_to_uint32(a: i64) -> Result<u32, EvalError> {
-        u32::try_from(a).or(Err(EvalError::UInt32OutOfRange))
+        u32::try_from(a).or(Err(EvalError::UInt32OutOfRange(a.to_string())))
     }
 );
 
@@ -104,8 +112,9 @@ sqlfunc!(
     #[sqlname = "bigint_to_uint8"]
     #[preserves_uniqueness = true]
     #[inverse = to_unary!(super::CastUint64ToInt64)]
+    #[is_monotone = true]
     fn cast_int64_to_uint64(a: i64) -> Result<u64, EvalError> {
-        u64::try_from(a).or(Err(EvalError::UInt64OutOfRange))
+        u64::try_from(a).or(Err(EvalError::UInt64OutOfRange(a.to_string())))
     }
 );
 
@@ -134,6 +143,10 @@ impl<'a> EagerUnaryFunc<'a> for CastInt64ToNumeric {
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastNumericToInt64)
     }
+
+    fn is_monotone(&self) -> bool {
+        true
+    }
 }
 
 impl fmt::Display for CastInt64ToNumeric {
@@ -146,6 +159,7 @@ sqlfunc!(
     #[sqlname = "bigint_to_real"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastFloat32ToInt64)]
+    #[is_monotone = true]
     fn cast_int64_to_float32(a: i64) -> f32 {
         // TODO(benesch): remove potentially dangerous usage of `as`.
         #[allow(clippy::as_conversions)]
@@ -159,6 +173,7 @@ sqlfunc!(
     #[sqlname = "bigint_to_double"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastFloat64ToInt64)]
+    #[is_monotone = true]
     fn cast_int64_to_float64(a: i64) -> f64 {
         // TODO(benesch): remove potentially dangerous usage of `as`.
         #[allow(clippy::as_conversions)]

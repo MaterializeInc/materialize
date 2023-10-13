@@ -25,6 +25,8 @@ if read_list BUILDKITE_PLUGIN_MZCOMPOSE_ARGS; then
     done
 fi
 
+sar -q 60 > sar.log &
+
 date +"%Y-%m-%d %H:%M:%S" > step_start_timestamp
 
 # Sometimes build cancellations prevent us from properly cleaning up the last
@@ -34,6 +36,10 @@ ci_collapsed_heading ":docker: Purging containers and volumes from previous buil
 mzcompose --mz-quiet kill
 mzcompose --mz-quiet rm --force -v
 mzcompose --mz-quiet down --volumes
+killall -9 clusterd || true # There might be remaining processes from a previous cargo-test run
+if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
+  find . -name '*.profraw' -delete # Remove remaining profraw files from coverage runs
+fi
 
 ci_collapsed_heading ":docker: Purging all existing docker containers and volumes, regardless of origin"
 docker ps --all --quiet | xargs --no-run-if-empty docker rm --force --volumes
@@ -47,6 +53,19 @@ mzcompose --mz-quiet build
 if ! mzcompose --mz-quiet list-workflows | grep -q "$service"; then
     ci_collapsed_heading ":docker: Starting dependencies"
     mzcompose up -d --scale "$service=0" "$service"
+fi
+
+if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
+    ci_uncollapsed_heading ":docker: Fetching binaries for coverage"
+    mzcompose create
+    mkdir -p coverage/
+    chmod 777 coverage/
+    # Not all tests contain all of these containers:
+    mzcompose cp sqllogictest:/usr/local/bin/sqllogictest coverage/ || true
+    mzcompose cp sqllogictest:/usr/local/bin/clusterd coverage/ || true
+    mzcompose cp materialized:/usr/local/bin/environmentd coverage/ || true
+    mzcompose cp materialized:/usr/local/bin/clusterd coverage/ || true
+    mzcompose cp testdrive:/usr/local/bin/testdrive coverage/ || true
 fi
 
 ci_uncollapsed_heading ":docker: Running \`mzcompose run ${run_args[*]}\`"

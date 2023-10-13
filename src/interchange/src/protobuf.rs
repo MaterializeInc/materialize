@@ -10,14 +10,12 @@
 use std::collections::BTreeSet;
 
 use anyhow::{anyhow, bail, Context};
-
+use mz_ore::str::StrExt;
+use mz_repr::{ColumnName, ColumnType, Datum, Row, RowPacker, ScalarType};
 use prost_reflect::{
     Cardinality, DescriptorPool, DynamicMessage, FieldDescriptor, Kind, MessageDescriptor,
     ReflectMessage, Value,
 };
-
-use mz_ore::str::StrExt;
-use mz_repr::{ColumnName, ColumnType, Datum, Row, RowPacker, ScalarType};
 
 /// A decoded description of the schema of a Protobuf message.
 #[derive(Debug, PartialEq)]

@@ -16,12 +16,11 @@ use std::time::Duration;
 
 use anyhow::bail;
 use async_trait::async_trait;
-
 use mz_compute_client::sources::MzOffset;
 use mz_expr::PartitionId;
 use mz_ore::retry::Retry;
 use mz_sql::catalog::SessionCatalog;
-use mz_sql::names::PartialObjectName;
+use mz_sql::names::PartialItemName;
 use mz_stash::Stash;
 
 use crate::action::{ControlFlow, State};
@@ -40,7 +39,7 @@ async fn run_verify_timestamp_compaction_action(
     let item_id = state
         .with_catalog_copy(|catalog| {
             catalog
-                .resolve_item(&PartialObjectName {
+                .resolve_item(&PartialItemName {
                     database: None,
                     schema: None,
                     item: source.clone(),

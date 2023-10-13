@@ -94,16 +94,10 @@ EXPLAIN OPTIMIZED PLAN WITH(raw) AS JSON FOR
               [
                 {
                   "data": [
-                    4,
+                    42,
                     1,
-                    0,
-                    0,
-                    0,
-                    4,
-                    2,
-                    0,
-                    0,
-                    0
+                    42,
+                    2
                   ]
                 },
                 2
@@ -111,16 +105,10 @@ EXPLAIN OPTIMIZED PLAN WITH(raw) AS JSON FOR
               [
                 {
                   "data": [
-                    4,
+                    42,
                     3,
-                    0,
-                    0,
-                    0,
-                    4,
-                    4,
-                    0,
-                    0,
-                    0
+                    42,
+                    4
                   ]
                 },
                 1
@@ -160,6 +148,9 @@ SELECT 1, a + b as c FROM t WHERE a > 0 and b < 0 and a + b > 0
       "plan": {
         "PeekExisting": [
           {
+            "User": 1
+          },
+          {
             "User": 4
           },
           null,
@@ -182,11 +173,8 @@ SELECT 1, a + b as c FROM t WHERE a > 0 and b < 0 and a + b > 0
                     {
                       "Ok": {
                         "data": [
-                          4,
-                          1,
-                          0,
-                          0,
-                          0
+                          42,
+                          1
                         ]
                       }
                     },
@@ -211,11 +199,7 @@ SELECT 1, a + b as c FROM t WHERE a > 0 and b < 0 and a + b > 0
                           {
                             "Ok": {
                               "data": [
-                                4,
-                                0,
-                                0,
-                                0,
-                                0
+                                41
                               ]
                             }
                           },
@@ -241,11 +225,7 @@ SELECT 1, a + b as c FROM t WHERE a > 0 and b < 0 and a + b > 0
                           {
                             "Ok": {
                               "data": [
-                                4,
-                                0,
-                                0,
-                                0,
-                                0
+                                41
                               ]
                             }
                           },
@@ -271,11 +251,7 @@ SELECT 1, a + b as c FROM t WHERE a > 0 and b < 0 and a + b > 0
                           {
                             "Ok": {
                               "data": [
-                                4,
-                                0,
-                                0,
-                                0,
-                                0
+                                41
                               ]
                             }
                           },
@@ -338,7 +314,8 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                           }
                         ],
                         "keys": []
-                      }
+                      },
+                      "access_strategy": "Persist"
                     }
                   },
                   "scalars": [
@@ -358,11 +335,8 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                         {
                           "Ok": {
                             "data": [
-                              4,
-                              1,
-                              0,
-                              0,
-                              0
+                              42,
+                              1
                             ]
                           }
                         },
@@ -387,11 +361,7 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                         {
                           "Ok": {
                             "data": [
-                              4,
-                              0,
-                              0,
-                              0,
-                              0
+                              41
                             ]
                           }
                         },
@@ -414,11 +384,7 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                         {
                           "Ok": {
                             "data": [
-                              4,
-                              0,
-                              0,
-                              0,
-                              0
+                              41
                             ]
                           }
                         },
@@ -441,11 +407,7 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                         {
                           "Ok": {
                             "data": [
-                              4,
-                              0,
-                              0,
-                              0,
-                              0
+                              41
                             ]
                           }
                         },
@@ -470,7 +432,9 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
   ],
   "sources": [
     {
-      "id": "materialize.public.mv",
+      "id": {
+        "User": 8
+      },
       "op": {
         "expressions": [],
         "predicates": [
@@ -487,11 +451,7 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                     {
                       "Ok": {
                         "data": [
-                          4,
-                          0,
-                          0,
-                          0,
-                          0
+                          41
                         ]
                       }
                     },
@@ -517,11 +477,7 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                     {
                       "Ok": {
                         "data": [
-                          4,
-                          0,
-                          0,
-                          0,
-                          0
+                          41
                         ]
                       }
                     },
@@ -555,11 +511,7 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                     {
                       "Ok": {
                         "data": [
-                          4,
-                          0,
-                          0,
-                          0,
-                          0
+                          41
                         ]
                       }
                     },
@@ -616,6 +568,16 @@ SELECT generate_series(a, b) from t
                       }
                     ],
                     "keys": []
+                  },
+                  "access_strategy": {
+                    "Index": [
+                      [
+                        {
+                          "User": 4
+                        },
+                        "FullScan"
+                      ]
+                    ]
                   }
                 }
               },
@@ -632,11 +594,8 @@ SELECT generate_series(a, b) from t
                     {
                       "Ok": {
                         "data": [
-                          4,
-                          1,
-                          0,
-                          0,
-                          0
+                          42,
+                          1
                         ]
                       }
                     },
@@ -696,6 +655,16 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
                               }
                             ],
                             "keys": []
+                          },
+                          "access_strategy": {
+                            "Index": [
+                              [
+                                {
+                                  "User": 4
+                                },
+                                "FullScan"
+                              ]
+                            ]
                           }
                         }
                       },
@@ -740,7 +709,8 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
                                     }
                                   ],
                                   "keys": []
-                                }
+                                },
+                                "access_strategy": "Persist"
                               }
                             },
                             "outputs": [
@@ -805,6 +775,16 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                           }
                         ],
                         "keys": []
+                      },
+                      "access_strategy": {
+                        "Index": [
+                          [
+                            {
+                              "User": 4
+                            },
+                            "FullScan"
+                          ]
+                        ]
                       }
                     }
                   },
@@ -837,7 +817,8 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                                 }
                               ],
                               "keys": []
-                            }
+                            },
+                            "access_strategy": "Persist"
                           }
                         },
                         "outputs": [
@@ -861,12 +842,12 @@ EOF
 # Test TopK.
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(raw) AS JSON FOR
-VIEW ov
+SELECT * FROM ov
 ----
 {
   "plans": [
     {
-      "id": "materialize.public.ov",
+      "id": "Explained Query",
       "plan": {
         "TopK": {
           "input": {
@@ -888,6 +869,16 @@ VIEW ov
                   }
                 ],
                 "keys": []
+              },
+              "access_strategy": {
+                "Index": [
+                  [
+                    {
+                      "User": 4
+                    },
+                    "FullScan"
+                  ]
+                ]
               }
             }
           },
@@ -906,7 +897,8 @@ VIEW ov
           ],
           "limit": 5,
           "offset": 0,
-          "monotonic": false
+          "monotonic": false,
+          "expected_group_size": null
         }
       }
     }
@@ -926,6 +918,9 @@ SELECT * FROM t ORDER BY b asc, a desc LIMIT 5
       "id": "Explained Query (fast path)",
       "plan": {
         "PeekExisting": [
+          {
+            "User": 1
+          },
           {
             "User": 4
           },
@@ -984,6 +979,16 @@ SELECT abs(min(a) - max(a)) FROM t
                           }
                         ],
                         "keys": []
+                      },
+                      "access_strategy": {
+                        "Index": [
+                          [
+                            {
+                              "User": 4
+                            },
+                            "FullScan"
+                          ]
+                        ]
                       }
                     }
                   },
@@ -1038,7 +1043,8 @@ SELECT abs(min(a) - max(a)) FROM t
                             "keys": [
                               []
                             ]
-                          }
+                          },
+                          "access_strategy": "UnknownOrLocal"
                         }
                       },
                       "inputs": [
@@ -1069,7 +1075,8 @@ SELECT abs(min(a) - max(a)) FROM t
                                               "keys": [
                                                 []
                                               ]
-                                            }
+                                            },
+                                            "access_strategy": "UnknownOrLocal"
                                           }
                                         },
                                         "outputs": []
@@ -1205,6 +1212,16 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
                           }
                         ],
                         "keys": []
+                      },
+                      "access_strategy": {
+                        "Index": [
+                          [
+                            {
+                              "User": 4
+                            },
+                            "FullScan"
+                          ]
+                        ]
                       }
                     }
                   },
@@ -1304,6 +1321,16 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                 }
                               ],
                               "keys": []
+                            },
+                            "access_strategy": {
+                              "Index": [
+                                [
+                                  {
+                                    "User": 4
+                                  },
+                                  "DifferentialJoin"
+                                ]
+                              ]
                             }
                           }
                         },
@@ -1352,6 +1379,16 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                               }
                                                             ],
                                                             "keys": []
+                                                          },
+                                                          "access_strategy": {
+                                                            "Index": [
+                                                              [
+                                                                {
+                                                                  "User": 4
+                                                                },
+                                                                "FullScan"
+                                                              ]
+                                                            ]
                                                           }
                                                         }
                                                       },
@@ -1398,7 +1435,8 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                           }
                                                         ],
                                                         "keys": []
-                                                      }
+                                                      },
+                                                      "access_strategy": "Persist"
                                                     }
                                                   },
                                                   "outputs": [
@@ -1422,6 +1460,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                 "unique_key": false,
                                                 "key_length": 0,
                                                 "arranged": false,
+                                                "cardinality": null,
                                                 "filters": {
                                                   "literal_equality": false,
                                                   "like": false,
@@ -1440,6 +1479,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                   "unique_key": false,
                                                   "key_length": 0,
                                                   "arranged": false,
+                                                  "cardinality": null,
                                                   "filters": {
                                                     "literal_equality": false,
                                                     "like": false,
@@ -1518,6 +1558,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                           "unique_key": true,
                           "key_length": 1,
                           "arranged": true,
+                          "cardinality": null,
                           "filters": {
                             "literal_equality": false,
                             "like": false,
@@ -1540,6 +1581,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                             "unique_key": false,
                             "key_length": 1,
                             "arranged": true,
+                            "cardinality": null,
                             "filters": {
                               "literal_equality": false,
                               "like": false,
@@ -1577,7 +1619,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                               "column_types": [
                                 {
                                   "scalar_type": "Int32",
-                                  "nullable": true
+                                  "nullable": false
                                 },
                                 {
                                   "scalar_type": "Int32",
@@ -1585,7 +1627,8 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                 }
                               ],
                               "keys": []
-                            }
+                            },
+                            "access_strategy": "UnknownOrLocal"
                           }
                         },
                         "keys": [
@@ -1623,7 +1666,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                             "column_types": [
                                                               {
                                                                 "scalar_type": "Int32",
-                                                                "nullable": true
+                                                                "nullable": false
                                                               },
                                                               {
                                                                 "scalar_type": "Int32",
@@ -1631,7 +1674,8 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                               }
                                                             ],
                                                             "keys": []
-                                                          }
+                                                          },
+                                                          "access_strategy": "UnknownOrLocal"
                                                         }
                                                       },
                                                       "outputs": [
@@ -1677,7 +1721,8 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                           }
                                                         ],
                                                         "keys": []
-                                                      }
+                                                      },
+                                                      "access_strategy": "Persist"
                                                     }
                                                   },
                                                   "outputs": [
@@ -1701,6 +1746,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                 "unique_key": false,
                                                 "key_length": 0,
                                                 "arranged": false,
+                                                "cardinality": null,
                                                 "filters": {
                                                   "literal_equality": false,
                                                   "like": false,
@@ -1719,6 +1765,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                   "unique_key": false,
                                                   "key_length": 0,
                                                   "arranged": false,
+                                                  "cardinality": null,
                                                   "filters": {
                                                     "literal_equality": false,
                                                     "like": false,
@@ -1797,6 +1844,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                           "unique_key": true,
                           "key_length": 1,
                           "arranged": true,
+                          "cardinality": null,
                           "filters": {
                             "literal_equality": false,
                             "like": false,
@@ -1819,6 +1867,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                             "unique_key": false,
                             "key_length": 1,
                             "arranged": false,
+                            "cardinality": null,
                             "filters": {
                               "literal_equality": false,
                               "like": false,
@@ -1881,6 +1930,16 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                       }
                     ],
                     "keys": []
+                  },
+                  "access_strategy": {
+                    "Index": [
+                      [
+                        {
+                          "User": 4
+                        },
+                        "FullScan"
+                      ]
+                    ]
                   }
                 }
               },
@@ -1907,7 +1966,8 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                           }
                         ],
                         "keys": []
-                      }
+                      },
+                      "access_strategy": "UnknownOrLocal"
                     }
                   },
                   "group_key": [
@@ -1942,7 +2002,8 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                 0
                               ]
                             ]
-                          }
+                          },
+                          "access_strategy": "UnknownOrLocal"
                         }
                       },
                       "keys": [
@@ -1983,7 +2044,8 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                   0
                                                 ]
                                               ]
-                                            }
+                                            },
+                                            "access_strategy": "UnknownOrLocal"
                                           }
                                         },
                                         {
@@ -2009,6 +2071,16 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                         }
                                                       ],
                                                       "keys": []
+                                                    },
+                                                    "access_strategy": {
+                                                      "Index": [
+                                                        [
+                                                          {
+                                                            "User": 7
+                                                          },
+                                                          "FullScan"
+                                                        ]
+                                                      ]
                                                     }
                                                   }
                                                 },
@@ -2066,6 +2138,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                               "unique_key": true,
                                               "key_length": 1,
                                               "arranged": true,
+                                              "cardinality": null,
                                               "filters": {
                                                 "literal_equality": false,
                                                 "like": false,
@@ -2088,6 +2161,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                 "unique_key": false,
                                                 "key_length": 1,
                                                 "arranged": false,
+                                                "cardinality": null,
                                                 "filters": {
                                                   "literal_equality": false,
                                                   "like": false,
@@ -2136,7 +2210,8 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                           "order_key": [],
                           "limit": 1,
                           "offset": 0,
-                          "monotonic": false
+                          "monotonic": false,
+                          "expected_group_size": null
                         }
                       },
                       "body": {
@@ -2168,7 +2243,8 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                       0
                                                     ]
                                                   ]
-                                                }
+                                                },
+                                                "access_strategy": "UnknownOrLocal"
                                               }
                                             },
                                             {
@@ -2194,7 +2270,8 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                             }
                                                           ],
                                                           "keys": []
-                                                        }
+                                                        },
+                                                        "access_strategy": "Persist"
                                                       }
                                                     },
                                                     "predicates": [
@@ -2251,6 +2328,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                   "unique_key": true,
                                                   "key_length": 1,
                                                   "arranged": true,
+                                                  "cardinality": null,
                                                   "filters": {
                                                     "literal_equality": false,
                                                     "like": false,
@@ -2273,6 +2351,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                     "unique_key": false,
                                                     "key_length": 1,
                                                     "arranged": false,
+                                                    "cardinality": null,
                                                     "filters": {
                                                       "literal_equality": false,
                                                       "like": false,
@@ -2321,7 +2400,8 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                               "order_key": [],
                               "limit": 1,
                               "offset": 0,
-                              "monotonic": false
+                              "monotonic": false,
+                              "expected_group_size": null
                             }
                           },
                           "body": {
@@ -2344,7 +2424,8 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                 }
                                               ],
                                               "keys": []
-                                            }
+                                            },
+                                            "access_strategy": "UnknownOrLocal"
                                           }
                                         },
                                         "keys": [
@@ -2381,7 +2462,8 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                       0
                                                     ]
                                                   ]
-                                                }
+                                                },
+                                                "access_strategy": "UnknownOrLocal"
                                               }
                                             },
                                             "inputs": [
@@ -2414,7 +2496,8 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                                         0
                                                                       ]
                                                                     ]
-                                                                  }
+                                                                  },
+                                                                  "access_strategy": "UnknownOrLocal"
                                                                 }
                                                               },
                                                               "outputs": [
@@ -2442,7 +2525,8 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                                   0
                                                                 ]
                                                               ]
-                                                            }
+                                                            },
+                                                            "access_strategy": "UnknownOrLocal"
                                                           }
                                                         }
                                                       ]
@@ -2504,7 +2588,8 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                       0
                                                     ]
                                                   ]
-                                                }
+                                                },
+                                                "access_strategy": "UnknownOrLocal"
                                               }
                                             },
                                             "inputs": [
@@ -2537,7 +2622,8 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                                         0
                                                                       ]
                                                                     ]
-                                                                  }
+                                                                  },
+                                                                  "access_strategy": "UnknownOrLocal"
                                                                 }
                                                               },
                                                               "outputs": [
@@ -2565,7 +2651,8 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                                   0
                                                                 ]
                                                               ]
-                                                            }
+                                                            },
+                                                            "access_strategy": "UnknownOrLocal"
                                                           }
                                                         }
                                                       ]
@@ -2630,6 +2717,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                             "unique_key": true,
                                             "key_length": 1,
                                             "arranged": true,
+                                            "cardinality": null,
                                             "filters": {
                                               "literal_equality": false,
                                               "like": false,
@@ -2651,6 +2739,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                             "unique_key": true,
                                             "key_length": 1,
                                             "arranged": true,
+                                            "cardinality": null,
                                             "filters": {
                                               "literal_equality": false,
                                               "like": false,
@@ -2674,6 +2763,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                             "unique_key": true,
                                             "key_length": 1,
                                             "arranged": true,
+                                            "cardinality": null,
                                             "filters": {
                                               "literal_equality": false,
                                               "like": false,
@@ -2695,6 +2785,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                             "unique_key": false,
                                             "key_length": 1,
                                             "arranged": true,
+                                            "cardinality": null,
                                             "filters": {
                                               "literal_equality": false,
                                               "like": false,
@@ -2718,6 +2809,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                             "unique_key": true,
                                             "key_length": 1,
                                             "arranged": true,
+                                            "cardinality": null,
                                             "filters": {
                                               "literal_equality": false,
                                               "like": false,
@@ -2739,6 +2831,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                             "unique_key": false,
                                             "key_length": 1,
                                             "arranged": true,
+                                            "cardinality": null,
                                             "filters": {
                                               "literal_equality": false,
                                               "like": false,
@@ -2774,7 +2867,9 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
   ],
   "sources": [
     {
-      "id": "materialize.public.mv",
+      "id": {
+        "User": 8
+      },
       "op": {
         "expressions": [],
         "predicates": [
@@ -2846,6 +2941,16 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                       }
                     ],
                     "keys": []
+                  },
+                  "access_strategy": {
+                    "Index": [
+                      [
+                        {
+                          "User": 4
+                        },
+                        "FullScan"
+                      ]
+                    ]
                   }
                 }
               },
@@ -2892,7 +2997,8 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                           }
                         ],
                         "keys": []
-                      }
+                      },
+                      "access_strategy": "UnknownOrLocal"
                     }
                   },
                   "keys": [
@@ -2929,7 +3035,8 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                     }
                                   ],
                                   "keys": []
-                                }
+                                },
+                                "access_strategy": "UnknownOrLocal"
                               }
                             },
                             {
@@ -2949,7 +3056,8 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                     }
                                   ],
                                   "keys": []
-                                }
+                                },
+                                "access_strategy": "UnknownOrLocal"
                               }
                             },
                             {
@@ -2973,7 +3081,8 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                             }
                                           ],
                                           "keys": []
-                                        }
+                                        },
+                                        "access_strategy": "UnknownOrLocal"
                                       }
                                     },
                                     "outputs": [
@@ -3018,6 +3127,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                     "unique_key": false,
                                     "key_length": 1,
                                     "arranged": true,
+                                    "cardinality": null,
                                     "filters": {
                                       "literal_equality": false,
                                       "like": false,
@@ -3039,6 +3149,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                     "unique_key": false,
                                     "key_length": 1,
                                     "arranged": true,
+                                    "cardinality": null,
                                     "filters": {
                                       "literal_equality": false,
                                       "like": false,
@@ -3062,6 +3173,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                     "unique_key": false,
                                     "key_length": 1,
                                     "arranged": true,
+                                    "cardinality": null,
                                     "filters": {
                                       "literal_equality": false,
                                       "like": false,
@@ -3083,6 +3195,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                     "unique_key": false,
                                     "key_length": 1,
                                     "arranged": true,
+                                    "cardinality": null,
                                     "filters": {
                                       "literal_equality": false,
                                       "like": false,
@@ -3106,6 +3219,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                     "unique_key": false,
                                     "key_length": 1,
                                     "arranged": true,
+                                    "cardinality": null,
                                     "filters": {
                                       "literal_equality": false,
                                       "like": false,
@@ -3127,6 +3241,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                     "unique_key": false,
                                     "key_length": 1,
                                     "arranged": true,
+                                    "cardinality": null,
                                     "filters": {
                                       "literal_equality": false,
                                       "like": false,
@@ -3185,6 +3300,16 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                             }
                                                           ],
                                                           "keys": []
+                                                        },
+                                                        "access_strategy": {
+                                                          "Index": [
+                                                            [
+                                                              {
+                                                                "User": 4
+                                                              },
+                                                              "FullScan"
+                                                            ]
+                                                          ]
                                                         }
                                                       }
                                                     },
@@ -3229,7 +3354,8 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                                 }
                                                               ],
                                                               "keys": []
-                                                            }
+                                                            },
+                                                            "access_strategy": "UnknownOrLocal"
                                                           }
                                                         },
                                                         "outputs": [
@@ -3280,6 +3406,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                   "unique_key": true,
                                                   "key_length": 1,
                                                   "arranged": true,
+                                                  "cardinality": null,
                                                   "filters": {
                                                     "literal_equality": false,
                                                     "like": false,
@@ -3302,6 +3429,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                     "unique_key": false,
                                                     "key_length": 1,
                                                     "arranged": false,
+                                                    "cardinality": null,
                                                     "filters": {
                                                       "literal_equality": false,
                                                       "like": false,
@@ -3344,6 +3472,16 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                             }
                                           ],
                                           "keys": []
+                                        },
+                                        "access_strategy": {
+                                          "Index": [
+                                            [
+                                              {
+                                                "User": 4
+                                              },
+                                              "FullScan"
+                                            ]
+                                          ]
                                         }
                                       }
                                     },
@@ -3411,7 +3549,8 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                     }
                                   ],
                                   "keys": []
-                                }
+                                },
+                                "access_strategy": "UnknownOrLocal"
                               }
                             },
                             "outputs": [
@@ -3486,6 +3625,16 @@ FROM
                       }
                     ],
                     "keys": []
+                  },
+                  "access_strategy": {
+                    "Index": [
+                      [
+                        {
+                          "User": 4
+                        },
+                        "FullScan"
+                      ]
+                    ]
                   }
                 }
               },
@@ -3512,7 +3661,8 @@ FROM
                           }
                         ],
                         "keys": []
-                      }
+                      },
+                      "access_strategy": "UnknownOrLocal"
                     }
                   },
                   "keys": [
@@ -3551,6 +3701,16 @@ FROM
                                             }
                                           ],
                                           "keys": []
+                                        },
+                                        "access_strategy": {
+                                          "Index": [
+                                            [
+                                              {
+                                                "User": 4
+                                              },
+                                              "DifferentialJoin"
+                                            ]
+                                          ]
                                         }
                                       }
                                     },
@@ -3587,7 +3747,8 @@ FROM
                                                               }
                                                             ],
                                                             "keys": []
-                                                          }
+                                                          },
+                                                          "access_strategy": "UnknownOrLocal"
                                                         }
                                                       },
                                                       "group_key": [
@@ -3618,7 +3779,8 @@ FROM
                                                       }
                                                     ],
                                                     "keys": []
-                                                  }
+                                                  },
+                                                  "access_strategy": "UnknownOrLocal"
                                                 }
                                               }
                                             ],
@@ -3632,6 +3794,7 @@ FROM
                                                     "unique_key": false,
                                                     "key_length": 0,
                                                     "arranged": false,
+                                                    "cardinality": null,
                                                     "filters": {
                                                       "literal_equality": false,
                                                       "like": false,
@@ -3650,6 +3813,7 @@ FROM
                                                       "unique_key": false,
                                                       "key_length": 0,
                                                       "arranged": false,
+                                                      "cardinality": null,
                                                       "filters": {
                                                         "literal_equality": false,
                                                         "like": false,
@@ -3724,6 +3888,7 @@ FROM
                                       "unique_key": true,
                                       "key_length": 1,
                                       "arranged": true,
+                                      "cardinality": null,
                                       "filters": {
                                         "literal_equality": false,
                                         "like": false,
@@ -3746,6 +3911,7 @@ FROM
                                         "unique_key": false,
                                         "key_length": 1,
                                         "arranged": true,
+                                        "cardinality": null,
                                         "filters": {
                                           "literal_equality": false,
                                           "like": false,
@@ -3813,7 +3979,8 @@ FROM
                                             }
                                           ],
                                           "keys": []
-                                        }
+                                        },
+                                        "access_strategy": "UnknownOrLocal"
                                       }
                                     },
                                     "keys": [
@@ -3859,7 +4026,8 @@ FROM
                                                                   }
                                                                 ],
                                                                 "keys": []
-                                                              }
+                                                              },
+                                                              "access_strategy": "UnknownOrLocal"
                                                             }
                                                           },
                                                           "outputs": [
@@ -3895,7 +4063,8 @@ FROM
                                                       }
                                                     ],
                                                     "keys": []
-                                                  }
+                                                  },
+                                                  "access_strategy": "UnknownOrLocal"
                                                 }
                                               }
                                             ],
@@ -3909,6 +4078,7 @@ FROM
                                                     "unique_key": false,
                                                     "key_length": 0,
                                                     "arranged": false,
+                                                    "cardinality": null,
                                                     "filters": {
                                                       "literal_equality": false,
                                                       "like": false,
@@ -3927,6 +4097,7 @@ FROM
                                                       "unique_key": false,
                                                       "key_length": 0,
                                                       "arranged": false,
+                                                      "cardinality": null,
                                                       "filters": {
                                                         "literal_equality": false,
                                                         "like": false,
@@ -4001,12 +4172,13 @@ FROM
                                       "unique_key": true,
                                       "key_length": 1,
                                       "arranged": true,
+                                      "cardinality": null,
                                       "filters": {
                                         "literal_equality": false,
                                         "like": false,
-                                        "is_null": true,
+                                        "is_null": false,
                                         "literal_inequality": 0,
-                                        "any_filter": false
+                                        "any_filter": true
                                       },
                                       "input": 1
                                     }
@@ -4023,12 +4195,13 @@ FROM
                                         "unique_key": false,
                                         "key_length": 1,
                                         "arranged": false,
+                                        "cardinality": null,
                                         "filters": {
                                           "literal_equality": false,
                                           "like": false,
-                                          "is_null": true,
+                                          "is_null": false,
                                           "literal_inequality": 0,
-                                          "any_filter": false
+                                          "any_filter": true
                                         },
                                         "input": 0
                                       }
@@ -4040,55 +4213,14 @@ FROM
                           },
                           "predicates": [
                             {
-                              "CallVariadic": {
-                                "func": "Or",
-                                "exprs": [
-                                  {
-                                    "CallBinary": {
-                                      "func": "NotEq",
-                                      "expr1": {
-                                        "Column": 0
-                                      },
-                                      "expr2": {
-                                        "Column": 4
-                                      }
-                                    }
-                                  },
-                                  {
-                                    "CallVariadic": {
-                                      "func": "And",
-                                      "exprs": [
-                                        {
-                                          "CallUnary": {
-                                            "func": {
-                                              "Not": null
-                                            },
-                                            "expr": {
-                                              "CallUnary": {
-                                                "func": {
-                                                  "IsNull": null
-                                                },
-                                                "expr": {
-                                                  "Column": 4
-                                                }
-                                              }
-                                            }
-                                          }
-                                        },
-                                        {
-                                          "CallUnary": {
-                                            "func": {
-                                              "IsNull": null
-                                            },
-                                            "expr": {
-                                              "Column": 0
-                                            }
-                                          }
-                                        }
-                                      ]
-                                    }
-                                  }
-                                ]
+                              "CallBinary": {
+                                "func": "NotEq",
+                                "expr1": {
+                                  "Column": 0
+                                },
+                                "expr2": {
+                                  "Column": 4
+                                }
                               }
                             }
                           ]
@@ -4149,6 +4281,16 @@ SELECT t1.a, t2.a FROM t as t1, t as t2
                           }
                         ],
                         "keys": []
+                      },
+                      "access_strategy": {
+                        "Index": [
+                          [
+                            {
+                              "User": 4
+                            },
+                            "FullScan"
+                          ]
+                        ]
                       }
                     }
                   },
@@ -4178,7 +4320,8 @@ SELECT t1.a, t2.a FROM t as t1, t as t2
                         }
                       ],
                       "keys": []
-                    }
+                    },
+                    "access_strategy": "UnknownOrLocal"
                   }
                 },
                 {
@@ -4194,7 +4337,8 @@ SELECT t1.a, t2.a FROM t as t1, t as t2
                         }
                       ],
                       "keys": []
-                    }
+                    },
+                    "access_strategy": "UnknownOrLocal"
                   }
                 }
               ],
@@ -4208,6 +4352,7 @@ SELECT t1.a, t2.a FROM t as t1, t as t2
                       "unique_key": false,
                       "key_length": 0,
                       "arranged": false,
+                      "cardinality": null,
                       "filters": {
                         "literal_equality": false,
                         "like": false,
@@ -4226,6 +4371,7 @@ SELECT t1.a, t2.a FROM t as t1, t as t2
                         "unique_key": false,
                         "key_length": 0,
                         "arranged": false,
+                        "cardinality": null,
                         "filters": {
                           "literal_equality": false,
                           "like": false,
@@ -4287,6 +4433,16 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                       }
                     ],
                     "keys": []
+                  },
+                  "access_strategy": {
+                    "Index": [
+                      [
+                        {
+                          "User": 4
+                        },
+                        "FullScan"
+                      ]
+                    ]
                   }
                 }
               },
@@ -4333,7 +4489,8 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                           }
                         ],
                         "keys": []
-                      }
+                      },
+                      "access_strategy": "UnknownOrLocal"
                     }
                   },
                   "keys": [
@@ -4367,7 +4524,8 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                                 }
                               ],
                               "keys": []
-                            }
+                            },
+                            "access_strategy": "UnknownOrLocal"
                           }
                         },
                         {
@@ -4387,7 +4545,8 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                                 }
                               ],
                               "keys": []
-                            }
+                            },
+                            "access_strategy": "UnknownOrLocal"
                           }
                         },
                         {
@@ -4411,7 +4570,8 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                                         }
                                       ],
                                       "keys": []
-                                    }
+                                    },
+                                    "access_strategy": "UnknownOrLocal"
                                   }
                                 },
                                 "outputs": [
@@ -4456,6 +4616,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                                 "unique_key": false,
                                 "key_length": 1,
                                 "arranged": true,
+                                "cardinality": null,
                                 "filters": {
                                   "literal_equality": false,
                                   "like": false,
@@ -4477,6 +4638,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                                 "unique_key": false,
                                 "key_length": 1,
                                 "arranged": true,
+                                "cardinality": null,
                                 "filters": {
                                   "literal_equality": false,
                                   "like": false,
@@ -4500,6 +4662,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                                 "unique_key": false,
                                 "key_length": 1,
                                 "arranged": true,
+                                "cardinality": null,
                                 "filters": {
                                   "literal_equality": false,
                                   "like": false,
@@ -4521,6 +4684,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                                 "unique_key": false,
                                 "key_length": 1,
                                 "arranged": true,
+                                "cardinality": null,
                                 "filters": {
                                   "literal_equality": false,
                                   "like": false,
@@ -4544,6 +4708,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                                 "unique_key": false,
                                 "key_length": 1,
                                 "arranged": true,
+                                "cardinality": null,
                                 "filters": {
                                   "literal_equality": false,
                                   "like": false,
@@ -4565,6 +4730,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                                 "unique_key": false,
                                 "key_length": 1,
                                 "arranged": true,
+                                "cardinality": null,
                                 "filters": {
                                   "literal_equality": false,
                                   "like": false,
@@ -4646,6 +4812,16 @@ WHERE a = c and d = e and b = f
                                 }
                               ],
                               "keys": []
+                            },
+                            "access_strategy": {
+                              "Index": [
+                                [
+                                  {
+                                    "User": 4
+                                  },
+                                  "DifferentialJoin"
+                                ]
+                              ]
                             }
                           }
                         },
@@ -4679,6 +4855,16 @@ WHERE a = c and d = e and b = f
                                 }
                               ],
                               "keys": []
+                            },
+                            "access_strategy": {
+                              "Index": [
+                                [
+                                  {
+                                    "User": 9
+                                  },
+                                  "DifferentialJoin"
+                                ]
+                              ]
                             }
                           }
                         },
@@ -4714,6 +4900,16 @@ WHERE a = c and d = e and b = f
                                     }
                                   ],
                                   "keys": []
+                                },
+                                "access_strategy": {
+                                  "Index": [
+                                    [
+                                      {
+                                        "User": 11
+                                      },
+                                      "FullScan"
+                                    ]
+                                  ]
                                 }
                               }
                             },
@@ -4807,6 +5003,7 @@ WHERE a = c and d = e and b = f
                           "unique_key": false,
                           "key_length": 1,
                           "arranged": true,
+                          "cardinality": null,
                           "filters": {
                             "literal_equality": false,
                             "like": false,
@@ -4829,6 +5026,7 @@ WHERE a = c and d = e and b = f
                             "unique_key": false,
                             "key_length": 1,
                             "arranged": true,
+                            "cardinality": null,
                             "filters": {
                               "literal_equality": false,
                               "like": false,
@@ -4853,6 +5051,7 @@ WHERE a = c and d = e and b = f
                             "unique_key": false,
                             "key_length": 2,
                             "arranged": false,
+                            "cardinality": null,
                             "filters": {
                               "literal_equality": false,
                               "like": false,
@@ -4983,6 +5182,18 @@ WHERE b = c and d = e
                                 }
                               ],
                               "keys": []
+                            },
+                            "access_strategy": {
+                              "Index": [
+                                [
+                                  {
+                                    "User": 12
+                                  },
+                                  {
+                                    "DeltaJoin": true
+                                  }
+                                ]
+                              ]
                             }
                           }
                         },
@@ -5016,6 +5227,26 @@ WHERE b = c and d = e
                                 }
                               ],
                               "keys": []
+                            },
+                            "access_strategy": {
+                              "Index": [
+                                [
+                                  {
+                                    "User": 9
+                                  },
+                                  {
+                                    "DeltaJoin": false
+                                  }
+                                ],
+                                [
+                                  {
+                                    "User": 10
+                                  },
+                                  {
+                                    "DeltaJoin": false
+                                  }
+                                ]
+                              ]
                             }
                           }
                         },
@@ -5054,6 +5285,18 @@ WHERE b = c and d = e
                                 }
                               ],
                               "keys": []
+                            },
+                            "access_strategy": {
+                              "Index": [
+                                [
+                                  {
+                                    "User": 11
+                                  },
+                                  {
+                                    "DeltaJoin": false
+                                  }
+                                ]
+                              ]
                             }
                           }
                         },
@@ -5099,6 +5342,7 @@ WHERE b = c and d = e
                             "unique_key": false,
                             "key_length": 1,
                             "arranged": true,
+                            "cardinality": null,
                             "filters": {
                               "literal_equality": false,
                               "like": false,
@@ -5120,6 +5364,7 @@ WHERE b = c and d = e
                             "unique_key": false,
                             "key_length": 1,
                             "arranged": true,
+                            "cardinality": null,
                             "filters": {
                               "literal_equality": false,
                               "like": false,
@@ -5143,6 +5388,7 @@ WHERE b = c and d = e
                             "unique_key": false,
                             "key_length": 1,
                             "arranged": true,
+                            "cardinality": null,
                             "filters": {
                               "literal_equality": false,
                               "like": false,
@@ -5164,6 +5410,7 @@ WHERE b = c and d = e
                             "unique_key": false,
                             "key_length": 1,
                             "arranged": true,
+                            "cardinality": null,
                             "filters": {
                               "literal_equality": false,
                               "like": false,
@@ -5187,6 +5434,7 @@ WHERE b = c and d = e
                             "unique_key": false,
                             "key_length": 1,
                             "arranged": true,
+                            "cardinality": null,
                             "filters": {
                               "literal_equality": false,
                               "like": false,
@@ -5208,6 +5456,7 @@ WHERE b = c and d = e
                             "unique_key": false,
                             "key_length": 1,
                             "arranged": true,
+                            "cardinality": null,
                             "filters": {
                               "literal_equality": false,
                               "like": false,
@@ -5274,5 +5523,114 @@ WHERE b = c and d = e
     }
   ],
   "sources": []
+}
+EOF
+
+statement ok
+CREATE TABLE t2(s string, like_pat string, regex_pat string);
+
+statement ok
+INSERT INTO t2 VALUES ('abc', 'a%', 'a.*'), ('ABC', 'a%', 'a.*'), ('ccc', 'a%', 'a.*');
+
+# Our Regex wrapper struct's serde is currently not serializing the Regex itself, but all info should be visible in
+# the other fields.
+
+query T multiline
+EXPLAIN AS JSON
+SELECT s FROM t2 WHERE s ~ 'a.*';
+----
+{
+  "plans": [
+    {
+      "id": "Explained Query",
+      "plan": {
+        "Project": {
+          "input": {
+            "Filter": {
+              "input": {
+                "Get": {
+                  "id": {
+                    "Global": {
+                      "User": 13
+                    }
+                  },
+                  "typ": {
+                    "column_types": [
+                      {
+                        "scalar_type": "String",
+                        "nullable": true
+                      },
+                      {
+                        "scalar_type": "String",
+                        "nullable": true
+                      },
+                      {
+                        "scalar_type": "String",
+                        "nullable": true
+                      }
+                    ],
+                    "keys": []
+                  },
+                  "access_strategy": "Persist"
+                }
+              },
+              "predicates": [
+                {
+                  "CallUnary": {
+                    "func": {
+                      "IsRegexpMatch": {
+                        "pattern": "a.*",
+                        "case_insensitive": false
+                      }
+                    },
+                    "expr": {
+                      "Column": 0
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "outputs": [
+            0
+          ]
+        }
+      }
+    }
+  ],
+  "sources": [
+    {
+      "id": {
+        "User": 13
+      },
+      "op": {
+        "expressions": [],
+        "predicates": [
+          [
+            1,
+            {
+              "CallUnary": {
+                "func": {
+                  "IsRegexpMatch": {
+                    "pattern": "a.*",
+                    "case_insensitive": false
+                  }
+                },
+                "expr": {
+                  "Column": 0
+                }
+              }
+            }
+          ]
+        ],
+        "projection": [
+          0,
+          1,
+          2
+        ],
+        "input_arity": 3
+      }
+    }
+  ]
 }
 EOF

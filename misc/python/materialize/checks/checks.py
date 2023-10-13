@@ -7,60 +7,69 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import List
+from random import Random
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.executors import Executor
 from materialize.util import MzVersion
 
+TESTDRIVE_NOP = "$ nop"
+
 
 class Check:
-    def __init__(self, base_version: MzVersion) -> None:
+    def __init__(self, base_version: MzVersion, rng: Random | None) -> None:
         self.base_version = base_version
-        self._initialize = self.initialize()
-        self._manipulate = self.manipulate()
-        self._validate = self.validate()
+        self.rng = rng
 
-    def _can_run(self) -> bool:
+    def _can_run(self, e: Executor) -> bool:
         return True
 
     def initialize(self) -> Testdrive:
-        return Testdrive("")
+        return Testdrive(TESTDRIVE_NOP)
 
-    def manipulate(self) -> List[Testdrive]:
+    def manipulate(self) -> list[Testdrive]:
         assert False
 
     def validate(self) -> Testdrive:
         assert False
 
     def start_initialize(self, e: Executor) -> None:
-        if self._can_run():
+        if self._can_run(e):
+            self.current_version = e.current_mz_version
+            self._initialize = self.initialize()
             self._initialize.execute(e)
 
     def join_initialize(self, e: Executor) -> None:
-        if self._can_run():
+        if self._can_run(e):
             self._initialize.join(e)
 
     def start_manipulate(self, e: Executor, phase: int) -> None:
-        if self._can_run():
+        if self._can_run(e):
+            self.current_version = e.current_mz_version
+            self._manipulate = self.manipulate()
+            assert (
+                len(self._manipulate) == 2
+            ), f"manipulate() should return a list with exactly 2 elements, but actually returns {len(self._manipulate)} elements"
             self._manipulate[phase].execute(e)
 
     def join_manipulate(self, e: Executor, phase: int) -> None:
-        if self._can_run():
+        if self._can_run(e):
             self._manipulate[phase].join(e)
 
     def start_validate(self, e: Executor) -> None:
-        if self._can_run():
+        if self._can_run(e):
+            self.current_version = e.current_mz_version
+            self._validate = self.validate()
             self._validate.execute(e)
 
     def join_validate(self, e: Executor) -> None:
-        if self._can_run():
+        if self._can_run(e):
             self._validate.join(e)
 
 
 class CheckDisabled(Check):
-    def manipulate(self) -> List[Testdrive]:
-        return [Testdrive(""), Testdrive("")]
+    def manipulate(self) -> list[Testdrive]:
+        return [Testdrive(TESTDRIVE_NOP), Testdrive(TESTDRIVE_NOP)]
 
     def validate(self) -> Testdrive:
-        return Testdrive("")
+        return Testdrive(TESTDRIVE_NOP)

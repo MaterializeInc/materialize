@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="545" height="179">
+   <polygon points="9 17 1 13 1 21"/>
+   <polygon points="17 17 9 13 9 21"/>
+   <rect x="31" y="3" width="80" height="32" rx="10"/>
+   <rect x="29"
+         y="1"
+         width="80"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="39" y="21">EXPLAIN</text>
+   <rect x="131" y="3" width="106" height="32" rx="10"/>
+   <rect x="129"
+         y="1"
+         width="106"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="139" y="21">TIMESTAMP</text>
+   <rect x="277" y="35" width="40" height="32" rx="10"/>
+   <rect x="275"
+         y="33"
+         width="40"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="285" y="53">AS</text>
+   <rect x="357" y="35" width="56" height="32" rx="10"/>
+   <rect x="355"
+         y="33"
+         width="56"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="365" y="53">TEXT</text>
+   <rect x="357" y="79" width="58" height="32" rx="10"/>
+   <rect x="355"
+         y="77"
+         width="58"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="365" y="97">JSON</text>
+   <rect x="475" y="3" width="48" height="32" rx="10"/>
+   <rect x="473"
+         y="1"
+         width="48"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="483" y="21">FOR</text>
+   <rect x="421" y="145" width="96" height="32"/>
+   <rect x="419" y="143" width="96" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="429" y="163">select_stmt</text>
+   <path class="line"
+         d="m17 17 h2 m0 0 h10 m80 0 h10 m0 0 h10 m106 0 h10 m20 0 h10 m0 0 h168 m-198 0 h20 m178 0 h20 m-218 0 q10 0 10 10 m198 0 q0 -10 10 -10 m-208 10 v12 m198 0 v-12 m-198 12 q0 10 10 10 m178 0 q10 0 10 -10 m-188 10 h10 m40 0 h10 m20 0 h10 m56 0 h10 m0 0 h2 m-98 0 h20 m78 0 h20 m-118 0 q10 0 10 10 m98 0 q0 -10 10 -10 m-108 10 v24 m98 0 v-24 m-98 24 q0 10 10 10 m78 0 q10 0 10 -10 m-88 10 h10 m58 0 h10 m40 -76 h10 m48 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-146 142 l2 0 m2 0 l2 0 m2 0 l2 0 m2 0 h10 m96 0 h10 m3 0 h-3"/>
+   <polygon points="535 159 543 155 543 163"/>
+   <polygon points="535 159 527 155 527 163"/>
+</svg>

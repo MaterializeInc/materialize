@@ -12,142 +12,82 @@
 // https://github.com/tokio-rs/prost/issues/237
 // #![allow(missing_docs)]
 
+use std::any::Any;
 use std::collections::BTreeMap;
+use std::convert::Infallible;
 use std::fmt::Debug;
-use std::time::Duration;
-
-use async_trait::async_trait;
-use differential_dataflow::difference::Semigroup;
-use futures::stream::LocalBoxStream;
-use prometheus::core::{AtomicI64, AtomicU64};
-use serde::{Deserialize, Serialize};
 use std::rc::Rc;
-use timely::dataflow::operators::Capability;
-use timely::progress::{Antichain, Timestamp};
-use timely::scheduling::activate::SyncActivator;
+use std::sync::Arc;
 
+use differential_dataflow::Collection;
 use mz_expr::PartitionId;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
-use mz_repr::{GlobalId, Row};
-use mz_storage_client::types::connections::ConnectionContext;
-use mz_storage_client::types::errors::{DecodeError, SourceErrorDetails};
-use mz_storage_client::types::sources::encoding::SourceDataEncoding;
-use mz_storage_client::types::sources::{MzOffset, SourceTimestamp};
+use mz_repr::{Diff, GlobalId, Row};
+use mz_rocksdb::RocksDBInstanceMetrics;
+use mz_storage_operators::metrics::BackpressureMetrics;
+use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::errors::{DecodeError, SourceErrorDetails};
+use mz_storage_types::sources::{MzOffset, SourceTimestamp};
+use prometheus::core::{AtomicF64, AtomicI64, AtomicU64};
+use serde::{Deserialize, Serialize};
+use timely::dataflow::{Scope, Stream};
+use timely::progress::Antichain;
 
-use crate::source::metrics::SourceBaseMetrics;
-use crate::source::source_reader_pipeline::HealthStatus;
+use crate::render::sources::OutputIndex;
+use crate::source::metrics::{SourceBaseMetrics, UpsertSharedMetrics};
+use crate::source::RawSourceCreationConfig;
 
-/// Extension trait to the SourceConnection trait that defines how to intantiate a particular
-/// connetion into a reader and offset committer
-pub trait SourceConnectionBuilder {
-    type Reader: SourceReader + 'static;
-    type OffsetCommitter: OffsetCommitter<<Self::Reader as SourceReader>::Time>
-        + Send
-        + Sync
-        + 'static;
-
-    /// Turn this connection into a new source reader.
-    ///
-    /// This function returns the source reader and its corresponding offset committed.
-    fn into_reader(
-        self,
-        source_name: String,
-        source_id: GlobalId,
-        worker_id: usize,
-        worker_count: usize,
-        consumer_activator: SyncActivator,
-        data_capability: Capability<<Self::Reader as SourceReader>::Time>,
-        upper_capability: Capability<<Self::Reader as SourceReader>::Time>,
-        resume_upper: Antichain<<Self::Reader as SourceReader>::Time>,
-        encoding: SourceDataEncoding,
-        metrics: crate::source::metrics::SourceBaseMetrics,
-        connection_context: ConnectionContext,
-    ) -> Result<(Self::Reader, Self::OffsetCommitter), anyhow::Error>;
-}
-
-/// This trait defines the interface between Materialize and external sources,
-/// and must be implemented for every new kind of source.
-///
-/// ## Contract between [`SourceReader`] and the ingestion framework
-///
-/// A source reader uses updates emitted from
-/// [`SourceReader::next`]/[`SourceReader::get_next_message`] to update the
-/// ingestion framework about new updates retrieved from the external system and
-/// about its internal state.
-///
-/// The framework will spawn a [`SourceReader`] on each timely worker. It is the
-/// responsibility of the reader to figure out which of the partitions (if any)
-/// it is responsible for reading using [`crate::source::responsible_for`].
-#[async_trait(?Send)]
-pub trait SourceReader {
+/// Describes a source that can render itself in a timely scope.
+pub trait SourceRender {
     type Key: timely::Data + MaybeLength;
     type Value: timely::Data + MaybeLength;
     type Time: SourceTimestamp;
-    type Diff: timely::Data + Semigroup;
 
-    /// Returns the next message available from the source.
-    async fn next(
-        &mut self,
-        timestamp_granularity: Duration,
-    ) -> Option<SourceMessageType<Self::Key, Self::Value, Self::Time, Self::Diff>> {
-        // Compatiblity implementation that delegates to the deprecated [Self::get_next_method]
-        // call. Once all source implementations have been transitioned to implement
-        // [SourceReader::next] directly this provided implementation should be removed and the
-        // method should become a required method.
-        loop {
-            match self.get_next_message() {
-                NextMessage::Ready(msg) => return Some(msg),
-                // There was a temporary hiccup in getting messages, check again asap.
-                NextMessage::TransientDelay => tokio::time::sleep(Duration::from_millis(1)).await,
-                // There were no new messages, check again after a delay
-                NextMessage::Pending => tokio::time::sleep(timestamp_granularity).await,
-                NextMessage::Finished => return None,
-            }
-        }
-    }
-
-    /// Returns the next message available from the source.
+    /// Renders the source in the provided timely scope.
     ///
-    /// # Deprecated
+    /// The `resume_uppers` stream can be used by the source to observe the overall progress of the
+    /// ingestion. When a frontier appears in this stream the source implementation can be certain
+    /// that future ingestion instances will request to read the external data only at times beyond
+    /// that frontier. Therefore, the source implementation can react to this stream by e.g
+    /// committing offsets upstream or advancing the LSN of a replication slot. It is safe to
+    /// ignore this argument.
     ///
-    /// Source implementation should implement the async [SourceReader::next] method instead.
-    fn get_next_message(&mut self) -> NextMessage<Self::Key, Self::Value, Self::Time, Self::Diff> {
-        NextMessage::Pending
-    }
-
-    /// Returns an adapter that treats the source as a stream.
+    /// Rendering a source is expected to return four things.
     ///
-    /// The stream produces the messages that would be produced by repeated calls to `next`.
-    fn into_stream<'a>(
-        mut self,
-        timestamp_granularity: Duration,
-    ) -> LocalBoxStream<'a, SourceMessageType<Self::Key, Self::Value, Self::Time, Self::Diff>>
-    where
-        Self: Sized + 'a,
-    {
-        Box::pin(async_stream::stream!({
-            while let Some(msg) = self.next(timestamp_granularity).await {
-                yield msg;
-            }
-        }))
-    }
-}
-
-/// A sibling trait to `SourceReader` that represents a source's ability to commit the frontier
-/// that all updates that materialize may need in the future will be beyond of.
-#[async_trait]
-pub trait OffsetCommitter<Time: SourceTimestamp> {
-    /// Commit the given frontier upstream. When this method is called permission is given to the
-    /// source to delete all updates that are not beyond this frontier and the system promises to
-    /// never request them again.
-    async fn commit_offsets(&self, offsets: Antichain<Time>) -> Result<(), anyhow::Error>;
-}
-
-pub enum NextMessage<Key, Value, Time: Timestamp, Diff> {
-    Ready(SourceMessageType<Key, Value, Time, Diff>),
-    Pending,
-    TransientDelay,
-    Finished,
+    /// First, a source must produce a collection that is produced by the rendered dataflow and
+    /// must contain *definite*[^1] data for all times beyond the resumption frontier.
+    ///
+    /// Second, a source may produce an optional progress stream that will be used to drive
+    /// reclocking. This is useful for sources that can query the highest offsets of the external
+    /// source before reading the data for those offsets. In those cases it is preferable to
+    /// produce this additional stream.
+    ///
+    /// Third, a source must produce a stream of health status updates.
+    ///
+    /// Finally, the source is expected to return an opaque token that when dropped will cause the
+    /// source to immediately drop all capabilities and advance its frontier to the empty antichain.
+    ///
+    /// [^1] <https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20210831_correctness.md#describing-definite-data>
+    fn render<G: Scope<Timestamp = Self::Time>>(
+        self,
+        scope: &mut G,
+        config: RawSourceCreationConfig,
+        connection_context: ConnectionContext,
+        resume_uppers: impl futures::Stream<Item = Antichain<Self::Time>> + 'static,
+        start_signal: impl std::future::Future<Output = ()> + 'static,
+    ) -> (
+        Collection<
+            G,
+            (
+                usize,
+                Result<SourceMessage<Self::Key, Self::Value>, SourceReaderError>,
+            ),
+            Diff,
+        >,
+        Option<Stream<G, Infallible>>,
+        Stream<G, (OutputIndex, HealthStatusUpdate)>,
+        Rc<dyn Any>,
+    );
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -156,59 +96,72 @@ pub struct HealthStatusUpdate {
     pub should_halt: bool,
 }
 
-/// A wrapper around [`SourceMessage`] that allows [`SourceReader`]'s to
-/// communicate additional "maintenance" messages.
-#[derive(Debug)]
-pub enum SourceMessageType<Key, Value, Time: Timestamp, Diff> {
-    /// A source message
-    Message(
-        Result<SourceMessage<Key, Value>, SourceReaderError>,
-        Capability<Time>,
-        Diff,
-    ),
-    /// Information about the source status
-    SourceStatus(HealthStatusUpdate),
+/// NB: we derive Ord here, so the enum order matters. Generally, statuses later in the list
+/// take precedence over earlier ones: so if one worker is stalled, we'll consider the entire
+/// source to be stalled.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub enum HealthStatus {
+    Starting,
+    Running,
+    StalledWithError { error: String, hint: Option<String> },
 }
 
-impl<Key, Value, Time: Timestamp, Diff> SourceMessageType<Key, Value, Time, Diff> {
-    pub fn status(update: HealthStatus) -> Self {
-        SourceMessageType::SourceStatus(HealthStatusUpdate {
+impl HealthStatus {
+    pub fn name(&self) -> &'static str {
+        match self {
+            HealthStatus::Starting => "starting",
+            HealthStatus::Running => "running",
+            HealthStatus::StalledWithError { .. } => "stalled",
+        }
+    }
+
+    pub fn error(&self) -> Option<&str> {
+        match self {
+            HealthStatus::Starting | HealthStatus::Running => None,
+            HealthStatus::StalledWithError { error, .. } => Some(error),
+        }
+    }
+
+    pub fn hint(&self) -> Option<&str> {
+        match self {
+            HealthStatus::Starting | HealthStatus::Running => None,
+            HealthStatus::StalledWithError { error: _, hint } => hint.as_deref(),
+        }
+    }
+}
+
+impl HealthStatusUpdate {
+    /// Generates a non-halting [`HealthStatusUpdate`] with `update`.
+    pub(crate) fn status(update: HealthStatus) -> Self {
+        HealthStatusUpdate {
             update,
             should_halt: false,
-        })
-    }
-}
-
-#[derive(Clone)]
-pub struct ByteStream {
-    /// The underlying asynchronous stream
-    pub stream: Rc<LocalBoxStream<'static, Vec<u8>>>,
-    /// The expected size of this stream in bytes. This is only an estimation and no assumption
-    /// should be based on the accuracy of this value.
-    pub size_hint: Option<usize>,
-}
-
-impl ByteStream {
-    pub fn new<S>(stream: S, size_hint: Option<usize>) -> Self
-    where
-        S: futures::Stream<Item = Vec<u8>> + 'static,
-    {
-        Self {
-            stream: Rc::new(Box::pin(stream)),
-            size_hint,
-        }
-    }
-    pub fn from_vec(data: Vec<u8>) -> Self {
-        Self {
-            size_hint: Some(data.len()),
-            stream: Rc::new(Box::pin(futures::stream::iter([data]))),
         }
     }
 }
 
-impl MaybeLength for ByteStream {
-    fn len(&self) -> Option<usize> {
-        self.size_hint
+impl crate::healthcheck::HealthStatus for HealthStatusUpdate {
+    fn name(&self) -> &'static str {
+        self.update.name()
+    }
+    fn error(&self) -> Option<&str> {
+        self.update.error()
+    }
+    fn hint(&self) -> Option<&str> {
+        self.update.hint()
+    }
+    fn should_halt(&self) -> bool {
+        self.should_halt
+    }
+    fn can_transition_from(&self, other: Option<&Self>) -> bool {
+        if let Some(other) = other {
+            self.update != other.update
+        } else {
+            true
+        }
+    }
+    fn starting() -> Self {
+        Self::status(HealthStatus::Starting)
     }
 }
 
@@ -216,20 +169,12 @@ impl MaybeLength for ByteStream {
 /// conversion to Message.
 #[derive(Debug, Clone)]
 pub struct SourceMessage<Key, Value> {
-    /// The output stream this message belongs to. Later in the pipeline the stream is partitioned
-    /// based on this value and is fed to the appropriate source exports
-    pub output: usize,
-    /// The time that an external system first observed the message
-    ///
-    /// Milliseconds since the unix epoch
-    pub upstream_time_millis: Option<i64>,
     /// The message key
     pub key: Key,
     /// The message value
     pub value: Value,
-    /// Headers, if the source is configured to pass them along. If it is, but there are none, it
-    /// passes `Some([])`
-    pub headers: Option<Vec<(String, Option<Vec<u8>>)>>,
+    /// Additional metadata columns requested by the user
+    pub metadata: Row,
 }
 
 /// A record produced by a source
@@ -239,17 +184,12 @@ pub struct SourceOutput<K, V> {
     pub key: K,
     /// The record's value
     pub value: V,
-    /// The position in the partition described by the `partition` in the source
-    /// (e.g., Kafka offset, file line number, monotonic increasing
-    /// number, etc.)
-    pub position: MzOffset,
-    /// The time the record was created in the upstream system, as milliseconds since the epoch
-    pub upstream_time_millis: Option<i64>,
-    /// The partition of this message, present iff the partition comes from Kafka
-    pub partition: PartitionId,
-    /// Headers, if the source is configured to pass them along. If it is, but there are none, it
-    /// passes `Some([])`
-    pub headers: Option<Vec<(String, Option<Vec<u8>>)>>,
+    /// Additional metadata columns requested by the user
+    pub metadata: Row,
+    /// The offset position in the partition of a kafka source. This is field is on its way out and
+    /// its only valid use is in the upsert operator. Do NOT use it in any new place!
+    // TODO(petrosagg): remove this field
+    pub position_for_upsert: MzOffset,
 }
 
 impl<K, V> SourceOutput<K, V> {
@@ -257,18 +197,14 @@ impl<K, V> SourceOutput<K, V> {
     pub fn new(
         key: K,
         value: V,
-        position: MzOffset,
-        upstream_time_millis: Option<i64>,
-        partition: PartitionId,
-        headers: Option<Vec<(String, Option<Vec<u8>>)>>,
+        metadata: Row,
+        position_for_upsert: MzOffset,
     ) -> SourceOutput<K, V> {
         SourceOutput {
             key,
             value,
-            position,
-            upstream_time_millis,
-            partition,
-            headers,
+            metadata,
+            position_for_upsert,
         }
     }
 }
@@ -282,20 +218,16 @@ pub struct DecodeResult {
     /// differential `diff` value for this value, if the value
     /// is present and not and error.
     pub value: Option<Result<Row, DecodeError>>,
-    /// The index of the decoded value in the stream
-    pub position: MzOffset,
-    /// The time the record was created in the upstream system, as milliseconds since the epoch
-    pub upstream_time_millis: Option<i64>,
-    /// The partition this record came from
-    pub partition: PartitionId,
-    /// If this is a Kafka stream, the appropriate metadata
-    // TODO(bwm): This should probably be statically different for different streams, or we should
-    // propagate whether metadata is requested into the decoder
+    /// Additional metadata requested by the user
     pub metadata: Row,
+    /// The offset position in the partition of a kafka source. This is field is on its way out and
+    /// its only valid use is in the upsert operator. Do NOT use it in any new place!
+    // TODO(petrosagg): remove this field
+    pub position_for_upsert: MzOffset,
 }
 
 /// A structured error for `SourceReader::get_next_message` implementors.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceReaderError {
     pub inner: SourceErrorDetails,
 }
@@ -319,17 +251,13 @@ pub struct SourcePersistSinkMetrics {
     pub(crate) error_inserts: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) error_retractions: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub(crate) processed_batches: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-
-    // TODO(guswynn): consider if this metric (and others) should be put into `StorageState`...
-    pub(crate) enable_multi_worker_storage_persist_sink:
-        DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
 }
 
 impl SourcePersistSinkMetrics {
     /// Initialises source metrics used in the `persist_sink`.
     pub fn new(
         base: &SourceBaseMetrics,
-        source_id: GlobalId,
+        _source_id: GlobalId,
         parent_source_id: GlobalId,
         worker_id: usize,
         shard_id: &mz_persist_client::ShardId,
@@ -337,19 +265,11 @@ impl SourcePersistSinkMetrics {
     ) -> SourcePersistSinkMetrics {
         let shard = shard_id.to_string();
         SourcePersistSinkMetrics {
-            enable_multi_worker_storage_persist_sink: base
-                .source_specific
-                .enable_multi_worker_storage_persist_sink
-                .get_delete_on_drop_gauge(vec![
-                    source_id.to_string(),
-                    worker_id.to_string(),
-                    parent_source_id.to_string(),
-                    output_index.to_string(),
-                ]),
             progress: base.source_specific.progress.get_delete_on_drop_gauge(vec![
                 parent_source_id.to_string(),
                 output_index.to_string(),
                 shard.clone(),
+                worker_id.to_string(),
             ]),
             row_inserts: base
                 .source_specific
@@ -358,6 +278,7 @@ impl SourcePersistSinkMetrics {
                     parent_source_id.to_string(),
                     output_index.to_string(),
                     shard.clone(),
+                    worker_id.to_string(),
                 ]),
             row_retractions: base
                 .source_specific
@@ -366,6 +287,7 @@ impl SourcePersistSinkMetrics {
                     parent_source_id.to_string(),
                     output_index.to_string(),
                     shard.clone(),
+                    worker_id.to_string(),
                 ]),
             error_inserts: base
                 .source_specific
@@ -374,6 +296,7 @@ impl SourcePersistSinkMetrics {
                     parent_source_id.to_string(),
                     output_index.to_string(),
                     shard.clone(),
+                    worker_id.to_string(),
                 ]),
             error_retractions: base
                 .source_specific
@@ -382,6 +305,7 @@ impl SourcePersistSinkMetrics {
                     parent_source_id.to_string(),
                     output_index.to_string(),
                     shard.clone(),
+                    worker_id.to_string(),
                 ]),
             processed_batches: base
                 .source_specific
@@ -390,6 +314,7 @@ impl SourcePersistSinkMetrics {
                     parent_source_id.to_string(),
                     output_index.to_string(),
                     shard,
+                    worker_id.to_string(),
                 ]),
         }
     }
@@ -530,8 +455,6 @@ impl PartitionMetrics {
 
 /// Source reader operator specific Prometheus metrics
 pub struct SourceReaderMetrics {
-    /// Per-partition Prometheus metrics.
-    pub(crate) partition_metrics: BTreeMap<PartitionId, SourceReaderPartitionMetrics>,
     source_id: GlobalId,
     base_metrics: SourceBaseMetrics,
 }
@@ -540,46 +463,14 @@ impl SourceReaderMetrics {
     /// Initialises source metrics for a given (source_id, worker_id)
     pub fn new(base: &SourceBaseMetrics, source_id: GlobalId) -> SourceReaderMetrics {
         SourceReaderMetrics {
-            partition_metrics: Default::default(),
             source_id,
             base_metrics: base.clone(),
         }
     }
 
-    /// Log updates to which offsets / timestamps read up to.
-    pub fn metrics_for_partition(&mut self, pid: &PartitionId) -> &SourceReaderPartitionMetrics {
-        self.partition_metrics
-            .entry(pid.clone())
-            .or_insert_with(|| {
-                SourceReaderPartitionMetrics::new(&self.base_metrics, self.source_id, pid)
-            })
-    }
-
     /// Get metrics struct for offset committing.
     pub fn offset_commit_metrics(&self) -> OffsetCommitMetrics {
         OffsetCommitMetrics::new(&self.base_metrics, self.source_id)
-    }
-}
-
-/// Partition-specific metrics, recorded to both Prometheus and a system table
-pub struct SourceReaderPartitionMetrics {
-    /// The offset-domain resume_upper for a source.
-    pub(crate) source_resume_upper: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-}
-
-impl SourceReaderPartitionMetrics {
-    /// Initialises partition metrics for a given (source_id, partition_id)
-    pub fn new(
-        base_metrics: &SourceBaseMetrics,
-        source_id: GlobalId,
-        partition_id: &PartitionId,
-    ) -> SourceReaderPartitionMetrics {
-        let base = &base_metrics.partition_specific;
-        SourceReaderPartitionMetrics {
-            source_resume_upper: base
-                .source_resume_upper
-                .get_delete_on_drop_gauge(vec![source_id.to_string(), partition_id.to_string()]),
-        }
     }
 }
 
@@ -597,6 +488,120 @@ impl OffsetCommitMetrics {
             offset_commit_failures: base
                 .offset_commit_failures
                 .get_delete_on_drop_counter(vec![source_id.to_string()]),
+        }
+    }
+}
+
+/// Metrics for the `upsert` operator.
+pub struct UpsertMetrics {
+    pub(crate) rehydration_latency: DeleteOnDropGauge<'static, AtomicF64, Vec<String>>,
+    pub(crate) rehydration_total: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) rehydration_updates: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) rocksdb_autospill_in_use: Arc<DeleteOnDropGauge<'static, AtomicU64, Vec<String>>>,
+
+    pub(crate) merge_snapshot_updates: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) merge_snapshot_inserts: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) merge_snapshot_deletes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) upsert_inserts: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) upsert_updates: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) upsert_deletes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) multi_get_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) multi_get_result_bytes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) multi_get_result_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) multi_put_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+
+    pub(crate) legacy_value_errors: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+
+    pub(crate) shared: Arc<UpsertSharedMetrics>,
+    pub(crate) rocksdb_shared: Arc<mz_rocksdb::RocksDBSharedMetrics>,
+    pub(crate) rocksdb_instance_metrics: Arc<mz_rocksdb::RocksDBInstanceMetrics>,
+    // `UpsertMetrics` keeps a reference (through `Arc`'s) to backpressure metrics, so that
+    // they are not dropped when the `persist_source` operator is dropped.
+    _backpressure_metrics: Option<BackpressureMetrics>,
+}
+
+impl UpsertMetrics {
+    pub fn new(
+        base_metrics: &SourceBaseMetrics,
+        source_id: GlobalId,
+        worker_id: usize,
+        backpressure_metrics: Option<BackpressureMetrics>,
+    ) -> Self {
+        let base = &base_metrics.upsert_specific;
+        let source_id_s = source_id.to_string();
+        let worker_id = worker_id.to_string();
+        Self {
+            rehydration_latency: base
+                .rehydration_latency
+                .get_delete_on_drop_gauge(vec![source_id_s.clone(), worker_id.clone()]),
+            rehydration_total: base
+                .rehydration_total
+                .get_delete_on_drop_gauge(vec![source_id_s.clone(), worker_id.clone()]),
+            rehydration_updates: base
+                .rehydration_updates
+                .get_delete_on_drop_gauge(vec![source_id_s.clone(), worker_id.clone()]),
+            rocksdb_autospill_in_use: Arc::new(
+                base.rocksdb_autospill_in_use
+                    .get_delete_on_drop_gauge(vec![source_id_s.clone(), worker_id.clone()]),
+            ),
+            merge_snapshot_updates: base
+                .merge_snapshot_updates
+                .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+            merge_snapshot_inserts: base
+                .merge_snapshot_inserts
+                .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+            merge_snapshot_deletes: base
+                .merge_snapshot_deletes
+                .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+            upsert_inserts: base
+                .upsert_inserts
+                .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+            upsert_updates: base
+                .upsert_updates
+                .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+            upsert_deletes: base
+                .upsert_deletes
+                .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+            multi_get_size: base
+                .multi_get_size
+                .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+            multi_get_result_count: base
+                .multi_get_result_count
+                .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+            multi_get_result_bytes: base
+                .multi_get_result_bytes
+                .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+            multi_put_size: base
+                .multi_put_size
+                .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+
+            legacy_value_errors: base
+                .legacy_value_errors
+                .get_delete_on_drop_gauge(vec![source_id_s.clone(), worker_id.clone()]),
+
+            shared: base.shared(&source_id),
+            rocksdb_shared: base.rocksdb_shared(&source_id),
+            rocksdb_instance_metrics: Arc::new(RocksDBInstanceMetrics {
+                multi_get_size: base
+                    .rocksdb_multi_get_size
+                    .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+                multi_get_result_count: base
+                    .rocksdb_multi_get_result_count
+                    .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+                multi_get_result_bytes: base
+                    .rocksdb_multi_get_result_bytes
+                    .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+                multi_get_count: base
+                    .rocksdb_multi_get_count
+                    .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+                multi_put_count: base
+                    .rocksdb_multi_put_count
+                    .get_delete_on_drop_counter(vec![source_id_s.clone(), worker_id.clone()]),
+                multi_put_size: base
+                    .rocksdb_multi_put_size
+                    .get_delete_on_drop_counter(vec![source_id_s, worker_id]),
+            }),
+            _backpressure_metrics: backpressure_metrics,
         }
     }
 }

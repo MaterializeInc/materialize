@@ -8,11 +8,13 @@
 # by the Apache License, Version 2.0.
 
 import random
+import string
 import threading
 from textwrap import dedent
-from typing import List, Set, Type
 
-from materialize.mzcompose import Composition
+import numpy as np
+
+from materialize.mzcompose.composition import Composition
 from materialize.zippy.framework import Action, ActionFactory, Capabilities, Capability
 from materialize.zippy.kafka_capabilities import Envelope, KafkaRunning, TopicExists
 from materialize.zippy.mz_capabilities import MzIsRunning
@@ -30,7 +32,8 @@ $ set schema={
         "type" : "record",
         "name" : "test",
         "fields" : [
-            {"name":"f1", "type":"long"}
+            {"name":"f1", "type":"long"},
+            {"name":"pad", "type":"string"}
         ]
     }
 """
@@ -39,7 +42,7 @@ $ set schema={
 class KafkaStart(Action):
     """Start a Kafka instance."""
 
-    def provides(self) -> List[Capability]:
+    def provides(self) -> list[Capability]:
         return [KafkaRunning()]
 
     def run(self, c: Composition) -> None:
@@ -50,10 +53,10 @@ class KafkaStop(Action):
     """Stop the Kafka instance."""
 
     @classmethod
-    def requires(self) -> Set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {KafkaRunning}
 
-    def withholds(self) -> Set[Type[Capability]]:
+    def withholds(self) -> set[type[Capability]]:
         return {KafkaRunning}
 
     def run(self, c: Composition) -> None:
@@ -64,18 +67,21 @@ class CreateTopicParameterized(ActionFactory):
     """Creates a Kafka topic and decides on the envelope that will be used."""
 
     @classmethod
-    def requires(cls) -> Set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {MzIsRunning, KafkaRunning}
 
     def __init__(
         self,
         max_topics: int = 10,
-        envelopes: List[Envelope] = [Envelope.NONE, Envelope.UPSERT],
+        envelopes_with_weights: dict[Envelope, int] = {
+            Envelope.NONE: 25,
+            Envelope.UPSERT: 75,
+        },
     ) -> None:
         self.max_topics = max_topics
-        self.envelopes = envelopes
+        self.envelopes_with_weights = envelopes_with_weights
 
-    def new(self, capabilities: Capabilities) -> List[Action]:
+    def new(self, capabilities: Capabilities) -> list[Action]:
         new_topic_name = capabilities.get_free_capability_name(
             TopicExists, self.max_topics
         )
@@ -86,7 +92,10 @@ class CreateTopicParameterized(ActionFactory):
                     capabilities=capabilities,
                     topic=TopicExists(
                         name=new_topic_name,
-                        envelope=random.choice(self.envelopes),
+                        envelope=random.choices(
+                            list(self.envelopes_with_weights.keys()),
+                            weights=list(self.envelopes_with_weights.values()),
+                        )[0],
                         partitions=random.randint(1, 10),
                     ),
                 )
@@ -100,7 +109,7 @@ class CreateTopic(Action):
         self.topic = topic
         super().__init__(capabilities)
 
-    def provides(self) -> List[Capability]:
+    def provides(self) -> list[Capability]:
         return [self.topic]
 
     def run(self, c: Composition) -> None:
@@ -110,7 +119,7 @@ class CreateTopic(Action):
                 f"""
                 $ kafka-create-topic topic={self.topic.name} partitions={self.topic.partitions}
                 $ kafka-ingest format=avro key-format=avro topic={self.topic.name} schema=${{schema}} key-schema=${{keyschema}} repeat=1
-                {{"key": 0}} {{"f1": 0}}
+                {{"key": 0}} {{"f1": 0, "pad": ""}}
                 """
             )
         )
@@ -120,12 +129,16 @@ class Ingest(Action):
     """Ingests data (inserts, updates or deletions) into a Kafka topic."""
 
     @classmethod
-    def requires(cls) -> Set[Type[Capability]]:
+    def requires(cls) -> set[type[Capability]]:
         return {MzIsRunning, KafkaRunning, TopicExists}
 
     def __init__(self, capabilities: Capabilities) -> None:
         self.topic = random.choice(capabilities.get(TopicExists))
-        self.delta = random.randint(1, 100000)
+        self.delta = random.randint(1, 10000)
+        # This gives 67% pads of up to 10 bytes, 25% of up to 100 bytes and outliers up to 256 bytes
+        self.pad = min(np.random.zipf(1.6, 1)[0], 256) * random.choice(
+            string.ascii_letters
+        )
         super().__init__(capabilities)
 
     def __str__(self) -> str:
@@ -147,7 +160,7 @@ class KafkaInsert(Ingest):
         testdrive_str = SCHEMA + dedent(
             f"""
             $ kafka-ingest format=avro key-format=avro topic={self.topic.name} schema=${{schema}} key-schema=${{keyschema}} start-iteration={prev_max + 1} repeat={self.delta}
-            {{"key": ${{kafka-ingest.iteration}}}} {{"f1": ${{kafka-ingest.iteration}}}}
+            {{"key": ${{kafka-ingest.iteration}}}} {{"f1": ${{kafka-ingest.iteration}}, "pad" : "{self.pad}"}}
             """
         )
 
@@ -161,11 +174,34 @@ class KafkaInsertParallel(KafkaInsert):
     """Inserts data into a Kafka topic using background threads."""
 
     @classmethod
-    def require_explicit_mention(self) -> bool:
+    def require_explicit_mention(cls) -> bool:
         return True
 
     def parallel(self) -> bool:
         return True
+
+
+class KafkaUpsertFromHead(Ingest):
+    """Updates records from the head in-place by modifying their pad"""
+
+    def run(self, c: Composition) -> None:
+        if self.topic.envelope is Envelope.NONE:
+            return
+
+        head = self.topic.watermarks.max
+        start = max(head - self.delta, self.topic.watermarks.min)
+        actual_delta = head - start
+
+        if actual_delta > 0:
+            c.testdrive(
+                SCHEMA
+                + dedent(
+                    f"""
+                    $ kafka-ingest format=avro topic={self.topic.name} key-format=avro key-schema=${{keyschema}} schema=${{schema}} start-iteration={start} repeat={actual_delta}
+                    {{"key": ${{kafka-ingest.iteration}}}} {{"f1": ${{kafka-ingest.iteration}}, "pad": "{self.pad}"}}
+                    """
+                )
+            )
 
 
 class KafkaDeleteFromHead(Ingest):
@@ -191,6 +227,29 @@ class KafkaDeleteFromHead(Ingest):
                     f"""
                     $ kafka-ingest format=avro topic={self.topic.name} key-format=avro key-schema=${{keyschema}} schema=${{schema}} start-iteration={self.topic.watermarks.max + 1} repeat={actual_delta}
                     {{"key": ${{kafka-ingest.iteration}}}}
+                    """
+                )
+            )
+
+
+class KafkaUpsertFromTail(Ingest):
+    """Updates records from the tail in-place by modifying their pad"""
+
+    def run(self, c: Composition) -> None:
+        if self.topic.envelope is Envelope.NONE:
+            return
+
+        tail = self.topic.watermarks.min
+        end = min(tail + self.delta, self.topic.watermarks.max)
+        actual_delta = end - tail
+
+        if actual_delta > 0:
+            c.testdrive(
+                SCHEMA
+                + dedent(
+                    f"""
+                    $ kafka-ingest format=avro topic={self.topic.name} key-format=avro key-schema=${{keyschema}} schema=${{schema}} start-iteration={tail} repeat={actual_delta}
+                    {{"key": ${{kafka-ingest.iteration}}}} {{"f1": ${{kafka-ingest.iteration}}, "pad": "{self.pad}"}}
                     """
                 )
             )

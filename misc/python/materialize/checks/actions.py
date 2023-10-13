@@ -7,8 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import textwrap
 import time
-from typing import TYPE_CHECKING, Any, Optional
+from inspect import getframeinfo, stack
+from typing import TYPE_CHECKING, Any
 
 from materialize.checks.executors import Executor
 
@@ -21,20 +23,22 @@ class Action:
         assert False
 
     def join(self, e: Executor) -> None:
-        assert False
+        print(f"Action {self} does not implement join()")
+        raise NotImplementedError
 
 
 class Testdrive(Action):
     # Instruct pytest this class does not contain actual tests
     __test__ = False
 
-    def __init__(self, input: str) -> None:
-        self.input = input
-        self.handle: Optional[Any] = None
+    def __init__(self, input: str, dedent: bool = True) -> None:
+        self.input = textwrap.dedent(input) if dedent else input
+        self.handle: Any | None = None
+        self.caller = getframeinfo(stack()[1][0])
 
     def execute(self, e: Executor) -> None:
         """Pass testdrive actions to be run by an Executor-specific implementation."""
-        self.handle = e.testdrive(self.input)
+        self.handle = e.testdrive(self.input, self.caller)
 
     def join(self, e: Executor) -> None:
         e.join(self.handle)
@@ -48,18 +52,20 @@ class Sleep(Action):
         print(f"Sleeping for {self.interval} seconds")
         time.sleep(self.interval)
 
+    def join(self, e: Executor) -> None:
+        pass
+
 
 class Initialize(Action):
     def __init__(self, scenario: "Scenario") -> None:
-        self.checks = [
-            check_class(scenario.base_version()) for check_class in scenario.checks()
-        ]
+        self.checks = scenario.check_objects
 
     def execute(self, e: Executor) -> None:
         for check in self.checks:
             print(f"Running initialize() from {check}")
             check.start_initialize(e)
 
+    def join(self, e: Executor) -> None:
         for check in self.checks:
             check.join_initialize(e)
 
@@ -68,14 +74,12 @@ class Manipulate(Action):
     def __init__(
         self,
         scenario: "Scenario",
-        phase: Optional[int] = None,
+        phase: int | None = None,
     ) -> None:
         assert phase is not None
         self.phase = phase - 1
 
-        self.checks = [
-            check_class(scenario.base_version()) for check_class in scenario.checks()
-        ]
+        self.checks = scenario.check_objects
         assert len(self.checks) >= self.phase
 
     def execute(self, e: Executor) -> None:
@@ -84,20 +88,21 @@ class Manipulate(Action):
             print(f"Running manipulate() from {check}")
             check.start_manipulate(e, self.phase)
 
+    def join(self, e: Executor) -> None:
+        assert self.phase is not None
         for check in self.checks:
             check.join_manipulate(e, self.phase)
 
 
 class Validate(Action):
     def __init__(self, scenario: "Scenario") -> None:
-        self.checks = [
-            check_class(scenario.base_version()) for check_class in scenario.checks()
-        ]
+        self.checks = scenario.check_objects
 
     def execute(self, e: Executor) -> None:
         for check in self.checks:
             print(f"Running validate() from {check}")
             check.start_validate(e)
 
+    def join(self, e: Executor) -> None:
         for check in self.checks:
             check.join_validate(e)

@@ -15,7 +15,9 @@ use std::sync::{Arc, Mutex};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
+use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
+use tokio::task::yield_now;
 
 use crate::error::Error;
 use crate::location::{
@@ -118,8 +120,11 @@ impl MemBlob {
 
 #[async_trait]
 impl Blob for MemBlob {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
-        self.core.lock().await.get(key)
+    async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
+        // Yield to maximize our chances for getting interesting orderings.
+        let () = yield_now().await;
+        let maybe_bytes = self.core.lock().await.get(key)?;
+        Ok(maybe_bytes.map(SegmentedBytes::from))
     }
 
     async fn list_keys_and_metadata(
@@ -127,15 +132,21 @@ impl Blob for MemBlob {
         key_prefix: &str,
         f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
     ) -> Result<(), ExternalError> {
+        // Yield to maximize our chances for getting interesting orderings.
+        let () = yield_now().await;
         self.core.lock().await.list_keys_and_metadata(key_prefix, f)
     }
 
     async fn set(&self, key: &str, value: Bytes, _atomic: Atomicity) -> Result<(), ExternalError> {
+        // Yield to maximize our chances for getting interesting orderings.
+        let () = yield_now().await;
         // NB: This is always atomic, so we're free to ignore the atomic param.
         self.core.lock().await.set(key, value)
     }
 
     async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
+        // Yield to maximize our chances for getting interesting orderings.
+        let () = yield_now().await;
         self.core.lock().await.delete(key)
     }
 }
@@ -178,6 +189,8 @@ impl MemConsensus {
 #[async_trait]
 impl Consensus for MemConsensus {
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
+        // Yield to maximize our chances for getting interesting orderings.
+        let () = yield_now().await;
         let store = self.data.lock().map_err(Error::from)?;
         let values = match store.get(key) {
             None => return Ok(None),
@@ -193,6 +206,8 @@ impl Consensus for MemConsensus {
         expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<CaSResult, ExternalError> {
+        // Yield to maximize our chances for getting interesting orderings.
+        let () = yield_now().await;
         if let Some(expected) = expected {
             if new.seqno <= expected {
                 return Err(ExternalError::from(
@@ -231,11 +246,15 @@ impl Consensus for MemConsensus {
         from: SeqNo,
         limit: usize,
     ) -> Result<Vec<VersionedData>, ExternalError> {
+        // Yield to maximize our chances for getting interesting orderings.
+        let () = yield_now().await;
         let store = self.data.lock().map_err(Error::from)?;
         Self::scan_store(&store, key, from, limit)
     }
 
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
+        // Yield to maximize our chances for getting interesting orderings.
+        let () = yield_now().await;
         let current = self.head(key).await?;
         if current.map_or(true, |data| data.seqno < seqno) {
             return Err(ExternalError::from(anyhow!(
@@ -263,7 +282,8 @@ mod tests {
 
     use super::*;
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn mem_blob() -> Result<(), ExternalError> {
         let registry = Arc::new(tokio::sync::Mutex::new(MemMultiRegistry::new()));
         blob_impl_test(move |path| {
@@ -274,7 +294,8 @@ mod tests {
         .await
     }
 
-    #[tokio::test]
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn mem_consensus() -> Result<(), ExternalError> {
         consensus_impl_test(|| async { Ok(MemConsensus::default()) }).await
     }

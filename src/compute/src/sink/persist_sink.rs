@@ -16,30 +16,28 @@ use std::sync::Arc;
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{Collection, Hashable};
+use mz_compute_types::sinks::{ComputeSinkDesc, PersistSinkConnection};
+use mz_ore::cast::CastFrom;
+use mz_ore::collections::HashMap;
+use mz_persist_client::batch::{Batch, BatchBuilder, ProtoBatch};
+use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::Diagnostics;
+use mz_persist_types::codec_impls::UnitSchema;
+use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::errors::DataflowError;
+use mz_storage_types::sources::SourceData;
+use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
+use mz_timely_util::probe::{self, ProbeNotify};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{
     Broadcast, Capability, CapabilitySet, ConnectLoop, Feedback, Inspect,
 };
 use timely::dataflow::{Scope, Stream};
-use timely::progress::Antichain;
-use timely::progress::Timestamp as TimelyTimestamp;
+use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use timely::PartialOrder;
 use tracing::trace;
-
-use mz_compute_client::types::sinks::{ComputeSinkDesc, PersistSinkConnection};
-use mz_ore::cast::CastFrom;
-use mz_ore::collections::HashMap;
-use mz_persist_client::batch::{Batch, BatchBuilder};
-use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::write::WriterEnrichedHollowBatch;
-use mz_persist_types::codec_impls::UnitSchema;
-use mz_repr::{Diff, GlobalId, Row, Timestamp};
-use mz_storage_client::controller::CollectionMetadata;
-use mz_storage_client::types::errors::DataflowError;
-use mz_storage_client::types::sources::SourceData;
-use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
-use mz_timely_util::probe::{self, ProbeNotify};
 
 use crate::compute_state::ComputeState;
 use crate::render::sinks::SinkRender;
@@ -95,8 +93,8 @@ where
     // `persist_source` to select an appropriate `as_of`. We only care about times beyond the
     // current shard upper anyway.
     let source_as_of = None;
-    let (ok_stream, err_stream, token) = mz_storage_client::source::persist_source::persist_source(
-        &desired_collection.scope(),
+    let (ok_stream, err_stream, token) = mz_storage_operators::persist_source::persist_source(
+        &mut desired_collection.scope(),
         sink_id,
         Arc::clone(&compute_state.persist_clients),
         target.clone(),
@@ -148,6 +146,12 @@ where
 ///    batches. Whenever the frontiers sufficiently advance, we take a batch
 ///    description and all the batches that belong to it and append it to the
 ///    persist shard.
+///
+/// Note that `mint_batch_descriptions` inspects the frontier of
+/// `desired_collection`, and passes the data through to `write_batches`.
+/// This is done to avoid a clone of the underlying data so that both
+/// operators can have the collection as input.
+///
 fn install_desired_into_persist<G>(
     sink_id: GlobalId,
     target: &CollectionMetadata,
@@ -185,7 +189,7 @@ where
     // the timestamp on feeding back using the summary.
     let (persist_feedback_handle, persist_feedback_stream) = scope.feedback(Timestamp::default());
 
-    let (batch_descriptions, mint_token) = mint_batch_descriptions(
+    let (batch_descriptions, passthrough_desired_stream, mint_token) = mint_batch_descriptions(
         sink_id,
         operator_name.clone(),
         target,
@@ -201,7 +205,7 @@ where
         operator_name.clone(),
         target,
         &batch_descriptions,
-        &desired_collection.inner,
+        &passthrough_desired_stream,
         &persist_collection.inner,
         Arc::clone(&persist_clients),
     );
@@ -246,6 +250,7 @@ fn mint_batch_descriptions<G>(
     compute_state: &mut crate::compute_state::ComputeState,
 ) -> (
     Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
+    Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
     Rc<dyn Any>,
 )
 where
@@ -277,25 +282,48 @@ where
         Antichain::new()
     }));
 
-    compute_state
-        .sink_write_frontiers
-        .insert(sink_id, Rc::clone(&shared_frontier));
+    let collection = compute_state.expect_collection_mut(sink_id);
+    collection.sink_write_frontier = Some(Rc::clone(&shared_frontier));
 
     let mut mint_op =
         AsyncOperatorBuilder::new(format!("{} mint_batch_descriptions", operator_name), scope);
 
     let (mut output, output_stream) = mint_op.new_output();
+    let (mut data_output, data_output_stream) = mint_op.new_output();
 
+    // The description and the data-passthrough outputs are both driven by this input, so
+    // they use a standard input connection.
     let mut desired_input = mint_op.new_input(desired_stream, Pipeline);
-    let mut persist_feedback_input =
-        mint_op.new_input_connection(persist_feedback_stream, Pipeline, vec![Antichain::new()]);
 
-    let shutdown_button = mint_op.build(move |mut capabilities| async move {
+    let mut persist_feedback_input = mint_op.new_input_connection(
+        persist_feedback_stream,
+        Pipeline,
+        // Neither output's capabilities should depend on the feedback input.
+        vec![Antichain::new(), Antichain::new()],
+    );
+
+    let shutdown_button = mint_op.build(move |capabilities| async move {
+        // Non-active workers should just pass the data through.
         if !active_worker {
+            // The description output is entirely driven by the active worker, so we drop
+            // its capability here. The data-passthrough output just uses the data
+            // capabilities.
+            drop(capabilities);
+            while let Some(event) = desired_input.next_mut().await {
+                match event {
+                    Event::Data(cap, data) => {
+                        data_output.give_container(&cap, data).await;
+                    }
+                    Event::Progress(_) => {}
+                }
+            }
             return;
         }
 
-        let mut cap_set = CapabilitySet::from_elem(capabilities.pop().expect("missing capability"));
+        // The data-passthrough output will use the data capabilities, so we drop
+        // its capability here.
+        let [desc_cap, _]: [_; 2] = capabilities.try_into().expect("one capability per output");
+        let mut cap_set = CapabilitySet::from_elem(desc_cap);
 
         // TODO(aljoscha): We need to figure out what to do with error
         // results from these calls.
@@ -307,9 +335,15 @@ where
         let mut write = persist_client
             .open_writer::<SourceData, (), Timestamp, Diff>(
                 shard_id,
-                &format!("compute::persist_sink::mint_batch_descriptions {}", sink_id),
                 Arc::new(target_relation_desc),
                 Arc::new(UnitSchema),
+                Diagnostics {
+                    shard_name: sink_id.to_string(),
+                    handle_purpose: format!(
+                        "compute::persist_sink::mint_batch_descriptions {}",
+                        sink_id
+                    ),
+                },
             )
             .await
             .expect("could not open persist shard");
@@ -365,10 +399,11 @@ where
 
         loop {
             tokio::select! {
-                Some(event) = desired_input.next() => {
+                Some(event) = desired_input.next_mut() => {
                     match event {
-                        Event::Data(_cap, _data) => {
-                            // Just read away data.
+                        Event::Data(cap, data) => {
+                            // Just passthrough the data.
+                            data_output.give_container(&cap, data).await;
                             continue;
                         }
                         Event::Progress(frontier) => {
@@ -379,7 +414,7 @@ where
                 Some(event) = persist_feedback_input.next() => {
                     match event {
                         Event::Data(_cap, _data) => {
-                            // Just read away data.
+                            // This input produces no data.
                             continue;
                         }
                         Event::Progress(frontier) => {
@@ -490,12 +525,12 @@ where
     }
 
     let token = Rc::new(shutdown_button.press_on_drop());
-    (output_stream, token)
+    (output_stream, data_output_stream, token)
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 enum BatchOrData {
-    Batch(WriterEnrichedHollowBatch<Timestamp>),
+    Batch(ProtoBatch),
     Data {
         lower: Antichain<Timestamp>,
         upper: Antichain<Timestamp>,
@@ -584,9 +619,12 @@ where
         let mut write = persist_client
             .open_writer::<SourceData, (), Timestamp, Diff>(
                 shard_id,
-                &format!("compute::persist_sink::write_batches {}", sink_id),
                 Arc::new(target_relation_desc),
                 Arc::new(UnitSchema),
+                Diagnostics {
+                    shard_name: sink_id.to_string(),
+                    handle_purpose: format!("compute::persist_sink::write_batches {}", sink_id),
+                },
             )
             .await
             .expect("could not open persist shard");
@@ -813,7 +851,7 @@ where
                                     batch.upper()
                                 );
                             }
-                            BatchOrData::Batch(batch.into_writer_hollow_batch())
+                            BatchOrData::Batch(batch.into_transmittable_batch())
                         } else {
                             BatchOrData::Data {
                                 lower: batch_lower.clone(),
@@ -940,9 +978,12 @@ where
         let mut write = persist_client
             .open_writer::<SourceData, (), Timestamp, Diff>(
                 shard_id,
-                &format!("persist_sink::append_batches {}", sink_id),
                 Arc::new(target_relation_desc),
-                Arc::new(UnitSchema)
+                Arc::new(UnitSchema),
+                Diagnostics {
+                    shard_name: sink_id.to_string(),
+                    handle_purpose: format!("persist_sink::append_batches {}", sink_id),
+                },
             )
             .await
             .expect("could not open persist shard");
@@ -994,7 +1035,7 @@ where
                             for batch in data.drain(..) {
                                 match batch {
                                     BatchOrData::Batch(batch) => {
-                                        let batch = write.batch_from_hollow_batch(batch);
+                                        let batch = write.batch_from_transmittable_batch(batch);
                                         let batch_description = (batch.lower().clone(), batch.upper().clone());
 
                                         let batches = in_flight_batches

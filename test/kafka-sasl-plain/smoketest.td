@@ -25,6 +25,16 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 > CREATE SECRET sasl_password AS 'sekurity'
 
 # Ensure that connectors work with SSL basic_auth
+! CREATE CONNECTION kafka_sasl TO KAFKA (
+    BROKER 'kafka:9092',
+    SASL MECHANISMS = 'PLAIN',
+    SASL USERNAME = 'nobody',
+    SASL PASSWORD = SECRET sasl_password,
+    SSL CERTIFICATE AUTHORITY = '${arg.ca}'
+  );
+contains:Invalid username or password
+
+# Ensure that connectors work with SSL basic_auth
 > CREATE CONNECTION kafka_sasl TO KAFKA (
     BROKER 'kafka:9092',
     SASL MECHANISMS = 'PLAIN',
@@ -66,17 +76,10 @@ $ kafka-verify-data format=avro sink=materialize.public.data_snk sort-messages=t
 {"before": null, "after": {"row": {"a": 1}}}
 {"before": null, "after": {"row": {"a": 2}}}
 
-# Ensure that connectors do not require the certificate authority
-> CREATE CONNECTION kafka_sasl_no_ca TO KAFKA (
+! CREATE CONNECTION kafka_sasl_no_ca TO KAFKA (
     BROKER 'kafka:9092',
     SASL MECHANISMS = 'PLAIN',
     SASL USERNAME = 'materialize',
     SASL PASSWORD = SECRET sasl_password
   );
-
-# This ensures that the error is not that the CA was required, but simply that
-# not providing it prohibits connecting.
-! CREATE SOURCE connector_source
-  FROM KAFKA CONNECTION kafka_sasl_no_ca (TOPIC 'testdrive-data-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_sasl
-contains: broker certificate could not be verified
+contains:Invalid CA certificate

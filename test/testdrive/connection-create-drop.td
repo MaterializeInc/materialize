@@ -9,6 +9,9 @@
 #
 # Test basic connection functionality
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_connection_validation_syntax = true
+
 ###
 # Test core functionality by creating, introspecting and dropping a connection
 ###
@@ -71,7 +74,7 @@ first second
 
 # Confirm we cannot drop the connection while a source depends upon it
 ! DROP CONNECTION testconn;
-contains:depended upon by catalog item 'materialize.public.connection_source'
+contains:depended upon by source connection_source
 
 # Confirm the drop works if we add cascade
 > DROP CONNECTION testconn CASCADE;
@@ -163,7 +166,7 @@ id creature
 1  lizard
 
 ! DROP CONNECTION csr_conn
-contains:depended upon by catalog item 'materialize.public.csr_source'
+contains:depended upon by source csr_source
 
 > DROP CONNECTION csr_conn CASCADE
 
@@ -321,13 +324,30 @@ contains:under-specified security configuration
 
 > CREATE SECRET s AS '...';
 
-! CREATE CONNECTION kafka_sasl_lowercase_mechanism TO KAFKA (
+> CREATE CONNECTION kafka_sasl_lowercase_string_mechanism TO KAFKA (
     BROKER 'kafka:9092',
     SASL MECHANISMS = 'plain',
     SASL USERNAME = 'materialize',
     SASL PASSWORD = SECRET s
-  );
-contains:invalid SASL MECHANISM "plain": must be uppercase
+  ) WITH (VALIDATE = FALSE);
+> CREATE CONNECTION kafka_sasl_spongebob_string_mechanism TO KAFKA (
+    BROKER 'kafka:9092',
+    SASL MECHANISMS = 'pLaIN',
+    SASL USERNAME = 'materialize',
+    SASL PASSWORD = SECRET s
+  ) WITH (VALIDATE = FALSE);
+> CREATE CONNECTION kafka_sasl_uppercase_ident_mechanism TO KAFKA (
+    BROKER 'kafka:9092',
+    SASL MECHANISMS = PLAIN,
+    SASL USERNAME = 'materialize',
+    SASL PASSWORD = SECRET s
+  ) WITH (VALIDATE = FALSE);
+> CREATE CONNECTION kafka_sasl_spongebob_ident_mechanism TO KAFKA (
+    BROKER 'kafka:9092',
+    SASL MECHANISMS = pLaIN,
+    SASL USERNAME = 'materialize',
+    SASL PASSWORD = SECRET s
+  ) WITH (VALIDATE = FALSE);
 
 ! CREATE CONNECTION multiple_brokers TO KAFKA (
     BROKER 'kafka:9092, kafka:9093'
@@ -380,7 +400,7 @@ contains: unknown catalog item 'foo'
 contains: unknown catalog item 'foo'
 
 # Error in mzcompose: AWS PrivateLink connections are not supported
-# Error in cloudtest/K8s: AWS PrivateLink Connection resource limit of 0 cannot be exceeded
+# Error in cloudtest/K8s: creating AWS PrivateLink Connection would violate max_aws_privatelink_connections limit
 ! CREATE CONNECTION privatelinkconn TO AWS PRIVATELINK (
     SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
     AVAILABILITY ZONES ('use1-az1', 'use1-az4')

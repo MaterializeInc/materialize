@@ -8,21 +8,23 @@
 # by the Apache License, Version 2.0.
 
 import random
+import re
+from datetime import timedelta
 from enum import Enum
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services import (
-    Clusterd,
-    Cockroach,
-    Debezium,
-    Kafka,
-    Materialized,
-    Minio,
-    Postgres,
-    SchemaRegistry,
-    Testdrive,
-    Zookeeper,
-)
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.debezium import Debezium
+from materialize.mzcompose.services.grafana import Grafana
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.minio import Minio
+from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.prometheus import Prometheus
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.zippy.framework import Test
 from materialize.zippy.scenarios import *  # noqa: F401 F403
 
@@ -32,12 +34,14 @@ SERVICES = [
     SchemaRegistry(),
     Debezium(),
     Postgres(),
-    Cockroach(setup_materialize=True),
+    Cockroach(),
     Minio(setup_materialize=True),
     # Those two are overriden below
     Materialized(),
     Clusterd(name="storaged"),
     Testdrive(),
+    Grafana(),
+    Prometheus(),
 ]
 
 
@@ -47,6 +51,22 @@ class TransactionIsolation(Enum):
 
     def __str__(self) -> str:
         return self.value
+
+
+def parse_timedelta(arg: str) -> timedelta:
+    p = re.compile(
+        (r"((?P<days>-?\d+)d)?" r"((?P<hours>-?\d+)h)?" r"((?P<minutes>-?\d+)m)?"),
+        re.IGNORECASE,
+    )
+
+    m = p.match(arg)
+    assert m is not None
+
+    parts = {k: int(v) for k, v in m.groupdict().items() if v}
+    td = timedelta(**parts)
+
+    assert td > timedelta(0), f"timedelta '{td}' from arg '{arg}' is not positive"
+    return td
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -73,6 +93,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     parser.add_argument(
+        "--max-execution-time", metavar="XhYmZs", type=parse_timedelta, default="1d"
+    )
+
+    parser.add_argument(
         "--transaction-isolation",
         type=TransactionIsolation,
         choices=list(TransactionIsolation),
@@ -93,15 +117,29 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="Cockroach DockerHub tag to use.",
     )
 
+    parser.add_argument(
+        "--observability",
+        action="store_true",
+        help="Start Prometheus and Grafana",
+    )
+
     args = parser.parse_args()
     scenario_class = globals()[args.scenario]
 
     c.up("zookeeper", "kafka", "schema-registry")
 
+    if args.observability:
+        c.up("prometheus", "grafana")
+
     random.seed(args.seed)
 
     with c.override(
-        Cockroach(image=f"cockroachdb/cockroach:{args.cockroach_tag}"),
+        Cockroach(
+            image=f"cockroachdb/cockroach:{args.cockroach_tag}",
+            # Workaround for #19276
+            restart="on-failure:5",
+            setup_materialize=True,
+        ),
         Testdrive(
             no_reset=True,
             seed=1,
@@ -113,12 +151,19 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         ),
         Materialized(
             default_size=args.size or Materialized.Size.DEFAULT_SIZE,
-            options=["--log-filter=warn"],
             external_minio=True,
             external_cockroach=True,
+            sanity_restart=False,
         ),
     ):
         c.up("materialized")
+
+        c.sql(
+            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
+        )
+
         c.sql(
             """
             CREATE CLUSTER storaged REPLICAS (r2 (
@@ -127,7 +172,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 COMPUTECTL ADDRESSES ['storaged:2101'],
                 COMPUTE ADDRESSES ['storaged:2102'],
                 WORKERS 4
-
             ))
         """
         )
@@ -136,6 +180,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         c.up("testdrive", persistent=True)
 
         print("Generating test...")
-        test = Test(scenario=scenario_class(), actions=args.actions)
+        test = Test(
+            scenario=scenario_class(),
+            actions=args.actions,
+            max_execution_time=args.max_execution_time,
+        )
         print("Running test...")
         test.run(c)
