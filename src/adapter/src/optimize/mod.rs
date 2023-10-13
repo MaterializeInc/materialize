@@ -52,10 +52,16 @@
 
 mod index;
 mod materialized_view;
+mod peek;
+mod subscribe;
+mod view;
 
 // Re-export optimzier structs
 pub use index::{Index, OptimizeIndex};
 pub use materialized_view::OptimizeMaterializedView;
+pub use peek::OptimizePeek;
+pub use subscribe::OptimizeSubscribe;
+pub use view::OptimizeView;
 
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
@@ -121,7 +127,8 @@ pub struct OptimizerConfig {
     /// The collection of type information happens in MIR ⇒ LIR lowering.
     pub enable_specialized_arrangements: bool,
     /// An exclusive upper bound on the number of results we may return from a
-    /// Persist fast-path peek.
+    /// Persist fast-path peek. Required by the `create_fast_path_plan` call in
+    /// [`OptimizePeek`].
     pub persist_fast_path_limit: usize,
 }
 
