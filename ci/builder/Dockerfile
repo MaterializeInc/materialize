@@ -31,6 +31,7 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     gawk \
     g++ \
     gcc \
+    gdb \
     gnupg2 \
     help2man \
     libc-dev \
