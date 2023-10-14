@@ -105,11 +105,16 @@ class Expression:
         This is relevant because when using non-aggregate functions on multiple rows, different evaluation strategies may yield different error messages due to a different row processing order."""
         raise NotImplementedError
 
-    def matches(self, predicate: Callable[[Expression], bool]) -> bool:
+    def matches(
+        self, predicate: Callable[[Expression], bool], apply_recursively: bool
+    ) -> bool:
+        # recursion is implemented in ExpressionWithArgs
         return predicate(self)
 
-    def contains(self, predicate: Callable[[Expression], bool]) -> bool:
-        return self.matches(predicate)
+    def contains(
+        self, predicate: Callable[[Expression], bool], check_recursively: bool
+    ) -> bool:
+        return self.matches(predicate, check_recursively)
 
 
 class LeafExpression(Expression):

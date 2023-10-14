@@ -394,7 +394,7 @@ class PostExecutionInconsistencyIgnoreFilter(
             return False
 
         for expression in expressions:
-            if expression.contains(is_function_taking_shortcut):
+            if expression.contains(is_function_taking_shortcut, True):
                 # see https://github.com/MaterializeInc/materialize/issues/17189
                 return True
 
@@ -409,7 +409,7 @@ class PostExecutionInconsistencyIgnoreFilter(
             ) and expression.has_any_characteristic({ExpressionCharacteristics.NULL})
 
         for expression in expressions:
-            if expression.contains(is_null_expression):
+            if expression.contains(is_null_expression, True):
                 # Constant folding takes shortcuts when it can infer that an expression will be NULL or not
                 # (e.g., `chr(huge_value) = NULL` won't be fully evaluated)
                 # see https://github.com/MaterializeInc/materialize/issues/17189
