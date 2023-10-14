@@ -176,6 +176,15 @@ def fetch(
 
 _fetch = fetch  # renamed because an argument shadows the fetch name in get_tags
 
+
+def get_common_ancestor_commit(remote: str, branch: str, fetch_branch: bool) -> str:
+    if fetch_branch:
+        fetch(remote=remote, branch=branch)
+
+    command = ["git", "merge-base", "HEAD", f"{remote}/{branch}"]
+    return spawn.capture(command).strip()
+
+
 # Work tree mutation
 
 
