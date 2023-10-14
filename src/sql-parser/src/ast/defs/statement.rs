@@ -2448,6 +2448,10 @@ pub enum ShowObjectType<T: AstInfo> {
     Subsource {
         on_source: Option<T::ItemName>,
     },
+    DefaultPrivileges {
+        object_type: Option<ObjectType>,
+        role: Option<T::RoleName>,
+    },
 }
 /// `SHOW <object>S`
 ///
@@ -2485,6 +2489,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ShowObjectType::Database => "DATABASES",
             ShowObjectType::Schema { .. } => "SCHEMAS",
             ShowObjectType::Subsource { .. } => "SUBSOURCES",
+            ShowObjectType::DefaultPrivileges { .. } => "DEFAULT PRIVILEGES",
         });
 
         if let ShowObjectType::Index { on_object, .. } = &self.object_type {
@@ -2522,6 +2527,18 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             if let Some(on_source) = on_source {
                 f.write_str(" ON ");
                 f.write_node(on_source);
+            }
+        }
+
+        if let ShowObjectType::DefaultPrivileges { object_type, role } = &self.object_type {
+            if let Some(object_type) = object_type {
+                f.write_str(" ON ");
+                f.write_node(object_type);
+                f.write_str("S");
+            }
+            if let Some(role) = role {
+                f.write_str(" FOR ");
+                f.write_node(role);
             }
         }
 
@@ -2864,7 +2881,7 @@ impl<T: AstInfo> AstDisplay for InsertSource<T> {
 }
 impl_display_t!(InsertSource);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Copy)]
 pub enum ObjectType {
     Table,
     View,
