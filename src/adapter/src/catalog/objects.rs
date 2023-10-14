@@ -34,9 +34,9 @@ use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Expr;
 use mz_sql::catalog::{
     CatalogClusterReplica, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
-    CatalogItemType as SqlCatalogItemType, CatalogItemType, CatalogSchema, CatalogType,
-    CatalogTypeDetails, DefaultPrivilegeAclItem, DefaultPrivilegeObject, IdReference,
-    RoleAttributes, RoleMembership, RoleVars, SystemObjectType,
+    CatalogItemType as SqlCatalogItemType, CatalogItemType, CatalogSchema, CatalogTypeDetails,
+    DefaultPrivilegeAclItem, DefaultPrivilegeObject, IdReference, RoleAttributes, RoleMembership,
+    RoleVars, SystemObjectType,
 };
 use mz_sql::names::{
     Aug, CommentObjectId, DatabaseId, FullItemName, QualifiedItemName, QualifiedSchemaName,
@@ -705,26 +705,16 @@ pub struct Type {
     pub create_sql: String,
     #[serde(skip)]
     pub details: CatalogTypeDetails<IdReference>,
+    pub desc: Option<RelationDesc>,
     pub resolved_ids: ResolvedIds,
 }
 
 impl Type {
     pub fn desc(&self, name: String) -> Result<RelationDesc, SqlCatalogError> {
-        match &self.details {
-            CatalogTypeDetails {
-                typ: CatalogType::Record { fields },
-                ..
-            } => {
-                let columns = fields
-                    .iter()
-                    .map(|field| (field.name.clone(), field.typ.clone()));
-                Ok(RelationDesc::from_names_and_types(columns))
-            }
-            _ => Err(SqlCatalogError::InvalidDependency {
-                name,
-                typ: CatalogItemType::Type,
-            }),
-        }
+        self.desc.clone().ok_or(SqlCatalogError::InvalidDependency {
+            name,
+            typ: CatalogItemType::Type,
+        })
     }
 }
 

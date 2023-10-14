@@ -1186,6 +1186,13 @@ impl Catalog {
         // Insert into catalog
         for typ in builtin_types {
             let element_id = name_to_id_map[typ.name];
+
+            // Assert that no built-in types are record types so that we don't
+            // need to bother to build a description. Only record types need
+            // descriptions.
+            let desc = None;
+            assert!(!matches!(typ.details.typ, CatalogType::Record { .. }));
+
             self.state.insert_item(
                 element_id,
                 typ.oid,
@@ -1199,6 +1206,7 @@ impl Catalog {
                 CatalogItem::Type(Type {
                     create_sql: format!("CREATE TYPE {}", typ.name),
                     details: typ.details.clone(),
+                    desc,
                     resolved_ids: ResolvedIds(BTreeSet::new()),
                 }),
                 MZ_SYSTEM_ROLE_ID,

@@ -2843,7 +2843,7 @@ pub fn plan_create_type(
             }
             _ => {
                 // Validate that the modifiers are actually valid.
-                scalar_type_from_catalog(scx, id, &modifiers)?;
+                scalar_type_from_catalog(scx.catalog, id, &modifiers)?;
 
                 Ok((id, modifiers))
             }
@@ -2888,11 +2888,10 @@ pub fn plan_create_type(
                 let data_type = column_def.data_type;
                 let key = ident(column_def.name.clone());
                 let (id, modifiers) = validate_data_type(scx, data_type, "", &key)?;
-                let scalar_type =
-                    crate::plan::query::scalar_type_from_catalog(scx, id, &modifiers)?;
                 fields.push(CatalogRecordField {
                     name: ColumnName::from(key.clone()),
-                    typ: scalar_type.nullable(true),
+                    type_reference: id,
+                    type_modifiers: modifiers,
                 });
             }
             CatalogType::Record { fields }

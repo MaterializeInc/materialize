@@ -52,9 +52,9 @@ use mz_sql::ast::display::AstDisplay;
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError as SqlCatalogError,
     CatalogItem as SqlCatalogItem, CatalogItemType as SqlCatalogItemType, CatalogItemType,
-    CatalogRole, CatalogSchema, CatalogType, CatalogTypeDetails, DefaultPrivilegeAclItem,
-    DefaultPrivilegeObject, EnvironmentId, IdReference, NameReference, RoleAttributes,
-    RoleMembership, RoleVars, SessionCatalog, SystemObjectType,
+    CatalogRecordField, CatalogRole, CatalogSchema, CatalogType, CatalogTypeDetails,
+    DefaultPrivilegeAclItem, DefaultPrivilegeObject, EnvironmentId, IdReference, NameReference,
+    RoleAttributes, RoleMembership, RoleVars, SessionCatalog, SystemObjectType,
 };
 use mz_sql::names::{
     CommentObjectId, DatabaseId, FullItemName, FullSchemaName, ItemQualifiers, ObjectId,
@@ -360,7 +360,14 @@ impl Catalog {
                 element_reference: name_to_id_map[element_reference],
             },
             CatalogType::Record { fields } => CatalogType::Record {
-                fields: fields.clone(),
+                fields: fields
+                    .into_iter()
+                    .map(|f| CatalogRecordField {
+                        name: f.name.clone(),
+                        type_reference: name_to_id_map[f.type_reference],
+                        type_modifiers: f.type_modifiers.clone(),
+                    })
+                    .collect(),
             },
             CatalogType::Bool => CatalogType::Bool,
             CatalogType::Bytes => CatalogType::Bytes,
@@ -3459,6 +3466,7 @@ impl Catalog {
             }),
             Plan::CreateType(CreateTypePlan { typ, .. }) => CatalogItem::Type(Type {
                 create_sql: typ.create_sql,
+                desc: typ.inner.desc(&session_catalog)?,
                 details: CatalogTypeDetails {
                     array_id: None,
                     typ: typ.inner,
