@@ -47,8 +47,10 @@ class NumberDataType(DataType):
         self, characteristics: set[ExpressionCharacteristics]
     ) -> ReturnTypeSpec:
         return NumericReturnTypeSpec(
-            only_integer=not self.is_decimal
+            only_integer=(not self.is_decimal)
             or ExpressionCharacteristics.DECIMAL not in characteristics,
+            always_floating_type=self.is_decimal
+            or ExpressionCharacteristics.DECIMAL in characteristics,
         )
 
 
