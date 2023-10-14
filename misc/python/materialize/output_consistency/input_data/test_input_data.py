@@ -65,7 +65,9 @@ class ConsistencyTestInputData:
             ]
 
     def _remove_postgres_incompatible_functions(self) -> None:
-        pass
+        self.all_operation_types = [
+            op for op in self.all_operation_types if op.is_pg_compatible
+        ]
 
     def _get_max_value_count_of_all_types(self) -> int:
         return max(

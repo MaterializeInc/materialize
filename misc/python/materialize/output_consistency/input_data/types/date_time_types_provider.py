@@ -29,6 +29,7 @@ class DateTimeDataType(DataType):
         further_values: list[str],
         has_time_zone: bool = False,
         is_pg_compatible: bool = True,
+        is_max_value_pg_compatible: bool = True,
     ):
         super().__init__(
             identifier,
@@ -40,6 +41,7 @@ class DateTimeDataType(DataType):
         self.max_value = max_value
         self.further_values = further_values
         self.has_time_zone = has_time_zone
+        self.is_max_value_pg_compatible = is_max_value_pg_compatible
 
     def resolve_return_type_spec(
         self, characteristics: set[ExpressionCharacteristics]
@@ -62,6 +64,7 @@ DATE_TYPE = DateTimeDataType(
     "0001-01-01",
     "99999-12-31",
     ["2023-06-01"],
+    is_max_value_pg_compatible=False,
 )
 TIME_TYPE = DateTimeDataType(
     TIME_TYPE_IDENTIFIER, "TIME", "00:00:00", "23:59:59.999999", ["01:02:03.000001"]
@@ -73,6 +76,7 @@ TIMESTAMP_TYPE = DateTimeDataType(
     "0001-01-01 00:00:00",
     "99999-12-31 23:59:59",
     ["2023-06-01 11:22:33.44444"],
+    is_max_value_pg_compatible=False,
 )
 TIMESTAMPTZ_TYPE = DateTimeDataType(
     TIMESTAMPTZ_TYPE_IDENTIFIER,
@@ -82,6 +86,7 @@ TIMESTAMPTZ_TYPE = DateTimeDataType(
     "99999-12-31 23:59:59",
     ["2023-06-01 11:22:33.44444", "2023-09-01 14:00:02.46464646"],
     has_time_zone=True,
+    is_max_value_pg_compatible=False,
 )
 INTERVAL_TYPE = DateTimeDataType(
     INTERVAL_TYPE_IDENTIFIER,
@@ -91,6 +96,7 @@ INTERVAL_TYPE = DateTimeDataType(
     ["2 years 3 months 4 days 11:22:33.456789", "100 months 100 days", "44:45:45"],
     # type is compatible but causes too many issues for now
     is_pg_compatible=False,
+    is_max_value_pg_compatible=True,
 )
 
 DATE_TIME_DATA_TYPES: list[DateTimeDataType] = [
