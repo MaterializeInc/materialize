@@ -26,6 +26,7 @@ from scenarios_scale import *  # noqa: F401 F403
 from scenarios_skew import *  # noqa: F401 F403
 from scenarios_subscribe import *  # noqa: F401 F403
 
+from materialize import benchmark_utils
 from materialize.feature_benchmark.aggregation import Aggregation, MinAggregation
 from materialize.feature_benchmark.benchmark import Benchmark, Report
 from materialize.feature_benchmark.comparator import (
@@ -122,6 +123,9 @@ def run_one_scenario(
             if instance == "this"
             else (args.other_tag, args.other_size, args.other_params)
         )
+
+        if tag == "common-ancestor":
+            tag = benchmark_utils.resolve_tag_of_common_ancestor()
 
         c.up("testdrive", persistent=True)
 
