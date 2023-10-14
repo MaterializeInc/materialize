@@ -44,7 +44,7 @@ use crate::arrangement::manager::{SpecializedTraceHandle, TraceBundle, TraceMana
 use crate::logging;
 use crate::logging::compute::ComputeEvent;
 use crate::metrics::ComputeMetrics;
-use crate::render::LinearJoinImpl;
+use crate::render::{LinearJoinImpl, LinearJoinSpec};
 use crate::server::ResponseSender;
 use crate::typedefs::TraceRowHandle;
 
@@ -84,8 +84,8 @@ pub struct ComputeState {
     max_result_size: u32,
     /// Maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
     pub dataflow_max_inflight_bytes: usize,
-    /// Implementation to use for rendering linear joins.
-    pub linear_join_impl: LinearJoinImpl,
+    /// Specification for rendering linear joins.
+    pub linear_join_spec: LinearJoinSpec,
     /// Metrics for this replica.
     pub metrics: ComputeMetrics,
     /// A process-global handle to tracing configuration.
@@ -116,7 +116,7 @@ impl ComputeState {
             command_history,
             max_result_size: u32::MAX,
             dataflow_max_inflight_bytes: usize::MAX,
-            linear_join_impl: Default::default(),
+            linear_join_spec: Default::default(),
             metrics,
             tracing_handle,
             enable_specialized_arrangements: Default::default(),
@@ -198,6 +198,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         let ComputeParameters {
             max_result_size,
             dataflow_max_inflight_bytes,
+            linear_join_yielding,
             enable_mz_join_core,
             enable_jemalloc_profiling,
             enable_specialized_arrangements,
@@ -212,11 +213,14 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         if let Some(v) = dataflow_max_inflight_bytes {
             self.compute_state.dataflow_max_inflight_bytes = v;
         }
+        if let Some(v) = linear_join_yielding {
+            self.compute_state.linear_join_spec.yielding = v;
+        }
         if let Some(v) = enable_specialized_arrangements {
             self.compute_state.enable_specialized_arrangements = v;
         }
         if let Some(v) = enable_mz_join_core {
-            self.compute_state.linear_join_impl = match v {
+            self.compute_state.linear_join_spec.implementation = match v {
                 false => LinearJoinImpl::DifferentialDataflow,
                 true => LinearJoinImpl::Materialize,
             };

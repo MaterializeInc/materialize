@@ -70,4 +70,5 @@ message ProtoComputeParameters {
     mz_service.params.ProtoGrpcClientParameters grpc_client = 6;
     optional bool enable_jemalloc_profiling = 7;
     optional bool enable_specialized_arrangements = 8;
+    mz_compute_types.dataflows.ProtoYieldSpec linear_join_yielding = 9;
 }

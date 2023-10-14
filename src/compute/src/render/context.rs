@@ -42,7 +42,7 @@ use timely::progress::{Antichain, Timestamp};
 use crate::arrangement::manager::SpecializedTraceHandle;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::render::errors::ErrorLogger;
-use crate::render::join::LinearJoinImpl;
+use crate::render::join::LinearJoinSpec;
 use crate::typedefs::{ErrSpine, RowSpine, TraceErrHandle, TraceRowHandle};
 
 // Local type definition to avoid the horror in signatures.
@@ -98,8 +98,8 @@ where
     pub bindings: BTreeMap<Id, CollectionBundle<S, T>>,
     /// A token that operators can probe to know whether the dataflow is shutting down.
     pub(super) shutdown_token: ShutdownToken,
-    /// The implementation to use for rendering linear joins.
-    pub(super) linear_join_impl: LinearJoinImpl,
+    /// Specification for rendering linear joins.
+    pub(super) linear_join_spec: LinearJoinSpec,
     pub(super) enable_specialized_arrangements: bool,
 }
 
@@ -127,7 +127,7 @@ where
             until: dataflow.until.clone(),
             bindings: BTreeMap::new(),
             shutdown_token: Default::default(),
-            linear_join_impl: Default::default(),
+            linear_join_spec: Default::default(),
             enable_specialized_arrangements: Default::default(),
         }
     }

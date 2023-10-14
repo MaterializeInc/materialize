@@ -10,6 +10,7 @@
 //! Types for describing dataflows.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Duration;
 
 use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
@@ -637,6 +638,38 @@ impl RustType<ProtoBuildDesc> for BuildDesc<crate::plan::Plan> {
             id: x.id.into_rust_if_some("ProtoBuildDesc::id")?,
             plan: x.plan.into_rust_if_some("ProtoBuildDesc::plan")?,
         })
+    }
+}
+
+/// Specification of a dataflow operator's yielding behavior.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+pub enum YieldSpec {
+    ByWork(usize),
+    ByTime(Duration),
+}
+
+impl RustType<ProtoYieldSpec> for YieldSpec {
+    fn into_proto(&self) -> ProtoYieldSpec {
+        use proto_yield_spec::Kind;
+
+        let kind = match *self {
+            Self::ByWork(w) => Kind::ByWork(w.into_proto()),
+            Self::ByTime(t) => Kind::ByTime(t.into_proto()),
+        };
+        ProtoYieldSpec { kind: Some(kind) }
+    }
+
+    fn from_proto(proto: ProtoYieldSpec) -> Result<Self, TryFromProtoError> {
+        use proto_yield_spec::Kind;
+
+        let Some(kind) = proto.kind else {
+            return Err(TryFromProtoError::missing_field("ProtoYieldSpec::kind"));
+        };
+        let spec = match kind {
+            Kind::ByWork(w) => Self::ByWork(w.into_rust()?),
+            Kind::ByTime(t) => Self::ByTime(t.into_rust()?),
+        };
+        Ok(spec)
     }
 }
 
