@@ -32,8 +32,11 @@ from materialize.scalability.endpoints import (
     PostgresContainer,
 )
 from materialize.scalability.operation import Operation
+from materialize.scalability.result_analyzer import ResultAnalyzer
+from materialize.scalability.result_analyzers import DefaultResultAnalyzer
 from materialize.scalability.schema import Schema, TransactionIsolation
 from materialize.scalability.workload import Workload, WorkloadSelfTest
+from materialize.scalability.workload_result import WorkloadResult
 from materialize.scalability.workloads import *  # noqa: F401 F403
 from materialize.scalability.workloads_test import *  # noqa: F401 F403
 
@@ -107,7 +110,9 @@ def run_with_concurrency(
             cursor.execute(connect_sql.encode("utf8"))
         cursor_pool.append(cursor)
 
-    print(f"Benchmarking workload '{workload.__class__.__name__}' at concurrency {concurrency} ...")
+    print(
+        f"Benchmarking workload '{workload.__class__.__name__}' at concurrency {concurrency} ..."
+    )
     operations = workload.operations()
 
     global next_worker_id
@@ -163,7 +168,7 @@ def run_workload(
     endpoint: Endpoint,
     schema: Schema,
     workload: Workload,
-) -> None:
+) -> WorkloadResult:
     df_totals = pd.DataFrame()
     df_details = pd.DataFrame()
 
@@ -196,6 +201,8 @@ def run_workload(
             RESULTS_DIR / endpoint_name / f"{type(workload).__name__}_details.csv"
         )
 
+    return WorkloadResult(workload, df_totals, df_details)
+
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
@@ -203,6 +210,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="Target for the benchmark: 'HEAD', 'local', 'remote', 'common-ancestor', 'Postgres', or a DockerHub tag",
         action="append",
         default=[],
+    )
+
+    parser.add_argument(
+        "--regression-against",
+        type=str,
+        help="Detect regression against: 'HEAD', 'local', 'remote', 'common-ancestor', 'Postgres', or a DockerHub tag",
+        default=None,
     )
 
     parser.add_argument(
@@ -278,9 +292,19 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if len(args.target) == 0:
         args.target = ["HEAD"]
 
+    regression_against_target = args.regression_against
+    if (
+        regression_against_target is not None
+        and regression_against_target not in args.target
+    ):
+        print(f"Adding {regression_against_target} as target")
+        args.target.append(regression_against_target)
+
     print(f"Targets: {args.target}")
+    print(f"Checking regression against: {regression_against_target}")
 
     endpoints: list[Endpoint] = []
+    regression_baseline_endpoint: Endpoint | None = None
     for i, target in enumerate(args.target):
         endpoint: Endpoint | None = None
         if target == "local":
@@ -301,6 +325,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             )
         assert endpoint is not None
 
+        if target == regression_against_target:
+            regression_baseline_endpoint = endpoint
+
         endpoints.append(endpoint)
 
     workloads = (
@@ -320,10 +347,49 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     df_workloads = pd.DataFrame(data={"workload": workload_names})
     df_workloads.to_csv(RESULTS_DIR / "workloads.csv")
 
+    endpoint_result_data_by_workload_name: dict[
+        str, dict[Endpoint, WorkloadResult]
+    ] = dict()
+
     for workload in workloads:
         assert issubclass(workload, Workload), f"{workload} is not a Workload"
+        result_data_of_current_workload = dict()
+        endpoint_result_data_by_workload_name[
+            workload.__name__
+        ] = result_data_of_current_workload
+
         for endpoint in endpoints:
-            run_workload(c, args, endpoint, schema, workload())
+            result = run_workload(c, args, endpoint, schema, workload())
+            result_data_of_current_workload[endpoint] = result
+
+    handle_regression_detection(
+        args, regression_baseline_endpoint, endpoint_result_data_by_workload_name
+    )
+
+
+def handle_regression_detection(
+    args: argparse.Namespace,
+    regression_baseline_endpoint: Endpoint | None,
+    endpoint_result_data_by_workload_name: dict[str, dict[Endpoint, WorkloadResult]],
+) -> None:
+    if regression_baseline_endpoint is None:
+        print("No regression detection because '--regression-against' param is not set")
+    else:
+        outcome = create_result_analyzer(args).determine_regression(
+            regression_baseline_endpoint, endpoint_result_data_by_workload_name
+        )
+
+        if outcome.has_regressions():
+            print(
+                f"ERROR: The following regressions were detected (baseline: {regression_baseline_endpoint}):\n{outcome}"
+            )
+            sys.exit(1)
+        else:
+            print("No regressions were detected.")
+
+
+def create_result_analyzer(_args: argparse.Namespace) -> ResultAnalyzer:
+    return DefaultResultAnalyzer(max_deviation_in_percent=0.1)
 
 
 def workflow_lab(c: Composition) -> None:
