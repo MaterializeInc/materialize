@@ -82,50 +82,50 @@ class SmokeTest(unittest.TestCase):
 
     def test_psycopg2_subscribe(self) -> None:
         """Test SUBSCRIBE with psycopg2 via server cursors."""
-        with psycopg2.connect(MATERIALIZED_URL) as conn:
-            conn.set_session(autocommit=True)
-            with conn.cursor() as cur:
-                # Create a table with one row of data.
-                cur.execute("CREATE TABLE psycopg2_subscribe (a int, b text)")
-                cur.execute("INSERT INTO psycopg2_subscribe VALUES (1, 'a')")
-                conn.set_session(autocommit=False)
+        conn = psycopg2.connect(MATERIALIZED_URL)
+        conn.set_session(autocommit=True)
+        with conn.cursor() as cur:
+            # Create a table with one row of data.
+            cur.execute("CREATE TABLE psycopg2_subscribe (a int, b text)")
+            cur.execute("INSERT INTO psycopg2_subscribe VALUES (1, 'a')")
+            conn.set_session(autocommit=False)
 
-                # Start SUBSCRIBE using the binary copy protocol.
-                cur.execute("DECLARE cur CURSOR FOR SUBSCRIBE psycopg2_subscribe")
-                cur.execute("FETCH ALL cur")
+            # Start SUBSCRIBE using the binary copy protocol.
+            cur.execute("DECLARE cur CURSOR FOR SUBSCRIBE psycopg2_subscribe")
+            cur.execute("FETCH ALL cur")
 
-                # Validate the first row, but ignore the timestamp column.
-                row = cur.fetchone()
-                if row is not None:
-                    (ts, diff, a, b) = row
-                    self.assertEqual(diff, 1)
-                    self.assertEqual(a, 1)
-                    self.assertEqual(b, "a")
-                else:
-                    self.fail("row is None")
+            # Validate the first row, but ignore the timestamp column.
+            row = cur.fetchone()
+            if row is not None:
+                (ts, diff, a, b) = row
+                self.assertEqual(diff, 1)
+                self.assertEqual(a, 1)
+                self.assertEqual(b, "a")
+            else:
+                self.fail("row is None")
 
-                self.assertEqual(cur.fetchone(), None)
+            self.assertEqual(cur.fetchone(), None)
 
-                # Insert another row from another connection to simulate an
-                # update arriving.
-                with psycopg2.connect(MATERIALIZED_URL) as conn2:
-                    conn2.set_session(autocommit=True)
-                    with conn2.cursor() as cur2:
-                        cur2.execute("INSERT INTO psycopg2_subscribe VALUES (2, 'b')")
+            # Insert another row from another connection to simulate an
+            # update arriving.
+            with psycopg2.connect(MATERIALIZED_URL) as conn2:
+                conn2.set_session(autocommit=True)
+                with conn2.cursor() as cur2:
+                    cur2.execute("INSERT INTO psycopg2_subscribe VALUES (2, 'b')")
 
-                # Validate the new row, again ignoring the timestamp column.
-                cur.execute("FETCH ALL cur")
-                row = cur.fetchone()
+            # Validate the new row, again ignoring the timestamp column.
+            cur.execute("FETCH ALL cur")
+            row = cur.fetchone()
 
-                if row is not None:
-                    (ts, diff, a, b) = row
-                    self.assertEqual(diff, 1)
-                    self.assertEqual(a, 2)
-                    self.assertEqual(b, "b")
-                else:
-                    self.fail("row None")
+            if row is not None:
+                (ts, diff, a, b) = row
+                self.assertEqual(diff, 1)
+                self.assertEqual(a, 2)
+                self.assertEqual(b, "b")
+            else:
+                self.fail("row None")
 
-                self.assertEqual(cur.fetchone(), None)
+            self.assertEqual(cur.fetchone(), None)
 
     def test_psycopg3_subscribe_copy(self) -> None:
         """Test SUBSCRIBE with psycopg3 via its new binary COPY decoding support."""
