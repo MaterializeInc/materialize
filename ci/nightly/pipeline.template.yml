@@ -39,7 +39,7 @@ steps:
       queue: builder-linux-x86_64
 
   - id: feature-benchmark
-    label: "Feature benchmark against 'latest'"
+    label: "Feature benchmark against merge base or 'latest'"
     timeout_in_minutes: 360
     agents:
       queue: linux-x86_64-large
@@ -49,7 +49,8 @@ steps:
           composition: feature-benchmark
           args:
              - --other-tag
-             - latest
+             # common-ancestor will default to latest if not in a PR
+             - common-ancestor
 
   - id: kafka-matrix
     label: Kafka smoke test against previous Kafka versions
