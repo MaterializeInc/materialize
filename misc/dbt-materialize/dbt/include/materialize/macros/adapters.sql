@@ -84,6 +84,12 @@
   {%- endcall %}
 {% endmacro %}
 
+{% macro materialize__truncate_relation(relation) -%}
+  {% call statement('truncate_relation') -%}
+    delete from {{ relation }}
+  {%- endcall %}
+{% endmacro %}
+
 {% macro materialize__get_create_index_sql(relation, index_dict) -%}
   {%- set index_config = adapter.parse_index(index_dict) -%}
   {%- set cluster = index_config.cluster or config.get('cluster', target.cluster) -%}

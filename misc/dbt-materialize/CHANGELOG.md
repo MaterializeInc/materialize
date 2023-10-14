@@ -1,5 +1,15 @@
 # dbt-materialize Changelog
 
+## Unreleased
+
+* Load seeds into tables rather than materialized views.
+
+  For historical reasons, dbt-materialize has loaded seed data by injecting the
+  values from the CSV file in a `CREATE MATERIALIZED VIEW AS ...` statement.
+  Starting with this release, dbt-materialize now creates a table and loads
+  the values from the CSV into that file, matching the behavior of other
+  dbt adapters.
+
 ## 1.6.0 - 2023-10-12
 
 * Upgrade to `dbt-postgres` v1.6.0:
