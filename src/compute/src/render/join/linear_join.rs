@@ -67,7 +67,9 @@ impl LinearJoinImpl {
             Self::DifferentialDataflow => {
                 differential_dataflow::operators::JoinCore::join_core(arranged1, arranged2, result)
             }
-            Self::Materialize => mz_join_core(arranged1, arranged2, result),
+            Self::Materialize => mz_join_core(arranged1, arranged2, result, |_start, work| {
+                work >= 1_000_000
+            }),
         }
     }
 }
