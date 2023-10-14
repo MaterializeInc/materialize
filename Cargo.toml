@@ -97,8 +97,9 @@ members = [
 ]
 
 exclude = [
-    # Exclude the wasm crate to avoid needless cache invalidations.
+    # Exclude the wasm crates to avoid needless cache invalidations.
     "src/sql-lexer-wasm",
+    "src/sql-pretty-wasm",
 ]
 
 # Use Cargo's new feature resolver, which can handle target-specific features.

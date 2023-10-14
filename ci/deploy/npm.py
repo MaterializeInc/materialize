@@ -27,7 +27,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-PUBLISH_CRATES = ["mz-sql-lexer-wasm"]
+PUBLISH_CRATES = ["mz-sql-lexer-wasm", "mz-sql-pretty-wasm"]
 
 
 @dataclass(frozen=True)
