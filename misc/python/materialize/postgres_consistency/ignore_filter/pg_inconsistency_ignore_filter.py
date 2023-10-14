@@ -7,15 +7,51 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from collections.abc import Callable
+from functools import partial
+
+from materialize.output_consistency.enum.enum_constant import EnumConstant
+from materialize.output_consistency.execution.evaluation_strategy import (
+    EvaluationStrategyKey,
+)
 from materialize.output_consistency.expression.expression import Expression
+from materialize.output_consistency.expression.expression_characteristics import (
+    ExpressionCharacteristics,
+)
+from materialize.output_consistency.expression.expression_with_args import (
+    ExpressionWithArgs,
+)
 from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
     IgnoreVerdict,
     InconsistencyIgnoreFilter,
     NoIgnore,
-    PostExecutionInconsistencyIgnoreFilter,
-    PreExecutionInconsistencyIgnoreFilter,
+    PostExecutionInconsistencyIgnoreFilterBase,
+    PreExecutionInconsistencyIgnoreFilterBase,
+    YesIgnore,
 )
-from materialize.output_consistency.selection.selection import DataRowSelection
+from materialize.output_consistency.input_data.return_specs.date_time_return_spec import (
+    DateTimeReturnTypeSpec,
+)
+from materialize.output_consistency.input_data.return_specs.number_return_spec import (
+    NumericReturnTypeSpec,
+)
+from materialize.output_consistency.input_data.return_specs.text_return_spec import (
+    TextReturnTypeSpec,
+)
+from materialize.output_consistency.input_data.types.date_time_types_provider import (
+    TIME_TYPE_IDENTIFIER,
+    TIMESTAMPTZ_TYPE_IDENTIFIER,
+)
+from materialize.output_consistency.input_data.types.number_types_provider import (
+    REAL_TYPE_IDENTIFIER,
+)
+from materialize.output_consistency.operation.operation import (
+    DbFunction,
+    DbOperation,
+    DbOperationOrFunction,
+)
+from materialize.output_consistency.query.query_result import QueryFailure
+from materialize.output_consistency.query.query_template import QueryTemplate
 from materialize.output_consistency.validation.validation_message import ValidationError
 
 
@@ -28,13 +64,470 @@ class PgInconsistencyIgnoreFilter(InconsistencyIgnoreFilter):
         self.post_execution_filter = PgPostExecutionInconsistencyIgnoreFilter()
 
 
-class PgPreExecutionInconsistencyIgnoreFilter(PreExecutionInconsistencyIgnoreFilter):
-    def shall_ignore_expression(
-        self, expression: Expression, row_selection: DataRowSelection
+class PgPreExecutionInconsistencyIgnoreFilter(
+    PreExecutionInconsistencyIgnoreFilterBase
+):
+    def _matches_problematic_operation_or_function_invocation(
+        self,
+        expression: ExpressionWithArgs,
+        operation: DbOperationOrFunction,
+        _all_involved_characteristics: set[ExpressionCharacteristics],
     ) -> IgnoreVerdict:
+        for arg in expression.args:
+            return_type_spec = arg.resolve_return_type_spec()
+
+            if (
+                isinstance(return_type_spec, DateTimeReturnTypeSpec)
+                and return_type_spec.type_identifier == TIMESTAMPTZ_TYPE_IDENTIFIER
+            ):
+                return YesIgnore("#22016: age, to_char, and others ignore timezone")
+
+        if _matches_eq_with_real(expression):
+            return YesIgnore("#22022: real with decimal comparison")
+
+        return super()._matches_problematic_operation_or_function_invocation(
+            expression, operation, _all_involved_characteristics
+        )
+
+    def _matches_problematic_function_invocation(
+        self,
+        db_function: DbFunction,
+        expression: ExpressionWithArgs,
+        all_involved_characteristics: set[ExpressionCharacteristics],
+    ) -> IgnoreVerdict:
+        inconsistent_value_ordering_functions = ["array_agg", "string_agg"]
+        if (
+            db_function.function_name_in_lower_case
+            in inconsistent_value_ordering_functions
+            # only exclude unordered variant
+            and "ORDER BY" not in db_function.to_pattern(db_function.max_param_count)
+        ):
+            return YesIgnore("inconsistent ordering, not an error")
+
+        if db_function.function_name_in_lower_case == "timezone":
+            return YesIgnore("#21999: timezone")
+
+        if db_function.function_name_in_lower_case == "date_trunc":
+            precision = expression.args[0]
+            if isinstance(precision, EnumConstant) and precision.value == "second":
+                return YesIgnore("#22017: date_trunc with seconds")
+            if isinstance(precision, EnumConstant) and precision.value == "quarter":
+                return YesIgnore("#21996: date_trunc does not support quarter")
+
+        if db_function.function_name_in_lower_case == "lpad" and expression.args[
+            1
+        ].has_any_characteristic({ExpressionCharacteristics.NEGATIVE}):
+            return YesIgnore("#21997: lpad with negative")
+
+        if db_function.function_name_in_lower_case in {"min", "max"}:
+            return_type_spec = expression.args[0].resolve_return_type_spec()
+
+            if (
+                isinstance(return_type_spec, DateTimeReturnTypeSpec)
+                and return_type_spec.type_identifier == TIME_TYPE_IDENTIFIER
+            ):
+                # MIN and MAX currently not supported on TIME type in mz
+                return YesIgnore("#21584: min/max on time")
+            if isinstance(return_type_spec, TextReturnTypeSpec):
+                return YesIgnore("#22002: min/max on text")
+
+        if db_function.function_name_in_lower_case in {
+            "regexp_match",
+            "regexp_replace",
+        } and expression.args[0].has_any_characteristic(
+            {ExpressionCharacteristics.TEXT_WITH_SPECIAL_SPACE_CHARS}
+        ):
+            return YesIgnore("#22000: regexp with linebreak")
+
+        if db_function.function_name_in_lower_case == "replace":
+            # replace is not working properly with empty text; however, it is not possible to reliably determine if an
+            # expression is an empty text, we therefore need to exclude the function completely
+            return YesIgnore("#22001: replace")
+
+        if db_function.function_name_in_lower_case == "nullif":
+            type_arg0 = expression.args[0].try_resolve_exact_data_type()
+            type_arg1 = expression.args[1].try_resolve_exact_data_type()
+
+            if (
+                type_arg0 is not None
+                and type_arg1 is not None
+                and type_arg0.type_name != type_arg1.type_name
+            ):
+                # Postgres returns a double for nullif(int, double), which does not seem better
+                return YesIgnore("not considered worse")
+
+        if (
+            db_function.function_name_in_lower_case == "regexp_split_to_array"
+            and expression.args[0].has_any_characteristic(
+                {ExpressionCharacteristics.TEXT_WITH_SPECIAL_SPACE_CHARS}
+            )
+        ):
+            return YesIgnore("#22011: regexp_split_to_array with linebreaks")
+
+        return NoIgnore()
+
+    def _matches_problematic_operation_invocation(
+        self,
+        db_operation: DbOperation,
+        expression: ExpressionWithArgs,
+        all_involved_characteristics: set[ExpressionCharacteristics],
+    ) -> IgnoreVerdict:
+        if "$ AT TIME ZONE $" in db_operation.pattern:
+            return YesIgnore("other time-zone handling")
+
+        if (
+            "$::TIMESTAMPTZ($)" in db_operation.pattern
+            or "$::TIMESTAMP($)" in db_operation.pattern
+        ) and expression.args[0].has_any_characteristic(
+            {ExpressionCharacteristics.NULL}
+        ):
+            return YesIgnore("#22014: timestamp precision with null")
+
+        if db_operation.pattern in {"$ ~ $", "$ ~* $", "$ !~ $", "$ !~* $"}:
+            return YesIgnore(
+                "Materialize regular expressions are similar to, but not identical to, PostgreSQL regular expressions."
+            )
+
         return NoIgnore()
 
 
-class PgPostExecutionInconsistencyIgnoreFilter(PostExecutionInconsistencyIgnoreFilter):
-    def shall_ignore_error(self, error: ValidationError) -> IgnoreVerdict:
+class PgPostExecutionInconsistencyIgnoreFilter(
+    PostExecutionInconsistencyIgnoreFilterBase
+):
+    def _shall_ignore_success_mismatch(
+        self,
+        error: ValidationError,
+        query_template: QueryTemplate,
+        contains_aggregation: bool,
+    ) -> IgnoreVerdict:
+        outcome_by_strategy_id = error.query_execution.get_outcome_by_strategy_key()
+
+        mz_outcome = outcome_by_strategy_id[EvaluationStrategyKey.MZ_DATAFLOW_RENDERING]
+        pg_outcome = outcome_by_strategy_id[EvaluationStrategyKey.POSTGRES]
+
+        if isinstance(pg_outcome, QueryFailure):
+            return self._shall_ignore_pg_failure_where_mz_succeeds(pg_outcome)
+
+        if isinstance(mz_outcome, QueryFailure):
+            return self._shall_ignore_mz_failure_where_pg_succeeds(
+                query_template, mz_outcome
+            )
+
+        return super()._shall_ignore_success_mismatch(
+            error, query_template, contains_aggregation
+        )
+
+    def _shall_ignore_pg_failure_where_mz_succeeds(
+        self, pg_outcome: QueryFailure
+    ) -> IgnoreVerdict:
+        pg_error_msg = pg_outcome.error_message
+
+        if (
+            "No function matches the given name and argument types" in pg_error_msg
+            or "No operator matches the given name and argument types" in pg_error_msg
+        ):
+            return YesIgnore(
+                "Not supported in Postgres: No function / operator matches the given name and argument types"
+            )
+
+        if 'syntax error at or near "="' in pg_error_msg:
+            # Postgres does not take: bool_null = bool_false = bool_true
+            return YesIgnore("accepted")
+
+        if "smallint out of range" in pg_error_msg:
+            # mz handles this better
+            return YesIgnore("accepted")
+
+        if (
+            "value out of range: overflow" in pg_error_msg
+            or "value out of range: underflow" in pg_error_msg
+            or "timestamp out of range" in pg_error_msg
+        ):
+            return YesIgnore("#22265")
+
+        if _error_message_is_about_zero_or_value_ranges(pg_error_msg):
+            return YesIgnore("Caused by a different precision")
+
         return NoIgnore()
+
+    def _shall_ignore_mz_failure_where_pg_succeeds(
+        self, query_template: QueryTemplate, mz_outcome: QueryFailure
+    ) -> IgnoreVerdict:
+        mz_error_msg = mz_outcome.error_message
+
+        if (
+            "No function matches the given name and argument types" in mz_error_msg
+            or "No operator matches the given name and argument types" in mz_error_msg
+        ):
+            # this does not necessarily mean that the function exists in Postgres; it could also be that an expression
+            # (an argument) is evaluated to another type
+            return YesIgnore(
+                f"#22024: non-existing functions for given parameters in mz ({mz_error_msg})"
+            )
+
+        def matches_round_function(expression: Expression) -> bool:
+            return (
+                isinstance(expression, ExpressionWithArgs)
+                and isinstance(expression.operation, DbFunction)
+                and expression.operation.function_name_in_lower_case == "round"
+            )
+
+        if (
+            "value out of range: overflow" in mz_error_msg
+            and query_template.matches_any_expression(matches_round_function, True)
+        ):
+            return YesIgnore("#22028: round overflow")
+
+        if (
+            "value out of range: overflow" in mz_error_msg
+            or "cannot take square root of a negative number" in mz_error_msg
+            # both "inf" and "-inf"
+            or 'inf" real out of range' in mz_error_msg
+            or 'inf" double precision out of range' in mz_error_msg
+        ):
+            return YesIgnore("#21994: overflow in mz")
+
+        if (
+            "value out of range: underflow" in mz_error_msg
+            or '"-inf" real out of range' in mz_error_msg
+        ):
+            return YesIgnore("#21995: underflow in mz")
+
+        if (
+            'inf" real out of range' in mz_error_msg
+            and query_template.matches_any_expression(_matches_eq_with_real, True)
+        ):
+            return YesIgnore("#20022: real resulting in out of range")
+
+        if (
+            "precision for type timestamp or timestamptz must be between 0 and 6"
+            in mz_error_msg
+        ):
+            return YesIgnore("#22020: unsupported timestamp precision")
+
+        if "array_agg on arrays not yet supported" in mz_error_msg:
+            return YesIgnore("(no ticket)")
+
+        if "field position must be greater than zero" in mz_error_msg:
+            return YesIgnore("#22023: split_part")
+
+        if "timestamp out of range" in mz_error_msg:
+            return YesIgnore("#22264")
+
+        if _error_message_is_about_zero_or_value_ranges(mz_error_msg):
+            return YesIgnore("Caused by a different precision")
+
+        return NoIgnore()
+
+    def _shall_ignore_content_mismatch(
+        self,
+        error: ValidationError,
+        query_template: QueryTemplate,
+        contains_aggregation: bool,
+    ) -> IgnoreVerdict:
+        def matches_math_aggregation_fun(expression: Expression) -> bool:
+            if isinstance(expression, ExpressionWithArgs):
+                if isinstance(expression.operation, DbFunction):
+                    return expression.operation.function_name_in_lower_case in {
+                        "sum",
+                        "avg",
+                        "var_pop",
+                        "var_samp",
+                        "stddev_pop",
+                        "stddev_samp",
+                    }
+
+            return False
+
+        def matches_math_op_with_large_or_tiny_val(expression: Expression) -> bool:
+            if isinstance(expression, ExpressionWithArgs):
+                if isinstance(expression.operation, DbOperation):
+                    return expression.operation.pattern in {
+                        "$ + $",
+                        "$ - $",
+                        "$ / $",
+                        "$ % $",
+                    } and expression.has_any_characteristic(
+                        {
+                            ExpressionCharacteristics.MAX_VALUE,
+                            ExpressionCharacteristics.TINY_VALUE,
+                        }
+                    )
+            return False
+
+        def matches_fun_with_problematic_floating_behavior(
+            expression: Expression,
+        ) -> bool:
+            if isinstance(expression, ExpressionWithArgs) and isinstance(
+                expression.operation, DbFunction
+            ):
+                return expression.operation.function_name_in_lower_case in [
+                    "sin",
+                    "cos",
+                    "tan",
+                    "asin",
+                    "acos",
+                    "atan",
+                    "asinh",
+                    "acosh",
+                    "atanh",
+                    "cot",
+                    "cos",
+                    "cosh",
+                    "log",
+                    "log10",
+                    "ln",
+                    "radians",
+                ]
+            return False
+
+        def matches_mod_with_decimal(expression: Expression) -> bool:
+            if isinstance(expression, ExpressionWithArgs) and isinstance(
+                expression.operation, DbOperation
+            ):
+                if expression.operation.pattern == "$ % $":
+                    arg1_ret_type_spec = expression.args[1].resolve_return_type_spec()
+
+                    if isinstance(arg1_ret_type_spec, NumericReturnTypeSpec):
+                        return arg1_ret_type_spec.always_floating_type
+
+            return False
+
+        def matches_nullif(expression: Expression) -> bool:
+            if isinstance(expression, ExpressionWithArgs) and isinstance(
+                expression.operation, DbFunction
+            ):
+                return expression.operation.function_name_in_lower_case == "nullif"
+
+            return False
+
+        if query_template.matches_any_expression(matches_math_aggregation_fun, True):
+            return YesIgnore("#22003: aggregation function")
+
+        if query_template.matches_any_expression(
+            matches_fun_with_problematic_floating_behavior, True
+        ):
+            return YesIgnore("Different precision causes issues")
+
+        if query_template.matches_any_expression(matches_mod_with_decimal, True):
+            return YesIgnore("Caused by a different precision")
+
+        if query_template.matches_any_expression(
+            partial(matches_fun_by_name, function_name_in_lower_case="mod"), True
+        ):
+            return YesIgnore("#22005: mod")
+
+        if query_template.matches_any_expression(
+            partial(
+                matches_x_or_y,
+                x=partial(matches_fun_by_name, function_name_in_lower_case="date_part"),
+                y=partial(matches_op_by_pattern, pattern="EXTRACT($ FROM $)"),
+            ),
+            True,
+        ):
+            return YesIgnore("Consequence of #22016")
+
+        if query_template.matches_any_expression(
+            matches_math_op_with_large_or_tiny_val, True
+        ):
+            return YesIgnore("#22266: arithmetic funs with large value")
+
+        if query_template.matches_any_expression(matches_nullif, True):
+            return YesIgnore("#22267: nullif")
+
+        return NoIgnore()
+
+    def _shall_ignore_row_count_mismatch(
+        self,
+        error: ValidationError,
+        query_template: QueryTemplate,
+        contains_aggregation: bool,
+    ) -> IgnoreVerdict:
+        def matches_float_comparison(expression: Expression) -> bool:
+            if isinstance(expression, ExpressionWithArgs) and isinstance(
+                expression.operation, DbOperation
+            ):
+                if expression.operation.pattern == "$ = $":
+                    type_spec_arg0 = expression.args[0].resolve_return_type_spec()
+                    type_spec_arg1 = expression.args[1].resolve_return_type_spec()
+
+                    return (
+                        isinstance(type_spec_arg0, NumericReturnTypeSpec)
+                        and type_spec_arg0.always_floating_type
+                    ) or (
+                        isinstance(type_spec_arg1, NumericReturnTypeSpec)
+                        and type_spec_arg1.always_floating_type
+                    )
+
+            return False
+
+        if query_template.matches_any_expression(matches_float_comparison, True):
+            return YesIgnore("Caused by a different precision")
+
+        return super()._shall_ignore_row_count_mismatch(
+            error, query_template, contains_aggregation
+        )
+
+
+def _matches_eq_with_real(expression: Expression) -> bool:
+    if (
+        isinstance(expression, ExpressionWithArgs)
+        and isinstance(expression.operation, DbOperation)
+        and expression.operation.pattern == "$ = $"
+    ):
+        type_arg0 = expression.args[0].try_resolve_exact_data_type()
+        type_arg1 = expression.args[1].try_resolve_exact_data_type()
+
+        return (
+            type_arg0 is not None and type_arg0.type_name == REAL_TYPE_IDENTIFIER
+        ) or (type_arg1 is not None and type_arg1.type_name == REAL_TYPE_IDENTIFIER)
+
+    return False
+
+
+def _error_message_is_about_zero_or_value_ranges(message: str) -> bool:
+    return (
+        "is not defined for zero" in message
+        or "is not defined for negative numbers" in message
+        or "zero raised to a negative power is undefined" in message
+        or "cannot take logarithm of zero" in message
+        or "cannot take logarithm of a negative number" in message
+        or "division by zero" in message
+        or "is defined for numbers between -1 and 1 inclusive" in message
+        or "cannot take square root of a negative number" in message
+        or "negative substring length not allowed" in message
+        or "input is out of range" in message
+        or "pow cannot return complex numbers" in message
+        or "timestamp cannot be NaN" in message
+        or "a negative number raised to a non-integer power yields a complex result"
+        in message
+    )
+
+
+def matches_x_or_y(
+    expression: Expression,
+    x: Callable[[Expression], bool],
+    y: Callable[[Expression], bool],
+) -> bool:
+    return x(expression) or y(expression)
+
+
+def matches_fun_by_name(
+    expression: Expression, function_name_in_lower_case: str
+) -> bool:
+    if isinstance(expression, ExpressionWithArgs) and isinstance(
+        expression.operation, DbFunction
+    ):
+        return (
+            expression.operation.function_name_in_lower_case
+            == function_name_in_lower_case
+        )
+    return False
+
+
+def matches_op_by_pattern(expression: Expression, pattern: str) -> bool:
+    if isinstance(expression, ExpressionWithArgs) and isinstance(
+        expression.operation, DbOperation
+    ):
+        return expression.operation.pattern == pattern
+    return False
