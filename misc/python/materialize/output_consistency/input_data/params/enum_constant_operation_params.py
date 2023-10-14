@@ -9,6 +9,9 @@
 from materialize.output_consistency.enum.enum_operation_param import (
     EnumConstantOperationParam,
 )
+from materialize.output_consistency.expression.expression_characteristics import (
+    ExpressionCharacteristics,
+)
 
 TIME_ZONE_PARAM = EnumConstantOperationParam(
     {"UTC", "CET", "+8", "America/New_York"}, add_quotes=True
@@ -54,6 +57,9 @@ TEXT_TRIM_SPEC_PARAM = EnumConstantOperationParam(
 
 REPETITIONS_PARAM = EnumConstantOperationParam(
     {"0", "1", "2", "10", "100", "-2"}, add_quotes=False
+)
+REPETITIONS_PARAM.characteristics_per_index[REPETITIONS_PARAM.values.index("-2")].add(
+    ExpressionCharacteristics.NEGATIVE
 )
 
 PRECISION_PARAM = EnumConstantOperationParam(

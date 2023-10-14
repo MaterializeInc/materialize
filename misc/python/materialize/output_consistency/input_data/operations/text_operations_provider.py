@@ -8,6 +8,8 @@
 # by the Apache License, Version 2.0.
 
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
+from materialize.output_consistency.enum.enum_constant import EnumConstant
+from materialize.output_consistency.expression.expression import Expression
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
@@ -46,6 +48,7 @@ from materialize.output_consistency.operation.operation import (
 )
 
 TEXT_OPERATION_TYPES: list[DbOperationOrFunction] = []
+
 
 TEXT_OPERATION_TYPES.append(
     DbOperation(
@@ -201,18 +204,31 @@ TEXT_OPERATION_TYPES.append(
     )
 )
 
-TEXT_OPERATION_TYPES.append(
-    DbFunction(
-        "lpad",
-        [
-            TextOperationParam(),
-            # do not use an arbitrary integer to avoid long durations
-            REPETITIONS_PARAM,
-            TextOperationParam(optional=True),
-        ],
-        TextReturnTypeSpec(),
-    )
-)
+
+class LpadFunction(DbFunction):
+    def __init__(self):
+        super().__init__(
+            "lpad",
+            [
+                TextOperationParam(),
+                # do not use an arbitrary integer to avoid long durations
+                REPETITIONS_PARAM,
+                TextOperationParam(optional=True),
+            ],
+            TextReturnTypeSpec(),
+        )
+
+    def derive_characteristics(
+        self, args: list[Expression]
+    ) -> set[ExpressionCharacteristics]:
+        length_arg = args[1]
+        if isinstance(length_arg, EnumConstant) and length_arg.value == "0":
+            return {ExpressionCharacteristics.TEXT_EMPTY}
+
+        return set()
+
+
+TEXT_OPERATION_TYPES.append(LpadFunction())
 
 TEXT_OPERATION_TYPES.append(
     DbFunction(

@@ -10,6 +10,13 @@
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
+from materialize.output_consistency.expression.expression_characteristics import (
+    ExpressionCharacteristics,
+)
+from materialize.output_consistency.input_data.return_specs.date_time_return_spec import (
+    DateTimeReturnTypeSpec,
+)
+from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
 
 
 class DateTimeDataType(DataType):
@@ -27,6 +34,13 @@ class DateTimeDataType(DataType):
         self.max_value = max_value
         self.further_values = further_values
         self.has_time_zone = has_time_zone
+
+    def resolve_return_type_spec(
+        self, characteristics: set[ExpressionCharacteristics]
+    ) -> ReturnTypeSpec:
+        return DateTimeReturnTypeSpec(
+            type_identifier=self.identifier,
+        )
 
 
 DATE_TYPE_IDENTIFIER = "DATE"
