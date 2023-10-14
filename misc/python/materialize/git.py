@@ -95,7 +95,7 @@ def get_version_tags(*, fetch: bool = True, prefix: str = "v") -> list[Version]:
             tag as a version.
     """
     if fetch:
-        _fetch()
+        _fetch(all_remotes=True, include_tags=True, force=True)
     tags = []
     for t in spawn.capture(["git", "tag"]).splitlines():
         if not t.startswith(prefix):
@@ -139,9 +139,39 @@ def describe() -> str:
     return spawn.capture(["git", "describe"]).strip()
 
 
-def fetch() -> str:
-    """Fetch from all configured default fetch remotes"""
-    return spawn.capture(["git", "fetch", "--all", "--tags", "--force"]).strip()
+def fetch(
+    remote: str | None = None,
+    all_remotes: bool = False,
+    include_tags: bool = False,
+    force: bool = False,
+    branch: str | None = None,
+) -> str:
+    """Fetch from remotes"""
+
+    if remote and all_remotes:
+        raise RuntimeError("all_remotes must be false when a remote is specified")
+
+    if branch and not remote:
+        raise RuntimeError("remote must be specified when a branch is specified")
+
+    command = ["git", "fetch"]
+
+    if remote:
+        command.append(remote)
+
+    if branch:
+        command.append(branch)
+
+    if all_remotes:
+        command.append("--all")
+
+    if include_tags:
+        command.append("--tags")
+
+    if force:
+        command.append("--force")
+
+    return spawn.capture(command).strip()
 
 
 _fetch = fetch  # renamed because an argument shadows the fetch name in get_tags

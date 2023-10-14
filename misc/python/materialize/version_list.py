@@ -13,7 +13,7 @@ from pathlib import Path
 
 import frontmatter
 
-from materialize.git import get_version_tags
+from materialize import git
 from materialize.util import MzVersion
 
 MZ_ROOT = Path(os.environ["MZ_ROOT"])
@@ -84,7 +84,7 @@ class VersionsFromGit(VersionList):
 
     def __init__(self) -> None:
         self.versions = list(
-            {MzVersion.from_semver(t) for t in get_version_tags(fetch=True)}
+            {MzVersion.from_semver(t) for t in git.get_version_tags(fetch=True)}
             - INVALID_VERSIONS
         )
         self.versions.sort()
