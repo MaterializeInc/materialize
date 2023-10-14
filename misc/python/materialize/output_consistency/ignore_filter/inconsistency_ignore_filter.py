@@ -308,10 +308,10 @@ class PostExecutionInconsistencyIgnoreFilter(
         outcome_by_strategy_id = error.query_execution.get_outcome_by_strategy_key()
 
         dfr_successful = outcome_by_strategy_id[
-            EvaluationStrategyKey.DATAFLOW_RENDERING
+            EvaluationStrategyKey.MZ_DATAFLOW_RENDERING
         ].successful
         ctf_successful = outcome_by_strategy_id[
-            EvaluationStrategyKey.CONSTANT_FOLDING
+            EvaluationStrategyKey.MZ_CONSTANT_FOLDING
         ].successful
 
         dfr_fails_but_ctf_succeeds = not dfr_successful and ctf_successful

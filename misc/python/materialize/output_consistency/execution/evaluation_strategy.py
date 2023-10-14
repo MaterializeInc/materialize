@@ -28,8 +28,8 @@ from materialize.output_consistency.selection.selection import (
 
 class EvaluationStrategyKey(Enum):
     DUMMY = 1
-    DATAFLOW_RENDERING = 2
-    CONSTANT_FOLDING = 3
+    MZ_DATAFLOW_RENDERING = 2
+    MZ_CONSTANT_FOLDING = 3
 
 
 class EvaluationStrategy:
@@ -223,7 +223,7 @@ class DummyEvaluation(EvaluationStrategy):
 class DataFlowRenderingEvaluation(EvaluationStrategy):
     def __init__(self) -> None:
         super().__init__(
-            EvaluationStrategyKey.DATAFLOW_RENDERING,
+            EvaluationStrategyKey.MZ_DATAFLOW_RENDERING,
             "Dataflow rendering",
             "t_dfr",
             "dataflow_rendering",
@@ -262,7 +262,7 @@ class DataFlowRenderingEvaluation(EvaluationStrategy):
 class ConstantFoldingEvaluation(EvaluationStrategy):
     def __init__(self) -> None:
         super().__init__(
-            EvaluationStrategyKey.CONSTANT_FOLDING,
+            EvaluationStrategyKey.MZ_CONSTANT_FOLDING,
             "Constant folding",
             "v_ctf",
             "constant_folding",
