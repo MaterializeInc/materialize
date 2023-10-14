@@ -709,15 +709,6 @@ pub struct Type {
     pub resolved_ids: ResolvedIds,
 }
 
-impl Type {
-    pub fn desc(&self, name: String) -> Result<RelationDesc, SqlCatalogError> {
-        self.desc.clone().ok_or(SqlCatalogError::InvalidDependency {
-            name,
-            typ: CatalogItemType::Type,
-        })
-    }
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub struct Func {
     #[serde(skip)]
@@ -754,22 +745,26 @@ impl CatalogItem {
         }
     }
 
-    pub fn desc(&self, name: String) -> Result<Cow<RelationDesc>, SqlCatalogError> {
+    pub fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, SqlCatalogError> {
+        self.desc_opt().ok_or(SqlCatalogError::InvalidDependency {
+            name: name.to_string(),
+            typ: self.typ(),
+        })
+    }
+
+    pub fn desc_opt(&self) -> Option<Cow<RelationDesc>> {
         match &self {
-            CatalogItem::Source(src) => Ok(Cow::Borrowed(&src.desc)),
-            CatalogItem::Log(log) => Ok(Cow::Owned(log.variant.desc())),
-            CatalogItem::Table(tbl) => Ok(Cow::Borrowed(&tbl.desc)),
-            CatalogItem::View(view) => Ok(Cow::Borrowed(&view.desc)),
-            CatalogItem::MaterializedView(mview) => Ok(Cow::Borrowed(&mview.desc)),
-            CatalogItem::Type(typ) => Ok(Cow::Owned(typ.desc(name)?)),
+            CatalogItem::Source(src) => Some(Cow::Borrowed(&src.desc)),
+            CatalogItem::Log(log) => Some(Cow::Owned(log.variant.desc())),
+            CatalogItem::Table(tbl) => Some(Cow::Borrowed(&tbl.desc)),
+            CatalogItem::View(view) => Some(Cow::Borrowed(&view.desc)),
+            CatalogItem::MaterializedView(mview) => Some(Cow::Borrowed(&mview.desc)),
+            CatalogItem::Type(typ) => typ.desc.as_ref().map(Cow::Borrowed),
             CatalogItem::Func(_)
             | CatalogItem::Index(_)
             | CatalogItem::Sink(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => Err(SqlCatalogError::InvalidDependency {
-                name,
-                typ: self.typ(),
-            }),
+            | CatalogItem::Connection(_) => None,
         }
     }
 
@@ -1095,17 +1090,21 @@ impl CatalogItem {
 }
 
 impl CatalogEntry {
-    /// Reports the description of the datums produced by this catalog item.
+    /// Like [`CatalogEntry::desc_opt`], but returns an error if the catalog
+    /// entry is not of a type that has a description.
     pub fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, SqlCatalogError> {
-        self.item.desc(name.to_string())
+        self.item.desc(name)
+    }
+
+    /// Reports the description of the rows produced by this catalog entry, if
+    /// this catalog entry produces rows.
+    pub fn desc_opt(&self) -> Option<Cow<RelationDesc>> {
+        self.item.desc_opt()
     }
 
     /// Reports if the item has columns.
     pub fn has_columns(&self) -> bool {
-        // The name passed to `desc` is only used to create the
-        // SqlCatalogError object in case it errors which we don't
-        // care for in this case.
-        self.item.desc("".to_string()).is_ok()
+        self.item.desc_opt().is_some()
     }
 
     /// Returns the [`mz_sql::func::Func`] associated with this `CatalogEntry`.
