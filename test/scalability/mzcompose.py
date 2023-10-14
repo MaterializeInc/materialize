@@ -297,7 +297,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             if target == "common-ancestor":
                 target = benchmark_utils.resolve_tag_of_common_ancestor()
             endpoint = MaterializeContainer(
-                composition=c, image=f"materialize/materialized:{target}"
+                composition=c,
+                image=f"materialize/materialized:{target}",
+                alternative_image="materialize/materialized:latest",
             )
         assert endpoint is not None
 
