@@ -330,7 +330,7 @@ SOURCE
 materialize
 mz_internal
 mz_compute_dependencies
-BASE TABLE
+SOURCE
 materialize
 mz_internal
 mz_compute_error_counts

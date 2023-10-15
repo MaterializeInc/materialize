@@ -63,6 +63,9 @@ pub enum IntrospectionType {
     StatementExecutionHistory,
     SessionHistory,
     PreparedStatementHistory,
+
+    // Collections written by the compute controller.
+    ComputeDependencies,
 }
 
 /// Describes how data is written to the collection.

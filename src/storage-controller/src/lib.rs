@@ -837,6 +837,11 @@ where
                                 self.partially_truncate_statement_log().await;
                             }
                         }
+
+                        // Truncate compute-maintained collections.
+                        IntrospectionType::ComputeDependencies => {
+                            self.reconcile_managed_collection(id, vec![]).await;
+                        }
                     }
                 }
                 DataSource::Webhook => {

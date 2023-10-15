@@ -523,6 +523,7 @@ mz_arrangement_heap_size_raw                 log   <null>   <null>
 mz_arrangement_heap_capacity_raw             log   <null>   <null>
 mz_arrangement_heap_allocations_raw          log   <null>   <null>
 mz_compute_delays_histogram_raw              log   <null>   <null>
+mz_compute_dependencies                      source <null>  <null>
 mz_compute_error_counts_raw                  log   <null>   <null>
 mz_compute_exports_per_worker                log   <null>   <null>
 mz_compute_frontiers_per_worker              log   <null>   <null>
@@ -560,7 +561,6 @@ mz_cluster_replica_metrics
 mz_cluster_replica_sizes
 mz_cluster_replica_statuses
 mz_comments
-mz_compute_dependencies
 mz_internal_cluster_replicas
 mz_kafka_sources
 mz_object_dependencies
@@ -660,7 +660,7 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-49
+48
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'

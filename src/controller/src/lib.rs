@@ -178,12 +178,6 @@ pub enum ControllerResponse<T = mz_repr::Timestamp> {
     ComputeReplicaHeartbeat(ReplicaId, DateTime<Utc>),
     /// Notification that new resource usage metrics are available for a given replica.
     ComputeReplicaMetrics(ReplicaId, Vec<ServiceProcessMetrics>),
-    /// Notification about compute dependency updates.
-    ComputeDependencyUpdate {
-        id: GlobalId,
-        dependencies: Vec<GlobalId>,
-        diff: i64,
-    },
 }
 
 impl<T> From<ComputeControllerResponse<T>> for ControllerResponse<T> {
@@ -198,15 +192,6 @@ impl<T> From<ComputeControllerResponse<T>> for ControllerResponse<T> {
             ComputeControllerResponse::ReplicaHeartbeat(id, when) => {
                 ControllerResponse::ComputeReplicaHeartbeat(id, when)
             }
-            ComputeControllerResponse::DependencyUpdate {
-                id,
-                dependencies,
-                diff,
-            } => ControllerResponse::ComputeDependencyUpdate {
-                id,
-                dependencies,
-                diff,
-            },
         }
     }
 }
@@ -327,7 +312,7 @@ where
                 Ok(None)
             }
             Readiness::Compute => {
-                let response = self.active_compute().process();
+                let response = self.active_compute().process().await;
                 Ok(response.map(Into::into))
             }
             Readiness::Metrics => Ok(self

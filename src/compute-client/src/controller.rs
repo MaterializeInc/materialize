@@ -46,9 +46,9 @@ use mz_expr::RowSetFinishing;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
-use mz_repr::{GlobalId, Row};
+use mz_repr::{Diff, GlobalId, Row};
 use mz_stash_types::objects::proto;
-use mz_storage_client::controller::{ReadPolicy, StorageController};
+use mz_storage_client::controller::{IntrospectionType, ReadPolicy, StorageController};
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::progress::{Antichain, Timestamp};
@@ -73,6 +73,8 @@ mod replica;
 
 pub mod error;
 
+type IntrospectionUpdates = (IntrospectionType, Vec<(Row, Diff)>);
+
 /// Responses from the compute controller.
 #[derive(Debug)]
 pub enum ComputeControllerResponse<T> {
@@ -83,12 +85,6 @@ pub enum ComputeControllerResponse<T> {
     /// A notification that we heard a response from the given replica at the
     /// given time.
     ReplicaHeartbeat(ReplicaId, DateTime<Utc>),
-    /// A notification about dependency updates.
-    DependencyUpdate {
-        id: GlobalId,
-        dependencies: Vec<GlobalId>,
-        diff: i64,
-    },
 }
 
 /// Replica configuration
@@ -158,6 +154,11 @@ pub struct ComputeController<T> {
     response_rx: mpsc::Receiver<ComputeControllerResponse<T>>,
     /// Response sender that's passed to new `Instance`s.
     response_tx: mpsc::Sender<ComputeControllerResponse<T>>,
+    /// Receiver for introspection updates produced by `Instance`s, to be recorded on subsequent
+    /// calls to `ActiveComputeController::process`.
+    introspection_rx: mpsc::Receiver<IntrospectionUpdates>,
+    /// Introspection updates sender that's passed to new `Instance`s.
+    introspection_tx: mpsc::Sender<IntrospectionUpdates>,
 }
 
 impl<T> ComputeController<T> {
@@ -168,6 +169,7 @@ impl<T> ComputeController<T> {
         metrics_registry: MetricsRegistry,
     ) -> Self {
         let (response_tx, response_rx) = mpsc::channel();
+        let (introspection_tx, introspection_rx) = mpsc::channel();
 
         Self {
             instances: BTreeMap::new(),
@@ -180,6 +182,8 @@ impl<T> ComputeController<T> {
             metrics: ComputeControllerMetrics::new(metrics_registry),
             response_rx,
             response_tx,
+            introspection_rx,
+            introspection_tx,
         }
     }
 
@@ -282,6 +286,7 @@ where
                 self.envd_epoch,
                 self.metrics.for_instance(id),
                 self.response_tx.clone(),
+                self.introspection_tx.clone(),
                 variable_length_row_encoding,
             ),
         );
@@ -562,7 +567,7 @@ where
     }
 
     /// Processes the work queued by [`ComputeController::ready`].
-    pub fn process(&mut self) -> Option<ComputeControllerResponse<T>> {
+    pub async fn process(&mut self) -> Option<ComputeControllerResponse<T>> {
         // Update controller state metrics.
         for instance in self.compute.instances.values_mut() {
             instance.refresh_state_metrics();
@@ -572,6 +577,9 @@ where
         for instance in self.compute.instances.values_mut() {
             instance.activate(self.storage).rehydrate_failed_replicas();
         }
+
+        // Record pending introspection updates.
+        self.record_introspection_updates().await;
 
         // Process pending ready responses.
         match self.compute.response_rx.try_recv() {
@@ -607,6 +615,14 @@ where
         }
 
         None
+    }
+
+    async fn record_introspection_updates(&mut self) {
+        for (type_, updates) in self.compute.introspection_rx.try_iter() {
+            self.storage
+                .record_introspection_updates(type_, updates)
+                .await;
+        }
     }
 }
 
@@ -666,6 +682,30 @@ pub struct CollectionState<T> {
     replica_write_frontiers: BTreeMap<ReplicaId, Antichain<T>>,
 }
 
+impl<T> CollectionState<T> {
+    /// Reports the current read capability.
+    pub fn read_capability(&self) -> &Antichain<T> {
+        &self.implied_capability
+    }
+
+    /// Reports the current read frontier.
+    pub fn read_frontier(&self) -> AntichainRef<T> {
+        self.read_capabilities.frontier()
+    }
+
+    /// Reports the current write frontier.
+    pub fn write_frontier(&self) -> AntichainRef<T> {
+        self.write_frontier.borrow()
+    }
+
+    /// Reports the IDs of the dependencies of this collection.
+    fn dependency_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        let compute = self.compute_dependencies.iter().copied();
+        let storage = self.storage_dependencies.iter().copied();
+        compute.chain(storage)
+    }
+}
+
 impl<T: Timestamp> CollectionState<T> {
     /// Creates a new collection state, with an initial read policy valid from `since`.
     pub fn new(
@@ -693,20 +733,5 @@ impl<T: Timestamp> CollectionState<T> {
         let mut state = Self::new(since, Vec::new(), Vec::new());
         state.log_collection = true;
         state
-    }
-
-    /// Reports the current read capability.
-    pub fn read_capability(&self) -> &Antichain<T> {
-        &self.implied_capability
-    }
-
-    /// Reports the current read frontier.
-    pub fn read_frontier(&self) -> AntichainRef<T> {
-        self.read_capabilities.frontier()
-    }
-
-    /// Reports the current write frontier.
-    pub fn write_frontier(&self) -> AntichainRef<T> {
-        self.write_frontier.borrow()
     }
 }
