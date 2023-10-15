@@ -18,6 +18,7 @@ use mz_ore::{cast::CastFrom, now::EpochMillis};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::{Datum, Diff, Row, RowPacker};
 use mz_sql::plan::Params;
+use mz_storage_client::controller::IntrospectionType;
 use qcell::QCell;
 use rand::SeedableRng;
 use rand::{distributions::Bernoulli, prelude::Distribution, thread_rng};
@@ -118,21 +119,29 @@ impl Coordinator {
     }
 
     pub(crate) async fn drain_statement_log(&mut self) {
-        let pending_session_events =
-            std::mem::take(&mut self.statement_logging.pending_session_events);
-        let pending_prepared_statement_events =
-            std::mem::take(&mut self.statement_logging.pending_prepared_statement_events);
-        let pending_statement_execution_events =
+        let session_updates = std::mem::take(&mut self.statement_logging.pending_session_events)
+            .into_iter()
+            .map(|update| (update, 1))
+            .collect();
+        let prepared_statement_updates =
+            std::mem::take(&mut self.statement_logging.pending_prepared_statement_events)
+                .into_iter()
+                .map(|update| (update, 1))
+                .collect();
+        let statement_execution_updates =
             std::mem::take(&mut self.statement_logging.pending_statement_execution_events);
 
-        self.controller
-            .storage
-            .send_statement_log_updates(
-                pending_statement_execution_events,
-                pending_prepared_statement_events,
-                pending_session_events,
-            )
-            .await;
+        use IntrospectionType::*;
+        for (type_, updates) in [
+            (SessionHistory, session_updates),
+            (PreparedStatementHistory, prepared_statement_updates),
+            (StatementExecutionHistory, statement_execution_updates),
+        ] {
+            self.controller
+                .storage
+                .record_introspection_updates(type_, updates)
+                .await;
+        }
     }
 
     /// Returns any statement logging events needed for a particular
