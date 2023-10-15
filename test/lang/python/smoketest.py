@@ -116,14 +116,12 @@ class SmokeTest(unittest.TestCase):
             # Validate the new row, again ignoring the timestamp column.
             cur.execute("FETCH ALL cur")
             row = cur.fetchone()
+            assert row is not None
 
-            if row is not None:
-                (ts, diff, a, b) = row
-                self.assertEqual(diff, 1)
-                self.assertEqual(a, 2)
-                self.assertEqual(b, "b")
-            else:
-                self.fail("row None")
+            (ts, diff, a, b) = row
+            self.assertEqual(diff, 1)
+            self.assertEqual(a, 2)
+            self.assertEqual(b, "b")
 
             self.assertEqual(cur.fetchone(), None)
 
@@ -177,16 +175,9 @@ class SmokeTest(unittest.TestCase):
 
                     # The subscribe won't end until we send a cancel request.
                     conn.cancel()
-                    with self.assertRaises(Exception) as context:
+                    with self.assertRaises(psycopg.errors.QueryCanceled):
                         copy.read_row()
-                    self.assertTrue(
-                        "canceling statement due to user request"
-                        in str(context.exception)
-                    )
 
-    # There might be problem with stream and the cancellation message. Skip until
-    # resolved.
-    @unittest.skip("https://github.com/psycopg/psycopg3/issues/30")
     def test_psycopg3_subscribe_stream(self) -> None:
         """Test subscribe with psycopg3 via its new streaming query support."""
         with psycopg.connect(MATERIALIZED_URL) as conn:
@@ -223,7 +214,8 @@ class SmokeTest(unittest.TestCase):
 
                 # The subscribe won't end until we send a cancel request.
                 conn.cancel()
-                self.assertEqual(next(stream, None), None)
+                with self.assertRaises(psycopg.errors.QueryCanceled):
+                    next(stream)
 
     def test_psycopg3_subscribe_terminate_connection(self) -> None:
         """Test terminating a bare subscribe with psycopg3.
