@@ -546,20 +546,10 @@ impl Coordinator {
     }
 
     async fn drop_replica(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
-        if let Some(Some(ReplicaMetadata {
-            last_heartbeat,
-            metrics,
-        })) = self.transient_replica_metadata.insert(replica_id, None)
+        if let Some(Some(ReplicaMetadata { metrics })) =
+            self.transient_replica_metadata.insert(replica_id, None)
         {
             let mut updates = vec![];
-            if let Some(last_heartbeat) = last_heartbeat {
-                let retraction = self.catalog().state().pack_replica_heartbeat_update(
-                    replica_id,
-                    last_heartbeat,
-                    -1,
-                );
-                updates.push(retraction);
-            }
             if let Some(metrics) = metrics {
                 let retraction = self
                     .catalog()

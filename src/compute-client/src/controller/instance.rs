@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroI64;
 use std::time::Instant;
 
+use chrono::{Duration, DurationRound, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::stream::FuturesUnordered;
 use futures::{future, StreamExt};
@@ -441,9 +442,49 @@ where
             }
             Some((replica_id, Some(response))) => {
                 // A replica has produced a response. Return it.
+                self.register_replica_heartbeat(replica_id);
                 Ok((replica_id, response))
             }
         }
+    }
+
+    /// Register a heartbeat from the given replica.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the specified replica does not exist.
+    fn register_replica_heartbeat(&mut self, replica_id: ReplicaId) {
+        let replica = self
+            .replicas
+            .get_mut(&replica_id)
+            .expect("replica must exist");
+
+        let now = Utc::now()
+            .duration_trunc(Duration::seconds(60))
+            .expect("cannot fail");
+
+        let mut updates = Vec::new();
+        if let Some(old) = replica.last_heartbeat {
+            if old == now {
+                return; // nothing new to report
+            }
+
+            let retraction = Row::pack_slice(&[
+                Datum::String(&replica_id.to_string()),
+                Datum::TimestampTz(old.try_into().expect("must fit")),
+            ]);
+            updates.push((retraction, -1));
+        }
+
+        replica.last_heartbeat = Some(now);
+
+        let insertion = Row::pack_slice(&[
+            Datum::String(&replica_id.to_string()),
+            Datum::TimestampTz(now.try_into().expect("must fit")),
+        ]);
+        updates.push((insertion, 1));
+
+        self.deliver_introspection_updates(IntrospectionType::ComputeReplicaHeartbeats, updates);
     }
 
     /// Assign a target replica to the identified subscribe.
@@ -544,7 +585,8 @@ where
 
     /// Remove an existing instance replica, by ID.
     pub fn remove_replica(&mut self, id: ReplicaId) -> Result<(), ReplicaMissing> {
-        self.compute
+        let replica = self
+            .compute
             .replicas
             .remove(&id)
             .ok_or(ReplicaMissing(id))?;
@@ -553,6 +595,18 @@ where
 
         // Remove frontier tracking for this replica.
         self.remove_write_frontiers(id);
+
+        // Remove introspection for this replica.
+        if let Some(time) = replica.last_heartbeat {
+            let row = Row::pack_slice(&[
+                Datum::String(&id.to_string()),
+                Datum::TimestampTz(time.try_into().expect("must fit")),
+            ]);
+            self.compute.deliver_introspection_updates(
+                IntrospectionType::ComputeReplicaHeartbeats,
+                vec![(row, -1)],
+            );
+        }
 
         // Subscribes targeting this replica either won't be served anymore (if the replica is
         // dropped) or might produce inconsistent output (if the target collection is an

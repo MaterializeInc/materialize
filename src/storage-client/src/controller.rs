@@ -66,6 +66,7 @@ pub enum IntrospectionType {
 
     // Collections written by the compute controller.
     ComputeDependencies,
+    ComputeReplicaHeartbeats,
 }
 
 /// Describes how data is written to the collection.

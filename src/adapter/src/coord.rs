@@ -73,7 +73,6 @@ use std::sync::{atomic, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use fail::fail_point;
@@ -569,8 +568,6 @@ pub struct Config {
 /// Soft-state metadata about a compute replica
 #[derive(Clone, Default, Debug, Eq, PartialEq)]
 pub struct ReplicaMetadata {
-    /// The last time we heard from this replica (possibly rounded)
-    pub last_heartbeat: Option<DateTime<Utc>>,
     /// The last known CPU and memory metrics
     pub metrics: Option<Vec<ServiceProcessMetrics>>,
 }

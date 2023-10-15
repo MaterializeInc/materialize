@@ -1996,9 +1996,10 @@ pub static MZ_CLUSTER_REPLICA_SIZES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTa
     is_retained_metrics_object: true,
 });
 
-pub static MZ_CLUSTER_REPLICA_HEARTBEATS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+pub static MZ_CLUSTER_REPLICA_HEARTBEATS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_cluster_replica_heartbeats",
     schema: MZ_INTERNAL_SCHEMA,
+    data_source: Some(IntrospectionType::ComputeReplicaHeartbeats),
     desc: RelationDesc::empty()
         .with_column("replica_id", ScalarType::String.nullable(false))
         .with_column(
@@ -5292,7 +5293,6 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_CLUSTER_REPLICA_METRICS),
         Builtin::Table(&MZ_CLUSTER_REPLICA_SIZES),
         Builtin::Table(&MZ_CLUSTER_REPLICA_STATUSES),
-        Builtin::Table(&MZ_CLUSTER_REPLICA_HEARTBEATS),
         Builtin::Table(&MZ_INTERNAL_CLUSTER_REPLICAS),
         Builtin::Table(&MZ_AUDIT_EVENTS),
         Builtin::Table(&MZ_STORAGE_USAGE_BY_SHARD),
@@ -5438,6 +5438,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Source(&MZ_COMPUTE_DEPENDENCIES),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS_PER_WORKER),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS),
+        Builtin::Source(&MZ_CLUSTER_REPLICA_HEARTBEATS),
         Builtin::Index(&MZ_SHOW_DATABASES_IND),
         Builtin::Index(&MZ_SHOW_SCHEMAS_IND),
         Builtin::Index(&MZ_SHOW_CONNECTIONS_IND),

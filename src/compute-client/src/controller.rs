@@ -33,7 +33,6 @@ use std::collections::BTreeMap;
 use std::num::NonZeroI64;
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::{future, FutureExt};
 use mz_build_info::BuildInfo;
@@ -81,9 +80,6 @@ pub enum ComputeControllerResponse<T> {
     PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
     /// See [`ComputeResponse::SubscribeResponse`](crate::protocol::response::ComputeResponse::SubscribeResponse).
     SubscribeResponse(GlobalId, SubscribeResponse<T>),
-    /// A notification that we heard a response from the given replica at the
-    /// given time.
-    ReplicaHeartbeat(ReplicaId, DateTime<Utc>),
 }
 
 /// Replica configuration
@@ -141,8 +137,6 @@ pub struct ComputeController<T> {
     /// A replica response to be handled by the corresponding `Instance` on a subsequent call to
     /// `ActiveComputeController::process`.
     stashed_replica_response: Option<(ComputeInstanceId, ReplicaId, ComputeResponse<T>)>,
-    /// Times we have last received responses from replicas.
-    replica_heartbeats: BTreeMap<ReplicaId, DateTime<Utc>>,
     /// A number that increases on every `environmentd` restart.
     envd_epoch: NonZeroI64,
     /// The compute controller metrics
@@ -176,7 +170,6 @@ impl<T> ComputeController<T> {
             initialized: false,
             config: Default::default(),
             stashed_replica_response: None,
-            replica_heartbeats: BTreeMap::new(),
             envd_epoch,
             metrics: ComputeControllerMetrics::new(metrics_registry),
             response_rx,
@@ -353,10 +346,6 @@ where
             // We have introspection updates waiting to be processed.
             return;
         }
-        if !self.replica_heartbeats.is_empty() {
-            // We have replica heartbeats waiting to be processed.
-            return;
-        }
         if self.instances.values().any(|i| i.wants_processing()) {
             // An instance requires processing.
             return;
@@ -378,7 +367,6 @@ where
         let ((instance_id, result), _index, _remaining) = future::select_all(receives).await;
         match result {
             Ok((replica_id, resp)) => {
-                self.replica_heartbeats.insert(replica_id, Utc::now());
                 self.stashed_replica_response = Some((instance_id, replica_id, resp));
             }
             Err(_) => {
@@ -597,13 +585,6 @@ where
                 // a copy of the `response_tx`.
                 panic!("response_tx has disconnected");
             }
-        }
-
-        // Process pending replica heartbeats.
-        if let Some((replica_id, when)) = self.compute.replica_heartbeats.pop_first() {
-            return Some(ComputeControllerResponse::ReplicaHeartbeat(
-                replica_id, when,
-            ));
         }
 
         // Process pending responses from replicas.

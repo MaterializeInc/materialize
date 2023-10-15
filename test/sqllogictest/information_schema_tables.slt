@@ -290,7 +290,7 @@ BASE TABLE
 materialize
 mz_internal
 mz_cluster_replica_heartbeats
-BASE TABLE
+SOURCE
 materialize
 mz_internal
 mz_cluster_replica_history
