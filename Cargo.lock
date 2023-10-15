@@ -3926,6 +3926,7 @@ dependencies = [
  "async-trait",
  "bytesize",
  "chrono",
+ "crossbeam-channel",
  "differential-dataflow",
  "futures",
  "http",

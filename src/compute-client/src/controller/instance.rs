@@ -11,7 +11,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroI64;
-use std::sync::mpsc;
 use std::time::Instant;
 
 use differential_dataflow::lattice::Lattice;
@@ -149,9 +148,9 @@ pub(super) struct Instance<T> {
     /// IDs of replicas that have failed and require rehydration.
     failed_replicas: BTreeSet<ReplicaId>,
     /// Sender for responses to be delivered.
-    response_tx: mpsc::Sender<ComputeControllerResponse<T>>,
+    response_tx: crossbeam_channel::Sender<ComputeControllerResponse<T>>,
     /// Sender for introspection updates to be recorded.
-    introspection_tx: mpsc::Sender<IntrospectionUpdates>,
+    introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
     /// A number that increases with each restart of `environmentd`.
     envd_epoch: NonZeroI64,
     /// Numbers that increase with each restart of a replica.
@@ -322,8 +321,8 @@ where
         arranged_logs: BTreeMap<LogVariant, GlobalId>,
         envd_epoch: NonZeroI64,
         metrics: InstanceMetrics,
-        response_tx: mpsc::Sender<ComputeControllerResponse<T>>,
-        introspection_tx: mpsc::Sender<IntrospectionUpdates>,
+        response_tx: crossbeam_channel::Sender<ComputeControllerResponse<T>>,
+        introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
         variable_length_row_encoding: bool,
     ) -> Self {
         let collections = arranged_logs

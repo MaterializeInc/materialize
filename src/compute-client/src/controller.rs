@@ -31,7 +31,6 @@
 
 use std::collections::BTreeMap;
 use std::num::NonZeroI64;
-use std::sync::mpsc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -151,14 +150,14 @@ pub struct ComputeController<T> {
 
     /// Receiver for responses produced by `Instance`s, to be delivered on subsequent calls to
     /// `ActiveComputeController::process`.
-    response_rx: mpsc::Receiver<ComputeControllerResponse<T>>,
+    response_rx: crossbeam_channel::Receiver<ComputeControllerResponse<T>>,
     /// Response sender that's passed to new `Instance`s.
-    response_tx: mpsc::Sender<ComputeControllerResponse<T>>,
+    response_tx: crossbeam_channel::Sender<ComputeControllerResponse<T>>,
     /// Receiver for introspection updates produced by `Instance`s, to be recorded on subsequent
     /// calls to `ActiveComputeController::process`.
-    introspection_rx: mpsc::Receiver<IntrospectionUpdates>,
+    introspection_rx: crossbeam_channel::Receiver<IntrospectionUpdates>,
     /// Introspection updates sender that's passed to new `Instance`s.
-    introspection_tx: mpsc::Sender<IntrospectionUpdates>,
+    introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
 }
 
 impl<T> ComputeController<T> {
@@ -168,8 +167,8 @@ impl<T> ComputeController<T> {
         envd_epoch: NonZeroI64,
         metrics_registry: MetricsRegistry,
     ) -> Self {
-        let (response_tx, response_rx) = mpsc::channel();
-        let (introspection_tx, introspection_rx) = mpsc::channel();
+        let (response_tx, response_rx) = crossbeam_channel::unbounded();
+        let (introspection_tx, introspection_rx) = crossbeam_channel::unbounded();
 
         Self {
             instances: BTreeMap::new(),
@@ -346,8 +345,16 @@ where
             // We still have a response stashed, which we are immediately ready to process.
             return;
         }
+        if !self.response_rx.is_empty() {
+            // We have responses waiting to be processed.
+            return;
+        }
+        if !self.introspection_rx.is_empty() {
+            // We have introspection updates waiting to be processed.
+            return;
+        }
         if !self.replica_heartbeats.is_empty() {
-            // We have replica heartbeats waiting to be processes.
+            // We have replica heartbeats waiting to be processed.
             return;
         }
         if self.instances.values().any(|i| i.wants_processing()) {
@@ -584,8 +591,8 @@ where
         // Process pending ready responses.
         match self.compute.response_rx.try_recv() {
             Ok(response) => return Some(response),
-            Err(mpsc::TryRecvError::Empty) => (),
-            Err(mpsc::TryRecvError::Disconnected) => {
+            Err(crossbeam_channel::TryRecvError::Empty) => (),
+            Err(crossbeam_channel::TryRecvError::Disconnected) => {
                 // This should never happen, since the `ComputeController` is always holding on to
                 // a copy of the `response_tx`.
                 panic!("response_tx has disconnected");
