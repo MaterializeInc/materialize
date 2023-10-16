@@ -142,54 +142,22 @@ mod tests {
         test_query(query, Some(vec![]), req_client, resp_client).await;
 
         // This is Jinja code and should not be parsed..
-        let info_message =
-            "Jinja code will not be parsed by the Materialize extension.".to_string();
         let query = "CREATE TABLE {{ model }} (A INT);";
-        let diagnostic = Some(vec![Diagnostic::new_with_code_number(
-            Range {
-                start: Position::new(0, 13),
-                end: Position::new(0, 13),
-            },
-            DiagnosticSeverity::INFORMATION,
-            1,
-            None,
-            info_message.clone(),
-        )]);
-        test_query(query, diagnostic, req_client, resp_client).await;
+        test_query(query, None, req_client, resp_client).await;
 
         let query = r#"
             {% if True %}
                 SELECT 100;
             {% endif %}
         "#;
-        let diagnostic = Some(vec![Diagnostic::new_with_code_number(
-            Range {
-                start: Position::new(1, 12),
-                end: Position::new(1, 12),
-            },
-            DiagnosticSeverity::INFORMATION,
-            1,
-            None,
-            info_message.clone(),
-        )]);
-        test_query(query, diagnostic, req_client, resp_client).await;
+        test_query(query, None, req_client, resp_client).await;
 
         let query = r#"
             {%+ if True %}
                 SELECT 100;
             {% endif %}
         "#;
-        let diagnostic = Some(vec![Diagnostic::new_with_code_number(
-            Range {
-                start: Position::new(1, 12),
-                end: Position::new(1, 12),
-            },
-            DiagnosticSeverity::INFORMATION,
-            1,
-            None,
-            info_message.clone(),
-        )]);
-        test_query(query, diagnostic, req_client, resp_client).await;
+        test_query(query, None, req_client, resp_client).await;
     }
 
     /// Asserts that the server can parse a single SQL statement `SELECT 100;`.
