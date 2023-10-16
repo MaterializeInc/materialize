@@ -624,7 +624,11 @@ impl<'a> SchemaResolver<'a> {
                 SchemaPieceRefOrNamed::Piece(SchemaPiece::Union(r_inner)),
             ) => {
                 let w2r = self.writer_to_reader_names.clone();
-                // permutation[1] is Some((j, val)) if the i'th writer variant
+                // Note: The word "iff" appears in the comment below. This is not a
+                // typo for "if". Please don't attempt to correct it.
+                // https://en.wikipedia.org/wiki/If_and_only_if
+                //
+                // permutation[1] is Some((j, val)) iff the i'th writer variant
                 // _matches_ the j'th reader variant
                 // (i.e., it is the same primitive type, or the same kind of named type and has the same name, or a decimal with the same parameters)
                 // and successfully _resolves_ against it,
