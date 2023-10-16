@@ -360,9 +360,6 @@ fn test_statement_logging_selects() {
     client.execute("SELECT * FROM v", &[]).unwrap();
     let _ = client.execute("SELECT 1/0", &[]);
 
-    // Statement logging happens async, give it a chance to catch up
-    thread::sleep(Duration::from_secs(5));
-
     #[derive(Debug)]
     struct Record {
         sample_rate: f64,
