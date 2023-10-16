@@ -807,7 +807,7 @@ impl DurableType<SystemPrivilegesKey, SystemPrivilegesValue> for MzAclItem {
 // Structs used internally to represent on-disk state.
 
 /// A snapshot of the current on-disk state.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Snapshot {
     pub databases: BTreeMap<proto::DatabaseKey, proto::DatabaseValue>,
     pub schemas: BTreeMap<proto::SchemaKey, proto::SchemaValue>,

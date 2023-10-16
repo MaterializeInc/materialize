@@ -10,10 +10,7 @@
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.output_consistency.output_consistency_test import (
-    parse_output_consistency_input_args,
-    run_output_consistency_tests,
-)
+from materialize.output_consistency.output_consistency_test import OutputConsistencyTest
 
 SERVICES = [
     Cockroach(setup_materialize=True),
@@ -30,9 +27,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     c.up("materialized")
 
-    args = parse_output_consistency_input_args(parser)
+    test = OutputConsistencyTest()
+    args = test.parse_output_consistency_input_args(parser)
     connection = c.sql_connection()
 
-    test_summary = run_output_consistency_tests(connection, args)
+    test_summary = test.run_output_consistency_tests(connection, args)
 
     assert test_summary.all_passed(), "At least one test failed"

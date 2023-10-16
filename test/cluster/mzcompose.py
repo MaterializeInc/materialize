@@ -239,7 +239,7 @@ def workflow_test_github_12251(c: Composition) -> None:
         SET statement_timeout = '1 s';
         CREATE TABLE IF NOT EXISTS log_table (f1 TEXT);
         CREATE TABLE IF NOT EXISTS panic_table (f1 TEXT);
-        INSERT INTO panic_table VALUES ('panic!');
+        INSERT INTO panic_table VALUES ('forced panic');
         -- Crash loop the cluster with the table's index
         INSERT INTO log_table SELECT mz_internal.mz_panic(f1) FROM panic_table;
         """

@@ -90,7 +90,7 @@ use mz_catalog::{
     debug_bootstrap_args, debug_stash_backed_catalog_state, stash_backed_catalog_state,
     CatalogError, DurableCatalogState, OpenableDurableCatalogState, StashConfig,
 };
-use mz_ore::now::SYSTEM_TIME;
+use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
 use mz_repr::role_id::RoleId;
 use mz_stash::DebugStashFactory;
 use std::num::NonZeroI64;
@@ -348,9 +348,10 @@ async fn test_debug_stash_open() {
 async fn test_open<D: DurableCatalogState>(
     mut openable_state: impl OpenableDurableCatalogState<D>,
 ) {
-    {
+    let (snapshot, audit_log) = {
         let mut state = openable_state
-            .open(SYSTEM_TIME.clone(), &debug_bootstrap_args(), None)
+            // Use `NOW_ZERO` for consistent timestamps in the snapshots.
+            .open(NOW_ZERO.clone(), &debug_bootstrap_args(), None)
             .await
             .unwrap();
 
@@ -358,11 +359,14 @@ async fn test_open<D: DurableCatalogState>(
             state.epoch(),
             NonZeroI64::new(2).expect("known to be non-zero")
         );
-        // Check for initial clusters to ensure the catalog was opened properly.
-        let clusters = state.get_clusters().await.unwrap();
-        assert_eq!(clusters.len(), 3);
-    }
-    // Reopening the catalog will increment the epoch.
+        // Check initial snapshot.
+        let snapshot = state.snapshot().await.unwrap();
+        insta::assert_debug_snapshot!(snapshot);
+        let audit_log = state.get_audit_logs().await.unwrap();
+        insta::assert_debug_snapshot!(audit_log);
+        (snapshot, audit_log)
+    };
+    // Reopening the catalog will increment the epoch, but shouldn't change the initial snapshot.
     {
         let mut state = openable_state
             .open(SYSTEM_TIME.clone(), &debug_bootstrap_args(), None)
@@ -373,6 +377,8 @@ async fn test_open<D: DurableCatalogState>(
             state.epoch(),
             NonZeroI64::new(3).expect("known to be non-zero")
         );
+        assert_eq!(state.snapshot().await.unwrap(), snapshot);
+        assert_eq!(state.get_audit_logs().await.unwrap(), audit_log);
     }
 }
 

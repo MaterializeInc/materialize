@@ -14,10 +14,8 @@ from materialize.output_consistency.common.configuration import (
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
 )
-from materialize.output_consistency.execution.sql_executor import (
-    SqlExecutionError,
-    SqlExecutor,
-)
+from materialize.output_consistency.execution.sql_executor import SqlExecutionError
+from materialize.output_consistency.execution.sql_executors import SqlExecutors
 from materialize.output_consistency.execution.test_summary import ConsistencyTestSummary
 from materialize.output_consistency.input_data.test_input_data import (
     ConsistencyTestInputData,
@@ -47,13 +45,13 @@ class QueryExecutionManager:
         self,
         evaluation_strategies: list[EvaluationStrategy],
         config: ConsistencyTestConfiguration,
-        executor: SqlExecutor,
+        executors: SqlExecutors,
         comparator: ResultComparator,
         output_printer: OutputPrinter,
     ):
         self.evaluation_strategies = evaluation_strategies
         self.config = config
-        self.executor = executor
+        self.executors = executors
         self.comparator = comparator
         self.output_printer = output_printer
         self.query_counter = 0
@@ -68,13 +66,14 @@ class QueryExecutionManager:
             self.output_printer.print_info(
                 f"Setup for evaluation strategy '{strategy.name}'"
             )
+            executor = self.executors.get_executor(strategy)
             ddl_statements = strategy.generate_sources(input_data)
 
             for sql_statement in ddl_statements:
                 self.output_printer.print_sql(sql_statement)
 
                 try:
-                    self.executor.ddl(sql_statement)
+                    executor.ddl(sql_statement)
                 except SqlExecutionError as e:
                     self.output_printer.print_error(
                         f"Setting up data structures failed ({e.message})!"
@@ -86,7 +85,8 @@ class QueryExecutionManager:
     ) -> bool:
         if self.query_counter % self.config.queries_per_tx == 0:
             # commit after every couple of queries
-            self.begin_tx(commit_previous_tx=self.query_counter > 0)
+            for strategy in self.evaluation_strategies:
+                self.begin_tx(strategy, commit_previous_tx=self.query_counter > 0)
 
         query_index = self.query_counter
         self.query_counter += 1
@@ -118,25 +118,28 @@ class QueryExecutionManager:
 
         return all_comparisons_passed
 
-    def complete(self) -> None:
-        self.commit_tx()
+    def complete(self, strategy: EvaluationStrategy) -> None:
+        self.commit_tx(strategy)
 
-    def begin_tx(self, commit_previous_tx: bool) -> None:
+    def begin_tx(self, strategy: EvaluationStrategy, commit_previous_tx: bool) -> None:
         if commit_previous_tx:
-            self.commit_tx()
+            self.commit_tx(strategy)
 
-        self.executor.begin_tx("SERIALIZABLE")
+        self.executors.get_executor(strategy).begin_tx("SERIALIZABLE")
 
-    def commit_tx(self) -> None:
+    def commit_tx(
+        self,
+        strategy: EvaluationStrategy,
+    ) -> None:
         if not self.config.use_autocommit:
-            self.executor.commit()
+            self.executors.get_executor(strategy).commit()
 
-    def rollback_tx(self, start_new_tx: bool) -> None:
+    def rollback_tx(self, strategy: EvaluationStrategy, start_new_tx: bool) -> None:
         # do this also when in autocommit mode
-        self.executor.rollback()
+        self.executors.get_executor(strategy).rollback()
 
         if start_new_tx:
-            self.begin_tx(commit_previous_tx=False)
+            self.begin_tx(strategy, commit_previous_tx=False)
 
     # May return multiple outcomes if a query is split and retried. Will always return at least one outcome.
     def fire_and_compare_query(
@@ -164,7 +167,7 @@ class QueryExecutionManager:
             start_time = datetime.now()
 
             try:
-                data = self.executor.query(sql_query_string)
+                data = self.executors.get_executor(strategy).query(sql_query_string)
                 duration = self._get_duration_in_ms(start_time)
                 result = QueryResult(
                     strategy, sql_query_string, query_template.column_count(), data
@@ -173,7 +176,7 @@ class QueryExecutionManager:
                 query_execution.durations.append(duration)
             except SqlExecutionError as err:
                 duration = self._get_duration_in_ms(start_time)
-                self.rollback_tx(start_new_tx=True)
+                self.rollback_tx(strategy, start_new_tx=True)
 
                 if self.shall_retry_with_smaller_query(query_template):
                     # abort and retry with smaller query

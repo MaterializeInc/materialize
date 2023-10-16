@@ -42,6 +42,7 @@ class DbOperationOrFunction:
         is_aggregation: bool = False,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
         is_enabled: bool = True,
+        is_pg_compatible: bool = True,
     ):
         """
         :param is_enabled: an operation should only be disabled if its execution causes problems;
@@ -58,6 +59,7 @@ class DbOperationOrFunction:
         self.is_aggregation = is_aggregation
         self.relevance = relevance
         self.is_enabled = is_enabled
+        self.is_pg_compatible = is_pg_compatible
 
     def to_pattern(self, args_count: int) -> str:
         raise NotImplementedError
@@ -115,6 +117,7 @@ class DbOperation(DbOperationOrFunction):
         args_validators: set[OperationArgsValidator] | None = None,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
         is_enabled: bool = True,
+        is_pg_compatible: bool = True,
     ):
         param_count = len(params)
         super().__init__(
@@ -126,6 +129,7 @@ class DbOperation(DbOperationOrFunction):
             is_aggregation=False,
             relevance=relevance,
             is_enabled=is_enabled,
+            is_pg_compatible=is_pg_compatible,
         )
         self.pattern = pattern
 
@@ -154,6 +158,7 @@ class DbFunction(DbOperationOrFunction):
         is_aggregation: bool = False,
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
         is_enabled: bool = True,
+        is_pg_compatible: bool = True,
     ):
         self.validate_params(params)
 
@@ -166,6 +171,7 @@ class DbFunction(DbOperationOrFunction):
             is_aggregation=is_aggregation,
             relevance=relevance,
             is_enabled=is_enabled,
+            is_pg_compatible=is_pg_compatible,
         )
         self.function_name_in_lower_case = function_name.lower()
 

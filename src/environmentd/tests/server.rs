@@ -1542,8 +1542,8 @@ fn test_max_request_size() {
         let param = std::iter::repeat("1").take(param_size).join("");
         let mut client = server.connect(postgres::NoTls).unwrap();
 
-        // The specific error isn't forwarded to the client, the connection is just closed.
-        assert!(client.query(statement, &[&param]).is_err());
+        let err = client.query(statement, &[&param]).unwrap_db_error();
+        assert_contains!(err.message(), "request larger than");
         assert!(client.is_valid(Duration::from_secs(2)).is_err());
     }
 

@@ -185,7 +185,7 @@ NUMERIC_OPERATION_TYPES.append(
     DbFunction(
         "EXP",
         [NumericOperationParam()],
-        NumericReturnTypeSpec(),
+        NumericReturnTypeSpec(always_floating_type=True),
         {SingleParamValueGrowsArgsValidator()},
     )
 )
