@@ -634,7 +634,18 @@ class Composition:
                 self.compose["services"][service]["image"].endswith(tag)
                 for tag in [":latest", ":unstable", ":rolling"]
             ):
-                self.invoke("pull", service, max_tries=max_tries)
+                self.pull_single_image(service, max_tries=max_tries)
+
+    def pull_single_image(self, service: str, max_tries: int) -> None:
+        self.invoke("pull", service, max_tries=max_tries)
+
+    def try_pull_single_image(self, service: str, max_tries: int = 2) -> bool:
+        """Tries to pull the specified image and returns if this was successful."""
+        try:
+            self.pull_single_image(service, max_tries=max_tries)
+            return True
+        except UIError:
+            return False
 
     def up(
         self,
