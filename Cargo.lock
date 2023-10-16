@@ -4392,6 +4392,7 @@ dependencies = [
  "mz-sql-lexer",
  "mz-sql-parser",
  "once_cell",
+ "regex",
  "ropey",
  "serde",
  "serde_json",
