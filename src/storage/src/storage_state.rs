@@ -873,6 +873,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 auto_spill_config,
                 delay_sources_past_rehydration,
                 shrink_upsert_unused_buffers_by_ratio,
+                record_namespaced_errors,
             } => self.storage_state.dataflow_parameters.update(
                 pg_source_tcp_timeouts,
                 pg_source_snapshot_statement_timeout,
@@ -881,6 +882,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 storage_dataflow_max_inflight_bytes_config,
                 delay_sources_past_rehydration,
                 shrink_upsert_unused_buffers_by_ratio,
+                record_namespaced_errors,
             ),
         }
     }
@@ -1203,6 +1205,7 @@ impl StorageState {
                         delay_sources_past_rehydration: params.delay_sources_past_rehydration,
                         shrink_upsert_unused_buffers_by_ratio: params
                             .shrink_upsert_unused_buffers_by_ratio,
+                        record_namespaced_errors: params.record_namespaced_errors,
                     })
                 }
             }

@@ -43,6 +43,9 @@ pub struct DataflowParameters {
     /// Configuration ratio to shrink upsert buffers.
     /// Defaults to 0, which means no shrinking will happen.
     pub shrink_upsert_unused_buffers_by_ratio: usize,
+    /// Whether or not to record errors by namespace in the `details`
+    /// column of the status history tables.
+    pub record_namespaced_errors: bool,
 }
 
 impl DataflowParameters {
@@ -63,6 +66,8 @@ impl DataflowParameters {
             storage_dataflow_max_inflight_bytes_config: Default::default(),
             delay_sources_past_rehydration: Default::default(),
             shrink_upsert_unused_buffers_by_ratio: Default::default(),
+            // Note the default is true in `vars.rs` as well.
+            record_namespaced_errors: true,
         }
     }
     /// Update the `DataflowParameters` with new configuration.
@@ -75,6 +80,7 @@ impl DataflowParameters {
         storage_dataflow_max_inflight_bytes_config: mz_storage_types::parameters::StorageMaxInflightBytesConfig,
         delay_sources_past_rehydration: bool,
         shrink_upsert_unused_buffers_by_ratio: usize,
+        record_namespaced_errors: bool,
     ) {
         self.pg_source_tcp_timeouts = pg_source_tcp_timeouts;
         self.pg_source_snapshot_statement_timeout = pg_source_snapshot_statement_timeout;
@@ -84,6 +90,7 @@ impl DataflowParameters {
             storage_dataflow_max_inflight_bytes_config;
         self.delay_sources_past_rehydration = delay_sources_past_rehydration;
         self.shrink_upsert_unused_buffers_by_ratio = shrink_upsert_unused_buffers_by_ratio;
+        self.record_namespaced_errors = record_namespaced_errors;
     }
 }
 
@@ -140,6 +147,8 @@ pub enum InternalStorageCommand {
         delay_sources_past_rehydration: bool,
         /// Configuration ratio to shrink upsert buffers by
         shrink_upsert_unused_buffers_by_ratio: usize,
+        /// Configuration for status history.
+        record_namespaced_errors: bool,
     },
 }
 

@@ -55,6 +55,9 @@ pub struct StorageParameters {
     /// How long entries in the statement log should be retained, in seconds.
     /// Ignored if `truncate_statement_log` is false.
     pub statement_logging_retention_time_seconds: u64,
+    /// Whether or not to record errors by namespace in the `details`
+    /// column of the status history tables.
+    pub record_namespaced_errors: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -141,6 +144,7 @@ impl StorageParameters {
             shrink_upsert_unused_buffers_by_ratio,
             statement_logging_retention_time_seconds,
             truncate_statement_log,
+            record_namespaced_errors,
         }: StorageParameters,
     ) {
         self.persist.update(persist);
@@ -160,6 +164,7 @@ impl StorageParameters {
         self.shrink_upsert_unused_buffers_by_ratio = shrink_upsert_unused_buffers_by_ratio;
         self.statement_logging_retention_time_seconds = statement_logging_retention_time_seconds;
         self.truncate_statement_log = truncate_statement_log;
+        self.record_namespaced_errors = record_namespaced_errors;
     }
 }
 
@@ -191,6 +196,7 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             ),
             truncate_statement_log: self.truncate_statement_log,
             statement_logging_retention_time_seconds: self.statement_logging_retention_time_seconds,
+            record_namespaced_errors: self.record_namespaced_errors,
         }
     }
 
@@ -238,6 +244,7 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             truncate_statement_log: proto.truncate_statement_log,
             statement_logging_retention_time_seconds: proto
                 .statement_logging_retention_time_seconds,
+            record_namespaced_errors: proto.record_namespaced_errors,
         })
     }
 }

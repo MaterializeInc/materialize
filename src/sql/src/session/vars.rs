@@ -1086,6 +1086,13 @@ const STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES: ServerVar<usize> = ServerVar {
     internal: true
 };
 
+const STORAGE_RECORD_SOURCE_SINK_NAMESPACED_ERRORS: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("storage_record_source_sink_namespaced_errors"),
+    value: &true,
+    description: "Whether or not to record namespaced errors in the status history tables",
+    internal: true,
+};
+
 /// Controls [`mz_persist_client::cfg::DynamicConfig::stats_audit_percent`].
 const PERSIST_STATS_AUDIT_PERCENT: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("persist_stats_audit_percent"),
@@ -2434,6 +2441,7 @@ impl SystemVars {
             .with_var(&STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO)
             .with_var(&PERSIST_SINK_MINIMUM_BATCH_UPDATES)
             .with_var(&STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES)
+            .with_var(&STORAGE_RECORD_SOURCE_SINK_NAMESPACED_ERRORS)
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF)
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER)
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP)
@@ -3024,6 +3032,11 @@ impl SystemVars {
     /// Returns the `storage_persist_sink_minimum_batch_updates` configuration parameter.
     pub fn storage_persist_sink_minimum_batch_updates(&self) -> usize {
         *self.expect_value(&STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES)
+    }
+
+    /// Returns the `storage_record_source_sink_namespaced_errors` configuration parameter.
+    pub fn storage_record_source_sink_namespaced_errors(&self) -> bool {
+        *self.expect_value(&STORAGE_RECORD_SOURCE_SINK_NAMESPACED_ERRORS)
     }
 
     /// Returns the `persist_stats_audit_percent` configuration parameter.
@@ -4797,6 +4810,7 @@ pub fn is_storage_config_var(name: &str) -> bool {
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY.name()
         || name == STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION.name()
         || name == STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO.name()
+        || name == STORAGE_RECORD_SOURCE_SINK_NAMESPACED_ERRORS.name()
         || is_upsert_rocksdb_config_var(name)
         || is_persist_config_var(name)
         || is_tracing_var(name)
@@ -4833,6 +4847,7 @@ fn is_persist_config_var(name: &str) -> bool {
         || name == CRDB_CONNECT_TIMEOUT.name()
         || name == CRDB_TCP_USER_TIMEOUT.name()
         || name == PERSIST_SINK_MINIMUM_BATCH_UPDATES.name()
+        || name == STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES.name()
         || name == STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES.name()
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF.name()
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER.name()
