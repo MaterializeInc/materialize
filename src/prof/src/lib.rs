@@ -124,7 +124,7 @@ pub struct StackProfile {
 
 impl StackProfile {
     /// Writes out the `.mzfg` format, which is fully described in flamegraph.js.
-    pub fn to_mzfg(&self, symbolicate: bool, header_extra: &[(&str, &str)]) -> String {
+    pub fn to_mzfg(&self, symbolize: bool, header_extra: &[(&str, &str)]) -> String {
         // All the unwraps in this function are justified by the fact that
         // String's fmt::Write impl is infallible.
         use std::fmt::Write;
@@ -150,8 +150,8 @@ mz_fg_version: 1
             writeln!(&mut builder, "").unwrap();
         }
 
-        if symbolicate {
-            let symbols = crate::symbolicate(self);
+        if symbolize {
+            let symbols = crate::symbolize(self);
             writeln!(&mut builder, "").unwrap();
 
             for (addr, names) in symbols {
@@ -364,14 +364,14 @@ impl StackProfile {
     }
 }
 
-static EVER_SYMBOLICATED: AtomicBool = AtomicBool::new(false);
+static EVER_SYMBOLIZED: AtomicBool = AtomicBool::new(false);
 
-/// Check whether symbolication has ever been run in this process.
+/// Check whether symbolization has ever been run in this process.
 /// This controls whether we display a warning about increasing RAM usage
 /// due to the backtrace cache on the
 /// profiler page. (Because the RAM hit is one-time, we don't need to warn if it's already happened).
-pub fn ever_symbolicated() -> bool {
-    EVER_SYMBOLICATED.load(std::sync::atomic::Ordering::SeqCst)
+pub fn ever_symbolized() -> bool {
+    EVER_SYMBOLIZED.load(std::sync::atomic::Ordering::SeqCst)
 }
 
 /// Given some stack traces, generate a map of addresses to their
@@ -379,8 +379,8 @@ pub fn ever_symbolicated() -> bool {
 ///
 /// Each address could correspond to more than one symbol, because
 /// of inlining. (E.g. if 0x1234 comes from "g", which is inlined in "f", the corresponding vec of symbols will be ["f", "g"].)
-pub fn symbolicate(profile: &StackProfile) -> BTreeMap<usize, Vec<String>> {
-    EVER_SYMBOLICATED.store(true, std::sync::atomic::Ordering::SeqCst);
+pub fn symbolize(profile: &StackProfile) -> BTreeMap<usize, Vec<String>> {
+    EVER_SYMBOLIZED.store(true, std::sync::atomic::Ordering::SeqCst);
     let mut all_addrs = vec![];
     for (stack, _annotation) in profile.stacks.iter() {
         all_addrs.extend(stack.addrs.iter().cloned());

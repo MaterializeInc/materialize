@@ -3,7 +3,7 @@
 {% block title %}Profiling{% endblock %}
 
 {% block content %}
-{% if ever_symbolicated %}
+{% if ever_symbolized %}
 <strong>Note.</strong> This page has been used during the lifetime of the process, so RAM usage will be permanently increased by about 500MiB - 1GiB.
 {% else %}
 <strong style="color:Red">Warning.</strong> Using this page will cause a one-time permanent increase in RAM usage of about 500MiB - 1GiB.
@@ -22,7 +22,7 @@
     <form method="post">
       <button name="action" value="deactivate">Deactivate</button>
       <button name="action" value="dump_jeheap">Download allocation profile (jemalloc heap format)</button>
-      <button name="action" value="dump_sym_mzfg">Download allocation profile (symbolicated MZ format)</button>
+      <button name="action" value="dump_sym_mzfg">Download allocation profile (symbolized MZ format)</button>
       <button name="action" value="mem_fg">Visualize heap profile (flamegraph)</button>
     </form>
   {% when None %}
