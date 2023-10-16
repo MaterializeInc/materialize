@@ -123,13 +123,16 @@ class ExpressionWithArgs(Expression):
     def is_leaf(self) -> bool:
         return False
 
-    def contains(self, predicate: Callable[[Expression], bool]) -> bool:
-        if super().contains(predicate):
+    def matches(
+        self, predicate: Callable[[Expression], bool], apply_recursively: bool
+    ) -> bool:
+        if super().matches(predicate, apply_recursively):
             return True
 
-        for arg in self.args:
-            if arg.contains(predicate):
-                return True
+        if apply_recursively:
+            for arg in self.args:
+                if arg.matches(predicate, apply_recursively):
+                    return True
 
         return False
 

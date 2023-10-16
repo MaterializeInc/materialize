@@ -167,6 +167,7 @@ DATE_TIME_OPERATION_TYPES.append(
         "try_parse_monotonic_iso8601_timestamp",
         [ISO8601_TIMESTAMP_PARAM],
         DateTimeReturnTypeSpec(TIMESTAMP_TYPE_IDENTIFIER),
+        is_pg_compatible=False,
     )
 )
 

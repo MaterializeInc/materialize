@@ -767,7 +767,7 @@ mod tests {
         let res = spawn(|| "test", async move {
             s.get::<(), (), u64, i64, _, _>(
                 s1,
-                || async { panic!("boom") },
+                || async { panic!("forced panic") },
                 &Diagnostics::for_tests(),
             )
             .await

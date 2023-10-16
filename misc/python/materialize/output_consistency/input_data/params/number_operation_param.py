@@ -80,7 +80,7 @@ class NumericOperationParam(OperationParam):
 
         return True
 
-    def might_support_as_input_assuming_category_matches(
+    def might_support_type_as_input_assuming_category_matches(
         self, return_type_spec: ReturnTypeSpec
     ) -> bool:
         # In doubt return True

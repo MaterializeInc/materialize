@@ -2448,6 +2448,10 @@ pub enum ShowObjectType<T: AstInfo> {
     Subsource {
         on_source: Option<T::ItemName>,
     },
+    Privileges {
+        object_type: Option<SystemObjectType>,
+        role: Option<T::RoleName>,
+    },
     RoleMembership {
         role: Option<T::RoleName>,
     },
@@ -2471,6 +2475,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("SHOW");
         f.write_str(" ");
+
         f.write_str(match &self.object_type {
             ShowObjectType::Table => "TABLES",
             ShowObjectType::View => "VIEWS",
@@ -2488,6 +2493,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ShowObjectType::Database => "DATABASES",
             ShowObjectType::Schema { .. } => "SCHEMAS",
             ShowObjectType::Subsource { .. } => "SUBSOURCES",
+            ShowObjectType::Privileges { .. } => "PRIVILEGES",
             ShowObjectType::RoleMembership { .. } => "ROLE MEMBERSHIP",
         });
 
@@ -2526,6 +2532,20 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             if let Some(on_source) = on_source {
                 f.write_str(" ON ");
                 f.write_node(on_source);
+            }
+        }
+
+        if let ShowObjectType::Privileges { object_type, role } = &self.object_type {
+            if let Some(object_type) = object_type {
+                f.write_str(" ON ");
+                f.write_node(object_type);
+                if let SystemObjectType::Object(_) = object_type {
+                    f.write_str("S");
+                }
+            }
+            if let Some(role) = role {
+                f.write_str(" FOR ");
+                f.write_node(role);
             }
         }
 
@@ -2876,7 +2896,7 @@ impl<T: AstInfo> AstDisplay for InsertSource<T> {
 }
 impl_display_t!(InsertSource);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Copy)]
 pub enum ObjectType {
     Table,
     View,
@@ -2942,6 +2962,22 @@ impl AstDisplay for ObjectType {
     }
 }
 impl_display!(ObjectType);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Copy)]
+pub enum SystemObjectType {
+    System,
+    Object(ObjectType),
+}
+
+impl AstDisplay for SystemObjectType {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            SystemObjectType::System => f.write_str("SYSTEM"),
+            SystemObjectType::Object(object) => f.write_node(object),
+        }
+    }
+}
+impl_display!(SystemObjectType);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ShowStatementFilter<T: AstInfo> {

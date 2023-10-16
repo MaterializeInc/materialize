@@ -688,6 +688,55 @@ SHOW CONNECTIONS
 Show(ShowObjects(ShowObjectsStatement { object_type: Connection, from: None, filter: None }))
 
 parse-statement
+SHOW PRIVILEGES
+----
+SHOW PRIVILEGES
+=>
+Show(ShowObjects(ShowObjectsStatement { object_type: Privileges { object_type: None, role: None }, from: None, filter: None }))
+
+parse-statement
+SHOW PRIVILEGES ON TABLES
+----
+SHOW PRIVILEGES ON TABLES
+=>
+Show(ShowObjects(ShowObjectsStatement { object_type: Privileges { object_type: Some(Object(Table)), role: None }, from: None, filter: None }))
+
+parse-statement
+SHOW PRIVILEGES FOR joe
+----
+SHOW PRIVILEGES FOR joe
+=>
+Show(ShowObjects(ShowObjectsStatement { object_type: Privileges { object_type: None, role: Some(Ident("joe")) }, from: None, filter: None }))
+
+parse-statement
+SHOW PRIVILEGES ON CLUSTERS  FOR mike
+----
+SHOW PRIVILEGES ON CLUSTERS FOR mike
+=>
+Show(ShowObjects(ShowObjectsStatement { object_type: Privileges { object_type: Some(Object(Cluster)), role: Some(Ident("mike")) }, from: None, filter: None }))
+
+parse-statement
+SHOW PRIVILEGES ON SYSTEM
+----
+SHOW PRIVILEGES ON SYSTEM
+=>
+Show(ShowObjects(ShowObjectsStatement { object_type: Privileges { object_type: Some(System), role: None }, from: None, filter: None }))
+
+parse-statement
+SHOW PRIVILEGES ON MATERIALIZED VIEWS
+----
+error: For object type MATERIALIZED VIEWS, you must specify 'TABLES'
+SHOW PRIVILEGES ON MATERIALIZED VIEWS
+                   ^
+
+parse-statement
+SHOW PRIVILEGES ON SOURCES
+----
+error: For object type SOURCES, you must specify 'TABLES'
+SHOW PRIVILEGES ON SOURCES
+                   ^
+
+parse-statement
 SHOW ROLE MEMBERSHIP
 ----
 SHOW ROLE MEMBERSHIP

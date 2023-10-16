@@ -368,6 +368,93 @@ materialize,r1,materialize,public,t,table,SELECT
 materialize,r2,materialize,public,t,table,SELECT
 COMPLETE 23
 
+query TTTTTTT
+SELECT * FROM (SHOW PRIVILEGES) ORDER BY object_type, database, schema, name, grantee
+----
+materialize  PUBLIC       NULL         NULL    c            cluster   USAGE
+materialize  materialize  NULL         NULL    c            cluster   USAGE
+materialize  materialize  NULL         NULL    c            cluster   CREATE
+materialize  r1           NULL         NULL    c            cluster   USAGE
+materialize  r3           NULL         NULL    c            cluster   USAGE
+materialize  r3           NULL         NULL    c            cluster   CREATE
+materialize  r4           NULL         NULL    c            cluster   CREATE
+mz_system    PUBLIC       NULL         NULL    default      cluster  USAGE
+mz_system    materialize  NULL         NULL    default      cluster  USAGE
+mz_system    materialize  NULL         NULL    default      cluster  CREATE
+materialize  PUBLIC       NULL         NULL    d            database  CREATE
+materialize  materialize  NULL         NULL    d            database  USAGE
+materialize  materialize  NULL         NULL    d            database  CREATE
+materialize  r1           NULL         NULL    d            database  USAGE
+materialize  r1           NULL         NULL    d            database  CREATE
+materialize  r2           NULL         NULL    d            database  USAGE
+materialize  r4           NULL         NULL    d            database  CREATE
+mz_system    PUBLIC       NULL         NULL    materialize  database  USAGE
+mz_system    materialize  NULL         NULL    materialize  database  USAGE
+mz_system    materialize  NULL         NULL    materialize  database  CREATE
+materialize  PUBLIC       d            NULL    public       schema  USAGE
+materialize  materialize  d            NULL    public       schema  USAGE
+materialize  materialize  d            NULL    public       schema  CREATE
+mz_system    PUBLIC       materialize  NULL    public       schema  USAGE
+mz_system    materialize  materialize  NULL    public       schema  USAGE
+mz_system    materialize  materialize  NULL    public       schema  CREATE
+materialize  PUBLIC       materialize  NULL    s            schema  USAGE
+materialize  materialize  materialize  NULL    s            schema  USAGE
+materialize  materialize  materialize  NULL    s            schema  CREATE
+materialize  r1           materialize  NULL    s            schema  USAGE
+materialize  r3           materialize  NULL    s            schema  USAGE
+materialize  r5           materialize  NULL    s            schema  USAGE
+materialize  r5           materialize  NULL    s            schema  CREATE
+mz_system    PUBLIC       NULL         NULL    NULL         system    CREATECLUSTER
+mz_system    materialize  NULL         NULL    NULL         system    CREATEDB
+mz_system    materialize  NULL         NULL    NULL         system    CREATEROLE
+mz_system    materialize  NULL         NULL    NULL         system    CREATECLUSTER
+mz_system    r1           NULL         NULL    NULL         system    CREATEDB
+mz_system    r1           NULL         NULL    NULL         system    CREATECLUSTER
+mz_system    r2           NULL         NULL    NULL         system    CREATEROLE
+mz_system    r4           NULL         NULL    NULL         system    CREATECLUSTER
+materialize  PUBLIC       materialize  public  t            table  INSERT
+materialize  materialize  materialize  public  t            table  DELETE
+materialize  materialize  materialize  public  t            table  INSERT
+materialize  materialize  materialize  public  t            table  SELECT
+materialize  materialize  materialize  public  t            table  UPDATE
+materialize  r1           materialize  public  t            table  INSERT
+materialize  r1           materialize  public  t            table  SELECT
+materialize  r2           materialize  public  t            table  SELECT
+materialize  r5           materialize  public  t            table  DELETE
+
+query TTTTTTT
+SELECT * FROM (SHOW PRIVILEGES ON CLUSTERS) ORDER BY object_type, database, schema, name, grantee
+----
+materialize  PUBLIC       NULL         NULL    c            cluster   USAGE
+materialize  materialize  NULL         NULL    c            cluster   USAGE
+materialize  materialize  NULL         NULL    c            cluster   CREATE
+materialize  r1           NULL         NULL    c            cluster   USAGE
+materialize  r3           NULL         NULL    c            cluster   USAGE
+materialize  r3           NULL         NULL    c            cluster   CREATE
+materialize  r4           NULL         NULL    c            cluster   CREATE
+mz_system    PUBLIC       NULL         NULL    default      cluster  USAGE
+mz_system    materialize  NULL         NULL    default      cluster  USAGE
+mz_system    materialize  NULL         NULL    default      cluster  CREATE
+
+query TTTTTTT
+SELECT * FROM (SHOW PRIVILEGES FOR r2) ORDER BY object_type, database, schema, name, grantee
+----
+materialize  PUBLIC       NULL         NULL    c            cluster   USAGE
+materialize  r3           NULL         NULL    c            cluster   USAGE
+materialize  r3           NULL         NULL    c            cluster   CREATE
+mz_system    PUBLIC       NULL         NULL    default      cluster  USAGE
+materialize  PUBLIC       NULL         NULL    d            database  CREATE
+materialize  r2           NULL         NULL    d            database  USAGE
+mz_system    PUBLIC       NULL         NULL    materialize  database  USAGE
+materialize  PUBLIC       d            NULL    public       schema  USAGE
+mz_system    PUBLIC       materialize  NULL    public       schema  USAGE
+materialize  PUBLIC       materialize  NULL    s            schema  USAGE
+materialize  r3           materialize  NULL    s            schema  USAGE
+mz_system    PUBLIC       NULL         NULL    NULL         system    CREATECLUSTER
+mz_system    r2           NULL         NULL    NULL         system    CREATEROLE
+materialize  PUBLIC       materialize  public  t            table  INSERT
+materialize  r2           materialize  public  t            table  SELECT
+
 # SHOW DEFAULT PRIVILEGES
 
 statement ok

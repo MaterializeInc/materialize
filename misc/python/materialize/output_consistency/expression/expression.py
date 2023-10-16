@@ -19,7 +19,10 @@ from materialize.output_consistency.expression.expression_characteristics import
     ExpressionCharacteristics,
 )
 from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
-from materialize.output_consistency.selection.selection import DataRowSelection
+from materialize.output_consistency.selection.selection import (
+    ALL_ROWS_SELECTION,
+    DataRowSelection,
+)
 
 
 class Expression:
@@ -63,18 +66,33 @@ class Expression:
         raise NotImplementedError
 
     def has_all_characteristics(
-        self, characteristics: set[ExpressionCharacteristics]
+        self,
+        characteristics: set[ExpressionCharacteristics],
+        recursive: bool = True,
+        row_selection: DataRowSelection = ALL_ROWS_SELECTION,
     ) -> bool:
-        """True if this expression itself exhibits all characteristics. Child expressions are not considered."""
-        overlap = self.own_characteristics & characteristics
+        """True if this expression itself exhibits all characteristics."""
+        present_characteristics = (
+            self.own_characteristics
+            if not recursive
+            else self.recursively_collect_involved_characteristics(row_selection)
+        )
+        overlap = present_characteristics & characteristics
         return len(overlap) == len(characteristics)
 
     def has_any_characteristic(
         self,
         characteristics: set[ExpressionCharacteristics],
+        recursive: bool = True,
+        row_selection: DataRowSelection = ALL_ROWS_SELECTION,
     ) -> bool:
-        """True if this expression itself exhibits any of the characteristics. Child expressions are not considered."""
-        overlap = self.own_characteristics & characteristics
+        """True if this expression itself exhibits any of the characteristics."""
+        present_characteristics = (
+            self.own_characteristics
+            if not recursive
+            else self.recursively_collect_involved_characteristics(row_selection)
+        )
+        overlap = present_characteristics & characteristics
         return len(overlap) > 0
 
     def is_leaf(self) -> bool:
@@ -87,11 +105,16 @@ class Expression:
         This is relevant because when using non-aggregate functions on multiple rows, different evaluation strategies may yield different error messages due to a different row processing order."""
         raise NotImplementedError
 
-    def matches(self, predicate: Callable[[Expression], bool]) -> bool:
+    def matches(
+        self, predicate: Callable[[Expression], bool], apply_recursively: bool
+    ) -> bool:
+        # recursion is implemented in ExpressionWithArgs
         return predicate(self)
 
-    def contains(self, predicate: Callable[[Expression], bool]) -> bool:
-        return self.matches(predicate)
+    def contains(
+        self, predicate: Callable[[Expression], bool], check_recursively: bool
+    ) -> bool:
+        return self.matches(predicate, check_recursively)
 
 
 class LeafExpression(Expression):
