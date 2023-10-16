@@ -21,7 +21,6 @@ use std::time::Duration;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
-use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
 use mz_persist_client::cache::PersistClientCache;
@@ -45,7 +44,7 @@ pub async fn write_to_persist(
     new_status: &str,
     new_error: Option<&str>,
     hints: &BTreeSet<String>,
-    namespaced_errors: &BTreeMap<String, String>,
+    namespaced_errors: &BTreeMap<StatusNamespace, String>,
     now: NowFn,
     client: &PersistClient,
     status_shard: ShardId,
@@ -57,7 +56,14 @@ pub async fn write_to_persist(
         new_status,
         new_error,
         hints,
-        namespaced_errors,
+        // `pack_status_row` requires keys sorted by their string representation.
+        // This is technically an few extra allocations, but its relatively rare so
+        // we don't worry about it. Sorting it in a vec like with `Itertools::sorted`
+        // would also cost allocations.
+        &namespaced_errors
+            .iter()
+            .map(|(ns, val)| (ns.to_string(), val))
+            .collect(),
         now_ms,
     );
 
@@ -125,37 +131,45 @@ pub(crate) struct ObjectHealthConfig {
     pub(crate) persist_location: PersistLocation,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+/// The namespace of the update. The `Ord` impl matter here, later variants are
+/// displayed over earlier ones.
+///
+/// Some namespaces (referred to as "sidechannels") can come from any worker_id,
+/// and `Running` statuses from them do not mark the entire object as running.
+///
+/// Ensure you update `is_sidechannel` when adding variants.
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StatusNamespace {
     /// A normal status namespaces. Any `Running` status from any worker will mark the object
     /// `Running`.
-    Kafka,
-    Postgres,
     Generator,
     TestScript,
+    Kafka,
+    Postgres,
+    Ssh,
     Upsert,
     Decode,
     Internal,
-    /// A side-channel namespace. `Running` does not mark the object as `Running`, but does clear
-    /// errors from this namespace. All statuses from side-channels are considered to be from the
-    /// same worker.
-    SideChannel(String),
+}
+
+impl StatusNamespace {
+    fn is_sidechannel(&self) -> bool {
+        matches!(self, StatusNamespace::Ssh)
+    }
 }
 
 impl fmt::Display for StatusNamespace {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use StatusNamespace::*;
         match self {
-            Kafka => write!(f, "kafka"),
-            Postgres => write!(f, "postgres"),
             Generator => write!(f, "generator"),
             TestScript => write!(f, "testscript"),
+            Kafka => write!(f, "kafka"),
+            Postgres => write!(f, "postgres"),
+            Ssh => write!(f, "ssh"),
             Upsert => write!(f, "upsert"),
             Decode => write!(f, "decode"),
             Internal => write!(f, "internal"),
-            StatusNamespace::SideChannel(n) => {
-                write!(f, "{}", n)
-            }
         }
     }
 }
@@ -172,7 +186,7 @@ impl PerWorkerHealthStatus {
         update: HealthStatusUpdate,
         only_greater: bool,
     ) {
-        if let StatusNamespace::SideChannel(_) = &namespace {
+        if namespace.is_sidechannel() {
             worker = 0;
         }
 
@@ -191,17 +205,15 @@ impl PerWorkerHealthStatus {
 
     fn decide_status(&self) -> OverallStatus {
         let mut output_status = OverallStatus::Starting;
-        let mut namespaced_errors: BTreeMap<String, String> = BTreeMap::new();
+        let mut namespaced_errors: BTreeMap<StatusNamespace, String> = BTreeMap::new();
         let mut hints: BTreeSet<String> = BTreeSet::new();
 
         for status in self.errors_by_worker.iter() {
             use HealthStatusUpdate::*;
             for (ns, ns_status) in status.iter() {
                 if let Stalled { error, hint, .. } = ns_status {
-                    let ns = ns.to_string();
-
-                    if Some(error) > namespaced_errors.get(&ns).as_deref() {
-                        namespaced_errors.insert(ns, error.to_string());
+                    if Some(error) > namespaced_errors.get(ns).as_deref() {
+                        namespaced_errors.insert(*ns, error.to_string());
                     }
 
                     if let Some(hint) = hint {
@@ -209,22 +221,17 @@ impl PerWorkerHealthStatus {
                     }
                 }
 
-                if !matches!(ns, StatusNamespace::SideChannel(_))
-                    && matches!(ns_status, HealthStatusUpdate::Running)
-                {
+                if !ns.is_sidechannel() && matches!(ns_status, HealthStatusUpdate::Running) {
                     output_status = OverallStatus::Running;
                 }
             }
         }
 
         if !namespaced_errors.is_empty() {
+            // Pick the most important error.
+            let (ns, err) = namespaced_errors.last_key_value().unwrap();
             output_status = OverallStatus::Stalled {
-                // Concatenate the namespaced errors together with commas, for an individual
-                // error message the user can look at.
-                error: namespaced_errors
-                    .iter()
-                    .map(|(ns, err)| format!("{}: {}", ns, err))
-                    .join(", "),
+                error: format!("{}: {}", ns, err),
                 hints,
                 namespaced_errors,
             }
@@ -241,7 +248,7 @@ pub enum OverallStatus {
     Stalled {
         error: String,
         hints: BTreeSet<String>,
-        namespaced_errors: BTreeMap<String, String>,
+        namespaced_errors: BTreeMap<StatusNamespace, String>,
     },
 }
 
@@ -264,7 +271,7 @@ impl OverallStatus {
     }
 
     /// A set of namespaced errors, if there are any.
-    pub(crate) fn errors(&self) -> Option<&BTreeMap<String, String>> {
+    pub(crate) fn errors(&self) -> Option<&BTreeMap<StatusNamespace, String>> {
         match self {
             OverallStatus::Starting | OverallStatus::Running => None,
             OverallStatus::Stalled {
@@ -330,7 +337,7 @@ pub trait HealthOperator {
         new_status: &str,
         new_error: Option<&str>,
         hints: &BTreeSet<String>,
-        namespaced_errors: &BTreeMap<String, String>,
+        namespaced_errors: &BTreeMap<StatusNamespace, String>,
         now: NowFn,
         // TODO(guswynn): not urgent:
         // Ideally this would be entirely included in the `DefaultWriter`, but that
@@ -360,7 +367,7 @@ impl HealthOperator for DefaultWriter {
         new_status: &str,
         new_error: Option<&str>,
         hints: &BTreeSet<String>,
-        namespaced_errors: &BTreeMap<String, String>,
+        namespaced_errors: &BTreeMap<StatusNamespace, String>,
         now: NowFn,
         client: &PersistClient,
         status_shard: ShardId,
@@ -418,7 +425,7 @@ pub(crate) fn health_operator<'g, G, P>(
     now: NowFn,
     // A set of id's that should be marked as `HealthStatusUpdate::starting()` during startup.
     mark_starting: BTreeSet<GlobalId>,
-    // An id that is allowed to halt the dataflow. SideChannels are ignored, and panic during debug
+    // An id that is allowed to halt the dataflow. Others are ignored, and panic during debug
     // mode.
     halting_id: GlobalId,
     // A description of the object type we are writing status updates about. Used in log lines.
@@ -736,6 +743,7 @@ impl HealthStatusUpdate {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use itertools::Itertools;
 
     // Actual timely tests for `health_operator`.
 
@@ -801,6 +809,7 @@ mod tests {
                     collection_index: 1,
                     status: "stalled".to_string(),
                     error: Some("testscript: uhoh".to_string()),
+                    errors: Some("testscript: uhoh".to_string()),
                     ..Default::default()
                 }]),
                 // And that it can recover.
@@ -850,6 +859,7 @@ mod tests {
                     collection_index: 0,
                     status: "stalled".to_string(),
                     error: Some("testscript: uhoh".to_string()),
+                    errors: Some("testscript: uhoh".to_string()),
                     ..Default::default()
                 }]),
                 Update(TestUpdate {
@@ -861,7 +871,8 @@ mod tests {
                 AssertStatus(vec![StatusToAssert {
                     collection_index: 0,
                     status: "stalled".to_string(),
-                    error: Some("kafka: uhoh, testscript: uhoh".to_string()),
+                    error: Some("kafka: uhoh".to_string()),
+                    errors: Some("testscript: uhoh, kafka: uhoh".to_string()),
                     ..Default::default()
                 }]),
                 // And that it can recover.
@@ -875,6 +886,7 @@ mod tests {
                     collection_index: 0,
                     status: "stalled".to_string(),
                     error: Some("testscript: uhoh".to_string()),
+                    errors: Some("testscript: uhoh".to_string()),
                     ..Default::default()
                 }]),
                 Update(TestUpdate {
@@ -909,38 +921,40 @@ mod tests {
                         ..Default::default()
                     },
                 ]),
-                // Assert that `SideChannel` doesn't downgrade the status
+                // Assert that sidechannel namespaces don't downgrade the status
                 //
                 // Note that these all happen on the same worker id.
                 Update(TestUpdate {
                     worker_id: 0,
-                    namespace: StatusNamespace::SideChannel("other".to_string()),
+                    namespace: StatusNamespace::Ssh,
                     input_index: 0,
                     update: HealthStatusUpdate::stalled("uhoh".to_string(), None),
                 }),
                 AssertStatus(vec![StatusToAssert {
                     collection_index: 0,
                     status: "stalled".to_string(),
-                    error: Some("other: uhoh".to_string()),
+                    error: Some("ssh: uhoh".to_string()),
+                    errors: Some("ssh: uhoh".to_string()),
                     ..Default::default()
                 }]),
                 // Note this is from a different work, but it merges as if its from
                 // the same worker.
                 Update(TestUpdate {
                     worker_id: 1,
-                    namespace: StatusNamespace::SideChannel("other".to_string()),
+                    namespace: StatusNamespace::Ssh,
                     input_index: 0,
                     update: HealthStatusUpdate::stalled("uhoh2".to_string(), None),
                 }),
                 AssertStatus(vec![StatusToAssert {
                     collection_index: 0,
                     status: "stalled".to_string(),
-                    error: Some("other: uhoh2".to_string()),
+                    error: Some("ssh: uhoh2".to_string()),
+                    errors: Some("ssh: uhoh2".to_string()),
                     ..Default::default()
                 }]),
                 Update(TestUpdate {
                     worker_id: 0,
-                    namespace: StatusNamespace::SideChannel("other".to_string()),
+                    namespace: StatusNamespace::Ssh,
                     input_index: 0,
                     update: HealthStatusUpdate::running(),
                 }),
@@ -982,8 +996,6 @@ mod tests {
                         ..Default::default()
                     },
                 ]),
-                // Assert that `SideChannel` doesn't downgrade the status
-                //
                 // Note that these all happen across worker ids.
                 Update(TestUpdate {
                     worker_id: 0,
@@ -998,6 +1010,7 @@ mod tests {
                     collection_index: 0,
                     status: "stalled".to_string(),
                     error: Some("testscript: uhoh".to_string()),
+                    errors: Some("testscript: uhoh".to_string()),
                     hint: Some("hint1".to_string()),
                 }]),
                 Update(TestUpdate {
@@ -1014,6 +1027,7 @@ mod tests {
                     status: "stalled".to_string(),
                     // Note the error sorts later so we just use that.
                     error: Some("testscript: uhoh2".to_string()),
+                    errors: Some("testscript: uhoh2".to_string()),
                     hint: Some("hint1, hint2".to_string()),
                 }]),
                 // Update one of the hints
@@ -1031,6 +1045,7 @@ mod tests {
                     status: "stalled".to_string(),
                     // Note the error sorts later so we just use that.
                     error: Some("testscript: uhoh2".to_string()),
+                    errors: Some("testscript: uhoh2".to_string()),
                     hint: Some("hint1, hint3".to_string()),
                 }]),
                 // Assert recovery.
@@ -1045,6 +1060,7 @@ mod tests {
                     status: "stalled".to_string(),
                     // Note the error sorts later so we just use that.
                     error: Some("testscript: uhoh2".to_string()),
+                    errors: Some("testscript: uhoh2".to_string()),
                     hint: Some("hint3".to_string()),
                 }]),
                 Update(TestUpdate {
@@ -1076,6 +1092,7 @@ mod tests {
         collection_index: usize,
         status: String,
         error: Option<String>,
+        errors: Option<String>,
         hint: Option<String>,
     }
 
@@ -1111,8 +1128,7 @@ mod tests {
             new_status: &str,
             new_error: Option<&str>,
             hints: &BTreeSet<String>,
-            // test with the `new_error`, which is pre-constructed
-            _namespaced_errors: &BTreeMap<String, String>,
+            namespaced_errors: &BTreeMap<StatusNamespace, String>,
             _now: NowFn,
             _client: &PersistClient,
             _status_shard: ShardId,
@@ -1122,6 +1138,16 @@ mod tests {
                 collection_index: *self.input_mapping.get(&collection_id).unwrap(),
                 status: new_status.to_string(),
                 error: new_error.map(str::to_string),
+                errors: if !namespaced_errors.is_empty() {
+                    Some(
+                        namespaced_errors
+                            .iter()
+                            .map(|(ns, err)| format!("{}: {}", ns, err))
+                            .join(", "),
+                    )
+                } else {
+                    None
+                },
                 hint: if !hints.is_empty() {
                     Some(hints.iter().join(", "))
                 } else {

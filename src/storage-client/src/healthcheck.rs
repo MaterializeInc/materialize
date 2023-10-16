@@ -18,7 +18,7 @@ pub fn pack_status_row(
     status_name: &str,
     error: Option<&str>,
     hints: &BTreeSet<String>,
-    namespaced_errors: &BTreeMap<String, String>,
+    namespaced_errors: &BTreeMap<String, &String>,
     ts: u64,
 ) -> Row {
     let timestamp = NaiveDateTime::from_timestamp_opt(
@@ -276,7 +276,7 @@ mod tests {
             status,
             Some(error_message),
             &Default::default(),
-            &BTreeMap::from([("thing".to_string(), "error".to_string())]),
+            &BTreeMap::from([("thing".to_string(), &"error".to_string())]),
             1000,
         );
 
@@ -321,7 +321,7 @@ mod tests {
             status,
             Some(error_message),
             &BTreeSet::from([hint.to_string()]),
-            &BTreeMap::from([("thing".to_string(), "error".to_string())]),
+            &BTreeMap::from([("thing".to_string(), &"error".to_string())]),
             1000,
         );
 
