@@ -55,7 +55,7 @@ use timely::progress::Antichain;
 use uuid::Uuid;
 
 /// New-type used to represent timestamps in persist.
-type Timestamp = u64;
+type Timestamp = mz_repr::Timestamp;
 
 /// Durable catalog mode that dictates the effect of mutable operations.
 #[derive(Debug)]
@@ -93,52 +93,55 @@ impl StateUpdate {
                 diff,
             })
         }
-        let databases = from_batch(txn_batch.databases, ts, StateUpdateKind::Database);
-        let schemas = from_batch(txn_batch.schemas, ts, StateUpdateKind::Schema);
-        let items = from_batch(txn_batch.items, ts, StateUpdateKind::Item);
-        let comments = from_batch(txn_batch.comments, ts, StateUpdateKind::Comment);
-        let roles = from_batch(txn_batch.roles, ts, StateUpdateKind::Role);
-        let clusters = from_batch(txn_batch.clusters, ts, StateUpdateKind::Cluster);
-        let cluster_replicas = from_batch(
-            txn_batch.cluster_replicas,
-            ts,
-            StateUpdateKind::ClusterReplica,
-        );
+        let TransactionBatch {
+            databases,
+            schemas,
+            items,
+            comments,
+            roles,
+            clusters,
+            cluster_replicas,
+            introspection_sources,
+            id_allocator,
+            configs,
+            settings,
+            timestamps,
+            system_gid_mapping,
+            system_configurations,
+            default_privileges,
+            system_privileges,
+            audit_log_updates,
+            storage_usage_updates,
+        } = txn_batch;
+        let databases = from_batch(databases, ts, StateUpdateKind::Database);
+        let schemas = from_batch(schemas, ts, StateUpdateKind::Schema);
+        let items = from_batch(items, ts, StateUpdateKind::Item);
+        let comments = from_batch(comments, ts, StateUpdateKind::Comment);
+        let roles = from_batch(roles, ts, StateUpdateKind::Role);
+        let clusters = from_batch(clusters, ts, StateUpdateKind::Cluster);
+        let cluster_replicas = from_batch(cluster_replicas, ts, StateUpdateKind::ClusterReplica);
         let introspection_sources = from_batch(
-            txn_batch.introspection_sources,
+            introspection_sources,
             ts,
             StateUpdateKind::IntrospectionSourceIndex,
         );
-        let id_allocators = from_batch(txn_batch.id_allocator, ts, StateUpdateKind::IdAllocator);
-        let configs = from_batch(txn_batch.configs, ts, StateUpdateKind::Config);
-        let settings = from_batch(txn_batch.settings, ts, StateUpdateKind::Setting);
-        let timestamps = from_batch(txn_batch.timestamps, ts, StateUpdateKind::Timestamp);
-        let system_object_mappings = from_batch(
-            txn_batch.system_gid_mapping,
-            ts,
-            StateUpdateKind::SystemObjectMapping,
-        );
+        let id_allocators = from_batch(id_allocator, ts, StateUpdateKind::IdAllocator);
+        let configs = from_batch(configs, ts, StateUpdateKind::Config);
+        let settings = from_batch(settings, ts, StateUpdateKind::Setting);
+        let timestamps = from_batch(timestamps, ts, StateUpdateKind::Timestamp);
+        let system_object_mappings =
+            from_batch(system_gid_mapping, ts, StateUpdateKind::SystemObjectMapping);
         let system_configurations = from_batch(
-            txn_batch.system_configurations,
+            system_configurations,
             ts,
             StateUpdateKind::SystemConfiguration,
         );
-        let default_privileges = from_batch(
-            txn_batch.default_privileges,
-            ts,
-            StateUpdateKind::DefaultPrivilege,
-        );
-        let system_privileges = from_batch(
-            txn_batch.system_privileges,
-            ts,
-            StateUpdateKind::SystemPrivilege,
-        );
-        let audit_logs = from_batch(txn_batch.audit_log_updates, ts, StateUpdateKind::AuditLog);
-        let storage_usage_updates = from_batch(
-            txn_batch.storage_usage_updates,
-            ts,
-            StateUpdateKind::StorageUsage,
-        );
+        let default_privileges =
+            from_batch(default_privileges, ts, StateUpdateKind::DefaultPrivilege);
+        let system_privileges = from_batch(system_privileges, ts, StateUpdateKind::SystemPrivilege);
+        let audit_logs = from_batch(audit_log_updates, ts, StateUpdateKind::AuditLog);
+        let storage_usage_updates =
+            from_batch(storage_usage_updates, ts, StateUpdateKind::StorageUsage);
 
         databases
             .chain(schemas)
@@ -397,7 +400,7 @@ impl PersistHandle {
     /// Reports if the catalog state has been initialized, and the current upper.
     async fn is_initialized_inner(&mut self) -> (bool, Timestamp) {
         let upper = self.current_upper().await;
-        (upper > 0, upper)
+        (upper > 0.into(), upper)
     }
 
     /// Generates an iterator of [`StateUpdate`] that contain all updates to the catalog
@@ -408,7 +411,7 @@ impl PersistHandle {
         &mut self,
         upper: Timestamp,
     ) -> impl Iterator<Item = StateUpdate> + DoubleEndedIterator {
-        let snapshot = if upper > 0 {
+        let snapshot = if upper > 0.into() {
             let since = self.read_handle.since().clone();
             let mut as_of = upper.saturating_sub(1);
             as_of.advance_by(since.borrow());
@@ -871,7 +874,7 @@ impl DurableCatalogState for PersistCatalogState {
         }
 
         let current_upper = self.upper.clone();
-        let next_upper = current_upper + 1;
+        let next_upper = current_upper.step_forward();
 
         let updates = StateUpdate::from_txn_batch(txn_batch, current_upper);
         self.apply_updates(updates.clone().into_iter())?;
@@ -945,7 +948,9 @@ impl DurableCatalogState for PersistCatalogState {
     }
 
     async fn set_connect_timeout(&mut self, _connect_timeout: Duration) {
-        // TODO(jkosh44) Is there an equivalent in persist?
+        // Persist is able to set this timeout internally so this is a no-op. The connect timeout
+        // passed to this function in production and the timeout Persist uses are both derived
+        // from the "crdb_connect_timeout" system variable.
     }
 
     // TODO(jkosh44) For most modifications we delegate to transactions to avoid duplicate code.
