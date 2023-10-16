@@ -199,6 +199,7 @@ mod tests {
                             "blob-scan-batches" => {
                                 machine_dd::blob_scan_batches(&state, args).await
                             }
+                            "clear-blob" => machine_dd::clear_blob(&mut state, args).await,
                             "compact" => machine_dd::compact(&mut state, args).await,
                             "compare-and-append" => {
                                 machine_dd::compare_and_append(&mut state, args).await
@@ -241,6 +242,7 @@ mod tests {
                             "register-leased-reader" => {
                                 machine_dd::register_leased_reader(&mut state, args).await
                             }
+                            "restore-blob" => machine_dd::restore_blob(&mut state, args).await,
                             "set-batch-parts-size" => {
                                 machine_dd::set_batch_parts_size(&mut state, args).await
                             }

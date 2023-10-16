@@ -136,6 +136,18 @@ pub struct MemBlobConfig {
     core: Arc<tokio::sync::Mutex<MemBlobCore>>,
 }
 
+impl MemBlobConfig {
+    /// Create a new instance.
+    pub fn new(tombstone: bool) -> Self {
+        Self {
+            core: Arc::new(tokio::sync::Mutex::new(MemBlobCore {
+                dataz: Default::default(),
+                tombstone,
+            })),
+        }
+    }
+}
+
 /// An in-memory implementation of [Blob].
 #[derive(Debug)]
 pub struct MemBlob {
