@@ -242,7 +242,7 @@ impl Backend {
     ///
     /// The trade-off is that the regex is simple, but it may detect some code as Jinja
     /// when it is not actually Jinja. For example: `SELECT '{{ 100 }}';`.
-    /// To handle such cases more successfully, the parser will attempt to parse the
+    /// To handle such cases more successfully, the server will first attempt to parse the
     /// file, and if it fails, it will then check if it contains Jinja code.
     fn contains_jinja_code(&self, s: &str) -> bool {
         let re = Regex::new(r"\{\{.*?\}\}|\{%.*?%\}|\{#.*?#\}").unwrap();
