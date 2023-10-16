@@ -135,6 +135,11 @@ pub enum PlanError {
     DropLastSubsource {
         source: String,
     },
+    DependentObjectsStillExist {
+        object_type: String,
+        object_name: String,
+        dependents: Vec<String>,
+    },
     AlterViewOnMaterializedView(String),
     ShowCreateViewOnMaterializedView(String),
     ExplainViewOnMaterializedView(String),
@@ -281,6 +286,7 @@ impl PlanError {
             Self::DropLastSubsource { source } | Self::DropProgressCollection { source, .. } => Some(format!(
                 "Use DROP SOURCE {source} to drop the primary source along with all subsources"
             )),
+            Self::DependentObjectsStillExist {..} => Some("Use DROP ... CASCADE to drop the dependent objects too.".into()),
             Self::AlterViewOnMaterializedView(_) => {
                 Some("Use ALTER MATERIALIZED VIEW to rename a materialized view.".into())
             }
@@ -474,6 +480,13 @@ impl fmt::Display for PlanError {
             Self::DropLastSubsource { source } => write!(f, "SOURCE {} must retain at least one non-progress subsource", source.quoted()),
             Self::DropProgressCollection { progress_collection, source: _} => write!(f, "SOURCE {} is a progress collection and cannot be dropped independently of its primary source", progress_collection.quoted()),
             Self::DropNonSubsource { non_subsource, source} => write!(f, "SOURCE {} is a not a subsource of {}", non_subsource.quoted(), source.quoted()),
+            Self::DependentObjectsStillExist {object_type, object_name, dependents} => {
+                let reason = match &dependents[..] {
+                    [] => " because other objects depend on it".to_string(),
+                    dependents => format!(": still depended upon by {}", dependents.join(", ")),
+                };
+                write!(f, "cannot drop {object_type} {object_name}{reason}")
+            }
             Self::InvalidOptionValue { option_name, err } => write!(f, "invalid {} option value: {}", option_name, err),
             Self::UnexpectedDuplicateReference { name } => write!(f, "unexpected multiple references to {}", name.to_ast_string()),
             Self::RecursiveTypeMismatch(name, declared, inferred) => {

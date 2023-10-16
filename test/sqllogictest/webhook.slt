@@ -222,7 +222,7 @@ CREATE SOURCE webhook_cluster_does_not_exist IN CLUSTER i_do_not_exist FROM WEBH
   BODY FORMAT BYTES;
 
 # Dropping without cascade should fail since there are sources using it.
-statement error cannot drop cluster with active objects
+statement error cannot drop cluster webhook_cluster because other objects depend on it
 DROP CLUSTER webhook_cluster;
 
 # Create a webhook source that uses secrets when validating.
