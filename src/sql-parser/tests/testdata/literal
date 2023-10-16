@@ -173,30 +173,22 @@ Cast { expr: Value(String("invalid timestamptx")), data_type: Other { name: Name
 parse-scalar
 TIMESTAMP(-1) '1999-01-01 01:23:34.555'
 ----
-error: Expected literal unsigned integer, found operator "-"
-TIMESTAMP(-1) '1999-01-01 01:23:34.555'
-          ^
+Cast { expr: Value(String("1999-01-01 01:23:34.555")), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamp")])), typ_mod: [-1] } }
 
 parse-scalar
 TIMESTAMPTZ(-1) '1999-01-01 01:23:34.555'
 ----
-error: Expected literal unsigned integer, found operator "-"
-TIMESTAMPTZ(-1) '1999-01-01 01:23:34.555'
-            ^
+Cast { expr: Value(String("1999-01-01 01:23:34.555")), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamptz")])), typ_mod: [-1] } }
 
 parse-scalar
 TIMESTAMP(-1) WITH TIME ZONE '1999-01-01 01:23:34.555'
 ----
-error: Expected literal unsigned integer, found operator "-"
-TIMESTAMP(-1) WITH TIME ZONE '1999-01-01 01:23:34.555'
-          ^
+Cast { expr: Value(String("1999-01-01 01:23:34.555")), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamptz")])), typ_mod: [-1] } }
 
 parse-scalar
 TIMESTAMP(-1) WITHOUT TIME ZONE '1999-01-01 01:23:34.555'
 ----
-error: Expected literal unsigned integer, found operator "-"
-TIMESTAMP(-1) WITHOUT TIME ZONE '1999-01-01 01:23:34.555'
-          ^
+Cast { expr: Value(String("1999-01-01 01:23:34.555")), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamp")])), typ_mod: [-1] } }
 
 parse-scalar
 TIMESTAMP(3) '1970-01-01T00:00:00.666666666'
@@ -241,30 +233,30 @@ Cast { expr: Value(String("1970-01-01T00:00:00.666666666")), data_type: Other { 
 parse-scalar
 TIMESTAMP(9223372036854775808) '1970-01-01T00:00:00.666666666'
 ----
-error: number too large to fit in target type
+error: Could not parse '9223372036854775808' as i64: number too large to fit in target type
 TIMESTAMP(9223372036854775808) '1970-01-01T00:00:00.666666666'
-   ^
+          ^
 
 parse-scalar
 TIMESTAMPTZ(9223372036854775808) '1970-01-01T00:00:00.666666666'
 ----
-error: number too large to fit in target type
+error: Could not parse '9223372036854775808' as i64: number too large to fit in target type
 TIMESTAMPTZ(9223372036854775808) '1970-01-01T00:00:00.666666666'
-   ^
+            ^
 
 parse-scalar
 TIMESTAMP(9223372036854775808) WITH TIME ZONE '1970-01-01T00:00:00.666666666'
 ----
-error: number too large to fit in target type
+error: Could not parse '9223372036854775808' as i64: number too large to fit in target type
 TIMESTAMP(9223372036854775808) WITH TIME ZONE '1970-01-01T00:00:00.666666666'
-   ^
+          ^
 
 parse-scalar
 TIMESTAMP(9223372036854775808) WITHOUT TIME ZONE '1970-01-01T00:00:00.666666666'
 ----
-error: number too large to fit in target type
+error: Could not parse '9223372036854775808' as i64: number too large to fit in target type
 TIMESTAMP(9223372036854775808) WITHOUT TIME ZONE '1970-01-01T00:00:00.666666666'
-   ^
+          ^
 
 parse-scalar
 INTERVAL '1' YEAR
