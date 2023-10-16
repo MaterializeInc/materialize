@@ -24,12 +24,27 @@ CI_RE = re.compile("ci-regexp: (.*)")
 CI_APPLY_TO = re.compile("ci-apply-to: (.*)")
 ERROR_RE = re.compile(
     r"""
+    # This block contains expected failures, don't report them
+    ^((?!.*
+    # Expected in restart test
+    ( restart-materialized-1\ \ \|\ thread\ 'coordinator'\ panicked\ at\ 'can't\ persist\ timestamp
+    # Expected in cluster test
+    | cluster-clusterd[12]-1\ .*\ halting\ process:\ new\ timely\ configuration\ does\ not\ match\ existing\ timely\ configuration
+    # Emitted by tests employing explicit mz_panic()
+    | forced\ panic
+    # Expected once compute cluster has panicked, brings no new information
+    | timely\ communication\ error:
+    # Expected once compute cluster has panicked, only happens in CI
+    | aborting\ because\ propagate_crashes\ is\ enabled
+    ))
+    .)*
+    # This block contains unexpected failures, report them
     ( panicked\ at
     | segfault\ at
+    | trap\ invalid\ opcode
+    | general\ protection
     | has\ overflowed\ its\ stack
-    # broken_statements.slt expects internal errors, but they will always be
-    # prepended with a "forced panic", so ignore that
-    | ^((?!forced\ panic).)* internal\ error:
+    | internal\ error:
     | \*\ FATAL:
     | [Oo]ut\ [Oo]f\ [Mm]emory
     | cannot\ migrate\ from\ catalog
@@ -52,16 +67,6 @@ ERROR_RE = re.compile(
     | error:\ Found\ argument\ '.*'\ which\ wasn't\ expected,\ or\ isn't\ valid\ in\ this\ context
     | unrecognized\ configuration\ parameter
     )
-    # Emitted by tests employing explicit mz_panic()
-    (?!.*forced\ panic)
-    # Expected once compute cluster has panicked, brings no new information
-    (?!.*timely\ communication\ error:)
-    # Expected once compute cluster has panicked, only happens in CI
-    (?!.*aborting\ because\ propagate_crashes\ is\ enabled)
-    # Emitted by webhook source tests that explicitly panic the validation.
-    (?!.*webhook\ panic\ test')
-    # Emitted by unit test at src/persist-client/src/cache.rs:765
-    (?!.*thread\ 'cache::tests::state_cache'\ panicked\ at\ 'boom')
     """,
     re.VERBOSE,
 )

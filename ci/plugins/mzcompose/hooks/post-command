@@ -62,7 +62,8 @@ fi
 
 ci_unimportant_heading "Upload log artifacts"
 
-run logs --no-color > services.log
+# services.log might already exist and contain logs from before composition was downed
+run logs --no-color >> services.log
 # shellcheck disable=SC2024
 sudo journalctl --merge --since "$(cat step_start_timestamp)" > journalctl-merge.log
 netstat -ant > netstat-ant.log
