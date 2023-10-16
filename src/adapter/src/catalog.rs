@@ -27,7 +27,8 @@ use mz_catalog::builtin::{
     BUILTIN_PREFIXES, MZ_INTROSPECTION_CLUSTER,
 };
 use mz_catalog::{
-    BootstrapArgs, DurableCatalogState, OpenableDurableCatalogState, StashConfig, Transaction,
+    debug_bootstrap_args, DurableCatalogState, OpenableDurableCatalogState, StashConfig,
+    Transaction,
 };
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller::clusters::{
@@ -456,7 +457,7 @@ impl Catalog {
         let mut openable_storage =
             mz_catalog::debug_stash_backed_catalog_state(debug_stash_factory);
         let storage = openable_storage
-            .open(now.clone(), &Self::debug_bootstrap_args(), None)
+            .open(now.clone(), &debug_bootstrap_args(), None)
             .await?;
         Self::open_debug_stash_catalog(storage, now).await
     }
@@ -480,7 +481,7 @@ impl Catalog {
         };
         let mut openable_storage = mz_catalog::stash_backed_catalog_state(stash_config);
         let storage = openable_storage
-            .open(now.clone(), &Self::debug_bootstrap_args(), None)
+            .open(now.clone(), &debug_bootstrap_args(), None)
             .await?;
         Self::open_debug_stash_catalog(storage, now).await
     }
@@ -494,7 +495,7 @@ impl Catalog {
     ) -> Result<Catalog, anyhow::Error> {
         let mut openable_storage = mz_catalog::stash_backed_catalog_state(stash_config);
         let storage = openable_storage
-            .open_read_only(now.clone(), &Self::debug_bootstrap_args())
+            .open_read_only(now.clone(), &debug_bootstrap_args())
             .await?;
         Self::open_debug_stash_catalog(storage, now).await
     }
@@ -544,14 +545,6 @@ impl Catalog {
         })
         .await?;
         Ok(catalog)
-    }
-
-    fn debug_bootstrap_args() -> BootstrapArgs {
-        BootstrapArgs {
-            default_cluster_replica_size: "1".into(),
-            builtin_cluster_replica_size: "1".into(),
-            bootstrap_role: None,
-        }
     }
 
     pub fn for_session<'a>(&'a self, session: &'a Session) -> ConnCatalog<'a> {
