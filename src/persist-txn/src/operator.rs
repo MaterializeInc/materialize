@@ -137,7 +137,7 @@ where
         // We've ensured that the data shard's physical upper is past as_of, so
         // start by passing through data and frontier updates from the input
         // until it is past the as_of.
-        let mut read_data_past = as_of;
+        let mut read_data_to = as_of.step_forward();
         let mut output_progress_exclusive = T::minimum();
         loop {
             // TODO(txn): Do something more specific when the input returns None
@@ -168,7 +168,7 @@ where
                             output_progress_exclusive.clone_from(input_progress_exclusive);
                             cap.downgrade(&output_progress_exclusive);
                         }
-                        if output_progress_exclusive > read_data_past {
+                        if read_data_to <= output_progress_exclusive {
                             break;
                         }
                     }
@@ -197,8 +197,8 @@ where
                     }
                     // The data shard got a write! Loop back above and pass
                     // through data until we see it.
-                    DataListenNext::ReadDataPast(new_target) => {
-                        read_data_past = new_target;
+                    DataListenNext::ReadDataTo(new_target) => {
+                        read_data_to = new_target;
                         break;
                     }
                     // We know there are no writes in
@@ -225,6 +225,7 @@ where
 ///
 /// [Subscribe]: mz_persist_client::read::Subscribe
 pub struct DataSubscribe {
+    as_of: u64,
     worker: Worker<timely::communication::allocator::Thread>,
     data: ProbeHandle<u64>,
     txns: ProbeHandle<u64>,
@@ -237,6 +238,7 @@ pub struct DataSubscribe {
 impl std::fmt::Debug for DataSubscribe {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let DataSubscribe {
+            as_of,
             worker: _,
             data,
             txns,
@@ -245,6 +247,7 @@ impl std::fmt::Debug for DataSubscribe {
             _tokens: _,
         } = self;
         f.debug_struct("DataSubscribe")
+            .field("as_of", as_of)
             .field("data", data)
             .field("txns", txns)
             .field("output", output)
@@ -306,6 +309,7 @@ impl DataSubscribe {
             (data, txns, data_stream.capture(), tokens)
         });
         Self {
+            as_of,
             worker,
             data,
             txns,
@@ -335,6 +339,10 @@ impl DataSubscribe {
         while self.worker.activations().borrow().empty_for().is_some() {
             self.worker.step();
         }
+        self.capture_output()
+    }
+
+    pub(crate) fn capture_output(&mut self) {
         loop {
             let event = match self.capture.try_recv() {
                 Ok(x) => x,

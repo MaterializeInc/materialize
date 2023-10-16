@@ -17,9 +17,10 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
+use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
-use mz_persist_types::{Codec, Codec64, StepForward};
+use mz_persist_types::{Codec, Codec64, Opaque, StepForward};
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
 use tracing::{debug, instrument};
@@ -94,25 +95,29 @@ use crate::{TxnsCodec, TxnsCodecDefault};
 /// (d1, <empty>, 2, 1)
 /// ```
 #[derive(Debug)]
-pub struct TxnsHandle<K, V, T, D, C = TxnsCodecDefault>
+pub struct TxnsHandle<K, V, T, D, O = u64, C = TxnsCodecDefault>
 where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + TotalOrder + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
+    O: Opaque + Debug + Codec64,
     C: TxnsCodec,
 {
     pub(crate) txns_cache: TxnsCache<T, C>,
     pub(crate) txns_write: WriteHandle<C::Key, C::Val, T, i64>,
+    #[allow(dead_code)] // TODO(txn): Becomes used in the txns compaction PR.
+    pub(crate) txns_since: SinceHandle<C::Key, C::Val, T, i64, O>,
     pub(crate) datas: DataHandles<K, V, T, D>,
 }
 
-impl<K, V, T, D, C> TxnsHandle<K, V, T, D, C>
+impl<K, V, T, D, O, C> TxnsHandle<K, V, T, D, O, C>
 where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
+    O: Opaque + Debug + Codec64,
     C: TxnsCodec,
 {
     /// Returns a [TxnsHandle] committing to the given txn shard.
@@ -146,10 +151,24 @@ where
             )
             .await
             .expect("txns schema shouldn't change");
+        let txns_since = client
+            .open_critical_since(
+                txns_id,
+                // TODO(txn): We likely need to use a different critical reader
+                // id for this if we want to be able to introspect it via SQL.
+                PersistClient::CONTROLLER_CRITICAL_SINCE,
+                Diagnostics {
+                    shard_name: "txns".to_owned(),
+                    handle_purpose: "commit txns".to_owned(),
+                },
+            )
+            .await
+            .expect("txns schema shouldn't change");
         let txns_cache = TxnsCache::init(init_ts, txns_read, &mut txns_write).await;
         TxnsHandle {
             txns_cache,
             txns_write,
+            txns_since,
             datas: DataHandles {
                 client,
                 data_write: BTreeMap::new(),
@@ -472,7 +491,7 @@ mod tests {
 
     use super::*;
 
-    impl TxnsHandle<String, (), u64, i64, TxnsCodecDefault> {
+    impl TxnsHandle<String, (), u64, i64, u64, TxnsCodecDefault> {
         pub(crate) async fn expect_open(client: PersistClient) -> Self {
             Self::expect_open_id(client, ShardId::new()).await
         }
