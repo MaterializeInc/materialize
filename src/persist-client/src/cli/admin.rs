@@ -20,7 +20,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use futures_util::StreamExt;
+use futures_util::{stream, StreamExt, TryStreamExt};
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
@@ -149,29 +149,34 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
                 metrics,
             );
 
-            let mut shards = consensus.list_keys();
-            let mut not_restored = vec![];
-
-            // TODO: this should be safe (and appealing) to parallelize.
-            while let Some(shard) = shards.next().await {
-                let shard_id = shard?;
-                let shard_id = ShardId::from_str(&shard_id).expect("invalid shard id");
-                let start = Instant::now();
-                info!("Restoring blob state for shard {shard_id}.",);
-                let shard_not_restored = crate::internal::restore::restore_blob(
-                    &versions,
-                    blob.as_ref(),
-                    &cfg.build_version,
-                    shard_id,
-                )
+            let not_restored: Vec<_> = consensus
+                .list_keys()
+                .flat_map_unordered(4, |shard| {
+                    stream::once(Box::pin(async {
+                        let shard_id = shard?;
+                        let shard_id = ShardId::from_str(&shard_id).expect("invalid shard id");
+                        let start = Instant::now();
+                        info!("Restoring blob state for shard {shard_id}.",);
+                        let shard_not_restored = crate::internal::restore::restore_blob(
+                            &versions,
+                            blob.as_ref(),
+                            &cfg.build_version,
+                            shard_id,
+                        )
+                        .await?;
+                        info!(
+                            "Restored blob state for shard {shard_id}; {} errors, {:?} elapsed.",
+                            shard_not_restored.len(),
+                            start.elapsed()
+                        );
+                        Ok::<_, ExternalError>(shard_not_restored)
+                    }))
+                })
+                .try_fold(vec![], |mut a, b| async move {
+                    a.extend(b);
+                    Ok(a)
+                })
                 .await?;
-                info!(
-                    "Restored blob state for shard {shard_id}; {} errors, {:?} elapsed.",
-                    shard_not_restored.len(),
-                    start.elapsed()
-                );
-                not_restored.extend(shard_not_restored);
-            }
 
             info_log_non_zero_metrics(&metrics_registry.gather());
             if !not_restored.is_empty() {
