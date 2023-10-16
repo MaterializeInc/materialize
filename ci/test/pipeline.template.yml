@@ -158,6 +158,7 @@ steps:
 
   - id: cargo-test
     label: Cargo test
+    parallelism: 2
     timeout_in_minutes: 30
     artifact_paths: [junit_*.xml, target/nextest/ci/junit_cargo-test.xml]
     inputs:
@@ -180,7 +181,7 @@ steps:
   - id: miri-test
     label: Miri test (fast) %n
     inputs: [src]
-    parallelism: 2
+    parallelism: 4
     timeout_in_minutes: 30
     artifact_paths: [junit_*.xml, target/nextest/ci/junit_cargo-test.xml]
     plugins:
@@ -197,7 +198,7 @@ steps:
     depends_on: build-x86_64
     timeout_in_minutes: 30
     inputs: [test/testdrive]
-    parallelism: 4
+    parallelism: 6
     # Don't need the junit_mzcompose_*.xml for this
     artifact_paths: [junit_testdrive_*.xml, test/testdrive/junit_testdrive_*.xml]
     plugins:
@@ -221,75 +222,16 @@ steps:
     agents:
       queue: linux-x86_64
 
-  - id: persistence
-    label: Persistence tests
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    artifact_paths: junit_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: persistence
-    agents:
-      queue: linux-x86_64
-
   - id: cluster-tests
     label: Cluster tests %n
     depends_on: build-x86_64
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
     inputs: [test/cluster]
-    parallelism: 2
+    parallelism: 4
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cluster
-    agents:
-      queue: linux-x86_64
-
-  - id: cluster-isolation
-    label: Cluster isolation test
-    depends_on: build-x86_64
-    timeout_in_minutes: 10
-    inputs: [test/cluster-isolation]
-    artifact_paths: junit_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: cluster-isolation
-    agents:
-      queue: linux-x86_64
-
-  - id: replica-isolation
-    label: Replica isolation
-    depends_on: build-x86_64
-    timeout_in_minutes: 20
-    inputs: [test/replica-isolation]
-    artifact_paths: junit_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: replica-isolation
-    agents:
-      queue: linux-x86_64
-
-  - id: kafka-ssl
-    label: Kafka SSL smoke test
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    inputs: [test/kafka-ssl/smoketest.td]
-    artifact_paths: junit_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: kafka-ssl
-    agents:
-      queue: linux-x86_64
-
-  - id: kafka-sasl-plain
-    label: Kafka SASL PLAIN smoke test
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    inputs: [test/kafka-sasl-plain/smoketest.td]
-    artifact_paths: junit_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: kafka-sasl-plain
     agents:
       queue: linux-x86_64
 
@@ -297,24 +239,12 @@ steps:
     label: Fast SQL logic tests %n
     depends_on: build-x86_64
     timeout_in_minutes: 30
-    parallelism: 3
+    parallelism: 5
     inputs: [test/sqllogictest]
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqllogictest
-    agents:
-      queue: linux-x86_64
-
-  - id: chbench-demo
-    label: chbench smoke test
-    depends_on: build-x86_64
-    artifact_paths: junit_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: chbench
-          args: [--run-seconds=10, --wait]
-    timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
 
@@ -338,28 +268,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: legacy-upgrade
-    agents:
-      queue: linux-x86_64
-
-  - id: metabase-demo
-    label: Metabase smoke test
-    depends_on: build-x86_64
-    timeout_in_minutes: 10
-    artifact_paths: junit_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: metabase
-    agents:
-      queue: linux-x86_64
-
-  - id: dbt-materialize
-    label: dbt-materialize tests
-    depends_on: build-x86_64
-    timeout_in_minutes: 10
-    artifact_paths: junit_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: dbt-materialize
     agents:
       queue: linux-x86_64
 
@@ -462,31 +370,6 @@ steps:
           composition: zippy
           args: [--scenario=KafkaSources, --actions=200]
 
-  - id: kafka-exactly-once
-    label: Kafka exactly-once tests
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    artifact_paths: junit_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: kafka-exactly-once
-    agents:
-      queue: linux-x86_64
-
-  - id: persist-maelstrom
-    label: Maelstrom coverage of persist
-    depends_on: build-x86_64
-    timeout_in_minutes: 10
-    inputs: [test/persist]
-    artifact_paths: [test/persist/maelstrom/**/*.log, junit_*.xml]
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: persist
-          args: [--consensus=mem, --blob=mem]
-    agents:
-      queue: linux-x86_64
-    coverage: skip # Randomized, shouldn't count for coverage
-
   - id: checks-drop-create-default-replica
     label: "Checks + DROP/CREATE replica"
     depends_on: build-x86_64
@@ -568,7 +451,7 @@ steps:
   - id: cloudtest
     label: Cloudtest %n
     depends_on: build-x86_64
-    parallelism: 3
+    parallelism: 5
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
     inputs:
@@ -590,6 +473,137 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: source-sink-errors
+
+  - id: feature-benchmark-kafka-only
+    label: "Feature benchmark (Kafka only)"
+    depends_on: build-x86_64
+    timeout_in_minutes: 30
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: feature-benchmark
+          args: [--scenario=KafkaUpsertUnique]
+    coverage: skip
+
+  # Fast tests closer to the end, doesn't matter as much if they have to wait
+  # for an agent
+  - id: replica-isolation
+    label: Replica isolation
+    depends_on: build-x86_64
+    timeout_in_minutes: 20
+    inputs: [test/replica-isolation]
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: replica-isolation
+    agents:
+      queue: linux-x86_64
+
+  - id: persistence
+    label: Persistence tests
+    depends_on: build-x86_64
+    timeout_in_minutes: 30
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: persistence
+    agents:
+      queue: linux-x86_64
+
+  - id: cluster-isolation
+    label: Cluster isolation test
+    depends_on: build-x86_64
+    timeout_in_minutes: 10
+    inputs: [test/cluster-isolation]
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: cluster-isolation
+    agents:
+      queue: linux-x86_64
+
+  - id: kafka-ssl
+    label: Kafka SSL smoke test
+    depends_on: build-x86_64
+    timeout_in_minutes: 30
+    inputs: [test/kafka-ssl/smoketest.td]
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: kafka-ssl
+    agents:
+      queue: linux-x86_64
+
+  - id: kafka-sasl-plain
+    label: Kafka SASL PLAIN smoke test
+    depends_on: build-x86_64
+    timeout_in_minutes: 30
+    inputs: [test/kafka-sasl-plain/smoketest.td]
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: kafka-sasl-plain
+    agents:
+      queue: linux-x86_64
+
+  - id: chbench-demo
+    label: chbench smoke test
+    depends_on: build-x86_64
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: chbench
+          args: [--run-seconds=10, --wait]
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
+
+  - id: metabase-demo
+    label: Metabase smoke test
+    depends_on: build-x86_64
+    timeout_in_minutes: 10
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: metabase
+    agents:
+      queue: linux-x86_64
+
+  - id: dbt-materialize
+    label: dbt-materialize tests
+    depends_on: build-x86_64
+    timeout_in_minutes: 10
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: dbt-materialize
+    agents:
+      queue: linux-x86_64
+
+  - id: kafka-exactly-once
+    label: Kafka exactly-once tests
+    depends_on: build-x86_64
+    timeout_in_minutes: 30
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: kafka-exactly-once
+    agents:
+      queue: linux-x86_64
+
+  - id: persist-maelstrom
+    label: Maelstrom coverage of persist
+    depends_on: build-x86_64
+    timeout_in_minutes: 10
+    inputs: [test/persist]
+    artifact_paths: [test/persist/maelstrom/**/*.log, junit_*.xml]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: persist
+          args: [--consensus=mem, --blob=mem]
+    agents:
+      queue: linux-x86_64
+    coverage: skip # Randomized, shouldn't count for coverage
 
   - id: storage-usage
     label: "Storage Usage Table Test"
@@ -661,17 +675,6 @@ steps:
           composition: python
     agents:
       queue: linux-x86_64
-
-  - id: feature-benchmark-kafka-only
-    label: "Feature benchmark (Kafka only)"
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    artifact_paths: junit_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: feature-benchmark
-          args: [--scenario=KafkaUpsertUnique]
-    coverage: skip
 
   - id: deploy-website
     label: Deploy website
