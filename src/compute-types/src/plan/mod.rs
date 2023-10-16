@@ -25,7 +25,7 @@ use mz_ore::str::Indent;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::explain::text::text_string_at;
 use mz_repr::explain::{DummyHumanizer, ExplainConfig, ExprHumanizer, PlanRenderingContext};
-use mz_repr::{Diff, GlobalId, Row};
+use mz_repr::{ColumnType, Diff, GlobalId, Row};
 use proptest::arbitrary::Arbitrary;
 use proptest::prelude::*;
 use proptest::strategy::Strategy;
@@ -34,6 +34,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::dataflows::{BuildDesc, DataflowDescription, IndexImport};
 use crate::plan::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
+use crate::plan::proto_available_collections::ProtoColumnTypes;
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
@@ -95,6 +96,10 @@ pub struct AvailableCollections {
     /// column permutation mapping
     #[proptest(strategy = "prop::collection::vec(any_arranged_thin(), 0..3)")]
     pub arranged: Vec<(Vec<MirScalarExpr>, BTreeMap<usize, usize>, Vec<usize>)>,
+    /// The types of the columns in the raw form of the collection, if known. We
+    /// only capture types when necessary to support arrangement specialization,
+    /// so this only done for specific LIR operators during lowering.
+    pub types: Option<Vec<ColumnType>>,
 }
 
 /// A strategy that produces arrangements that are thinner than the default. That is
@@ -108,11 +113,24 @@ pub(crate) fn any_arranged_thin(
     )
 }
 
+impl RustType<ProtoColumnTypes> for Vec<ColumnType> {
+    fn into_proto(&self) -> ProtoColumnTypes {
+        ProtoColumnTypes {
+            types: self.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoColumnTypes) -> Result<Self, TryFromProtoError> {
+        proto.types.into_rust()
+    }
+}
+
 impl RustType<ProtoAvailableCollections> for AvailableCollections {
     fn into_proto(&self) -> ProtoAvailableCollections {
         ProtoAvailableCollections {
             raw: self.raw,
             arranged: self.arranged.into_proto(),
+            types: self.types.into_proto(),
         }
     }
 
@@ -121,6 +139,7 @@ impl RustType<ProtoAvailableCollections> for AvailableCollections {
             Self {
                 raw: x.raw,
                 arranged: x.arranged.into_rust()?,
+                types: x.types.into_rust()?,
             }
         })
     }
@@ -132,6 +151,7 @@ impl AvailableCollections {
         Self {
             raw: true,
             arranged: Vec::new(),
+            types: None,
         }
     }
 
@@ -147,6 +167,7 @@ impl AvailableCollections {
         Self {
             raw: false,
             arranged,
+            types: None,
         }
     }
 
@@ -1037,6 +1058,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
         expr: &MirRelationExpr,
         arrangements: &mut BTreeMap<Id, AvailableCollections>,
         debug_info: LirDebugInfo<'_>,
+        enable_specialized_arrangements: bool,
     ) -> Result<(Self, AvailableCollections), String> {
         // This function is recursive and can overflow its stack, so grow it if
         // needed. The growth here is unbounded. Our general solution for this problem
@@ -1047,13 +1069,21 @@ impl<T: timely::progress::Timestamp> Plan<T> {
         // to allow the unbounded growth here. We are though somewhat protected by
         // higher levels enforcing their own limits on stack depth (in the parser,
         // transformer/desugarer, and planner).
-        mz_ore::stack::maybe_grow(|| Plan::from_mir_stack_safe(expr, arrangements, debug_info))
+        mz_ore::stack::maybe_grow(|| {
+            Plan::from_mir_stack_safe(
+                expr,
+                arrangements,
+                debug_info,
+                enable_specialized_arrangements,
+            )
+        })
     }
 
     fn from_mir_stack_safe(
         expr: &MirRelationExpr,
         arrangements: &mut BTreeMap<Id, AvailableCollections>,
         debug_info: LirDebugInfo<'_>,
+        enable_specialized_arrangements: bool,
     ) -> Result<(Self, AvailableCollections), String> {
         // Extract a maximally large MapFilterProject from `expr`.
         // We will then try and push this in to the resulting expression.
@@ -1167,12 +1197,22 @@ impl<T: timely::progress::Timestamp> Plan<T> {
 
                 // Plan the value using only the initial arrangements, but
                 // introduce any resulting arrangements bound to `id`.
-                let (value, v_keys) = Plan::from_mir(value, arrangements, debug_info)?;
+                let (value, v_keys) = Plan::from_mir(
+                    value,
+                    arrangements,
+                    debug_info,
+                    enable_specialized_arrangements,
+                )?;
                 let pre_existing = arrangements.insert(Id::Local(*id), v_keys);
                 assert!(pre_existing.is_none());
                 // Plan the body using initial and `value` arrangements,
                 // and then remove reference to the value arrangements.
-                let (body, b_keys) = Plan::from_mir(body, arrangements, debug_info)?;
+                let (body, b_keys) = Plan::from_mir(
+                    body,
+                    arrangements,
+                    debug_info,
+                    enable_specialized_arrangements,
+                )?;
                 arrangements.remove(&Id::Local(*id));
                 // Return the plan, and any `body` arrangements.
                 (
@@ -1198,8 +1238,12 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                 // as we cannot circulate an arrangement through a `Variable` yet.
                 let mut lir_values = Vec::with_capacity(values.len());
                 for (id, value) in ids.iter().zip(values) {
-                    let (mut lir_value, mut v_keys) =
-                        Plan::from_mir(value, arrangements, debug_info)?;
+                    let (mut lir_value, mut v_keys) = Plan::from_mir(
+                        value,
+                        arrangements,
+                        debug_info,
+                        enable_specialized_arrangements,
+                    )?;
                     // If `v_keys` does not contain an unarranged collection, we must form it.
                     if !v_keys.raw {
                         // Choose an "arbitrary" arrangement; TODO: prefer a specific one.
@@ -1254,7 +1298,12 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                 }
                 // Plan the body using initial and `value` arrangements,
                 // and then remove reference to the value arrangements.
-                let (body, b_keys) = Plan::from_mir(body, arrangements, debug_info)?;
+                let (body, b_keys) = Plan::from_mir(
+                    body,
+                    arrangements,
+                    debug_info,
+                    enable_specialized_arrangements,
+                )?;
                 for id in ids.iter() {
                     arrangements.remove(&Id::Local(*id));
                 }
@@ -1270,7 +1319,12 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                 )
             }
             MirRelationExpr::FlatMap { input, func, exprs } => {
-                let (input, keys) = Plan::from_mir(input, arrangements, debug_info)?;
+                let (input, keys) = Plan::from_mir(
+                    input,
+                    arrangements,
+                    debug_info,
+                    enable_specialized_arrangements,
+                )?;
                 // This stage can absorb arbitrary MFP instances.
                 let mfp = mfp.take();
                 let mut exprs = exprs.clone();
@@ -1315,7 +1369,12 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                 let mut input_keys = Vec::new();
                 let mut input_arities = Vec::new();
                 for input in inputs.iter() {
-                    let (plan, keys) = Plan::from_mir(input, arrangements, debug_info)?;
+                    let (plan, keys) = Plan::from_mir(
+                        input,
+                        arrangements,
+                        debug_info,
+                        enable_specialized_arrangements,
+                    )?;
                     input_arities.push(input.arity());
                     plans.push(plan);
                     input_keys.push(keys);
@@ -1441,7 +1500,12 @@ This is not expected to cause incorrect results, but could indicate a performanc
             } => {
                 let input_arity = input.arity();
                 let output_arity = group_key.len() + aggregates.len();
-                let (input, keys) = Self::from_mir(input, arrangements, debug_info)?;
+                let (input, keys) = Self::from_mir(
+                    input,
+                    arrangements,
+                    debug_info,
+                    enable_specialized_arrangements,
+                )?;
                 let (input_key, permutation_and_new_arity) = if let Some((
                     input_key,
                     permutation,
@@ -1485,7 +1549,12 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 expected_group_size,
             } => {
                 let arity = input.arity();
-                let (input, keys) = Self::from_mir(input, arrangements, debug_info)?;
+                let (input, keys) = Self::from_mir(
+                    input,
+                    arrangements,
+                    debug_info,
+                    enable_specialized_arrangements,
+                )?;
 
                 let top_k_plan = TopKPlan::create_from(
                     group_key.clone(),
@@ -1515,7 +1584,12 @@ This is not expected to cause incorrect results, but could indicate a performanc
             }
             MirRelationExpr::Negate { input } => {
                 let arity = input.arity();
-                let (input, keys) = Self::from_mir(input, arrangements, debug_info)?;
+                let (input, keys) = Self::from_mir(
+                    input,
+                    arrangements,
+                    debug_info,
+                    enable_specialized_arrangements,
+                )?;
 
                 // We don't have an MFP here -- install an operator to permute the
                 // input, if necessary.
@@ -1534,7 +1608,12 @@ This is not expected to cause incorrect results, but could indicate a performanc
             }
             MirRelationExpr::Threshold { input } => {
                 let arity = input.arity();
-                let (input, keys) = Self::from_mir(input, arrangements, debug_info)?;
+                let (input, keys) = Self::from_mir(
+                    input,
+                    arrangements,
+                    debug_info,
+                    enable_specialized_arrangements,
+                )?;
                 // We don't have an MFP here -- install an operator to permute the
                 // input, if necessary.
                 let input = if !keys.raw {
@@ -1570,10 +1649,20 @@ This is not expected to cause incorrect results, but could indicate a performanc
             MirRelationExpr::Union { base, inputs } => {
                 let arity = base.arity();
                 let mut plans_keys = Vec::with_capacity(1 + inputs.len());
-                let (plan, keys) = Self::from_mir(base, arrangements, debug_info)?;
+                let (plan, keys) = Self::from_mir(
+                    base,
+                    arrangements,
+                    debug_info,
+                    enable_specialized_arrangements,
+                )?;
                 plans_keys.push((plan, keys));
                 for input in inputs.iter() {
-                    let (plan, keys) = Self::from_mir(input, arrangements, debug_info)?;
+                    let (plan, keys) = Self::from_mir(
+                        input,
+                        arrangements,
+                        debug_info,
+                        enable_specialized_arrangements,
+                    )?;
                     plans_keys.push((plan, keys));
                 }
                 let plans = plans_keys
@@ -1597,7 +1686,19 @@ This is not expected to cause incorrect results, but could indicate a performanc
             }
             MirRelationExpr::ArrangeBy { input, keys } => {
                 let arity = input.arity();
-                let (input, mut input_keys) = Self::from_mir(input, arrangements, debug_info)?;
+                let types = if enable_specialized_arrangements {
+                    input.typ().column_types
+                } else {
+                    Default::default()
+                };
+                let (input, mut input_keys) = Self::from_mir(
+                    input,
+                    arrangements,
+                    debug_info,
+                    enable_specialized_arrangements,
+                )?;
+                input_keys.types = Some(types);
+
                 // Determine keys that are not present in `input_keys`.
                 let new_keys = keys
                     .iter()
@@ -1733,9 +1834,10 @@ This is not expected to cause incorrect results, but could indicate a performanc
         desc: DataflowDescription<OptimizedMirRelationExpr>,
         enable_consolidate_after_union_negate: bool,
         enable_monotonic_oneshot_selects: bool,
+        enable_specialized_arrangements: bool,
     ) -> Result<DataflowDescription<Self>, String> {
         // First, we lower the dataflow description from MIR to LIR.
-        let mut dataflow = Self::lower_dataflow(desc)?;
+        let mut dataflow = Self::lower_dataflow(desc, enable_specialized_arrangements)?;
 
         // Subsequently, we perform plan refinements for the dataflow.
         Self::refine_source_mfps(&mut dataflow);
@@ -1792,6 +1894,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
     )]
     fn lower_dataflow(
         desc: DataflowDescription<OptimizedMirRelationExpr>,
+        enable_specialized_arrangements: bool,
     ) -> Result<DataflowDescription<Self>, String> {
         // Collect available arrangements by identifier.
         let mut arrangements = BTreeMap::new();
@@ -1813,11 +1916,15 @@ This is not expected to cause incorrect results, but could indicate a performanc
             // _assume_ that they were both generated by `permutation_for_arrangement`,
             // and recover it here.
             let (permutation, thinning) = permutation_for_arrangement(&key, typ.arity());
-            arrangements
+            let index_keys = arrangements
                 .entry(Id::Global(index_desc.on_id))
-                .or_insert_with(AvailableCollections::default)
-                .arranged
-                .push((key, permutation, thinning));
+                .or_insert_with(AvailableCollections::default);
+            index_keys.arranged.push((key, permutation, thinning));
+            index_keys.types = if enable_specialized_arrangements {
+                Some(typ.column_types.clone())
+            } else {
+                Default::default()
+            };
         }
         for id in desc.source_imports.keys() {
             arrangements
@@ -1834,6 +1941,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     debug_name: &desc.debug_name,
                     id: build.id,
                 },
+                enable_specialized_arrangements,
             )?;
             arrangements.insert(Id::Global(build.id), keys);
             objects_to_build.push(BuildDesc { id: build.id, plan });

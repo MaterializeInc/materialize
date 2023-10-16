@@ -102,6 +102,7 @@ pub mod adt;
 pub mod antichain;
 pub mod chrono;
 pub mod explain;
+pub mod fixed_length;
 pub mod global_id;
 pub mod namespaces;
 pub mod role_id;

@@ -136,6 +136,13 @@ impl RustType<ProtoColumnType> for ColumnType {
     }
 }
 
+impl fmt::Display for ColumnType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let nullable = if self.nullable { "Null" } else { "NotNull" };
+        f.write_fmt(format_args!("{:?}:{}", self.scalar_type, nullable))
+    }
+}
+
 /// The type of a relation.
 #[derive(
     Arbitrary, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,

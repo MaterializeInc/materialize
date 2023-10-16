@@ -113,6 +113,11 @@ pub struct OptimizerConfig {
     ///
     /// The refinement happens in the LIR ⇒ LIR phase.
     pub enable_monotonic_oneshot_selects: bool,
+    /// Enable collecting type information so that rendering can type-specialize
+    /// arrangements.
+    ///
+    /// The collection of type information happens in MIR ⇒ LIR lowering.
+    pub enable_specialized_arrangements: bool,
     /// An exclusive upper bound on the number of results we may return from a
     /// Persist fast-path peek.
     pub persist_fast_path_limit: usize,
@@ -123,6 +128,7 @@ impl From<&SystemVars> for OptimizerConfig {
         Self {
             enable_consolidate_after_union_negate: vars.enable_consolidate_after_union_negate(),
             enable_monotonic_oneshot_selects: vars.enable_monotonic_oneshot_selects(),
+            enable_specialized_arrangements: vars.enable_specialized_arrangements(),
             persist_fast_path_limit: vars.persist_fast_path_limit(),
         }
     }

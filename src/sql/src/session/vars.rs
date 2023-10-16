@@ -1752,6 +1752,11 @@ feature_flags!(
     (
         enable_assert_not_null,
         "ASSERT NOT NULL for materialized views"
+    ),
+    (
+        enable_specialized_arrangements,
+        "type-specialization for arrangements in compute rendering",
+        false
     )
 );
 
@@ -4774,6 +4779,7 @@ pub fn is_compute_config_var(name: &str) -> bool {
         || name == DATAFLOW_MAX_INFLIGHT_BYTES.name()
         || name == ENABLE_MZ_JOIN_CORE.name()
         || name == ENABLE_JEMALLOC_PROFILING.name()
+        || name == ENABLE_SPECIALIZED_ARRANGEMENTS.name()
         || is_persist_config_var(name)
         || is_tracing_var(name)
 }

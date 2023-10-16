@@ -106,19 +106,21 @@ use std::sync::Arc;
 
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::{AsCollection, Collection};
+use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::{AsCollection, Collection, ExchangeData, Hashable};
 use itertools::izip;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription, IndexDesc};
 use mz_compute_types::plan::Plan;
 use mz_expr::{EvalError, Id};
-use mz_repr::{GlobalId, Row};
+use mz_repr::{Diff, GlobalId};
 use mz_storage_operators::persist_source;
 use mz_storage_operators::persist_source::FlowControl;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
-use mz_timely_util::probe::{self, ProbeNotify};
+use mz_timely_util::probe;
 use timely::communication::Allocate;
+use timely::container::columnation::Columnation;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::operators::{BranchWhen, Operator};
@@ -135,8 +137,8 @@ use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::logging::compute::{LogDataflowErrors, LogImportFrontiers};
-use crate::render::context::{ArrangementFlavor, Context, ShutdownToken};
-use crate::typedefs::{ErrSpine, RowKeySpine};
+use crate::render::context::{ArrangementFlavor, Context, ShutdownToken, SpecializedArrangement};
+use crate::typedefs::{ErrSpine, RowKeySpine, TraceRowHandle};
 
 pub mod context;
 mod errors;
@@ -288,6 +290,8 @@ pub fn build_compute_dataflow<A: Allocate>(
             scope.clone().iterative::<PointStamp<u64>, _, _>(|region| {
                 let mut context = Context::for_dataflow_in(&dataflow, region.clone());
                 context.linear_join_impl = compute_state.linear_join_impl;
+                context.enable_specialized_arrangements =
+                    compute_state.enable_specialized_arrangements;
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
                     let bundle = crate::render::CollectionBundle::from_collections(
@@ -348,6 +352,8 @@ pub fn build_compute_dataflow<A: Allocate>(
             scope.clone().region_named(&build_name, |region| {
                 let mut context = Context::for_dataflow_in(&dataflow, region.clone());
                 context.linear_join_impl = compute_state.linear_join_impl;
+                context.enable_specialized_arrangements =
+                    compute_state.enable_specialized_arrangements;
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
                     let bundle = crate::render::CollectionBundle::from_collections(
@@ -409,7 +415,7 @@ pub fn build_compute_dataflow<A: Allocate>(
 
 // This implementation block allows child timestamps to vary from parent timestamps,
 // but requires the parent timestamp to be `repr::Timestamp`.
-impl<'g, G, T> Context<Child<'g, G, T>, Row>
+impl<'g, G, T> Context<Child<'g, G, T>>
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
     T: Refines<G::Timestamp> + RenderTimestamp,
@@ -429,11 +435,21 @@ where
             );
 
             let token = traces.to_drop().clone();
-            let (mut ok_arranged, ok_button) = traces.oks_mut().import_frontier_core(
-                &self.scope.parent,
+            // Import the specialized trace handle as a specialized arrangement import.
+            // Note that we incorporate optional logging setup as part of this process,
+            // since a specialized arrangement import require us to enter a scope, but
+            // we can only enter after logging is set up. We attach logging here instead
+            // of implementing it in the server.rs worker loop since we want to catch the
+            // wall-clock time of the frontier advancement for each dataflow as early as
+            // possible.
+            let (ok_arranged, ok_button) = traces.oks_mut().import_frontier_logged(
+                &self.scope,
                 &format!("Index({}, {:?})", idx.on_id, idx.key),
                 self.as_of_frontier.clone(),
                 self.until.clone(),
+                compute_state.compute_logger.clone(),
+                idx_id,
+                export_ids,
             );
             let (err_arranged, err_button) = traces.errs_mut().import_frontier_core(
                 &self.scope.parent,
@@ -441,16 +457,6 @@ where
                 self.as_of_frontier.clone(),
                 self.until.clone(),
             );
-
-            // If logging is enabled, log import frontier advancements. Note that we do
-            // this here instead of in the server.rs worker loop since we want to catch the
-            // wall-clock time of the frontier advancement for each dataflow as early as
-            // possible.
-            if let Some(logger) = compute_state.compute_logger.clone() {
-                ok_arranged = ok_arranged.log_import_frontiers(logger, idx_id, export_ids);
-            }
-
-            let ok_arranged = ok_arranged.enter(&self.scope);
             let err_arranged = err_arranged.enter(&self.scope);
 
             self.update_id(
@@ -474,7 +480,7 @@ where
 }
 
 // This implementation block allows child timestamps to vary from parent timestamps.
-impl<G> Context<G, Row>
+impl<G> Context<G>
 where
     G: Scope,
     G::Timestamp: RenderTimestamp,
@@ -488,7 +494,7 @@ where
 
 // This implementation block requires the scopes have the same timestamp as the trace manager.
 // That makes some sense, because we are hoping to deposit an arrangement in the trace manager.
-impl<'g, G> Context<Child<'g, G, G::Timestamp>, Row, G::Timestamp>
+impl<'g, G> Context<Child<'g, G, G::Timestamp>, G::Timestamp>
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
 {
@@ -520,8 +526,10 @@ where
 
         match bundle.arrangement(&idx.key) {
             Some(ArrangementFlavor::Local(oks, errs)) => {
-                // Set up probes to notify on index frontier advancement.
-                oks.stream.probe_notify_with(probes);
+                // Set up probes to notify on index frontier advancement, and obtain
+                // a specialized handle matching the specialized arrangement.
+                oks.probe_notify_with(probes);
+                let oks_trace = oks.trace_handle();
 
                 // Attach logging of dataflow errors.
                 if let Some(logger) = compute_state.compute_logger.clone() {
@@ -530,7 +538,7 @@ where
 
                 compute_state.traces.set(
                     idx_id,
-                    TraceBundle::new(oks.trace, errs.trace).with_drop(needed_tokens),
+                    TraceBundle::new(oks_trace, errs.trace).with_drop(needed_tokens),
                 );
             }
             Some(ArrangementFlavor::Trace(gid, _, _)) => {
@@ -557,7 +565,7 @@ where
 
 // This implementation block requires the scopes have the same timestamp as the trace manager.
 // That makes some sense, because we are hoping to deposit an arrangement in the trace manager.
-impl<'g, G, T> Context<Child<'g, G, T>, Row>
+impl<'g, G, T> Context<Child<'g, G, T>>
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
     T: RenderTimestamp,
@@ -590,13 +598,9 @@ where
 
         match bundle.arrangement(&idx.key) {
             Some(ArrangementFlavor::Local(oks, errs)) => {
-                let oks = oks
-                    .as_collection(|k, v| (k.clone(), v.clone()))
-                    .leave()
-                    .mz_arrange("Arrange export iterative");
-
-                // Set up probes to notify on index frontier advancement.
-                oks.stream.probe_notify_with(probes);
+                let oks = self.dispatch_rearrange_iterative(oks);
+                oks.probe_notify_with(probes);
+                let oks_trace = oks.trace_handle();
 
                 let errs = errs
                     .as_collection(|k, v| (k.clone(), v.clone()))
@@ -610,7 +614,7 @@ where
 
                 compute_state.traces.set(
                     idx_id,
-                    TraceBundle::new(oks.trace, errs.trace).with_drop(needed_tokens),
+                    TraceBundle::new(oks_trace, errs.trace).with_drop(needed_tokens),
                 );
             }
             Some(ArrangementFlavor::Trace(gid, _, _)) => {
@@ -633,9 +637,42 @@ where
             }
         };
     }
+
+    /// Dispatches the rearranging of an arrangement coming from an iterative scope
+    /// according to specialized key-value arrangement types.
+    fn dispatch_rearrange_iterative(
+        &self,
+        oks: SpecializedArrangement<Child<'g, G, T>>,
+    ) -> SpecializedArrangement<G> {
+        match oks {
+            SpecializedArrangement::Bytes9Row(key_types, inner) => {
+                let oks = self.rearrange_iterative(inner);
+                SpecializedArrangement::Bytes9Row(key_types, oks)
+            }
+            SpecializedArrangement::RowRow(inner) => {
+                let oks = self.rearrange_iterative(inner);
+                SpecializedArrangement::RowRow(oks)
+            }
+        }
+    }
+
+    /// Rearranges an arrangement coming from an iterative scope into an arrangement
+    /// in the outer timestamp scope.
+    fn rearrange_iterative<K, V>(
+        &self,
+        oks: Arranged<Child<'g, G, T>, TraceRowHandle<K, V, T, Diff>>,
+    ) -> Arranged<G, TraceRowHandle<K, V, G::Timestamp, Diff>>
+    where
+        K: Columnation + ExchangeData + Hashable,
+        V: Columnation + ExchangeData,
+    {
+        oks.as_collection(|k, v| (k.clone(), v.clone()))
+            .leave()
+            .mz_arrange("Arrange export iterative")
+    }
 }
 
-impl<G> Context<G, Row>
+impl<G> Context<G>
 where
     G: Scope<Timestamp = Product<mz_repr::Timestamp, PointStamp<u64>>>,
 {
@@ -651,7 +688,7 @@ where
     ///
     /// The method requires that all variables conclude with a physical representation that
     /// contains a collection (i.e. a non-arrangement), and it will panic otherwise.
-    pub fn render_recursive_plan(&mut self, level: usize, plan: Plan) -> CollectionBundle<G, Row> {
+    pub fn render_recursive_plan(&mut self, level: usize, plan: Plan) -> CollectionBundle<G> {
         if let Plan::LetRec {
             ids,
             values,
@@ -757,7 +794,7 @@ where
     }
 }
 
-impl<G> Context<G, Row>
+impl<G> Context<G>
 where
     G: Scope,
     G::Timestamp: RenderTimestamp,
@@ -766,7 +803,7 @@ where
     ///
     /// The return type reflects the uncertainty about the data representation, perhaps
     /// as a stream of data, perhaps as an arrangement, perhaps as a stream of batches.
-    pub fn render_plan(&mut self, plan: Plan) -> CollectionBundle<G, Row> {
+    pub fn render_plan(&mut self, plan: Plan) -> CollectionBundle<G> {
         match plan {
             Plan::Constant { rows } => {
                 // Produce both rows and errs to avoid conditional dataflow construction.
@@ -948,7 +985,13 @@ where
                 input_mfp,
             } => {
                 let input = self.render_plan(*input);
-                input.ensure_collections(keys, input_key, input_mfp, self.until.clone())
+                input.ensure_collections(
+                    keys,
+                    input_key,
+                    input_mfp,
+                    self.until.clone(),
+                    self.enable_specialized_arrangements,
+                )
             }
         }
     }

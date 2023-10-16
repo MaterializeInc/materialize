@@ -20,13 +20,20 @@ import "expr/src/linear.proto";
 import "expr/src/relation.proto";
 import "expr/src/scalar.proto";
 import "repr/src/row.proto";
+import "repr/src/relation_and_scalar.proto";
 import "google/protobuf/empty.proto";
 
 package mz_compute_types.plan;
 
 message ProtoAvailableCollections {
+
+     message ProtoColumnTypes {
+          repeated mz_repr.relation_and_scalar.ProtoColumnType types = 1;
+     }
+
     bool raw = 1;
     repeated mz_compute_types.plan.threshold.ProtoArrangement arranged = 2;
+    optional ProtoColumnTypes types = 3;
 }
 
 message ProtoGetPlan {

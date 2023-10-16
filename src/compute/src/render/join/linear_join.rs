@@ -17,7 +17,8 @@ use differential_dataflow::trace::TraceReader;
 use differential_dataflow::{AsCollection, Collection, Data};
 use mz_compute_types::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan};
 use mz_compute_types::plan::join::JoinClosure;
-use mz_repr::{DatumVec, Diff, Row, RowArena};
+use mz_repr::fixed_length::IntoRowByTypes;
+use mz_repr::{ColumnType, DatumVec, Diff, Row, RowArena};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use timely::dataflow::operators::OkErr;
@@ -26,7 +27,8 @@ use timely::progress::timestamp::{Refines, Timestamp};
 
 use crate::extensions::arrange::MzArrange;
 use crate::render::context::{
-    Arrangement, ArrangementFlavor, ArrangementImport, CollectionBundle, Context,
+    ArrangementFlavor, CollectionBundle, Context, SpecializedArrangement,
+    SpecializedArrangementImport,
 };
 use crate::render::join::mz_join_core::mz_join_core;
 use crate::typedefs::RowSpine;
@@ -43,7 +45,7 @@ pub enum LinearJoinImpl {
 
 impl LinearJoinImpl {
     /// Run this join implementation on the provided arrangements.
-    fn run<G, Tr1, Tr2, L, I>(
+    fn run<G, Tr1, Tr2, L, I, K, V1, V2>(
         &self,
         arranged1: &Arranged<G, Tr1>,
         arranged2: &Arranged<G, Tr2>,
@@ -52,11 +54,14 @@ impl LinearJoinImpl {
     where
         G: Scope,
         G::Timestamp: Lattice,
-        Tr1: TraceReader<Key = Row, Val = Row, Time = G::Timestamp, R = Diff> + Clone + 'static,
-        Tr2: TraceReader<Key = Row, Val = Row, Time = G::Timestamp, R = Diff> + Clone + 'static,
+        Tr1: TraceReader<Key = K, Val = V1, Time = G::Timestamp, R = Diff> + Clone + 'static,
+        Tr2: TraceReader<Key = K, Val = V2, Time = G::Timestamp, R = Diff> + Clone + 'static,
         L: FnMut(&Tr1::Key, &Tr1::Val, &Tr2::Val) -> I + 'static,
         I: IntoIterator,
         I::Item: Data,
+        K: Data,
+        V1: Data,
+        V2: Data,
     {
         match self {
             Self::DifferentialDataflow => {
@@ -77,12 +82,12 @@ where
     /// Streamed data as a collection.
     Collection(Collection<G, Row, Diff>),
     /// A dataflow-local arrangement.
-    Local(Arrangement<G, Row>),
+    Local(SpecializedArrangement<G>),
     /// An imported arrangement.
-    Trace(ArrangementImport<G, Row, T>),
+    Trace(SpecializedArrangementImport<G, T>),
 }
 
-impl<G, T> Context<G, Row, T>
+impl<G, T> Context<G, T>
 where
     G: Scope,
     G::Timestamp: Lattice + Refines<T>,
@@ -90,9 +95,9 @@ where
 {
     pub(crate) fn render_join(
         &mut self,
-        inputs: Vec<CollectionBundle<G, Row, T>>,
+        inputs: Vec<CollectionBundle<G, T>>,
         linear_plan: LinearJoinPlan,
-    ) -> CollectionBundle<G, Row, T> {
+    ) -> CollectionBundle<G, T> {
         self.scope.region_named("Join(Linear)", |inner| {
             // Collect all error streams, and concatenate them at the end.
             let mut errors = Vec::new();
@@ -160,6 +165,7 @@ where
                     inputs[stage_plan.lookup_relation].enter_region(inner),
                     stage_plan,
                     &mut errors,
+                    self.enable_specialized_arrangements,
                 );
                 // Update joined results and capture any errors.
                 joined = JoinedFlavor::Collection(stream);
@@ -208,7 +214,7 @@ where
 fn differential_join<G, T>(
     join_impl: LinearJoinImpl,
     mut joined: JoinedFlavor<G, T>,
-    lookup_relation: CollectionBundle<G, Row, T>,
+    lookup_relation: CollectionBundle<G, T>,
     LinearStagePlan {
         stream_key,
         stream_thinning,
@@ -217,6 +223,7 @@ fn differential_join<G, T>(
         lookup_relation: _,
     }: LinearStagePlan,
     errors: &mut Vec<Collection<G, DataflowError, Diff>>,
+    _enable_specialized_arrangements: bool,
 ) -> Collection<G, Row, Diff>
 where
     G: Scope,
@@ -247,8 +254,12 @@ where
         });
 
         errors.push(errs);
+
+        // TODO(vmarcos): We should implement arrangement specialization here (#22104).
+        // Note that not specializing may lead to panics when enable_specialized_arrangements
+        // is turned on.
         let arranged = keyed.mz_arrange::<RowSpine<_, _, _, _>>("JoinStage");
-        joined = JoinedFlavor::Local(arranged);
+        joined = JoinedFlavor::Local(SpecializedArrangement::RowRow(arranged));
     }
 
     // Demultiplex the four different cross products of arrangement types we might have.
@@ -261,13 +272,15 @@ where
         }
         JoinedFlavor::Local(local) => match arrangement {
             ArrangementFlavor::Local(oks, errs1) => {
-                let (oks, errs2) = differential_join_inner(join_impl, local, oks, closure);
+                let (oks, errs2) =
+                    dispatch_differential_join_inner_local_local(join_impl, local, oks, closure);
                 errors.push(errs1.as_collection(|k, _v| k.clone()));
                 errors.extend(errs2);
                 oks
             }
             ArrangementFlavor::Trace(_gid, oks, errs1) => {
-                let (oks, errs2) = differential_join_inner(join_impl, local, oks, closure);
+                let (oks, errs2) =
+                    dispatch_differential_join_inner_local_trace(join_impl, local, oks, closure);
                 errors.push(errs1.as_collection(|k, _v| k.clone()));
                 errors.extend(errs2);
                 oks
@@ -275,18 +288,245 @@ where
         },
         JoinedFlavor::Trace(trace) => match arrangement {
             ArrangementFlavor::Local(oks, errs1) => {
-                let (oks, errs2) = differential_join_inner(join_impl, trace, oks, closure);
+                let (oks, errs2) =
+                    dispatch_differential_join_inner_trace_local(join_impl, trace, oks, closure);
                 errors.push(errs1.as_collection(|k, _v| k.clone()));
                 errors.extend(errs2);
                 oks
             }
             ArrangementFlavor::Trace(_gid, oks, errs1) => {
-                let (oks, errs2) = differential_join_inner(join_impl, trace, oks, closure);
+                let (oks, errs2) =
+                    dispatch_differential_join_inner_trace_trace(join_impl, trace, oks, closure);
                 errors.push(errs1.as_collection(|k, _v| k.clone()));
                 errors.extend(errs2);
                 oks
             }
         },
+    }
+}
+
+/// Dispatches valid combinations of arrangements where the type-specialized keys match.
+fn dispatch_differential_join_inner_local_local<G>(
+    join_impl: LinearJoinImpl,
+    prev_keyed: SpecializedArrangement<G>,
+    next_input: SpecializedArrangement<G>,
+    closure: JoinClosure,
+) -> (
+    Collection<G, Row, Diff>,
+    Option<Collection<G, DataflowError, Diff>>,
+)
+where
+    G: Scope,
+    G::Timestamp: Lattice,
+{
+    match (prev_keyed, next_input) {
+        (
+            SpecializedArrangement::Bytes9Row(prev_key_types, prev_keyed),
+            SpecializedArrangement::Bytes9Row(next_key_types, next_input),
+        ) => {
+            assert!(prev_key_types
+                .iter()
+                .zip(next_key_types.iter())
+                .all(|(c1, c2)| c1.scalar_type == c2.scalar_type));
+            differential_join_inner(
+                join_impl,
+                prev_keyed,
+                next_input,
+                Some(prev_key_types),
+                None,
+                None,
+                closure,
+            )
+        }
+        (
+            SpecializedArrangement::RowRow(prev_keyed),
+            SpecializedArrangement::RowRow(next_input),
+        ) => differential_join_inner(join_impl, prev_keyed, next_input, None, None, None, closure),
+        (SpecializedArrangement::Bytes9Row(key_types, _), SpecializedArrangement::RowRow(_)) => {
+            panic!(
+                "Invalid combination of type specializations: key types differ! \
+                Bytes9 local vs. Row local, key_types: {:?}",
+                key_types
+            )
+        }
+        (SpecializedArrangement::RowRow(_), SpecializedArrangement::Bytes9Row(key_types, _)) => {
+            panic!(
+                "Invalid combination of type specializations: key types differ! \
+                Row local vs. Bytes9 local, key_types: {:?}",
+                key_types
+            )
+        }
+    }
+}
+
+/// Dispatches valid combinations of arrangement-trace where the type-specialized keys match.
+fn dispatch_differential_join_inner_local_trace<G, T>(
+    join_impl: LinearJoinImpl,
+    prev_keyed: SpecializedArrangement<G>,
+    next_input: SpecializedArrangementImport<G, T>,
+    closure: JoinClosure,
+) -> (
+    Collection<G, Row, Diff>,
+    Option<Collection<G, DataflowError, Diff>>,
+)
+where
+    G: Scope,
+    T: Timestamp + Lattice,
+    G::Timestamp: Lattice + Refines<T>,
+{
+    match (prev_keyed, next_input) {
+        (
+            SpecializedArrangement::Bytes9Row(prev_key_types, prev_keyed),
+            SpecializedArrangementImport::Bytes9Row(next_key_types, next_input),
+        ) => {
+            assert!(prev_key_types
+                .iter()
+                .zip(next_key_types.iter())
+                .all(|(c1, c2)| c1.scalar_type == c2.scalar_type));
+            differential_join_inner(
+                join_impl,
+                prev_keyed,
+                next_input,
+                Some(prev_key_types),
+                None,
+                None,
+                closure,
+            )
+        }
+        (
+            SpecializedArrangement::RowRow(prev_keyed),
+            SpecializedArrangementImport::RowRow(next_input),
+        ) => differential_join_inner(join_impl, prev_keyed, next_input, None, None, None, closure),
+        (
+            SpecializedArrangement::Bytes9Row(key_types, _),
+            SpecializedArrangementImport::RowRow(_),
+        ) => panic!(
+            "Invalid combination of type specializations: key types differ! \
+            Bytes9 local vs. Row trace, key_types: {:?}",
+            key_types
+        ),
+        (
+            SpecializedArrangement::RowRow(_),
+            SpecializedArrangementImport::Bytes9Row(key_types, _),
+        ) => panic!(
+            "Invalid combination of type specializations: key types differ! \
+            Row local vs. Bytes9 trace, key_types: {:?}",
+            key_types
+        ),
+    }
+}
+
+/// Dispatches valid combinations of trace-arrangement where the type-specialized keys match.
+fn dispatch_differential_join_inner_trace_local<G, T>(
+    join_impl: LinearJoinImpl,
+    prev_keyed: SpecializedArrangementImport<G, T>,
+    next_input: SpecializedArrangement<G>,
+    closure: JoinClosure,
+) -> (
+    Collection<G, Row, Diff>,
+    Option<Collection<G, DataflowError, Diff>>,
+)
+where
+    G: Scope,
+    T: Timestamp + Lattice,
+    G::Timestamp: Lattice + Refines<T>,
+{
+    match (prev_keyed, next_input) {
+        (
+            SpecializedArrangementImport::Bytes9Row(prev_key_types, prev_keyed),
+            SpecializedArrangement::Bytes9Row(next_key_types, next_input),
+        ) => {
+            assert!(prev_key_types
+                .iter()
+                .zip(next_key_types.iter())
+                .all(|(c1, c2)| c1.scalar_type == c2.scalar_type));
+            differential_join_inner(
+                join_impl,
+                prev_keyed,
+                next_input,
+                Some(prev_key_types),
+                None,
+                None,
+                closure,
+            )
+        }
+        (
+            SpecializedArrangementImport::RowRow(prev_keyed),
+            SpecializedArrangement::RowRow(next_input),
+        ) => differential_join_inner(join_impl, prev_keyed, next_input, None, None, None, closure),
+        (
+            SpecializedArrangementImport::Bytes9Row(key_types, _),
+            SpecializedArrangement::RowRow(_),
+        ) => panic!(
+            "Invalid combination of type specializations: key types differ! \
+            Bytes9 trace vs. Row local, key_types: {:?}",
+            key_types
+        ),
+        (
+            SpecializedArrangementImport::RowRow(_),
+            SpecializedArrangement::Bytes9Row(key_types, _),
+        ) => panic!(
+            "Invalid combination of type specializations: key types differ! \
+            Row trace vs. Bytes9 local, key_types: {:?}",
+            key_types
+        ),
+    }
+}
+
+/// Dispatches valid combinations of trace-arrangement where the type-specialized keys match.
+fn dispatch_differential_join_inner_trace_trace<G, T>(
+    join_impl: LinearJoinImpl,
+    prev_keyed: SpecializedArrangementImport<G, T>,
+    next_input: SpecializedArrangementImport<G, T>,
+    closure: JoinClosure,
+) -> (
+    Collection<G, Row, Diff>,
+    Option<Collection<G, DataflowError, Diff>>,
+)
+where
+    G: Scope,
+    T: Timestamp + Lattice,
+    G::Timestamp: Lattice + Refines<T>,
+{
+    match (prev_keyed, next_input) {
+        (
+            SpecializedArrangementImport::Bytes9Row(prev_key_types, prev_keyed),
+            SpecializedArrangementImport::Bytes9Row(next_key_types, next_input),
+        ) => {
+            assert!(prev_key_types
+                .iter()
+                .zip(next_key_types.iter())
+                .all(|(c1, c2)| c1.scalar_type == c2.scalar_type));
+            differential_join_inner(
+                join_impl,
+                prev_keyed,
+                next_input,
+                Some(prev_key_types),
+                None,
+                None,
+                closure,
+            )
+        }
+        (
+            SpecializedArrangementImport::RowRow(prev_keyed),
+            SpecializedArrangementImport::RowRow(next_input),
+        ) => differential_join_inner(join_impl, prev_keyed, next_input, None, None, None, closure),
+        (
+            SpecializedArrangementImport::Bytes9Row(key_types, _),
+            SpecializedArrangementImport::RowRow(_),
+        ) => panic!(
+            "Invalid combination of type specializations: key types differ! \
+            Bytes9 trace vs. Row trace, key_types: {:?}",
+            key_types
+        ),
+        (
+            SpecializedArrangementImport::RowRow(_),
+            SpecializedArrangementImport::Bytes9Row(key_types, _),
+        ) => panic!(
+            "Invalid combination of type specializations: key types differ! \
+            Row trace vs. Bytes9 trace, key_types: {:?}",
+            key_types
+        ),
     }
 }
 
@@ -296,10 +536,13 @@ where
 ///
 /// The return type includes an optional error collection, which may be
 /// `None` if we can determine that `closure` cannot error.
-fn differential_join_inner<G, T, Tr1, Tr2>(
+fn differential_join_inner<G, T, Tr1, Tr2, K, V1, V2>(
     join_impl: LinearJoinImpl,
     prev_keyed: Arranged<G, Tr1>,
     next_input: Arranged<G, Tr2>,
+    key_types: Option<Vec<ColumnType>>,
+    prev_types: Option<Vec<ColumnType>>,
+    next_types: Option<Vec<ColumnType>>,
     closure: JoinClosure,
 ) -> (
     Collection<G, Row, Diff>,
@@ -309,16 +552,27 @@ where
     G: Scope,
     G::Timestamp: Lattice + Refines<T>,
     T: Timestamp + Lattice,
-    Tr1: TraceReader<Key = Row, Val = Row, Time = G::Timestamp, R = Diff> + Clone + 'static,
-    Tr2: TraceReader<Key = Row, Val = Row, Time = G::Timestamp, R = Diff> + Clone + 'static,
+    Tr1: TraceReader<Key = K, Val = V1, Time = G::Timestamp, R = Diff> + Clone + 'static,
+    Tr2: TraceReader<Key = K, Val = V2, Time = G::Timestamp, R = Diff> + Clone + 'static,
+    K: Data + IntoRowByTypes,
+    V1: Data + IntoRowByTypes,
+    V2: Data + IntoRowByTypes,
 {
     // Reuseable allocation for unpacking.
     let mut datums = DatumVec::new();
     let mut row_builder = Row::default();
 
+    let mut key_buf = Row::default();
+    let mut old_buf = Row::default();
+    let mut new_buf = Row::default();
+
     if closure.could_error() {
         let (oks, err) = join_impl
             .run(&prev_keyed, &next_input, move |key, old, new| {
+                let key = key.into_row(&mut key_buf, key_types.as_deref());
+                let old = old.into_row(&mut old_buf, prev_types.as_deref());
+                let new = new.into_row(&mut new_buf, next_types.as_deref());
+
                 let temp_storage = RowArena::new();
                 let mut datums_local = datums.borrow_with_many(&[key, old, new]);
                 closure
@@ -338,6 +592,10 @@ where
         (oks.as_collection(), Some(err.as_collection()))
     } else {
         let oks = join_impl.run(&prev_keyed, &next_input, move |key, old, new| {
+            let key = key.into_row(&mut key_buf, key_types.as_deref());
+            let old = old.into_row(&mut old_buf, prev_types.as_deref());
+            let new = new.into_row(&mut new_buf, next_types.as_deref());
+
             let temp_storage = RowArena::new();
             let mut datums_local = datums.borrow_with_many(&[key, old, new]);
             closure

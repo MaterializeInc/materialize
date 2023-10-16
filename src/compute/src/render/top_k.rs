@@ -37,16 +37,16 @@ use crate::render::errors::MaybeValidatingRow;
 use crate::typedefs::{RowKeySpine, RowSpine};
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
-impl<G> Context<G, Row>
+impl<G> Context<G>
 where
     G: Scope,
     G::Timestamp: crate::render::RenderTimestamp,
 {
     pub(crate) fn render_topk(
         &mut self,
-        input: CollectionBundle<G, Row>,
+        input: CollectionBundle<G>,
         top_k_plan: TopKPlan,
-    ) -> CollectionBundle<G, Row> {
+    ) -> CollectionBundle<G> {
         let (ok_input, err_input) = input.as_specific_collection(None);
 
         // We create a new region to compartmentalize the topk logic.
