@@ -1504,6 +1504,34 @@ mod cluster_scheduling {
 /// Note that not all `ServerVar<bool>` are feature flags. Feature flags are for variables that:
 /// - Belong to `SystemVars`, _not_ `SessionVars`
 /// - Default to false and must be explicitly enabled, or default to `true` and can be explicitly disabled.
+///
+/// WARNING / CONTRACT: Feature flags must always *enable* behavior. In other words, setting a
+/// feature flag must make the system more permissive. For example, let's suppose we'd like to
+/// gate deprecated upsert syntax behind a feature flag. In this case, do not add a feature flag
+/// like `disable_deprecated_upsert_syntax`, as `disable_deprecated_upsert_syntax = on` would
+/// _prevent_ the system from parsing the deprecated upsert syntax. Instead, use a feature flag
+/// like `enable_deprecated_upsert_syntax`.
+///
+/// The hazard this protects against is related to reboots after feature flags have been disabled.
+/// Say someone creates a Kinesis source while `enable_kinesis_sources = on`. Materialize will
+/// commit this source to the system catalog. Then, suppose we discover a catastrophic bug in
+/// Kinesis sources and set `enable_kinesis_sources` to `off`. This prevents users from creating
+/// new Kinesis sources, but leaves the existing Kinesis sources in place. This is because
+/// disabling a feature flag doesn't remove access to catalog objects created while the feature
+/// flag was live. On the next reboot, Materialize will proceed to load the Kinesis source from the
+/// catalog, reparsing and replanning the `CREATE SOURCE` definition and rechecking the
+/// `enable_kinesis_sources` feature flag along the way. Even though the feature flag has been
+/// switched to `off`, we need to temporarily re-enable it during parsing and planning to be able
+/// to boot successfully.
+///
+/// Ensuring that all feature flags *enable* behavior means that setting all feature flags to `on`
+/// during catalog boot has the desired effect.
+///
+/// The features enabled by a flag must not result in SQL plan differences that are not specified
+/// in the SQL itself. For example, a feature flag may enable new SQL syntax. Alternatively, a
+/// feature flag that enables a certain SQL-to-HIR optimization must only do so if the flag is
+/// enabled and the user specifies the optimization in some query hint or option. Otherwise, on
+/// restart, the plan may change because all feature flags are enabled then.
 macro_rules! feature_flags {
     // Match `$name, $feature_desc`, default `$value` to false.
     (@inner $name:expr, $feature_desc:literal) => {
