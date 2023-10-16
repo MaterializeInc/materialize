@@ -3392,7 +3392,7 @@ fn test_pg_cancel_dropped_role() {
         .unwrap();
 
     // Start session using role.
-    let dropped_client = server
+    let mut dropped_client = server
         .pg_config()
         .user(dropped_role)
         .connect(postgres::NoTls)
