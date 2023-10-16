@@ -850,7 +850,7 @@
 "substr"
 "subtest"
 "SUKWDHL"
-"symbolize"
+"symbolicate"
 "syms"
 "syscall"
 "sysinfo"
