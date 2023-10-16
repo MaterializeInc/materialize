@@ -1,0 +1,638 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+statement ok
+DROP SCHEMA IF EXISTS left_joins_raw CASCADE;
+
+statement ok
+DROP SCHEMA IF EXISTS left_joins CASCADE;
+
+statement ok
+CREATE SCHEMA left_joins_raw;
+
+statement ok
+CREATE SCHEMA left_joins;
+
+statement ok
+CREATE TABLE left_joins_raw.outer(
+    x int not null,
+    y int not null
+);
+
+statement ok
+CREATE MATERIALIZED VIEW left_joins.outer AS
+SELECT DISTINCT ON(x, y) * FROM left_joins_raw.outer;
+
+statement ok
+CREATE TABLE left_joins_raw.facts(
+    facts_k01 int not null,
+    dim01_k01 int,
+    dim02_k01 int,
+    dim03_k01 int,
+    facts_d01 int,
+    facts_d02 int,
+    facts_d03 int,
+    facts_d04 int,
+    facts_d05 int
+);
+
+statement ok
+CREATE MATERIALIZED VIEW left_joins.facts AS
+SELECT DISTINCT ON(facts_k01) * FROM left_joins_raw.facts;
+
+statement ok
+CREATE TABLE left_joins_raw.dim01(
+    dim01_k01 int,
+    dim01_d01 int,
+    dim01_d02 int,
+    dim01_d03 int,
+    dim01_d04 int,
+    dim01_d05 int
+);
+
+statement ok
+CREATE MATERIALIZED VIEW left_joins.dim01 AS
+SELECT DISTINCT ON(dim01_k01) * FROM left_joins_raw.dim01;
+
+statement ok
+CREATE TABLE left_joins_raw.dim02(
+    dim02_k01 int,
+    dim02_d01 int,
+    dim02_d02 int,
+    dim02_d03 int,
+    dim02_d04 int,
+    dim02_d05 int
+);
+
+statement ok
+CREATE MATERIALIZED VIEW left_joins.dim02 AS
+SELECT DISTINCT ON(dim02_k01) * FROM left_joins_raw.dim02;
+
+# A fallback lowering strategy for outer joins with theta-join ON predicates.
+#
+# The "outer" part is characterized by:
+# 1. A `Union`/`Negate` of two `Distinct` with fat `group_by` keys.
+# 2. An equi-join with the preserving side with a fat `on` predicate.
+#
+# Simplification opportunities:
+# - The `Distinct` nodes from (1) can be removed by `ReduceElision`.
+# - The `Join` from (2) can be removed by `RedundantJoin`.
+#
+# Applying the optimization above depends on unique key information.
+#
+# Projection pushdown is blocked unless the `Join` is removed.
+query T multiline
+EXPLAIN DECORRELATED PLAN WITH(humanized_exprs, arity) FOR
+SELECT
+  facts.facts_k01,
+  facts.facts_d01,
+  facts.dim01_k01,
+  dim01.dim01_d01
+FROM
+  left_joins_raw.facts LEFT JOIN
+  left_joins_raw.dim01 ON(facts.dim01_k01 > dim01.dim01_k01);
+----
+Return // { arity: 4 }
+  Project (#0, #4, #1, #10) // { arity: 4 }
+    Union // { arity: 15 }
+      Get l1 // { arity: 15 }
+      CrossJoin // { arity: 15 }
+        Project (#0..=#8) // { arity: 9 }
+          Join on=(facts_k01 = facts_k01 AND dim01_k01 = dim01_k01 AND dim02_k01 = dim02_k01 AND dim03_k01 = dim03_k01 AND facts_d01 = facts_d01 AND facts_d02 = facts_d02 AND facts_d03 = facts_d03 AND facts_d04 = facts_d04 AND facts_d05 = facts_d05) // { arity: 18 }
+            Union // { arity: 9 }
+              Negate // { arity: 9 }
+                Distinct group_by=[facts_k01, dim01_k01, dim02_k01, dim03_k01, facts_d01, facts_d02, facts_d03, facts_d04, facts_d05] // { arity: 9 }
+                  Get l1 // { arity: 15 }
+              Distinct group_by=[facts_k01, dim01_k01, dim02_k01, dim03_k01, facts_d01, facts_d02, facts_d03, facts_d04, facts_d05] // { arity: 9 }
+                Get l0 // { arity: 9 }
+            Get l0 // { arity: 9 }
+        Constant // { arity: 6 }
+          - (null, null, null, null, null, null)
+With
+  cte l1 =
+    Filter (dim01_k01 > dim01_k01) // { arity: 15 }
+      Project (#0..=#14) // { arity: 15 }
+        CrossJoin // { arity: 15 }
+          Get l0 // { arity: 9 }
+          CrossJoin // { arity: 6 }
+            Constant // { arity: 0 }
+              - ()
+            Get materialize.left_joins_raw.dim01 // { arity: 6 }
+  cte l0 =
+    CrossJoin // { arity: 9 }
+      Constant // { arity: 0 }
+        - ()
+      Get materialize.left_joins_raw.facts // { arity: 9 }
+
+EOF
+
+# An optimized lowering strategy for outer joins with equijoin ON predicates.
+#
+# The "outer" part is characterized by:
+# 1. A semijoin between the inner result (l1) and the preserving side (l0).
+# 2. An antijoin of l0 w.r.t. this semijoin.
+#
+# Simplification opportunities:
+# - The semijoin from (1) can be removed by `SemijoinIdempotence`.
+#
+# Applying the optimization above depends on unique key information.
+#
+# Projection pushdown is always possible.
+query T multiline
+EXPLAIN DECORRELATED PLAN WITH(humanized_exprs, arity) FOR
+SELECT
+  facts.facts_k01,
+  facts.facts_d01,
+  facts.dim01_k01,
+  dim01.dim01_d01
+FROM
+  left_joins_raw.facts LEFT JOIN
+  left_joins_raw.dim01 ON(facts.dim01_k01 = dim01.dim01_k01);
+----
+Return // { arity: 4 }
+  Project (#0, #4, #1, #10) // { arity: 4 }
+    Union // { arity: 15 }
+      Map (null, null, null, null, null, null) // { arity: 15 }
+        Union // { arity: 9 }
+          Negate // { arity: 9 }
+            Project (#0..=#8) // { arity: 9 }
+              Join on=(dim01_k01 = dim01_k01) // { arity: 10 }
+                Get l0 // { arity: 9 }
+                Distinct group_by=[dim01_k01] // { arity: 1 }
+                  Project (#1) // { arity: 1 }
+                    Get l1 // { arity: 15 }
+          Get l0 // { arity: 9 }
+      Get l1 // { arity: 15 }
+With
+  cte l1 =
+    Filter (dim01_k01 = dim01_k01) // { arity: 15 }
+      Project (#0..=#14) // { arity: 15 }
+        CrossJoin // { arity: 15 }
+          Get l0 // { arity: 9 }
+          CrossJoin // { arity: 6 }
+            Constant // { arity: 0 }
+              - ()
+            Get materialize.left_joins_raw.dim01 // { arity: 6 }
+  cte l0 =
+    CrossJoin // { arity: 9 }
+      Constant // { arity: 0 }
+        - ()
+      Get materialize.left_joins_raw.facts // { arity: 9 }
+
+EOF
+
+# ON predicates with non-trivial equi-join conjuncts are planned using the
+# optimized lowering strategy.
+#
+# TODO(#22347): rewrite this test.
+query T multiline
+EXPLAIN DECORRELATED PLAN WITH(humanized_exprs, arity) FOR
+SELECT * FROM left_joins.outer CROSS JOIN LATERAL (
+  SELECT
+    facts.facts_k01,
+    facts.facts_d01,
+    facts.dim01_k01,
+    dim01.dim01_d01
+  FROM
+    left_joins_raw.facts LEFT JOIN
+    left_joins_raw.dim01 ON(facts.dim01_k01 + x = dim01.dim01_k01 + y)
+);
+----
+Return // { arity: 6 }
+  Filter true // { arity: 6 }
+    Project (#0, #1, #4..=#7) // { arity: 6 }
+      Join on=(x = x AND y = y) // { arity: 8 }
+        Get l0 // { arity: 2 }
+        Project (#0..=#2, #6, #3, #12) // { arity: 6 }
+          Union // { arity: 17 }
+            Get l3 // { arity: 17 }
+            CrossJoin // { arity: 17 }
+              Project (#0..=#10) // { arity: 11 }
+                Join on=(x = x AND y = y AND facts_k01 = facts_k01 AND dim01_k01 = dim01_k01 AND dim02_k01 = dim02_k01 AND dim03_k01 = dim03_k01 AND facts_d01 = facts_d01 AND facts_d02 = facts_d02 AND facts_d03 = facts_d03 AND facts_d04 = facts_d04 AND facts_d05 = facts_d05) // { arity: 22 }
+                  Union // { arity: 11 }
+                    Negate // { arity: 11 }
+                      Distinct group_by=[x, y, facts_k01, dim01_k01, dim02_k01, dim03_k01, facts_d01, facts_d02, facts_d03, facts_d04, facts_d05] // { arity: 11 }
+                        Get l3 // { arity: 17 }
+                    Distinct group_by=[x, y, facts_k01, dim01_k01, dim02_k01, dim03_k01, facts_d01, facts_d02, facts_d03, facts_d04, facts_d05] // { arity: 11 }
+                      Get l2 // { arity: 11 }
+                  Get l2 // { arity: 11 }
+              Constant // { arity: 6 }
+                - (null, null, null, null, null, null)
+With
+  cte l3 =
+    Filter ((dim01_k01 + x) = (dim01_k01 + y)) // { arity: 17 }
+      Project (#0..=#10, #13..=#18) // { arity: 17 }
+        Join on=(x = x AND y = y) // { arity: 19 }
+          Get l2 // { arity: 11 }
+          CrossJoin // { arity: 8 }
+            Get l1 // { arity: 2 }
+            Get materialize.left_joins_raw.dim01 // { arity: 6 }
+  cte l2 =
+    CrossJoin // { arity: 11 }
+      Get l1 // { arity: 2 }
+      Get materialize.left_joins_raw.facts // { arity: 9 }
+  cte l1 =
+    Distinct group_by=[x, y] // { arity: 2 }
+      Get l0 // { arity: 2 }
+  cte l0 =
+    CrossJoin // { arity: 2 }
+      Constant // { arity: 0 }
+        - ()
+      Get materialize.left_joins.outer // { arity: 2 }
+
+EOF
+
+# ON predicates with non-trivial equi-join conjuncts are planned using the
+# optimized lowering strategy. Same as above, but a RIGHT JOIN.
+#
+# TODO(#22347): rewrite this test.
+query T multiline
+EXPLAIN DECORRELATED PLAN WITH(humanized_exprs, arity) FOR
+SELECT * FROM left_joins.outer CROSS JOIN LATERAL (
+  SELECT
+    facts.facts_k01,
+    facts.facts_d01,
+    facts.dim01_k01,
+    dim01.dim01_d01
+  FROM
+    left_joins_raw.dim01 RIGHT JOIN
+    left_joins_raw.facts ON(facts.dim01_k01 + x = dim01.dim01_k01 + y)
+);
+----
+Return // { arity: 6 }
+  Filter true // { arity: 6 }
+    Project (#0, #1, #4..=#7) // { arity: 6 }
+      Join on=(x = x AND y = y) // { arity: 8 }
+        Get l0 // { arity: 2 }
+        Project (#0, #1, #8, #12, #9, #3) // { arity: 6 }
+          Union // { arity: 17 }
+            Get l3 // { arity: 17 }
+            Project (#0, #1, #11..=#16, #2..=#10) // { arity: 17 }
+              CrossJoin // { arity: 17 }
+                Project (#0..=#10) // { arity: 11 }
+                  Join on=(x = x AND y = y AND facts_k01 = facts_k01 AND dim01_k01 = dim01_k01 AND dim02_k01 = dim02_k01 AND dim03_k01 = dim03_k01 AND facts_d01 = facts_d01 AND facts_d02 = facts_d02 AND facts_d03 = facts_d03 AND facts_d04 = facts_d04 AND facts_d05 = facts_d05) // { arity: 22 }
+                    Union // { arity: 11 }
+                      Negate // { arity: 11 }
+                        Distinct group_by=[x, y, facts_k01, dim01_k01, dim02_k01, dim03_k01, facts_d01, facts_d02, facts_d03, facts_d04, facts_d05] // { arity: 11 }
+                          Project (#0, #1, #8..=#16, #2..=#7) // { arity: 17 }
+                            Get l3 // { arity: 17 }
+                      Distinct group_by=[x, y, facts_k01, dim01_k01, dim02_k01, dim03_k01, facts_d01, facts_d02, facts_d03, facts_d04, facts_d05] // { arity: 11 }
+                        Get l2 // { arity: 11 }
+                    Get l2 // { arity: 11 }
+                Constant // { arity: 6 }
+                  - (null, null, null, null, null, null)
+With
+  cte l3 =
+    Filter ((dim01_k01 + x) = (dim01_k01 + y)) // { arity: 17 }
+      Project (#0..=#7, #10..=#18) // { arity: 17 }
+        Join on=(x = x AND y = y) // { arity: 19 }
+          CrossJoin // { arity: 8 }
+            Get l1 // { arity: 2 }
+            Get materialize.left_joins_raw.dim01 // { arity: 6 }
+          Get l2 // { arity: 11 }
+  cte l2 =
+    CrossJoin // { arity: 11 }
+      Get l1 // { arity: 2 }
+      Get materialize.left_joins_raw.facts // { arity: 9 }
+  cte l1 =
+    Distinct group_by=[x, y] // { arity: 2 }
+      Get l0 // { arity: 2 }
+  cte l0 =
+    CrossJoin // { arity: 2 }
+      Constant // { arity: 0 }
+        - ()
+      Get materialize.left_joins.outer // { arity: 2 }
+
+EOF
+
+# ON predicates with at least one equi-join conjunct are planned using the
+# optimized lowering strategy.
+#
+# TODO(#22348): rewrite this test.
+query T multiline
+EXPLAIN DECORRELATED PLAN WITH(humanized_exprs, arity) FOR
+SELECT * FROM left_joins.outer CROSS JOIN LATERAL (
+  SELECT
+    facts.facts_k01,
+    facts.facts_d01,
+    facts.dim01_k01,
+    dim01.dim01_d01
+  FROM
+    left_joins_raw.facts LEFT JOIN
+    left_joins_raw.dim01 ON(
+      facts.dim01_k01 + x = dim01.dim01_k01 + y AND
+      facts_d02 = 42 AND
+      dim01_d02 = 24
+    )
+);
+----
+Return // { arity: 6 }
+  Filter true // { arity: 6 }
+    Project (#0, #1, #4..=#7) // { arity: 6 }
+      Join on=(x = x AND y = y) // { arity: 8 }
+        Get l0 // { arity: 2 }
+        Project (#0..=#2, #6, #3, #12) // { arity: 6 }
+          Union // { arity: 17 }
+            Get l3 // { arity: 17 }
+            CrossJoin // { arity: 17 }
+              Project (#0..=#10) // { arity: 11 }
+                Join on=(x = x AND y = y AND facts_k01 = facts_k01 AND dim01_k01 = dim01_k01 AND dim02_k01 = dim02_k01 AND dim03_k01 = dim03_k01 AND facts_d01 = facts_d01 AND facts_d02 = facts_d02 AND facts_d03 = facts_d03 AND facts_d04 = facts_d04 AND facts_d05 = facts_d05) // { arity: 22 }
+                  Union // { arity: 11 }
+                    Negate // { arity: 11 }
+                      Distinct group_by=[x, y, facts_k01, dim01_k01, dim02_k01, dim03_k01, facts_d01, facts_d02, facts_d03, facts_d04, facts_d05] // { arity: 11 }
+                        Get l3 // { arity: 17 }
+                    Distinct group_by=[x, y, facts_k01, dim01_k01, dim02_k01, dim03_k01, facts_d01, facts_d02, facts_d03, facts_d04, facts_d05] // { arity: 11 }
+                      Get l2 // { arity: 11 }
+                  Get l2 // { arity: 11 }
+              Constant // { arity: 6 }
+                - (null, null, null, null, null, null)
+With
+  cte l3 =
+    Filter ((((dim01_k01 + x) = (dim01_k01 + y)) AND (facts_d02 = 42)) AND (dim01_d02 = 24)) // { arity: 17 }
+      Project (#0..=#10, #13..=#18) // { arity: 17 }
+        Join on=(x = x AND y = y) // { arity: 19 }
+          Get l2 // { arity: 11 }
+          CrossJoin // { arity: 8 }
+            Get l1 // { arity: 2 }
+            Get materialize.left_joins_raw.dim01 // { arity: 6 }
+  cte l2 =
+    CrossJoin // { arity: 11 }
+      Get l1 // { arity: 2 }
+      Get materialize.left_joins_raw.facts // { arity: 9 }
+  cte l1 =
+    Distinct group_by=[x, y] // { arity: 2 }
+      Get l0 // { arity: 2 }
+  cte l0 =
+    CrossJoin // { arity: 2 }
+      Constant // { arity: 0 }
+        - ()
+      Get materialize.left_joins.outer // { arity: 2 }
+
+EOF
+
+# ON predicates with at least one equi-join conjunct are planned using the
+# optimized lowering strategy. Same as above, but a RIGHT JOIN.
+#
+# TODO(#22348): rewrite this test.
+query T multiline
+EXPLAIN DECORRELATED PLAN WITH(humanized_exprs, arity) FOR
+SELECT * FROM left_joins.outer CROSS JOIN LATERAL (
+  SELECT
+    facts.facts_k01,
+    facts.facts_d01,
+    facts.dim01_k01,
+    dim01.dim01_d01
+  FROM
+    left_joins_raw.dim01 RIGHT JOIN
+    left_joins_raw.facts ON(
+      facts.dim01_k01 + x = dim01.dim01_k01 + y AND
+      facts_d02 = 42 AND
+      dim01_d02 = 24
+    )
+);
+----
+Return // { arity: 6 }
+  Filter true // { arity: 6 }
+    Project (#0, #1, #4..=#7) // { arity: 6 }
+      Join on=(x = x AND y = y) // { arity: 8 }
+        Get l0 // { arity: 2 }
+        Project (#0, #1, #8, #12, #9, #3) // { arity: 6 }
+          Union // { arity: 17 }
+            Get l3 // { arity: 17 }
+            Project (#0, #1, #11..=#16, #2..=#10) // { arity: 17 }
+              CrossJoin // { arity: 17 }
+                Project (#0..=#10) // { arity: 11 }
+                  Join on=(x = x AND y = y AND facts_k01 = facts_k01 AND dim01_k01 = dim01_k01 AND dim02_k01 = dim02_k01 AND dim03_k01 = dim03_k01 AND facts_d01 = facts_d01 AND facts_d02 = facts_d02 AND facts_d03 = facts_d03 AND facts_d04 = facts_d04 AND facts_d05 = facts_d05) // { arity: 22 }
+                    Union // { arity: 11 }
+                      Negate // { arity: 11 }
+                        Distinct group_by=[x, y, facts_k01, dim01_k01, dim02_k01, dim03_k01, facts_d01, facts_d02, facts_d03, facts_d04, facts_d05] // { arity: 11 }
+                          Project (#0, #1, #8..=#16, #2..=#7) // { arity: 17 }
+                            Get l3 // { arity: 17 }
+                      Distinct group_by=[x, y, facts_k01, dim01_k01, dim02_k01, dim03_k01, facts_d01, facts_d02, facts_d03, facts_d04, facts_d05] // { arity: 11 }
+                        Get l2 // { arity: 11 }
+                    Get l2 // { arity: 11 }
+                Constant // { arity: 6 }
+                  - (null, null, null, null, null, null)
+With
+  cte l3 =
+    Filter ((((dim01_k01 + x) = (dim01_k01 + y)) AND (facts_d02 = 42)) AND (dim01_d02 = 24)) // { arity: 17 }
+      Project (#0..=#7, #10..=#18) // { arity: 17 }
+        Join on=(x = x AND y = y) // { arity: 19 }
+          CrossJoin // { arity: 8 }
+            Get l1 // { arity: 2 }
+            Get materialize.left_joins_raw.dim01 // { arity: 6 }
+          Get l2 // { arity: 11 }
+  cte l2 =
+    CrossJoin // { arity: 11 }
+      Get l1 // { arity: 2 }
+      Get materialize.left_joins_raw.facts // { arity: 9 }
+  cte l1 =
+    Distinct group_by=[x, y] // { arity: 2 }
+      Get l0 // { arity: 2 }
+  cte l0 =
+    CrossJoin // { arity: 2 }
+      Constant // { arity: 0 }
+        - ()
+      Get materialize.left_joins.outer // { arity: 2 }
+
+EOF
+
+# ON predicates with non-trivial equi-join conjuncts and local predicates are
+# planned using the optimized lowering strategy (FULL OUTER JOIN).
+#
+# TODO(#22348): rewrite this test.
+query T multiline
+EXPLAIN DECORRELATED PLAN WITH(humanized_exprs, arity) FOR
+SELECT * FROM left_joins.outer CROSS JOIN LATERAL (
+  SELECT
+    dim01_k01,
+    dim01_k01,
+    dim02_d02,
+    dim02_d02
+  FROM
+    left_joins_raw.dim01 FULL OUTER JOIN
+    left_joins_raw.dim02 ON(
+      coalesce(dim01_k01, x) = coalesce(dim02_k01, y) AND
+      dim01_d03 > 42 AND dim02_d03 < 24
+    )
+);
+----
+Return // { arity: 6 }
+  Filter true // { arity: 6 }
+    Project (#0, #1, #4..=#7) // { arity: 6 }
+      Join on=(x = x AND y = y) // { arity: 8 }
+        Get l0 // { arity: 2 }
+        Project (#0..=#2, #2, #10, #10) // { arity: 6 }
+          Union // { arity: 14 }
+            Get l4 // { arity: 14 }
+            CrossJoin // { arity: 14 }
+              Project (#0..=#7) // { arity: 8 }
+                Join on=(x = x AND y = y AND dim01_k01 = dim01_k01 AND dim01_d01 = dim01_d01 AND dim01_d02 = dim01_d02 AND dim01_d03 = dim01_d03 AND dim01_d04 = dim01_d04 AND dim01_d05 = dim01_d05) // { arity: 16 }
+                  Union // { arity: 8 }
+                    Negate // { arity: 8 }
+                      Distinct group_by=[x, y, dim01_k01, dim01_d01, dim01_d02, dim01_d03, dim01_d04, dim01_d05] // { arity: 8 }
+                        Get l4 // { arity: 14 }
+                    Distinct group_by=[x, y, dim01_k01, dim01_d01, dim01_d02, dim01_d03, dim01_d04, dim01_d05] // { arity: 8 }
+                      Get l2 // { arity: 8 }
+                  Get l2 // { arity: 8 }
+              Constant // { arity: 6 }
+                - (null, null, null, null, null, null)
+            Project (#0, #1, #8..=#13, #2..=#7) // { arity: 14 }
+              CrossJoin // { arity: 14 }
+                Project (#0..=#7) // { arity: 8 }
+                  Join on=(x = x AND y = y AND dim02_k01 = dim02_k01 AND dim02_d01 = dim02_d01 AND dim02_d02 = dim02_d02 AND dim02_d03 = dim02_d03 AND dim02_d04 = dim02_d04 AND dim02_d05 = dim02_d05) // { arity: 16 }
+                    Union // { arity: 8 }
+                      Negate // { arity: 8 }
+                        Distinct group_by=[x, y, dim02_k01, dim02_d01, dim02_d02, dim02_d03, dim02_d04, dim02_d05] // { arity: 8 }
+                          Project (#0, #1, #8..=#13, #2..=#7) // { arity: 14 }
+                            Get l4 // { arity: 14 }
+                      Distinct group_by=[x, y, dim02_k01, dim02_d01, dim02_d02, dim02_d03, dim02_d04, dim02_d05] // { arity: 8 }
+                        Get l3 // { arity: 8 }
+                    Get l3 // { arity: 8 }
+                Constant // { arity: 6 }
+                  - (null, null, null, null, null, null)
+With
+  cte l4 =
+    Filter (((coalesce(dim01_k01, x) = coalesce(dim02_k01, y)) AND (dim01_d03 > 42)) AND (dim02_d03 < 24)) // { arity: 14 }
+      Project (#0..=#7, #10..=#15) // { arity: 14 }
+        Join on=(x = x AND y = y) // { arity: 16 }
+          Get l2 // { arity: 8 }
+          Get l3 // { arity: 8 }
+  cte l3 =
+    CrossJoin // { arity: 8 }
+      Get l1 // { arity: 2 }
+      Get materialize.left_joins_raw.dim02 // { arity: 6 }
+  cte l2 =
+    CrossJoin // { arity: 8 }
+      Get l1 // { arity: 2 }
+      Get materialize.left_joins_raw.dim01 // { arity: 6 }
+  cte l1 =
+    Distinct group_by=[x, y] // { arity: 2 }
+      Get l0 // { arity: 2 }
+  cte l0 =
+    CrossJoin // { arity: 2 }
+      Constant // { arity: 0 }
+        - ()
+      Get materialize.left_joins.outer // { arity: 2 }
+
+EOF
+
+# ON predicates with subqueries are still planned using the fallback lowering
+# strategy.
+query T multiline
+EXPLAIN DECORRELATED PLAN WITH(humanized_exprs, arity) FOR
+SELECT * FROM left_joins.outer CROSS JOIN LATERAL (
+  SELECT
+    facts.facts_k01,
+    facts.facts_d01,
+    facts.dim01_k01,
+    dim01.dim01_d01
+  FROM
+    left_joins_raw.facts LEFT JOIN
+    left_joins_raw.dim01 ON(
+      facts.dim01_k01 + x = dim01.dim01_k01 + y AND
+      facts_d02 = 42 AND
+      dim01_d01 = ANY('{24, 42}'::int[])
+    )
+);
+----
+Return // { arity: 6 }
+  Filter true // { arity: 6 }
+    Project (#0, #1, #4..=#7) // { arity: 6 }
+      Join on=(x = x AND y = y) // { arity: 8 }
+        Get l0 // { arity: 2 }
+        Project (#0..=#2, #6, #3, #12) // { arity: 6 }
+          Union // { arity: 17 }
+            Get l8 // { arity: 17 }
+            CrossJoin // { arity: 17 }
+              Project (#0..=#10) // { arity: 11 }
+                Join on=(x = x AND y = y AND facts_k01 = facts_k01 AND dim01_k01 = dim01_k01 AND dim02_k01 = dim02_k01 AND dim03_k01 = dim03_k01 AND facts_d01 = facts_d01 AND facts_d02 = facts_d02 AND facts_d03 = facts_d03 AND facts_d04 = facts_d04 AND facts_d05 = facts_d05) // { arity: 22 }
+                  Union // { arity: 11 }
+                    Negate // { arity: 11 }
+                      Distinct group_by=[x, y, facts_k01, dim01_k01, dim02_k01, dim03_k01, facts_d01, facts_d02, facts_d03, facts_d04, facts_d05] // { arity: 11 }
+                        Get l8 // { arity: 17 }
+                    Distinct group_by=[x, y, facts_k01, dim01_k01, dim02_k01, dim03_k01, facts_d01, facts_d02, facts_d03, facts_d04, facts_d05] // { arity: 11 }
+                      Get l2 // { arity: 11 }
+                  Get l2 // { arity: 11 }
+              Constant // { arity: 6 }
+                - (null, null, null, null, null, null)
+With
+  cte l8 =
+    Project (#0..=#16) // { arity: 17 }
+      Filter ((((dim01_k01 + x) = (dim01_k01 + y)) AND (facts_d02 = 42)) AND #17) // { arity: 18 }
+        Project (#0..=#16, #18) // { arity: 18 }
+          Join on=(dim01_d01 = dim01_d01) // { arity: 19 }
+            Get l3 // { arity: 17 }
+            Union // { arity: 2 }
+              Get l7 // { arity: 2 }
+              CrossJoin // { arity: 2 }
+                Project (#0) // { arity: 1 }
+                  Join on=(dim01_d01 = dim01_d01) // { arity: 2 }
+                    Union // { arity: 1 }
+                      Negate // { arity: 1 }
+                        Distinct group_by=[dim01_d01] // { arity: 1 }
+                          Get l7 // { arity: 2 }
+                      Distinct group_by=[dim01_d01] // { arity: 1 }
+                        Get l4 // { arity: 1 }
+                    Get l4 // { arity: 1 }
+                Constant // { arity: 1 }
+                  - (null)
+  cte l7 =
+    Union // { arity: 2 }
+      Get l6 // { arity: 2 }
+      Map (error("more than one record produced in subquery")) // { arity: 2 }
+        Project (#0) // { arity: 1 }
+          Filter (#1 > 1) // { arity: 2 }
+            Reduce group_by=[dim01_d01] aggregates=[count(*)] // { arity: 2 }
+              Get l6 // { arity: 2 }
+  cte l6 =
+    Union // { arity: 2 }
+      Get l5 // { arity: 2 }
+      CrossJoin // { arity: 2 }
+        Project (#0) // { arity: 1 }
+          Join on=(dim01_d01 = dim01_d01) // { arity: 2 }
+            Union // { arity: 1 }
+              Negate // { arity: 1 }
+                Distinct group_by=[dim01_d01] // { arity: 1 }
+                  Get l5 // { arity: 2 }
+              Distinct group_by=[dim01_d01] // { arity: 1 }
+                Get l4 // { arity: 1 }
+            Get l4 // { arity: 1 }
+        Constant // { arity: 1 }
+          - (false)
+  cte l5 =
+    Reduce group_by=[dim01_d01] aggregates=[any((dim01_d01 = #1))] // { arity: 2 }
+      FlatMap unnest_array(strtoarray("{24, 42}")) // { arity: 2 }
+        Get l4 // { arity: 1 }
+  cte l4 =
+    Distinct group_by=[dim01_d01] // { arity: 1 }
+      Get l3 // { arity: 17 }
+  cte l3 =
+    Project (#0..=#10, #13..=#18) // { arity: 17 }
+      Join on=(x = x AND y = y) // { arity: 19 }
+        Get l2 // { arity: 11 }
+        CrossJoin // { arity: 8 }
+          Get l1 // { arity: 2 }
+          Get materialize.left_joins_raw.dim01 // { arity: 6 }
+  cte l2 =
+    CrossJoin // { arity: 11 }
+      Get l1 // { arity: 2 }
+      Get materialize.left_joins_raw.facts // { arity: 9 }
+  cte l1 =
+    Distinct group_by=[x, y] // { arity: 2 }
+      Get l0 // { arity: 2 }
+  cte l0 =
+    CrossJoin // { arity: 2 }
+      Constant // { arity: 0 }
+        - ()
+      Get materialize.left_joins.outer // { arity: 2 }
+
+EOF
