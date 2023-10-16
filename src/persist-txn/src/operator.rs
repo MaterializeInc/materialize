@@ -226,7 +226,7 @@ where
 /// [Subscribe]: mz_persist_client::read::Subscribe
 pub struct DataSubscribe {
     as_of: u64,
-    worker: Worker<timely::communication::allocator::Thread>,
+    pub(crate) worker: Worker<timely::communication::allocator::Thread>,
     data: ProbeHandle<u64>,
     txns: ProbeHandle<u64>,
     capture: mpsc::Receiver<EventCore<u64, Vec<(String, u64, i64)>>>,

@@ -20,6 +20,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [dev-dependencies]
 crossbeam-channel = "0.5.8"
+rand = { version = "0.8.5", default-features = false, features = ["small_rng"] }
 tokio = { version = "1.32.0", default-features = false, features = ["rt", "rt-multi-thread"] }
 
 [package.metadata.cargo-udeps.ignore]
