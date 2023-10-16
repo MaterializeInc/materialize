@@ -164,7 +164,6 @@ steps:
 
   - id: cargo-test
     label: Cargo test
-    parallelism: 2
     timeout_in_minutes: 30
     artifact_paths: [junit_*.xml, target/nextest/ci/junit_cargo-test.xml]
     inputs:
@@ -187,7 +186,7 @@ steps:
   - id: miri-test
     label: Miri test (fast) %n
     inputs: [src]
-    parallelism: 4
+    parallelism: 2
     timeout_in_minutes: 30
     artifact_paths: [junit_*.xml, target/nextest/ci/junit_cargo-test.xml]
     plugins:
