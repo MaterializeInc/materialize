@@ -525,138 +525,142 @@ impl<'a> Parser<'a> {
         // because the `date` type name is not followed by a string literal, but
         // in fact is a valid expression that should parse as the column name
         // "date".
-        let maybe_data_type = |parser: &mut Parser| match parser.parse_data_type() {
-            Ok(data_type) => {
-                if data_type.to_string().as_str() == "interval" {
-                    Ok(Expr::Value(parser.parse_interval_value()?))
-                } else {
-                    Ok(Expr::Cast {
-                        expr: Box::new(Expr::Value(Value::String(parser.parse_literal_string()?))),
-                        data_type,
-                    })
-                }
+        maybe!(self.maybe_parse(|parser| {
+            let data_type = parser.parse_data_type()?;
+            if data_type.to_string().as_str() == "interval" {
+                Ok(Expr::Value(parser.parse_interval_value()?))
+            } else {
+                Ok(Expr::Cast {
+                    expr: Box::new(Expr::Value(Value::String(parser.parse_literal_string()?))),
+                    data_type,
+                })
             }
-            Err(e) => Err(e),
-        };
+        }));
 
-        maybe!(self.maybe_parse(maybe_data_type));
-
-        let maybe_prefix_expr = |parser: &mut Parser| {
-            let tok = parser.next_token().ok_or_else(|| {
-                parser.error(parser.peek_prev_pos(), "Unexpected EOF".to_string())
-            })?;
-            let expr = match tok {
-                Token::LBracket => {
+        let tok = self
+            .next_token()
+            .ok_or_else(|| self.error(self.peek_prev_pos(), "Unexpected EOF".to_string()))?;
+        let expr = match tok {
+            Token::LBracket => {
+                self.prev_token();
+                let function = self.parse_named_function()?;
+                Ok(Expr::Function(function))
+            }
+            Token::Keyword(TRUE) | Token::Keyword(FALSE) | Token::Keyword(NULL) => {
+                self.prev_token();
+                Ok(Expr::Value(self.parse_value()?))
+            }
+            Token::Keyword(ARRAY) => self.parse_array(),
+            Token::Keyword(LIST) => self.parse_list(),
+            Token::Keyword(CASE) => self.parse_case_expr(),
+            Token::Keyword(CAST) => self.parse_cast_expr(),
+            Token::Keyword(COALESCE) => {
+                self.parse_homogenizing_function(HomogenizingFunction::Coalesce)
+            }
+            Token::Keyword(GREATEST) => {
+                self.parse_homogenizing_function(HomogenizingFunction::Greatest)
+            }
+            Token::Keyword(LEAST) => self.parse_homogenizing_function(HomogenizingFunction::Least),
+            Token::Keyword(NULLIF) => self.parse_nullif_expr(),
+            Token::Keyword(EXISTS) => self.parse_exists_expr(),
+            Token::Keyword(EXTRACT) => self.parse_extract_expr(),
+            Token::Keyword(INTERVAL) => Ok(Expr::Value(self.parse_interval_value()?)),
+            // having timestamps separately here because errors are swallowed by the maybe! block
+            Token::Keyword(id @ TIMESTAMP) | Token::Keyword(id @ TIMESTAMPTZ) => {
+                let index = self.index;
+                let maybe_data_type = |parser: &mut Parser| {
                     parser.prev_token();
-                    let function = parser.parse_named_function()?;
-                    Ok(Expr::Function(function))
-                }
-                Token::Keyword(TRUE) | Token::Keyword(FALSE) | Token::Keyword(NULL) => {
-                    parser.prev_token();
-                    Ok(Expr::Value(parser.parse_value()?))
-                }
-                Token::Keyword(ARRAY) => parser.parse_array(),
-                Token::Keyword(LIST) => parser.parse_list(),
-                Token::Keyword(CASE) => parser.parse_case_expr(),
-                Token::Keyword(CAST) => parser.parse_cast_expr(),
-                Token::Keyword(COALESCE) => {
-                    parser.parse_homogenizing_function(HomogenizingFunction::Coalesce)
-                }
-                Token::Keyword(GREATEST) => {
-                    parser.parse_homogenizing_function(HomogenizingFunction::Greatest)
-                }
-                Token::Keyword(LEAST) => {
-                    parser.parse_homogenizing_function(HomogenizingFunction::Least)
-                }
-                Token::Keyword(NULLIF) => parser.parse_nullif_expr(),
-                Token::Keyword(EXISTS) => parser.parse_exists_expr(),
-                Token::Keyword(EXTRACT) => parser.parse_extract_expr(),
-                Token::Keyword(INTERVAL) => Ok(Expr::Value(parser.parse_interval_value()?)),
-                Token::Keyword(NOT) => Ok(Expr::Not {
-                    expr: Box::new(parser.parse_subexpr(Precedence::PrefixNot)?),
-                }),
-                Token::Keyword(ROW) => parser.parse_row_expr(),
-                Token::Keyword(TRIM) => parser.parse_trim_expr(),
-                Token::Keyword(POSITION) if parser.peek_token() == Some(Token::LParen) => {
-                    parser.parse_position_expr()
-                }
-                Token::Keyword(SUBSTRING) => parser.parse_substring_expr(),
-                Token::Keyword(kw) if kw.is_reserved() => {
-                    return Err(parser.error(
-                        parser.peek_prev_pos(),
-                        "expected expression, but found reserved keyword".into(),
-                    ));
-                }
-                Token::Keyword(id @ TIMESTAMP) | Token::Keyword(id @ TIMESTAMPTZ) => {
-                    // If the execution reaches here, timestamp/timestamptz could not be evaluated
-                    // to valid data types above. These can now only be identifiers, not functions
-                    let parsed = parser.parse_qualified_identifier(id.into())?;
-                    if matches!(parsed, Expr::Function(_)) {
-                        return Err(parser.error(
-                            parser.peek_prev_pos(),
-                            "timestamp/timestamptz as data_type should have already been resolved!"
-                                .into(),
-                        ));
+                    match parser.parse_data_type() {
+                        Ok(data_type) => Ok(Expr::Cast {
+                            expr: Box::new(Expr::Value(Value::String(
+                                parser.parse_literal_string()?,
+                            ))),
+                            data_type,
+                        }),
+                        Err(e) => Err(e),
                     }
-                    Ok(parsed)
-                }
-                Token::Keyword(id) => parser.parse_qualified_identifier(id.into()),
-                Token::Ident(id) => parser.parse_qualified_identifier(Ident::new(id)),
-                Token::Op(op) if op == "-" => {
-                    if let Some(Token::Number(n)) = parser.peek_token() {
-                        let n = match n.parse::<f64>() {
-                            Ok(n) => n,
-                            Err(_) => {
-                                return Err(parser.error(
-                                    parser.peek_prev_pos(),
-                                    format!("invalid number {}", n),
-                                ))
-                            }
-                        };
-                        if n != 0.0 {
-                            parser.prev_token();
-                            return Ok(Expr::Value(parser.parse_value()?));
+                };
+
+                // Check if it's a valid data type.
+                // If not, check if it can be a identifier.
+                // Return the data type parsing error in case all fails
+                match maybe_data_type(self) {
+                    Ok(data_type_expr) => Ok(data_type_expr),
+                    Err(e) => {
+                        self.index = index;
+                        match self.parse_qualified_identifier(id.into()) {
+                            // It cannot be a function, it's a type with modifiers
+                            // Returning the original parsing error
+                            Ok(Expr::Function(_)) => Err(e),
+                            Ok(expr) => Ok(expr),
+                            Err(_) => Err(e),
                         }
                     }
-
-                    Ok(Expr::Op {
-                        op: Op::bare(op),
-                        expr1: Box::new(parser.parse_subexpr(Precedence::PrefixPlusMinus)?),
-                        expr2: None,
-                    })
                 }
-                Token::Op(op) if op == "+" => Ok(Expr::Op {
+            }
+            Token::Keyword(NOT) => Ok(Expr::Not {
+                expr: Box::new(self.parse_subexpr(Precedence::PrefixNot)?),
+            }),
+            Token::Keyword(ROW) => self.parse_row_expr(),
+            Token::Keyword(TRIM) => self.parse_trim_expr(),
+            Token::Keyword(POSITION) if self.peek_token() == Some(Token::LParen) => {
+                self.parse_position_expr()
+            }
+            Token::Keyword(SUBSTRING) => self.parse_substring_expr(),
+            Token::Keyword(kw) if kw.is_reserved() => {
+                return Err(self.error(
+                    self.peek_prev_pos(),
+                    "expected expression, but found reserved keyword".into(),
+                ));
+            }
+            Token::Keyword(id) => self.parse_qualified_identifier(id.into()),
+            Token::Ident(id) => self.parse_qualified_identifier(Ident::new(id)),
+            Token::Op(op) if op == "-" => {
+                if let Some(Token::Number(n)) = self.peek_token() {
+                    let n = match n.parse::<f64>() {
+                        Ok(n) => n,
+                        Err(_) => {
+                            return Err(
+                                self.error(self.peek_prev_pos(), format!("invalid number {}", n))
+                            )
+                        }
+                    };
+                    if n != 0.0 {
+                        self.prev_token();
+                        return Ok(Expr::Value(self.parse_value()?));
+                    }
+                }
+
+                Ok(Expr::Op {
                     op: Op::bare(op),
-                    expr1: Box::new(parser.parse_subexpr(Precedence::PrefixPlusMinus)?),
+                    expr1: Box::new(self.parse_subexpr(Precedence::PrefixPlusMinus)?),
                     expr2: None,
-                }),
-                Token::Op(op) if op == "~" => Ok(Expr::Op {
-                    op: Op::bare(op),
-                    expr1: Box::new(parser.parse_subexpr(Precedence::Other)?),
-                    expr2: None,
-                }),
-                Token::Number(_) | Token::String(_) | Token::HexString(_) => {
-                    parser.prev_token();
-                    Ok(Expr::Value(parser.parse_value()?))
-                }
-                Token::Parameter(n) => Ok(Expr::Parameter(n)),
-                Token::LParen => {
-                    let expr = parser.parse_parenthesized_expr()?;
-                    parser.expect_token(&Token::RParen)?;
-                    Ok(expr)
-                }
-                unexpected => {
-                    parser.expected(parser.peek_prev_pos(), "an expression", Some(unexpected))
-                }
-            }?;
-            Ok(expr)
-        };
+                })
+            }
+            Token::Op(op) if op == "+" => Ok(Expr::Op {
+                op: Op::bare(op),
+                expr1: Box::new(self.parse_subexpr(Precedence::PrefixPlusMinus)?),
+                expr2: None,
+            }),
+            Token::Op(op) if op == "~" => Ok(Expr::Op {
+                op: Op::bare(op),
+                expr1: Box::new(self.parse_subexpr(Precedence::Other)?),
+                expr2: None,
+            }),
+            Token::Number(_) | Token::String(_) | Token::HexString(_) => {
+                self.prev_token();
+                Ok(Expr::Value(self.parse_value()?))
+            }
+            Token::Parameter(n) => Ok(Expr::Parameter(n)),
+            Token::LParen => {
+                let expr = self.parse_parenthesized_expr()?;
+                self.expect_token(&Token::RParen)?;
+                Ok(expr)
+            }
+            unexpected => self.expected(self.peek_prev_pos(), "an expression", Some(unexpected)),
+        }?;
 
-        maybe!(self.maybe_parse(maybe_prefix_expr));
-
-        // If execution reaches here, it means none of the above maybe! branches were valid
-        // Returning the error when parsing data_type
-        maybe_data_type(self)
+        Ok(expr)
     }
 
     /// Parses an expression that appears in parentheses, like `(1 + 1)` or
