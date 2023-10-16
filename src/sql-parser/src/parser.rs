@@ -4241,26 +4241,7 @@ impl<'a> Parser<'a> {
                     new_owner,
                 }))
             }
-            ObjectType::Schema => {
-                let if_exists = self
-                    .parse_if_exists()
-                    .map_parser_err(StatementKind::AlterOwner)?;
-                let name = UnresolvedObjectName::Schema(
-                    self.parse_schema_name()
-                        .map_parser_err(StatementKind::AlterOwner)?,
-                );
-                self.expect_keywords(&[OWNER, TO])
-                    .map_parser_err(StatementKind::AlterOwner)?;
-                let new_owner = self
-                    .parse_identifier()
-                    .map_parser_err(StatementKind::AlterOwner)?;
-                Ok(Statement::AlterOwner(AlterOwnerStatement {
-                    object_type,
-                    if_exists,
-                    name,
-                    new_owner,
-                }))
-            }
+            ObjectType::Schema => self.parse_alter_schema(object_type),
             ObjectType::Func | ObjectType::Subsource => parser_err!(
                 self,
                 self.peek_prev_pos(),
@@ -5001,6 +4982,50 @@ impl<'a> Parser<'a> {
                 self.peek_prev_pos(),
                 "Unexpected object type 'SUBSOURCE'"
             ),
+        }
+    }
+
+    fn parse_alter_schema(
+        &mut self,
+        object_type: ObjectType,
+    ) -> Result<Statement<Raw>, ParserStatementError> {
+        let if_exists = self.parse_if_exists().map_no_statement_parser_err()?;
+        let name = self.parse_schema_name().map_no_statement_parser_err()?;
+        let name = UnresolvedObjectName::Schema(name);
+        let action = self
+            .expect_one_of_keywords(&[OWNER, RENAME])
+            .map_no_statement_parser_err()?;
+
+        match action {
+            OWNER => {
+                self.expect_keyword(TO)
+                    .map_parser_err(StatementKind::AlterOwner)?;
+                let new_owner = self
+                    .parse_identifier()
+                    .map_parser_err(StatementKind::AlterOwner)?;
+
+                Ok(Statement::AlterOwner(AlterOwnerStatement {
+                    object_type,
+                    if_exists,
+                    name,
+                    new_owner,
+                }))
+            }
+            RENAME => {
+                self.expect_keyword(TO)
+                    .map_parser_err(StatementKind::AlterObjectRename)?;
+                let to_item_name = self
+                    .parse_identifier()
+                    .map_parser_err(StatementKind::AlterObjectRename)?;
+
+                Ok(Statement::AlterObjectRename(AlterObjectRenameStatement {
+                    object_type,
+                    if_exists,
+                    name,
+                    to_item_name,
+                }))
+            }
+            k => unreachable!("programming error, unmatched {k}"),
         }
     }
 
