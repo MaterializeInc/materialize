@@ -15,10 +15,12 @@
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
-use mz_sql::catalog::DefaultPrivilegeObject;
+use mz_sql::catalog::{CatalogItem, DefaultPrivilegeObject};
 use mz_sql::names::{
-    CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
+    CommentObjectId, DatabaseId, QualifiedItemName, ResolvedDatabaseSpecifier, SchemaId,
+    SchemaSpecifier,
 };
+use mz_sql_parser::ast::{self, Statement};
 use serde::Serialize;
 
 use super::CatalogState;
@@ -33,17 +35,22 @@ pub struct CatalogInconsistencies {
     comments: Vec<CommentInconsistency>,
     /// Inconsistencies found with object dependencies, if any.
     object_dependencies: Vec<ObjectDependencyInconsistency>,
+    /// Inconsistencies found with items in the catalog, if any.
+    items: Vec<ItemInconsistency>,
 }
 
 impl CatalogInconsistencies {
     pub fn is_empty(&self) -> bool {
-        self.internal_fields.is_empty() && self.roles.is_empty() && self.comments.is_empty()
+        self.internal_fields.is_empty()
+            && self.roles.is_empty()
+            && self.comments.is_empty()
+            && self.items.is_empty()
     }
 }
 
 impl CatalogState {
     /// Checks the [`CatalogState`] to make sure we're internally consistent.
-    pub fn check_consistency(&self) -> Result<(), CatalogInconsistencies> {
+    pub fn check_consistency(&self) -> Result<(), Box<CatalogInconsistencies>> {
         let mut inconsistencies = CatalogInconsistencies::default();
 
         if let Err(internal_fields) = self.check_internal_fields() {
@@ -58,11 +65,14 @@ impl CatalogState {
         if let Err(dependencies) = self.check_object_dependencies() {
             inconsistencies.object_dependencies = dependencies;
         }
+        if let Err(items) = self.check_items() {
+            inconsistencies.items = items;
+        }
 
         if inconsistencies.is_empty() {
             Ok(())
         } else {
-            Err(inconsistencies)
+            Err(Box::new(inconsistencies))
         }
     }
 
@@ -348,6 +358,175 @@ impl CatalogState {
             Err(dependency_inconsistencies)
         }
     }
+
+    /// # Invariants
+    ///
+    /// * Every schema that exists in the `schemas_by_name` map, also exists in `schemas_by_id`.
+    /// * The name present in the `schemas_by_name` map matches the name in the associated `Schema`
+    ///   struct.
+    /// * All items that exist in a `Schema` struct, also exist in the `entries_by_id` map.
+    /// * Parsing the `create_sql` string from an `Entry` succeeds.
+    /// * The result of parsing the `create_sql` must return a single `Statement`.
+    /// * The names in the returned `Statement`, must match that of the parent struct.
+    /// * The item from the parsed `create_sql` must be fully qualified.
+    ///
+    fn check_items(&self) -> Result<(), Vec<ItemInconsistency>> {
+        let mut item_inconsistencies = vec![];
+
+        for (db_id, db) in &self.database_by_id {
+            for (schema_name, schema_id) in &db.schemas_by_name {
+                // Make sure the schema themselves are consistent.
+                let Some(schema) = db.schemas_by_id.get(schema_id) else {
+                    item_inconsistencies.push(ItemInconsistency::MissingSchema {
+                        db_id: *db_id,
+                        schema_name: schema_name.clone(),
+                    });
+                    continue;
+                };
+                if schema_name != &schema.name.schema {
+                    item_inconsistencies.push(ItemInconsistency::KeyedName {
+                        db_schema_by_name: schema_name.clone(),
+                        struct_name: schema.name.schema.clone(),
+                    });
+                }
+
+                // Make sure the items in the schema are consistent.
+                for (item_name, item_id) in &schema.items {
+                    let Some(entry) = self.entry_by_id.get(item_id) else {
+                        item_inconsistencies.push(ItemInconsistency::NonExistentItem {
+                            db_id: *db_id,
+                            schema_id: schema.id,
+                            item_id: *item_id,
+                        });
+                        continue;
+                    };
+                    if item_name != &entry.name().item {
+                        item_inconsistencies.push(ItemInconsistency::ItemNameMismatch {
+                            item_id: *item_id,
+                            map_name: item_name.clone(),
+                            entry_name: entry.name().clone(),
+                        });
+                    }
+                    let statement = match mz_sql::parse::parse(entry.create_sql()) {
+                        Ok(mut statements) if statements.len() == 1 => {
+                            let statement = statements.pop().expect("checked length");
+                            statement.ast
+                        }
+                        Ok(_) => {
+                            item_inconsistencies.push(ItemInconsistency::MultiCreateStatement {
+                                create_sql: entry.create_sql().to_string(),
+                            });
+                            continue;
+                        }
+                        Err(_) => {
+                            item_inconsistencies.push(ItemInconsistency::StatementParseFailure {
+                                create_sql: entry.create_sql().to_string(),
+                            });
+                            continue;
+                        }
+                    };
+                    match statement {
+                        Statement::CreateConnection(ast::CreateConnectionStatement {
+                            name,
+                            ..
+                        })
+                        | Statement::CreateWebhookSource(ast::CreateWebhookSourceStatement {
+                            name,
+                            ..
+                        })
+                        | Statement::CreateSource(ast::CreateSourceStatement { name, .. })
+                        | Statement::CreateSubsource(ast::CreateSubsourceStatement {
+                            name, ..
+                        })
+                        | Statement::CreateSink(ast::CreateSinkStatement { name, .. })
+                        | Statement::CreateView(ast::CreateViewStatement {
+                            definition: ast::ViewDefinition { name, .. },
+                            ..
+                        })
+                        | Statement::CreateMaterializedView(
+                            ast::CreateMaterializedViewStatement { name, .. },
+                        )
+                        | Statement::CreateTable(ast::CreateTableStatement { name, .. })
+                        | Statement::CreateType(ast::CreateTypeStatement { name, .. })
+                        | Statement::CreateSecret(ast::CreateSecretStatement { name, .. }) => {
+                            let [db_component, schema_component, item_component] = &name.0[..]
+                            else {
+                                let name =
+                                    name.0.into_iter().map(|ident| ident.to_string()).collect();
+                                item_inconsistencies.push(
+                                    ItemInconsistency::NonFullyQualifiedItemName {
+                                        create_sql: entry.create_sql().to_string(),
+                                        name,
+                                    },
+                                );
+                                continue;
+                            };
+                            if db_component.as_str() != &db.name
+                                || schema_component.as_str() != &schema.name.schema
+                                || item_component.as_str() != &entry.name().item
+                            {
+                                item_inconsistencies.push(
+                                    ItemInconsistency::CreateSqlItemNameMismatch {
+                                        item_name: vec![
+                                            db.name.clone(),
+                                            schema.name.schema.clone(),
+                                            entry.name().item.clone(),
+                                        ],
+                                        create_sql: entry.create_sql().to_string(),
+                                    },
+                                );
+                            }
+                        }
+                        Statement::CreateSchema(ast::CreateSchemaStatement { name, .. }) => {
+                            let [db_component, schema_component] = &name.0[..] else {
+                                let name =
+                                    name.0.into_iter().map(|ident| ident.to_string()).collect();
+                                item_inconsistencies.push(
+                                    ItemInconsistency::NonFullyQualifiedSchemaName {
+                                        create_sql: entry.create_sql().to_string(),
+                                        name,
+                                    },
+                                );
+                                continue;
+                            };
+                            if db_component.as_str() != &db.name
+                                || schema_component.as_str() != &schema.name.schema
+                            {
+                                item_inconsistencies.push(
+                                    ItemInconsistency::CreateSqlSchemaNameMismatch {
+                                        schema_name: vec![
+                                            db.name.clone(),
+                                            schema.name.schema.clone(),
+                                        ],
+                                        create_sql: entry.create_sql().to_string(),
+                                    },
+                                );
+                            }
+                        }
+                        Statement::CreateDatabase(ast::CreateDatabaseStatement {
+                            name, ..
+                        }) => {
+                            if db.name != name.0.as_str() {
+                                item_inconsistencies.push(
+                                    ItemInconsistency::CreateSqlDatabaseNameMismatch {
+                                        database_name: db.name.clone(),
+                                        create_sql: entry.create_sql().to_string(),
+                                    },
+                                );
+                            }
+                        }
+                        _ => (),
+                    }
+                }
+            }
+        }
+
+        if item_inconsistencies.is_empty() {
+            Ok(())
+        } else {
+            Err(item_inconsistencies)
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq)]
@@ -406,5 +585,62 @@ enum ObjectDependencyInconsistency {
     InconsistentUses {
         object_a: GlobalId,
         object_b: GlobalId,
+    },
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq)]
+enum ItemInconsistency {
+    /// The name in a `Database` `schemas_by_name` does not match the name on the `Schema` struct.
+    KeyedName {
+        db_schema_by_name: String,
+        struct_name: String,
+    },
+    /// A schema present in a `Database` `schemas_by_name` map is not in the `schema_by_id` map.
+    MissingSchema {
+        db_id: DatabaseId,
+        schema_name: String,
+    },
+    /// An item in a `Schema` `items` collection does not exist.
+    NonExistentItem {
+        db_id: DatabaseId,
+        schema_id: SchemaSpecifier,
+        item_id: GlobalId,
+    },
+    /// An item in the `Schema` `items` collection has a mismatched name.
+    ItemNameMismatch {
+        item_id: GlobalId,
+        /// Name from the `items` map.
+        map_name: String,
+        /// Name on the entry itself.
+        entry_name: QualifiedItemName,
+    },
+    /// Failed to parse the `create_sql` persisted with an item.
+    StatementParseFailure { create_sql: String },
+    /// Parsing the `create_sql` returned multiple Statements.
+    MultiCreateStatement { create_sql: String },
+    /// The name from a parsed `create_sql` statement, is not fully qualified.
+    NonFullyQualifiedItemName {
+        create_sql: String,
+        name: Vec<String>,
+    },
+    /// The name from a parsed `create_sql` statement, is not fully qualified.
+    NonFullyQualifiedSchemaName {
+        create_sql: String,
+        name: Vec<String>,
+    },
+    /// The name from a parsed `create_sql` statement, did not match that from the parent item.
+    CreateSqlItemNameMismatch {
+        item_name: Vec<String>,
+        create_sql: String,
+    },
+    /// The name from a parsed `create_sql` statement, did not match that from the parent schema.
+    CreateSqlSchemaNameMismatch {
+        schema_name: Vec<String>,
+        create_sql: String,
+    },
+    /// The name from a parsed `create_sql` statement, did not match that from the parent database.
+    CreateSqlDatabaseNameMismatch {
+        database_name: String,
+        create_sql: String,
     },
 }
