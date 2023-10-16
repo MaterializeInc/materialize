@@ -783,6 +783,17 @@ steps:
       #         composition: parallel-workload
       #         args: [--runtime=1500, --threads=100]
 
+      - id: parallel-workload-rename
+        label: "Parallel Workload (rename)"
+        artifact_paths: [junit_*.xml, parallel-workload-queries.log]
+        timeout_in_minutes: 30
+        agents:
+          queue: builder-linux-x86_64
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: parallel-workload
+              args: [--runtime=1500, --scenario=rename]
+
       - id: parallel-workload-cancel
         label: "Parallel Workload (cancel)"
         artifact_paths: [junit_*.xml, parallel-workload-queries.log]

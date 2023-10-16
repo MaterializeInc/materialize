@@ -62,6 +62,7 @@ from materialize.checks.rename_view import *  # noqa: F401 F403
 from materialize.checks.replica import *  # noqa: F401 F403
 from materialize.checks.roles import *  # noqa: F401 F403
 from materialize.checks.rollback import *  # noqa: F401 F403
+from materialize.checks.schemas import *  # noqa: F401 F403
 from materialize.checks.sink import *  # noqa: F401 F403
 from materialize.checks.source_errors import *  # noqa: F401 F403
 from materialize.checks.statement_logging import *  # noqa: F401 F403
