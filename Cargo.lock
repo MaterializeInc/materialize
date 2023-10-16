@@ -3664,16 +3664,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mz-build-id"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "libc",
- "mz-ore",
- "workspace-hack",
-]
-
-[[package]]
 name = "mz-build-info"
 version = "0.0.0"
 dependencies = [
@@ -4890,6 +4880,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-proc"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "mz-ore",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-prof"
 version = "0.0.0"
 dependencies = [
@@ -4905,11 +4905,11 @@ dependencies = [
  "include_dir",
  "libc",
  "mime",
- "mz-build-id",
  "mz-build-info",
  "mz-http-util",
  "mz-npm",
  "mz-ore",
+ "mz-proc",
  "once_cell",
  "pprof",
  "prost",

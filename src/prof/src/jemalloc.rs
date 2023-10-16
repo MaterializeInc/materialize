@@ -22,10 +22,10 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail};
 use libc::size_t;
-use mz_build_id::BuildId;
 use mz_ore::cast::CastFrom;
 use mz_ore::metric;
 use mz_ore::metrics::{MetricsRegistry, UIntGauge};
+use mz_proc::BuildId;
 use once_cell::sync::Lazy;
 use tempfile::NamedTempFile;
 use tikv_jemalloc_ctl::{epoch, raw, stats};
@@ -56,7 +56,7 @@ pub static PROF_CTL: Lazy<Option<Arc<Mutex<JemallocProfCtl>>>> = Lazy::new(|| {
 static BUILD_IDS: Lazy<Option<BTreeMap<PathBuf, BuildId>>> = Lazy::new(|| {
     // SAFETY: We are on Linux, and this is the only place in the program this
     // function is called.
-    match unsafe { mz_build_id::all_build_ids() } {
+    match unsafe { mz_proc::linux::all_build_ids() } {
         Ok(ids) => Some(ids),
         Err(err) => {
             error!("build ID fetching failed: {err}");

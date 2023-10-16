@@ -83,8 +83,8 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use mz_build_id::BuildId;
 use mz_ore::cast::{CastFrom, TryCastFrom};
+use mz_proc::BuildId;
 use prost::Message;
 
 mod pprof_types;
