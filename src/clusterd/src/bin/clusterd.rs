@@ -188,6 +188,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
+    println!("test");
     let args = cli::parse_args(CliConfig {
         env_prefix: Some("CLUSTERD_"),
         enable_version_flag: true,

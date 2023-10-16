@@ -17,7 +17,7 @@ from materialize.xcompile import Arch
 
 def main() -> None:
     coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
-    stable = ui.env_is_truthy("BUILDKITE_TAG")
+    stable = True
     repo = mzbuild.Repository(Path("."), coverage=coverage, stable=stable)
 
     # Build and push any images that are not already available on Docker Hub,
