@@ -55,6 +55,8 @@ GENERIC_OPERATION_TYPES.append(
         "CASE WHEN $ THEN $ ELSE $ END",
         [BooleanOperationParam(), AnyOperationParam(), AnyLikeOtherOperationParam(1)],
         DynamicReturnTypeSpec(param_index_to_take_type=1),
+        # due to different evaluation order
+        is_pg_compatible=False,
     )
 )
 GENERIC_OPERATION_TYPES.append(
@@ -66,6 +68,8 @@ GENERIC_OPERATION_TYPES.append(
             AnyLikeOtherOperationParam(0, optional=True),
         ],
         DynamicReturnTypeSpec(param_index_to_take_type=0),
+        # pg evaluates all arguments, possibly resulting in an evaluation error
+        is_pg_compatible=False,
     )
 )
 GENERIC_OPERATION_TYPES.append(

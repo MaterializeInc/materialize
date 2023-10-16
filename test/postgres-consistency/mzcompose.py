@@ -10,26 +10,35 @@
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.output_consistency.output_consistency_test import OutputConsistencyTest
+from materialize.mzcompose.services.postgres import Postgres
+from materialize.postgres_consistency.postgres_consistency_test import (
+    PostgresConsistencyTest,
+)
 
 SERVICES = [
     Cockroach(setup_materialize=True),
     Materialized(propagate_crashes=True, external_cockroach=True),
+    Postgres(),
 ]
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     """
-    Test the output consistency of different query evaluation strategies (e.g., dataflow rendering and constant folding).
+    Test the consistency with Postgres.
     """
 
     c.down(destroy_volumes=True)
 
-    c.up("materialized")
+    c.up("materialized", "postgres")
 
-    test = OutputConsistencyTest()
+    test = PostgresConsistencyTest()
     args = test.parse_output_consistency_input_args(parser)
     connection = c.sql_connection()
+    test.pg_connection = c.sql_connection(
+        service="postgres",
+        user="postgres",
+        password="postgres",
+    )
 
     test_summary = test.run_output_consistency_tests(connection, args)
 

@@ -9,6 +9,9 @@
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
+from materialize.output_consistency.execution.sql_dialect_adjuster import (
+    SqlDialectAdjuster,
+)
 
 
 class EnumDataType(DataType):
@@ -17,5 +20,5 @@ class EnumDataType(DataType):
     ) -> None:
         super().__init__("SPECIAL", "SQL", DataTypeCategory.ENUM)
 
-    def value_to_sql(self, string_value: str) -> str:
+    def value_to_sql(self, string_value: str, sql_adjuster: SqlDialectAdjuster) -> str:
         return string_value

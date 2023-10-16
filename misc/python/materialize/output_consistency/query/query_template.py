@@ -6,6 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+from collections.abc import Callable
 
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
@@ -153,3 +154,20 @@ FROM{space_separator}{db_object_name}
                 return False
 
         return True
+
+    def matches_any_select_expression(
+        self, predicate: Callable[[Expression], bool], check_recursively: bool
+    ) -> bool:
+        for expression in self.select_expressions:
+            if expression.matches(predicate, check_recursively):
+                return True
+
+        return False
+
+    def matches_any_expression(
+        self, predicate: Callable[[Expression], bool], check_recursively: bool
+    ) -> bool:
+        return self.matches_any_select_expression(predicate, check_recursively) or (
+            self.where_expression is not None
+            and self.where_expression.matches(predicate, check_recursively)
+        )

@@ -10,14 +10,25 @@
 from materialize.output_consistency.data_type.data_type_with_values import (
     DataTypeWithValues,
 )
+from materialize.output_consistency.expression.expression_characteristics import (
+    ExpressionCharacteristics,
+)
 from materialize.output_consistency.input_data.types.text_type_provider import (
     TEXT_DATA_TYPE,
 )
 
 TEXT_DATA_TYPE_WITH_VALUES = DataTypeWithValues(TEXT_DATA_TYPE)
 
-TEXT_DATA_TYPE_WITH_VALUES.add_raw_value("''", "EMPTY", set())
+TEXT_DATA_TYPE_WITH_VALUES.add_raw_value(
+    "''",
+    "EMPTY",
+    {ExpressionCharacteristics.TEXT_EMPTY},
+)
 TEXT_DATA_TYPE_WITH_VALUES.add_raw_value("'a'", "VAL_1", set())
 TEXT_DATA_TYPE_WITH_VALUES.add_raw_value("'abc'", "VAL_2", set())
 TEXT_DATA_TYPE_WITH_VALUES.add_raw_value("'xAAx'", "VAL_3", set())
-TEXT_DATA_TYPE_WITH_VALUES.add_raw_value("' mAA m\n\t '", "VAL_W_SPACES", set())
+TEXT_DATA_TYPE_WITH_VALUES.add_raw_value(
+    "' mAA m\n\t '",
+    "VAL_W_SPACES",
+    {ExpressionCharacteristics.TEXT_WITH_SPECIAL_SPACE_CHARS},
+)

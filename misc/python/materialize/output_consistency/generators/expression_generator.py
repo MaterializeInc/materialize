@@ -372,7 +372,7 @@ class ExpressionGenerator:
         )
         is_unsupported = (
             is_unsupported
-            or not param.might_support_as_input_assuming_category_matches(
+            or not param.might_support_type_as_input_assuming_category_matches(
                 nested_expression.operation.return_type_spec
             )
         )

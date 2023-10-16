@@ -31,8 +31,14 @@ class NumberDataType(DataType):
         max_negative_value: str | None,
         further_tiny_dec_values: set[str] | None = None,
         is_floating_point_type: bool = False,
+        is_pg_compatible: bool = True,
     ):
-        super().__init__(identifier, type_name, DataTypeCategory.NUMERIC)
+        super().__init__(
+            identifier,
+            type_name,
+            DataTypeCategory.NUMERIC,
+            is_pg_compatible=is_pg_compatible,
+        )
         self.is_signed = is_signed
         self.is_decimal = is_decimal
         self.smallest_value = smallest_value
@@ -47,8 +53,10 @@ class NumberDataType(DataType):
         self, characteristics: set[ExpressionCharacteristics]
     ) -> ReturnTypeSpec:
         return NumericReturnTypeSpec(
-            only_integer=not self.is_decimal
+            only_integer=(not self.is_decimal)
             or ExpressionCharacteristics.DECIMAL not in characteristics,
+            always_floating_type=self.is_decimal
+            or ExpressionCharacteristics.DECIMAL in characteristics,
         )
 
 
@@ -99,6 +107,7 @@ UINT2_TYPE = NumberDataType(
     smallest_value="1",
     max_value="65535",
     max_negative_value=None,
+    is_pg_compatible=False,
 )
 UINT4_TYPE = NumberDataType(
     UINT4_TYPE_IDENTIFIER,
@@ -108,6 +117,7 @@ UINT4_TYPE = NumberDataType(
     smallest_value="1",
     max_value="4294967295",
     max_negative_value=None,
+    is_pg_compatible=False,
 )
 UINT8_TYPE = NumberDataType(
     UINT8_TYPE_IDENTIFIER,
@@ -117,6 +127,7 @@ UINT8_TYPE = NumberDataType(
     smallest_value="1",
     max_value="18446744073709551615",
     max_negative_value=None,
+    is_pg_compatible=False,
 )
 
 # configurable decimal digits
