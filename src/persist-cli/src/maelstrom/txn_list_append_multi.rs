@@ -27,14 +27,14 @@ use mz_persist_client::async_runtime::IsolatedRuntime;
 use mz_persist_client::cache::StateCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::metrics::Metrics;
-use mz_persist_client::read::{ListenEvent, ReadHandle};
+use mz_persist_client::read::ReadHandle;
 use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
+use mz_persist_txn::operator::DataSubscribe;
 use mz_persist_txn::txns::{Tidy, TxnsHandle};
-use mz_persist_types::codec_impls::{UnitSchema, VecU8Schema};
-use timely::progress::Antichain;
+use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 use tokio::sync::Mutex;
-use tracing::{debug, info, trace};
+use tracing::{debug, info};
 
 use crate::maelstrom::api::{Body, MaelstromError, NodeId, ReqTxnOp, ResTxnOp};
 use crate::maelstrom::node::{Handle, Service};
@@ -46,9 +46,9 @@ pub struct Transactor {
     txns_id: ShardId,
     oracle: LocalOracle,
     client: PersistClient,
-    txns: TxnsHandle<Vec<u8>, (), u64, i64>,
+    txns: TxnsHandle<String, (), u64, i64>,
     tidy: Tidy,
-    data_reads: BTreeMap<ShardId, (u64, ReadHandle<Vec<u8>, (), u64, i64>)>,
+    data_reads: BTreeMap<ShardId, (u64, ReadHandle<String, (), u64, i64>)>,
 }
 
 impl Transactor {
@@ -59,7 +59,7 @@ impl Transactor {
             init_ts,
             client.clone(),
             txns_id,
-            Arc::new(VecU8Schema),
+            Arc::new(StringSchema),
             Arc::new(UnitSchema),
         )
         .await;
@@ -78,7 +78,7 @@ impl Transactor {
         req_ops: &[ReqTxnOp],
     ) -> Result<Vec<ResTxnOp>, MaelstromError> {
         let mut read_ids = Vec::new();
-        let mut writes = BTreeMap::<ShardId, Vec<(Vec<u8>, i64)>>::new();
+        let mut writes = BTreeMap::<ShardId, Vec<(String, i64)>>::new();
         for op in req_ops {
             match op {
                 ReqTxnOp::Read { key } => {
@@ -87,7 +87,7 @@ impl Transactor {
                 ReqTxnOp::Append { key, val } => writes
                     .entry(self.key_shard(*key))
                     .or_default()
-                    .push((val.to_le_bytes().to_vec(), 1)),
+                    .push((val.to_string(), 1)),
             }
         }
 
@@ -152,9 +152,7 @@ impl Transactor {
                         .expect("key should have been read")
                         .iter()
                         .map(|(k, t, d)| {
-                            let k = u64::from_le_bytes(
-                                <[u8; 8]>::try_from(k.as_slice()).expect("valid u64"),
-                            );
+                            let k = k.parse().expect("valid u64");
                             (k, *t, *d)
                         })
                         .collect::<Vec<_>>();
@@ -211,7 +209,7 @@ impl Transactor {
             .client
             .open_leased_reader(
                 *data_id,
-                Arc::new(VecU8Schema),
+                Arc::new(StringSchema),
                 Arc::new(UnitSchema),
                 Diagnostics::from_purpose("txn data"),
             )
@@ -224,7 +222,7 @@ impl Transactor {
                 .client
                 .open_writer(
                     *data_id,
-                    Arc::new(VecU8Schema),
+                    Arc::new(StringSchema),
                     Arc::new(UnitSchema),
                     Diagnostics::from_purpose("txn data"),
                 )
@@ -253,18 +251,13 @@ impl Transactor {
         &mut self,
         read_ts: u64,
         data_ids: impl Iterator<Item = &ShardId>,
-    ) -> BTreeMap<ShardId, Vec<(Vec<u8>, u64, i64)>> {
+    ) -> BTreeMap<ShardId, Vec<(String, u64, i64)>> {
         // Ensure these reads don't block.
         let tidy = self.txns.apply_le(&read_ts).await;
         self.tidy.merge(tidy);
 
         let mut reads = BTreeMap::new();
         for data_id in data_ids {
-            let (_, data_read) = self
-                .data_reads
-                .get(data_id)
-                .expect("data handle was registered");
-            let mut data_read = data_read.clone("read_at").await;
             // SUBTLE! Maelstrom txn-list-append requires that we be able to
             // reconstruct the order in which we appended list items. To avoid
             // needing to change the staged writes if our read_ts advances, we
@@ -272,68 +265,22 @@ impl Transactor {
             // To recover them, instead of grabbing a snapshot at the read_ts,
             // we have to start a subscription at time 0 and walk it forward
             // until we pass read_ts.
-            //
-            // TODO: It would be lovely to do this without cloning the
-            // ReadHandle, but that would require adding a method to fetch the
-            // un-advanced data in some `(lower, upper)`.
-            //
-            // TODO(txn): Use the timely operator instead to get additional
-            // coverage of it. In the meantime, hack access to the non-pub
-            // unblock_read by fetching a snapshot and throwing it away. This
-            // guarantees that the data shard is readable through read_ts.
-            let data_write = self
-                .client
-                .open_writer(
-                    *data_id,
-                    Arc::new(VecU8Schema),
-                    Arc::new(UnitSchema),
-                    Diagnostics::from_purpose("txn data"),
-                )
-                .await
-                .expect("data schema shouldn't change");
-            let _ = self
+            let as_of = self
                 .txns
                 .read_cache()
-                .data_snapshot(data_id, read_ts)
-                .expect("data shard was registered")
-                .snapshot_and_fetch(&mut data_read, data_write)
-                .await;
-            let mut subscribe = data_read
-                .subscribe(Antichain::from_elem(0))
-                .await
-                .expect("data shard is not compacted");
-            let mut data = Vec::new();
-            let mut progress_exclusive = 0;
-            while progress_exclusive <= read_ts {
-                let events = subscribe.fetch_next().await;
-                for event in events {
-                    match event {
-                        ListenEvent::Progress(x) => {
-                            progress_exclusive = *x.as_option().expect("data shard not closed");
-                            trace!(
-                                "{} read {} progress: {}",
-                                data_id,
-                                read_ts,
-                                progress_exclusive
-                            );
-                        }
-                        ListenEvent::Updates(x) => {
-                            let updates = x
-                                .into_iter()
-                                .map(|((k, v), t, d)| {
-                                    let (k, ()) = (k.unwrap(), v.unwrap());
-                                    (k, t, d)
-                                })
-                                .filter(|(_, t, _)| *t <= read_ts)
-                                .map(|x| {
-                                    trace!("{} read {} data: {:?}", data_id, read_ts, x);
-                                    x
-                                });
-                            data.extend(updates);
-                        }
-                    }
-                }
+                .data_since(data_id)
+                .expect("data shard has been registered");
+            let mut subscribe = DataSubscribe::new(
+                "maelstrom",
+                self.client.clone(),
+                self.txns_id,
+                *data_id,
+                as_of,
+            );
+            while subscribe.progress() <= read_ts {
+                subscribe.step();
             }
+            let data = subscribe.output().clone();
             reads.insert(*data_id, data);
         }
         reads

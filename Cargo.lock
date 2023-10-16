@@ -4698,6 +4698,7 @@ dependencies = [
  "mz-persist-types",
  "mz-timely-util",
  "prost",
+ "rand",
  "timely",
  "tokio",
  "tracing",
