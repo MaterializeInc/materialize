@@ -375,9 +375,12 @@ fn test_statement_logging_selects() {
         rows_returned: Option<i64>,
     }
 
-    let sl_selects = client
-        .query(
-            "SELECT
+    let sl_selects = Retry::default()
+        .max_duration(Duration::from_secs(30))
+        .retry(|x| {
+            let sl_selects = client
+                .query(
+                    "SELECT
     mseh.sample_rate,
     mseh.began_at,
     mseh.finished_at,
@@ -393,9 +396,16 @@ FROM
             ON mseh.prepared_statement_id = mpsh.id
 WHERE mpsh.sql ~~ 'SELECT%'
 ORDER BY mseh.began_at",
-            &[],
-        )
-        .unwrap()
+                    &[],
+                )
+                .unwrap();
+            if sl_selects.len() == 4 {
+                Ok(sl_selects)
+            } else {
+                Err(())
+            }
+        })
+        .expect("number of results never became correct")
         .into_iter()
         .map(|r| Record {
             sample_rate: r.get(0),
@@ -408,7 +418,6 @@ ORDER BY mseh.began_at",
             rows_returned: r.get(7),
         })
         .collect::<Vec<_>>();
-    assert_eq!(sl_selects.len(), 4);
     for r in &sl_selects {
         assert_eq!(r.sample_rate, 1.0);
         assert!(r.prepared_at <= r.began_at);
