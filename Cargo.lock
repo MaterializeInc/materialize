@@ -3688,6 +3688,7 @@ dependencies = [
  "async-trait",
  "derivative",
  "futures",
+ "insta",
  "itertools",
  "mz-audit-log",
  "mz-compute-client",
