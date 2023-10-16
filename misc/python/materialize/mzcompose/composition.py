@@ -33,7 +33,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from inspect import Traceback, getframeinfo, getmembers, isfunction, stack
 from tempfile import TemporaryFile
-from typing import Any, cast
+from typing import Any, TextIO, cast
 
 import pg8000
 import sqlparse
@@ -243,8 +243,8 @@ class Composition:
     def invoke(
         self,
         *args: str,
-        capture: bool = False,
-        capture_stderr: bool = False,
+        capture: bool | TextIO = False,
+        capture_stderr: bool | TextIO = False,
         stdin: str | None = None,
         check: bool = True,
         max_tries: int = 1,
@@ -253,8 +253,10 @@ class Composition:
 
         Args:
             args: The arguments to pass to `docker compose`.
-            capture: Whether to capture the child's stdout stream.
-            capture_stderr: Whether to capture the child's stderr stream.
+            capture: Whether to capture the child's stdout stream, can be an
+                opened file to capture stdout into the file directly.
+            capture_stderr: Whether to capture the child's stderr stream, can
+                be an opened file to capture stderr into the file directly.
             input: A string to provide as stdin for the command.
         """
 
@@ -265,10 +267,10 @@ class Composition:
 
         stdout = None
         if capture:
-            stdout = subprocess.PIPE
+            stdout = subprocess.PIPE if capture == True else capture
         stderr = None
         if capture_stderr:
-            stderr = subprocess.PIPE
+            stderr = subprocess.PIPE if capture_stderr == True else capture_stderr
         project_name_args = (
             ("--project-name", self.project_name) if self.project_name else ()
         )
@@ -775,9 +777,10 @@ class Composition:
         if sanity_restart_mz:
             self.sanity_restart_mz()
 
-        logs = self.invoke("logs", "--no-color", capture=True).stdout
+        # Capture logs into services.log since they will be lost otherwise
+        # after dowing a composition.
         with open(MZ_ROOT / "services.log", "a") as f:
-            f.write(logs)
+            self.invoke("logs", "--no-color", capture=f)
 
         self.invoke(
             "down",
