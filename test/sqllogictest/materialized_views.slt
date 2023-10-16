@@ -566,3 +566,86 @@ DROP TABLE t CASCADE
 
 statement ok
 DROP CLUSTER other CASCADE
+
+# `ASSERT NOT NULL` in materialized views
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_assert_not_null to OFF;
+----
+COMPLETE 0
+
+## Feature flag should be off by default
+statement error ASSERT NOT NULL for materialized views is not supported
+CREATE MATERIALIZED VIEW mv_feature_off(x) WITH (ASSERT NOT NULL x) AS VALUES (1);
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_assert_not_null to ON;
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE t2 (x int, y int, z int);
+
+statement ok
+INSERT INTO t2 VALUES (NULL, 2, 3), (4, NULL, 6), (7, 8, NULL);
+
+statement ok
+CREATE MATERIALIZED VIEW mv_no_assertions AS SELECT * FROM t2;
+
+query III
+SELECT * FROM mv_no_assertions ORDER BY x;
+----
+4 NULL 6
+7 8 NULL
+NULL 2 3
+
+statement ok
+CREATE MATERIALIZED VIEW mv_assertion_at_begin WITH (ASSERT NOT NULL x) AS SELECT * FROM t2;
+
+statement error column 1 must not be null
+SELECT * FROM mv_assertion_at_begin;
+
+statement ok
+CREATE MATERIALIZED VIEW mv_assertion_at_end WITH (ASSERT NOT NULL z) AS SELECT * FROM t2;
+
+statement error column 3 must not be null
+SELECT * FROM mv_assertion_at_end;
+
+statement ok
+CREATE MATERIALIZED VIEW mv_two_assertions WITH (ASSERT NOT NULL x, ASSERT NOT NULL z) AS SELECT * FROM t2;
+
+statement error column 1 must not be null
+SELECT * FROM mv_two_assertions;
+
+statement ok
+CREATE MATERIALIZED VIEW mv_misordered_assertions WITH (ASSERT NOT NULL z, ASSERT NOT NULL y) AS SELECT * FROM t2;
+
+statement error column 2 must not be null
+SELECT * FROM mv_misordered_assertions
+
+statement error duplicate column "y" in non-null assertions
+CREATE MATERIALIZED VIEW mv_duplicate_assertions WITH (ASSERT NOT NULL y, ASSERT NOT NULL y) AS SELECT * FROM t2;
+
+statement error column "x" in ASSERT NOT NULL option not found
+CREATE MATERIALIZED VIEW mv_bad_assertion_on_renamed_column (a, b, c) WITH (ASSERT NOT NULL x) AS SELECT * FROM t2;
+
+statement ok
+CREATE MATERIALIZED VIEW mv_good_assertion_on_renamed_column (a, b, c) WITH (ASSERT NOT NULL b) AS SELECT * FROM t2;
+
+statement error column 2 must not be null
+SELECT * FROM mv_good_assertion_on_renamed_column;
+
+statement ok
+UPDATE t2 SET x=1 WHERE x IS NULL;
+
+query III
+SELECT * FROM mv_assertion_at_begin ORDER BY x;
+----
+1 2 3
+4 NULL 6
+7 8 NULL
+
+# More Cleanup
+
+statement ok
+DROP TABLE t2 CASCADE

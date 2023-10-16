@@ -1615,3 +1615,6 @@ values ('2023-01-01T00:00:00.666'::timestamp(6)) union all values ('2023-01-01T0
 ----
 2023-01-01 00:00:00.666+00
 2023-01-01 00:00:00.667+00
+
+query error numeric field overflow
+SELECT '1e-307'::float8::numeric

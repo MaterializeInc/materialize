@@ -237,7 +237,7 @@ ALTER SYSTEM SET enable_unstable_dependencies = true;
   BODY FORMAT TEXT
   CHECK (
     WITH (HEADERS)
-    mz_internal.mz_panic('webhook panic test') = headers::text
+    mz_internal.mz_panic('forced panic') = headers::text
   );
 
 $ webhook-append name=webhook_validation_panic status=500

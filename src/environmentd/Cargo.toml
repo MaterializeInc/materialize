@@ -1,7 +1,7 @@
 [package]
 name = "mz-environmentd"
 description = "Manages a single Materialize environment."
-version = "0.73.0-dev"
+version = "0.74.0-dev"
 authors = ["Materialize, Inc."]
 license = "proprietary"
 edition.workspace = true
@@ -47,6 +47,7 @@ mz-expr = { path = "../expr" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-http-util = { path = "../http-util" }
 mz-interchange = { path = "../interchange" }
+mz-metrics = { path = "../metrics" }
 mz-orchestrator = { path = "../orchestrator" }
 mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes" }
 mz-orchestrator-process = { path = "../orchestrator-process" }
@@ -63,6 +64,7 @@ mz-segment = { path = "../segment" }
 mz-service = { path = "../service" }
 mz-sql = { path = "../sql" }
 mz-stash = { path = "../stash" }
+mz-stash-types = { path = "../stash-types" }
 mz-storage-client = { path = "../storage-client" }
 mz-storage-types = { path = "../storage-types" }
 mz-tls-util = { path = "../tls-util" }

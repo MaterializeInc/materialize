@@ -361,6 +361,7 @@ pub fn plan_explain_plan(
                         expr: raw_plan,
                         column_names,
                         cluster_id,
+                        non_null_assertions,
                         ..
                     },
                 ..
@@ -375,6 +376,7 @@ pub fn plan_explain_plan(
                 column_names,
                 cluster_id,
                 broken,
+                non_null_assertions,
             })
         }
         Explainee::CreateIndex(mut stmt, broken) => {

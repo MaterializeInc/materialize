@@ -391,6 +391,11 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
                         handle,
                         maybe_unconsolidated,
                     } => {
+                        if handle.is_finished() {
+                            self.metrics.compaction.parts_prefetched.inc();
+                        } else {
+                            self.metrics.compaction.parts_waited.inc()
+                        }
                         self.metrics.consolidation.parts_fetched.inc();
                         *part = ConsolidationPart::from_encoded(
                             handle.await??,
@@ -460,7 +465,6 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> Consolidator<T, D
                         }
                         _ => continue,
                     };
-                    self.metrics.compaction.parts_prefetched.inc();
 
                     let maybe_unconsolidated = data.maybe_unconsolidated();
                     let span = debug_span!("compaction::prefetch");
@@ -597,7 +601,7 @@ struct PartRef<'a, T: Timestamp, D> {
 }
 
 impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> PartRef<'a, T, D> {
-    fn update_peek(&mut self, iter: &mut ConsolidationPartIter<'a, T, D>) {
+    fn update_peek(&mut self, iter: &ConsolidationPartIter<'a, T, D>) {
         let peek = iter.peek();
         self.next_kvt = Reverse(peek.map(|(k, v, t, _)| (k, v, t)));
     }
@@ -635,14 +639,14 @@ where
         }
     }
 
-    fn push(&mut self, mut iter: ConsolidationPartIter<'a, T, D>, last_in_run: bool) {
+    fn push(&mut self, iter: ConsolidationPartIter<'a, T, D>, last_in_run: bool) {
         let mut part_ref = PartRef {
             next_kvt: Reverse(None),
             index: self.parts.len(),
             last_in_run,
             _phantom: Default::default(),
         };
-        part_ref.update_peek(&mut iter);
+        part_ref.update_peek(&iter);
         self.parts.push(iter);
         self.heap.push(part_ref);
     }

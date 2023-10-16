@@ -71,6 +71,7 @@ copyright_files=$(grep -vE \
     -e 'misc/completions/.*' \
     -e 'supply-chain/.*' \
     -e '.devcontainer/.*' \
+    -e 'snapshots/.*\.snap' \
     <<< "$files"
 )
 
@@ -101,6 +102,7 @@ if [[ ! "${MZDEV_NO_PYTHON:-}" ]]; then
     fi
 fi
 
+try bin/lint-versions
 try bin/lint-cargo
 try bin/gen-completion check
 try bin/gen-lints

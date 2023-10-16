@@ -75,6 +75,11 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
+//! Manages a single Materialize environment.
+//!
+//! It listens for SQL connections on port 6875 (MTRL) and for HTTP connections
+//! on port 6876.
+
 use mz_balancerd::BUILD_INFO;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
@@ -113,7 +118,7 @@ fn main() {
     let (_, _tracing_guard) = runtime
         .block_on(args.tracing.configure_tracing(
             StaticTracingConfig {
-                service_name: "balancer",
+                service_name: "balancerd",
                 build_info: BUILD_INFO,
             },
             MetricsRegistry::new(),

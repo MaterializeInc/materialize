@@ -15,10 +15,10 @@
 
 //! Configuration file management.
 
-use std::collections::BTreeMap;
 use std::fs::OpenOptions;
 use std::io::Read;
 use std::path::PathBuf;
+use std::{collections::BTreeMap, str::FromStr};
 
 use maplit::btreemap;
 use mz_ore::str::StrExt;
@@ -27,7 +27,16 @@ use serde::{Deserialize, Serialize};
 use tokio::fs;
 use toml_edit::{value, Document};
 
+#[cfg(target_os = "macos")]
+use security_framework::passwords::{get_generic_password, set_generic_password};
+
 use crate::error::Error;
+
+#[cfg(target_os = "macos")]
+static DEFAULT_VAULT_VALUE: Lazy<Option<&str>> = Lazy::new(|| Some(Vault::Keychain.as_str()));
+
+#[cfg(not(target_os = "macos"))]
+static DEFAULT_VAULT_VALUE: Lazy<Option<&str>> = Lazy::new(|| Some(Vault::Inline.as_str()));
 
 static GLOBAL_PARAMS: Lazy<BTreeMap<&'static str, GlobalParam>> = Lazy::new(|| {
     btreemap! {
@@ -38,7 +47,7 @@ static GLOBAL_PARAMS: Lazy<BTreeMap<&'static str, GlobalParam>> = Lazy::new(|| {
         },
         "vault" => GlobalParam {
             get: |config_file| {
-                config_file.vault.as_deref().or(None)
+                config_file.vault.as_deref().or(*DEFAULT_VAULT_VALUE)
             },
         }
     }
@@ -112,7 +121,8 @@ impl ConfigFile {
 
         let profiles = editable.entry("profiles").or_insert(toml_edit::table());
         let mut new_profile = toml_edit::Table::new();
-        new_profile["app-password"] = value(profile.app_password.ok_or(Error::AppPasswordMissing)?);
+
+        self.add_app_password(&mut new_profile, &name, profile.clone())?;
         new_profile["region"] = value(profile.region.unwrap_or("aws/us-east-1".to_string()));
 
         if let Some(admin_endpoint) = profile.admin_endpoint {
@@ -124,7 +134,7 @@ impl ConfigFile {
         }
 
         if let Some(vault) = profile.vault {
-            new_profile["vault"] = value(vault);
+            new_profile["vault"] = value(vault.to_string());
         }
 
         profiles[name.clone()] = toml_edit::Item::Table(new_profile);
@@ -135,6 +145,41 @@ impl ConfigFile {
 
         // TODO: I don't know why it creates an empty [profiles] table
         fs::write(&self.path, editable.to_string()).await?;
+
+        Ok(())
+    }
+
+    /// Adds an app-password to the configuration file or
+    /// to the keychain if the vault is enabled.
+    #[cfg(target_os = "macos")]
+    pub fn add_app_password(
+        &self,
+        new_profile: &mut toml_edit::Table,
+        name: &str,
+        profile: TomlProfile,
+    ) -> Result<(), Error> {
+        if Vault::Keychain == self.vault() {
+            let app_password = profile.app_password.ok_or(Error::AppPasswordMissing)?;
+            set_generic_password("Materialize mz CLI", name, app_password.as_bytes())
+                .map_err(|e| Error::MacOsSecurityError(e.message().unwrap_or("".to_owned())))?;
+        } else {
+            new_profile["app-password"] =
+                value(profile.app_password.ok_or(Error::AppPasswordMissing)?);
+        }
+
+        Ok(())
+    }
+
+    /// Adds an app-password to the configuration file.
+    #[cfg(not(target_os = "macos"))]
+    pub fn add_app_password(
+        &self,
+        new_profile: &mut toml_edit::Table,
+        // Compatibility param.
+        _name: &str,
+        profile: TomlProfile,
+    ) -> Result<(), Error> {
+        new_profile["app-password"] = value(profile.app_password.ok_or(Error::AppPasswordMissing)?);
 
         Ok(())
     }
@@ -188,7 +233,7 @@ impl ConfigFile {
             ("app-password", profile.app_password),
             ("cloud-endpoint", profile.cloud_endpoint),
             ("region", profile.region),
-            ("vault", profile.vault),
+            ("vault", profile.vault.map(|x| x.to_string())),
         ];
 
         Ok(out)
@@ -276,7 +321,7 @@ static PROFILE_PARAMS: Lazy<BTreeMap<&'static str, ProfileParam>> = Lazy::new(||
             get: |t| t.region.as_deref(),
         },
         "vault" => ProfileParam {
-            get: |t| t.vault.as_deref(),
+            get: |t| t.vault.clone().map(|x| x.as_str()),
         },
         "admin-endpoint" => ProfileParam {
             get: |t| t.admin_endpoint.as_deref(),
@@ -304,8 +349,40 @@ impl Profile<'_> {
     }
 
     /// Returns the app password in the profile configuration.
-    pub fn app_password(&self) -> Option<&str> {
+    #[cfg(target_os = "macos")]
+    pub fn app_password(&self, global_vault: &str) -> Result<String, Error> {
+        if let Some(vault) = self.vault().or(Some(global_vault)) {
+            if vault == Vault::Keychain {
+                let password = get_generic_password("Materialize mz CLI", self.name);
+
+                match password {
+                    Ok(generic_password) => {
+                        let parsed_password = String::from_utf8(generic_password.to_vec());
+                        match parsed_password {
+                            Ok(app_password) => return Ok(app_password),
+                            Err(err) => return Err(Error::MacOsSecurityError(err.to_string())),
+                        }
+                    }
+                    Err(err) => {
+                        return Err(Error::MacOsSecurityError(
+                            err.message().unwrap_or("".to_owned()),
+                        ));
+                    }
+                }
+            }
+        }
+
         (PROFILE_PARAMS["app-password"].get)(self.parsed)
+            .map(|x| x.to_string())
+            .ok_or(Error::AppPasswordMissing)
+    }
+
+    /// Returns the app password in the profile configuration.
+    #[cfg(not(target_os = "macos"))]
+    pub fn app_password(&self, _global_vault: &str) -> Result<String, Error> {
+        (PROFILE_PARAMS["app-password"].get)(self.parsed)
+            .map(|x| x.to_string())
+            .ok_or(Error::AppPasswordMissing)
     }
 
     /// Returns the region in the profile configuration.
@@ -336,6 +413,58 @@ struct ConfigParam<T> {
 type GlobalParam = ConfigParam<TomlConfigFile>;
 type ProfileParam = ConfigParam<TomlProfile>;
 
+/// This structure represents the two possible
+/// values for the vault field.
+#[derive(Clone, Deserialize, Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Vault {
+    /// Default for macOS. Stores passwords in the macOS keychain.
+    Keychain,
+    /// Default for Linux. Stores passwords in the config file.
+    Inline,
+}
+
+impl ToString for Vault {
+    fn to_string(&self) -> String {
+        match self {
+            Vault::Keychain => "keychain".to_string(),
+            Vault::Inline => "inline".to_string(),
+        }
+    }
+}
+
+impl Vault {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Vault::Keychain => "keychain",
+            Vault::Inline => "inline",
+        }
+    }
+}
+
+impl FromStr for Vault {
+    type Err = crate::error::Error;
+    fn from_str(s: &str) -> Result<Self, crate::error::Error> {
+        match s.to_ascii_lowercase().as_str() {
+            "keychain" => Ok(Vault::Keychain),
+            "inline" => Ok(Vault::Inline),
+            _ => Err(Error::InvalidVaultError),
+        }
+    }
+}
+
+impl PartialEq<&str> for Vault {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+impl PartialEq<Vault> for &str {
+    fn eq(&self, other: &Vault) -> bool {
+        self == &other.as_str()
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 #[serde(rename_all = "kebab-case")]
@@ -355,7 +484,7 @@ pub struct TomlProfile {
     /// The profile's region to use by default.
     pub region: Option<String>,
     /// The vault value to use in MacOS.
-    pub vault: Option<String>,
+    pub vault: Option<Vault>,
     /// A custom admin endpoint used for development.
     pub admin_endpoint: Option<String>,
     /// A custom cloud endpoint used for development.

@@ -17,7 +17,7 @@ mod schema;
 pub use crate::avro::decode::{Decoder, DiffPair};
 pub use crate::avro::encode::{
     encode_datums_as_avro, encode_debezium_transaction_unchecked, get_debezium_transaction_schema,
-    AvroEncoder, AvroSchemaGenerator, AvroSchemaOptions,
+    AvroEncoder, AvroSchemaGenerator, AvroSchemaOptions, DocTarget,
 };
 pub use crate::avro::envelope_cdc_v2 as cdc_v2;
 pub use crate::avro::schema::{parse_schema, schema_to_relationdesc, ConfluentAvroResolver};

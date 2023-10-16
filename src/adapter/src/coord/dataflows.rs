@@ -145,11 +145,35 @@ impl Coordinator {
         dataflow: DataflowDesc,
         instance: ComputeInstanceId,
     ) -> DataflowDescription<Plan> {
+        #[allow(deprecated)]
         self.ship_dataflow(dataflow, instance)
             .await
             .expect("failed to ship dataflow")
     }
 
+    /// Call into the compute controller to install a finalized dataflow, and
+    /// initialize the read policies for its exported objects.
+    pub(crate) async fn ship_dataflow_new(
+        &mut self,
+        dataflow: DataflowDescription<Plan>,
+        instance: ComputeInstanceId,
+    ) {
+        let export_ids = dataflow.export_ids().collect();
+
+        self.controller
+            .active_compute()
+            .create_dataflow(instance, dataflow)
+            .unwrap_or_terminate("dataflow creation cannot fail");
+
+        self.initialize_compute_read_policies(
+            export_ids,
+            instance,
+            Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
+        )
+        .await;
+    }
+
+    #[deprecated = "This is being replaced by ship_dataflow1 (see #20569)."]
     /// Finalizes a dataflow and then broadcasts it to all workers.
     ///
     /// Returns an error on failure. DO NOT call this for DDL. Instead, use the non-fallible version
@@ -495,6 +519,7 @@ impl<'a> DataflowBuilder<'a> {
         debug_name: String,
         optimized_expr: &OptimizedMirRelationExpr,
         desc: &RelationDesc,
+        non_null_assertions: &[usize],
     ) -> Result<(DataflowDesc, DataflowMetainfo), AdapterError> {
         let mut dataflow = DataflowDesc::new(debug_name);
 
@@ -513,6 +538,7 @@ impl<'a> DataflowBuilder<'a> {
             }),
             with_snapshot: true,
             up_to: Antichain::default(),
+            non_null_assertions: non_null_assertions.to_vec(),
         };
 
         let dataflow_metainfo =

@@ -555,7 +555,9 @@ mod columnation {
                         | e @ EvalError::InvalidBase64EndSequence
                         | e @ EvalError::InvalidTimezoneInterval
                         | e @ EvalError::InvalidTimezoneConversion
-                        | e @ EvalError::LengthTooLarge => e.clone(),
+                        | e @ EvalError::LengthTooLarge
+                        | e @ EvalError::AclArrayNullElement
+                        | e @ EvalError::MzAclArrayNullElement => e.clone(),
                         EvalError::Unsupported { feature, issue_no } => EvalError::Unsupported {
                             feature: self.string_region.copy(feature),
                             issue_no: *issue_no,

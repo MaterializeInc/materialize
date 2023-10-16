@@ -71,7 +71,12 @@ from materialize.checks.threshold import *  # noqa: F401 F403
 from materialize.checks.top_k import *  # noqa: F401 F403
 from materialize.checks.update import *  # noqa: F401 F403
 from materialize.checks.upsert import *  # noqa: F401 F403
+from materialize.checks.upsert_enrich import *  # noqa: F401 F403
+from materialize.checks.upsert_many_columns import *  # noqa: F401 F403
+from materialize.checks.upsert_many_rows import *  # noqa: F401 F403
+from materialize.checks.upsert_many_updates import *  # noqa: F401 F403
 from materialize.checks.upsert_shrink_grow import *  # noqa: F401 F403
+from materialize.checks.upsert_wide import *  # noqa: F401 F403
 from materialize.checks.uuid import *  # noqa: F401 F403
 from materialize.checks.webhook import *  # noqa: F401 F403
 from materialize.checks.window_functions import *  # noqa: F401 F403

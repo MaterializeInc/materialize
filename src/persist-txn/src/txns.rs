@@ -17,9 +17,10 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
+use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
-use mz_persist_types::{Codec, Codec64, StepForward};
+use mz_persist_types::{Codec, Codec64, Opaque, StepForward};
 use timely::order::TotalOrder;
 use timely::progress::Timestamp;
 use tracing::{debug, instrument};
@@ -94,25 +95,29 @@ use crate::{TxnsCodec, TxnsCodecDefault};
 /// (d1, <empty>, 2, 1)
 /// ```
 #[derive(Debug)]
-pub struct TxnsHandle<K, V, T, D, C = TxnsCodecDefault>
+pub struct TxnsHandle<K, V, T, D, O = u64, C = TxnsCodecDefault>
 where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + TotalOrder + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
+    O: Opaque + Debug + Codec64,
     C: TxnsCodec,
 {
     pub(crate) txns_cache: TxnsCache<T, C>,
     pub(crate) txns_write: WriteHandle<C::Key, C::Val, T, i64>,
+    #[allow(dead_code)] // TODO(txn): Becomes used in the txns compaction PR.
+    pub(crate) txns_since: SinceHandle<C::Key, C::Val, T, i64, O>,
     pub(crate) datas: DataHandles<K, V, T, D>,
 }
 
-impl<K, V, T, D, C> TxnsHandle<K, V, T, D, C>
+impl<K, V, T, D, O, C> TxnsHandle<K, V, T, D, O, C>
 where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
+    O: Opaque + Debug + Codec64,
     C: TxnsCodec,
 {
     /// Returns a [TxnsHandle] committing to the given txn shard.
@@ -146,10 +151,24 @@ where
             )
             .await
             .expect("txns schema shouldn't change");
+        let txns_since = client
+            .open_critical_since(
+                txns_id,
+                // TODO(txn): We likely need to use a different critical reader
+                // id for this if we want to be able to introspect it via SQL.
+                PersistClient::CONTROLLER_CRITICAL_SINCE,
+                Diagnostics {
+                    shard_name: "txns".to_owned(),
+                    handle_purpose: "commit txns".to_owned(),
+                },
+            )
+            .await
+            .expect("txns schema shouldn't change");
         let txns_cache = TxnsCache::init(init_ts, txns_read, &mut txns_write).await;
         TxnsHandle {
             txns_cache,
             txns_write,
+            txns_since,
             datas: DataHandles {
                 client,
                 data_write: BTreeMap::new(),
@@ -466,13 +485,26 @@ where
 
 #[cfg(test)]
 mod tests {
-    use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
+    use std::time::UNIX_EPOCH;
 
-    use crate::tests::{writer, CommitLog};
+    use differential_dataflow::Hashable;
+    use futures::future::BoxFuture;
+    use mz_ore::cast::CastFrom;
+    use mz_persist_client::cache::PersistClientCache;
+    use mz_persist_client::PersistLocation;
+    use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
+    use rand::rngs::SmallRng;
+    use rand::{RngCore, SeedableRng};
+    use timely::progress::Antichain;
+    use tokio::sync::oneshot;
+    use tracing::{info, info_span, Instrument};
+
+    use crate::operator::DataSubscribe;
+    use crate::tests::{reader, writer, CommitLog};
 
     use super::*;
 
-    impl TxnsHandle<String, (), u64, i64, TxnsCodecDefault> {
+    impl TxnsHandle<String, (), u64, i64, u64, TxnsCodecDefault> {
         pub(crate) async fn expect_open(client: PersistClient) -> Self {
             Self::expect_open_id(client, ShardId::new()).await
         }
@@ -622,5 +654,234 @@ mod tests {
         txns.expect_commit_at(10, d0, &[], &log).await;
 
         log.assert_snapshot(d0, 10).await;
+    }
+
+    struct StressWorker {
+        idx: usize,
+        data_ids: Vec<ShardId>,
+        txns: TxnsHandle<String, (), u64, i64>,
+        log: CommitLog,
+        tidy: Tidy,
+        ts: u64,
+        step: usize,
+        rng: SmallRng,
+        reads: Vec<(
+            oneshot::Sender<u64>,
+            ShardId,
+            u64,
+            tokio::task::JoinHandle<Vec<(String, u64, i64)>>,
+        )>,
+    }
+
+    impl StressWorker {
+        pub async fn step(&mut self) {
+            debug!("{} step {} START ts={}", self.idx, self.step, self.ts);
+            let data_id =
+                self.data_ids[usize::cast_from(self.rng.next_u64()) % self.data_ids.len()];
+            match self.rng.next_u64() % 3 {
+                0 => self.write(data_id).await,
+                1 => self.register(data_id).await,
+                2 => self.start_read(data_id),
+                _ => unreachable!(""),
+            }
+            debug!("{} step {} DONE ts={}", self.idx, self.step, self.ts);
+            self.step += 1;
+        }
+
+        fn key(&self) -> String {
+            format!("w{}s{}", self.idx, self.step)
+        }
+
+        async fn registered_at_ts(&mut self, data_id: ShardId) -> bool {
+            self.txns.txns_cache.update_ge(&self.ts).await;
+            self.txns.txns_cache.datas.contains_key(&data_id)
+        }
+
+        // Writes to the given data shard, either via txns if it's registered or
+        // directly if it's not.
+        async fn write(&mut self, data_id: ShardId) {
+            // Make sure to keep the registered_at_ts call _inside_ the retry
+            // loop, because a data shard might switch between registered or not
+            // registered as the loop advances through timestamps.
+            self.retry_ts_err(&mut |w: &mut StressWorker| {
+                Box::pin(async move {
+                    if w.registered_at_ts(data_id).await {
+                        w.write_via_txns(data_id).await
+                    } else {
+                        w.write_direct(data_id).await
+                    }
+                })
+            })
+            .await
+        }
+
+        async fn write_via_txns(&mut self, data_id: ShardId) -> Result<(), u64> {
+            let mut txn = self.txns.begin();
+            txn.tidy(std::mem::take(&mut self.tidy));
+            txn.write(&data_id, self.key(), (), 1).await;
+            let apply = txn.commit_at(&mut self.txns, self.ts).await?;
+            self.log.record_txn(self.ts, &txn);
+            if self.rng.next_u64() % 3 == 0 {
+                self.tidy.merge(apply.apply(&mut self.txns).await);
+            }
+            Ok(())
+        }
+
+        async fn write_direct(&mut self, data_id: ShardId) -> Result<(), u64> {
+            let mut write = writer(&self.txns.datas.client, data_id).await;
+            let mut current = write.shared_upper();
+            loop {
+                if !current.less_equal(&self.ts) {
+                    return Err(current.into_option().unwrap());
+                }
+                let key = self.key();
+                let updates = [((key.clone(), ()), self.ts, 1)];
+                let res = write
+                    .compare_and_append(&updates, current, Antichain::from_elem(self.ts + 1))
+                    .await
+                    .unwrap();
+                match res {
+                    Ok(()) => {
+                        self.log.record((data_id, key, self.ts, 1));
+                        return Ok(());
+                    }
+                    Err(err) => current = err.current,
+                }
+            }
+        }
+
+        async fn register(&mut self, data_id: ShardId) {
+            self.retry_ts_err(&mut |w: &mut StressWorker| {
+                Box::pin(async move {
+                    let data_write = writer(&w.txns.datas.client, data_id).await;
+                    let _ = w.txns.register(w.ts, [data_write]).await?;
+                    Ok(())
+                })
+            })
+            .await
+        }
+
+        fn start_read(&mut self, data_id: ShardId) {
+            let client = self.txns.datas.client.clone();
+            let txns_id = self.txns.txns_id();
+            let as_of = self.ts;
+            debug!("start_read {:.9} as_of {}", data_id.to_string(), as_of);
+            let (tx, mut rx) = oneshot::channel();
+            let subscribe = mz_ore::task::spawn_blocking(
+                || format!("{:.9}-{}", data_id.to_string(), as_of),
+                move || {
+                    let _guard = info_span!("read_worker", %data_id, as_of).entered();
+                    let mut subscribe = DataSubscribe::new("test", client, txns_id, data_id, as_of);
+                    loop {
+                        subscribe.worker.step_or_park(None);
+                        subscribe.capture_output();
+                        let until = match rx.try_recv() {
+                            Ok(ts) => ts,
+                            Err(oneshot::error::TryRecvError::Empty) => {
+                                continue;
+                            }
+                            Err(oneshot::error::TryRecvError::Closed) => 0,
+                        };
+                        while subscribe.progress() < until {
+                            subscribe.worker.step_or_park(None);
+                            subscribe.capture_output();
+                        }
+                        return subscribe.output().clone();
+                    }
+                },
+            );
+            self.reads.push((tx, data_id, as_of, subscribe));
+        }
+
+        async fn retry_ts_err<W>(&mut self, work_fn: &mut W)
+        where
+            W: for<'b> FnMut(&'b mut Self) -> BoxFuture<'b, Result<(), u64>>,
+        {
+            loop {
+                match work_fn(self).await {
+                    Ok(ret) => return ret,
+                    Err(new_ts) => self.ts = new_ts,
+                }
+            }
+        }
+    }
+
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn stress_correctness() {
+        const NUM_DATA_SHARDS: usize = 2;
+        const NUM_WORKERS: usize = 2;
+        const NUM_STEPS_PER_WORKER: usize = 100;
+        let seed = UNIX_EPOCH.elapsed().unwrap().hashed();
+        eprintln!("using seed {}", seed);
+
+        let mut clients = PersistClientCache::new_no_metrics();
+        let client = clients.open(PersistLocation::new_in_mem()).await.unwrap();
+        let mut txns = TxnsHandle::expect_open(client.clone()).await;
+        let log = txns.new_log();
+        let data_ids = (0..NUM_DATA_SHARDS)
+            .map(|_| ShardId::new())
+            .collect::<Vec<_>>();
+        let data_writes = data_ids
+            .iter()
+            .map(|data_id| writer(&client, *data_id))
+            .collect::<FuturesUnordered<_>>()
+            .collect::<Vec<_>>()
+            .await;
+        let _data_sinces = data_ids
+            .iter()
+            .map(|data_id| reader(&client, *data_id))
+            .collect::<FuturesUnordered<_>>()
+            .collect::<Vec<_>>()
+            .await;
+        let register_ts = 1;
+        txns.register(register_ts, data_writes).await.unwrap();
+
+        let mut workers = Vec::new();
+        for idx in 0..NUM_WORKERS {
+            // Clear the state cache between each client to maximally disconnect
+            // them from each other.
+            clients.clear_state_cache();
+            let client = clients.open(PersistLocation::new_in_mem()).await.unwrap();
+            let mut worker = StressWorker {
+                idx,
+                log: log.clone(),
+                txns: TxnsHandle::expect_open_id(client.clone(), txns.txns_id()).await,
+                data_ids: data_ids.clone(),
+                tidy: Tidy::default(),
+                ts: register_ts + 1,
+                step: 0,
+                rng: SmallRng::seed_from_u64(seed.wrapping_add(u64::cast_from(idx))),
+                reads: Vec::new(),
+            };
+            let worker = async move {
+                while worker.step < NUM_STEPS_PER_WORKER {
+                    worker.step().await;
+                }
+                (worker.ts, worker.reads)
+            }
+            .instrument(info_span!("stress_worker", idx));
+            workers.push(mz_ore::task::spawn(|| format!("worker-{}", idx), worker));
+        }
+
+        let mut max_ts = 0;
+        let mut reads = Vec::new();
+        for worker in workers {
+            let (t, mut r) = worker.await.unwrap();
+            max_ts = std::cmp::max(max_ts, t);
+            reads.append(&mut r);
+        }
+
+        info!("finished with max_ts of {}", max_ts);
+        txns.apply_le(&max_ts).await;
+        for data_id in data_ids {
+            log.assert_snapshot(data_id, max_ts).await;
+        }
+        info!("now waiting for reads {}", max_ts);
+        for (tx, data_id, as_of, subscribe) in reads {
+            let _ = tx.send(max_ts + 1);
+            let output = subscribe.await.unwrap();
+            log.assert_eq(data_id, as_of, max_ts + 1, output);
+        }
     }
 }

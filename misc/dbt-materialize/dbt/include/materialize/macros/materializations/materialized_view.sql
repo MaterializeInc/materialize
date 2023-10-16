@@ -14,7 +14,7 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{% materialization materializedview, adapter='materialize' %}
+{% materialization materialized_view, adapter='materialize' %}
   {%- set identifier = model['alias'] -%}
   {%- set old_relation = adapter.get_relation(identifier=identifier,
                                               schema=schema,
@@ -22,7 +22,7 @@
   {%- set target_relation = api.Relation.create(identifier=identifier,
                                                 schema=schema,
                                                 database=database,
-                                                type='materializedview') -%}
+                                                type='materialized_view') -%}
 
   {% if old_relation %}
     {{ adapter.drop_relation(old_relation) }}

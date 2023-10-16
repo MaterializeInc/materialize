@@ -2,16 +2,61 @@
 
 ## Unreleased
 
+* Load seeds into tables rather than materialized views.
+
+  For historical reasons, dbt-materialize has loaded seed data by injecting the
+  values from the CSV file in a `CREATE MATERIALIZED VIEW AS ...` statement.
+  Starting with this release, dbt-materialize now creates a table and loads
+  the values from the CSV into that file, matching the behavior of other
+  dbt adapters.
+
+## 1.6.0 - 2023-10-12
+
+* Upgrade to `dbt-postgres` v1.6.0:
+
+  * Support [model contracts](https://docs.getdbt.com/docs/collaborate/govern/model-contracts)
+    for `view`, `materialized_view` and `table` materializations.
+    Materialize does not have a notion of constraints, so [model- and column-level constraints](https://docs.getdbt.com/reference/resource-properties/constraints)
+    are **not supported**.
+
+  * Deprecate the custom `materializedview` materialization name in favor of
+    `materialized_view`, which is built-in from dbt v1.6.
+
+    **New**
+
+    ```sql
+    {{ config( materialized = 'materialized_view' )}}
+    ```
+
+    **Deprecated**
+
+    ```sql
+    {{ config( materialized = 'materializedview' )}}
+    ```
+
+    The deprecated materialization name will be removed in a future release of the
+    adapter.
+
+* Enable the `cluster` configuration for tests, which allows specifying a target
+  cluster for `dbt test` to run against (for both one-shot and [continuous testing](https://materialize.com/docs/manage/dbt/#configure-continuous-testing)).
+
+  ```yaml
+  tests:
+    example:
+      +store_failures: true
+      +schema: 'dbt_test_schema'
+      +cluster: 'dbt_test_cluster'
+  ```
+
+* Override the `dbt init` command to generate a project based on the [quickstart](https://materialize.com/docs/get-started/quickstart/),
+  instead of the default project generated in `dbt-core`.
+
 * **Breaking change.** Set 255 as the maximum identifier length for relation
     names, after [#20999](https://github.com/MaterializeInc/materialize/pull/20999)
     introduced a `max_identifier_length` session variable that enforces this
     limit in Materialize.
 
 * Support cancelling outstanding queries when pressing Ctrl+C.
-
-* Make `dbt init` generate a project based on the [quickstart](https://materialize.com/docs/get-started/quickstart/).
-
-* Allow `cluster` configuration for `dbt test`.
 
 ## 1.5.1 - 2023-07-24
 

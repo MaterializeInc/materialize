@@ -103,7 +103,7 @@ use mz_persist_client::rpc::PersistGrpcPubSubServer;
 use mz_persist_client::PersistLocation;
 use mz_secrets::SecretsController;
 use mz_sql::catalog::EnvironmentId;
-use mz_stash::StashFactory;
+use mz_stash_types::metrics::Metrics as StashMetrics;
 use mz_storage_types::connections::ConnectionContext;
 use once_cell::sync::Lazy;
 use postgres::error::DbError;
@@ -387,7 +387,6 @@ impl Listeners {
             PersistClientCache::new(persist_cfg, &metrics_registry, |_, _| persist_pubsub_client)
         };
         let persist_clients = Arc::new(persist_clients);
-        let postgres_factory = StashFactory::new(&metrics_registry);
         let secrets_controller = Arc::clone(&orchestrator);
         let connection_context = ConnectionContext::for_tests(orchestrator.reader());
         let (tracing_handle, tracing_guard) = if config.enable_tracing {
@@ -435,7 +434,7 @@ impl Listeners {
                         persist_clients,
                         storage_stash_url,
                         now: config.now.clone(),
-                        postgres_factory,
+                        stash_metrics: Arc::new(StashMetrics::register_into(&metrics_registry)),
                         metrics_registry: metrics_registry.clone(),
                         persist_pubsub_url: format!(
                             "http://localhost:{}",
@@ -592,6 +591,14 @@ impl Server {
         Url::parse(&format!(
             "ws://{}/api/experimental/sql",
             self.inner.http_local_addr()
+        ))
+        .unwrap()
+    }
+
+    pub fn internal_ws_addr(&self) -> Url {
+        Url::parse(&format!(
+            "ws://{}/api/experimental/sql",
+            self.inner.internal_http_local_addr()
         ))
         .unwrap()
     }
@@ -811,14 +818,25 @@ pub fn auth_with_ws(
     ws: &mut WebSocket<MaybeTlsStream<TcpStream>>,
     options: BTreeMap<String, String>,
 ) -> Result<Vec<WebSocketResponse>, anyhow::Error> {
-    ws.send(Message::Text(
-        serde_json::to_string(&WebSocketAuth::Basic {
-            user: "materialize".into(),
-            password: "".into(),
-            options,
-        })
-        .unwrap(),
-    ))?;
+    auth_with_ws_impl(
+        ws,
+        Message::Text(
+            serde_json::to_string(&WebSocketAuth::Basic {
+                user: "materialize".into(),
+                password: "".into(),
+                options,
+            })
+            .unwrap(),
+        ),
+    )
+}
+
+pub fn auth_with_ws_impl(
+    ws: &mut WebSocket<MaybeTlsStream<TcpStream>>,
+    auth_message: Message,
+) -> Result<Vec<WebSocketResponse>, anyhow::Error> {
+    ws.send(auth_message)?;
+
     // Wait for initial ready response.
     let mut msgs = Vec::new();
     loop {

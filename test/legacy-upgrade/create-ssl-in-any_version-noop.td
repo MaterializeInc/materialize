@@ -8,3 +8,5 @@
 # by the Apache License, Version 2.0.
 
 # no-op to keep the upgrade test glob simple
+
+$ nop

@@ -115,6 +115,17 @@ impl PersistClientCache {
         &self.cfg
     }
 
+    /// Clears the state cache, allowing for tests with disconnected states.
+    ///
+    /// Only exposed for testing.
+    pub fn clear_state_cache(&mut self) {
+        self.state_cache = Arc::new(StateCache::new(
+            &self.cfg,
+            Arc::clone(&self.metrics),
+            Arc::clone(&self.pubsub_sender),
+        ))
+    }
+
     /// Returns a new [PersistClient] for interfacing with persist shards made
     /// durable to the given [PersistLocation].
     ///
@@ -767,7 +778,7 @@ mod tests {
         let res = spawn(|| "test", async move {
             s.get::<(), (), u64, i64, _, _>(
                 s1,
-                || async { panic!("boom") },
+                || async { panic!("forced panic") },
                 &Diagnostics::for_tests(),
             )
             .await

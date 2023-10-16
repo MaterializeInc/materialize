@@ -42,6 +42,18 @@ def main() -> int:
             new_steps.append(step)
         if "wait" in step:
             new_steps.append(step)
+        # Groups can't be nested, so handle them explicitly here instead of recursing
+        if "group" in step:
+            new_inner_steps = []
+            for inner_step in step.get("steps", []):
+                if "id" in inner_step and inner_step["id"] in selected_tests:
+                    del inner_step["id"]
+                    new_inner_steps.append(inner_step)
+            # There must be at least 1 step in a group
+            if new_inner_steps:
+                step["steps"] = new_inner_steps
+                del step["key"]
+                new_steps.append(step)
     spawn.runv(
         ["buildkite-agent", "pipeline", "upload", "--replace"],
         stdin=yaml.dump(new_steps).encode(),

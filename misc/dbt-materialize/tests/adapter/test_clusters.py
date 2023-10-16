@@ -63,7 +63,6 @@ where mv.id like 'u%'
 
 models_expected_clusters = """
 materialized_view_name,cluster_name,index_name,index_cluster_name
-expected_clusters,default,,
 override_cluster,not_default,,
 override_index_cluster,default,i_col_1_idx,not_default
 override_cluster_and_index,not_default,c_i_col_1_idx,not_default

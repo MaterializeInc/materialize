@@ -23,7 +23,7 @@ use crate::parser::BuiltinCommand;
 
 pub async fn run_force_compaction(
     mut cmd: BuiltinCommand,
-    state: &mut State,
+    state: &State,
 ) -> Result<ControlFlow, anyhow::Error> {
     let shard_id = cmd.args.string("shard-id")?;
     cmd.args.done()?;

@@ -7,8 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use mz_ore::metrics::MetricsFutureExt;
 use uuid::Uuid;
 
+use crate::metrics::Metrics;
 use crate::{Client, Error};
 
 impl Client {
@@ -17,17 +19,27 @@ impl Client {
         &self,
         request: ApiTokenArgs,
         admin_api_token_url: &str,
+        metrics: &Metrics,
     ) -> Result<ApiTokenResponse, Error> {
-        let result = self
+        let name = "exchange_secret_for_token";
+        let histogram = metrics.request_duration_seconds.with_label_values(&[name]);
+
+        let response = self
             .client
             .post(admin_api_token_url)
             .json(&request)
             .send()
-            .await?
-            .error_for_status()?
-            .json()
+            .wall_time()
+            .observe(histogram)
             .await?;
 
+        let status = response.status().to_string();
+        metrics
+            .request_count
+            .with_label_values(&[name, &status])
+            .inc();
+
+        let result = response.error_for_status()?.json().await?;
         Ok(result)
     }
 
@@ -36,17 +48,28 @@ impl Client {
         &self,
         refresh_url: &str,
         refresh_token: &str,
+        metrics: &Metrics,
     ) -> Result<ApiTokenResponse, Error> {
-        let res = self
+        let name = "refresh_token";
+        let histogram = metrics.request_duration_seconds.with_label_values(&[name]);
+
+        let response = self
             .client
             .post(refresh_url)
             .json(&RefreshToken { refresh_token })
             .send()
-            .await?
-            .error_for_status()?
-            .json::<ApiTokenResponse>()
+            .wall_time()
+            .observe(histogram)
             .await?;
-        Ok(res)
+
+        let status = response.status().to_string();
+        metrics
+            .request_count
+            .with_label_values(&[name, &status])
+            .inc();
+
+        let result = response.error_for_status()?.json().await?;
+        Ok(result)
     }
 }
 
@@ -75,6 +98,7 @@ pub struct RefreshToken<'a> {
 #[cfg(test)]
 mod tests {
     use axum::{routing::post, Router};
+    use mz_ore::metrics::MetricsRegistry;
     use reqwest::StatusCode;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -82,6 +106,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::ApiTokenResponse;
+    use crate::metrics::Metrics;
     use crate::{ApiTokenArgs, Client};
 
     #[mz_ore::test(tokio::test)]
@@ -135,12 +160,15 @@ mod tests {
             code: u16,
             should_retry: bool,
         ) -> Result<(), String> {
+            let registry = MetricsRegistry::new();
+            let metrics = Metrics::register_into(&registry);
+
             let args = ApiTokenArgs {
                 client_id: Uuid::new_v4(),
                 secret: Uuid::new_v4(),
             };
             let exchange_result = client
-                .exchange_client_secret_for_token(args, &format!("http://{addr}/{code}"))
+                .exchange_client_secret_for_token(args, &format!("http://{addr}/{code}"), &metrics)
                 .await
                 .map(|_| ())
                 .map_err(|e| e.to_string());
@@ -149,7 +177,7 @@ mod tests {
             assert_eq!(prev_count, expected_count);
 
             let refresh_result = client
-                .refresh_token(&format!("http://{addr}/{code}"), "test")
+                .refresh_token(&format!("http://{addr}/{code}"), "test", &metrics)
                 .await
                 .map(|_| ())
                 .map_err(|e| e.to_string());

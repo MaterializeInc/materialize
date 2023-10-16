@@ -90,12 +90,12 @@ use std::{iter, thread};
 use anyhow::bail;
 use chrono::{DateTime, Utc};
 use futures::FutureExt;
-use http::StatusCode;
+use http::{Request, StatusCode};
 use itertools::Itertools;
 use mz_environmentd::http::{
     BecomeLeaderResponse, BecomeLeaderResult, LeaderStatus, LeaderStatusResponse,
 };
-use mz_environmentd::WebSocketResponse;
+use mz_environmentd::{WebSocketAuth, WebSocketResponse};
 use mz_ore::cast::CastFrom;
 use mz_ore::cast::CastLossy;
 use mz_ore::cast::TryCastFrom;
@@ -1542,8 +1542,8 @@ fn test_max_request_size() {
         let param = std::iter::repeat("1").take(param_size).join("");
         let mut client = server.connect(postgres::NoTls).unwrap();
 
-        // The specific error isn't forwarded to the client, the connection is just closed.
-        assert!(client.query(statement, &[&param]).is_err());
+        let err = client.query(statement, &[&param]).unwrap_db_error();
+        assert_contains!(err.message(), "request larger than");
         assert!(client.is_valid(Duration::from_secs(2)).is_err());
     }
 
@@ -2108,6 +2108,80 @@ fn test_internal_http_auth() {
     tracing::info!("response: {res:?}");
     // invalid header returns an error
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED, "{:?}", res.text());
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_internal_ws_auth() {
+    let server = util::start_server(util::Config::default()).unwrap();
+
+    // Create our WebSocket.
+    let ws_url = server.internal_ws_addr();
+    let make_req = || {
+        Request::builder()
+            .uri(ws_url.as_str())
+            .method("GET")
+            .header("Host", ws_url.host_str().unwrap())
+            .header("Connection", "Upgrade")
+            .header("Upgrade", "websocket")
+            .header("Sec-WebSocket-Version", "13")
+            .header("Sec-WebSocket-Key", "foobar")
+            // Set our user to the mz_support user
+            .header("x-materialize-user", "mz_support")
+            .body(())
+            .unwrap()
+    };
+
+    let (mut ws, _resp) = tungstenite::connect(make_req()).unwrap();
+    let options = BTreeMap::from([(
+        "application_name".to_string(),
+        "billion_dollar_idea".to_string(),
+    )]);
+    // We should receive error if sending the standard bearer auth, since that is unexpected
+    // for the Internal HTTP API
+    assert_eq!(util::auth_with_ws(&mut ws, options.clone()).is_err(), true);
+
+    // Recreate the websocket
+    let (mut ws, _resp) = tungstenite::connect(make_req()).unwrap();
+    // Auth with OptionsOnly
+    util::auth_with_ws_impl(
+        &mut ws,
+        Message::Text(serde_json::to_string(&WebSocketAuth::OptionsOnly { options }).unwrap()),
+    )
+    .unwrap();
+
+    // Query to make sure we get back the correct user, which should be
+    // set from the headers passed with the websocket request.
+    let json = "{\"query\":\"SELECT current_user;\"}";
+    let json: serde_json::Value = serde_json::from_str(json).unwrap();
+    ws.send(Message::Text(json.to_string())).unwrap();
+
+    let mut read_msg = || -> WebSocketResponse {
+        let msg = ws.read().unwrap();
+        let msg = msg.into_text().expect("response should be text");
+        serde_json::from_str(&msg).unwrap()
+    };
+    let starting = read_msg();
+    let columns = read_msg();
+    let row_val = read_msg();
+
+    if !matches!(starting, WebSocketResponse::CommandStarting(_)) {
+        panic!("wrong message!, {starting:?}");
+    };
+
+    if let WebSocketResponse::Rows(rows) = columns {
+        let names: Vec<&str> = rows.columns.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["current_user"]);
+    } else {
+        panic!("wrong message!, {columns:?}");
+    };
+
+    if let WebSocketResponse::Row(row) = row_val {
+        let expected = serde_json::Value::String("mz_support".to_string());
+        assert_eq!(row, [expected]);
+    } else {
+        panic!("wrong message!, {row_val:?}");
+    }
 }
 
 #[mz_ore::test]

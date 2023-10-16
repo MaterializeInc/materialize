@@ -86,8 +86,6 @@ pub struct ComputeState {
     pub metrics: ComputeMetrics,
     /// A process-global handle to tracing configuration.
     tracing_handle: Arc<TracingHandle>,
-    /// Enable arrangement size logging
-    pub enable_arrangement_size_logging: bool,
 }
 
 impl ComputeState {
@@ -115,7 +113,6 @@ impl ComputeState {
             linear_join_impl: Default::default(),
             metrics,
             tracing_handle,
-            enable_arrangement_size_logging: Default::default(),
         }
     }
 
@@ -194,7 +191,6 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         let ComputeParameters {
             max_result_size,
             dataflow_max_inflight_bytes,
-            enable_arrangement_size_logging,
             enable_mz_join_core,
             enable_jemalloc_profiling,
             persist,
@@ -207,9 +203,6 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         }
         if let Some(v) = dataflow_max_inflight_bytes {
             self.compute_state.dataflow_max_inflight_bytes = v;
-        }
-        if let Some(v) = enable_arrangement_size_logging {
-            self.compute_state.enable_arrangement_size_logging = v;
         }
         if let Some(v) = enable_mz_join_core {
             self.compute_state.linear_join_impl = match v {
@@ -368,7 +361,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             panic!("dataflow server has already initialized logging");
         }
 
-        let (logger, traces) = logging::initialize(self.timely_worker, self.compute_state, config);
+        let (logger, traces) = logging::initialize(self.timely_worker, config);
 
         // Install traces as maintained indexes
         for (log, trace) in traces {

@@ -974,7 +974,7 @@ impl PredicatePushdown {
                     map_exprs[c - input_arity].visit_post(&mut |e| {
                         if let MirScalarExpr::Column(c) = e {
                             if *c >= input_arity {
-                                if !support.insert(*c) {
+                                if support.insert(*c) {
                                     workset.push(*c);
                                 }
                             }

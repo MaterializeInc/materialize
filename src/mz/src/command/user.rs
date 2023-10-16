@@ -34,7 +34,7 @@ pub struct CreateArgs<'a> {
 
 /// Creates a user in the profile organization.
 pub async fn create(
-    cx: &mut ProfileContext,
+    cx: &ProfileContext,
     CreateArgs { email, name }: CreateArgs<'_>,
 ) -> Result<(), Error> {
     let loading_spinner = cx.output_formatter().loading_spinner("Creating user...");
@@ -55,7 +55,7 @@ pub async fn create(
 }
 
 /// Lists all the users in the profile organization.
-pub async fn list(cx: &mut ProfileContext) -> Result<(), Error> {
+pub async fn list(cx: &ProfileContext) -> Result<(), Error> {
     let output_formatter = cx.output_formatter();
 
     let loading_spinner = output_formatter.loading_spinner("Retrieving users...");
@@ -86,7 +86,7 @@ pub struct RemoveArgs<'a> {
 
 /// Removes a user from the profile context using the admin client.
 pub async fn remove(
-    cx: &mut ProfileContext,
+    cx: &ProfileContext,
     RemoveArgs { email }: RemoveArgs<'_>,
 ) -> Result<(), Error> {
     let loading_spinner = cx.output_formatter().loading_spinner("Removing user...");

@@ -16,6 +16,7 @@ use mz_repr::adt::numeric::{NUMERIC_AGG_MAX_PRECISION, NUMERIC_DATUM_MAX_PRECISI
 use mz_repr::{ColumnName, ColumnType, Datum, GlobalId, RelationDesc, ScalarType};
 use serde_json::{json, Map};
 
+use crate::avro::DocTarget;
 use crate::encode::{column_names_and_types, Encode, TypedDatum};
 use crate::envelopes;
 
@@ -77,7 +78,13 @@ impl fmt::Debug for JsonEncoder {
                 "schema",
                 &format!(
                     "{:?}",
-                    build_row_schema_json(&self.value_columns, "schema", &BTreeMap::new(), false)
+                    build_row_schema_json(
+                        &self.value_columns,
+                        "schema",
+                        &BTreeMap::new(),
+                        None,
+                        &Default::default(),
+                    )
                 ),
             )
             .finish()
@@ -251,7 +258,8 @@ fn build_row_schema_field_type(
     type_namer: &mut Namer,
     custom_names: &BTreeMap<GlobalId, String>,
     typ: &ColumnType,
-    set_null_defaults: bool,
+    item_id: Option<GlobalId>,
+    options: &SchemaOptions,
 ) -> serde_json::Value {
     let mut field_type = match &typ.scalar_type {
         ScalarType::AclItem => json!("string"),
@@ -312,7 +320,8 @@ fn build_row_schema_field_type(
                     nullable: true,
                     scalar_type: ty.unwrap_collection_element_type().clone(),
                 },
-                set_null_defaults,
+                item_id,
+                options,
             );
             json!({
                 "type": "array",
@@ -327,7 +336,8 @@ fn build_row_schema_field_type(
                     nullable: true,
                     scalar_type: (**value_type).clone(),
                 },
-                set_null_defaults,
+                item_id,
+                options,
             );
             json!({
                 "type": "map",
@@ -346,12 +356,23 @@ fn build_row_schema_field_type(
             } else {
                 let fields = fields.to_vec();
                 let json_fields =
-                    build_row_schema_fields(&fields, type_namer, custom_names, set_null_defaults);
-                json!({
-                    "type": "record",
-                    "name": name,
-                    "fields": json_fields
-                })
+                    build_row_schema_fields(&fields, type_namer, custom_names, *custom_id, options);
+                if let Some(comment) =
+                    custom_id.and_then(|id| options.doc_comments.get(&DocTarget::Type(id)))
+                {
+                    json!({
+                        "type": "record",
+                        "name": name,
+                        "doc": comment,
+                        "fields": json_fields
+                    })
+                } else {
+                    json!({
+                        "type": "record",
+                        "name": name,
+                        "fields": json_fields
+                    })
+                }
             }
         }
         ScalarType::Numeric { max_scale } => {
@@ -384,34 +405,58 @@ fn build_row_schema_fields(
     columns: &[(ColumnName, ColumnType)],
     type_namer: &mut Namer,
     custom_names: &BTreeMap<GlobalId, String>,
-    set_null_defaults: bool,
+    item_id: Option<GlobalId>,
+    options: &SchemaOptions,
 ) -> Vec<serde_json::Value> {
     let mut fields = Vec::new();
     let mut field_namer = Namer::default();
     for (name, typ) in columns.iter() {
         let (name, _seen) = field_namer.valid_name(name.as_str());
         let field_type =
-            build_row_schema_field_type(type_namer, custom_names, typ, set_null_defaults);
+            build_row_schema_field_type(type_namer, custom_names, typ, item_id, options);
+
+        let mut field = json!({
+            "name": name,
+            "type": field_type,
+        });
 
         // It's a nullable union if the type is an array and the first option is "null"
         let is_nullable_union = field_type
             .as_array()
             .is_some_and(|array| array.first().is_some_and(|first| first == &json!("null")));
 
-        if set_null_defaults && is_nullable_union {
-            fields.push(json!({
-                "name": name,
-                "type": field_type,
-                "default": null,
-            }));
-        } else {
-            fields.push(json!({
-                "name": name,
-                "type": field_type,
-            }));
+        if options.set_null_defaults && is_nullable_union {
+            field
+                .as_object_mut()
+                .expect("`field` initialized to JSON object above")
+                .insert("default".to_string(), json!(null));
         }
+
+        if let Some(comment) = item_id.and_then(|item_id| {
+            options.doc_comments.get(&DocTarget::Field {
+                object_id: item_id,
+                column_name: name.into(),
+            })
+        }) {
+            field
+                .as_object_mut()
+                .expect("`field` initialized to JSON object above")
+                .insert("doc".to_string(), json!(comment));
+        }
+
+        fields.push(field);
     }
     fields
+}
+
+#[derive(Default, Clone, Debug)]
+/// Struct to pass around options to create the json schema
+pub struct SchemaOptions {
+    /// Boolean flag to enable null defaults.
+    pub set_null_defaults: bool,
+    /// Map containing comments for an item or field, used to populate
+    /// documentation in the generated avro schema
+    pub doc_comments: BTreeMap<DocTarget, String>,
 }
 
 /// Builds the JSON for the row schema, which can be independently useful.
@@ -419,20 +464,34 @@ pub fn build_row_schema_json(
     columns: &[(ColumnName, ColumnType)],
     name: &str,
     custom_names: &BTreeMap<GlobalId, String>,
-    set_null_defaults: bool,
+    item_id: Option<GlobalId>,
+    options: &SchemaOptions,
 ) -> Result<serde_json::Value, anyhow::Error> {
     let fields = build_row_schema_fields(
         columns,
         &mut Namer::default(),
         custom_names,
-        set_null_defaults,
+        item_id,
+        options,
     );
+
     let _ = mz_avro::schema::Name::parse_simple(name)?;
-    Ok(json!({
-        "type": "record",
-        "fields": fields,
-        "name": name
-    }))
+    if let Some(comment) =
+        item_id.and_then(|item_id| options.doc_comments.get(&DocTarget::Type(item_id)))
+    {
+        Ok(json!({
+            "type": "record",
+            "doc": comment,
+            "fields": fields,
+            "name": name
+        }))
+    } else {
+        Ok(json!({
+            "type": "record",
+            "fields": fields,
+            "name": name
+        }))
+    }
 }
 
 /// Naming helper for use when constructing an Avro schema.

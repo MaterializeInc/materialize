@@ -22,7 +22,6 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     CreateIndexStatement, FetchStatement, Ident, Raw, RawClusterName, RawItemName, Statement,
 };
-use mz_stash::StashError;
 use mz_storage_types::controller::StorageError;
 use mz_transform::TransformError;
 use tokio::sync::mpsc::UnboundedSender;
@@ -295,22 +294,22 @@ impl ShouldHalt for AdapterError {
 impl ShouldHalt for crate::catalog::Error {
     fn should_halt(&self) -> bool {
         match &self.kind {
-            crate::catalog::ErrorKind::Stash(e) => e.should_halt(),
+            crate::catalog::ErrorKind::Durable(e) => e.should_halt(),
             _ => false,
         }
     }
 }
 
-impl ShouldHalt for mz_catalog::Error {
+impl ShouldHalt for mz_catalog::CatalogError {
     fn should_halt(&self) -> bool {
         match &self {
-            Self::Stash(e) => e.should_halt(),
+            Self::Durable(e) => e.should_halt(),
             _ => false,
         }
     }
 }
 
-impl ShouldHalt for StashError {
+impl ShouldHalt for mz_catalog::DurableCatalogError {
     fn should_halt(&self) -> bool {
         self.is_unrecoverable()
     }
@@ -334,7 +333,7 @@ impl ShouldHalt for StorageError {
             | StorageError::DataflowError(_)
             | StorageError::InvalidAlterSource { .. }
             | StorageError::ShuttingDown(_) => false,
-            StorageError::IOError(e) => e.should_halt(),
+            StorageError::IOError(e) => e.is_unrecoverable(),
         }
     }
 }

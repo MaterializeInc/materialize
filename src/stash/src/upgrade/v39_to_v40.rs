@@ -7,8 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use crate::objects::{wire_compatible, WireCompatible};
-use crate::upgrade::{objects_v39 as v39, objects_v40 as v40, MigrationAction};
+use mz_stash_types::upgrade::{objects_v39 as v39, objects_v40 as v40};
+
+use crate::upgrade::{wire_compatible, MigrationAction, WireCompatible};
 use crate::{StashError, Transaction, TypedCollection};
 
 wire_compatible!(v39::ClusterId with v40::ClusterId);
@@ -29,13 +30,13 @@ pub const CLUSTER_REPLICA_COLLECTION: TypedCollection<
 > = TypedCollection::new("compute_replicas");
 
 /// Migrate replicas to include internal/billed-as information.
-pub async fn upgrade(tx: &mut Transaction<'_>) -> Result<(), StashError> {
+pub async fn upgrade(tx: &Transaction<'_>) -> Result<(), StashError> {
     migrate_cluster_replicas(tx).await?;
     migrate_audit_log(tx).await
 }
 
 /// Migrate replicas in the "cluster_replicas" collection.
-async fn migrate_cluster_replicas(tx: &mut Transaction<'_>) -> Result<(), StashError> {
+async fn migrate_cluster_replicas(tx: &Transaction<'_>) -> Result<(), StashError> {
     let action = |(key, value): (&v39::ClusterReplicaKey, &v39::ClusterReplicaValue)| {
         let new_key: v40::ClusterReplicaKey = WireCompatible::convert(key);
         let new_value = v40::ClusterReplicaValue {
@@ -88,7 +89,7 @@ async fn migrate_cluster_replicas(tx: &mut Transaction<'_>) -> Result<(), StashE
 }
 
 /// Migrate the audit log to the new replica billed-as and internal.
-async fn migrate_audit_log(tx: &mut Transaction<'_>) -> Result<(), StashError> {
+async fn migrate_audit_log(tx: &Transaction<'_>) -> Result<(), StashError> {
     let action = |key: &v39::AuditLogKey| {
         let v39::audit_log_key::Event::V1(event) = key.event.as_ref()?;
         let details = event.details.as_ref()?;
@@ -228,9 +229,9 @@ mod tests {
 
             // Run the migration.
             stash
-                .with_transaction(|mut tx| {
+                .with_transaction(|tx| {
                     Box::pin(async move {
-                        upgrade(&mut tx).await?;
+                        upgrade(&tx).await?;
                         Ok(())
                     })
                 })
@@ -419,9 +420,9 @@ mod tests {
 
             // Run the migration.
             stash
-                .with_transaction(|mut tx| {
+                .with_transaction(|tx| {
                     Box::pin(async move {
-                        upgrade(&mut tx).await?;
+                        upgrade(&tx).await?;
                         Ok(())
                     })
                 })

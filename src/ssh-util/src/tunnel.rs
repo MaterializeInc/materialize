@@ -92,7 +92,7 @@ impl SshTunnelConfig {
                 return Err(e);
             }
         };
-        let local_port = match port_forward(&mut session, remote_host, remote_port).await {
+        let local_port = match port_forward(&session, remote_host, remote_port).await {
             Ok(local_port) => local_port,
             Err(e) => {
                 warn!(%tunnel_id, "failed to forward port through ssh tunnel: {}", e.display_with_causes());
@@ -114,14 +114,14 @@ impl SshTunnelConfig {
                     time::sleep(CHECK_INTERVAL).await;
                     if let Err(e) = session.check().await {
                         warn!(%tunnel_id, "ssh tunnel unhealthy: {}", e.display_with_causes());
-                        let mut s = match connect(&config).await {
+                        let s = match connect(&config).await {
                             Ok(s) => s,
                             Err(e) => {
                                 warn!(%tunnel_id, "reconnection to ssh tunnel failed: {}", e.display_with_causes());
                                 continue;
                             }
                         };
-                        let lp = match port_forward(&mut s, &remote_host, remote_port).await {
+                        let lp = match port_forward(&s, &remote_host, remote_port).await {
                             Ok(lp) => lp,
                             Err(e) => {
                                 warn!(%tunnel_id, "reconnection to ssh tunnel failed: {}", e.display_with_causes());
@@ -207,7 +207,7 @@ async fn connect(config: &SshTunnelConfig) -> Result<Session, anyhow::Error> {
     Ok(session)
 }
 
-async fn port_forward(session: &mut Session, host: &str, port: u16) -> Result<u16, anyhow::Error> {
+async fn port_forward(session: &Session, host: &str, port: u16) -> Result<u16, anyhow::Error> {
     // Loop trying to find an open port.
     for _ in 0..50 {
         // Choose a dynamic port according to RFC 6335.

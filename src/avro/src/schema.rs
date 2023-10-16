@@ -2116,6 +2116,9 @@ impl<'a> Serialize for RecordFieldSerContext<'a> {
         if let Some(default) = &self.inner.default {
             map.serialize_entry("default", default)?;
         }
+        if let Some(doc) = &self.inner.doc {
+            map.serialize_entry("doc", doc)?;
+        }
         map.end()
     }
 }
@@ -2347,9 +2350,10 @@ mod tests {
                 {
                     "type": "record",
                     "name": "test",
+                    "doc": "record doc",
                     "fields": [
-                        {"name": "a", "type": "long", "default": 42},
-                        {"name": "b", "type": "string"}
+                        {"name": "a", "doc": "a doc", "type": "long", "default": 42},
+                        {"name": "b", "doc": "b doc", "type": "string"}
                     ]
                 }
             "#;
@@ -2359,11 +2363,11 @@ mod tests {
         lookup.insert("b".to_owned(), 1);
 
         let expected = SchemaPiece::Record {
-            doc: None,
+            doc: Some("record doc".to_string()),
             fields: vec![
                 RecordField {
                     name: "a".to_string(),
-                    doc: None,
+                    doc: Some("a doc".to_string()),
                     default: Some(Value::Number(42i64.into())),
                     schema: SchemaPiece::Long.into(),
                     order: RecordFieldOrder::Ascending,
@@ -2371,7 +2375,7 @@ mod tests {
                 },
                 RecordField {
                     name: "b".to_string(),
-                    doc: None,
+                    doc: Some("b doc".to_string()),
                     default: None,
                     schema: SchemaPiece::String.into(),
                     order: RecordFieldOrder::Ascending,

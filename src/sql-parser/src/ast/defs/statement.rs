@@ -18,10 +18,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// `EnumKind` unconditionally introduces a lifetime. TODO: remove this once
-// https://github.com/rust-lang/rust-clippy/pull/9037 makes it into stable
-#![allow(clippy::extra_unused_lifetimes)]
-
 use std::fmt;
 
 use enum_kinds::EnumKind;
@@ -1239,6 +1235,7 @@ pub struct CreateMaterializedViewStatement<T: AstInfo> {
     pub columns: Vec<Ident>,
     pub in_cluster: Option<T::ClusterName>,
     pub query: Query<T>,
+    pub non_null_assertions: Vec<Ident>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {
@@ -1266,6 +1263,18 @@ impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {
         if let Some(cluster) = &self.in_cluster {
             f.write_str(" IN CLUSTER ");
             f.write_node(cluster);
+        }
+
+        if !self.non_null_assertions.is_empty() {
+            f.write_str(" WITH (");
+            for (i, nna) in self.non_null_assertions.iter().enumerate() {
+                f.write_str("ASSERT NOT NULL ");
+                f.write_node(nna);
+                if i + 1 != self.non_null_assertions.len() {
+                    f.write_str(", ")
+                }
+            }
+            f.write_str(")");
         }
 
         f.write_str(" AS ");
@@ -2435,6 +2444,10 @@ pub enum ShowObjectType<T: AstInfo> {
     Subsource {
         on_source: Option<T::ItemName>,
     },
+    Privileges {
+        object_type: Option<SystemObjectType>,
+        role: Option<T::RoleName>,
+    },
 }
 /// `SHOW <object>S`
 ///
@@ -2455,6 +2468,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("SHOW");
         f.write_str(" ");
+
         f.write_str(match &self.object_type {
             ShowObjectType::Table => "TABLES",
             ShowObjectType::View => "VIEWS",
@@ -2472,6 +2486,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ShowObjectType::Database => "DATABASES",
             ShowObjectType::Schema { .. } => "SCHEMAS",
             ShowObjectType::Subsource { .. } => "SUBSOURCES",
+            ShowObjectType::Privileges { .. } => "PRIVILEGES",
         });
 
         if let ShowObjectType::Index { on_object, .. } = &self.object_type {
@@ -2509,6 +2524,20 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             if let Some(on_source) = on_source {
                 f.write_str(" ON ");
                 f.write_node(on_source);
+            }
+        }
+
+        if let ShowObjectType::Privileges { object_type, role } = &self.object_type {
+            if let Some(object_type) = object_type {
+                f.write_str(" ON ");
+                f.write_node(object_type);
+                if let SystemObjectType::Object(_) = object_type {
+                    f.write_str("S");
+                }
+            }
+            if let Some(role) = role {
+                f.write_str(" FOR ");
+                f.write_node(role);
             }
         }
 
@@ -2851,7 +2880,7 @@ impl<T: AstInfo> AstDisplay for InsertSource<T> {
 }
 impl_display_t!(InsertSource);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Copy)]
 pub enum ObjectType {
     Table,
     View,
@@ -2917,6 +2946,22 @@ impl AstDisplay for ObjectType {
     }
 }
 impl_display!(ObjectType);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Copy)]
+pub enum SystemObjectType {
+    System,
+    Object(ObjectType),
+}
+
+impl AstDisplay for SystemObjectType {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            SystemObjectType::System => f.write_str("SYSTEM"),
+            SystemObjectType::Object(object) => f.write_node(object),
+        }
+    }
+}
+impl_display!(SystemObjectType);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ShowStatementFilter<T: AstInfo> {

@@ -112,6 +112,7 @@ The privileges required to execute this statement are:
 
 ## Related pages
 
+- [SHOW PRIVILEGES](../show-privileges)
 - [CREATE ROLE](../create-role)
 - [ALTER ROLE](../alter-role)
 - [DROP ROLE](../drop-role)

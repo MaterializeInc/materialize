@@ -153,11 +153,7 @@ impl Row {
 /// Warning: These order by the u8 array representation, and NOT by Datum::cmp.
 impl PartialOrd for Row {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        match self.data.len().cmp(&other.data.len()) {
-            std::cmp::Ordering::Less => Some(std::cmp::Ordering::Less),
-            std::cmp::Ordering::Greater => Some(std::cmp::Ordering::Greater),
-            std::cmp::Ordering::Equal => Some(self.data.cmp(&other.data)),
-        }
+        Some(self.cmp(other))
     }
 }
 
