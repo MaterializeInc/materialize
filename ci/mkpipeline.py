@@ -333,18 +333,21 @@ def trim_pipeline(pipeline: Any, coverage: bool) -> None:
             )
 
     # Restrict the pipeline to the needed steps.
-    pipeline["steps"] = [
-        step
-        for step in pipeline["steps"]
-        if "wait" in step or "group" in step or step["id"] in needed
-    ]
     for step in pipeline["steps"]:
         if "group" in step:
             step["steps"] = [
                 inner_step
                 for inner_step in step.get("steps", [])
-                if inner_step["id"] in needed
+                if inner_step.get("id") in needed
             ]
+
+    pipeline["steps"] = [
+        step
+        for step in pipeline["steps"]
+        if "wait" in step
+        or ("group" in step and step["steps"])
+        or step.get("id") in needed
+    ]
 
 
 def have_paths_changed(globs: Iterable[str]) -> bool:
