@@ -4363,6 +4363,23 @@ impl Coordinator {
         }
     }
 
+    pub(super) async fn sequence_alter_schema_rename(
+        &mut self,
+        session: &Session,
+        plan: plan::AlterSchemaRenamePlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let (database_spec, schema_spec) = plan.cur_schema_spec;
+        let op = catalog::Op::RenameSchema {
+            database_spec,
+            schema_spec,
+            new_name: plan.new_schema_name,
+        };
+        match self.catalog_transact(Some(session), vec![op]).await {
+            Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::Schema)),
+            Err(err) => Err(err),
+        }
+    }
+
     pub(super) fn sequence_alter_index_set_options(
         &mut self,
         plan: plan::AlterIndexSetOptionsPlan,
