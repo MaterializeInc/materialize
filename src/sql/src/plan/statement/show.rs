@@ -19,8 +19,8 @@ use mz_ore::collections::CollectionExt;
 use mz_repr::{Datum, GlobalId, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    ShowCreateConnectionStatement, ShowCreateMaterializedViewStatement, ShowObjectType,
-    ObjectType, SystemObjectType,
+    ObjectType, ShowCreateConnectionStatement, ShowCreateMaterializedViewStatement, ShowObjectType,
+    SystemObjectType,
 };
 use query::QueryContext;
 
