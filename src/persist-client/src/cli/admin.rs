@@ -151,10 +151,13 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
 
             let mut shards = consensus.list_keys();
             let mut not_restored = vec![];
+
+            // TODO: this should be safe (and appealing) to parallelize.
             while let Some(shard) = shards.next().await {
                 let shard_id = shard?;
                 let shard_id = ShardId::from_str(&shard_id).expect("invalid shard id");
-
+                let start = Instant::now();
+                info!("Restoring blob state for shard {shard_id}.",);
                 let shard_not_restored = crate::internal::restore::restore_blob(
                     &versions,
                     blob.as_ref(),
@@ -163,8 +166,9 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
                 )
                 .await?;
                 info!(
-                    "Restored blob state for shard {shard_id}; {} errors.",
-                    shard_not_restored.len()
+                    "Restored blob state for shard {shard_id}; {} errors, {:?} elapsed.",
+                    shard_not_restored.len(),
+                    start.elapsed()
                 );
                 not_restored.extend(shard_not_restored);
             }
@@ -185,7 +189,7 @@ pub(crate) fn info_log_non_zero_metrics(metric_families: &[MetricFamily]) {
                 MetricType::COUNTER => m.get_counter().get_value(),
                 MetricType::GAUGE => m.get_gauge().get_value(),
                 x => {
-                    warn!("unhandled {} metric type: {:?}", mf.get_name(), x);
+                    info!("unhandled {} metric type: {:?}", mf.get_name(), x);
                     continue;
                 }
             };

@@ -55,33 +55,39 @@ pub(crate) async fn restore_blob(
             if rollup.key < first_live_seqno {
                 continue;
             }
-            if let Some(value) = after(rollup.val) {
-                let key = value.key.complete(&shard_id);
-                check_restored(&key, blob.restore(&key).await);
-                // Elsewhere, we restore any state referenced in live diffs... but we also
-                // need to restore everything referenced in that first rollup.
-                if rollup.key != first_live_seqno {
+            let Some(value) = after(rollup.val) else {
+                continue;
+            };
+            let key = value.key.complete(&shard_id);
+            let rollup_result = blob.restore(&key).await;
+            let rollup_restored = rollup_result.is_ok();
+            check_restored(&key, rollup_result);
+
+            // Elsewhere, we restore any state referenced in live diffs... but we also
+            // need to restore everything referenced in that first rollup.
+            // If restoring the rollup failed, let's
+            // keep going to try and recover the rest of the blobs before bailing out.
+            if rollup.key != first_live_seqno || !rollup_restored {
+                continue;
+            }
+            let rollup_bytes = blob
+                .get(&key)
+                .await?
+                .ok_or_else(|| anyhow!("fetching just-restored rollup"))?;
+            let rollup_state: State<u64> =
+                UntypedState::decode(build_version, rollup_bytes).check_ts_codec(&shard_id)?;
+            for (seqno, rollup) in &rollup_state.collections.rollups {
+                // We never actually reference rollups from before the first live diff.
+                if *seqno < first_live_seqno {
                     continue;
                 }
-                let rollup_bytes = blob
-                    .get(&key)
-                    .await?
-                    .ok_or_else(|| anyhow!("fetching just-restored rollup"))?;
-                let rollup_state: State<u64> =
-                    UntypedState::decode(build_version, rollup_bytes).check_ts_codec(&shard_id)?;
-                for (seqno, rollup) in &rollup_state.collections.rollups {
-                    // We never actually reference rollups from before the first live diff.
-                    if *seqno < first_live_seqno {
-                        continue;
-                    }
-                    let key = rollup.key.complete(&shard_id);
+                let key = rollup.key.complete(&shard_id);
+                check_restored(&key, blob.restore(&key).await);
+            }
+            for batch in rollup_state.collections.trace.batches() {
+                for part in &batch.parts {
+                    let key = part.key.complete(&shard_id);
                     check_restored(&key, blob.restore(&key).await);
-                }
-                for batch in rollup_state.collections.trace.batches() {
-                    for part in &batch.parts {
-                        let key = part.key.complete(&shard_id);
-                        check_restored(&key, blob.restore(&key).await);
-                    }
                 }
             }
         }
