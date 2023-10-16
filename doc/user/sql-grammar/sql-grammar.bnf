@@ -437,6 +437,8 @@ show_views ::=
   'SHOW' 'VIEWS' ('FROM' schema_name)?
 show_objects ::=
   'SHOW' 'OBJECTS' ('FROM' schema_name)?
+show_privileges ::=
+  'SHOW' 'PRIVILEGES' ('ON' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'DATABASES' | 'SCHEMAS' | 'CLUSTERS' | 'SYSTEM'))? ('FOR' role_name)?
 show_default_privileges ::=
   'SHOW' 'DEFAULT' 'PRIVILEGES' ('ON' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'DATABASES' | 'SCHEMAS' | 'CLUSTERS'))? ('FOR' role_name)?
 string_agg ::=

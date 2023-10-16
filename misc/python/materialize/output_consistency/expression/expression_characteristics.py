@@ -30,3 +30,7 @@ class ExpressionCharacteristics(Enum):
 
     INTERVAL_WITH_MONTHS = 130
     """time interval containing months or years"""
+
+    TEXT_EMPTY = 140
+    TEXT_WITH_SPECIAL_SPACE_CHARS = 141
+    """Lines with tabulators, newlines, and further whitespace types"""

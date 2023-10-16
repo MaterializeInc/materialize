@@ -74,15 +74,6 @@ AGGREGATE_OPERATION_TYPES.append(
 )
 AGGREGATE_OPERATION_TYPES.append(
     DbFunction(
-        "avg_internal_v1",
-        [NumericOperationParam()],
-        NumericReturnTypeSpec(),
-        is_aggregation=True,
-        relevance=OperationRelevance.HIGH,
-    ),
-)
-AGGREGATE_OPERATION_TYPES.append(
-    DbFunction(
         "bool_and",
         [BooleanOperationParam()],
         BooleanReturnTypeSpec(),

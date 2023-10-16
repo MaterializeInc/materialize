@@ -37,6 +37,8 @@ BOOLEAN_OPERATION_TYPES.append(
         "($) AND ($)",
         [BooleanOperationParam(), BooleanOperationParam()],
         BooleanReturnTypeSpec(),
+        # disable for Postgres because the evaluation order will be different
+        is_pg_compatible=False,
     )
 )
 
@@ -45,6 +47,8 @@ BOOLEAN_OPERATION_TYPES.append(
         "($) OR ($)",
         [BooleanOperationParam(), BooleanOperationParam()],
         BooleanReturnTypeSpec(),
+        # disable for Postgres because the evaluation order will be different
+        is_pg_compatible=False,
     )
 )
 

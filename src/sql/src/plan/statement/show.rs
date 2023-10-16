@@ -19,7 +19,8 @@ use mz_ore::collections::CollectionExt;
 use mz_repr::{Datum, GlobalId, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    ObjectType, ShowCreateConnectionStatement, ShowCreateMaterializedViewStatement, ShowObjectType,
+    ShowCreateConnectionStatement, ShowCreateMaterializedViewStatement, ShowObjectType,
+    ObjectType, SystemObjectType,
 };
 use query::QueryContext;
 
@@ -337,6 +338,10 @@ pub fn show_objects<'a>(
         ShowObjectType::Schema { from: db_from } => {
             assert!(from.is_none(), "parser should reject from");
             show_schemas(scx, db_from, filter)
+        }
+        ShowObjectType::Privileges { object_type, role } => {
+            assert!(from.is_none(), "parser should reject from");
+            show_privileges(scx, object_type, role, filter)
         }
         ShowObjectType::DefaultPrivileges { object_type, role } => {
             assert!(from.is_none(), "parser should reject from");
@@ -696,6 +701,52 @@ pub fn show_secrets<'a>(
     );
 
     ShowSelect::new(scx, query, filter, None, Some(&["name"]))
+}
+
+pub fn show_privileges<'a>(
+    scx: &'a StatementContext<'a>,
+    object_type: Option<SystemObjectType>,
+    role: Option<ResolvedRoleName>,
+    filter: Option<ShowStatementFilter<Aug>>,
+) -> Result<ShowSelect<'a>, PlanError> {
+    let mut query_filter = Vec::new();
+    if let Some(object_type) = object_type {
+        query_filter.push(format!(
+            "object_type = '{}'",
+            object_type.to_string().to_lowercase()
+        ));
+    }
+    if let Some(role) = role {
+        let name = role.name;
+        query_filter.push(format!("CASE WHEN grantee = 'PUBLIC' THEN true ELSE pg_has_role('{name}', grantee, 'USAGE') END"));
+    }
+    let query_filter = if query_filter.len() > 0 {
+        format!("WHERE {}", itertools::join(query_filter, " AND "))
+    } else {
+        "".to_string()
+    };
+
+    let query = format!(
+        "SELECT grantor, grantee, database, schema, name, object_type, privilege_type
+        FROM mz_internal.mz_show_all_privileges
+        {query_filter}",
+    );
+
+    ShowSelect::new(
+        scx,
+        query,
+        filter,
+        None,
+        Some(&[
+            "grantor",
+            "grantee",
+            "database",
+            "schema",
+            "name",
+            "object_type",
+            "privilege_type",
+        ]),
+    )
 }
 
 pub fn show_default_privileges<'a>(

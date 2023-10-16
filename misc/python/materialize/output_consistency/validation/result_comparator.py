@@ -96,6 +96,12 @@ class ResultComparator:
                     "Outcome differs",
                     value1=outcome1.__class__.__name__,
                     value2=outcome2.__class__.__name__,
+                    sql_error1=outcome1.error_message
+                    if isinstance(outcome1, QueryFailure)
+                    else None,
+                    sql_error2=outcome2.error_message
+                    if isinstance(outcome2, QueryFailure)
+                    else None,
                     strategy1=outcome1.strategy,
                     strategy2=outcome2.strategy,
                     sql1=outcome1.sql,
@@ -118,10 +124,7 @@ class ResultComparator:
             # this needs will no longer be sensible when more than two evaluation strategies are used
             self.remark_on_success_with_single_column(outcome1, validation_outcome)
 
-        if (
-            both_failed
-            and not query_execution.query_template.disable_error_message_validation
-        ):
+        if both_failed and self.shall_validate_error_message(query_execution):
             failure1 = cast(QueryFailure, outcome1)
             self.validate_error_messages(
                 query_execution,
@@ -140,6 +143,9 @@ class ResultComparator:
                 )
             )
             self.warn_on_failure_with_multiple_columns(any_failure, validation_outcome)
+
+    def shall_validate_error_message(self, query_execution: QueryExecution) -> bool:
+        return not query_execution.query_template.disable_error_message_validation
 
     def validate_row_count(
         self,
@@ -192,6 +198,8 @@ class ResultComparator:
                     "Error message differs",
                     value1=norm_error_message_1,
                     value2=norm_error_message_2,
+                    sql_error1=failure1.error_message,
+                    sql_error2=failure2.error_message,
                     strategy1=failure1.strategy,
                     strategy2=failure2.strategy,
                     sql1=failure1.sql,
