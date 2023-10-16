@@ -32,14 +32,16 @@ use crate::location::{
 #[derive(Debug)]
 pub struct MemMultiRegistry {
     blob_by_path: BTreeMap<String, Arc<tokio::sync::Mutex<MemBlobCore>>>,
+    tombstone: bool,
 }
 
 #[cfg(test)]
 impl MemMultiRegistry {
     /// Constructs a new, empty [MemMultiRegistry].
-    pub fn new() -> Self {
+    pub fn new(tombstone: bool) -> Self {
         MemMultiRegistry {
             blob_by_path: BTreeMap::new(),
+            tombstone,
         }
     }
 
@@ -53,7 +55,10 @@ impl MemMultiRegistry {
                 core: Arc::clone(blob),
             })
         } else {
-            let blob = Arc::new(tokio::sync::Mutex::new(MemBlobCore::default()));
+            let blob = Arc::new(tokio::sync::Mutex::new(MemBlobCore {
+                dataz: Default::default(),
+                tombstone: self.tombstone,
+            }));
             self.blob_by_path
                 .insert(path.to_string(), Arc::clone(&blob));
             MemBlob::open(MemBlobConfig { core: blob })
@@ -63,16 +68,20 @@ impl MemMultiRegistry {
 
 #[derive(Debug, Default)]
 struct MemBlobCore {
-    dataz: BTreeMap<String, Bytes>,
+    dataz: BTreeMap<String, (Bytes, bool)>,
+    tombstone: bool,
 }
 
 impl MemBlobCore {
     fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
-        Ok(self.dataz.get(key).map(|x| x.to_vec()))
+        Ok(self
+            .dataz
+            .get(key)
+            .and_then(|(x, exists)| exists.then(|| x.to_vec())))
     }
 
     fn set(&mut self, key: &str, value: Bytes) -> Result<(), ExternalError> {
-        self.dataz.insert(key.to_owned(), value);
+        self.dataz.insert(key.to_owned(), (value, true));
         Ok(())
     }
 
@@ -81,8 +90,8 @@ impl MemBlobCore {
         key_prefix: &str,
         f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
     ) -> Result<(), ExternalError> {
-        for (key, value) in &self.dataz {
-            if !key.starts_with(key_prefix) {
+        for (key, (value, exists)) in &self.dataz {
+            if !*exists || !key.starts_with(key_prefix) {
                 continue;
             }
 
@@ -96,8 +105,28 @@ impl MemBlobCore {
     }
 
     fn delete(&mut self, key: &str) -> Result<Option<usize>, ExternalError> {
-        let bytes = self.dataz.remove(key).map(|x| x.len());
+        let bytes = if self.tombstone {
+            self.dataz.get_mut(key).and_then(|(x, exists)| {
+                let deleted_size = exists.then(|| x.len());
+                *exists = false;
+                deleted_size
+            })
+        } else {
+            self.dataz.remove(key).map(|(x, _)| x.len())
+        };
         Ok(bytes)
+    }
+
+    fn restore(&mut self, key: &str) -> Result<(), ExternalError> {
+        match self.dataz.get_mut(key) {
+            None => Err(
+                Determinate::new(anyhow!("unable to restore {key} from in-memory state")).into(),
+            ),
+            Some((_, exists)) => {
+                *exists = true;
+                Ok(())
+            }
+        }
     }
 }
 
@@ -155,13 +184,7 @@ impl Blob for MemBlob {
     async fn restore(&self, key: &str) -> Result<(), ExternalError> {
         // Yield to maximize our chances for getting interesting orderings.
         let () = yield_now().await;
-        if !self.core.lock().await.dataz.contains_key(key) {
-            return Err(
-                Determinate::new(anyhow!("unable to restore {key} from in-memory state")).into(),
-            );
-        }
-
-        Ok(())
+        self.core.lock().await.restore(key)
     }
 }
 
@@ -306,13 +329,23 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn mem_blob() -> Result<(), ExternalError> {
-        let registry = Arc::new(tokio::sync::Mutex::new(MemMultiRegistry::new()));
+        let registry = Arc::new(tokio::sync::Mutex::new(MemMultiRegistry::new(false)));
         blob_impl_test(move |path| {
             let path = path.to_owned();
             let registry = Arc::clone(&registry);
             async move { Ok(registry.lock().await.blob(&path)) }
         })
-        .await
+        .await?;
+
+        let registry = Arc::new(tokio::sync::Mutex::new(MemMultiRegistry::new(true)));
+        blob_impl_test(move |path| {
+            let path = path.to_owned();
+            let registry = Arc::clone(&registry);
+            async move { Ok(registry.lock().await.blob(&path)) }
+        })
+        .await?;
+
+        Ok(())
     }
 
     #[mz_ore::test(tokio::test)]
