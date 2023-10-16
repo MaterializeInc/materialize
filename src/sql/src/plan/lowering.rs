@@ -42,6 +42,7 @@ use std::iter::repeat;
 use itertools::Itertools;
 use mz_expr::{AccessStrategy, AggregateFunc, MirRelationExpr, MirScalarExpr};
 use mz_ore::collections::CollectionExt;
+use mz_ore::soft_panic_or_log;
 use mz_ore::stack::maybe_grow;
 use mz_repr::*;
 
@@ -590,7 +591,7 @@ impl HirRelationExpr {
                             // such a plan is not possible, for example if `on` does not describe an
                             // equijoin between columns of `left` and `right`.
                             if kind != JoinKind::Inner {
-                                if let Some(joined) = attempt_outer_join(
+                                if let Some(joined) = attempt_outer_equijoin(
                                     get_left.clone(),
                                     get_right.clone(),
                                     on.clone(),
@@ -1762,73 +1763,11 @@ impl AggregateExpr {
     }
 }
 
-// TODO: move this to the `mz_expr` crate.
-/// If the on clause of an outer join is an equijoin, figure out the join keys.
-///
-/// `oa`, `la`, and `ra` are the arities of `outer`, the lhs, and the rhs
-/// respectively.
-pub(crate) fn derive_equijoin_cols(
-    oa: usize,
-    la: usize,
-    ra: usize,
-    on: Vec<MirScalarExpr>,
-) -> Option<(Vec<usize>, Vec<usize>)> {
-    use mz_expr::{BinaryFunc, VariadicFunc};
-    // TODO: Replace this predicate deconstruction with
-    // `mz_expr::canonicalize::canonicalize_predicates`, which will also enable
-    // treating select * from lhs left join rhs on lhs.id = rhs.id and true as
-    // an equijoin.
-    // Deconstruct predicates that may be ands of multiple conditions.
-    let mut predicates = Vec::new();
-    let mut todo = on;
-    while let Some(next) = todo.pop() {
-        if let MirScalarExpr::CallVariadic {
-            func: VariadicFunc::And,
-            exprs,
-        } = next
-        {
-            exprs.into_iter().for_each(|e| todo.push(e));
-        } else {
-            predicates.push(next)
-        }
-    }
-
-    // We restrict ourselves to predicates that test column equality between left and right.
-    let mut l_keys = Vec::new();
-    let mut r_keys = Vec::new();
-    for predicate in predicates.iter_mut() {
-        if let MirScalarExpr::CallBinary {
-            expr1,
-            expr2,
-            func: BinaryFunc::Eq,
-        } = predicate
-        {
-            if let (MirScalarExpr::Column(c1), MirScalarExpr::Column(c2)) =
-                (&mut **expr1, &mut **expr2)
-            {
-                if *c1 > *c2 {
-                    std::mem::swap(c1, c2);
-                }
-                if (oa <= *c1 && *c1 < oa + la) && (oa + la <= *c2 && *c2 < oa + la + ra) {
-                    l_keys.push(*c1);
-                    r_keys.push(*c2 - la);
-                }
-            }
-        }
-    }
-    // If any predicates were not column equivs, give up.
-    if l_keys.len() < predicates.len() {
-        None
-    } else {
-        Some((l_keys, r_keys))
-    }
-}
-
 /// Attempts an efficient outer join, if `on` has equijoin structure.
-fn attempt_outer_join(
+fn attempt_outer_equijoin(
     left: MirRelationExpr,
     right: MirRelationExpr,
-    mut on: MirScalarExpr,
+    on: MirScalarExpr,
     kind: JoinKind,
     oa: usize,
     id_gen: &mut mz_ore::id_gen::IdGen,
@@ -1848,8 +1787,10 @@ fn attempt_outer_join(
     output_type.extend(l_type.column_types);
     output_type.extend(r_type.column_types.into_iter().skip(oa));
 
-    // Generally healthy to do,  but specifically `USING` conditions put an `AND true` here.
-    on.reduce(&output_type);
+    // Generally healthy to do, but specifically `USING` conditions sometimes
+    // put an `AND true` at the end of the `ON` condition.
+    let mut on = vec![on];
+    mz_expr::canonicalize::canonicalize_predicates(&mut on, &output_type);
 
     // Form the left and right types without the outer attributes.
     output_type.drain(0..oa);
@@ -1857,7 +1798,7 @@ fn attempt_outer_join(
     let rt = output_type.drain(0..ra).collect_vec();
     assert!(output_type.is_empty());
 
-    let equijoin_keys = derive_equijoin_cols(oa, la, ra, vec![on.clone()]);
+    let equijoin_keys = derive_equijoin_cols(oa, la, ra, on.clone());
     if equijoin_keys.is_none() {
         return Ok(None);
     }
@@ -1885,7 +1826,7 @@ fn attempt_outer_join(
                     .collect(),
             )
             // apply the filter constraints here, to ensure nulls are not matched.
-            .filter(vec![on]);
+            .filter(on);
 
             // We'll want to re-use the results of the join multiple times.
             join.let_in_fallible(id_gen, |id_gen, get_join| {
@@ -1966,4 +1907,62 @@ fn attempt_outer_join(
         })
     })?;
     Ok(Some(result))
+}
+
+/// If the on clause of an outer join is an equijoin, figure out the join keys.
+///
+/// `oa`, `la`, and `ra` are the arities of `outer`, the lhs, and the rhs
+/// respectively.
+pub(crate) fn derive_equijoin_cols(
+    oa: usize,
+    la: usize,
+    ra: usize,
+    on: Vec<MirScalarExpr>,
+) -> Option<(Vec<usize>, Vec<usize>)> {
+    use mz_expr::{BinaryFunc::Eq, VariadicFunc::And};
+
+    // Deconstruct predicates that may be ands of multiple conditions.
+    //
+    // Because the on predicate has been canonicalized by the caller with a
+    // `canonicalize_predicates` call, we should never have to do any work here.
+    let mut predicates = Vec::new();
+    let mut todo = on;
+    while let Some(next) = todo.pop() {
+        if let MirScalarExpr::CallVariadic { func: And, exprs } = next {
+            soft_panic_or_log!("Unexpected nested AND call in canonicalized predicate");
+            exprs.into_iter().for_each(|e| todo.push(e));
+        } else {
+            predicates.push(next)
+        }
+    }
+
+    // We restrict ourselves to predicates that test column equality between left and right.
+    let mut l_keys = Vec::new();
+    let mut r_keys = Vec::new();
+    for predicate in predicates.iter_mut() {
+        if let MirScalarExpr::CallBinary {
+            func: Eq,
+            expr1,
+            expr2,
+        } = predicate
+        {
+            if let (MirScalarExpr::Column(c1), MirScalarExpr::Column(c2)) =
+                (&mut **expr1, &mut **expr2)
+            {
+                if *c1 > *c2 {
+                    std::mem::swap(c1, c2);
+                }
+                if (oa <= *c1 && *c1 < oa + la) && (oa + la <= *c2 && *c2 < oa + la + ra) {
+                    l_keys.push(*c1);
+                    r_keys.push(*c2 - la);
+                }
+            }
+        }
+    }
+    // If any predicates were not column equivs, give up.
+    if l_keys.len() < predicates.len() {
+        None
+    } else {
+        Some((l_keys, r_keys))
+    }
 }
