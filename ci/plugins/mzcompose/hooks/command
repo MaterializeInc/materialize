@@ -13,6 +13,14 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
+cores="$HOME"/cores
+rm -rf "$cores"
+mkdir -m 777 "$cores"
+# Max 128 characters, so don't use $PWD which will make it too long
+sudo sysctl -w kernel.core_pattern="|/usr/bin/env tee $cores/core.%e.%p"
+echo -n "Core pattern: "
+cat /proc/sys/kernel/core_pattern
+
 mzcompose() {
     bin/ci-builder run stable bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
 }
@@ -24,8 +32,6 @@ if read_list BUILDKITE_PLUGIN_MZCOMPOSE_ARGS; then
         run_args+=("$arg")
     done
 fi
-
-sar -q 60 > sar.log &
 
 date +"%Y-%m-%d %H:%M:%S" > step_start_timestamp
 
