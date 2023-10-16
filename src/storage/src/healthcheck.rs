@@ -730,14 +730,6 @@ impl HealthStatusUpdate {
             HealthStatusUpdate::Stalled { should_halt, .. } => *should_halt,
         }
     }
-
-    /*
-    /// Whether or not we can transition from a state (or lack of one).
-    ///
-    /// Each time this returns `true`, a new status message will be communicated to the user.
-    /// Note that messages that are identical except for `should_halt` don't need to be
-    /// able to transition between each other, that is handled separately.
-     */
 }
 
 #[cfg(test)]
