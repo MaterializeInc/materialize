@@ -377,7 +377,7 @@ fn test_statement_logging_selects() {
 
     let sl_selects = Retry::default()
         .max_duration(Duration::from_secs(30))
-        .retry(|x| {
+        .retry(|_| {
             let sl_selects = client
                 .query(
                     "SELECT
