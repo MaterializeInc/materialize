@@ -42,9 +42,6 @@ from materialize.output_consistency.input_data.types.date_time_types_provider im
     TIME_TYPE_IDENTIFIER,
     TIMESTAMPTZ_TYPE_IDENTIFIER,
 )
-from materialize.output_consistency.input_data.types.number_types_provider import (
-    REAL_TYPE_IDENTIFIER,
-)
 from materialize.output_consistency.operation.operation import (
     DbFunction,
     DbOperation,
@@ -82,7 +79,7 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             ):
                 return YesIgnore("#22016: age, to_char, and others ignore timezone")
 
-        if _matches_eq_with_real(expression):
+        if matches_float_comparison(expression):
             return YesIgnore("#22022: real with decimal comparison")
 
         return super()._matches_problematic_operation_or_function_invocation(
@@ -294,12 +291,6 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             return YesIgnore("#21995: underflow in mz")
 
         if (
-            'inf" real out of range' in mz_error_msg
-            and query_template.matches_any_expression(_matches_eq_with_real, True)
-        ):
-            return YesIgnore("#20022: real resulting in out of range")
-
-        if (
             "precision for type timestamp or timestamptz must be between 0 and 6"
             in mz_error_msg
         ):
@@ -409,6 +400,9 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("Different precision causes issues")
 
+        if query_template.matches_any_expression(matches_float_comparison, True):
+            return YesIgnore("Caused by a different precision")
+
         if query_template.matches_any_expression(matches_mod_with_decimal, True):
             return YesIgnore("Caused by a different precision")
 
@@ -443,24 +437,6 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         query_template: QueryTemplate,
         contains_aggregation: bool,
     ) -> IgnoreVerdict:
-        def matches_float_comparison(expression: Expression) -> bool:
-            if isinstance(expression, ExpressionWithArgs) and isinstance(
-                expression.operation, DbOperation
-            ):
-                if expression.operation.pattern == "$ = $":
-                    type_spec_arg0 = expression.args[0].resolve_return_type_spec()
-                    type_spec_arg1 = expression.args[1].resolve_return_type_spec()
-
-                    return (
-                        isinstance(type_spec_arg0, NumericReturnTypeSpec)
-                        and type_spec_arg0.always_floating_type
-                    ) or (
-                        isinstance(type_spec_arg1, NumericReturnTypeSpec)
-                        and type_spec_arg1.always_floating_type
-                    )
-
-            return False
-
         if query_template.matches_any_expression(matches_float_comparison, True):
             return YesIgnore("Caused by a different precision")
 
@@ -469,18 +445,21 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         )
 
 
-def _matches_eq_with_real(expression: Expression) -> bool:
-    if (
-        isinstance(expression, ExpressionWithArgs)
-        and isinstance(expression.operation, DbOperation)
-        and expression.operation.pattern == "$ = $"
+def matches_float_comparison(expression: Expression) -> bool:
+    if isinstance(expression, ExpressionWithArgs) and isinstance(
+        expression.operation, DbOperation
     ):
-        type_arg0 = expression.args[0].try_resolve_exact_data_type()
-        type_arg1 = expression.args[1].try_resolve_exact_data_type()
+        if expression.operation.pattern == "$ = $":
+            type_spec_arg0 = expression.args[0].resolve_return_type_spec()
+            type_spec_arg1 = expression.args[1].resolve_return_type_spec()
 
-        return (
-            type_arg0 is not None and type_arg0.type_name == REAL_TYPE_IDENTIFIER
-        ) or (type_arg1 is not None and type_arg1.type_name == REAL_TYPE_IDENTIFIER)
+            return (
+                isinstance(type_spec_arg0, NumericReturnTypeSpec)
+                and type_spec_arg0.always_floating_type
+            ) or (
+                isinstance(type_spec_arg1, NumericReturnTypeSpec)
+                and type_spec_arg1.always_floating_type
+            )
 
     return False
 
