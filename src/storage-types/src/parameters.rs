@@ -24,7 +24,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_storage_types.parameters.rs"));
 ///
 /// Parameters can be set (`Some`) or unset (`None`).
 /// Unset parameters should be interpreted to mean "use the previous value".
-#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct StorageParameters {
     /// Persist client configuration.
     pub persist: PersistParameters,
@@ -58,6 +58,31 @@ pub struct StorageParameters {
     /// Whether or not to record errors by namespace in the `details`
     /// column of the status history tables.
     pub record_namespaced_errors: bool,
+}
+
+// Implement `Default` manually, so that the default can match the
+// LD default. This is not strictly necessary, but improves clarity.
+impl Default for StorageParameters {
+    fn default() -> Self {
+        Self {
+            persist: Default::default(),
+            pg_source_tcp_timeouts: Default::default(),
+            pg_source_snapshot_statement_timeout: Default::default(),
+            keep_n_source_status_history_entries: Default::default(),
+            keep_n_sink_status_history_entries: Default::default(),
+            upsert_rocksdb_tuning_config: Default::default(),
+            finalize_shards: Default::default(),
+            tracing: Default::default(),
+            upsert_auto_spill_config: Default::default(),
+            storage_dataflow_max_inflight_bytes_config: Default::default(),
+            grpc_client: Default::default(),
+            delay_sources_past_rehydration: Default::default(),
+            shrink_upsert_unused_buffers_by_ratio: Default::default(),
+            truncate_statement_log: Default::default(),
+            statement_logging_retention_time_seconds: Default::default(),
+            record_namespaced_errors: true,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
