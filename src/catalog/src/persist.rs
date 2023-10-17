@@ -14,7 +14,6 @@ use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
 use mz_ore::{soft_assert, soft_assert_eq};
 use mz_persist_client::read::ReadHandle;
@@ -462,7 +461,7 @@ impl PersistHandle {
                 },
             )
             .collect();
-        soft_assert!(
+        soft_assert_eq!(
             configs.len(),
             1,
             "multiple configs should not share the same key: {configs:?}"
@@ -658,6 +657,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
                 })
                 .map(|value| value.value.clone()))
         })
+        .await
     }
 
     async fn get_clusters(&mut self) -> Result<Vec<Cluster>, CatalogError> {
@@ -670,6 +670,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
                 .map_ok(|(k, v)| Cluster::from_key_value(k, v))
                 .collect::<Result<_, _>>()?)
         })
+        .await
     }
 
     async fn get_cluster_replicas(&mut self) -> Result<Vec<ClusterReplica>, CatalogError> {
@@ -682,6 +683,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
                 .map_ok(|(k, v)| ClusterReplica::from_key_value(k, v))
                 .collect::<Result<_, _>>()?)
         })
+        .await
     }
 
     async fn get_databases(&mut self) -> Result<Vec<Database>, CatalogError> {
@@ -694,6 +696,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
                 .map_ok(|(k, v)| Database::from_key_value(k, v))
                 .collect::<Result<_, _>>()?)
         })
+        .await
     }
 
     async fn get_schemas(&mut self) -> Result<Vec<Schema>, CatalogError> {
@@ -706,6 +709,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
                 .map_ok(|(k, v)| Schema::from_key_value(k, v))
                 .collect::<Result<_, _>>()?)
         })
+        .await
     }
 
     async fn get_system_items(&mut self) -> Result<Vec<SystemObjectMapping>, CatalogError> {
@@ -718,6 +722,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
                 .map_ok(|(k, v)| SystemObjectMapping::from_key_value(k, v))
                 .collect::<Result<_, _>>()?)
         })
+        .await
     }
 
     async fn get_introspection_source_indexes(
@@ -744,6 +749,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
                 )
                 .collect::<Result<_, _>>()?)
         })
+        .await
     }
 
     async fn get_roles(&mut self) -> Result<Vec<Role>, CatalogError> {
@@ -756,6 +762,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
                 .map_ok(|(k, v)| Role::from_key_value(k, v))
                 .collect::<Result<_, _>>()?)
         })
+        .await
     }
 
     async fn get_default_privileges(&mut self) -> Result<Vec<DefaultPrivilege>, CatalogError> {
@@ -768,6 +775,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
                 .map_ok(|(k, v)| DefaultPrivilege::from_key_value(k, v))
                 .collect::<Result<_, _>>()?)
         })
+        .await
     }
 
     async fn get_system_privileges(&mut self) -> Result<Vec<MzAclItem>, CatalogError> {
@@ -780,6 +788,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
                 .map_ok(|(k, v)| MzAclItem::from_key_value(k, v))
                 .collect::<Result<_, _>>()?)
         })
+        .await
     }
 
     async fn get_system_configurations(
@@ -794,6 +803,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
                 .map_ok(|(k, v)| SystemConfiguration::from_key_value(k, v))
                 .collect::<Result<_, _>>()?)
         })
+        .await
     }
 
     async fn get_comments(&mut self) -> Result<Vec<Comment>, CatalogError> {
@@ -806,6 +816,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
                 .map_ok(|(k, v)| Comment::from_key_value(k, v))
                 .collect::<Result<_, _>>()?)
         })
+        .await
     }
 
     async fn get_timestamps(&mut self) -> Result<Vec<TimelineTimestamp>, CatalogError> {
@@ -818,6 +829,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
                 .map_ok(|(k, v)| TimelineTimestamp::from_key_value(k, v))
                 .collect::<Result<_, _>>()?)
         })
+        .await
     }
 
     async fn get_timestamp(
@@ -836,6 +848,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
                 .transpose()?;
             Ok(val.map(|v| v.ts))
         })
+        .await
     }
 
     async fn get_audit_logs(&mut self) -> Result<Vec<VersionedEvent>, CatalogError> {
@@ -869,10 +882,11 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
         self.with_snapshot(|snapshot| {
             Ok(snapshot.id_allocator.get(&key).expect("must exist").next_id)
         })
+        .await
     }
 
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError> {
-        self.with_snapshot(|snapshot| Ok(snapshot.clone()))
+        self.with_snapshot(|snapshot| Ok(snapshot.clone())).await
     }
 }
 
