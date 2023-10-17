@@ -134,9 +134,7 @@ def run_with_concurrency(
         )
     wallclock_total = time.time() - start
 
-    df_detail = pd.DataFrame()
-    for measurement in measurements:
-        df_detail = pd.concat([df_detail, pd.DataFrame([measurement])])
+    df_detail = pd.DataFrame(measurements)
     print("Best and worst individual measurements:")
     print(df_detail.sort_values(by=["wallclock"]))
 
@@ -187,8 +185,8 @@ def run_workload(
             concurrency,
             floor(args.count * sqrt(concurrency)),
         )
-        df_totals = pd.concat([df_totals, df_total])
-        df_details = pd.concat([df_details, df_detail])
+        df_totals = pd.concat([df_totals, df_total], ignore_index=True)
+        df_details = pd.concat([df_details, df_detail], ignore_index=True)
 
         endpoint_name = endpoint.name()
         pathlib.Path(RESULTS_DIR / endpoint_name).mkdir(parents=True, exist_ok=True)
