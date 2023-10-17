@@ -11,6 +11,7 @@
 # TODO(guswynn): move ALL upsert-related tests into this directory.
 
 from pathlib import Path
+from textwrap import dedent
 
 from materialize import ci_util
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
@@ -398,7 +399,15 @@ def workflow_rocksdb_cleanup(c: Composition) -> None:
             else:
                 assert num_files(dropped_source_path) == 0
 
-        c.testdrive("#reset testdrive")
+        c.testdrive(
+            dedent(
+                """
+            $ nop
+
+            # this is to reset testdrive
+            """
+            )
+        )
 
 
 def workflow_autospill(c: Composition) -> None:

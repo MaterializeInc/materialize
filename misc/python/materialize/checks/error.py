@@ -147,10 +147,6 @@ class DecodeError(Check):
                 $ kafka-ingest format=avro topic=decode-error schema=${schema-f1} repeat=1
                 {"f1": "A"}
 
-                > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
-
-                > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
-
                 > CREATE SOURCE decode_error
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-decode-error-${testdrive.seed}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -205,10 +201,6 @@ class DecodeErrorUpsertValue(Check):
                 key0: {"f1": 1}
                 key1: {"f1": 2}
                 key2: {"f1": 3}
-
-                > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
-
-                > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
 
                 > CREATE SOURCE decode_error_upsert_value
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-decode-error-upsert-value-${testdrive.seed}')
@@ -296,10 +288,6 @@ class DecodeErrorUpsertKey(Check):
                 $ kafka-ingest topic=decode-error-upsert-key key-format=avro format=bytes key-schema=${key-schema}
                 {"f1": 1} value1
                 {"f1": 2} value2
-
-                > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
-
-                > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
 
                 > CREATE SOURCE decode_error_upsert_key
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-decode-error-upsert-key-${testdrive.seed}')

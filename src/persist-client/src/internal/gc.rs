@@ -399,7 +399,7 @@ where
     async fn incrementally_delete_and_truncate<F>(
         states: &mut StateVersionsIter<T>,
         gc_rollups: &GcRollups,
-        machine: &mut Machine<K, V, T, D>,
+        machine: &Machine<K, V, T, D>,
         timer: &mut F,
         gc_results: &mut GcResults,
     ) where
@@ -546,7 +546,7 @@ where
         truncate_lt: SeqNo,
         batch_parts: &mut BTreeSet<PartialBatchKey>,
         rollups: &mut BTreeSet<PartialRollupKey>,
-        machine: &mut Machine<K, V, T, D>,
+        machine: &Machine<K, V, T, D>,
         timer: &mut F,
     ) where
         F: FnMut(&Counter),

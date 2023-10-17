@@ -14,7 +14,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use bytesize::ByteSize;
-use differential_dataflow::trace::TraceReader;
+use differential_dataflow::trace::{Cursor, TraceReader};
+use differential_dataflow::Data;
 use mz_compute_client::logging::LoggingConfig;
 use mz_compute_client::protocol::command::{
     ComputeCommand, ComputeParameters, InstanceConfig, Peek,
@@ -27,22 +28,25 @@ use mz_ore::cast::CastFrom;
 use mz_ore::metrics::UIntGauge;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_persist_client::cache::PersistClientCache;
-use mz_repr::{GlobalId, Row, Timestamp};
+use mz_repr::fixed_length::{FromRowByTypes, IntoRowByTypes};
+use mz_repr::{ColumnType, Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_timely_util::probe;
 use timely::communication::Allocate;
+use timely::container::columnation::Columnation;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::worker::Worker as TimelyWorker;
 use tracing::{error, info, span, Level};
 use uuid::Uuid;
 
-use crate::arrangement::manager::{TraceBundle, TraceManager};
+use crate::arrangement::manager::{SpecializedTraceHandle, TraceBundle, TraceManager};
 use crate::logging;
 use crate::logging::compute::ComputeEvent;
 use crate::metrics::ComputeMetrics;
 use crate::render::LinearJoinImpl;
 use crate::server::ResponseSender;
+use crate::typedefs::TraceRowHandle;
 
 /// Worker-local state that is maintained across dataflows.
 ///
@@ -86,8 +90,8 @@ pub struct ComputeState {
     pub metrics: ComputeMetrics,
     /// A process-global handle to tracing configuration.
     tracing_handle: Arc<TracingHandle>,
-    /// Enable arrangement size logging
-    pub enable_arrangement_size_logging: bool,
+    /// Enable arrangement type specialization.
+    pub enable_specialized_arrangements: bool,
 }
 
 impl ComputeState {
@@ -115,7 +119,7 @@ impl ComputeState {
             linear_join_impl: Default::default(),
             metrics,
             tracing_handle,
-            enable_arrangement_size_logging: Default::default(),
+            enable_specialized_arrangements: Default::default(),
         }
     }
 
@@ -194,9 +198,9 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         let ComputeParameters {
             max_result_size,
             dataflow_max_inflight_bytes,
-            enable_arrangement_size_logging,
             enable_mz_join_core,
             enable_jemalloc_profiling,
+            enable_specialized_arrangements,
             persist,
             tracing,
             grpc_client: _grpc_client,
@@ -208,8 +212,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         if let Some(v) = dataflow_max_inflight_bytes {
             self.compute_state.dataflow_max_inflight_bytes = v;
         }
-        if let Some(v) = enable_arrangement_size_logging {
-            self.compute_state.enable_arrangement_size_logging = v;
+        if let Some(v) = enable_specialized_arrangements {
+            self.compute_state.enable_specialized_arrangements = v;
         }
         if let Some(v) = enable_mz_join_core {
             self.compute_state.linear_join_impl = match v {
@@ -368,7 +372,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             panic!("dataflow server has already initialized logging");
         }
 
-        let (logger, traces) = logging::initialize(self.timely_worker, self.compute_state, config);
+        let (logger, traces) = logging::initialize(self.timely_worker, config);
 
         // Install traces as maintained indexes
         for (log, trace) in traces {
@@ -644,13 +648,11 @@ impl PendingPeek {
         Some(response)
     }
 
-    /// Collects data for a known-complete peek.
+    /// Collects data for a known-complete peek from the ok stream.
     fn collect_finished_data(
         &mut self,
         max_result_size: u32,
     ) -> Result<Vec<(Row, NonZeroUsize)>, String> {
-        let max_result_size = usize::cast_from(max_result_size);
-        let count_byte_size = std::mem::size_of::<NonZeroUsize>();
         // Check if there exist any errors and, if so, return whatever one we
         // find first.
         let (mut cursor, storage) = self.trace_bundle.errs_mut().cursor();
@@ -674,8 +676,50 @@ impl PendingPeek {
             cursor.step_key(&storage);
         }
 
+        self.dispatch_collect_ok_finished_data(max_result_size)
+    }
+
+    /// Dispatches peek finishing of data in the ok stream according to
+    /// arrangement key-value types.
+    fn dispatch_collect_ok_finished_data(
+        &mut self,
+        max_result_size: u32,
+    ) -> Result<Vec<(Row, NonZeroUsize)>, String> {
+        let peek = &mut self.peek;
+        let oks = self.trace_bundle.oks_mut();
+        match oks {
+            SpecializedTraceHandle::Bytes9Row(key_types, oks_handle) => {
+                Self::collect_ok_finished_data(
+                    peek,
+                    oks_handle,
+                    Some(key_types),
+                    None,
+                    max_result_size,
+                )
+            }
+            SpecializedTraceHandle::RowRow(oks_handle) => {
+                Self::collect_ok_finished_data(peek, oks_handle, None, None, max_result_size)
+            }
+        }
+    }
+
+    /// Collects data for a known-complete peek from the ok stream.
+    fn collect_ok_finished_data<K, V>(
+        peek: &mut Peek<Timestamp>,
+        oks_handle: &mut TraceRowHandle<K, V, Timestamp, Diff>,
+        key_types: Option<&[ColumnType]>,
+        val_types: Option<&[ColumnType]>,
+        max_result_size: u32,
+    ) -> Result<Vec<(Row, NonZeroUsize)>, String>
+    where
+        K: Columnation + Data + FromRowByTypes + IntoRowByTypes,
+        V: Columnation + Data + IntoRowByTypes,
+    {
+        let max_result_size = usize::cast_from(max_result_size);
+        let count_byte_size = std::mem::size_of::<NonZeroUsize>();
+
         // Cursor and bound lifetime for `Row` data in the backing trace.
-        let (mut cursor, storage) = self.trace_bundle.oks_mut().cursor();
+        let (mut cursor, storage) = oks_handle.cursor();
         // Accumulated `Vec<(row, count)>` results that we are likely to return.
         let mut results = Vec::new();
         let mut total_size: usize = 0;
@@ -685,13 +729,8 @@ impl PendingPeek {
         // `order_by` field. Further limiting will happen when the results
         // are collected, so we don't need to have exactly this many results,
         // just at least those results that would have been returned.
-        let max_results = self
-            .peek
-            .finishing
-            .limit
-            .map(|l| l + self.peek.finishing.offset);
+        let max_results = peek.finishing.limit.map(|l| l + peek.finishing.offset);
 
-        use differential_dataflow::trace::Cursor;
         use mz_ore::result::ResultExt;
         use mz_repr::{DatumVec, RowArena};
 
@@ -701,12 +740,11 @@ impl PendingPeek {
         let mut r_datum_vec = DatumVec::new();
 
         // We have to sort the literal constraints because cursor.seek_key can seek only forward.
-        self.peek
-            .literal_constraints
+        peek.literal_constraints
             .iter_mut()
             .for_each(|vec| vec.sort());
-        let has_literal_constraints = self.peek.literal_constraints.is_some();
-        let mut literals = self.peek.literal_constraints.iter().flat_map(|l| l);
+        let has_literal_constraints = peek.literal_constraints.is_some();
+        let mut literals = peek.literal_constraints.iter().flat_map(|l| l);
         let mut current_literal = None;
 
         while cursor.key_valid(&storage) {
@@ -718,11 +756,14 @@ impl PendingPeek {
                     match current_literal {
                         None => return Ok(results),
                         Some(current_literal) => {
-                            cursor.seek_key(&storage, current_literal);
+                            // NOTE(vmarcos): We expect the extra allocations below to be manageable
+                            // since we only perform as many of them as there are literals.
+                            let current_literal = K::from_row(current_literal.clone(), key_types);
+                            cursor.seek_key(&storage, &current_literal);
                             if !cursor.key_valid(&storage) {
                                 return Ok(results);
                             }
-                            if *cursor.get_key(&storage).unwrap() == *current_literal {
+                            if *cursor.get_key(&storage).unwrap() == current_literal {
                                 // The cursor found a record whose key matches the current literal.
                                 // We break from the inner loop, and process this key.
                                 break;
@@ -734,6 +775,8 @@ impl PendingPeek {
                 }
             }
 
+            let mut key_buf = Row::default();
+            let mut val_buf = Row::default();
             while cursor.val_valid(&storage) {
                 // TODO: This arena could be maintained and reused for longer,
                 // but it wasn't clear at what interval we should flush
@@ -741,8 +784,12 @@ impl PendingPeek {
                 // This choice is conservative, and not the end of the world
                 // from a performance perspective.
                 let arena = RowArena::new();
-                let key = cursor.key(&storage);
-                let row = cursor.val(&storage);
+                // TODO(vmarcos): We could think of not transiting through `Row` below,
+                // but rather create another type-sensitive dispatch to obtain the borrow
+                // on the key and value datums. The complexity does not seem worth the payoff
+                // if all we are doing here is returning a naturally limited number of results.
+                let key = cursor.key(&storage).into_row(&mut key_buf, key_types);
+                let row = cursor.val(&storage).into_row(&mut val_buf, val_types);
                 // TODO: We could unpack into a re-used allocation, except
                 // for the arena above (the allocation would not be allowed
                 // to outlive the arena above, from which it might borrow).
@@ -757,15 +804,14 @@ impl PendingPeek {
                     // loop.
                     datum_vec.extend(current_literal.unwrap().iter());
                 }
-                if let Some(result) = self
-                    .peek
+                if let Some(result) = peek
                     .map_filter_project
                     .evaluate_into(&mut borrow, &arena, &mut row_builder)
                     .map_err_to_string_with_causes()?
                 {
                     let mut copies = 0;
                     cursor.map_times(&storage, |time, diff| {
-                        if time.less_equal(&self.peek.timestamp) {
+                        if time.less_equal(&peek.timestamp) {
                             copies += diff;
                         }
                     });
@@ -799,7 +845,7 @@ impl PendingPeek {
                         // across all of the insertions. We could tighten this, but it
                         // works for the moment.
                         if results.len() >= 2 * max_results {
-                            if self.peek.finishing.order_by.is_empty() {
+                            if peek.finishing.order_by.is_empty() {
                                 results.truncate(max_results);
                                 return Ok(results);
                             } else {
@@ -815,7 +861,7 @@ impl PendingPeek {
                                     let left_datums = l_datum_vec.borrow_with(&left.0);
                                     let right_datums = r_datum_vec.borrow_with(&right.0);
                                     mz_expr::compare_columns(
-                                        &self.peek.finishing.order_by,
+                                        &peek.finishing.order_by,
                                         &left_datums,
                                         &right_datums,
                                         || left.0.cmp(&right.0),

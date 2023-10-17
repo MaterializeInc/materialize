@@ -642,6 +642,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
         }
     }
 
+    // False positive for async_worker
+    #[allow(clippy::needless_pass_by_ref_mut)]
     /// Entry point for applying an internal storage command.
     pub fn handle_internal_storage_command(
         &mut self,
@@ -1158,6 +1160,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
 }
 
 impl StorageState {
+    // False positive for async_worker
+    #[allow(clippy::needless_pass_by_ref_mut)]
     /// Entry point for applying a storage command.
     ///
     /// NOTE: This does not have access to the timely worker and therefore

@@ -663,12 +663,12 @@ pub fn get_precision<const N: usize>(n: &Decimal<N>) -> u32 {
 }
 
 /// Returns `n`'s scale, i.e. the number of digits used after the decimal point.
-pub fn get_scale(n: &Numeric) -> u8 {
+pub fn get_scale(n: &Numeric) -> u32 {
     let exp = n.exponent();
     if exp >= 0 {
         0
     } else {
-        u8::try_from(-exp).unwrap()
+        exp.unsigned_abs()
     }
 }
 
@@ -693,7 +693,7 @@ fn rescale_within_max_precision(n: &mut Numeric) -> Result<(), anyhow::Error> {
     if current_precision > u32::from(NUMERIC_DATUM_MAX_PRECISION) {
         if n.exponent() < 0 {
             let precision_diff = current_precision - u32::from(NUMERIC_DATUM_MAX_PRECISION);
-            let current_scale = get_scale(n);
+            let current_scale = u8::try_from(get_scale(n))?;
             let scale_diff = current_scale - u8::try_from(precision_diff).unwrap();
             rescale(n, scale_diff)?;
         } else {

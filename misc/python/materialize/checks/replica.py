@@ -9,7 +9,7 @@
 from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import Check
+from materialize.checks.checks import TESTDRIVE_NOP, Check
 from materialize.checks.executors import Executor
 from materialize.util import MzVersion
 
@@ -80,7 +80,7 @@ class CreateReplica(Check):
                 true
                 """
                 if self.base_version < MzVersion.parse("0.66.0-dev")
-                else ""
+                else TESTDRIVE_NOP
             )
         )
 

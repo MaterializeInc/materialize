@@ -87,7 +87,6 @@ use mz_controller::clusters::{ClusterConfig, ClusterEvent, CreateReplicaConfig};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_orchestrator::ServiceProcessMetrics;
-use mz_ore::cast::CastFrom;
 use mz_ore::metrics::{MetricsFutureExt, MetricsRegistry};
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::retry::Retry;
@@ -98,7 +97,7 @@ use mz_ore::{soft_assert_or_log, stack, task};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::ExplainFormat;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Datum, GlobalId, RelationType, Row, Timestamp};
+use mz_repr::{GlobalId, RelationType, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::SecretsController;
 use mz_sql::ast::{CreateSubsourceStatement, Raw, Statement};
@@ -142,12 +141,13 @@ use crate::coord::timestamp_oracle::catalog_oracle::CatalogTimestampPersistence;
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
+use crate::optimize::{Optimize, OptimizeMaterializedView, OptimizerConfig};
 use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, ResultExt};
 use crate::{flags, AdapterNotice, TimestampProvider};
-use mz_catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
+use mz_catalog::builtin::BUILTINS;
 
 pub(crate) mod dataflows;
 use self::statement_logging::{StatementLogging, StatementLoggingId};
@@ -1353,6 +1353,12 @@ impl Coordinator {
 
         debug!("coordinator init: installing existing objects in catalog");
         let mut privatelink_connections = BTreeMap::new();
+
+        let enable_unified_optimizer_api = self
+            .catalog()
+            .system_config()
+            .enable_unified_optimizer_api();
+
         for entry in &entries {
             debug!(
                 "coordinator init: installing {} {}",
@@ -1470,40 +1476,96 @@ impl Coordinator {
                         .storage_ids
                         .insert(entry.id());
 
-                    // Re-create the sink on the compute instance.
-                    let internal_view_id = self.allocate_transient_id()?;
-                    let debug_name = self
-                        .catalog()
-                        .resolve_full_name(entry.name(), entry.conn_id())
-                        .to_string();
+                    if enable_unified_optimizer_api {
+                        // Collect optimizer parameters
+                        let compute_instance = self
+                            .instance_snapshot(mview.cluster_id)
+                            .expect("compute instance does not exist");
+                        let internal_view_id = self.allocate_transient_id()?;
+                        let debug_name = self
+                            .catalog()
+                            .resolve_full_name(entry.name(), None)
+                            .to_string();
+                        let optimzier_config =
+                            OptimizerConfig::from(self.catalog().system_config());
 
-                    let mut builder = self.dataflow_builder(mview.cluster_id);
-                    let (mut df, df_metainfo) = builder.build_materialized_view(
-                        entry.id(),
-                        internal_view_id,
-                        debug_name,
-                        &mview.optimized_expr,
-                        &mview.desc,
-                    )?;
+                        // Build a MATERIALIZED VIEW optimizer for this view.
+                        let mut optimizer = OptimizeMaterializedView::new(
+                            self.owned_catalog(),
+                            compute_instance,
+                            entry.id(),
+                            internal_view_id,
+                            mview.desc.iter_names().cloned().collect(),
+                            mview.non_null_assertions.clone(),
+                            debug_name,
+                            optimzier_config,
+                        );
 
-                    // Note: ideally, the optimized_plan should be computed and
-                    // set when the CatalogItem is re-constructed (in
-                    // parse_item).
-                    //
-                    // However, it's not clear how exactly to change
-                    // `load_catalog_items` to accommodate for the
-                    // `build_materialized_view` call above.
-                    self.catalog_mut()
-                        .set_optimized_plan(entry.id(), df.clone());
-                    self.catalog_mut()
-                        .set_dataflow_metainfo(entry.id(), df_metainfo);
+                        // MIR ⇒ MIR optimization (global)
+                        let global_mir_plan = optimizer.optimize(mview.optimized_expr.clone())?;
+                        // Timestamp selection
+                        let as_of = self.bootstrap_materialized_view_as_of(
+                            global_mir_plan.df_desc(),
+                            global_mir_plan.compute_instance_id(),
+                        );
+                        let timestamped_plan = global_mir_plan.clone().resolve(as_of.clone());
+                        // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+                        let global_lir_plan = optimizer.optimize(timestamped_plan)?;
 
-                    // The 'as_of' field of the dataflow changes after restart
-                    let as_of = self.bootstrap_materialized_view_as_of(&df, mview.cluster_id);
-                    df.set_as_of(as_of);
+                        // Note: ideally, the optimized_plan should be computed
+                        // and set when the CatalogItem is re-constructed (in
+                        // parse_item).
+                        //
+                        // However, it's not clear how exactly to change
+                        // `load_catalog_items` in order to accommodate the
+                        // optimizer pipeline executed above.
+                        self.catalog_mut()
+                            .set_optimized_plan(entry.id(), global_mir_plan.df_desc().clone());
+                        self.catalog_mut()
+                            .set_physical_plan(entry.id(), global_lir_plan.df_desc().clone());
+                        self.catalog_mut()
+                            .set_dataflow_metainfo(entry.id(), global_lir_plan.df_meta().clone());
 
-                    let df = self.must_ship_dataflow(df, mview.cluster_id).await;
-                    self.catalog_mut().set_physical_plan(entry.id(), df);
+                        let df = global_lir_plan.unapply().0;
+
+                        self.ship_dataflow_new(df, mview.cluster_id).await;
+                    } else {
+                        // Re-create the sink on the compute instance.
+                        let internal_view_id = self.allocate_transient_id()?;
+                        let debug_name = self
+                            .catalog()
+                            .resolve_full_name(entry.name(), entry.conn_id())
+                            .to_string();
+
+                        let mut builder = self.dataflow_builder(mview.cluster_id);
+                        let (mut df, df_metainfo) = builder.build_materialized_view(
+                            entry.id(),
+                            internal_view_id,
+                            debug_name,
+                            &mview.optimized_expr,
+                            &mview.desc,
+                            &mview.non_null_assertions,
+                        )?;
+
+                        // Note: ideally, the optimized_plan should be computed and
+                        // set when the CatalogItem is re-constructed (in
+                        // parse_item).
+                        //
+                        // However, it's not clear how exactly to change
+                        // `load_catalog_items` to accommodate for the
+                        // `build_materialized_view` call above.
+                        self.catalog_mut()
+                            .set_optimized_plan(entry.id(), df.clone());
+                        self.catalog_mut()
+                            .set_dataflow_metainfo(entry.id(), df_metainfo);
+
+                        // The 'as_of' field of the dataflow changes after restart
+                        let as_of = self.bootstrap_materialized_view_as_of(&df, mview.cluster_id);
+                        df.set_as_of(as_of);
+
+                        let df = self.must_ship_dataflow(df, mview.cluster_id).await;
+                        self.catalog_mut().set_physical_plan(entry.id(), df);
+                    }
                 }
                 CatalogItem::Sink(sink) => {
                     // Re-create the sink.
@@ -1618,61 +1680,6 @@ impl Coordinator {
         debug!("coordinator init: announcing completion of initialization to controller");
         // Announce the completion of initialization.
         self.controller.initialization_complete();
-
-        // Announce primary and foreign key relationships.
-        debug!("coordinator init: announcing primary and foreign key relationships");
-        let mz_view_keys = self.catalog().resolve_builtin_table(&MZ_VIEW_KEYS);
-        for log in BUILTINS::logs() {
-            let log_id = &self.catalog().resolve_builtin_log(log).to_string();
-            builtin_table_updates.extend(
-                log.variant
-                    .desc()
-                    .typ()
-                    .keys
-                    .iter()
-                    .enumerate()
-                    .flat_map(move |(index, key)| {
-                        key.iter().map(move |k| {
-                            let row = Row::pack_slice(&[
-                                Datum::String(log_id),
-                                Datum::UInt64(u64::cast_from(*k)),
-                                Datum::UInt64(u64::cast_from(index)),
-                            ]);
-                            BuiltinTableUpdate {
-                                id: mz_view_keys,
-                                row,
-                                diff: 1,
-                            }
-                        })
-                    }),
-            );
-
-            let mz_foreign_keys = self.catalog().resolve_builtin_table(&MZ_VIEW_FOREIGN_KEYS);
-            builtin_table_updates.extend(
-                log.variant.foreign_keys().into_iter().enumerate().flat_map(
-                    |(index, (parent, pairs))| {
-                        let parent_log = BUILTINS::logs()
-                            .find(|src| src.variant == parent)
-                            .expect("log foreign key variant is invalid");
-                        let parent_id = self.catalog().resolve_builtin_log(parent_log).to_string();
-                        pairs.into_iter().map(move |(c, p)| {
-                            let row = Row::pack_slice(&[
-                                Datum::String(log_id),
-                                Datum::UInt64(u64::cast_from(c)),
-                                Datum::String(&parent_id),
-                                Datum::UInt64(u64::cast_from(p)),
-                                Datum::UInt64(u64::cast_from(index)),
-                            ]);
-                            BuiltinTableUpdate {
-                                id: mz_foreign_keys,
-                                row,
-                                diff: 1,
-                            }
-                        })
-                    },
-                ),
-            )
-        }
 
         // Expose mapping from T-shirt sizes to actual sizes
         builtin_table_updates.extend(self.catalog().state().pack_all_replica_size_updates());
@@ -2085,18 +2092,15 @@ pub async fn serve(
         coord_bail!("availability zones must be unique");
     }
 
-    let aws_principal_context = if aws_account_id.is_some()
-        && connection_context.aws_external_id_prefix.is_some()
-    {
-        Some(AwsPrincipalContext {
-            aws_account_id: aws_account_id.expect("known to be `Some` from `is_some()` call above"),
-            aws_external_id_prefix: connection_context
-                .aws_external_id_prefix
-                .clone()
-                .expect("known to be `Some` from `is_some()` call above"),
-        })
-    } else {
-        None
+    let aws_principal_context = match (
+        aws_account_id,
+        connection_context.aws_external_id_prefix.clone(),
+    ) {
+        (Some(aws_account_id), Some(aws_external_id_prefix)) => Some(AwsPrincipalContext {
+            aws_account_id,
+            aws_external_id_prefix,
+        }),
+        _ => None,
     };
 
     let aws_privatelink_availability_zones = aws_privatelink_availability_zones

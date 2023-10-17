@@ -688,6 +688,9 @@ impl CatalogState {
         // [Catalog::open]. Existing catalog items might have been created while a
         // specific feature flag turned on, so we need to ensure that this is also the
         // case during catalog rehydration in order to avoid panics.
+        // WARNING / CONTRACT: The session catalog with all features enabled should be used
+        // exclusively for parsing and obtaining an an mz_sql::plan::Plan. After this step,
+        // feature flag configuration must not be overridden.
         session_catalog.system_vars_mut().enable_all_feature_flags();
 
         let stmt = mz_sql::parse::parse(&create_sql)?.into_element().ast;
@@ -1237,6 +1240,15 @@ impl CatalogState {
                 unreachable!("temporary schemas are in the ambient database")
             }
         }
+    }
+
+    pub(super) fn find_non_temp_schema(&self, schema_id: &SchemaId) -> &Schema {
+        self.database_by_id
+            .values()
+            .filter_map(|database| database.schemas_by_id.get(schema_id))
+            .chain(self.ambient_schemas_by_id.values())
+            .filter(|schema| schema.id() == &SchemaSpecifier::from(*schema_id))
+            .into_first()
     }
 
     pub fn get_mz_catalog_schema_id(&self) -> &SchemaId {

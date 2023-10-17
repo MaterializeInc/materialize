@@ -55,6 +55,7 @@ SUBCOMMANDS:
    ```
    aws/us-east-1  enabled
    aws/eu-west-1  disabled
+   aws/us-west-2  disabled
    ```
 
 4. Launch a SQL shell connected to one of the enabled regions in your

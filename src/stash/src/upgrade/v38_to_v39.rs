@@ -7,8 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use crate::objects::{wire_compatible, WireCompatible};
-use crate::upgrade::{objects_v38 as v38, objects_v39 as v39, MigrationAction};
+use mz_stash_types::upgrade::{objects_v38 as v38, objects_v39 as v39};
+
+use crate::upgrade::{wire_compatible, MigrationAction, WireCompatible};
 use crate::{StashError, Transaction, TypedCollection};
 
 wire_compatible!(v38::RoleKey with v39::RoleKey);
@@ -19,7 +20,7 @@ const ROLES_COLLECTION: TypedCollection<v38::RoleKey, v38::RoleValue> =
     TypedCollection::new("role");
 
 /// Update all Roles to contains an empy set of RoleVars.
-pub async fn upgrade(tx: &mut Transaction<'_>) -> Result<(), StashError> {
+pub async fn upgrade(tx: &Transaction<'_>) -> Result<(), StashError> {
     ROLES_COLLECTION
         .migrate_to(tx, |entries| {
             let mut updates = Vec::with_capacity(entries.len());
@@ -109,9 +110,9 @@ mod tests {
 
             // Run the migration.
             stash
-                .with_transaction(|mut tx| {
+                .with_transaction(|tx| {
                     Box::pin(async move {
-                        upgrade(&mut tx).await?;
+                        upgrade(&tx).await?;
                         Ok(())
                     })
                 })

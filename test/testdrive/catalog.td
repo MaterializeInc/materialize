@@ -523,6 +523,7 @@ mz_arrangement_heap_size_raw                 log   <null>   <null>
 mz_arrangement_heap_capacity_raw             log   <null>   <null>
 mz_arrangement_heap_allocations_raw          log   <null>   <null>
 mz_compute_delays_histogram_raw              log   <null>   <null>
+mz_compute_error_counts_raw                  log   <null>   <null>
 mz_compute_exports_per_worker                log   <null>   <null>
 mz_compute_frontiers_per_worker              log   <null>   <null>
 mz_compute_import_frontiers_per_worker       log   <null>   <null>
@@ -568,8 +569,6 @@ mz_sessions
 mz_storage_usage_by_shard
 mz_subscriptions
 mz_type_pg_metadata
-mz_view_foreign_keys
-mz_view_keys
 mz_webhook_sources
 
 > SHOW VIEWS FROM mz_internal
@@ -584,6 +583,8 @@ mz_cluster_replica_history
 mz_cluster_replica_utilization
 mz_compute_delays_histogram
 mz_compute_delays_histogram_per_worker
+mz_compute_error_counts
+mz_compute_error_counts_per_worker
 mz_compute_exports
 mz_compute_frontiers
 mz_compute_import_frontiers
@@ -659,11 +660,11 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-51
+49
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-108
+111
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

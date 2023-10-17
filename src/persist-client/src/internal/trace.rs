@@ -834,7 +834,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
     ///
     /// When this function is called, `effort` must be non-negative
     #[allow(dead_code)]
-    pub fn exert(&mut self, effort: &mut isize, merge_reqs: &mut Vec<FueledMergeReq<T>>) {
+    pub fn exert(&mut self, effort: &isize, merge_reqs: &mut Vec<FueledMergeReq<T>>) {
         let mut log = SpineLog::Enabled { merge_reqs };
         // If there is work to be done, ...
         self.tidy_layers();
@@ -942,7 +942,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
         // Convert to an `isize` so we can observe any fuel shortfall.
         // TODO(benesch): avoid dangerous usage of `as`.
         #[allow(clippy::as_conversions)]
-        let mut fuel = fuel as isize;
+        let fuel = fuel as isize;
 
         // Step 1.  Apply fuel to each in-progress merge.
         //
@@ -950,7 +950,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
         //          fuel to in-progress merges, as this fuel is what ensures
         //          that the merges will be complete by the time we insert
         //          the updates.
-        self.apply_fuel(&mut fuel, log);
+        self.apply_fuel(&fuel, log);
 
         // Step 2.  We must ensure the invariant that adjacent layers do not
         //          contain two batches will be satisfied when we insert the
@@ -1027,7 +1027,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
     /// could do so in order to maintain fewer batches on average (at the risk
     /// of completing merges of large batches later, but tbh probably not much
     /// later).
-    pub fn apply_fuel(&mut self, fuel: &mut isize, log: &mut SpineLog<'_, T>) {
+    pub fn apply_fuel(&mut self, fuel: &isize, log: &mut SpineLog<'_, T>) {
         // For the moment our strategy is to apply fuel independently to each
         // merge in progress, rather than prioritizing small merges. This sounds
         // like a great idea, but we need better accounting in place to ensure
@@ -1422,7 +1422,7 @@ pub mod datadriven {
     }
 
     pub fn since_upper(
-        datadriven: &mut TraceState,
+        datadriven: &TraceState,
         _args: DirectiveArgs,
     ) -> Result<String, anyhow::Error> {
         Ok(format!(
@@ -1432,10 +1432,7 @@ pub mod datadriven {
         ))
     }
 
-    pub fn batches(
-        datadriven: &mut TraceState,
-        _args: DirectiveArgs,
-    ) -> Result<String, anyhow::Error> {
+    pub fn batches(datadriven: &TraceState, _args: DirectiveArgs) -> Result<String, anyhow::Error> {
         let mut s = String::new();
         datadriven.trace.spine.map_batches(|b| {
             s.push_str(b.describe(true).as_str());

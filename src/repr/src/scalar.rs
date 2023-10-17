@@ -7,10 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-// `EnumKind` unconditionally introduces a lifetime. TODO: remove this once
-// https://github.com/rust-lang/rust-clippy/pull/9037 makes it into stable
-#![allow(clippy::extra_unused_lifetimes)]
-
 use std::fmt::{self, Debug, Write};
 use std::hash::Hash;
 use std::iter;
@@ -2393,7 +2389,7 @@ impl<'a, E> DatumType<'a, E> for CheckedTimestamp<DateTime<Utc>> {
     }
 }
 
-impl<'a> ScalarType {
+impl ScalarType {
     /// Returns the contained numeric maximum scale.
     ///
     /// # Panics

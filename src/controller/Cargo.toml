@@ -23,7 +23,7 @@ mz-proto = { path = "../proto" }
 mz-ore = { path = "../ore" }
 mz-repr = { path = "../repr" }
 mz-service = { path = "../service" }
-mz-stash = { path = "../stash" }
+mz-stash-types = { path = "../stash-types" }
 mz-storage-client = { path = "../storage-client" }
 mz-storage-controller = { path = "../storage-controller" }
 once_cell = "1.16.0"

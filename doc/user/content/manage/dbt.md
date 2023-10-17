@@ -232,7 +232,7 @@ This is where Materialize goes beyond dbt's incremental models (and traditional 
 
 **Filename:** models/materialized_view_a.sql
 ```sql
-{{ config(materialized='materializedview') }}
+{{ config(materialized='materialized_view') }}
 
 SELECT
     col_a, ...
@@ -277,7 +277,7 @@ database.schema.kafka_topic_c
 Use the `cluster` option to specify the [cluster](/sql/create-cluster/) in which a `materialized view` is created. If unspecified, the default cluster for the connection is used.
 
 ```sql
-{{ config(materialized='materializedview', cluster='cluster_a') }}
+{{ config(materialized='materialized_view', cluster='cluster_a') }}
 ```
 
 #### Databases
@@ -285,7 +285,7 @@ Use the `cluster` option to specify the [cluster](/sql/create-cluster/) in which
 Use the `database` option to specify the [database](/sql/namespaces/#database-details) in which a `source`, `view`, `materialized view` or `sink` is created. If unspecified, the default database for the connection is used.
 
 ```sql
-{{ config(materialized='materializedview', database='database_a') }}
+{{ config(materialized='materialized_view', database='database_a') }}
 ```
 
 #### Indexes
@@ -351,6 +351,9 @@ Component                            | Value     | Description
 That's it! From here on, Materialize makes sure that your models are **incrementally updated** as new data streams in, and that you get **fresh and correct results** with millisecond latency whenever you query your views.
 
 ## Test and document a dbt project
+
+[//]: # "TODO(morsapaes) Call out the cluster configuration for tests once this
+page is rehashed."
 
 ### Configure continuous testing
 

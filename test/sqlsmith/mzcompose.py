@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 import json
-import os
 import random
 import time
 from datetime import datetime
@@ -22,13 +21,8 @@ from materialize.mzcompose.composition import (
 )
 from materialize.mzcompose.services.materialized import Materialized
 
-if os.getenv("BUILDKITE_AGENT_META_DATA_AWS_INSTANCE_TYPE") == "c5.2xlarge":
-    TOTAL_MEMORY = 12
-    NUM_SERVERS = 2
-else:
-    TOTAL_MEMORY = 96
-    NUM_SERVERS = 1
-
+TOTAL_MEMORY = 12
+NUM_SERVERS = 2
 MZ_SERVERS = [f"mz_{i + 1}" for i in range(NUM_SERVERS)]
 
 SERVICES = [
@@ -159,6 +153,7 @@ known_errors = [
     "csv_extract number of columns too large",
     "target replica failed or was dropped",  # expected on replica OoMs with #21587
     "cannot materialize call to",  # create materialized view on some internal views
+    "arrays must not contain null values",  # aclexplode, mz_aclexplode
 ]
 
 

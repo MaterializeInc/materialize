@@ -69,6 +69,9 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "persist_streaming_snapshot_and_fetch_enabled": "true",
     "enable_unified_clusters": "true",
     "enable_jemalloc_profiling": "true",
+    "enable_comment": "true",
+    "enable_sink_doc_on_option": "true",
+    "enable_assert_not_null": "true",
 }
 
 DEFAULT_CRDB_ENVIRONMENT = [

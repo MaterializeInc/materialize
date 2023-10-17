@@ -239,6 +239,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     emit_boot_diagnostics!(&BUILD_INFO);
 
     mz_alloc::register_metrics_into(&metrics_registry).await;
+    mz_metrics::rusage::register_metrics_into(&metrics_registry).await;
 
     let mut _pid_file = None;
     if let Some(pid_file_location) = &args.pid_file_location {

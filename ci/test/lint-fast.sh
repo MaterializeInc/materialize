@@ -30,12 +30,18 @@ try cargo --locked about generate ci/deploy/licenses.hbs > /dev/null
 
 
 if [[ "${BUILDKITE_PULL_REQUEST:-true}" != "false" ]]; then
+  # see ./ci/test/lint-buf/README.md
+
   fetch_pr_target_branch
 
+  ci_collapsed_heading "Verify that protobuf config is up-to-date"
+  try bin/pyactivate ./ci/test/lint-buf/generate-buf-config.py
+  try yamllint src/buf.yaml
+  try git diff --name-only --exit-code src/buf.yaml
+
   ci_collapsed_heading "Lint protobuf"
-  # exceptions can be defined in src/buf.yaml
   COMMON_ANCESTOR="$(get_common_ancestor_commit_of_pr_and_target)"
-  try buf breaking src --against ".git#ref=$COMMON_ANCESTOR,subdir=src"
+  try buf breaking src --against ".git#ref=$COMMON_ANCESTOR,subdir=src" --verbose
 fi
 
 try_status_report

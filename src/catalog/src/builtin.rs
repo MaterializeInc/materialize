@@ -1396,6 +1396,12 @@ pub const MZ_SCHEDULING_PARKS_HISTOGRAM_RAW: BuiltinLog = BuiltinLog {
     variant: LogVariant::Timely(TimelyLog::Parks),
 };
 
+pub const MZ_ARRANGEMENT_RECORDS_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_arrangement_records_raw",
+    schema: MZ_INTERNAL_SCHEMA,
+    variant: LogVariant::Differential(DifferentialLog::ArrangementRecords),
+};
+
 pub const MZ_ARRANGEMENT_BATCHES_RAW: BuiltinLog = BuiltinLog {
     name: "mz_arrangement_batches_raw",
     schema: MZ_INTERNAL_SCHEMA,
@@ -1430,6 +1436,12 @@ pub const MZ_COMPUTE_DELAYS_HISTOGRAM_RAW: BuiltinLog = BuiltinLog {
     name: "mz_compute_delays_histogram_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::FrontierDelay),
+};
+
+pub const MZ_COMPUTE_ERROR_COUNTS_RAW: BuiltinLog = BuiltinLog {
+    name: "mz_compute_error_counts_raw",
+    schema: MZ_INTERNAL_SCHEMA,
+    variant: LogVariant::Compute(ComputeLog::ErrorCount),
 };
 
 pub const MZ_ACTIVE_PEEKS_PER_WORKER: BuiltinLog = BuiltinLog {
@@ -1498,35 +1510,6 @@ pub const MZ_DATAFLOW_OPERATOR_REACHABILITY_RAW: BuiltinLog = BuiltinLog {
     variant: LogVariant::Timely(TimelyLog::Reachability),
 };
 
-pub const MZ_ARRANGEMENT_RECORDS_RAW: BuiltinLog = BuiltinLog {
-    name: "mz_arrangement_records_raw",
-    schema: MZ_INTERNAL_SCHEMA,
-    variant: LogVariant::Differential(DifferentialLog::ArrangementRecords),
-};
-
-pub static MZ_VIEW_KEYS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
-    name: "mz_view_keys",
-    schema: MZ_INTERNAL_SCHEMA,
-    desc: RelationDesc::empty()
-        .with_column("object_id", ScalarType::String.nullable(false))
-        .with_column("column", ScalarType::UInt64.nullable(false))
-        .with_column("key_group", ScalarType::UInt64.nullable(false)),
-    is_retained_metrics_object: false,
-});
-pub static MZ_VIEW_FOREIGN_KEYS: Lazy<BuiltinTable> = Lazy::new(|| {
-    BuiltinTable {
-        name: "mz_view_foreign_keys",
-        schema: MZ_INTERNAL_SCHEMA,
-        desc: RelationDesc::empty()
-            .with_column("child_id", ScalarType::String.nullable(false))
-            .with_column("child_column", ScalarType::UInt64.nullable(false))
-            .with_column("parent_id", ScalarType::String.nullable(false))
-            .with_column("parent_column", ScalarType::UInt64.nullable(false))
-            .with_column("key_group", ScalarType::UInt64.nullable(false))
-            .with_key(vec![0, 1, 4]), // TODO: explain why this is a key.
-        is_retained_metrics_object: false,
-    }
-});
 pub static MZ_KAFKA_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_kafka_sinks",
     schema: MZ_CATALOG_SCHEMA,
@@ -2281,7 +2264,7 @@ pub static MZ_COMMENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("object_type", ScalarType::String.nullable(false))
-        .with_column("object_sub_id", ScalarType::UInt64.nullable(true))
+        .with_column("object_sub_id", ScalarType::Int32.nullable(true))
         .with_column("comment", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
 });
@@ -2862,15 +2845,43 @@ LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
 WHERE s.database_id IS NULL OR d.name = current_database()",
 };
 
+/// Note: Databases, Roles, Clusters, Cluster Replicas, Secrets, and Connections are excluded from
+/// this view for Postgres compatibility. Specifically, there is no classoid for these objects,
+/// which is required for this view.
 pub const PG_DESCRIPTION: BuiltinView = BuiltinView {
     name: "pg_description",
     schema: PG_CATALOG_SCHEMA,
-    sql: "CREATE VIEW pg_catalog.pg_description AS SELECT
-    c.oid as objoid,
-    NULL::pg_catalog.oid as classoid,
-    0::pg_catalog.int4 as objsubid,
-    NULL::pg_catalog.text as description
-FROM pg_catalog.pg_class c",
+    sql: "CREATE VIEW pg_catalog.pg_description AS
+    (
+        -- Gather all of the class oid's for objects that can have comments.
+        WITH pg_classoids AS (
+            SELECT oid, (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'pg_class') AS classoid
+            FROM pg_catalog.pg_class
+            UNION ALL
+            SELECT oid, (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'pg_type') AS classoid
+            FROM pg_catalog.pg_type
+            UNION ALL
+            SELECT oid, (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'pg_namespace') AS classoid
+            FROM pg_catalog.pg_namespace
+        ),
+        -- Gather all of the MZ ids for objects that can have comments.
+        mz_objects AS (
+            SELECT id, oid, type FROM mz_catalog.mz_objects
+            UNION ALL
+            SELECT id, oid, 'schema' AS type FROM mz_catalog.mz_schemas
+        )
+        SELECT
+            pg_classoids.oid AS objoid,
+            pg_classoids.classoid as classoid,
+            COALESCE(cmt.object_sub_id, 0) AS objsubid,
+            cmt.comment AS description
+        FROM
+            pg_classoids
+        JOIN
+            mz_objects ON pg_classoids.oid = mz_objects.oid
+        JOIN
+            mz_internal.mz_comments AS cmt ON mz_objects.id = cmt.id AND lower(mz_objects.type) = lower(cmt.object_type)
+    )",
 };
 
 pub const PG_TYPE: BuiltinView = BuiltinView {
@@ -3265,6 +3276,51 @@ SELECT
     pg_catalog.sum(count) AS count
 FROM mz_internal.mz_compute_delays_histogram_per_worker
 GROUP BY export_id, import_id, delay_ns",
+};
+
+pub const MZ_COMPUTE_ERROR_COUNTS_PER_WORKER: BuiltinView = BuiltinView {
+    name: "mz_compute_error_counts_per_worker",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_compute_error_counts_per_worker AS
+WITH MUTUALLY RECURSIVE
+    -- Indexes that reuse existing indexes rather than maintaining separate dataflows.
+    -- For these we don't log error counts separately, so we need to forward the error counts from
+    -- their dependencies instead.
+    index_reuses(reuse_id text, index_id text) AS (
+        SELECT d.object_id, d.dependency_id
+        FROM mz_internal.mz_compute_dependencies d
+        JOIN mz_internal.mz_compute_exports e ON (e.export_id = d.object_id)
+        WHERE NOT EXISTS (
+            SELECT 1 FROM mz_internal.mz_dataflows
+            WHERE id = e.dataflow_id
+        )
+    ),
+    -- Error counts that were directly logged on compute exports.
+    direct_errors(export_id text, worker_id uint8, count int8) AS (
+        SELECT export_id, worker_id, count
+        FROM mz_internal.mz_compute_error_counts_raw
+    ),
+    -- Error counts propagated to index reused.
+    all_errors(export_id text, worker_id uint8, count int8) AS (
+        SELECT * FROM direct_errors
+        UNION
+        SELECT r.reuse_id, e.worker_id, e.count
+        FROM all_errors e
+        JOIN index_reuses r ON (r.index_id = e.export_id)
+    )
+SELECT * FROM all_errors",
+};
+
+pub const MZ_COMPUTE_ERROR_COUNTS: BuiltinView = BuiltinView {
+    name: "mz_compute_error_counts",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_compute_error_counts AS
+SELECT
+    export_id,
+    pg_catalog.sum(count) AS count
+FROM mz_internal.mz_compute_error_counts_per_worker
+GROUP BY export_id
+HAVING pg_catalog.sum(count) != 0",
 };
 
 pub const MZ_MESSAGE_COUNTS_PER_WORKER: BuiltinView = BuiltinView {
@@ -5198,8 +5254,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Log(&MZ_COMPUTE_FRONTIERS_PER_WORKER),
         Builtin::Log(&MZ_COMPUTE_IMPORT_FRONTIERS_PER_WORKER),
         Builtin::Log(&MZ_COMPUTE_DELAYS_HISTOGRAM_RAW),
-        Builtin::Table(&MZ_VIEW_KEYS),
-        Builtin::Table(&MZ_VIEW_FOREIGN_KEYS),
+        Builtin::Log(&MZ_COMPUTE_ERROR_COUNTS_RAW),
         Builtin::Table(&MZ_KAFKA_SINKS),
         Builtin::Table(&MZ_KAFKA_CONNECTIONS),
         Builtin::Table(&MZ_KAFKA_SOURCES),
@@ -5296,6 +5351,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_SCHEDULING_PARKS_HISTOGRAM),
         Builtin::View(&MZ_COMPUTE_DELAYS_HISTOGRAM_PER_WORKER),
         Builtin::View(&MZ_COMPUTE_DELAYS_HISTOGRAM),
+        Builtin::View(&MZ_COMPUTE_ERROR_COUNTS_PER_WORKER),
+        Builtin::View(&MZ_COMPUTE_ERROR_COUNTS),
         Builtin::View(&MZ_SHOW_SOURCES),
         Builtin::View(&MZ_SHOW_SINKS),
         Builtin::View(&MZ_SHOW_MATERIALIZED_VIEWS),
@@ -5307,8 +5364,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&PG_DEPEND),
         Builtin::View(&PG_DATABASE),
         Builtin::View(&PG_INDEX),
-        Builtin::View(&PG_DESCRIPTION),
         Builtin::View(&PG_TYPE),
+        Builtin::View(&PG_DESCRIPTION),
         Builtin::View(&PG_ATTRIBUTE),
         Builtin::View(&PG_PROC),
         Builtin::View(&PG_OPERATOR),

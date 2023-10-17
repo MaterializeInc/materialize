@@ -1260,7 +1260,7 @@ pub mod datadriven {
     /// Scans consensus and returns all states with their SeqNos
     /// and which batches they reference
     pub async fn consensus_scan(
-        datadriven: &mut MachineState,
+        datadriven: &MachineState,
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let from = args.expect("from_seqno");
@@ -1307,7 +1307,7 @@ pub mod datadriven {
     }
 
     pub async fn consensus_truncate(
-        datadriven: &mut MachineState,
+        datadriven: &MachineState,
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let to = args.expect("to_seqno");
@@ -1321,7 +1321,7 @@ pub mod datadriven {
     }
 
     pub async fn blob_scan_batches(
-        datadriven: &mut MachineState,
+        datadriven: &MachineState,
         _args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let key_prefix = BlobKeyPrefix::Shard(&datadriven.shard_id).to_string();
@@ -1342,7 +1342,7 @@ pub mod datadriven {
 
     #[allow(clippy::unused_async)]
     pub async fn shard_desc(
-        datadriven: &mut MachineState,
+        datadriven: &MachineState,
         _args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         Ok(format!(
@@ -1509,7 +1509,7 @@ pub mod datadriven {
     }
 
     pub async fn fetch_batch(
-        datadriven: &mut MachineState,
+        datadriven: &MachineState,
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let input = args.expect_str("input");
@@ -1879,7 +1879,7 @@ pub mod datadriven {
     }
 
     pub async fn compare_and_append_batches(
-        datadriven: &mut MachineState,
+        datadriven: &MachineState,
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let expected_upper = args.expect_antichain("expected_upper");

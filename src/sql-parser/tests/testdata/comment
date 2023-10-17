@@ -18,21 +18,21 @@ COMMENT ON TABLE my_table IS 'hello world this is a cool table.'
 ----
 COMMENT ON TABLE my_table IS 'hello world this is a cool table.'
 =>
-Comment(CommentStatement { object: Table { name: UnresolvedItemName([Ident("my_table")]) }, comment: Some("hello world this is a cool table.") })
+Comment(CommentStatement { object: Table { name: Name(UnresolvedItemName([Ident("my_table")])) }, comment: Some("hello world this is a cool table.") })
 
 parse-statement
 COMMENT ON VIEW amazing_view IS 'this view powers a 1,000,000x startup'
 ----
 COMMENT ON VIEW amazing_view IS 'this view powers a 1,000,000x startup'
 =>
-Comment(CommentStatement { object: View { name: UnresolvedItemName([Ident("amazing_view")]) }, comment: Some("this view powers a 1,000,000x startup") })
+Comment(CommentStatement { object: View { name: Name(UnresolvedItemName([Ident("amazing_view")])) }, comment: Some("this view powers a 1,000,000x startup") })
 
 parse-statement
 COMMENT ON COLUMN building.load_bearing_column IS 'do not move this column, it is load bearing'
 ----
 COMMENT ON COLUMN building.load_bearing_column IS 'do not move this column, it is load bearing'
 =>
-Comment(CommentStatement { object: Column { relation_name: UnresolvedItemName([Ident("building")]), column_name: Ident("load_bearing_column") }, comment: Some("do not move this column, it is load bearing") })
+Comment(CommentStatement { object: Column { name: RawColumnName { relation: Name(UnresolvedItemName([Ident("building")])), column: Ident("load_bearing_column") } }, comment: Some("do not move this column, it is load bearing") })
 
 parse-statement
 COMMENT ON TABLE my_table
@@ -46,63 +46,63 @@ COMMENT ON TABLE escaping IS 'it''s a single '' within a single '' string'
 ----
 COMMENT ON TABLE escaping IS 'it''s a single '' within a single '' string'
 =>
-Comment(CommentStatement { object: Table { name: UnresolvedItemName([Ident("escaping")]) }, comment: Some("it's a single ' within a single ' string") })
+Comment(CommentStatement { object: Table { name: Name(UnresolvedItemName([Ident("escaping")])) }, comment: Some("it's a single ' within a single ' string") })
 
 parse-statement
 COMMENT ON VIEW emoji_movie IS 'this movie was not that good 📉😭'
 ----
 COMMENT ON VIEW emoji_movie IS 'this movie was not that good 📉😭'
 =>
-Comment(CommentStatement { object: View { name: UnresolvedItemName([Ident("emoji_movie")]) }, comment: Some("this movie was not that good 📉😭") })
+Comment(CommentStatement { object: View { name: Name(UnresolvedItemName([Ident("emoji_movie")])) }, comment: Some("this movie was not that good 📉😭") })
 
 parse-statement
 COMMENT ON COLUMN cool_table.bad_column IS NULL
 ----
 COMMENT ON COLUMN cool_table.bad_column IS NULL
 =>
-Comment(CommentStatement { object: Column { relation_name: UnresolvedItemName([Ident("cool_table")]), column_name: Ident("bad_column") }, comment: None })
+Comment(CommentStatement { object: Column { name: RawColumnName { relation: Name(UnresolvedItemName([Ident("cool_table")])), column: Ident("bad_column") } }, comment: None })
 
 parse-statement
 COMMENT ON MATERIALIZED VIEW mz IS 'hello world'
 ----
 COMMENT ON MATERIALIZED VIEW mz IS 'hello world'
 =>
-Comment(CommentStatement { object: MaterializedView { name: UnresolvedItemName([Ident("mz")]) }, comment: Some("hello world") })
+Comment(CommentStatement { object: MaterializedView { name: Name(UnresolvedItemName([Ident("mz")])) }, comment: Some("hello world") })
 
 parse-statement
 COMMENT ON SINK kool_kafka IS 'i wish kafka was easier'
 ----
 COMMENT ON SINK kool_kafka IS 'i wish kafka was easier'
 =>
-Comment(CommentStatement { object: Sink { name: UnresolvedItemName([Ident("kool_kafka")]) }, comment: Some("i wish kafka was easier") })
+Comment(CommentStatement { object: Sink { name: Name(UnresolvedItemName([Ident("kool_kafka")])) }, comment: Some("i wish kafka was easier") })
 
 parse-statement
 COMMENT ON SOURCE pg_src IS 'ingest data all the time!'
 ----
 COMMENT ON SOURCE pg_src IS 'ingest data all the time!'
 =>
-Comment(CommentStatement { object: Source { name: UnresolvedItemName([Ident("pg_src")]) }, comment: Some("ingest data all the time!") })
+Comment(CommentStatement { object: Source { name: Name(UnresolvedItemName([Ident("pg_src")])) }, comment: Some("ingest data all the time!") })
 
 parse-statement
 COMMENT ON INDEX my_db.x.fast IS 'this is a super fast index'
 ----
 COMMENT ON INDEX my_db.x.fast IS 'this is a super fast index'
 =>
-Comment(CommentStatement { object: Index { name: UnresolvedItemName([Ident("my_db"), Ident("x"), Ident("fast")]) }, comment: Some("this is a super fast index") })
+Comment(CommentStatement { object: Index { name: Name(UnresolvedItemName([Ident("my_db"), Ident("x"), Ident("fast")])) }, comment: Some("this is a super fast index") })
 
 parse-statement
 COMMENT ON FUNCTION ai_func IS 'ai in a bottle $$$'
 ----
 COMMENT ON FUNCTION ai_func IS 'ai in a bottle $$$'
 =>
-Comment(CommentStatement { object: Func { name: UnresolvedItemName([Ident("ai_func")]) }, comment: Some("ai in a bottle $$$") })
+Comment(CommentStatement { object: Func { name: Name(UnresolvedItemName([Ident("ai_func")])) }, comment: Some("ai in a bottle $$$") })
 
 parse-statement
 COMMENT ON CONNECTION kafka_super_prod IS 'yep'
 ----
 COMMENT ON CONNECTION kafka_super_prod IS 'yep'
 =>
-Comment(CommentStatement { object: Connection { name: UnresolvedItemName([Ident("kafka_super_prod")]) }, comment: Some("yep") })
+Comment(CommentStatement { object: Connection { name: Name(UnresolvedItemName([Ident("kafka_super_prod")])) }, comment: Some("yep") })
 
 parse-statement
 COMMENT ON ROLE space_monkey IS 'should be our mascot'
@@ -144,11 +144,11 @@ COMMENT ON TYPE special_int IS 'not enough bits'
 ----
 COMMENT ON TYPE special_int IS 'not enough bits'
 =>
-Comment(CommentStatement { object: Type { name: UnresolvedItemName([Ident("special_int")]) }, comment: Some("not enough bits") })
+Comment(CommentStatement { object: Type { name: Name(UnresolvedItemName([Ident("special_int")])) }, comment: Some("not enough bits") })
 
 parse-statement
 COMMENT ON SECRET api_key IS 'shhhhhh'
 ----
 COMMENT ON SECRET api_key IS 'shhhhhh'
 =>
-Comment(CommentStatement { object: Secret { name: UnresolvedItemName([Ident("api_key")]) }, comment: Some("shhhhhh") })
+Comment(CommentStatement { object: Secret { name: Name(UnresolvedItemName([Ident("api_key")])) }, comment: Some("shhhhhh") })

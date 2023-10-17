@@ -2133,7 +2133,7 @@ fn test_introspection_user_permissions() {
         .is_err());
 
     assert!(introspection_client
-        .query("SELECT * FROM mz_internal.mz_view_keys", &[])
+        .query("SELECT * FROM mz_internal.mz_comments", &[])
         .is_ok());
     assert!(introspection_client
         .query("SELECT * FROM mz_catalog.mz_tables", &[])
@@ -2146,7 +2146,7 @@ fn test_introspection_user_permissions() {
         .batch_execute("SET CLUSTER TO 'mz_system'")
         .unwrap();
     assert!(introspection_client
-        .query("SELECT * FROM mz_internal.mz_view_keys", &[])
+        .query("SELECT * FROM mz_internal.mz_comments", &[])
         .is_ok());
     assert!(introspection_client
         .query("SELECT * FROM mz_catalog.mz_tables", &[])
@@ -2160,7 +2160,7 @@ fn test_introspection_user_permissions() {
         .unwrap();
     assert!(introspection_client.query("SELECT * FROM t1", &[]).is_err());
     assert!(introspection_client
-        .query("SELECT * FROM mz_internal.mz_view_keys", &[])
+        .query("SELECT * FROM mz_internal.mz_comments", &[])
         .is_ok());
     assert!(introspection_client
         .query("SELECT * FROM mz_catalog.mz_tables", &[])
@@ -3376,7 +3376,7 @@ fn test_params() {
     client.batch_execute("COMMIT").unwrap();
 }
 
-// Test pg_cancel_backed after the authenticated role is dropped.
+// Test pg_cancel_backend after the authenticated role is dropped.
 #[mz_ore::test]
 fn test_pg_cancel_dropped_role() {
     mz_ore::test::init_logging();
@@ -3392,14 +3392,14 @@ fn test_pg_cancel_dropped_role() {
         .unwrap();
 
     // Start session using role.
-    let _dropped_client = server
+    let mut dropped_client = server
         .pg_config()
         .user(dropped_role)
         .connect(postgres::NoTls)
         .unwrap();
 
     // Get the connection ID of the new session.
-    let connection_id = query_client
+    let connection_id = dropped_client
         .query_one(
             &format!(
                 "SELECT s.id

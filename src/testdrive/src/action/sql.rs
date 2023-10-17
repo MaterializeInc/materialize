@@ -31,7 +31,7 @@ use tokio_postgres::types::{FromSql, Type};
 use crate::action::{ControlFlow, State};
 use crate::parser::{FailSqlCommand, SqlCommand, SqlExpectedError, SqlOutput};
 
-pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+pub async fn run_sql(mut cmd: SqlCommand, state: &State) -> Result<ControlFlow, anyhow::Error> {
     use Statement::*;
 
     let stmts = mz_sql_parser::parser::parse_statements(&cmd.query)
@@ -390,7 +390,7 @@ impl ErrorMatcher {
 
 pub async fn run_fail_sql(
     cmd: FailSqlCommand,
-    state: &mut State,
+    state: &State,
 ) -> Result<ControlFlow, anyhow::Error> {
     use Statement::{Commit, Fetch, Rollback};
 

@@ -17,7 +17,7 @@ use serde::Serialize;
 #[derive(Debug, Default, Serialize, PartialEq)]
 pub struct CoordinatorInconsistencies {
     /// Inconsistencies found in the catalog.
-    catalog_inconsistencies: CatalogInconsistencies,
+    catalog_inconsistencies: Box<CatalogInconsistencies>,
     /// Inconsistencies found in read capabilities.
     read_capabilities: Vec<ReadCapabilitiesInconsistency>,
 }

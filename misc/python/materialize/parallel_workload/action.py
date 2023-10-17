@@ -251,6 +251,19 @@ class DeleteAction(Action):
                     table.num_rows = 0
 
 
+class CommentAction(Action):
+    def run(self, exe: Executor) -> None:
+        table = self.rng.choice(self.db.tables)
+
+        if self.rng.choice([True, False]):
+            column = self.rng.choice(table.columns)
+            query = f"COMMENT ON COLUMN {column} IS '{Text.value(self.rng)}'"
+        else:
+            query = f"COMMENT ON TABLE {table} IS '{Text.value(self.rng)}'"
+
+        exe.execute(query)
+
+
 class CreateIndexAction(Action):
     def errors_to_ignore(self) -> list[str]:
         return [
@@ -752,6 +765,7 @@ dml_nontrans_action_list = ActionList(
     [
         (DeleteAction, 10),
         (UpdateAction, 10),
+        (CommentAction, 5),
         (SetClusterAction, 1),
         (ReconnectAction, 1),
         # (TransactionIsolationAction, 1),

@@ -41,17 +41,14 @@ pub enum AppPasswordSubcommand {
 }
 
 pub async fn run(cx: Context, cmd: AppPasswordCommand) -> Result<(), Error> {
-    let mut cx = cx.activate_profile()?;
+    let cx = cx.activate_profile()?;
     match &cmd.subcommand {
         AppPasswordSubcommand::Create { name } => {
-            mz::command::app_password::create(
-                &mut cx,
-                CreateAppPasswordRequest { description: name },
-            )
-            .await?;
+            mz::command::app_password::create(&cx, CreateAppPasswordRequest { description: name })
+                .await?;
         }
         AppPasswordSubcommand::List => {
-            mz::command::app_password::list(&mut cx).await?;
+            mz::command::app_password::list(&cx).await?;
         }
     }
 

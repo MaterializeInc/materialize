@@ -989,10 +989,8 @@ where
             value_schema_id,
         }) => {
             let options = AvroSchemaOptions {
-                avro_key_fullname: None,
-                avro_value_fullname: None,
-                set_null_defaults: false,
                 is_debezium: matches!(envelope, Some(SinkEnvelope::Debezium)),
+                ..Default::default()
             };
             let schema_generator = AvroSchemaGenerator::new(key_desc, value_desc, options)
                 .expect("avro schema validated");

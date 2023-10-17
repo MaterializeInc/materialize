@@ -100,6 +100,12 @@ checksum = "bf7d0a018de4f6aa429b9d33d69edf69072b1c5b1cb8d3e4a5f7ef898fc3eb76"
 
 [[package]]
 name = "arrayvec"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23b62fc65de8e4e7f52534fb52b0f3ed04746ae267519eef2a83941e8085068b"
+
+[[package]]
+name = "arrayvec"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8da52d66c7071e2e3fa2a1e5c6d088fec47b593032b254f5e980de8ea54454d6"
@@ -824,6 +830,21 @@ dependencies = [
  "shlex",
  "syn 2.0.18",
 ]
+
+[[package]]
+name = "bit-set"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0700ddab506f33b20a03b13996eccd309a48e5ff77d0d95926aa0210fb4e95f1"
+dependencies = [
+ "bit-vec",
+]
+
+[[package]]
+name = "bit-vec"
+version = "0.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "349f9b6a179ed607305526ca489b34ad0a41aed5f7980fa90eb03160b69598fb"
 
 [[package]]
 name = "bitflags"
@@ -2020,6 +2041,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7360491ce676a36bf9bb3c56c1aa791658183a54d2744120f27285738d90465a"
 
 [[package]]
+name = "fancy-regex"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b95f7c0680e4142284cf8b22c14a476e87d61b004a3a0861872b32ef7ead40a2"
+dependencies = [
+ "bit-set",
+ "regex",
+]
+
+[[package]]
 name = "fast-float"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2645,9 +2676,9 @@ dependencies = [
 
 [[package]]
 name = "insta"
-version = "1.32.0"
+version = "1.33.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3e02c584f4595792d09509a94cdb92a3cef7592b1eb2d9877ee6f527062d0ea"
+checksum = "1aa511b2e298cd49b1856746f6bb73e17036bcd66b25f5e92cdcdbec9bd75686"
 dependencies = [
  "console",
  "lazy_static",
@@ -2900,7 +2931,7 @@ dependencies = [
 [[package]]
 name = "launchdarkly-server-sdk"
 version = "1.0.0"
-source = "git+https://github.com/MaterializeInc/rust-server-sdk#dcc193d9601086f4329bde3ec191e0e929da7170"
+source = "git+https://github.com/MaterializeInc/rust-server-sdk#71559906dfc648963787f87ef6b1119c3a0d1b63"
 dependencies = [
  "built",
  "chrono",
@@ -3533,7 +3564,7 @@ dependencies = [
  "anyhow",
  "mz-ore",
  "mz-proto",
- "mz-stash",
+ "mz-stash-types",
  "proptest",
  "proptest-derive",
  "serde",
@@ -3612,6 +3643,7 @@ dependencies = [
  "bytesize",
  "clap",
  "futures",
+ "hyper-openssl",
  "jsonwebtoken",
  "mz-build-info",
  "mz-frontegg-auth",
@@ -3656,6 +3688,7 @@ dependencies = [
  "async-trait",
  "derivative",
  "futures",
+ "insta",
  "itertools",
  "mz-audit-log",
  "mz-compute-client",
@@ -3669,6 +3702,7 @@ dependencies = [
  "mz-sql",
  "mz-sql-parser",
  "mz-stash",
+ "mz-stash-types",
  "mz-storage-client",
  "mz-storage-types",
  "once_cell",
@@ -3678,6 +3712,7 @@ dependencies = [
  "rand",
  "serde",
  "serde_json",
+ "thiserror",
  "tokio",
  "tokio-postgres",
  "tracing",
@@ -3786,7 +3821,7 @@ dependencies = [
  "itertools",
  "mz-ore",
  "mz-proto",
- "mz-stash",
+ "mz-stash-types",
  "once_cell",
  "prometheus",
  "proptest",
@@ -3809,7 +3844,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "0.73.0-dev"
+version = "0.74.0-dev"
 dependencies = [
  "anyhow",
  "axum",
@@ -3823,6 +3858,7 @@ dependencies = [
  "mz-compute",
  "mz-compute-client",
  "mz-http-util",
+ "mz-metrics",
  "mz-orchestrator-tracing",
  "mz-ore",
  "mz-persist-client",
@@ -3906,7 +3942,7 @@ dependencies = [
  "mz-proto",
  "mz-repr",
  "mz-service",
- "mz-stash",
+ "mz-stash-types",
  "mz-storage-client",
  "mz-storage-types",
  "mz-timely-util",
@@ -3977,7 +4013,7 @@ dependencies = [
  "mz-proto",
  "mz-repr",
  "mz-service",
- "mz-stash",
+ "mz-stash-types",
  "mz-storage-client",
  "mz-storage-controller",
  "once_cell",
@@ -4003,7 +4039,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.73.0-dev"
+version = "0.74.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -4043,6 +4079,7 @@ dependencies = [
  "mz-frontegg-auth",
  "mz-http-util",
  "mz-interchange",
+ "mz-metrics",
  "mz-npm",
  "mz-orchestrator",
  "mz-orchestrator-kubernetes",
@@ -4062,6 +4099,7 @@ dependencies = [
  "mz-sql",
  "mz-sql-parser",
  "mz-stash",
+ "mz-stash-types",
  "mz-storage-client",
  "mz-storage-types",
  "mz-tls-util",
@@ -4300,6 +4338,7 @@ dependencies = [
  "chrono",
  "clap",
  "crossbeam",
+ "fancy-regex",
  "mz-avro",
  "mz-ccsr",
  "mz-ore",
@@ -4353,6 +4392,7 @@ dependencies = [
  "mz-sql-lexer",
  "mz-sql-parser",
  "once_cell",
+ "regex",
  "ropey",
  "serde",
  "serde_json",
@@ -4381,6 +4421,17 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tracing",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-metrics"
+version = "0.0.0"
+dependencies = [
+ "libc",
+ "mz-ore",
+ "prometheus",
+ "tokio",
  "workspace-hack",
 ]
 
@@ -4589,7 +4640,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.73.0-dev"
+version = "0.74.0-dev"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4648,6 +4699,7 @@ dependencies = [
  "mz-persist-types",
  "mz-timely-util",
  "prost",
+ "rand",
  "timely",
  "tokio",
  "tracing",
@@ -4931,6 +4983,7 @@ dependencies = [
  "regex",
  "ryu",
  "serde",
+ "serde-big-array",
  "serde_json",
  "smallvec",
  "thiserror",
@@ -5131,7 +5184,7 @@ dependencies = [
  "mz-secrets",
  "mz-sql-lexer",
  "mz-sql-parser",
- "mz-stash",
+ "mz-stash-types",
  "mz-storage-types",
  "mz-tracing",
  "once_cell",
@@ -5181,12 +5234,24 @@ dependencies = [
  "itertools",
  "mz-ore",
  "mz-sql-lexer",
+ "mz-sql-parser",
  "mz-walkabout",
  "phf",
  "serde",
  "tracing",
  "uncased",
  "unicode-width",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-sql-pretty"
+version = "0.0.0"
+dependencies = [
+ "datadriven",
+ "mz-ore",
+ "mz-sql-parser",
+ "pretty",
  "workspace-hack",
 ]
 
@@ -5218,7 +5283,7 @@ dependencies = [
  "mz-service",
  "mz-sql",
  "mz-sql-parser",
- "mz-stash",
+ "mz-stash-types",
  "mz-storage-types",
  "once_cell",
  "postgres-protocol",
@@ -5262,8 +5327,6 @@ dependencies = [
 name = "mz-stash"
 version = "0.0.0"
 dependencies = [
- "anyhow",
- "bitflags 1.3.2",
  "bytes",
  "criterion",
  "derivative",
@@ -5272,31 +5335,23 @@ dependencies = [
  "futures",
  "insta",
  "itertools",
- "md-5",
  "mz-ore",
- "mz-postgres-util",
  "mz-proto",
- "mz-repr",
+ "mz-stash-types",
  "mz-tls-util",
  "once_cell",
  "paste",
  "postgres-openssl",
  "prometheus",
  "proptest",
- "proptest-derive",
  "prost",
- "prost-build",
- "protobuf-src",
  "rand",
  "serde",
- "serde_json",
- "similar-asserts",
  "static_assertions",
  "timely",
  "tokio",
  "tokio-postgres",
  "tracing",
- "uuid",
  "workspace-hack",
 ]
 
@@ -5319,6 +5374,30 @@ dependencies = [
  "prost",
  "serde_json",
  "tokio",
+ "tokio-postgres",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-stash-types"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "md-5",
+ "mz-ore",
+ "mz-proto",
+ "mz-repr",
+ "paste",
+ "prometheus",
+ "proptest",
+ "proptest-derive",
+ "prost",
+ "prost-build",
+ "protobuf-src",
+ "serde",
+ "serde_json",
+ "similar-asserts",
+ "timely",
  "tokio-postgres",
  "workspace-hack",
 ]
@@ -5467,6 +5546,7 @@ dependencies = [
  "mz-repr",
  "mz-service",
  "mz-stash",
+ "mz-stash-types",
  "mz-storage-client",
  "mz-storage-types",
  "mz-tls-util",
@@ -5532,7 +5612,7 @@ dependencies = [
  "mz-secrets",
  "mz-service",
  "mz-ssh-util",
- "mz-stash",
+ "mz-stash-types",
  "mz-timely-util",
  "mz-tracing",
  "once_cell",
@@ -5583,7 +5663,7 @@ dependencies = [
 
 [[package]]
 name = "mz-testdrive"
-version = "0.73.0-dev"
+version = "0.74.0-dev"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -6593,6 +6673,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "pretty"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b55c4d17d994b637e2f4daf6e5dc5d660d209d5642377d675d7a1c3ab69fa579"
+dependencies = [
+ "arrayvec 0.5.2",
+ "typed-arena",
+ "unicode-width",
+]
+
+[[package]]
 name = "pretty-hex"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7508,6 +7599,15 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "serde-big-array"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11fc7cc2c76d73e0f27ee52abbd64eec84d46f370c88371120433196934e4b7f"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -8809,6 +8909,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "typed-arena"
+version = "2.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6af6ae20167a9ece4bcb41af5b80f8a1f1df981f6391189ce00fd257af04126a"
+
+[[package]]
 name = "typed-builder"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8989,7 +9095,7 @@ name = "vte"
 version = "0.10.1"
 source = "git+https://github.com/MaterializeInc/vte?rev=45670c47cebd7af050def2f80a307bdeec7caba3#45670c47cebd7af050def2f80a307bdeec7caba3"
 dependencies = [
- "arrayvec",
+ "arrayvec 0.7.2",
  "utf8parse",
  "vte_generate_state_changes",
 ]

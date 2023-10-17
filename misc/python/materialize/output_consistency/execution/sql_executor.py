@@ -10,6 +10,7 @@ from collections import deque
 from collections.abc import Sequence
 from typing import Any
 
+import dateutil  # type: ignore
 from pg8000 import Connection
 from pg8000.dbapi import ProgrammingError
 from pg8000.exceptions import DatabaseError, InterfaceError
@@ -86,6 +87,8 @@ class PgWireDatabaseSqlExecutor(SqlExecutor):
             self.cursor.execute(sql)
         except (ProgrammingError, DatabaseError) as err:
             raise SqlExecutionError(self._extract_message_from_error(err))
+        except dateutil.parser._parser.ParserError as err:  # type: ignore
+            raise SqlExecutionError(err.args[0])
         except ValueError as err:
             self.output_printer.print_error(f"Query with value error is: {sql}")
             raise err

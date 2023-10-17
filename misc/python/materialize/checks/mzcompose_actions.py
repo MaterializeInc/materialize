@@ -47,6 +47,7 @@ class StartMz(MzcomposeAction):
             external_cockroach=True,
             environment_extra=self.environment_extra,
             system_parameter_defaults=self.system_parameter_defaults,
+            sanity_restart=False,
         )
 
         with c.override(mz):
@@ -128,6 +129,14 @@ class ConfigureMz(MzcomposeAction):
                 "$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}\n"
                 + "\n".join(system_settings)
             )
+
+        input += dedent(
+            """
+            > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}';
+
+            > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
+            """
+        )
 
         self.handle = e.testdrive(input=input)
         e.system_settings.update(system_settings)

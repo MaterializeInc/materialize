@@ -98,7 +98,8 @@ so it is executed.""",
     if args.coverage:
         pipeline["env"]["CI_BUILDER_SCCACHE"] = 1
         pipeline["env"]["CI_COVERAGE_ENABLED"] = 1
-        for step in pipeline["steps"]:
+
+        def visit(step: dict[str, Any]) -> None:
             # Coverage runs are slower
             if "timeout_in_minutes" in step:
                 step["timeout_in_minutes"] *= 3
@@ -107,10 +108,25 @@ so it is executed.""",
                 step["skip"] = True
             if step.get("id") == "build-x86_64":
                 step["name"] = "Build x86_64 with coverage"
-    else:
+
         for step in pipeline["steps"]:
+            visit(step)
+            # Groups can't be nested, so handle them explicitly here instead of recursing
+            if "group" in step:
+                for inner_step in step.get("steps", []):
+                    visit(inner_step)
+
+    else:
+
+        def visit(step: dict[str, Any]) -> None:
             if step.get("coverage") == "only":
                 step["skip"] = True
+
+        for step in pipeline["steps"]:
+            visit(step)
+            if "group" in step:
+                for inner_step in step.get("steps", []):
+                    visit(inner_step)
 
     prioritize_pipeline(pipeline)
 
@@ -120,11 +136,17 @@ so it is executed.""",
 
     # Remove the Materialize-specific keys from the configuration that are
     # only used to inform how to trim the pipeline and for coverage runs.
-    for step in pipeline["steps"]:
+    def visit(step: dict[str, Any]) -> None:
         if "inputs" in step:
             del step["inputs"]
         if "coverage" in step:
             del step["coverage"]
+
+    for step in pipeline["steps"]:
+        visit(step)
+        if "group" in step:
+            for inner_step in step.get("steps", []):
+                visit(inner_step)
 
     spawn.runv(
         ["buildkite-agent", "pipeline", "upload"], stdin=yaml.dump(pipeline).encode()
@@ -167,7 +189,12 @@ def prioritize_pipeline(pipeline: Any) -> None:
 
 def permit_rerunning_successful_steps(pipeline: Any) -> None:
     for config in pipeline["steps"]:
-        if "trigger" in config or "wait" in config or "block" in config:
+        if (
+            "trigger" in config
+            or "wait" in config
+            or "block" in config
+            or "group" in config
+        ):
             continue
         config.setdefault("retry", {}).setdefault("manual", {}).setdefault(
             "permit_on_passed", True
@@ -197,11 +224,15 @@ def add_test_selection_block(pipeline: Any, pipeline_name: str) -> None:
     else:
         return
 
-    for step in pipeline["steps"]:
-        if "id" not in step or step["id"] in ("analyze", "build-x86_64"):
-            continue
+    def visit(step: dict[str, Any]) -> None:
+        if "id" in step and step["id"] not in ("analyze", "build-x86_64"):
+            selection_step["fields"][0]["options"].append({"value": step["id"]})
 
-        selection_step["fields"][0]["options"].append({"value": step["id"]})
+    for step in pipeline["steps"]:
+        visit(step)
+        if "group" in step:
+            for inner_step in step.get("steps", []):
+                visit(inner_step)
 
     pipeline["steps"].insert(0, selection_step)
 
@@ -224,9 +255,10 @@ def trim_pipeline(pipeline: Any, coverage: bool) -> None:
     deps = repo.resolve_dependencies(image for image in repo)
 
     steps = OrderedDict()
-    for config in pipeline["steps"]:
-        if "wait" in config:
-            continue
+
+    def to_step(config: dict[str, Any]) -> PipelineStep | None:
+        if "wait" in config or "group" in config:
+            return None
         step = PipelineStep(config["id"])
         if "inputs" in config:
             for inp in config["inputs"]:
@@ -251,7 +283,16 @@ def trim_pipeline(pipeline: Any, coverage: bool) -> None:
                     elif plugin_name == "./ci/plugins/cloudtest":
                         step.image_dependencies.add(deps["environmentd"])
                         step.image_dependencies.add(deps["clusterd"])
-        steps[step.id] = step
+
+        return step
+
+    for config in pipeline["steps"]:
+        if step := to_step(config):
+            steps[step.id] = step
+        if "group" in config:
+            for inner_config in config.get("steps", []):
+                if inner_step := to_step(inner_config):
+                    steps[inner_step.id] = inner_step
 
     # Find all the steps whose inputs have changed with respect to main.
     # We delegate this hard work to Git.
@@ -292,8 +333,20 @@ def trim_pipeline(pipeline: Any, coverage: bool) -> None:
             )
 
     # Restrict the pipeline to the needed steps.
+    for step in pipeline["steps"]:
+        if "group" in step:
+            step["steps"] = [
+                inner_step
+                for inner_step in step.get("steps", [])
+                if inner_step.get("id") in needed
+            ]
+
     pipeline["steps"] = [
-        step for step in pipeline["steps"] if "wait" in step or step["id"] in needed
+        step
+        for step in pipeline["steps"]
+        if "wait" in step
+        or ("group" in step and step["steps"])
+        or step.get("id") in needed
     ]
 
 

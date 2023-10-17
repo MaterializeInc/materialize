@@ -21,7 +21,9 @@ use uuid::Uuid;
 use mz_catalog::builtin::{
     Builtin, Fingerprint, BUILTINS, BUILTIN_CLUSTERS, BUILTIN_PREFIXES, BUILTIN_ROLES,
 };
-use mz_catalog::objects::{SystemObjectDescription, SystemObjectUniqueIdentifier};
+use mz_catalog::objects::{
+    IntrospectionSourceIndex, SystemObjectDescription, SystemObjectUniqueIdentifier,
+};
 use mz_catalog::SystemObjectMapping;
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_compute_client::logging::LogVariant;
@@ -35,7 +37,8 @@ use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{
-    CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogItemType, CatalogType,
+    CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogItemType, CatalogSchema,
+    CatalogType,
 };
 use mz_sql::func::OP_IMPLS;
 use mz_sql::names::{
@@ -658,7 +661,11 @@ impl Catalog {
                 .set_introspection_source_indexes(
                     new_indexes
                         .iter()
-                        .map(|(log, index_id)| (id, log.name, *index_id))
+                        .map(|(log, index_id)| IntrospectionSourceIndex {
+                            cluster_id: id,
+                            name: log.name.to_string(),
+                            index_id: *index_id,
+                        })
                         .collect(),
                 )
                 .await?;
@@ -803,7 +810,7 @@ impl Catalog {
             .unwrap_or_else(|| "new".to_string());
 
         if !config.skip_migrations {
-            migrate::migrate(&mut catalog, config.connection_context)
+            migrate::migrate(&catalog, config.connection_context)
                 .await
                 .map_err(|e| {
                     Error::new(ErrorKind::FailedMigration {
@@ -1539,7 +1546,15 @@ impl Catalog {
                     continue;
                 }
                 Err(e) => {
-                    let name = c.resolve_full_name(&item.name, None);
+                    let schema = c.state().find_non_temp_schema(&item.schema_id);
+                    let name = QualifiedItemName {
+                        qualifiers: ItemQualifiers {
+                            database_spec: schema.database().clone(),
+                            schema_spec: schema.id().clone(),
+                        },
+                        item: item.name,
+                    };
+                    let name = c.resolve_full_name(&name, None);
                     return Err(Error::new(ErrorKind::Corruption {
                         detail: format!("failed to deserialize item {} ({}): {}", item.id, name, e),
                     }));
@@ -1551,7 +1566,15 @@ impl Catalog {
             if let Some(dependent_items) = awaiting_id_dependencies.remove(&item.id) {
                 items.extend(dependent_items);
             }
-            let full_name = c.resolve_full_name(&item.name, None);
+            let schema = c.state().find_non_temp_schema(&item.schema_id);
+            let name = QualifiedItemName {
+                qualifiers: ItemQualifiers {
+                    database_spec: schema.database().clone(),
+                    schema_spec: schema.id().clone(),
+                },
+                item: item.name,
+            };
+            let full_name = c.resolve_full_name(&name, None);
             if let Some(dependent_items) = awaiting_name_dependencies.remove(&full_name.to_string())
             {
                 items.extend(dependent_items);
@@ -1560,7 +1583,7 @@ impl Catalog {
             c.state.insert_item(
                 item.id,
                 oid,
-                item.name,
+                name,
                 catalog_item,
                 item.owner_id,
                 PrivilegeMap::from_mz_acl_items(item.privileges),
@@ -1571,11 +1594,20 @@ impl Catalog {
         if let Some((missing_dep, mut dependents)) = awaiting_id_dependencies.into_iter().next() {
             let mz_catalog::Item {
                 id,
+                schema_id,
                 name,
                 create_sql: _,
                 owner_id: _,
                 privileges: _,
             } = dependents.remove(0);
+            let schema = c.state().find_non_temp_schema(&schema_id);
+            let name = QualifiedItemName {
+                qualifiers: ItemQualifiers {
+                    database_spec: schema.database().clone(),
+                    schema_spec: schema.id().clone(),
+                },
+                item: name,
+            };
             let name = c.resolve_full_name(&name, None);
             return Err(Error::new(ErrorKind::Corruption {
                 detail: format!(
@@ -1590,11 +1622,20 @@ impl Catalog {
         if let Some((missing_dep, mut dependents)) = awaiting_name_dependencies.into_iter().next() {
             let mz_catalog::Item {
                 id,
+                schema_id,
                 name,
                 create_sql: _,
                 owner_id: _,
                 privileges: _,
             } = dependents.remove(0);
+            let schema = c.state().find_non_temp_schema(&schema_id);
+            let name = QualifiedItemName {
+                qualifiers: ItemQualifiers {
+                    database_spec: schema.database().clone(),
+                    schema_spec: schema.id().clone(),
+                },
+                item: name,
+            };
             let name = c.resolve_full_name(&name, None);
             return Err(Error::new(ErrorKind::Corruption {
                 detail: format!(
@@ -1748,6 +1789,7 @@ async fn test_builtin_migration() {
                             .with_key(vec![0]),
                         resolved_ids: ResolvedIds(BTreeSet::from_iter(resolved_ids)),
                         cluster_id: ClusterId::User(1),
+                        non_null_assertions: vec![],
                     })
                 }
                 SimplifiedItem::Index { on } => {

@@ -1504,6 +1504,34 @@ mod cluster_scheduling {
 /// Note that not all `ServerVar<bool>` are feature flags. Feature flags are for variables that:
 /// - Belong to `SystemVars`, _not_ `SessionVars`
 /// - Default to false and must be explicitly enabled, or default to `true` and can be explicitly disabled.
+///
+/// WARNING / CONTRACT: Feature flags must always *enable* behavior. In other words, setting a
+/// feature flag must make the system more permissive. For example, let's suppose we'd like to
+/// gate deprecated upsert syntax behind a feature flag. In this case, do not add a feature flag
+/// like `disable_deprecated_upsert_syntax`, as `disable_deprecated_upsert_syntax = on` would
+/// _prevent_ the system from parsing the deprecated upsert syntax. Instead, use a feature flag
+/// like `enable_deprecated_upsert_syntax`.
+///
+/// The hazard this protects against is related to reboots after feature flags have been disabled.
+/// Say someone creates a Kinesis source while `enable_kinesis_sources = on`. Materialize will
+/// commit this source to the system catalog. Then, suppose we discover a catastrophic bug in
+/// Kinesis sources and set `enable_kinesis_sources` to `off`. This prevents users from creating
+/// new Kinesis sources, but leaves the existing Kinesis sources in place. This is because
+/// disabling a feature flag doesn't remove access to catalog objects created while the feature
+/// flag was live. On the next reboot, Materialize will proceed to load the Kinesis source from the
+/// catalog, reparsing and replanning the `CREATE SOURCE` definition and rechecking the
+/// `enable_kinesis_sources` feature flag along the way. Even though the feature flag has been
+/// switched to `off`, we need to temporarily re-enable it during parsing and planning to be able
+/// to boot successfully.
+///
+/// Ensuring that all feature flags *enable* behavior means that setting all feature flags to `on`
+/// during catalog boot has the desired effect.
+///
+/// The features enabled by a flag must not result in SQL plan differences that are not specified
+/// in the SQL itself. For example, a feature flag may enable new SQL syntax. Alternatively, a
+/// feature flag that enables a certain SQL-to-HIR optimization must only do so if the flag is
+/// enabled and the user specifies the optimization in some query hint or option. Otherwise, on
+/// restart, the plan may change because all feature flags are enabled then.
 macro_rules! feature_flags {
     // Match `$name, $feature_desc`, default `$value` to false.
     (@inner $name:expr, $feature_desc:literal) => {
@@ -1677,11 +1705,6 @@ feature_flags!(
         "MANAGED, AVAILABILITY ZONES syntax"
     ),
     (
-        enable_arrangement_size_logging,
-        "arrangement size logging",
-        true
-    ),
-    (
         statement_logging_use_reproducible_rng,
         "statement logging with reproducible RNG"
     ),
@@ -1714,6 +1737,26 @@ feature_flags!(
         "the COMMENT ON feature for objects",
         false, // default false
         false  // internal false
+    ),
+    (
+        enable_sink_doc_on_option,
+        "DOC ON option for sinks",
+        false, // default false
+        false  // internal false
+    ),
+    (
+        enable_unified_optimizer_api,
+        "use the new unified optimzier API in bootstrap() and coordinator methods",
+        true
+    ),
+    (
+        enable_assert_not_null,
+        "ASSERT NOT NULL for materialized views"
+    ),
+    (
+        enable_specialized_arrangements,
+        "type-specialization for arrangements in compute rendering",
+        false
     )
 );
 
@@ -4734,9 +4777,9 @@ pub fn is_tracing_var(name: &str) -> bool {
 pub fn is_compute_config_var(name: &str) -> bool {
     name == MAX_RESULT_SIZE.name()
         || name == DATAFLOW_MAX_INFLIGHT_BYTES.name()
-        || name == ENABLE_ARRANGEMENT_SIZE_LOGGING.name()
         || name == ENABLE_MZ_JOIN_CORE.name()
         || name == ENABLE_JEMALLOC_PROFILING.name()
+        || name == ENABLE_SPECIALIZED_ARRANGEMENTS.name()
         || is_persist_config_var(name)
         || is_tracing_var(name)
 }

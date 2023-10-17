@@ -188,7 +188,7 @@ pub(crate) trait HealthStatus: timely::ExchangeData + Debug + Ord {
 /// The `OutputIndex` values that come across `health_stream` must be a strict subset of thosema,
 /// `configs`'s keys.
 pub(crate) fn health_operator<'g, G, O>(
-    scope: &mut Child<'g, G, mz_repr::Timestamp>,
+    scope: &Child<'g, G, mz_repr::Timestamp>,
     storage_state: &crate::storage_state::StorageState,
     // A set of id's that should be marked as `HealthStatus::starting()` during startup.
     mark_starting: BTreeSet<GlobalId>,
@@ -306,7 +306,7 @@ where
 
         // Write the initial starting state to the status shard for all managed objects
         if is_active_worker {
-            for state in health_states.values() {
+            for state in health_states.values_mut() {
                 if mark_starting.contains(&state.id) {
                     if let Some((status_shard, persist_client)) = state.persist_details {
                         let status = O::starting();
@@ -321,6 +321,8 @@ where
                             status.hint(),
                         )
                         .await;
+
+                        state.last_reported_status = Some(status);
                     }
                 }
             }

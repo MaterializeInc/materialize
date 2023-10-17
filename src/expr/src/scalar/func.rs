@@ -437,7 +437,7 @@ fn round_numeric_binary<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, Eva
         // Ensure rescale doesn't exceed max precision by putting a ceiling on
         // b equal to the maximum remaining scale the value can support.
         let max_remaining_scale = u32::from(numeric::NUMERIC_DATUM_MAX_PRECISION)
-            - (numeric::get_precision(&a) - u32::from(numeric::get_scale(&a)));
+            - (numeric::get_precision(&a) - numeric::get_scale(&a));
         b = match i32::try_from(max_remaining_scale) {
             Ok(max_remaining_scale) => std::cmp::min(b, max_remaining_scale),
             Err(_) => b,

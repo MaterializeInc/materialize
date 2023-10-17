@@ -153,11 +153,7 @@ impl Row {
 /// Warning: These order by the u8 array representation, and NOT by Datum::cmp.
 impl PartialOrd for Row {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        match self.data.len().cmp(&other.data.len()) {
-            std::cmp::Ordering::Less => Some(std::cmp::Ordering::Less),
-            std::cmp::Ordering::Greater => Some(std::cmp::Ordering::Greater),
-            std::cmp::Ordering::Equal => Some(self.data.cmp(&other.data)),
-        }
+        Some(self.cmp(other))
     }
 }
 
@@ -611,25 +607,25 @@ unsafe fn read_byte_array_extending_nonnegative<const N: usize>(
     read_byte_array_sign_extending::<N, 0>(data, offset, length)
 }
 
-fn read_byte_array<const N: usize>(data: &[u8], offset: &mut usize) -> [u8; N] {
+pub(super) fn read_byte_array<const N: usize>(data: &[u8], offset: &mut usize) -> [u8; N] {
     let mut raw = [0; N];
     raw.copy_from_slice(&data[*offset..*offset + N]);
     *offset += N;
     raw
 }
 
-fn read_date(data: &[u8], offset: &mut usize) -> Date {
+pub(super) fn read_date(data: &[u8], offset: &mut usize) -> Date {
     let days = i32::from_le_bytes(read_byte_array(data, offset));
     Date::from_pg_epoch(days).expect("unexpected date")
 }
 
-fn read_naive_date(data: &[u8], offset: &mut usize) -> NaiveDate {
+pub(super) fn read_naive_date(data: &[u8], offset: &mut usize) -> NaiveDate {
     let year = i32::from_le_bytes(read_byte_array(data, offset));
     let ordinal = u32::from_le_bytes(read_byte_array(data, offset));
     NaiveDate::from_yo_opt(year, ordinal).unwrap()
 }
 
-fn read_time(data: &[u8], offset: &mut usize) -> NaiveTime {
+pub(super) fn read_time(data: &[u8], offset: &mut usize) -> NaiveTime {
     let secs = u32::from_le_bytes(read_byte_array(data, offset));
     let nanos = u32::from_le_bytes(read_byte_array(data, offset));
     NaiveTime::from_num_seconds_from_midnight_opt(secs, nanos).unwrap()
@@ -983,27 +979,49 @@ where
     data.extend_from_slice(bytes);
 }
 
+pub(super) fn date_to_array(date: Date) -> [u8; size_of::<i32>()] {
+    i32::to_le_bytes(date.pg_epoch_days())
+}
+
 fn push_date<D>(data: &mut D, date: Date)
 where
     D: Vector<u8>,
 {
-    data.extend_from_slice(&i32::to_le_bytes(date.pg_epoch_days()));
+    data.extend_from_slice(&date_to_array(date));
+}
+
+pub(super) fn naive_date_to_arrays(
+    date: NaiveDate,
+) -> ([u8; size_of::<i32>()], [u8; size_of::<u32>()]) {
+    (
+        i32::to_le_bytes(date.year()),
+        u32::to_le_bytes(date.ordinal()),
+    )
 }
 
 fn push_naive_date<D>(data: &mut D, date: NaiveDate)
 where
     D: Vector<u8>,
 {
-    data.extend_from_slice(&i32::to_le_bytes(date.year()));
-    data.extend_from_slice(&u32::to_le_bytes(date.ordinal()));
+    let (ds1, ds2) = naive_date_to_arrays(date);
+    data.extend_from_slice(&ds1);
+    data.extend_from_slice(&ds2);
+}
+
+pub(super) fn time_to_arrays(time: NaiveTime) -> ([u8; size_of::<u32>()], [u8; size_of::<u32>()]) {
+    (
+        u32::to_le_bytes(time.num_seconds_from_midnight()),
+        u32::to_le_bytes(time.nanosecond()),
+    )
 }
 
 fn push_time<D>(data: &mut D, time: NaiveTime)
 where
     D: Vector<u8>,
 {
-    data.extend_from_slice(&u32::to_le_bytes(time.num_seconds_from_midnight()));
-    data.extend_from_slice(&u32::to_le_bytes(time.nanosecond()));
+    let (ts1, ts2) = time_to_arrays(time);
+    data.extend_from_slice(&ts1);
+    data.extend_from_slice(&ts2);
 }
 
 /// Returns an i64 representing a `NaiveDateTime`, if

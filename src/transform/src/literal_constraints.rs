@@ -83,7 +83,7 @@ impl LiteralConstraints {
             fn undo_preparation(
                 mfp: &mut MapFilterProject,
                 orig_mfp: &MapFilterProject,
-                relation: &mut MirRelationExpr,
+                relation: &MirRelationExpr,
             ) -> Result<(), RecursionLimitError> {
                 // undo list_of_predicates_to_and_of_predicates, distribute_and_over_or, unary_and
                 // (It undoes the latter 2 through `MirScalarExp::reduce`.)

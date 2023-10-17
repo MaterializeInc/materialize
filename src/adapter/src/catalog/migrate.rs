@@ -49,7 +49,7 @@ where
 }
 
 pub(crate) async fn migrate(
-    catalog: &mut Catalog,
+    catalog: &Catalog,
     _connection_context: Option<ConnectionContext>,
 ) -> Result<(), anyhow::Error> {
     let mut storage = catalog.storage().await;

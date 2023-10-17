@@ -29,6 +29,7 @@ from materialize.output_consistency.operation.operation import (
     DbOperation,
     DbOperationOrFunction,
 )
+from materialize.output_consistency.query.query_template import QueryTemplate
 from materialize.output_consistency.selection.selection import DataRowSelection
 from materialize.output_consistency.validation.validation_message import (
     ValidationError,
@@ -58,8 +59,12 @@ class InconsistencyIgnoreFilter:
     """Allows specifying and excluding expressions with known output inconsistencies"""
 
     def __init__(self) -> None:
-        self.pre_execution_filter = PreExecutionInconsistencyIgnoreFilter()
-        self.post_execution_filter = PostExecutionInconsistencyIgnoreFilter()
+        self.pre_execution_filter: PreExecutionInconsistencyIgnoreFilterBase = (
+            PreExecutionInconsistencyIgnoreFilter()
+        )
+        self.post_execution_filter: PostExecutionInconsistencyIgnoreFilterBase = (
+            PostExecutionInconsistencyIgnoreFilter()
+        )
 
     def shall_ignore_expression(
         self, expression: Expression, row_selection: DataRowSelection
@@ -74,7 +79,7 @@ class InconsistencyIgnoreFilter:
         return self.post_execution_filter.shall_ignore_error(error)
 
 
-class PreExecutionInconsistencyIgnoreFilter:
+class PreExecutionInconsistencyIgnoreFilterBase:
     def shall_ignore_expression(
         self, expression: Expression, row_selection: DataRowSelection
     ) -> IgnoreVerdict:
@@ -144,6 +149,32 @@ class PreExecutionInconsistencyIgnoreFilter:
         operation: DbOperationOrFunction,
         _all_involved_characteristics: set[ExpressionCharacteristics],
     ) -> IgnoreVerdict:
+        return NoIgnore()
+
+    def _matches_problematic_function_invocation(
+        self,
+        db_function: DbFunction,
+        expression: ExpressionWithArgs,
+        all_involved_characteristics: set[ExpressionCharacteristics],
+    ) -> IgnoreVerdict:
+        return NoIgnore()
+
+    def _matches_problematic_operation_invocation(
+        self,
+        db_operation: DbOperation,
+        expression: ExpressionWithArgs,
+        all_involved_characteristics: set[ExpressionCharacteristics],
+    ) -> IgnoreVerdict:
+        return NoIgnore()
+
+
+class PreExecutionInconsistencyIgnoreFilter(PreExecutionInconsistencyIgnoreFilterBase):
+    def _matches_problematic_operation_or_function_invocation(
+        self,
+        expression: ExpressionWithArgs,
+        operation: DbOperationOrFunction,
+        _all_involved_characteristics: set[ExpressionCharacteristics],
+    ) -> IgnoreVerdict:
         if operation.is_aggregation:
             for arg in expression.args:
                 if arg.is_leaf():
@@ -169,7 +200,6 @@ class PreExecutionInconsistencyIgnoreFilter:
         if db_function.function_name_in_lower_case in {
             "sum",
             "avg",
-            "avg_internal_v1",
             "stddev_samp",
             "stddev_pop",
             "var_samp",
@@ -205,59 +235,129 @@ class PreExecutionInconsistencyIgnoreFilter:
         return NoIgnore()
 
 
-class PostExecutionInconsistencyIgnoreFilter:
+class PostExecutionInconsistencyIgnoreFilterBase:
     def shall_ignore_error(self, error: ValidationError) -> IgnoreVerdict:
         query_template = error.query_execution.query_template
         contains_aggregation = query_template.contains_aggregations
 
         if error.error_type == ValidationErrorType.SUCCESS_MISMATCH:
-            outcome_by_strategy_id = error.query_execution.get_outcome_by_strategy_key()
-
-            dfr_successful = outcome_by_strategy_id[
-                EvaluationStrategyKey.DATAFLOW_RENDERING
-            ].successful
-            ctf_successful = outcome_by_strategy_id[
-                EvaluationStrategyKey.CONSTANT_FOLDING
-            ].successful
-
-            dfr_fails_but_ctf_succeeds = not dfr_successful and ctf_successful
-            dfr_succeeds_but_ctf_fails = dfr_successful and not ctf_successful
-
-            if dfr_fails_but_ctf_succeeds and self._uses_shortcut_optimization(
-                query_template.select_expressions, contains_aggregation
-            ):
-                # see https://github.com/MaterializeInc/materialize/issues/19662
-                return YesIgnore("#19662")
-
-            if (
-                dfr_fails_but_ctf_succeeds
-                and query_template.where_expression is not None
-                and self._uses_shortcut_optimization(
-                    [query_template.where_expression], contains_aggregation
-                )
-            ):
-                # see https://github.com/MaterializeInc/materialize/issues/17189
-                return YesIgnore("#17189")
-
-            if (
-                dfr_succeeds_but_ctf_fails or dfr_fails_but_ctf_succeeds
-            ) and query_template.where_expression is not None:
-                # An evaluation strategy may touch further rows than the selected subset and thereby run into evaluation
-                # errors (while the other uses another order).
-                # see https://github.com/MaterializeInc/materialize/issues/17189
-                return YesIgnore("#17189")
+            return self._shall_ignore_success_mismatch(
+                error, query_template, contains_aggregation
+            )
 
         if error.error_type == ValidationErrorType.ERROR_MISMATCH:
-            if self._uses_shortcut_optimization(
-                query_template.select_expressions, contains_aggregation
-            ):
-                # see https://github.com/MaterializeInc/materialize/issues/17189
-                return YesIgnore("#17189")
+            return self._shall_ignore_error_mismatch(
+                error, query_template, contains_aggregation
+            )
 
-            if query_template.where_expression is not None:
-                # The error message may depend on the evaluation order of the where expression.
-                # see https://github.com/MaterializeInc/materialize/issues/17189
-                return YesIgnore("#17189")
+        if error.error_type == ValidationErrorType.CONTENT_MISMATCH:
+            return self._shall_ignore_content_mismatch(
+                error, query_template, contains_aggregation
+            )
+
+        if error.error_type == ValidationErrorType.ROW_COUNT_MISMATCH:
+            return self._shall_ignore_error_mismatch(
+                error, query_template, contains_aggregation
+            )
+
+        raise RuntimeError(f"Unexpected validation error type: {error.error_type}")
+
+    def _shall_ignore_success_mismatch(
+        self,
+        error: ValidationError,
+        query_template: QueryTemplate,
+        contains_aggregation: bool,
+    ) -> IgnoreVerdict:
+        return NoIgnore()
+
+    def _shall_ignore_error_mismatch(
+        self,
+        error: ValidationError,
+        query_template: QueryTemplate,
+        contains_aggregation: bool,
+    ) -> IgnoreVerdict:
+        return NoIgnore()
+
+    def _shall_ignore_content_mismatch(
+        self,
+        error: ValidationError,
+        query_template: QueryTemplate,
+        contains_aggregation: bool,
+    ) -> IgnoreVerdict:
+        return NoIgnore()
+
+    def _shall_ignore_row_count_mismatch(
+        self,
+        error: ValidationError,
+        query_template: QueryTemplate,
+        contains_aggregation: bool,
+    ) -> IgnoreVerdict:
+        return NoIgnore()
+
+
+class PostExecutionInconsistencyIgnoreFilter(
+    PostExecutionInconsistencyIgnoreFilterBase
+):
+    def _shall_ignore_success_mismatch(
+        self,
+        error: ValidationError,
+        query_template: QueryTemplate,
+        contains_aggregation: bool,
+    ) -> IgnoreVerdict:
+        outcome_by_strategy_id = error.query_execution.get_outcome_by_strategy_key()
+
+        dfr_successful = outcome_by_strategy_id[
+            EvaluationStrategyKey.MZ_DATAFLOW_RENDERING
+        ].successful
+        ctf_successful = outcome_by_strategy_id[
+            EvaluationStrategyKey.MZ_CONSTANT_FOLDING
+        ].successful
+
+        dfr_fails_but_ctf_succeeds = not dfr_successful and ctf_successful
+        dfr_succeeds_but_ctf_fails = dfr_successful and not ctf_successful
+
+        if dfr_fails_but_ctf_succeeds and self._uses_shortcut_optimization(
+            query_template.select_expressions, contains_aggregation
+        ):
+            # see https://github.com/MaterializeInc/materialize/issues/19662
+            return YesIgnore("#19662")
+
+        if (
+            dfr_fails_but_ctf_succeeds
+            and query_template.where_expression is not None
+            and self._uses_shortcut_optimization(
+                [query_template.where_expression], contains_aggregation
+            )
+        ):
+            # see https://github.com/MaterializeInc/materialize/issues/17189
+            return YesIgnore("#17189")
+
+        if (
+            dfr_succeeds_but_ctf_fails or dfr_fails_but_ctf_succeeds
+        ) and query_template.where_expression is not None:
+            # An evaluation strategy may touch further rows than the selected subset and thereby run into evaluation
+            # errors (while the other uses another order).
+            # see https://github.com/MaterializeInc/materialize/issues/17189
+            return YesIgnore("#17189")
+
+        return NoIgnore()
+
+    def _shall_ignore_error_mismatch(
+        self,
+        error: ValidationError,
+        query_template: QueryTemplate,
+        contains_aggregation: bool,
+    ) -> IgnoreVerdict:
+        if self._uses_shortcut_optimization(
+            query_template.select_expressions, contains_aggregation
+        ):
+            # see https://github.com/MaterializeInc/materialize/issues/17189
+            return YesIgnore("#17189")
+
+        if query_template.where_expression is not None:
+            # The error message may depend on the evaluation order of the where expression.
+            # see https://github.com/MaterializeInc/materialize/issues/17189
+            return YesIgnore("#17189")
 
         return NoIgnore()
 
@@ -293,7 +393,7 @@ class PostExecutionInconsistencyIgnoreFilter:
             return False
 
         for expression in expressions:
-            if expression.contains(is_function_taking_shortcut):
+            if expression.contains(is_function_taking_shortcut, True):
                 # see https://github.com/MaterializeInc/materialize/issues/17189
                 return True
 
@@ -308,7 +408,7 @@ class PostExecutionInconsistencyIgnoreFilter:
             ) and expression.has_any_characteristic({ExpressionCharacteristics.NULL})
 
         for expression in expressions:
-            if expression.contains(is_null_expression):
+            if expression.contains(is_null_expression, True):
                 # Constant folding takes shortcuts when it can infer that an expression will be NULL or not
                 # (e.g., `chr(huge_value) = NULL` won't be fully evaluated)
                 # see https://github.com/MaterializeInc/materialize/issues/17189

@@ -88,6 +88,7 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     docker.io \
     gcc \
     g++ \
+    gdb \
     git \
     gnupg2 \
     jq \
@@ -108,6 +109,7 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     ruby \
     unzip \
     xz-utils \
+    yamllint \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Node.js LTS, for our Python typechecker. This is up here because we don't

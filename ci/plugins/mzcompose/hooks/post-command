@@ -62,7 +62,8 @@ fi
 
 ci_unimportant_heading "Upload log artifacts"
 
-run logs --no-color > services.log
+# services.log might already exist and contain logs from before composition was downed
+run logs --no-color >> services.log
 # shellcheck disable=SC2024
 sudo journalctl --merge --since "$(cat step_start_timestamp)" > journalctl-merge.log
 netstat -ant > netstat-ant.log
@@ -70,7 +71,27 @@ netstat -panelot > netstat-panelot.log
 ps aux > ps-aux.log
 docker ps -a --no-trunc > docker-ps-a.log
 
-artifacts=(run.log services.log journalctl-merge.log netstat-ant.log netstat-panelot.log ps-aux.log docker-ps-a.log docker-inspect.log sar.log)
+mv "$HOME"/cores .
+
+if find cores -name 'core.*' | grep -q .; then
+    # Best effort attempt to fetch interesting executables to get backtrace of core files
+    run cp sqllogictest:/usr/local/bin/sqllogictest cores/ || true
+    run cp sqllogictest:/usr/local/bin/clusterd cores/ || true
+    run cp materialized:/usr/local/bin/environmentd cores/ || true
+    run cp materialized:/usr/local/bin/clusterd cores/ || true
+    run cp testdrive:/usr/local/bin/testdrive cores/ || true
+fi
+
+find cores -name 'core.*' | while read -r core; do
+    exe=$(echo "$core" | sed -e "s/core\.\(.*\)\.[0-9][0-9]*/\1/")
+    bin/ci-builder run stable gdb --batch -ex "bt full" -ex "quit" "$exe" "$core" > "$core".txt || true
+    buildkite-agent artifact upload "$core".txt
+    buildkite-agent artifact upload "$core"
+done
+# can be huge, clean up
+rm -rf cores
+
+artifacts=(run.log services.log journalctl-merge.log netstat-ant.log netstat-panelot.log ps-aux.log docker-ps-a.log docker-inspect.log)
 artifacts_str=$(IFS=";"; echo "${artifacts[*]}")
 buildkite-agent artifact upload "$artifacts_str"
 bin/ci-builder run stable bin/ci-logged-errors-detect "${artifacts[@]}"

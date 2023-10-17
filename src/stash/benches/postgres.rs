@@ -79,7 +79,8 @@ use std::str::FromStr;
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use mz_ore::metrics::MetricsRegistry;
-use mz_stash::{Stash, StashError, StashFactory, TypedCollection};
+use mz_stash::{Stash, StashFactory, TypedCollection};
+use mz_stash_types::StashError;
 use once_cell::sync::Lazy;
 use tokio::runtime::Runtime;
 

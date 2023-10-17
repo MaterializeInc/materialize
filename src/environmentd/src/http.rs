@@ -106,7 +106,7 @@ pub enum TlsMode {
 #[derive(Clone)]
 pub struct WsState {
     frontegg: Arc<Option<FronteggAuthentication>>,
-    adapter_client: mz_adapter::Client,
+    adapter_client_rx: Delayed<mz_adapter::Client>,
     active_connection_count: SharedConnectionCounter,
 }
 
@@ -135,13 +135,13 @@ impl HttpServer {
         adapter_client_tx
             .send(adapter_client.clone())
             .expect("rx known to be live");
-
+        let adapter_client_rx = adapter_client_rx.shared();
         let base_router = base_router(BaseRouterConfig { profiling: false })
             .layer(middleware::from_fn(move |req, next| {
                 let base_frontegg = Arc::clone(&base_frontegg);
-                async move { http_auth(req, next, tls_mode, &base_frontegg).await }
+                async move { http_auth(req, next, tls_mode, base_frontegg.as_ref().as_ref()).await }
             }))
-            .layer(Extension(adapter_client_rx.shared()))
+            .layer(Extension(adapter_client_rx.clone()))
             .layer(Extension(Arc::clone(&active_connection_count)))
             .layer(
                 CorsLayer::new()
@@ -156,12 +156,11 @@ impl HttpServer {
                     .expose_headers(Any)
                     .max_age(Duration::from_secs(60) * 60),
             );
-
         let ws_router = Router::new()
             .route("/api/experimental/sql", routing::get(sql::handle_sql_ws))
             .with_state(WsState {
                 frontegg,
-                adapter_client: adapter_client.clone(),
+                adapter_client_rx,
                 active_connection_count,
             });
 
@@ -375,6 +374,7 @@ impl InternalHttpServer {
             "/internal-console".to_string(),
         ));
 
+        let adapter_client_rx = adapter_client_rx.shared();
         let router = base_router(BaseRouterConfig { profiling: true })
             .route(
                 "/metrics",
@@ -439,9 +439,22 @@ impl InternalHttpServer {
                 routing::get(console::handle_internal_console),
             )
             .layer(middleware::from_fn(internal_http_auth))
-            .layer(Extension(adapter_client_rx.shared()))
+            .layer(Extension(adapter_client_rx.clone()))
             .layer(Extension(console_config))
-            .layer(Extension(active_connection_count));
+            .layer(Extension(Arc::clone(&active_connection_count)));
+
+        let ws_router = Router::new()
+            .route("/api/experimental/sql", routing::get(sql::handle_sql_ws))
+            // This middleware extracts the MZ user from the x-materialize-user http header.
+            // Normally, browser-initiated websocket requests do not support headers, however for the
+            // Internal HTTP Server the browser would be connecting through teleport, which should
+            // attach the x-materialize-user header to all requests it proxies to this api.
+            .layer(middleware::from_fn(internal_http_auth))
+            .with_state(WsState {
+                frontegg: Arc::new(None),
+                adapter_client_rx,
+                active_connection_count,
+            });
 
         let leader_router = Router::new()
             .route("/api/leader/status", routing::get(handle_leader_status))
@@ -451,7 +464,10 @@ impl InternalHttpServer {
                 ready_to_promote,
             })));
 
-        let router = router.merge(leader_router).apply_default_layers(metrics);
+        let router = router
+            .merge(ws_router)
+            .merge(leader_router)
+            .apply_default_layers(metrics);
 
         InternalHttpServer { router }
     }
@@ -484,7 +500,10 @@ impl Server for InternalHttpServer {
         let router = self.router.clone();
         Box::pin(async {
             let http = hyper::server::conn::Http::new();
-            http.serve_connection(conn, router).err_into().await
+            http.serve_connection(conn, router)
+                .with_upgrades()
+                .err_into()
+                .await
         })
     }
 }
@@ -500,7 +519,7 @@ enum ConnProtocol {
 }
 
 #[derive(Clone, Debug)]
-struct AuthedUser(User);
+pub struct AuthedUser(User);
 
 pub struct AuthedClient {
     pub client: SessionClient,
@@ -642,7 +661,7 @@ async fn http_auth<B>(
     mut req: Request<B>,
     next: Next<B>,
     tls_mode: TlsMode,
-    frontegg: &Option<FronteggAuthentication>,
+    frontegg: Option<&FronteggAuthentication>,
 ) -> impl IntoResponse {
     // First, extract the username from the certificate, validating that the
     // connection matches the TLS configuration along the way.
@@ -685,9 +704,10 @@ async fn http_auth<B>(
 async fn init_ws(
     WsState {
         frontegg,
-        adapter_client,
+        adapter_client_rx,
         active_connection_count,
     }: &WsState,
+    existing_user: Option<AuthedUser>,
     ws: &mut WebSocket,
 ) -> Result<AuthedClient, anyhow::Error> {
     // TODO: Add a timeout here to prevent resource leaks by clients that
@@ -709,33 +729,59 @@ async fn init_ws(
             }
         }
     };
-    let (creds, options) = if frontegg.is_some() {
-        match ws_auth {
+    let (user, options) = match (frontegg.as_ref(), existing_user, ws_auth) {
+        (Some(frontegg), None, ws_auth) => {
+            let (creds, options) = match ws_auth {
+                WebSocketAuth::Basic {
+                    user,
+                    password,
+                    options,
+                } => {
+                    let creds = Credentials::Password {
+                        username: user,
+                        password,
+                    };
+                    (creds, options)
+                }
+                WebSocketAuth::Bearer { token, options } => {
+                    let creds = Credentials::Token { token };
+                    (creds, options)
+                }
+                WebSocketAuth::OptionsOnly { options: _ } => {
+                    anyhow::bail!("expected auth information");
+                }
+            };
+            (auth(Some(frontegg), creds).await?, options)
+        }
+        (
+            None,
+            None,
             WebSocketAuth::Basic {
                 user,
-                password,
+                password: _,
                 options,
-            } => {
-                let creds = Credentials::Password {
-                    username: user,
-                    password,
-                };
-                (creds, options)
-            }
-            WebSocketAuth::Bearer { token, options } => {
-                let creds = Credentials::Token { token };
-                (creds, options)
-            }
+            },
+        ) => (auth(None, Credentials::User(user)).await?, options),
+        // No frontegg, specified existing user, we only accept options only.
+        (None, Some(existing_user), WebSocketAuth::OptionsOnly { options }) => {
+            (existing_user, options)
         }
-    } else if let WebSocketAuth::Basic { user, options, .. } = ws_auth {
-        (Credentials::User(user), options)
-    } else {
-        anyhow::bail!("unexpected")
+        // No frontegg, specified existing user, we do not expect basic or bearer auth.
+        (None, Some(_), WebSocketAuth::Basic { .. } | WebSocketAuth::Bearer { .. }) => {
+            warn!("Unexpected bearer or basic auth provided when using user header");
+            anyhow::bail!("unexpected")
+        }
+        // Specifying both frontegg and an existing user should not be possible.
+        (Some(_), Some(_), _) => anyhow::bail!("unexpected"),
+        // No frontegg, no existing user, and no passed username.
+        (None, None, WebSocketAuth::Bearer { .. } | WebSocketAuth::OptionsOnly { .. }) => {
+            warn!("Unexpected auth type when not using frontegg or user header");
+            anyhow::bail!("unexpected")
+        }
     };
-    let user = auth(frontegg, creds).await?;
 
     let client = AuthedClient::new(
-        adapter_client,
+        &adapter_client_rx.clone().await?,
         user,
         Arc::clone(active_connection_count),
         options,
@@ -753,7 +799,7 @@ enum Credentials {
 }
 
 async fn auth(
-    frontegg: &Option<FronteggAuthentication>,
+    frontegg: Option<&FronteggAuthentication>,
     creds: Credentials,
 ) -> Result<AuthedUser, AuthError> {
     // There are three places a username may be specified:

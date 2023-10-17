@@ -22,7 +22,7 @@
   create view {{ relation }}
     {% set contract_config = config.get('contract') %}
     {% if contract_config.enforced %}
-      {{exceptions.warn("Model contracts cannot be enforced in this version of the adapter (see dbt-core #7213)")}}
+      {{ get_assert_columns_equivalent(sql) }}
     {%- endif %}
   as (
     {{ sql }}
@@ -35,7 +35,11 @@
   create materialized view {{ relation }}
     {% set contract_config = config.get('contract') %}
     {% if contract_config.enforced %}
-      {{exceptions.warn("Model contracts cannot be enforced in this version of the adapter (see dbt-core #7213)")}}
+      {{ get_assert_columns_equivalent(sql) }}
+      -- Explicitly throw a warning rather than silently ignore configured
+      -- constraints for tables and materialized views.
+      -- See /relations/columns_spec_ddl.sql for details.
+      {{ get_table_columns_and_constraints() }}
     {%- endif %}
   {% if cluster %}
     in cluster {{ cluster }}
@@ -48,7 +52,7 @@
 {% macro materialize__create_arbitrary_object(sql) -%}
     {% set contract_config = config.get('contract') %}
     {% if contract_config.enforced %}
-      {{exceptions.warn("Model contracts cannot be enforced in this version of the adapter (see dbt-core #7213)")}}
+      {{exceptions.warn("Model contracts cannot be enforced for custom materializations (see dbt-core #7213)")}}
     {%- endif %}
     {{ sql }}
 {%- endmacro %}
@@ -77,6 +81,12 @@
     {% elif relation.type == 'index' %}
       drop index if exists {{ relation }}
     {% endif %}
+  {%- endcall %}
+{% endmacro %}
+
+{% macro materialize__truncate_relation(relation) -%}
+  {% call statement('truncate_relation') -%}
+    delete from {{ relation }}
   {%- endcall %}
 {% endmacro %}
 

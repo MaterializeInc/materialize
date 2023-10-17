@@ -333,6 +333,18 @@ mz_compute_dependencies
 BASE TABLE
 materialize
 mz_internal
+mz_compute_error_counts
+VIEW
+materialize
+mz_internal
+mz_compute_error_counts_per_worker
+VIEW
+materialize
+mz_internal
+mz_compute_error_counts_raw
+SOURCE
+materialize
+mz_internal
 mz_compute_exports
 VIEW
 materialize
@@ -706,14 +718,6 @@ BASE TABLE
 materialize
 mz_internal
 mz_type_pg_metadata
-BASE TABLE
-materialize
-mz_internal
-mz_view_foreign_keys
-BASE TABLE
-materialize
-mz_internal
-mz_view_keys
 BASE TABLE
 materialize
 mz_internal
