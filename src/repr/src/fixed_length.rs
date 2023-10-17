@@ -15,7 +15,7 @@
 //! or fixed-length containers standing in for them.
 
 use std::borrow::Borrow;
-use std::iter;
+use std::iter::{empty, once, Empty, Once};
 use std::mem::size_of;
 
 use chrono::{DateTime, Utc};
@@ -31,35 +31,63 @@ use crate::adt::mz_acl_item::{AclItem, MzAclItem};
 use crate::adt::timestamp::CheckedTimestamp;
 use crate::row::{
     date_to_array, naive_date_to_arrays, read_byte_array, read_date, read_naive_date, read_time,
-    time_to_arrays,
+    time_to_arrays, DatumListIter,
 };
 use crate::{ColumnType, Datum, Row, ScalarType, Timestamp};
-
-/// A typedef to ease use of 9-byte fixed-length representations.
-pub type Bytes9 = BytesN<9>;
 
 /// A helper trait to get references to `Row` based on type information that only manifests
 /// at runtime (typically originating from inferred schemas).
 pub trait IntoRowByTypes: Sized {
+    /// An iterator type for use in `into_datum_iter`.
+    type DatumIter<'a>: IntoIterator<Item = Datum<'a>>
+    where
+        Self: 'a;
+
     /// Obtains a reference to `Row` for an instance of `Self`, given a `Row` buffer and
     /// a schema provided by `types`.
     ///
     /// Implementations are free to not use `row_buf` if a zero-copy implementation
     /// can be provided. If the Row buffer is used, then the reference returned is to it.
     /// Implementations are also free to place specific requirements on the given schema.
-    fn into_row<'a>(&'a self, row_buf: &'a mut Row, types: Option<&[ColumnType]>) -> &'a Row;
+    #[inline]
+    fn into_row<'a>(&'a self, row_buf: &'a mut Row, types: Option<&[ColumnType]>) -> &'a Row {
+        let mut packer = row_buf.packer();
+        packer.extend(self.into_datum_iter(types));
+        row_buf
+    }
+
+    /// Obtains an iterator of datums out of an instance of `Self`, given a schema provided
+    /// by `types`.
+    ///
+    /// Implementations are free to place specific requirements on the given schema.
+    fn into_datum_iter<'a>(&'a self, types: Option<&[ColumnType]>) -> Self::DatumIter<'a>;
 }
 
 // Blanket identity implementation for Row.
 impl IntoRowByTypes for Row {
+    /// Datum iterator for `Row`.
+    type DatumIter<'a> = DatumListIter<'a>;
+
     /// Performs a zero-copy reference forwarding without employing the `Row` buffer.
     ///
     /// This implementation panics if `types` other than `None` are provided. This is because
     /// `Row` is already self-describing and can use variable-length types, so we are
     /// explicitly not validating the given schema.
+    #[inline]
     fn into_row<'a>(&'a self, _row_buf: &'a mut Row, types: Option<&[ColumnType]>) -> &'a Row {
         assert!(types.is_none());
         self
+    }
+
+    /// Borrows `self` and gets an iterator from it.
+    ///
+    /// This implementation panics if `types` other than `None` are provided. This is because
+    /// `Row` is already self-describing and can use variable-length types, so we are
+    /// explicitly not validating the given schema.
+    #[inline]
+    fn into_datum_iter<'a>(&'a self, types: Option<&[ColumnType]>) -> Self::DatumIter<'a> {
+        assert!(types.is_none());
+        self.iter()
     }
 }
 
@@ -69,7 +97,9 @@ impl IntoRowByTypes for Row {
 pub trait FromRowByTypes: Sized {
     /// Obtains an instance of `Self` given an instance of `Row` and a schema provided
     /// by `types`.
+    ///
     /// Implementations are free to place specific requirements on the given schema.
+    #[inline]
     fn from_row(row: Row, types: Option<&[ColumnType]>) -> Self {
         let iter = row.iter();
         Self::from_datum_iter(iter, types)
@@ -77,6 +107,7 @@ pub trait FromRowByTypes: Sized {
 
     /// Obtains an instance of `Self' given an iterator of borrowed datums and a schema
     /// provided by `types`.
+    ///
     /// Implementations are free to place specific requirements on the given schema.
     fn from_datum_iter<'a, I, D>(datum_iter: I, types: Option<&[ColumnType]>) -> Self
     where
@@ -90,6 +121,7 @@ impl FromRowByTypes for Row {
     /// This implementation panics if `types` other than `None` provided. This is because
     /// `Row` is already self-describing and can use variable-length types, so we are
     /// explicitly not validating the given schema.
+    #[inline]
     fn from_row(row: Row, types: Option<&[ColumnType]>) -> Self {
         assert!(types.is_none());
         row
@@ -100,6 +132,7 @@ impl FromRowByTypes for Row {
     /// This implementation panics if non-empty `types` are provided. This is because
     /// `Row` is already self-describing and can use variable-length types, so we are
     /// explicitly not validating the given schema.
+    #[inline]
     fn from_datum_iter<'a, I, D>(datum_iter: I, types: Option<&[ColumnType]>) -> Self
     where
         I: IntoIterator<Item = D>,
@@ -111,6 +144,71 @@ impl FromRowByTypes for Row {
         row
     }
 }
+
+impl IntoRowByTypes for () {
+    /// Empty iterator for unit.
+    type DatumIter<'a> = Empty<Datum<'a>>;
+
+    /// Returns the `Row` buffer, which is assumed to be empty, without touching it.
+    ///
+    /// This implementation panics if `types` other than `Some(&[])` are provided. This is because
+    /// unit values need to have an empty schema.
+    #[inline]
+    fn into_row<'a>(&'a self, row_buf: &'a mut Row, types: Option<&[ColumnType]>) -> &'a Row {
+        let Some(&[]) = types else {
+            panic!("Non-empty schema with unit values")
+        };
+        debug_assert!(row_buf.is_empty());
+        row_buf
+    }
+
+    /// Returns an empty iterator.
+    ///
+    /// This implementation panics if `types` other than `Some(&[])` are provided. This is because
+    /// unit values need to have an empty schema.
+    #[inline]
+    fn into_datum_iter<'a>(&'a self, types: Option<&[ColumnType]>) -> Self::DatumIter<'a> {
+        let Some(&[]) = types else {
+            panic!("Non-empty schema with unit values")
+        };
+        empty()
+    }
+}
+
+impl FromRowByTypes for () {
+    /// Obtains a unit value from an empty `Row`.
+    ///
+    /// This implementation panics if `types` other than `Some(&[])` are provided. This is because
+    /// unit values need to have an empty schema.
+    #[inline]
+    fn from_row(row: Row, types: Option<&[ColumnType]>) -> Self {
+        let Some(&[]) = types else {
+            panic!("Non-empty schema with unit values")
+        };
+        debug_assert!(row.is_empty());
+        ()
+    }
+
+    /// Obtains a unit value from an empty datum iterator.
+    ///
+    /// This implementation panics if `types` other than `Some(&[])` are provided. This is because
+    /// unit values need to have an empty schema.
+    #[inline]
+    fn from_datum_iter<'a, I, D>(datum_iter: I, types: Option<&[ColumnType]>) -> Self
+    where
+        I: IntoIterator<Item = D>,
+        D: Borrow<Datum<'a>>,
+    {
+        let Some(&[]) = types else {
+            panic!("Non-empty schema with unit values")
+        };
+        debug_assert!(datum_iter.into_iter().next().is_none());
+        ()
+    }
+}
+
+/// A typedef to ease use of 9-byte fixed-length representations.
+pub type Bytes9 = BytesN<9>;
 
 /// A representation of fixed-length values with N bytes, wherein one byte
 /// is reserved for nullability encoding.
@@ -549,13 +647,18 @@ impl<const N: usize> BytesN<N> {
         }
         false
     }
+}
 
-    /// A helper function that constructs an iterator of datums from the `BytesN` instance
-    /// given by `self`.
-    pub fn into_datum_iter<'a>(
-        &'a self,
-        types: Option<&[ColumnType]>,
-    ) -> impl Iterator<Item = Datum<'a>> {
+impl<const N: usize> IntoRowByTypes for BytesN<N> {
+    /// Single-element iterator for single-column `BytesN`.
+    type DatumIter<'a> = Once<Datum<'a>>;
+
+    /// Constructs an iterator of datums from the `BytesN` instance given by `self`.
+    ///
+    /// Presently, the implementation panics if more than one `ColumnType` is found
+    /// in `types` or if the one column has a byte length greater than N-1 (due to one
+    /// byte being reserved for nullability encoding).
+    fn into_datum_iter<'a>(&'a self, types: Option<&[ColumnType]>) -> Self::DatumIter<'a> {
         // TODO (vmarcos): The implementation should be extended in the future to support
         // multiple columns in `types` and to panic if the multi-column schema that ends up
         // being too wide for a fixed-length N-byte pattern (MaterializeInc/materialize#22102).
@@ -620,21 +723,7 @@ impl<const N: usize> BytesN<N> {
                 ),
             }
         };
-        iter::once(datum)
-    }
-}
-
-impl<const N: usize> IntoRowByTypes for BytesN<N> {
-    /// This implementation employs the schema provided by `types` to decode
-    /// the N-byte value into `row_buf`, returning a reference to it.
-    ///
-    /// Presently, the implementation panics if more than one `ColumnType` is found
-    /// in `types` or if the one column has a byte length greater than N-1 (due to one
-    /// byte being reserved for nullability encoding).
-    fn into_row<'a>(&'a self, row_buf: &'a mut Row, types: Option<&[ColumnType]>) -> &'a Row {
-        let mut packer = row_buf.packer();
-        packer.extend(self.into_datum_iter(types));
-        row_buf
+        once(datum)
     }
 }
 

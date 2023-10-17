@@ -274,8 +274,9 @@ where
             SpecializedArrangement::Bytes9Row(key_types, inner) => {
                 let key_types = key_types.clone();
                 inner.as_collection(move |k, v| {
-                    let datums_borrow =
-                        datums.borrow_with_iter(k.into_datum_iter(Some(&key_types)), &v);
+                    let mut datums_borrow = datums.borrow();
+                    datums_borrow.extend(k.into_datum_iter(Some(&key_types)));
+                    datums_borrow.extend(&**v);
                     logic(&datums_borrow)
                 })
             }
@@ -308,8 +309,9 @@ where
                     inner,
                     key.map(|k| Bytes9::from_row(k, Some(&key_types))),
                     move |k, v, t, d| {
-                        let mut datums_borrow =
-                            datums.borrow_with_iter(k.into_datum_iter(Some(&key_types)), &v);
+                        let mut datums_borrow = datums.borrow();
+                        datums_borrow.extend(k.into_datum_iter(Some(&key_types)));
+                        datums_borrow.extend(&**v);
                         logic(&mut datums_borrow, t, d)
                     },
                     refuel,
@@ -428,8 +430,9 @@ where
             SpecializedArrangementImport::Bytes9Row(key_types, inner) => {
                 let key_types = key_types.clone();
                 inner.as_collection(move |k, v| {
-                    let datums_borrow =
-                        datums.borrow_with_iter(k.into_datum_iter(Some(&key_types)), &v);
+                    let mut datums_borrow = datums.borrow();
+                    datums_borrow.extend(k.into_datum_iter(Some(&key_types)));
+                    datums_borrow.extend(&**v);
                     logic(&datums_borrow)
                 })
             }
@@ -460,8 +463,9 @@ where
                     inner,
                     key.map(|k| Bytes9::from_row(k, Some(&key_types))),
                     move |k, v, t, d| {
-                        let mut datums_borrow =
-                            datums.borrow_with_iter(k.into_datum_iter(Some(&key_types)), &v);
+                        let mut datums_borrow = datums.borrow();
+                        datums_borrow.extend(k.into_datum_iter(Some(&key_types)));
+                        datums_borrow.extend(&**v);
                         logic(&mut datums_borrow, t, d)
                     },
                     refuel,
