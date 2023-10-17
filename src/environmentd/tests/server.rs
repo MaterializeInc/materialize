@@ -372,7 +372,7 @@ fn test_statement_logging_selects() {
         rows_returned: Option<i64>,
     }
 
-    let sl_selects = Retry::default()
+    let result = Retry::default()
         .max_duration(Duration::from_secs(30))
         .retry(|_| {
             let sl_selects = client
@@ -392,6 +392,7 @@ FROM
             mz_internal.mz_prepared_statement_history AS mpsh
             ON mseh.prepared_statement_id = mpsh.id
 WHERE mpsh.sql ~~ 'SELECT%'
+AND mpsh.sql !~ '%unique string to prevent this query showing up in results after retries%'
 ORDER BY mseh.began_at",
                     &[],
                 )
@@ -399,22 +400,27 @@ ORDER BY mseh.began_at",
             if sl_selects.len() == 4 {
                 Ok(sl_selects)
             } else {
-                Err(())
+                Err(sl_selects)
             }
-        })
-        .expect("number of results never became correct")
-        .into_iter()
-        .map(|r| Record {
-            sample_rate: r.get(0),
-            began_at: r.get(1),
-            finished_at: r.get(2),
-            finished_status: r.get(3),
-            error_message: r.get(4),
-            prepared_at: r.get(5),
-            execution_strategy: r.get(6),
-            rows_returned: r.get(7),
-        })
-        .collect::<Vec<_>>();
+        });
+    let sl_selects = match result {
+        Ok(rows) => rows
+            .into_iter()
+            .map(|r| Record {
+                sample_rate: r.get(0),
+                began_at: r.get(1),
+                finished_at: r.get(2),
+                finished_status: r.get(3),
+                error_message: r.get(4),
+                prepared_at: r.get(5),
+                execution_strategy: r.get(6),
+                rows_returned: r.get(7),
+            })
+            .collect::<Vec<_>>(),
+        Err(rows) => {
+            panic!("number of results never became correct: {rows:?}")
+        }
+    };
     for r in &sl_selects {
         assert_eq!(r.sample_rate, 1.0);
         assert!(r.prepared_at <= r.began_at);
