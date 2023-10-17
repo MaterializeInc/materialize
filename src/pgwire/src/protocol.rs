@@ -31,12 +31,12 @@ use mz_frontegg_auth::{
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
-use mz_ore::server::TlsMode;
 use mz_ore::str::StrExt;
 use mz_pgcopy::CopyFormatParams;
 use mz_pgwire_common::{ErrorResponse, Format, FrontendMessage, Severity, VERSIONS, VERSION_3};
 use mz_repr::user::ExternalUserMetadata;
 use mz_repr::{Datum, GlobalId, RelationDesc, RelationType, Row, RowArena, ScalarType};
+use mz_server_core::TlsMode;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{FetchDirection, Ident, Raw, Statement};
 use mz_sql::parse::StatementParseResult;

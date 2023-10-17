@@ -98,12 +98,12 @@ use mz_frontegg_auth::Authentication as FronteggAuthentication;
 use mz_ore::metric;
 use mz_ore::metrics::{ComputedGauge, MetricsRegistry};
 use mz_ore::netio::AsyncReady;
-use mz_ore::server::{listen, TlsCertConfig, TlsConfig, TlsMode};
 use mz_ore::task::JoinSetExt;
 use mz_pgwire_common::{
     decode_startup, Conn, ErrorResponse, FrontendMessage, FrontendStartupMessage,
     ACCEPT_SSL_ENCRYPTION, REJECT_ENCRYPTION, VERSION_3,
 };
+use mz_server_core::{listen, TlsCertConfig, TlsConfig, TlsMode};
 use openssl::ssl::{NameType, Ssl, SslContext};
 use semver::Version;
 use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt};
@@ -214,7 +214,7 @@ impl BalancerService {
                 tls: pgwire_tls,
             };
             set.spawn_named(|| "pgwire_stream", async move {
-                mz_ore::server::serve(pgwire_stream, pgwire).await;
+                mz_server_core::serve(pgwire_stream, pgwire).await;
             });
         }
         {
@@ -223,7 +223,7 @@ impl BalancerService {
                 resolve_template: Arc::from(self.cfg.https_addr_template),
             };
             set.spawn_named(|| "https_stream", async move {
-                mz_ore::server::serve(https_stream, https).await;
+                mz_server_core::serve(https_stream, https).await;
             });
         }
 
@@ -339,10 +339,10 @@ impl PgwireBalancer {
     }
 }
 
-impl mz_ore::server::Server for PgwireBalancer {
+impl mz_server_core::Server for PgwireBalancer {
     const NAME: &'static str = "pgwire_balancer";
 
-    fn handle_connection(&self, conn: TcpStream) -> mz_ore::server::ConnectionHandler {
+    fn handle_connection(&self, conn: TcpStream) -> mz_server_core::ConnectionHandler {
         let tls = self.tls.clone();
         let resolver = Arc::clone(&self.resolver);
         Box::pin(async move {
@@ -418,10 +418,10 @@ struct HttpsBalancer {
     // todo: metrics
 }
 
-impl mz_ore::server::Server for HttpsBalancer {
+impl mz_server_core::Server for HttpsBalancer {
     const NAME: &'static str = "https_balancer";
 
-    fn handle_connection(&self, conn: TcpStream) -> mz_ore::server::ConnectionHandler {
+    fn handle_connection(&self, conn: TcpStream) -> mz_server_core::ConnectionHandler {
         let tls_context = Arc::clone(&self.tls);
         let resolve_template = Arc::clone(&self.resolve_template);
         Box::pin(async move {

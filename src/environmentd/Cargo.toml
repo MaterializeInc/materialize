@@ -61,6 +61,7 @@ mz-prof = { path = "../prof" }
 mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
 mz-segment = { path = "../segment" }
+mz-server-core = { path = "../server-core" }
 mz-service = { path = "../service" }
 mz-sql = { path = "../sql" }
 mz-stash = { path = "../stash" }

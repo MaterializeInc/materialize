@@ -12,7 +12,8 @@ async-trait = "0.1.68"
 byteorder = "1.4.3"
 bytes = "1.3.0"
 bytesize = "1.1.0"
-mz-ore = { path = "../ore", features = ["network", "server"] }
+mz-ore = { path = "../ore", features = ["network"] }
+mz-server-core = { path = "../server-core" }
 tokio = "1.24.2"
 tokio-openssl = "0.6.3"
 tokio-postgres = { version = "0.7.8" }

@@ -15,10 +15,10 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use mz_frontegg_auth::Authentication as FronteggAuthentication;
 use mz_ore::netio::AsyncReady;
-use mz_ore::server::{ConnectionHandler, TlsConfig};
 use mz_pgwire_common::{
     decode_startup, Conn, FrontendStartupMessage, ACCEPT_SSL_ENCRYPTION, REJECT_ENCRYPTION,
 };
+use mz_server_core::{ConnectionHandler, TlsConfig};
 use mz_sql::session::vars::ConnectionCounter;
 use openssl::ssl::Ssl;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
@@ -66,7 +66,7 @@ pub struct Server {
 }
 
 #[async_trait]
-impl mz_ore::server::Server for Server {
+impl mz_server_core::Server for Server {
     const NAME: &'static str = "pgwire";
 
     fn handle_connection(&self, conn: TcpStream) -> ConnectionHandler {

@@ -17,11 +17,12 @@ itertools = "0.10.5"
 mz-adapter = { path = "../adapter" }
 mz-expr = { path = "../expr" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
-mz-ore = { path = "../ore", features = ["tracing_", "server"] }
+mz-ore = { path = "../ore", features = ["tracing_"] }
 mz-pgcopy = { path = "../pgcopy" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-pgwire-common = { path = "../pgwire-common" }
 mz-repr = { path = "../repr" }
+mz-server-core = { path = "../server-core" }
 mz-sql = { path = "../sql" }
 openssl = { version = "0.10.48", features = ["vendored"] }
 postgres = { version = "0.19.5" }
