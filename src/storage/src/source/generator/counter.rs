@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use async_trait::async_trait;
 use mz_ore::now::NowFn;
 use mz_repr::{Datum, Row};
 use mz_storage_types::sources::{Generator, MzOffset};
@@ -21,8 +22,9 @@ pub struct Counter {
     pub max_cardinality: Option<u64>,
 }
 
+#[async_trait]
 impl Generator for Counter {
-    fn by_seed(
+    async fn by_seed(
         &self,
         _now: NowFn,
         _seed: Option<u64>,

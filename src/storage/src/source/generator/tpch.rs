@@ -13,6 +13,7 @@ use std::iter;
 use std::ops::RangeInclusive;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use chrono::NaiveDate;
 use dec::{Context as DecimalContext, OrderedDecimal};
 use mz_ore::now::NowFn;
@@ -46,8 +47,9 @@ const LINEITEM_OUTPUT: usize = 6;
 const NATION_OUTPUT: usize = 7;
 const REGION_OUTPUT: usize = 8;
 
+#[async_trait]
 impl Generator for Tpch {
-    fn by_seed(
+    async fn by_seed(
         &self,
         _: NowFn,
         seed: Option<u64>,

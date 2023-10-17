@@ -216,6 +216,7 @@ pub enum PlanError {
     KafkaSourcePurification(KafkaSourcePurificationError),
     TestScriptSourcePurification(TestScriptSourcePurificationError),
     LoadGeneratorSourcePurification(LoadGeneratorSourcePurificationError),
+    UnsupportedLdbcScaleFactor,
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -266,6 +267,7 @@ impl PlanError {
             Self::KafkaSourcePurification(e) => e.detail(),
             Self::TestScriptSourcePurification(e) => e.detail(),
             Self::LoadGeneratorSourcePurification(e) => e.detail(),
+            Self::UnsupportedLdbcScaleFactor=>Some("Supported scale factors: 1, 3, 10, 30, 100, 300".into()),
             _ => None,
         }
     }
@@ -340,6 +342,7 @@ impl PlanError {
             Self::KafkaSourcePurification(e) => e.hint(),
             Self::TestScriptSourcePurification(e) => e.hint(),
             Self::LoadGeneratorSourcePurification(e) => e.hint(),
+            Self::UnsupportedLdbcScaleFactor=> Some("See: https://github.com/ldbc/ldbc_snb_bi/blob/main/snb-bi-pre-generated-data-sets.md".into()),
             _ => None,
         }
     }
@@ -551,6 +554,7 @@ impl fmt::Display for PlanError {
             Self::MangedReplicaName(name) => {
                 write!(f, "{name} is reserved for replicas of managed clusters")
             }
+            Self::UnsupportedLdbcScaleFactor => write!(f, "unsupported scale factor"),
         }
     }
 }

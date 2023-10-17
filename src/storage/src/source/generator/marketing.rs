@@ -12,6 +12,7 @@ use std::{
     iter,
 };
 
+use async_trait::async_trait;
 use mz_ore::now::to_datetime;
 use mz_repr::{Datum, Row};
 use mz_storage_types::sources::{Generator, MzOffset};
@@ -33,8 +34,9 @@ pub struct Marketing {}
 // Note that this generator issues retractions; if you change this,
 // `mz_storage_types::sources::LoadGenerator::is_monotonic`
 // must be updated.
+#[async_trait]
 impl Generator for Marketing {
-    fn by_seed(
+    async fn by_seed(
         &self,
         now: mz_ore::now::NowFn,
         seed: Option<u64>,

@@ -38,6 +38,7 @@ from materialize.checks.json_source import *  # noqa: F401 F403
 from materialize.checks.jsonb_type import *  # noqa: F401 F403
 from materialize.checks.kafka_formats import *  # noqa: F401 F403
 from materialize.checks.large_tables import *  # noqa: F401 F403
+from materialize.checks.ldbc_generator import *  # noqa: F401 F403
 from materialize.checks.like import *  # noqa: F401 F403
 from materialize.checks.managed_cluster import *  # noqa: F401 F403
 from materialize.checks.materialized_views import *  # noqa: F401 F403

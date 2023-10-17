@@ -218,6 +218,8 @@ dependencies = [
  "memchr",
  "pin-project-lite",
  "tokio",
+ "zstd",
+ "zstd-safe",
 ]
 
 [[package]]
@@ -5231,6 +5233,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uncased",
+ "url",
  "uuid",
  "workspace-hack",
 ]
@@ -5432,6 +5435,7 @@ name = "mz-storage"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-compression",
  "async-stream",
  "async-trait",
  "axum",
@@ -5441,12 +5445,14 @@ dependencies = [
  "chrono",
  "clap",
  "crossbeam-channel",
+ "csv",
  "csv-core",
  "datadriven",
  "dec",
  "differential-dataflow",
  "either",
  "fail",
+ "flate2",
  "futures",
  "globset",
  "http",
@@ -5470,6 +5476,7 @@ dependencies = [
  "mz-persist-client",
  "mz-persist-types",
  "mz-pgcopy",
+ "mz-pgrepr",
  "mz-pid-file",
  "mz-postgres-util",
  "mz-repr",
@@ -5490,11 +5497,13 @@ dependencies = [
  "rand",
  "rdkafka",
  "regex",
+ "reqwest",
  "rocksdb",
  "seahash",
  "serde",
  "serde_json",
  "sha2",
+ "tar",
  "tempfile",
  "thiserror",
  "timely",
@@ -5614,6 +5623,7 @@ name = "mz-storage-types"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "aws-config",
  "aws-credential-types",
  "aws-types",
@@ -7166,6 +7176,7 @@ dependencies = [
  "serde_urlencoded",
  "tokio",
  "tokio-native-tls",
+ "tokio-util",
  "tower-service",
  "url",
  "wasm-bindgen",
@@ -9468,6 +9479,7 @@ version = "0.0.0"
 dependencies = [
  "ahash",
  "anyhow",
+ "async-compression",
  "aws-credential-types",
  "aws-sdk-sts",
  "aws-sig-auth",
@@ -9574,6 +9586,7 @@ dependencies = [
  "url",
  "uuid",
  "zeroize",
+ "zstd-sys",
 ]
 
 [[package]]
@@ -9631,11 +9644,31 @@ dependencies = [
 ]
 
 [[package]]
-name = "zstd-sys"
-version = "2.0.1+zstd.1.5.2"
+name = "zstd"
+version = "0.11.2+zstd.1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9fd07cbbc53846d9145dbffdf6dd09a7a0aa52be46741825f5c97bdd4f73f12b"
+checksum = "20cc960326ece64f010d2d2107537f26dc589a6573a316bd5b1dba685fa5fde4"
+dependencies = [
+ "zstd-safe",
+]
+
+[[package]]
+name = "zstd-safe"
+version = "5.0.2+zstd.1.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d2a5585e04f9eea4b2a3d1eca508c4dee9592a89ef6f450c11719da0726f4db"
+dependencies = [
+ "libc",
+ "zstd-sys",
+]
+
+[[package]]
+name = "zstd-sys"
+version = "2.0.8+zstd.1.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5556e6ee25d32df2586c098bbfa278803692a20d0ab9565e049480d52707ec8c"
 dependencies = [
  "cc",
  "libc",
+ "pkg-config",
 ]

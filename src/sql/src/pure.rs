@@ -592,8 +592,11 @@ async fn purify_create_source(
         CreateSourceConnection::LoadGenerator { generator, options } => {
             let scx = StatementContext::new(None, &catalog);
 
-            let (_load_generator, available_subsources) =
-                load_generator_ast_to_generator(generator, options)?;
+            let (_load_generator, available_subsources) = load_generator_ast_to_generator(
+                generator,
+                options,
+                catalog.system_vars().ldbc_url(),
+            )?;
 
             let mut targeted_subsources = vec![];
 

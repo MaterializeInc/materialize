@@ -17,6 +17,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
+use async_trait::async_trait;
 use bytes::BufMut;
 use dec::OrderedDecimal;
 use itertools::EitherOrBoth::Both;
@@ -2215,6 +2216,9 @@ pub enum LoadGenerator {
         count_orders: i64,
         count_clerk: i64,
     },
+    Ldbc {
+        urls: Vec<String>,
+    },
 }
 
 impl LoadGenerator {
@@ -2248,6 +2252,7 @@ impl LoadGenerator {
             ),
             LoadGenerator::Marketing => DataEncodingInner::RowCodec(RelationDesc::empty()),
             LoadGenerator::Tpch { .. } => DataEncodingInner::RowCodec(RelationDesc::empty()),
+            LoadGenerator::Ldbc { .. } => DataEncodingInner::RowCodec(RelationDesc::empty()),
         }
     }
 
@@ -2494,6 +2499,15 @@ impl LoadGenerator {
                     ),
                 ]
             }
+            LoadGenerator::Ldbc { .. } => {
+                let mut descs = LDBC_DESCS.iter().collect::<Vec<_>>();
+                // Sort by output id.
+                descs.sort_by_key(|x| x.1 .0);
+                descs
+                    .into_iter()
+                    .map(|(name, (_output, desc))| (*name, desc.clone()))
+                    .collect()
+            }
         }
     }
 
@@ -2507,13 +2521,15 @@ impl LoadGenerator {
             LoadGenerator::Marketing => false,
             LoadGenerator::Datums => true,
             LoadGenerator::Tpch { .. } => false,
+            LoadGenerator::Ldbc { .. } => false,
         }
     }
 }
 
+#[async_trait]
 pub trait Generator {
     /// Returns a function that produces rows and batch information.
-    fn by_seed(
+    async fn by_seed(
         &self,
         now: NowFn,
         seed: Option<u64>,
@@ -2545,6 +2561,9 @@ impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnect
                     count_orders: *count_orders,
                     count_clerk: *count_clerk,
                 }),
+                LoadGenerator::Ldbc { urls } => {
+                    ProtoGenerator::Ldbc(ProtoLdbcLoadGenerator { urls: urls.clone() })
+                }
                 LoadGenerator::Datums => ProtoGenerator::Datums(()),
             }),
             tick_micros: self.tick_micros,
@@ -2575,6 +2594,9 @@ impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnect
                     count_orders,
                     count_clerk,
                 },
+                ProtoGenerator::Ldbc(ProtoLdbcLoadGenerator { urls }) => {
+                    LoadGenerator::Ldbc { urls }
+                }
                 ProtoGenerator::Datums(()) => LoadGenerator::Datums,
             },
             tick_micros: proto.tick_micros,
@@ -2830,6 +2852,298 @@ impl Schema<SourceData> for RelationDesc {
         })
     }
 }
+
+const LDBC_ORGANISATION_OUTPUT: usize = 1;
+const LDBC_PLACE_OUTPUT: usize = 2;
+const LDBC_TAG_OUTPUT: usize = 3;
+const LDBC_TAGCLASS_OUTPUT: usize = 4;
+const LDBC_COMMENT_OUTPUT: usize = 5;
+const LDBC_FORUM_OUTPUT: usize = 6;
+const LDBC_POST_OUTPUT: usize = 7;
+const LDBC_PERSON_OUTPUT: usize = 8;
+const LDBC_COMMENT_HASTAG_TAG_OUTPUT: usize = 9;
+const LDBC_POST_HASTAG_TAG_OUTPUT: usize = 10;
+const LDBC_FORUM_HASMEMBER_PERSON_OUTPUT: usize = 11;
+const LDBC_FORUM_HASTAG_TAG_OUTPUT: usize = 12;
+const LDBC_PERSON_HASINTEREST_TAG_OUTPUT: usize = 13;
+const LDBC_PERSON_LIKES_COMMENT_OUTPUT: usize = 14;
+const LDBC_PERSON_LIKES_POST_OUTPUT: usize = 15;
+const LDBC_PERSON_STUDYAT_UNIVERSITY_OUTPUT: usize = 16;
+const LDBC_PERSON_WORKAT_COMPANY_OUTPUT: usize = 17;
+pub const LDBC_PERSON_KNOWS_PERSON_OUTPUT: usize = 18;
+
+pub static LDBC_DESCS: Lazy<BTreeMap<&'static str, (usize, RelationDesc)>> = Lazy::new(|| {
+    let identifier = ScalarType::Int64.nullable(false);
+    let identifier_nullable = ScalarType::Int64.nullable(true);
+
+    BTreeMap::from([
+        (
+            "organisation",
+            (
+                LDBC_ORGANISATION_OUTPUT,
+                RelationDesc::empty()
+                    .with_column("id", identifier.clone())
+                    .with_column("type", ScalarType::String.nullable(false))
+                    .with_column("name", ScalarType::String.nullable(false))
+                    .with_column("url", ScalarType::String.nullable(false))
+                    .with_column("locationplaceid", identifier_nullable.clone())
+                    .with_key(vec![0]),
+            ),
+        ),
+        (
+            "place",
+            (
+                LDBC_PLACE_OUTPUT,
+                RelationDesc::empty()
+                    .with_column("id", identifier.clone())
+                    .with_column("name", ScalarType::String.nullable(false))
+                    .with_column("url", ScalarType::String.nullable(false))
+                    .with_column("type", ScalarType::String.nullable(false))
+                    .with_column("partofplaceid", identifier_nullable.clone())
+                    .with_key(vec![0]),
+            ),
+        ),
+        (
+            "tag",
+            (
+                LDBC_TAG_OUTPUT,
+                RelationDesc::empty()
+                    .with_column("id", identifier.clone())
+                    .with_column("name", ScalarType::String.nullable(false))
+                    .with_column("url", ScalarType::String.nullable(false))
+                    .with_column("typetagclassid", identifier.clone())
+                    .with_key(vec![0]),
+            ),
+        ),
+        (
+            "tagclass",
+            (
+                LDBC_TAGCLASS_OUTPUT,
+                RelationDesc::empty()
+                    .with_column("id", identifier.clone())
+                    .with_column("name", ScalarType::String.nullable(false))
+                    .with_column("url", ScalarType::String.nullable(false))
+                    .with_column("subclassoftagclassid", identifier_nullable.clone())
+                    .with_key(vec![0]),
+            ),
+        ),
+        (
+            "comment",
+            (
+                LDBC_COMMENT_OUTPUT,
+                RelationDesc::empty()
+                    .with_column(
+                        "creationdate",
+                        ScalarType::TimestampTz { precision: None }.nullable(false),
+                    )
+                    .with_column("id", identifier.clone())
+                    .with_column("locationip", ScalarType::String.nullable(false))
+                    .with_column("browserused", ScalarType::String.nullable(false))
+                    .with_column("content", ScalarType::String.nullable(true))
+                    .with_column("length", ScalarType::Int32.nullable(false))
+                    .with_column("creatorpersonid", identifier.clone())
+                    .with_column("locationcountryid", identifier.clone())
+                    .with_column("parentpostid", identifier_nullable.clone())
+                    .with_column("parentcommentid", identifier_nullable.clone())
+                    .with_key(vec![0]),
+            ),
+        ),
+        (
+            "forum",
+            (
+                LDBC_FORUM_OUTPUT,
+                RelationDesc::empty()
+                    .with_column(
+                        "creationdate",
+                        ScalarType::TimestampTz { precision: None }.nullable(false),
+                    )
+                    .with_column("id", identifier.clone())
+                    .with_column("title", ScalarType::String.nullable(false))
+                    .with_column("moderatorpersonid", identifier_nullable.clone())
+                    .with_key(vec![0]),
+            ),
+        ),
+        (
+            "post",
+            (
+                LDBC_POST_OUTPUT,
+                RelationDesc::empty()
+                    .with_column(
+                        "creationdate",
+                        ScalarType::TimestampTz { precision: None }.nullable(false),
+                    )
+                    .with_column("id", identifier.clone())
+                    .with_column("imagefile", ScalarType::String.nullable(true))
+                    .with_column("locationip", ScalarType::String.nullable(false))
+                    .with_column("browserused", ScalarType::String.nullable(false))
+                    .with_column("language", ScalarType::String.nullable(true))
+                    .with_column("content", ScalarType::String.nullable(true))
+                    .with_column("length", ScalarType::Int32.nullable(false))
+                    .with_column("creatorpersonid", identifier.clone())
+                    .with_column("containerforumid", identifier.clone())
+                    .with_column("locationcountryid", identifier.clone())
+                    .with_key(vec![0]),
+            ),
+        ),
+        (
+            "person",
+            (
+                LDBC_PERSON_OUTPUT,
+                RelationDesc::empty()
+                    .with_column(
+                        "creationdate",
+                        ScalarType::TimestampTz { precision: None }.nullable(false),
+                    )
+                    .with_column("id", identifier.clone())
+                    .with_column("firstname", ScalarType::String.nullable(false))
+                    .with_column("lastname", ScalarType::String.nullable(false))
+                    .with_column("gender", ScalarType::String.nullable(false))
+                    .with_column("birthday", ScalarType::Date.nullable(false))
+                    .with_column("locationip", ScalarType::String.nullable(false))
+                    .with_column("browserused", ScalarType::String.nullable(false))
+                    .with_column("locationcountryid", identifier.clone())
+                    // TODO: This should be an array split on ';'.
+                    .with_column("speaks", ScalarType::String.nullable(false))
+                    // TODO: This should be an array split on ';'.
+                    .with_column("email", ScalarType::String.nullable(false))
+                    .with_key(vec![0]),
+            ),
+        ),
+        (
+            "comment_hastag_tag",
+            (
+                LDBC_COMMENT_HASTAG_TAG_OUTPUT,
+                RelationDesc::empty()
+                    .with_column(
+                        "creationdate",
+                        ScalarType::TimestampTz { precision: None }.nullable(false),
+                    )
+                    .with_column("commentid", identifier.clone())
+                    .with_column("tagid", identifier.clone()),
+            ),
+        ),
+        (
+            "post_hastag_tag",
+            (
+                LDBC_POST_HASTAG_TAG_OUTPUT,
+                RelationDesc::empty()
+                    .with_column(
+                        "creationdate",
+                        ScalarType::TimestampTz { precision: None }.nullable(false),
+                    )
+                    .with_column("postid", identifier.clone())
+                    .with_column("tagid", identifier.clone()),
+            ),
+        ),
+        (
+            "forum_hasmember_person",
+            (
+                LDBC_FORUM_HASMEMBER_PERSON_OUTPUT,
+                RelationDesc::empty()
+                    .with_column(
+                        "creationdate",
+                        ScalarType::TimestampTz { precision: None }.nullable(false),
+                    )
+                    .with_column("forumid", identifier.clone())
+                    .with_column("personid", identifier.clone()),
+            ),
+        ),
+        (
+            "forum_hastag_tag",
+            (
+                LDBC_FORUM_HASTAG_TAG_OUTPUT,
+                RelationDesc::empty()
+                    .with_column(
+                        "creationdate",
+                        ScalarType::TimestampTz { precision: None }.nullable(false),
+                    )
+                    .with_column("forumid", identifier.clone())
+                    .with_column("tagid", identifier.clone()),
+            ),
+        ),
+        (
+            "person_hasinterest_tag",
+            (
+                LDBC_PERSON_HASINTEREST_TAG_OUTPUT,
+                RelationDesc::empty()
+                    .with_column(
+                        "creationdate",
+                        ScalarType::TimestampTz { precision: None }.nullable(false),
+                    )
+                    .with_column("personid", identifier.clone())
+                    .with_column("tagid", identifier.clone()),
+            ),
+        ),
+        (
+            "person_likes_comment",
+            (
+                LDBC_PERSON_LIKES_COMMENT_OUTPUT,
+                RelationDesc::empty()
+                    .with_column(
+                        "creationdate",
+                        ScalarType::TimestampTz { precision: None }.nullable(false),
+                    )
+                    .with_column("personid", identifier.clone())
+                    .with_column("commentid", identifier.clone()),
+            ),
+        ),
+        (
+            "person_likes_post",
+            (
+                LDBC_PERSON_LIKES_POST_OUTPUT,
+                RelationDesc::empty()
+                    .with_column(
+                        "creationdate",
+                        ScalarType::TimestampTz { precision: None }.nullable(false),
+                    )
+                    .with_column("personid", identifier.clone())
+                    .with_column("postid", identifier.clone()),
+            ),
+        ),
+        (
+            "person_studyat_university",
+            (
+                LDBC_PERSON_STUDYAT_UNIVERSITY_OUTPUT,
+                RelationDesc::empty()
+                    .with_column(
+                        "creationdate",
+                        ScalarType::TimestampTz { precision: None }.nullable(false),
+                    )
+                    .with_column("personid", identifier.clone())
+                    .with_column("universityid", identifier.clone())
+                    .with_column("classyear", ScalarType::Int32.nullable(false)),
+            ),
+        ),
+        (
+            "person_workat_company",
+            (
+                LDBC_PERSON_WORKAT_COMPANY_OUTPUT,
+                RelationDesc::empty()
+                    .with_column(
+                        "creationdate",
+                        ScalarType::TimestampTz { precision: None }.nullable(false),
+                    )
+                    .with_column("personid", identifier.clone())
+                    .with_column("companyid", identifier.clone())
+                    .with_column("workfrom", ScalarType::Int32.nullable(false)),
+            ),
+        ),
+        (
+            "person_knows_person",
+            (
+                LDBC_PERSON_KNOWS_PERSON_OUTPUT,
+                RelationDesc::empty()
+                    .with_column(
+                        "creationdate",
+                        ScalarType::TimestampTz { precision: None }.nullable(false),
+                    )
+                    .with_column("person1id", identifier.clone())
+                    .with_column("person2id", identifier.clone())
+                    .with_key(vec![1, 2]),
+            ),
+        ),
+    ])
+});
 
 #[cfg(test)]
 mod tests {
