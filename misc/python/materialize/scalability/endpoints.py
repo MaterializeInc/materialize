@@ -27,6 +27,9 @@ class MaterializeRemote(Endpoint):
     def up(self) -> None:
         pass
 
+    def __str__(self) -> str:
+        return f"MaterializeRemote ({self.materialize_url})"
+
 
 class PostgresContainer(Endpoint):
     def __init__(self, composition: Composition) -> None:
@@ -55,6 +58,9 @@ class PostgresContainer(Endpoint):
 
     def name(self) -> str:
         return "postgres"
+
+    def __str__(self) -> str:
+        return "PostgresContainer"
 
 
 class MaterializeNonRemote(Endpoint):
@@ -91,6 +97,9 @@ class MaterializeLocal(MaterializeNonRemote):
 
     def up(self) -> None:
         self.lift_limits()
+
+    def __str__(self) -> str:
+        return f"MaterializeLocal ({self.host()})"
 
 
 class MaterializeContainer(MaterializeNonRemote):
@@ -140,3 +149,6 @@ class MaterializeContainer(MaterializeNonRemote):
         ):
             self.composition.up("materialized")
             self._port = self.composition.default_port("materialized")
+
+    def __str__(self) -> str:
+        return f"MaterializeContainer ({self.image})"
