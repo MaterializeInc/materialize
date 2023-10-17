@@ -22,7 +22,8 @@ class StatementLogging(Check):
         return Testdrive(
             dedent(
                 """
-                > ALTER SYSTEM SET statement_logging_max_sample_rate TO 1.0
+                $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                ALTER SYSTEM SET statement_logging_max_sample_rate TO 1.0
                 """
             )
         )
@@ -33,14 +34,17 @@ class StatementLogging(Check):
             for s in [
                 """
                 > SET statement_logging_sample_rate TO 1.0
-                > SELECT 'hello'; -- Btv was here
-                'hello'
-                > SELECT mz_internal.mz_sleep(20);
+                > SELECT 'hello' /* Btv was here */;
+                hello
+                > SELECT mz_internal.mz_sleep(5);
+                <null>
                 """,
                 """
                 > SET statement_logging_sample_rate TO 1.0
-                > SELECT 'goodbye'; -- Btv was here
-                > SELECT mz_internal.mz_sleep(20);
+                > SELECT 'goodbye' /* Btv was here */;
+                goodbye
+                > SELECT mz_internal.mz_sleep(5);
+                <null>
                 """,
             ]
         ]
@@ -49,9 +53,9 @@ class StatementLogging(Check):
         return Testdrive(
             dedent(
                 """
-                > SELECT sql, finished_status FROM mz_internal.mz_statement_execution_history mseh, mz_internal.mz_prepared_statement_history mpsh WHERE mseh.prepared_statement_id = mpsh.id AND sql LIKE '%-- Btv was here' ORDER BY mseh.began_at;
-                "SELECT 'hello'; -- Btv was here" success
-                "SELECT 'goodbye'; -- Btv was here" success
+                > SELECT sql, finished_status FROM mz_internal.mz_statement_execution_history mseh, mz_internal.mz_prepared_statement_history mpsh WHERE mseh.prepared_statement_id = mpsh.id AND sql LIKE '%/* Btv was here */' ORDER BY mseh.began_at;
+                "SELECT 'hello' /* Btv was here */" success
+                "SELECT 'goodbye' /* Btv was here */" success
                 """
             )
         )
