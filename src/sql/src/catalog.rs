@@ -51,7 +51,7 @@ use crate::names::{
 use crate::normalize;
 use crate::plan::statement::ddl::PlannedRoleAttributes;
 use crate::plan::statement::StatementDesc;
-use crate::plan::{PlanError, PlanNotice};
+use crate::plan::{query, PlanError, PlanNotice};
 use crate::session::vars::{OwnedVarInput, SystemVars};
 
 /// A catalog keeps track of SQL objects and session state available to the
@@ -868,6 +868,32 @@ pub enum CatalogType<T: TypeReference> {
     VarChar,
     Int2Vector,
     MzAclItem,
+}
+
+impl CatalogType<IdReference> {
+    /// Returns the relation description for the type, if the type is a record
+    /// type.
+    pub fn desc(&self, catalog: &dyn SessionCatalog) -> Result<Option<RelationDesc>, PlanError> {
+        match &self {
+            CatalogType::Record { fields } => {
+                let mut desc = RelationDesc::empty();
+                for f in fields {
+                    let name = f.name.clone();
+                    let ty = query::scalar_type_from_catalog(
+                        catalog,
+                        f.type_reference,
+                        &f.type_modifiers,
+                    )?;
+                    // TODO: support plumbing `NOT NULL` constraints through
+                    // `CREATE TYPE`.
+                    let ty = ty.nullable(true);
+                    desc = desc.with_column(name, ty);
+                }
+                Ok(Some(desc))
+            }
+            _ => Ok(None),
+        }
+    }
 }
 
 /// A description of a field in a [`CatalogType::Record`].

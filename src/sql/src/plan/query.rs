@@ -5233,26 +5233,23 @@ pub fn scalar_type_from_sql(
             })
         }
         ResolvedDataType::Named { id, modifiers, .. } => {
-            scalar_type_from_catalog(scx, *id, modifiers)
+            scalar_type_from_catalog(scx.catalog, *id, modifiers)
         }
         ResolvedDataType::Error => unreachable!("should have been caught in name resolution"),
     }
 }
 
 pub fn scalar_type_from_catalog(
-    scx: &StatementContext,
+    catalog: &dyn SessionCatalog,
     id: GlobalId,
     modifiers: &[i64],
 ) -> Result<ScalarType, PlanError> {
-    let entry = scx.catalog.get_item(&id);
+    let entry = catalog.get_item(&id);
     let type_details = match entry.type_details() {
         Some(type_details) => type_details,
         None => sql_bail!(
             "{} does not refer to a type",
-            scx.catalog
-                .resolve_full_name(entry.name())
-                .to_string()
-                .quoted()
+            catalog.resolve_full_name(entry.name()).to_string().quoted()
         ),
     };
     match &type_details.typ {
@@ -5335,14 +5332,14 @@ pub fn scalar_type_from_catalog(
             if !modifiers.is_empty() {
                 sql_bail!(
                     "{} does not support type modifiers",
-                    scx.catalog.resolve_full_name(entry.name()).to_string()
+                    catalog.resolve_full_name(entry.name()).to_string()
                 );
             }
             match t {
                 CatalogType::Array {
                     element_reference: element_id,
                 } => Ok(ScalarType::Array(Box::new(scalar_type_from_catalog(
-                    scx,
+                    catalog,
                     *element_id,
                     modifiers,
                 )?))),
@@ -5351,7 +5348,7 @@ pub fn scalar_type_from_catalog(
                     element_modifiers,
                 } => Ok(ScalarType::List {
                     element_type: Box::new(scalar_type_from_catalog(
-                        scx,
+                        catalog,
                         *element_id,
                         element_modifiers,
                     )?),
@@ -5364,7 +5361,7 @@ pub fn scalar_type_from_catalog(
                     value_modifiers,
                 } => Ok(ScalarType::Map {
                     value_type: Box::new(scalar_type_from_catalog(
-                        scx,
+                        catalog,
                         *value_id,
                         value_modifiers,
                     )?),
@@ -5373,14 +5370,17 @@ pub fn scalar_type_from_catalog(
                 CatalogType::Range {
                     element_reference: element_id,
                 } => Ok(ScalarType::Range {
-                    element_type: Box::new(scalar_type_from_catalog(scx, *element_id, &[])?),
+                    element_type: Box::new(scalar_type_from_catalog(catalog, *element_id, &[])?),
                 }),
                 CatalogType::Record { fields } => {
                     let scalars: Vec<(ColumnName, ColumnType)> = fields
                         .iter()
                         .map(|f| {
-                            let scalar_type =
-                                scalar_type_from_catalog(scx, f.type_reference, &f.type_modifiers)?;
+                            let scalar_type = scalar_type_from_catalog(
+                                catalog,
+                                f.type_reference,
+                                &f.type_modifiers,
+                            )?;
                             Ok((
                                 f.name.clone(),
                                 ColumnType {
@@ -5416,7 +5416,7 @@ pub fn scalar_type_from_catalog(
                 CatalogType::Pseudo => {
                     sql_bail!(
                         "cannot reference pseudo type {}",
-                        scx.catalog.resolve_full_name(entry.name()).to_string()
+                        catalog.resolve_full_name(entry.name()).to_string()
                     )
                 }
                 CatalogType::RegClass => Ok(ScalarType::RegClass),

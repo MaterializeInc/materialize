@@ -483,6 +483,13 @@ impl ResolvedItemName {
             _ => panic!("cannot call object_full_name on non-object"),
         }
     }
+
+    pub fn item_id(&self) -> &GlobalId {
+        match self {
+            ResolvedItemName::Item { id, .. } => id,
+            _ => panic!("cannot call item_id on non-object"),
+        }
+    }
 }
 
 impl AstDisplay for ResolvedItemName {

@@ -459,6 +459,10 @@ impl Coordinator {
                 self.sequence_plan(ctx, plan, ResolvedIds(BTreeSet::new()))
                     .await
             }
+            Ok(Plan::CreateSink(create_sink)) => {
+                self.sequence_plan(ctx, Plan::CreateSink(create_sink), resolved_ids)
+                    .await;
+            }
             Ok(p) => {
                 unreachable!("{:?} is not purified", p)
             }

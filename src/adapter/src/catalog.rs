@@ -3462,6 +3462,7 @@ impl Catalog {
             }),
             Plan::CreateType(CreateTypePlan { typ, .. }) => CatalogItem::Type(Type {
                 create_sql: typ.create_sql,
+                desc: typ.inner.desc(&session_catalog)?,
                 details: CatalogTypeDetails {
                     array_id: None,
                     typ: typ.inner,
@@ -4017,7 +4018,6 @@ impl ExprHumanizer for ConnCatalog<'_> {
             .try_map(|entry| {
                 Ok::<_, SqlCatalogError>(
                     entry
-                        .item()
                         .desc(&self.resolve_full_name(entry.name()))?
                         .iter_names()
                         .cloned()
