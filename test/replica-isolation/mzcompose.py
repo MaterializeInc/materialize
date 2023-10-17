@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import json
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -24,12 +25,48 @@ from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
 
+
+def generate_replica(
+    replica: int, nodes: int
+) -> dict[str, dict[str, int | str | list[str]]]:
+    return {
+        "allocation": {
+            "workers": 1,
+            "scale": nodes,
+            "credits_per_hour": "0",
+        },
+        "ports": {
+            "storagectl": [
+                f"clusterd_{replica}_{node}:2100" for node in range(1, nodes + 1)
+            ],
+            "storage": [
+                f"clusterd_{replica}_{node}:2103" for node in range(1, nodes + 1)
+            ],
+            "compute": [
+                f"clusterd_{replica}_{node}:2102" for node in range(1, nodes + 1)
+            ],
+            "computectl": [
+                f"clusterd_{replica}_{node}:2101" for node in range(1, nodes + 1)
+            ],
+        },
+    }
+
+
+static_replicas = {
+    "replica1": generate_replica(1, 2),
+    "replica2": generate_replica(2, 2),
+    "invalid": generate_replica(1000000, 1),
+}
+
 SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
     Localstack(),
     Materialized(
+        options=[
+            f"--orchestrator-static-replicas={json.dumps(static_replicas)}",
+        ],
         additional_system_parameter_defaults={
             "log_filter": "mz_cluster::server=debug,info",
         },
@@ -217,44 +254,18 @@ def restart_environmentd(c: Composition) -> None:
 
 
 def drop_create_replica(c: Composition) -> None:
-
-    c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
-        port=6877,
-        user="mz_system",
-    )
-
     c.testdrive(
         dedent(
             """
             > DROP CLUSTER REPLICA cluster1.replica1
-            > CREATE CLUSTER REPLICA cluster1.replica3
-              STORAGECTL ADDRESSES ['clusterd_1_1:2100', 'clusterd_1_2:2100'],
-              STORAGE ADDRESSES ['clusterd_1_1:2103', 'clusterd_1_2:2103'],
-              COMPUTECTL ADDRESSES ['clusterd_1_1:2101', 'clusterd_1_2:2101'],
-              COMPUTE ADDRESSES ['clusterd_1_1:2102', 'clusterd_1_2:2102']
+            > CREATE CLUSTER REPLICA cluster1.replica3 SIZE 'replica1'
             """
         )
     )
 
 
 def create_invalid_replica(c: Composition) -> None:
-    c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
-        port=6877,
-        user="mz_system",
-    )
-    c.testdrive(
-        dedent(
-            """
-            > CREATE CLUSTER REPLICA cluster1.replica3
-              STORAGECTL ADDRESSES ['no_such_host:2100'],
-              STORAGE ADDRESSES ['no_such_host:2103'],
-              COMPUTECTL ADDRESSES ['no_such_host:2101'],
-              COMPUTE ADDRESSES ['no_such_host:2102']
-            """
-        )
-    )
+    c.testdrive("> CREATE CLUSTER REPLICA cluster1.replica3 SIZE 'invalid'")
 
 
 def validate(c: Composition) -> None:
@@ -421,28 +432,7 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
         c.up("materialized", *[n.name for n in nodes])
 
         c.sql(
-            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
-            port=6877,
-            user="mz_system",
-        )
-
-        c.sql(
-            """
-            CREATE CLUSTER cluster1 REPLICAS (
-                replica1 (
-                    STORAGECTL ADDRESSES ['clusterd_1_1:2100', 'clusterd_1_2:2100'],
-                    STORAGE ADDRESSES ['clusterd_1_1:2103', 'clusterd_1_2:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd_1_1:2101', 'clusterd_1_2:2101'],
-                    COMPUTE ADDRESSES ['clusterd_1_1:2102', 'clusterd_1_2:2102']
-                ),
-                replica2 (
-                    STORAGECTL ADDRESSES ['clusterd_2_1:2100', 'clusterd_2_2:2100'],
-                    STORAGE ADDRESSES ['clusterd_2_1:2103', 'clusterd_2_2:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd_2_1:2101', 'clusterd_2_2:2101'],
-                    COMPUTE ADDRESSES ['clusterd_2_1:2102', 'clusterd_2_2:2102']
-                )
-            )
-            """
+            "CREATE CLUSTER cluster1 REPLICAS (replica1 (SIZE 'replica1'), replica2 (SIZE 'replica2'))"
         )
 
         with c.override(

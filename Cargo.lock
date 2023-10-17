@@ -4085,6 +4085,7 @@ dependencies = [
  "mz-orchestrator",
  "mz-orchestrator-kubernetes",
  "mz-orchestrator-process",
+ "mz-orchestrator-static",
  "mz-orchestrator-tracing",
  "mz-ore",
  "mz-persist-client",
@@ -4520,6 +4521,20 @@ dependencies = [
  "sysinfo",
  "tokio",
  "tracing",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-orchestrator-static"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "futures",
+ "mz-adapter",
+ "mz-controller",
+ "mz-orchestrator",
+ "serde",
  "workspace-hack",
 ]
 

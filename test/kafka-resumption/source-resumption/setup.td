@@ -7,9 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true
-
 $ kafka-create-topic topic=topic
 
 $ kafka-ingest format=bytes topic=topic
@@ -17,15 +14,7 @@ one
 two
 three
 
-> CREATE CLUSTER clusterd REPLICAS (
-    r1 (
-      STORAGECTL ADDRESSES ['clusterd:2100'],
-      STORAGE ADDRESSES ['clusterd:2103'],
-      COMPUTECTL ADDRESSES ['clusterd:2101'],
-      COMPUTE ADDRESSES ['clusterd:2102'],
-      WORKERS 4
-    )
-  )
+> CREATE CLUSTER clusterd REPLICAS (r1 (SIZE 'clusterd'))
 
 > CREATE CONNECTION conn TO KAFKA (BROKER '${testdrive.kafka-addr}')
 

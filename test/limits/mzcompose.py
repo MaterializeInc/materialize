@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import contextlib
+import json
 import os
 import sys
 import tempfile
@@ -1425,7 +1426,42 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     c.up("materialized")
 
+    def generate_replica(
+        replica: int, scale: int
+    ) -> dict[str, dict[str, str | int | list[str]]]:
+        return {
+            "allocation": {
+                "workers": args.workers,
+                "scale": scale,
+                "credits_per_hour": "0",
+            },
+            "ports": {
+                "storagectl": [
+                    f"clusterd_{replica}_{node}:2100" for node in range(1, scale + 1)
+                ],
+                "storage": [
+                    f"clusterd_{replica}_{node}:2103" for node in range(1, scale + 1)
+                ],
+                "compute": [
+                    f"clusterd_{replica}_{node}:2102" for node in range(1, scale + 1)
+                ],
+                "computectl": [
+                    f"clusterd_{replica}_{node}:2101" for node in range(1, scale + 1)
+                ],
+            },
+        }
+
+    static_replicas = {
+        "replica1": generate_replica(1, 2),
+        "replica2": generate_replica(2, 2),
+    }
+
     nodes = [
+        Materialized(
+            options=[
+                f"--orchestrator-static-replicas={json.dumps(static_replicas)}",
+            ]
+        ),
         Clusterd(name="clusterd_1_1"),
         Clusterd(name="clusterd_1_2"),
         Clusterd(name="clusterd_2_1"),
@@ -1435,29 +1471,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         c.up(*[n.name for n in nodes])
 
         c.sql(
-            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
-            port=6877,
-            user="mz_system",
-        )
-
-        c.sql(
-            f"""
+            """
             DROP CLUSTER DEFAULT cascade;
             CREATE CLUSTER default REPLICAS (
-                replica1 (
-                    STORAGECTL ADDRESSES ['clusterd_1_1:2100', 'clusterd_1_2:2100'],
-                    STORAGE ADDRESSES ['clusterd_1_1:2103', 'clusterd_1_2:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd_1_1:2101', 'clusterd_1_2:2101'],
-                    COMPUTE ADDRESSES ['clusterd_1_1:2102', 'clusterd_1_2:2102'],
-                    WORKERS {args.workers}
-                ),
-                replica2 (
-                    STORAGECTL ADDRESSES ['clusterd_2_1:2100', 'clusterd_2_2:2100'],
-                    STORAGE ADDRESSES ['clusterd_2_1:2103', 'clusterd_2_2:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd_2_1:2101', 'clusterd_2_2:2101'],
-                    COMPUTE ADDRESSES ['clusterd_2_1:2102', 'clusterd_2_2:2102'],
-                    WORKERS {args.workers}
-                )
+                replica1 (SIZE 'replica1'),
+                replica2 (SIZE 'replica2')
             )
         """,
             port=6877,
@@ -1515,24 +1533,58 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
     args = parser.parse_args()
 
     c.up("testdrive", persistent=True)
-    c.up("materialized")
 
     # Construct the requied Clusterd instances and peer them into clusters
     cluster_replicas = []
+    static_replicas = {}
     for cluster_id in range(0, args.clusters):
         for replica_id in range(0, args.replicas):
             nodes = []
+            storagectl = []
+            storage = []
+            compute = []
+            computectl = []
             for node_id in range(0, args.nodes):
                 node_name = f"compute_u{cluster_id}_{replica_id}_{node_id}"
+                storagectl.append(f"{node_name}:2100")
+                storage.append(f"{node_name}:2103")
+                computectl.append(f"{node_name}:2101")
+                compute.append(f"{node_name}:2102")
                 nodes.append(node_name)
 
             for node_id in range(0, args.nodes):
                 cluster_replicas.append(Clusterd(name=nodes[node_id]))
 
+            static_replicas[f"replica_u{cluster_id}_{replica_id}"] = {
+                "allocation": {
+                    "workers": args.workers,
+                    "scale": args.nodes,
+                    "credits_per_hour": "0",
+                },
+                "ports": {
+                    "storagectl": storagectl,
+                    "storage": storage,
+                    "compute": compute,
+                    "computectl": computectl,
+                },
+            }
+    import pprint
+
+    pprint.pprint(static_replicas)
+
+    cluster_replicas.insert(
+        0,
+        Materialized(
+            options=[
+                f"--orchestrator-static-replicas={json.dumps(static_replicas)}",
+            ]
+        ),
+    )
+
     with c.override(*cluster_replicas):
+        c.up("materialized")
         with c.override(Testdrive(seed=1, no_reset=True)):
-            for n in cluster_replicas:
-                c.up(n.name)
+            c.up(*[n.name for n in cluster_replicas])
 
             # Increase resource limits
             c.testdrive(
@@ -1575,30 +1627,11 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
             for cluster_id in range(0, args.clusters):
                 replica_definitions = []
                 for replica_id in range(0, args.replicas):
-                    nodes = []
-                    for node_id in range(0, args.nodes):
-                        node_name = f"compute_u{cluster_id}_{replica_id}_{node_id}"
-                        nodes.append(node_name)
-
                     replica_name = f"replica_u{cluster_id}_{replica_id}"
-
                     replica_definitions.append(
-                        f"{replica_name} (STORAGECTL ADDRESSES ["
-                        + ", ".join(f"'{n}:2100'" for n in nodes)
-                        + "], STORAGE ADDRESSES ["
-                        + ", ".join(f"'{n}:2103'" for n in nodes)
-                        + "], COMPUTECTL ADDRESSES ["
-                        + ", ".join(f"'{n}:2101'" for n in nodes)
-                        + "], COMPUTE ADDRESSES ["
-                        + ", ".join(f"'{n}:2102'" for n in nodes)
-                        + f"], WORKERS {args.workers})"
+                        f"{replica_name} (SIZE '{replica_name}')"
                     )
 
-                c.sql(
-                    "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
-                    port=6877,
-                    user="mz_system",
-                )
                 c.sql(
                     f"CREATE CLUSTER cluster_u{cluster_id} REPLICAS ("
                     + ",".join(replica_definitions)

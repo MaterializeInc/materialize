@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import json
 import random
 import re
 from datetime import timedelta
@@ -43,6 +44,22 @@ SERVICES = [
     Grafana(),
     Prometheus(),
 ]
+
+static_replicas = {
+    "storaged": {
+        "allocation": {
+            "workers": 4,
+            "scale": 1,
+            "credits_per_hour": "0",
+        },
+        "ports": {
+            "storagectl": ["storaged:2100"],
+            "storage": ["storaged:2103"],
+            "compute": ["storaged:2102"],
+            "computectl": ["storaged:2101"],
+        },
+    }
+}
 
 
 class TransactionIsolation(Enum):
@@ -150,6 +167,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             },
         ),
         Materialized(
+            options=[
+                f"--orchestrator-static-replicas={json.dumps(static_replicas)}",
+            ],
             default_size=args.size or Materialized.Size.DEFAULT_SIZE,
             external_minio=True,
             external_cockroach=True,
@@ -158,23 +178,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     ):
         c.up("materialized")
 
-        c.sql(
-            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
-            port=6877,
-            user="mz_system",
-        )
-
-        c.sql(
-            """
-            CREATE CLUSTER storaged REPLICAS (r2 (
-                STORAGECTL ADDRESSES ['storaged:2100'],
-                STORAGE ADDRESSES ['storaged:2103'],
-                COMPUTECTL ADDRESSES ['storaged:2101'],
-                COMPUTE ADDRESSES ['storaged:2102'],
-                WORKERS 4
-            ))
-        """
-        )
+        c.sql("CREATE CLUSTER storaged REPLICAS (r2 (SIZE 'storaged'))")
         c.rm("materialized")
 
         c.up("testdrive", persistent=True)

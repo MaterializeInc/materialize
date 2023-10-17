@@ -6,6 +6,8 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+
+import json
 import time
 
 import requests
@@ -14,10 +16,27 @@ from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.materialized import Materialized
 
+static_replicas = {
+    "clusterd": {
+        "allocation": {
+            "workers": 1,
+            "scale": 1,
+            "credits_per_hour": "0",
+        },
+        "ports": {
+            "storagectl": ["clusterd:2100"],
+            "storage": ["clusterd:2103"],
+            "compute": ["clusterd:2102"],
+            "computectl": ["clusterd:2101"],
+        },
+    }
+}
+
 SERVICES = [
     Materialized(
         options=[
             "--opentelemetry-endpoint=whatever:7777",
+            f"--orchestrator-static-replicas={json.dumps(static_replicas)}",
         ]
     ),
     Clusterd(name="clusterd"),
@@ -114,23 +133,7 @@ def workflow_clusterd(c: Composition) -> None:
     c.up("materialized", "clusterd")
     port = c.port("clusterd", 6878)
 
-    c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
-        port=6877,
-        user="mz_system",
-    )
-
-    c.sql(
-        """
-        CREATE CLUSTER c REPLICAS (r1 (
-            STORAGECTL ADDRESSES ['clusterd:2100'],
-            STORAGE ADDRESSES ['clusterd:2103'],
-            COMPUTECTL ADDRESSES ['clusterd:2101'],
-            COMPUTE ADDRESSES ['clusterd:2102'],
-            WORKERS 1
-        ))
-    """
-    )
+    c.sql("CREATE CLUSTER c REPLICAS (r1 (SIZE 'clusterd'))")
 
     c.sql(
         "ALTER SYSTEM SET log_filter = 'debug'",
