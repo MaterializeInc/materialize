@@ -360,9 +360,6 @@ fn test_statement_logging_selects() {
     client.execute("SELECT * FROM v", &[]).unwrap();
     let _ = client.execute("SELECT 1/0", &[]);
 
-    // Statement logging happens async, give it a chance to catch up
-    thread::sleep(Duration::from_secs(5));
-
     #[derive(Debug)]
     struct Record {
         sample_rate: f64,
@@ -375,9 +372,12 @@ fn test_statement_logging_selects() {
         rows_returned: Option<i64>,
     }
 
-    let sl_selects = client
-        .query(
-            "SELECT
+    let result = Retry::default()
+        .max_duration(Duration::from_secs(30))
+        .retry(|_| {
+            let sl_selects = client
+                .query(
+                    "SELECT
     mseh.sample_rate,
     mseh.began_at,
     mseh.finished_at,
@@ -392,23 +392,35 @@ FROM
             mz_internal.mz_prepared_statement_history AS mpsh
             ON mseh.prepared_statement_id = mpsh.id
 WHERE mpsh.sql ~~ 'SELECT%'
+AND mpsh.sql !~ '%unique string to prevent this query showing up in results after retries%'
 ORDER BY mseh.began_at",
-            &[],
-        )
-        .unwrap()
-        .into_iter()
-        .map(|r| Record {
-            sample_rate: r.get(0),
-            began_at: r.get(1),
-            finished_at: r.get(2),
-            finished_status: r.get(3),
-            error_message: r.get(4),
-            prepared_at: r.get(5),
-            execution_strategy: r.get(6),
-            rows_returned: r.get(7),
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(sl_selects.len(), 4);
+                    &[],
+                )
+                .unwrap();
+            if sl_selects.len() == 4 {
+                Ok(sl_selects)
+            } else {
+                Err(sl_selects)
+            }
+        });
+    let sl_selects = match result {
+        Ok(rows) => rows
+            .into_iter()
+            .map(|r| Record {
+                sample_rate: r.get(0),
+                began_at: r.get(1),
+                finished_at: r.get(2),
+                finished_status: r.get(3),
+                error_message: r.get(4),
+                prepared_at: r.get(5),
+                execution_strategy: r.get(6),
+                rows_returned: r.get(7),
+            })
+            .collect::<Vec<_>>(),
+        Err(rows) => {
+            panic!("number of results never became correct: {rows:?}")
+        }
+    };
     for r in &sl_selects {
         assert_eq!(r.sample_rate, 1.0);
         assert!(r.prepared_at <= r.began_at);
