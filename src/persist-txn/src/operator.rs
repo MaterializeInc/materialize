@@ -32,6 +32,7 @@ use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::Scheduler;
 use timely::worker::Worker;
 use timely::{Data, WorkerConfig};
+use tracing::debug;
 
 use crate::txn_read::{DataListenNext, TxnsCache};
 use crate::{TxnsCodec, TxnsCodecDefault};
@@ -104,6 +105,7 @@ where
     let mut passthrough_input =
         builder.new_input_connection(&passthrough, Pipeline, vec![Antichain::new()]);
 
+    let name = name.to_owned();
     let shutdown_button = builder.build(move |capabilities| async move {
         let [mut cap]: [_; 1] = capabilities.try_into().expect("one capability per output");
         let client = client.await;
@@ -120,9 +122,7 @@ where
         let mut txns_cache = TxnsCache::<T, C>::open(txns_read).await;
 
         txns_cache.update_gt(&as_of).await;
-        let snap = txns_cache
-            .data_snapshot(&data_id, as_of.clone())
-            .expect("data shard is registered");
+        let snap = txns_cache.data_snapshot(data_id, as_of.clone());
         let data_write = client
             .open_writer::<K, V, T, D>(
                 data_id,
@@ -180,9 +180,15 @@ where
             // find out what to do next given our current progress.
             loop {
                 txns_cache.update_ge(&output_progress_exclusive).await;
-                let data_listen_next = txns_cache
-                    .data_listen_next(&data_id, output_progress_exclusive.clone())
-                    .expect("table should still exist");
+                let data_listen_next =
+                    txns_cache.data_listen_next(&data_id, output_progress_exclusive.clone());
+                debug!(
+                    "txns_progress({}): data_listen_next {:.9} at {:?}: {:?}",
+                    name,
+                    data_id.to_string(),
+                    output_progress_exclusive,
+                    data_listen_next
+                );
                 match data_listen_next {
                     // We've caught up to the txns upper and we have to wait for
                     // it to advance before asking again.
@@ -225,7 +231,7 @@ where
 ///
 /// [Subscribe]: mz_persist_client::read::Subscribe
 pub struct DataSubscribe {
-    as_of: u64,
+    pub(crate) as_of: u64,
     pub(crate) worker: Worker<timely::communication::allocator::Thread>,
     data: ProbeHandle<u64>,
     txns: ProbeHandle<u64>,

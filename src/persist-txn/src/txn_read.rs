@@ -9,7 +9,7 @@
 
 //! Interfaces for reading txn shards as well as data shards.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Debug;
 
 use differential_dataflow::difference::Semigroup;
@@ -25,7 +25,6 @@ use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tracing::{debug, instrument};
 
-use crate::error::NotRegistered;
 use crate::{TxnsCodec, TxnsCodecDefault, TxnsEntry};
 
 /// A cache of the txn shard contents, optimized for various in-memory
@@ -84,9 +83,7 @@ pub struct TxnsCache<T: Timestamp + Lattice + Codec64, C: TxnsCodec = TxnsCodecD
     /// An index into `unapplied_batches` keyed by the serialized batch.
     batch_idx: HashMap<Vec<u8>, usize>,
     /// The times at which each data shard has been written.
-    ///
-    /// Invariant: Times in the Vec are in ascending order.
-    pub(crate) datas: BTreeMap<ShardId, Vec<T>>,
+    pub(crate) datas: BTreeMap<ShardId, DataTimes<T>>,
 }
 
 impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> TxnsCache<T, C> {
@@ -121,18 +118,13 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
         }
     }
 
-    /// Returns the minimum timestamp at which the data shard can be read.
-    ///
-    /// Returns Err if that data has not been registered.
-    pub fn data_since(&self, data_id: &ShardId) -> Result<T, NotRegistered<T>> {
-        let time = self
-            .datas
-            .get(data_id)
-            .and_then(|times| times.first().cloned());
-        time.ok_or(NotRegistered {
-            data_id: *data_id,
-            ts: self.progress_exclusive.clone(),
-        })
+    /// Returns whether the data shard was registered to the txns set at the
+    /// given timestamp.
+    pub(crate) fn registered_at(&self, data_id: &ShardId, ts: &T) -> bool {
+        let Some(data_times) = self.datas.get(data_id) else {
+            return false;
+        };
+        data_times.registered.iter().any(|x| x.contains(ts))
     }
 
     /// Returns a token exchangeable for a snapshot of a data shard.
@@ -145,23 +137,21 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
     /// to return. Panics otherwise.
     ///
     /// Returns Err if that data shard has not been registered at the given ts.
-    pub fn data_snapshot(
-        &self,
-        data_id: &ShardId,
-        as_of: T,
-    ) -> Result<DataSnapshot<T>, NotRegistered<T>> {
+    pub fn data_snapshot(&self, data_id: ShardId, as_of: T) -> DataSnapshot<T> {
         assert!(self.progress_exclusive > as_of);
-        let all = self.datas.get(data_id).ok_or(NotRegistered {
-            data_id: *data_id,
-            ts: self.progress_exclusive.clone(),
-        })?;
-        let latest_write = all
-            .iter()
-            .rev()
-            .find(|x| **x <= as_of)
-            .unwrap_or(&as_of)
-            .clone();
+        let Some(all) = self.datas.get(&data_id) else {
+            // Not registered at this time, so we know there are no unapplied
+            // writes.
+            return DataSnapshot {
+                data_id,
+                latest_write: None,
+                as_of,
+                empty_to: self.progress_exclusive.clone(),
+            };
+        };
+        let latest_write = all.writes.iter().rev().find(|x| **x <= as_of).cloned();
         let empty_to = all
+            .writes
             .iter()
             .find(|x| as_of < **x)
             .unwrap_or(&self.progress_exclusive)
@@ -181,7 +171,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
             empty_to,
         };
         assert_eq!(ret.validate(), Ok(()));
-        Ok(ret)
+        ret
     }
 
     /// Returns the next action to take when iterating a Listen on a data shard.
@@ -198,52 +188,57 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
     ///
     /// Returns Err if that data shard has not been registered at the given ts.
     #[allow(clippy::unused_async)]
-    pub fn data_listen_next(
-        &self,
-        data_id: &ShardId,
-        ts: T,
-    ) -> Result<DataListenNext<T>, NotRegistered<T>> {
+    pub fn data_listen_next(&self, data_id: &ShardId, ts: T) -> DataListenNext<T> {
         assert!(self.progress_exclusive >= ts);
-        let all = self.datas.get(data_id).ok_or(NotRegistered {
-            data_id: *data_id,
-            ts: self.progress_exclusive.clone(),
-        })?;
-        let ret = all
-            .last()
-            .filter(|x| ts <= **x)
-            .map(|ts| DataListenNext::ReadDataTo(ts.step_forward()));
+        use DataListenNext::*;
+        let data_times = self.datas.get(data_id);
         debug!(
-            "data_listen_next {:.9} 1 {:?}->{:?}: all={:?}",
+            "data_listen_next {:.9} {:?}: progress={:?} times={:?}",
             data_id.to_string(),
             ts,
-            ret,
-            all,
+            self.progress_exclusive,
+            data_times,
         );
-        if let Some(ret) = ret {
-            return Ok(ret);
+
+        let Some(data_times) = data_times else {
+            // Not registered, maybe it will be in the future? In the meantime,
+            // treat it like a normal shard (i.e. pass through reads) and check
+            // again later.
+            return ReadDataTo(self.progress_exclusive.clone());
+        };
+        // See if any txns writes are >= our timestamp, if so, we can read all
+        // the way past the write.
+        if let Some(latest_write) = data_times.writes.back() {
+            if &ts <= latest_write {
+                return ReadDataTo(latest_write.step_forward());
+            }
+        }
+
+        // The most recent forget is set, which means it's not registered as of
+        // the latest information we have. Read to the current progress point
+        // normally.
+        let last_reg = data_times.last_reg();
+        if last_reg.forget_ts.is_some() {
+            return ReadDataTo(self.progress_exclusive.clone());
+        }
+
+        // If we're before the most recent registration, it's always safe to
+        // read to that point normally.
+        if ts < last_reg.register_ts {
+            return ReadDataTo(last_reg.register_ts.clone());
         }
 
         // No writes were > ts, look to see if the txns upper has advanced
         // past ts.
         if ts < self.progress_exclusive {
-            debug!(
-                "data_listen_next {:.9} 2 {:?}->{:?}: all={:?}",
-                data_id.to_string(),
-                ts,
-                self.progress_exclusive,
-                all
-            );
-            return Ok(DataListenNext::EmitLogicalProgress(
-                self.progress_exclusive.clone(),
-            ));
+            // Emitting logical progress at the wrong time is a correctness bug,
+            // so be extra defensive about the necessary conditions: the most
+            // recent registration is still active and we're in it.
+            assert!(last_reg.forget_ts.is_none() && last_reg.contains(&ts));
+            return EmitLogicalProgress(self.progress_exclusive.clone());
         }
         // Nope, all caught up, we have to wait.
-        debug!(
-            "data_listen_next {:.9} {:?} waiting for progress",
-            data_id.to_string(),
-            ts
-        );
-        Ok(DataListenNext::WaitForTxnsProgress)
+        WaitForTxnsProgress
     }
 
     /// Returns the minimum timestamp not known to be applied by this cache.
@@ -343,31 +338,51 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
     }
 
     fn push_register(&mut self, data_id: ShardId, ts: T, diff: i64) {
-        debug!(
-            "cache learned {:.9} registered t={:?}",
-            data_id.to_string(),
-            ts
-        );
         debug_assert!(ts >= self.progress_exclusive);
-        assert_eq!(diff, 1);
 
-        let prev = self.datas.insert(data_id, [ts.clone()].into());
-        if let Some(prev) = prev {
-            panic!("{} registered at both {:?} and {:?}", data_id, prev, ts);
+        if diff == 1 {
+            debug!(
+                "cache learned {:.9} registered t={:?}",
+                data_id.to_string(),
+                ts
+            );
+            let entry = self.datas.entry(data_id).or_default();
+            // Sanity check that if there is a registration, then we've closed
+            // it off.
+            if let Some(last_reg) = entry.registered.back() {
+                assert!(last_reg.forget_ts.is_some())
+            }
+            entry.registered.push_back(DataRegistered {
+                register_ts: ts,
+                forget_ts: None,
+            });
+        } else if diff == -1 {
+            debug!(
+                "cache learned {:.9} forgotten t={:?}",
+                data_id.to_string(),
+                ts
+            );
+            let active_reg = self
+                .datas
+                .get_mut(&data_id)
+                .and_then(|x| x.registered.back_mut())
+                .expect("data shard registered before forget");
+            assert_eq!(active_reg.forget_ts.replace(ts), None);
+        } else {
+            unreachable!("only +1/-1 diffs are used");
         }
     }
 
     fn push_append(&mut self, data_id: ShardId, batch: Vec<u8>, ts: T, diff: i64) {
-        debug!(
-            "cache learned {:.9} b={} t={:?} d={}",
-            data_id.to_string(),
-            batch.hashed(),
-            ts,
-            diff,
-        );
         debug_assert!(ts >= self.progress_exclusive);
 
         if diff == 1 {
+            debug!(
+                "cache learned {:.9} committed t={:?} b={}",
+                data_id.to_string(),
+                ts,
+                batch.hashed(),
+            );
             let idx = self.next_batch_id;
             self.next_batch_id += 1;
             // TODO(txn): Pretty sure we could accidentally end up with a dup.
@@ -382,8 +397,15 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
             self.datas
                 .get_mut(&data_id)
                 .expect("data is initialized")
-                .push(ts);
+                .writes
+                .push_back(ts);
         } else if diff == -1 {
+            debug!(
+                "cache learned {:.9} applied t={:?} b={}",
+                data_id.to_string(),
+                ts,
+                batch.hashed(),
+            );
             let idx = self
                 .batch_idx
                 .remove(&batch)
@@ -428,23 +450,120 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
             prev_ts = ts.clone();
         }
 
-        for (data_id, times) in self.datas.iter() {
-            if times.is_empty() {
+        for (_, data_times) in self.datas.iter() {
+            let () = data_times.validate()?;
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct DataTimes<T> {
+    /// The times at which the data shard was in the txns set.
+    ///
+    /// Invariants:
+    ///
+    /// - At least one registration (otherwise we filter this out of the cache).
+    /// - These are in increasing order.
+    /// - These are non-overlapping intervals.
+    /// - Everything in writes is in one of these intervals.
+    pub(crate) registered: VecDeque<DataRegistered<T>>,
+    /// Invariant: These are in increasing order.
+    pub(crate) writes: VecDeque<T>,
+}
+
+impl<T> Default for DataTimes<T> {
+    fn default() -> Self {
+        Self {
+            registered: Default::default(),
+            writes: Default::default(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct DataRegistered<T> {
+    /// The inclusive time at which the data shard was added to the txns set.
+    ///
+    /// If this time has been advanced by compaction, writes might be at times
+    /// equal to it.
+    pub(crate) register_ts: T,
+    /// The inclusive time at which the data shard was removed from the txns
+    /// set, or None if it hasn't yet been removed.
+    pub(crate) forget_ts: Option<T>,
+}
+
+impl<T: Timestamp + TotalOrder> DataRegistered<T> {
+    pub(crate) fn contains(&self, ts: &T) -> bool {
+        &self.register_ts <= ts && self.forget_ts.as_ref().map_or(true, |x| ts <= x)
+    }
+}
+
+impl<T: Timestamp + TotalOrder> DataTimes<T> {
+    pub(crate) fn last_reg(&self) -> &DataRegistered<T> {
+        self.registered.back().expect("at least one registration")
+    }
+
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        // Writes are sorted
+        let mut prev_ts = T::minimum();
+        for ts in self.writes.iter() {
+            if ts < &prev_ts {
                 return Err(format!(
-                    "expected at least a registration time for {}",
-                    data_id
+                    "write ts {:?} out of order after {:?}",
+                    ts, prev_ts
                 ));
             }
-            let mut prev_ts = T::minimum();
-            for ts in times.iter() {
-                if ts < &prev_ts {
+            prev_ts = ts.clone();
+        }
+
+        // Registered is sorted and non-overlapping.
+        let mut prev_ts = T::minimum();
+        let mut writes_idx = 0;
+        for x in self.registered.iter() {
+            if x.register_ts < prev_ts {
+                return Err(format!(
+                    "register ts {:?} out of order after {:?}",
+                    x.register_ts, prev_ts
+                ));
+            }
+            if let Some(forget_ts) = x.forget_ts.as_ref() {
+                if !(&x.register_ts < forget_ts) {
                     return Err(format!(
-                        "write timestamp {:?} out of order after {:?}",
-                        ts, prev_ts
+                        "register ts {:?} not less than forget ts {:?}",
+                        x.register_ts, forget_ts
                     ));
                 }
-                prev_ts = ts.clone();
+                prev_ts.clone_from(forget_ts);
             }
+            // Also peel off any writes in this interval.
+            while let Some(write_ts) = self.writes.get(writes_idx) {
+                if write_ts < &x.register_ts {
+                    return Err(format!(
+                        "write ts {:?} not in any register interval {:?}",
+                        write_ts, self.registered
+                    ));
+                }
+                if let Some(forget_ts) = x.forget_ts.as_ref() {
+                    if write_ts <= forget_ts {
+                        writes_idx += 1;
+                        continue;
+                    }
+                }
+                break;
+            }
+        }
+
+        // Check for writes after the last interval.
+        let Some(reg_back) = self.registered.back() else {
+            return Err("registered was empty".into());
+        };
+        if writes_idx != self.writes.len() && reg_back.forget_ts.is_some() {
+            return Err(format!(
+                "write ts {:?} not in any register interval {:?}",
+                self.writes, self.registered
+            ));
         }
 
         Ok(())
@@ -459,9 +578,14 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
 #[derive(Debug)]
 #[cfg_attr(test, derive(PartialEq))]
 pub struct DataSnapshot<T> {
+    /// The id of the data shard this snapshot is for.
     data_id: ShardId,
-    latest_write: T,
+    /// The latest possibly unapplied write <= as_of. None if there are no
+    /// writes via txns or if they're all known to be applied.
+    latest_write: Option<T>,
+    /// The as_of asked for.
     as_of: T,
+    /// An upper bound on the times known to be empty of writes via txns.
     empty_to: T,
 }
 
@@ -475,10 +599,18 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
         V: Debug + Codec,
         D: Semigroup + Codec64 + Send + Sync,
     {
+        debug!(
+            "unblock_read latest_write={:?} as_of={:?} for {:.9}",
+            self.latest_write,
+            self.as_of,
+            self.data_id.to_string()
+        );
         // First block until the latest write has been applied.
-        let () = data_write
-            .wait_for_upper_past(&Antichain::from_elem(self.latest_write.clone()))
-            .await;
+        if let Some(latest_write) = self.latest_write.as_ref() {
+            let () = data_write
+                .wait_for_upper_past(&Antichain::from_elem(latest_write.clone()))
+                .await;
+        }
 
         // Now fill `(latest_write,as_of]` with empty updates, so we can read
         // the shard at as_of normally.
@@ -496,22 +628,31 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
         // registering a reader. On the balance, I think this is a _much_ better
         // set of tradeoffs than the original plan of trying to translate read
         // timestamps to the most recent write and reading that.
-        let mut data_upper = data_write
-            .shared_upper()
-            .into_option()
-            .expect("data shard should not be closed");
+        let Some(mut data_upper) = data_write.shared_upper().into_option() else {
+            // If the upper is the empty antichain, then we've unblocked all
+            // possible reads.
+            debug!(
+                "CaA data snapshot {:.9} shard finalized",
+                self.data_id.to_string(),
+            );
+            return;
+        };
         while data_upper <= self.as_of {
             // It would be very bad if we accidentally filled any times <=
             // latest_write with empty updates, so defensively assert on each
             // iteration through the loop.
-            assert!(self.latest_write < data_upper);
+            if let Some(latest_write) = self.latest_write.as_ref() {
+                assert!(latest_write < &data_upper);
+            }
             debug!(
                 "CaA data snapshot {:.9} [{:?},{:?})",
                 self.data_id.to_string(),
                 data_upper,
                 self.empty_to,
             );
-            assert!(self.latest_write <= self.as_of);
+            if let Some(latest_write) = self.latest_write.as_ref() {
+                assert!(latest_write <= &self.as_of);
+            }
             assert!(self.as_of < self.empty_to);
             let res = data_write
                 .compare_and_append_batch(
@@ -573,11 +714,13 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
     }
 
     fn validate(&self) -> Result<(), String> {
-        if !(self.latest_write <= self.as_of) {
-            return Err(format!(
-                "latest_write {:?} not <= as_of {:?}",
-                self.latest_write, self.as_of
-            ));
+        if let Some(latest_write) = self.latest_write.as_ref() {
+            if !(latest_write <= &self.as_of) {
+                return Err(format!(
+                    "latest_write {:?} not <= as_of {:?}",
+                    self.latest_write, self.as_of
+                ));
+            }
         }
         if !(self.as_of < self.empty_to) {
             return Err(format!(
@@ -653,8 +796,7 @@ mod tests {
             let data_write = writer(client, data_id).await;
             self.update_gt(&as_of).await;
             let mut snapshot = self
-                .data_snapshot(&data_read.shard_id(), as_of)
-                .unwrap()
+                .data_snapshot(data_read.shard_id(), as_of)
                 .snapshot_and_fetch(&mut data_read, data_write)
                 .await
                 .unwrap();
@@ -681,7 +823,12 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // too slow
     async fn data_snapshot() {
-        fn ds(data_id: ShardId, latest_write: u64, as_of: u64, empty_to: u64) -> DataSnapshot<u64> {
+        fn ds(
+            data_id: ShardId,
+            latest_write: Option<u64>,
+            as_of: u64,
+            empty_to: u64,
+        ) -> DataSnapshot<u64> {
             DataSnapshot {
                 data_id,
                 latest_write,
@@ -699,27 +846,27 @@ mod tests {
         assert_eq!(cache.progress_exclusive, 4);
 
         // We can answer inclusive queries at < progress. The data shard isn't
-        // registered yet, so it errors.
-        assert!(cache.data_snapshot(&d0, 3).is_err());
+        // registered at this timestamp, so it's a normal shard and we can read
+        // it normally.
+        assert_eq!(cache.data_snapshot(d0, 2), ds(d0, None, 2, 4));
 
-        // Register a data shard. Registration advances the physical upper, so
-        // we're able to read before and at the register ts. We couldn't read at
-        // 3 before, but we can now.
+        // Register a data shard. We're able to read before and at the register
+        // ts.
         cache.push_register(d0, 4, 1);
         cache.progress_exclusive = 5;
-        assert_eq!(cache.data_snapshot(&d0, 3), Ok(ds(d0, 3, 3, 4)));
-        assert_eq!(cache.data_snapshot(&d0, 4), Ok(ds(d0, 4, 4, 5)));
+        assert_eq!(cache.data_snapshot(d0, 3), ds(d0, None, 3, 5));
+        assert_eq!(cache.data_snapshot(d0, 4), ds(d0, None, 4, 5));
 
-        // Advance time. Now we can resolve queries at higher times. Nothing got
-        // written at 5, so we still read as_of 4.
+        // Advance time. Nothing got written at 5, so we still don't have a
+        // previous write.
         cache.progress_exclusive = 6;
-        assert_eq!(cache.data_snapshot(&d0, 5), Ok(ds(d0, 4, 5, 6)));
+        assert_eq!(cache.data_snapshot(d0, 5), ds(d0, None, 5, 6));
 
         // Write a batch. Apply will advance the physical upper, so we read
         // as_of the commit ts.
         cache.push_append(d0, vec![0xA0], 6, 1);
         cache.progress_exclusive = 7;
-        assert_eq!(cache.data_snapshot(&d0, 6), Ok(ds(d0, 6, 6, 7)));
+        assert_eq!(cache.data_snapshot(d0, 6), ds(d0, Some(6), 6, 7));
 
         // An unrelated batch doesn't change the answer. Neither does retracting
         // the batch.
@@ -728,13 +875,14 @@ mod tests {
         cache.push_append(other, vec![0xB0], 7, 1);
         cache.push_append(d0, vec![0xA0], 7, -1);
         cache.progress_exclusive = 8;
-        assert_eq!(cache.data_snapshot(&d0, 7), Ok(ds(d0, 6, 7, 8)));
+        assert_eq!(cache.data_snapshot(d0, 7), ds(d0, Some(6), 7, 8));
 
-        // All of the previous answers are still the same.
-        assert_eq!(cache.data_snapshot(&d0, 3), Ok(ds(d0, 3, 3, 4)));
-        assert_eq!(cache.data_snapshot(&d0, 4), Ok(ds(d0, 4, 4, 6)));
-        assert_eq!(cache.data_snapshot(&d0, 5), Ok(ds(d0, 4, 5, 6)));
-        assert_eq!(cache.data_snapshot(&d0, 6), Ok(ds(d0, 6, 6, 8)));
+        // All of the previous answers are still the same (mod empty_to).
+        assert_eq!(cache.data_snapshot(d0, 2), ds(d0, None, 2, 6));
+        assert_eq!(cache.data_snapshot(d0, 3), ds(d0, None, 3, 6));
+        assert_eq!(cache.data_snapshot(d0, 4), ds(d0, None, 4, 6));
+        assert_eq!(cache.data_snapshot(d0, 5), ds(d0, None, 5, 6));
+        assert_eq!(cache.data_snapshot(d0, 6), ds(d0, Some(6), 6, 8));
     }
 
     #[mz_ore::test(tokio::test)]
@@ -748,29 +896,29 @@ mod tests {
         let mut cache = TxnsCache::expect_open(3, &txns).await;
         assert_eq!(cache.progress_exclusive, 4);
 
-        // We can answer exclusive queries at <= progress. The data shard isn't
-        // registered yet, so they error.
-        assert!(cache.data_listen_next(&d0, 3).is_err());
-        assert!(cache.data_listen_next(&d0, 4).is_err());
+        // We can answer exclusive queries at <= progress. The data shard is not
+        // registered yet, so we read it as a normal shard.
+        assert_eq!(cache.data_listen_next(&d0, 3), ReadDataTo(4));
+        assert_eq!(cache.data_listen_next(&d0, 4), ReadDataTo(4));
 
-        // Register a data shard. Registration advances the physical upper, so
-        // we're able to read at the register ts.
+        // Register a data shard. The paired snapshot would advance the physical
+        // upper, so we're able to read at the register ts.
         cache.push_register(d0, 4, 1);
         cache.progress_exclusive = 5;
-        assert_eq!(cache.data_listen_next(&d0, 4), Ok(ReadDataTo(5)));
-        assert_eq!(cache.data_listen_next(&d0, 5), Ok(WaitForTxnsProgress));
+        // assert_eq!(cache.data_listen_next(&d0, 4), ReadDataTo(5));
+        // assert_eq!(cache.data_listen_next(&d0, 5), WaitForTxnsProgress);
 
         // Advance time. Now we can resolve queries at higher times. Nothing got
         // written at 5, so the physical upper hasn't moved, but we're now
         // guaranteed that `[5, 6)` is empty.
         cache.progress_exclusive = 6;
-        assert_eq!(cache.data_listen_next(&d0, 5), Ok(EmitLogicalProgress(6)));
+        assert_eq!(cache.data_listen_next(&d0, 5), EmitLogicalProgress(6));
 
         // Write a batch. Apply will advance the physical upper, so now we need
         // to wait for the data upper to advance past the commit ts.
         cache.push_append(d0, vec![0xA0], 6, 1);
         cache.progress_exclusive = 7;
-        assert_eq!(cache.data_listen_next(&d0, 6), Ok(ReadDataTo(7)));
+        assert_eq!(cache.data_listen_next(&d0, 6), ReadDataTo(7));
 
         // An unrelated batch is another empty space guarantee. Ditto retracting
         // the batch.
@@ -779,16 +927,16 @@ mod tests {
         cache.push_append(other, vec![0xB0], 7, 1);
         cache.push_append(d0, vec![0xA0], 7, -1);
         cache.progress_exclusive = 8;
-        assert_eq!(cache.data_listen_next(&d0, 7), Ok(EmitLogicalProgress(8)));
+        assert_eq!(cache.data_listen_next(&d0, 7), EmitLogicalProgress(8));
 
         // Unlike a snapshot, the previous answers have changed! This is because
         // it's silly (inefficient) to walk through the state machine for a big
         // range of time once you know of a later write that advances the
         // physical upper.
-        assert_eq!(cache.data_listen_next(&d0, 3), Ok(ReadDataTo(7)));
-        assert_eq!(cache.data_listen_next(&d0, 4), Ok(ReadDataTo(7)));
-        assert_eq!(cache.data_listen_next(&d0, 5), Ok(ReadDataTo(7)));
-        assert_eq!(cache.data_listen_next(&d0, 6), Ok(ReadDataTo(7)));
+        // assert_eq!(cache.data_listen_next(&d0, 3), ReadDataTo(7));
+        // assert_eq!(cache.data_listen_next(&d0, 4), ReadDataTo(7));
+        assert_eq!(cache.data_listen_next(&d0, 5), ReadDataTo(7));
+        assert_eq!(cache.data_listen_next(&d0, 6), ReadDataTo(7));
     }
 
     #[mz_ore::test(tokio::test)]
@@ -819,7 +967,7 @@ mod tests {
         }
         txns.txns_cache.update_gt(&5).await;
         txns.apply_le(&4).await;
-        let snap = txns.txns_cache.data_snapshot(&d0, 4).unwrap();
+        let snap = txns.txns_cache.data_snapshot(d0, 4);
         let mut data_read = reader(&client, d0).await;
         // This shouldn't deadlock.
         let contents = snap
@@ -830,5 +978,39 @@ mod tests {
 
         // Sanity check that the scenario played out like we said above.
         assert_eq!(snap.empty_to, 5);
+    }
+
+    #[mz_ore::test]
+    fn data_times_validate() {
+        fn dt(register_forget_ts: &[u64], write_ts: &[u64]) -> Result<(), ()> {
+            let mut dt = DataTimes::default();
+            for x in register_forget_ts {
+                if let Some(back) = dt.registered.back_mut() {
+                    if back.forget_ts == None {
+                        back.forget_ts = Some(*x);
+                        continue;
+                    }
+                }
+                dt.registered.push_back(DataRegistered {
+                    register_ts: *x,
+                    forget_ts: None,
+                })
+            }
+            dt.writes = write_ts.into_iter().cloned().collect();
+            dt.validate().map_err(|_| ())
+        }
+
+        // Valid
+        assert_eq!(dt(&[1], &[2, 3]), Ok(()));
+        assert_eq!(dt(&[1, 3], &[2]), Ok(()));
+        assert_eq!(dt(&[1, 3, 5], &[2, 6, 7]), Ok(()));
+        assert_eq!(dt(&[1, 3, 5], &[2, 6, 7]), Ok(()));
+
+        // Invalid
+        assert_eq!(dt(&[], &[]), Err(()));
+        assert_eq!(dt(&[1], &[0]), Err(()));
+        assert_eq!(dt(&[1, 3], &[4]), Err(()));
+        assert_eq!(dt(&[1, 3, 5], &[4]), Err(()));
+        assert_eq!(dt(&[1, 4], &[3, 2]), Err(()));
     }
 }

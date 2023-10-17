@@ -221,6 +221,9 @@ Restrictions:
     growing unboundedly and also means that, at any given time, the txns shard
     contains the set of txns that need to be applied (as well as the set of
     registered data shards).
+- A data shard may be _forgotten_ at some `forget_ts` to reclaim it from the
+  txns system. This allows us to delete it (e.g. when a table is dropped). Like
+  registration, forget is idempotent.
 
 ### Usage
 
@@ -361,6 +364,18 @@ but this seems like a reasonable guarantee). It might result in things like GC
 maintenance or a CRDB write, but this is also true for registering a reader. On
 the balance, I think this is a _much_ better set of tradeoffs than the original
 plan.
+
+### Forget
+
+A data shard is removed from the txns set using a `forget` operation that writes
+a retraction of the registration update at some `forget_ts`. After this, the
+shard may be used through normal means, such as direct `compare_and_append`
+writes or tombstone-ing it. To prevent accidental misuse, the forget operation
+ensures that all writes to the data shard have been applied before writing the
+retraction.
+
+The code will support repeatedly registering and forgetting the same data shard,
+but this is not expected to be used in normal operation.
 
 ## Alternatives
 
