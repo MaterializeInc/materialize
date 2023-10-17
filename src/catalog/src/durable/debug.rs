@@ -45,6 +45,11 @@ pub trait Collection {
 
     /// Generate a `StateUpdateKind` with `key` and `value` that corresponds to [`Collection`].
     fn persist_update(key: Self::Key, value: Self::Value) -> StateUpdateKind;
+
+    /// The human readable name of this collection.
+    fn name() -> String {
+        Self::collection_type().to_string()
+    }
 }
 
 /// The type of a [`Collection`].
