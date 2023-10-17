@@ -42,8 +42,9 @@ use crate::decode::avro::AvroDecoderState;
 use crate::decode::csv::CsvDecoderState;
 use crate::decode::metrics::DecodeMetrics;
 use crate::decode::protobuf::ProtobufDecoderState;
+use crate::healthcheck::HealthStatusUpdate;
 use crate::render::sources::OutputIndex;
-use crate::source::types::{DecodeResult, HealthStatus, HealthStatusUpdate, SourceOutput};
+use crate::source::types::{DecodeResult, SourceOutput};
 
 mod avro;
 mod csv;
@@ -499,13 +500,7 @@ where
     });
 
     let health = transient_errors.map(|err: Rc<anyhow::Error>| {
-        let halt_status = HealthStatusUpdate {
-            update: HealthStatus::StalledWithError {
-                error: err.display_with_causes().to_string(),
-                hint: None,
-            },
-            should_halt: true,
-        };
+        let halt_status = HealthStatusUpdate::halting(err.display_with_causes().to_string(), None);
         (0, halt_status)
     });
 

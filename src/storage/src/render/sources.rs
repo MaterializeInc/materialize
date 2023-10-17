@@ -33,14 +33,15 @@ use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::order::refine_antichain;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::operators::generic::operator::empty;
-use timely::dataflow::operators::{Concat, ConnectLoop, Exchange, Feedback, Leave, OkErr};
+use timely::dataflow::operators::{Concat, ConnectLoop, Exchange, Feedback, Leave, Map, OkErr};
 use timely::dataflow::scopes::{Child, Scope};
 use timely::dataflow::Stream;
 use timely::progress::{Antichain, Timestamp as _};
 
 use crate::decode::{render_decode_cdcv2, render_decode_delimited};
+use crate::healthcheck::{HealthStatusMessage, StatusNamespace};
 use crate::render::upsert::UpsertKey;
-use crate::source::types::{DecodeResult, HealthStatusUpdate, SourceOutput};
+use crate::source::types::{DecodeResult, SourceOutput};
 use crate::source::{self, RawSourceCreationConfig, SourceCreationParams};
 
 /// A type-level enum that holds one of two types of sources depending on their message type
@@ -84,7 +85,7 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
         Collection<Child<'g, G, mz_repr::Timestamp>, Row, Diff>,
         Collection<Child<'g, G, mz_repr::Timestamp>, DataflowError, Diff>,
     )>,
-    Stream<G, (OutputIndex, HealthStatusUpdate)>,
+    Stream<G, HealthStatusMessage>,
     Rc<dyn Any>,
 ) {
     // Tokens that we should return from the method.
@@ -261,7 +262,7 @@ fn render_source_stream<G>(
     Collection<G, Row, Diff>,
     Collection<G, DataflowError, Diff>,
     Vec<Rc<dyn Any>>,
-    Stream<G, (OutputIndex, HealthStatusUpdate)>,
+    Stream<G, HealthStatusMessage>,
 )
 where
     G: Scope<Timestamp = Timestamp>,
@@ -549,7 +550,11 @@ where
                                 None => upsert.as_collection(),
                             };
 
-                            (upsert.leave(), health_update.leave())
+                            (upsert.leave(), health_update.map(|(index, update)| HealthStatusMessage {
+                                index,
+                                namespace: StatusNamespace::Upsert,
+                                update
+                            }).leave())
                         },
                     );
 
@@ -577,7 +582,13 @@ where
             (
                 envelope_ok,
                 envelope_err,
-                decode_health.concat(&envelope_health),
+                decode_health
+                    .map(|(index, update)| HealthStatusMessage {
+                        index,
+                        namespace: StatusNamespace::Decode,
+                        update,
+                    })
+                    .concat(&envelope_health),
             )
         }
     };

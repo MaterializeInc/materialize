@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
-use crate::render::sources::OutputIndex;
+use crate::healthcheck::{HealthStatusMessage, StatusNamespace};
 use crate::source::metrics::{SourceBaseMetrics, UpsertSharedMetrics};
 use crate::source::RawSourceCreationConfig;
 
@@ -42,6 +42,7 @@ pub trait SourceRender {
     type Key: timely::Data + MaybeLength;
     type Value: timely::Data + MaybeLength;
     type Time: SourceTimestamp;
+    const STATUS_NAMESPACE: StatusNamespace;
 
     /// Renders the source in the provided timely scope.
     ///
@@ -85,84 +86,9 @@ pub trait SourceRender {
             Diff,
         >,
         Option<Stream<G, Infallible>>,
-        Stream<G, (OutputIndex, HealthStatusUpdate)>,
+        Stream<G, HealthStatusMessage>,
         Rc<dyn Any>,
     );
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-pub struct HealthStatusUpdate {
-    pub update: HealthStatus,
-    pub should_halt: bool,
-}
-
-/// NB: we derive Ord here, so the enum order matters. Generally, statuses later in the list
-/// take precedence over earlier ones: so if one worker is stalled, we'll consider the entire
-/// source to be stalled.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-pub enum HealthStatus {
-    Starting,
-    Running,
-    StalledWithError { error: String, hint: Option<String> },
-}
-
-impl HealthStatus {
-    pub fn name(&self) -> &'static str {
-        match self {
-            HealthStatus::Starting => "starting",
-            HealthStatus::Running => "running",
-            HealthStatus::StalledWithError { .. } => "stalled",
-        }
-    }
-
-    pub fn error(&self) -> Option<&str> {
-        match self {
-            HealthStatus::Starting | HealthStatus::Running => None,
-            HealthStatus::StalledWithError { error, .. } => Some(error),
-        }
-    }
-
-    pub fn hint(&self) -> Option<&str> {
-        match self {
-            HealthStatus::Starting | HealthStatus::Running => None,
-            HealthStatus::StalledWithError { error: _, hint } => hint.as_deref(),
-        }
-    }
-}
-
-impl HealthStatusUpdate {
-    /// Generates a non-halting [`HealthStatusUpdate`] with `update`.
-    pub(crate) fn status(update: HealthStatus) -> Self {
-        HealthStatusUpdate {
-            update,
-            should_halt: false,
-        }
-    }
-}
-
-impl crate::healthcheck::HealthStatus for HealthStatusUpdate {
-    fn name(&self) -> &'static str {
-        self.update.name()
-    }
-    fn error(&self) -> Option<&str> {
-        self.update.error()
-    }
-    fn hint(&self) -> Option<&str> {
-        self.update.hint()
-    }
-    fn should_halt(&self) -> bool {
-        self.should_halt
-    }
-    fn can_transition_from(&self, other: Option<&Self>) -> bool {
-        if let Some(other) = other {
-            self.update != other.update
-        } else {
-            true
-        }
-    }
-    fn starting() -> Self {
-        Self::status(HealthStatus::Starting)
-    }
 }
 
 /// Source-agnostic wrapper for messages. Each source must implement a

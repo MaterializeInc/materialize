@@ -713,8 +713,8 @@ INSERT INTO pk_table VALUES (99999);
 # should be "materialize.public.pk_table"
 
 > SELECT error FROM mz_internal.mz_source_statuses where name in ('enum_source', 'mz_source');
-"publication \"mz_source\" does not exist"
-"publication \"mz_source\" does not exist"
+"postgres: publication \"mz_source\" does not exist"
+"postgres: publication \"mz_source\" does not exist"
 
 > DROP SOURCE enum_source CASCADE;
 > DROP SOURCE "mz_source" CASCADE;

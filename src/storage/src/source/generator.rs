@@ -25,7 +25,8 @@ use timely::dataflow::operators::ToStream;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
-use crate::source::types::{HealthStatus, HealthStatusUpdate, SourceRender};
+use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
+use crate::source::types::SourceRender;
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 
 mod auction;
@@ -73,6 +74,8 @@ impl SourceRender for LoadGeneratorSourceConnection {
     type Value = Row;
     type Time = MzOffset;
 
+    const STATUS_NAMESPACE: StatusNamespace = StatusNamespace::Generator;
+
     fn render<G: Scope<Timestamp = MzOffset>>(
         self,
         scope: &mut G,
@@ -90,7 +93,7 @@ impl SourceRender for LoadGeneratorSourceConnection {
             Diff,
         >,
         Option<Stream<G, Infallible>>,
-        Stream<G, (usize, HealthStatusUpdate)>,
+        Stream<G, HealthStatusMessage>,
         Rc<dyn Any>,
     ) {
         let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
@@ -157,7 +160,12 @@ impl SourceRender for LoadGeneratorSourceConnection {
             }
         });
 
-        let status = [(0, HealthStatusUpdate::status(HealthStatus::Running))].to_stream(scope);
+        let status = [HealthStatusMessage {
+            index: 0,
+            namespace: Self::STATUS_NAMESPACE.clone(),
+            update: HealthStatusUpdate::running(),
+        }]
+        .to_stream(scope);
         (
             stream.as_collection(),
             None,
