@@ -461,9 +461,8 @@ impl PersistHandle {
                 },
             )
             .collect();
-        soft_assert_eq!(
-            configs.len(),
-            1,
+        soft_assert!(
+            configs.len() <= 1,
             "multiple configs should not share the same key: {configs:?}"
         );
         configs.pop()
