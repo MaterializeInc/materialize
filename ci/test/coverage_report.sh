@@ -15,8 +15,8 @@ set -euo pipefail
 
 ci_unimportant_heading "Download coverage data from run"
 mkdir -p coverage
-buildkite-agent artifact download 'coverage/*.xz' coverage/
-find coverage -name '*.xz' -exec xz -d {} \;
+buildkite-agent artifact download 'coverage/*.zst' coverage/
+find coverage -name '*.zst' -exec zstd -d {} \;
 
 ci_uncollapsed_heading "Uncovered Lines in Pull Request"
 find coverage -name '*.lcov' -not -name 'cargotest.lcov' -exec bin/ci-coverage-pr-report --unittests=coverage/cargotest.lcov {} +
@@ -28,7 +28,7 @@ REPORT_UNITTESTS=coverage_with_unittests_"$BUILDKITE_BUILD_ID"
 find coverage -name '*.lcov' -exec sed -i "s#SF:/var/lib/buildkite-agent/builds/buildkite-.*/materialize/coverage/#SF:#" {} +
 find coverage -name '*.lcov' -not -name 'cargotest.lcov' -exec genhtml -o "$REPORT" {} +
 find coverage -name '*.lcov' -exec genhtml -o "$REPORT_UNITTESTS" {} +
-tar cfJ "$REPORT".tar.xz "$REPORT"
-tar cfJ "$REPORT_UNITTESTS".tar.xz "$REPORT_UNITTESTS"
-buildkite-agent artifact upload "$REPORT".tar.xz
-buildkite-agent artifact upload "$REPORT_UNITTESTS".tar.xz
+tar -I zstd -cf "$REPORT".tar.zst "$REPORT"
+tar -I zstd -cf "$REPORT_UNITTESTS".tar.zst "$REPORT_UNITTESTS"
+buildkite-agent artifact upload "$REPORT".tar.zst
+buildkite-agent artifact upload "$REPORT_UNITTESTS".tar.zst
