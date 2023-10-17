@@ -296,6 +296,9 @@ impl Coordinator {
             self.catalog()
                 .system_config()
                 .enable_monotonic_oneshot_selects(),
+            self.catalog()
+                .system_config()
+                .enable_specialized_arrangements(),
         )
         .map_err(AdapterError::Internal)
     }

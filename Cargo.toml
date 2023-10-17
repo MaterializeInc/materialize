@@ -65,6 +65,7 @@ members = [
     "src/s3-datagen",
     "src/secrets",
     "src/segment",
+    "src/server-core",
     "src/service",
     "src/ssh-util",
     "src/sql",

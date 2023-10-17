@@ -17,7 +17,7 @@ use mz_balancerd::{
 };
 use mz_frontegg_auth::{Authentication, AuthenticationConfig};
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::server::TlsCliArgs;
+use mz_server_core::TlsCliArgs;
 use tracing::info;
 
 #[derive(Debug, clap::Parser)]

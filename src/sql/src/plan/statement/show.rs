@@ -347,6 +347,10 @@ pub fn show_objects<'a>(
             assert!(from.is_none(), "parser should reject from");
             show_default_privileges(scx, object_type, role, filter)
         }
+        ShowObjectType::RoleMembership { role } => {
+            assert!(from.is_none(), "parser should reject from");
+            show_role_membership(scx, role, filter)
+        }
     }
 }
 
@@ -791,6 +795,39 @@ pub fn show_default_privileges<'a>(
             "grantee",
             "privilege_type",
         ]),
+    )
+}
+
+pub fn show_role_membership<'a>(
+    scx: &'a StatementContext<'a>,
+    role: Option<ResolvedRoleName>,
+    filter: Option<ShowStatementFilter<Aug>>,
+) -> Result<ShowSelect<'a>, PlanError> {
+    let mut query_filter = Vec::new();
+    if let Some(role) = role {
+        let name = role.name;
+        query_filter.push(format!(
+            "(pg_has_role('{name}', member, 'USAGE') OR role = '{name}')"
+        ));
+    }
+    let query_filter = if query_filter.len() > 0 {
+        format!("WHERE {}", itertools::join(query_filter, " AND "))
+    } else {
+        "".to_string()
+    };
+
+    let query = format!(
+        "SELECT role, member, grantor
+        FROM mz_internal.mz_show_role_members
+        {query_filter}",
+    );
+
+    ShowSelect::new(
+        scx,
+        query,
+        filter,
+        None,
+        Some(&["role", "member", "grantor"]),
     )
 }
 

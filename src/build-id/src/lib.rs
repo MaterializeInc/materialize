@@ -103,7 +103,7 @@ impl fmt::Display for BuildId {
 /// Gets the GNU build IDs for all loaded images, including the main
 /// program binary as well as all dynamically loaded libraries.
 /// Intended to be useful for profilers, who can use the supplied IDs
-/// to symbolicate stack traces offline.
+/// to symbolize stack traces offline.
 ///
 /// Uses `dl_iterate_phdr` to walk the program headers of all images,
 /// and iterates over them looking for note

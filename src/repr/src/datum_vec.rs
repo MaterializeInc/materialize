@@ -58,6 +58,27 @@ impl DatumVec {
         }
         borrow
     }
+
+    /// Borrow an instance with a specific lifetime, and pre-populate with some `Datum`s and a `Row`,
+    /// for example first adding a key followed by its values.
+    pub fn borrow_with_iter<'a, I, D, R>(
+        &'a mut self,
+        datum_iter: I,
+        row: &'a R,
+    ) -> DatumVecBorrow<'a>
+    where
+        I: IntoIterator<Item = D>,
+        D: ::std::borrow::Borrow<Datum<'a>>,
+        R: ::std::borrow::Borrow<Row> + 'a,
+    {
+        let mut borrow = self.borrow();
+        for datum in datum_iter {
+            borrow.push(*datum.borrow());
+        }
+        let row_iter = row.borrow().iter();
+        borrow.extend(row_iter);
+        borrow
+    }
 }
 
 /// A borrowed allocation of `Datum` with a specific lifetime.

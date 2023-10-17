@@ -45,7 +45,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, Collection, Data};
-use mz_repr::{Diff, Row};
+use mz_repr::Diff;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::channels::pushers::Tee;
@@ -61,7 +61,7 @@ use timely::PartialOrder;
 /// Each matching pair of records `(key, val1)` and `(key, val2)` are subjected to the `result` function,
 /// which produces something implementing `IntoIterator`, where the output collection will have an entry for
 /// every value returned by the iterator.
-pub(super) fn mz_join_core<G, Tr1, Tr2, L, I>(
+pub(super) fn mz_join_core<G, Tr1, Tr2, L, I, K, V1, V2>(
     arranged1: &Arranged<G, Tr1>,
     arranged2: &Arranged<G, Tr2>,
     mut result: L,
@@ -69,11 +69,14 @@ pub(super) fn mz_join_core<G, Tr1, Tr2, L, I>(
 where
     G: Scope,
     G::Timestamp: Lattice,
-    Tr1: TraceReader<Key = Row, Val = Row, Time = G::Timestamp, R = Diff> + Clone + 'static,
-    Tr2: TraceReader<Key = Row, Val = Row, Time = G::Timestamp, R = Diff> + Clone + 'static,
+    Tr1: TraceReader<Key = K, Val = V1, Time = G::Timestamp, R = Diff> + Clone + 'static,
+    Tr2: TraceReader<Key = K, Val = V2, Time = G::Timestamp, R = Diff> + Clone + 'static,
     L: FnMut(&Tr1::Key, &Tr1::Val, &Tr2::Val) -> I + 'static,
     I: IntoIterator,
     I::Item: Data,
+    K: Data,
+    V1: Data,
+    V2: Data,
 {
     let mut trace1 = arranged1.trace.clone();
     let mut trace2 = arranged2.trace.clone();
@@ -354,11 +357,11 @@ where
 /// The structure wraps cursors which allow us to play out join computation at whatever rate we like.
 /// This allows us to avoid producing and buffering massive amounts of data, without giving the timely
 /// dataflow system a chance to run operators that can consume and aggregate the data.
-struct Deferred<T, C1, C2, D>
+struct Deferred<T, C1, C2, D, K, V1, V2>
 where
     T: Timestamp,
-    C1: Cursor<Key = Row, Val = Row, Time = T, R = Diff>,
-    C2: Cursor<Key = Row, Val = Row, Time = T, R = Diff>,
+    C1: Cursor<Key = K, Val = V1, Time = T, R = Diff>,
+    C2: Cursor<Key = K, Val = V2, Time = T, R = Diff>,
 {
     cursor1: C1,
     storage1: C1::Storage,
@@ -369,12 +372,15 @@ where
     temp: Vec<(D, T, Diff)>,
 }
 
-impl<T, C1, C2, D> Deferred<T, C1, C2, D>
+impl<T, C1, C2, D, K, V1, V2> Deferred<T, C1, C2, D, K, V1, V2>
 where
     T: Timestamp + Lattice,
-    C1: Cursor<Key = Row, Val = Row, Time = T, R = Diff>,
-    C2: Cursor<Key = Row, Val = Row, Time = T, R = Diff>,
+    C1: Cursor<Key = K, Val = V1, Time = T, R = Diff>,
+    C2: Cursor<Key = K, Val = V2, Time = T, R = Diff>,
     D: Data,
+    K: Data,
+    V1: Data,
+    V2: Data,
 {
     fn new(
         cursor1: C1,

@@ -127,14 +127,20 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 ],
                 env=env,
             )
+
             cpu_count = os.cpu_count()
             assert cpu_count
+
+            partition = int(os.environ.get("BUILDKITE_PARALLEL_JOB", 0)) + 1
+            total = int(os.environ.get("BUILDKITE_PARALLEL_JOB_COUNT", 1))
+
             spawn.runv(
                 [
                     "cargo",
                     "nextest",
                     "run",
                     "--profile=ci",
+                    f"--partition=count:{partition}/{total}",
                     # Most tests don't use 100% of a CPU core, so run two tests per CPU.
                     # TODO(def-): Reenable when #19931 is fixed
                     # f"--test-threads={cpu_count * 2}",

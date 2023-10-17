@@ -112,7 +112,6 @@ use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
-use mz_ore::server::TlsCliArgs;
 use mz_ore::task::RuntimeExt;
 use mz_ore::{halt, metric};
 use mz_persist_client::cache::PersistClientCache;
@@ -122,6 +121,7 @@ use mz_persist_client::rpc::{
 };
 use mz_persist_client::PersistLocation;
 use mz_secrets::SecretsController;
+use mz_server_core::TlsCliArgs;
 use mz_service::emit_boot_diagnostics;
 use mz_service::secrets::{SecretsControllerKind, SecretsReaderCliArgs};
 use mz_sql::catalog::EnvironmentId;
@@ -225,6 +225,30 @@ pub struct Args {
         default_value = "127.0.0.1:6879"
     )]
     internal_persist_pubsub_listen_addr: SocketAddr,
+    /// The address on which to listen for SQL connections from the balancers.
+    ///
+    /// Connections to this address are not subject to encryption.
+    /// Care should be taken to not expose this address to the public internet
+    /// or other unauthorized parties.
+    #[clap(
+        long,
+        value_name = "HOST:PORT",
+        env = "BALANCER_SQL_LISTEN_ADDR",
+        default_value = "127.0.0.1:6880"
+    )]
+    balancer_sql_listen_addr: SocketAddr,
+    /// The address on which to listen for trusted HTTP connections.
+    ///
+    /// Connections to this address are not subject to encryption.
+    /// Care should be taken to not expose this address to the public internet
+    /// or other unauthorized parties.
+    #[clap(
+        long,
+        value_name = "HOST:PORT",
+        env = "BALANCER_HTTP_LISTEN_ADDR",
+        default_value = "127.0.0.1:6881"
+    )]
+    balancer_http_listen_addr: SocketAddr,
     /// Enable cross-origin resource sharing (CORS) for HTTP requests from the
     /// specified origin.
     ///
@@ -896,6 +920,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         let listeners = Listeners::bind(ListenersConfig {
             sql_listen_addr: args.sql_listen_addr,
             http_listen_addr: args.http_listen_addr,
+            balancer_sql_listen_addr: args.balancer_sql_listen_addr,
+            balancer_http_listen_addr: args.balancer_http_listen_addr,
             internal_sql_listen_addr: args.internal_sql_listen_addr,
             internal_http_listen_addr: args.internal_http_listen_addr,
         })

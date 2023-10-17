@@ -84,7 +84,7 @@ fi
 
 find cores -name 'core.*' | while read -r core; do
     exe=$(echo "$core" | sed -e "s/core\.\(.*\)\.[0-9][0-9]*/\1/")
-    bin/ci-builder run stable gdb cores/"$exe" "$core" --batch -ex bt full -ex quit > "$core".txt || true
+    bin/ci-builder run stable gdb --batch -ex "bt full" -ex "quit" "$exe" "$core" > "$core".txt || true
     buildkite-agent artifact upload "$core".txt
     buildkite-agent artifact upload "$core"
 done

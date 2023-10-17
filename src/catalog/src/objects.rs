@@ -24,7 +24,6 @@ use mz_stash_types::objects::{proto, RustType, TryFromProtoError};
 use mz_storage_types::sources::Timeline;
 use proptest_derive::Arbitrary;
 use std::collections::BTreeMap;
-use std::time::Duration;
 
 // Structs used to pass information to outside modules.
 
@@ -38,7 +37,7 @@ use std::time::Duration;
 /// This trait is based on [`RustType`], however it is meant to
 /// convert the types used in [`RustType`] to a more consumable and
 /// condensed type.
-pub(crate) trait DurableType<K, V>: Sized {
+pub trait DurableType<K, V>: Sized {
     /// Consume and convert `Self` into a `(K, V)` key-value pair.
     fn into_key_value(self) -> (K, V);
 
@@ -47,7 +46,7 @@ pub(crate) trait DurableType<K, V>: Sized {
     fn from_key_value(key: K, value: V) -> Self;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Database {
     pub id: DatabaseId,
     pub name: String,
@@ -77,7 +76,7 @@ impl DurableType<DatabaseKey, DatabaseValue> for Database {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Schema {
     pub id: SchemaId,
     pub name: String,
@@ -110,7 +109,7 @@ impl DurableType<SchemaKey, SchemaValue> for Schema {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Role {
     pub id: RoleId,
     pub name: String,
@@ -143,7 +142,7 @@ impl DurableType<RoleKey, RoleValue> for Role {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cluster {
     pub id: ClusterId,
     pub name: String,
@@ -258,7 +257,7 @@ pub struct ClusterVariantManaged {
     pub disk: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IntrospectionSourceIndex {
     pub cluster_id: ClusterId,
     pub name: String,
@@ -307,7 +306,7 @@ impl DurableType<ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceI
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClusterReplica {
     pub cluster_id: ClusterId,
     pub replica_id: ReplicaId,
@@ -505,13 +504,7 @@ impl RustType<proto::replica_config::Location> for ReplicaLocation {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct ComputeReplicaLogging {
-    pub log_logging: bool,
-    pub interval: Option<Duration>,
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Item {
     pub id: GlobalId,
     pub schema_id: SchemaId,
@@ -554,7 +547,7 @@ pub struct SystemObjectDescription {
     pub object_name: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SystemObjectUniqueIdentifier {
     pub id: GlobalId,
     pub fingerprint: String,
@@ -567,7 +560,7 @@ pub struct SystemObjectUniqueIdentifier {
 /// As such, system objects are keyed in the catalog storage by the
 /// tuple (schema_name, object_type, object_name), which is guaranteed
 /// to be unique.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SystemObjectMapping {
     pub description: SystemObjectDescription,
     pub unique_identifier: SystemObjectUniqueIdentifier,
@@ -608,7 +601,7 @@ impl DurableType<GidMappingKey, GidMappingValue> for SystemObjectMapping {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DefaultPrivilege {
     pub object: DefaultPrivilegeObject,
     pub acl_item: DefaultPrivilegeAclItem,
@@ -646,7 +639,7 @@ impl DurableType<DefaultPrivilegesKey, DefaultPrivilegesValue> for DefaultPrivil
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Comment {
     pub object_id: CommentObjectId,
     pub sub_component: Option<usize>,
@@ -675,7 +668,7 @@ impl DurableType<CommentKey, CommentValue> for Comment {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IdAlloc {
     pub name: String,
     pub next_id: u64,
@@ -699,7 +692,7 @@ impl DurableType<IdAllocKey, IdAllocValue> for IdAlloc {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     pub key: String,
     pub value: u64,
@@ -743,7 +736,7 @@ impl DurableType<SettingKey, SettingValue> for Setting {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TimelineTimestamp {
     pub timeline: Timeline,
     pub ts: mz_repr::Timestamp,
@@ -767,7 +760,7 @@ impl DurableType<TimestampKey, TimestampValue> for TimelineTimestamp {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SystemConfiguration {
     pub name: String,
     pub value: String,
@@ -814,7 +807,7 @@ impl DurableType<SystemPrivilegesKey, SystemPrivilegesValue> for MzAclItem {
 // Structs used internally to represent on-disk state.
 
 /// A snapshot of the current on-disk state.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Snapshot {
     pub databases: BTreeMap<proto::DatabaseKey, proto::DatabaseValue>,
     pub schemas: BTreeMap<proto::SchemaKey, proto::SchemaValue>,

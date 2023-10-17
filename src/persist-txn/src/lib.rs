@@ -271,11 +271,12 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
 use mz_persist_client::batch::ProtoBatch;
+use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{ShardId, ShardIdSchema};
 use mz_persist_types::codec_impls::VecU8Schema;
-use mz_persist_types::{Codec, Codec64, StepForward};
+use mz_persist_types::{Codec, Codec64, Opaque, StepForward};
 use prost::Message;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
@@ -350,7 +351,7 @@ impl TxnsCodec for TxnsCodecDefault {
 }
 
 /// Helper for common logging for compare_and_append-ing a small amount of data.
-#[instrument(level = "debug", skip_all, fields(shard=%txns_or_data_write.shard_id()))]
+#[instrument(level = "debug", skip_all, fields(shard=%txns_or_data_write.shard_id(), ts=?new_upper))]
 pub(crate) async fn small_caa<S, F, K, V, T, D>(
     name: F,
     txns_or_data_write: &mut WriteHandle<K, V, T, D>,
@@ -465,7 +466,7 @@ pub(crate) async fn empty_caa<S, F, K, V, T, D>(
 /// the work must have already been done by someone else. (Think how our compute
 /// replicas race to compute some MATERIALIZED VIEW, but they're all guaranteed
 /// to get the same answer.)
-#[instrument(level = "debug", skip_all, fields(shard=%data_write.shard_id()))]
+#[instrument(level = "debug", skip_all, fields(shard=%data_write.shard_id(), ts=?commit_ts))]
 async fn apply_caa<K, V, T, D>(
     data_write: &mut WriteHandle<K, V, T, D>,
     batch_raw: &[u8],
@@ -536,6 +537,34 @@ async fn apply_caa<K, V, T, D>(
                 continue;
             }
         }
+    }
+}
+
+#[instrument(level = "debug", skip_all, fields(shard=%txns_since.shard_id(), ts=?new_since_ts))]
+pub(crate) async fn maybe_cads<T, O, C>(
+    txns_since: &mut SinceHandle<C::Key, C::Val, T, i64, O>,
+    new_since_ts: T,
+) where
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+    O: Opaque + Debug + Codec64,
+    C: TxnsCodec,
+{
+    // Fast-path, don't bother trying to CaDS if we're already past that
+    // since.
+    if !txns_since.since().less_than(&new_since_ts) {
+        return;
+    }
+    let token = txns_since.opaque().clone();
+    let res = txns_since
+        .maybe_compare_and_downgrade_since(&token, (&token, &Antichain::from_elem(new_since_ts)))
+        .await;
+    match res {
+        Some(Ok(_)) => {}
+        Some(Err(actual)) => {
+            mz_ore::halt!("fenced by another process @ {actual:?}. ours = {token:?}")
+        }
+        // We got rate-limited. No-op.
+        None => {}
     }
 }
 

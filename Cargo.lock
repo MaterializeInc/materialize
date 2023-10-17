@@ -3650,6 +3650,7 @@ dependencies = [
  "mz-orchestrator-tracing",
  "mz-ore",
  "mz-pgwire-common",
+ "mz-server-core",
  "num_cpus",
  "openssl",
  "semver",
@@ -3688,6 +3689,7 @@ dependencies = [
  "async-trait",
  "derivative",
  "futures",
+ "insta",
  "itertools",
  "mz-audit-log",
  "mz-compute-client",
@@ -4094,6 +4096,7 @@ dependencies = [
  "mz-repr",
  "mz-secrets",
  "mz-segment",
+ "mz-server-core",
  "mz-service",
  "mz-sql",
  "mz-sql-parser",
@@ -4391,6 +4394,7 @@ dependencies = [
  "mz-sql-lexer",
  "mz-sql-parser",
  "once_cell",
+ "regex",
  "ropey",
  "serde",
  "serde_json",
@@ -4575,12 +4579,10 @@ dependencies = [
  "serde",
  "serde_json",
  "smallvec",
- "socket2 0.4.9",
  "stacker",
  "tokio",
  "tokio-native-tls",
  "tokio-openssl",
- "tokio-stream",
  "tokio-test",
  "tonic",
  "tracing",
@@ -4697,6 +4699,7 @@ dependencies = [
  "mz-persist-types",
  "mz-timely-util",
  "prost",
+ "rand",
  "timely",
  "tokio",
  "tracing",
@@ -4797,6 +4800,7 @@ dependencies = [
  "mz-pgrepr",
  "mz-pgwire-common",
  "mz-repr",
+ "mz-server-core",
  "mz-sql",
  "openssl",
  "postgres",
@@ -4817,6 +4821,7 @@ dependencies = [
  "bytes",
  "bytesize",
  "mz-ore",
+ "mz-server-core",
  "tokio",
  "tokio-openssl",
  "tokio-postgres",
@@ -4980,6 +4985,7 @@ dependencies = [
  "regex",
  "ryu",
  "serde",
+ "serde-big-array",
  "serde_json",
  "smallvec",
  "thiserror",
@@ -5098,6 +5104,22 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-server-core"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "futures",
+ "mz-ore",
+ "openssl",
+ "socket2 0.4.9",
+ "tokio",
+ "tokio-stream",
+ "tracing",
  "workspace-hack",
 ]
 
@@ -7598,6 +7620,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde-big-array"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11fc7cc2c76d73e0f27ee52abbd64eec84d46f370c88371120433196934e4b7f"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "serde-value"
 version = "0.7.0"
 source = "git+https://github.com/MaterializeInc/serde-value.git#62c7e5f84ace6b7b5da48c46cb963be95d43aaab"
@@ -9513,6 +9544,7 @@ dependencies = [
  "sha2",
  "similar",
  "smallvec",
+ "socket2 0.4.9",
  "syn 1.0.107",
  "syn 2.0.18",
  "textwrap",

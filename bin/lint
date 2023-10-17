@@ -71,6 +71,7 @@ copyright_files=$(grep -vE \
     -e 'misc/completions/.*' \
     -e 'supply-chain/.*' \
     -e '.devcontainer/.*' \
+    -e 'snapshots/.*\.snap' \
     <<< "$files"
 )
 

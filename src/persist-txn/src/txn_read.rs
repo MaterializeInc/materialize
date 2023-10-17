@@ -23,7 +23,7 @@ use mz_persist_client::ShardId;
 use mz_persist_types::{Codec, Codec64, StepForward};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
-use tracing::debug;
+use tracing::{debug, instrument};
 
 use crate::error::NotRegistered;
 use crate::{TxnsCodec, TxnsCodecDefault, TxnsEntry};
@@ -167,7 +167,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
             .unwrap_or(&self.progress_exclusive)
             .clone();
         debug!(
-            "translate_snapshot {:.9} latest_write={:?} as_of={:?} empty_to={:?}: all={:?}",
+            "data_snapshot {:.9} latest_write={:?} as_of={:?} empty_to={:?}: all={:?}",
             data_id.to_string(),
             latest_write,
             as_of,
@@ -211,9 +211,9 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
         let ret = all
             .last()
             .filter(|x| ts <= **x)
-            .map(|ts| DataListenNext::ReadDataPast(ts.clone()));
+            .map(|ts| DataListenNext::ReadDataTo(ts.step_forward()));
         debug!(
-            "{:.9} data_listen_next 1 {:?}->{:?}: all={:?}",
+            "data_listen_next {:.9} 1 {:?}->{:?}: all={:?}",
             data_id.to_string(),
             ts,
             ret,
@@ -227,7 +227,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
         // past ts.
         if ts < self.progress_exclusive {
             debug!(
-                "{:.9} data_listen_next 2 {:?}->{:?}: all={:?}",
+                "data_listen_next {:.9} 2 {:?}->{:?}: all={:?}",
                 data_id.to_string(),
                 ts,
                 self.progress_exclusive,
@@ -239,7 +239,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
         }
         // Nope, all caught up, we have to wait.
         debug!(
-            "{:.9} data_listen_next {:?} waiting for progress",
+            "data_listen_next {:.9} {:?} waiting for progress",
             data_id.to_string(),
             ts
         );
@@ -287,6 +287,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
     }
 
     /// Invariant: afterward, self.progress_exclusive will be > ts
+    #[instrument(level = "debug", skip_all, fields(ts = ?ts))]
     pub(crate) async fn update_gt(&mut self, ts: &T) {
         self.update(|progress_exclusive| progress_exclusive > ts)
             .await;
@@ -295,6 +296,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
     }
 
     /// Invariant: afterward, self.progress_exclusive will be >= ts
+    #[instrument(level = "debug", skip_all, fields(ts = ?ts))]
     pub(crate) async fn update_ge(&mut self, ts: &T) {
         self.update(|progress_exclusive| progress_exclusive >= ts)
             .await;
@@ -466,6 +468,7 @@ pub struct DataSnapshot<T> {
 impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
     /// Unblocks reading a snapshot at `self.as_of` by waiting for the latest
     /// write before that time and then running an empty CaA if necessary.
+    #[instrument(level = "debug", skip_all, fields(shard = %self.data_id, ts = ?self.as_of))]
     pub(crate) async fn unblock_read<K, V, D>(&self, mut data_write: WriteHandle<K, V, T, D>)
     where
         K: Debug + Codec,
@@ -592,9 +595,9 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
 #[derive(Debug)]
 #[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
 pub enum DataListenNext<T> {
-    /// Read the data shard normally, until this timestamp is less than what has
-    /// been read.
-    ReadDataPast(T),
+    /// Read the data shard normally, until this timestamp is less_equal what
+    /// has been read.
+    ReadDataTo(T),
     /// It is known there there are no writes between the progress given to the
     /// `data_listen_next` call and this timestamp. Advance the data shard
     /// listen progress to this (exclusive) frontier.
@@ -754,7 +757,7 @@ mod tests {
         // we're able to read at the register ts.
         cache.push_register(d0, 4, 1);
         cache.progress_exclusive = 5;
-        assert_eq!(cache.data_listen_next(&d0, 4), Ok(ReadDataPast(4)));
+        assert_eq!(cache.data_listen_next(&d0, 4), Ok(ReadDataTo(5)));
         assert_eq!(cache.data_listen_next(&d0, 5), Ok(WaitForTxnsProgress));
 
         // Advance time. Now we can resolve queries at higher times. Nothing got
@@ -767,7 +770,7 @@ mod tests {
         // to wait for the data upper to advance past the commit ts.
         cache.push_append(d0, vec![0xA0], 6, 1);
         cache.progress_exclusive = 7;
-        assert_eq!(cache.data_listen_next(&d0, 6), Ok(ReadDataPast(6)));
+        assert_eq!(cache.data_listen_next(&d0, 6), Ok(ReadDataTo(7)));
 
         // An unrelated batch is another empty space guarantee. Ditto retracting
         // the batch.
@@ -782,10 +785,10 @@ mod tests {
         // it's silly (inefficient) to walk through the state machine for a big
         // range of time once you know of a later write that advances the
         // physical upper.
-        assert_eq!(cache.data_listen_next(&d0, 3), Ok(ReadDataPast(6)));
-        assert_eq!(cache.data_listen_next(&d0, 4), Ok(ReadDataPast(6)));
-        assert_eq!(cache.data_listen_next(&d0, 5), Ok(ReadDataPast(6)));
-        assert_eq!(cache.data_listen_next(&d0, 6), Ok(ReadDataPast(6)));
+        assert_eq!(cache.data_listen_next(&d0, 3), Ok(ReadDataTo(7)));
+        assert_eq!(cache.data_listen_next(&d0, 4), Ok(ReadDataTo(7)));
+        assert_eq!(cache.data_listen_next(&d0, 5), Ok(ReadDataTo(7)));
+        assert_eq!(cache.data_listen_next(&d0, 6), Ok(ReadDataTo(7)));
     }
 
     #[mz_ore::test(tokio::test)]

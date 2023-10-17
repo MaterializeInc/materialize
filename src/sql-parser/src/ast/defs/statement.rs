@@ -18,10 +18,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// `EnumKind` unconditionally introduces a lifetime. TODO: remove this once
-// https://github.com/rust-lang/rust-clippy/pull/9037 makes it into stable
-#![allow(clippy::extra_unused_lifetimes)]
-
 use std::fmt;
 
 use enum_kinds::EnumKind;
@@ -2456,6 +2452,9 @@ pub enum ShowObjectType<T: AstInfo> {
         object_type: Option<ObjectType>,
         role: Option<T::RoleName>,
     },
+    RoleMembership {
+        role: Option<T::RoleName>,
+    },
 }
 /// `SHOW <object>S`
 ///
@@ -2496,6 +2495,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ShowObjectType::Subsource { .. } => "SUBSOURCES",
             ShowObjectType::Privileges { .. } => "PRIVILEGES",
             ShowObjectType::DefaultPrivileges { .. } => "DEFAULT PRIVILEGES",
+            ShowObjectType::RoleMembership { .. } => "ROLE MEMBERSHIP",
         });
 
         if let ShowObjectType::Index { on_object, .. } = &self.object_type {
@@ -2560,6 +2560,14 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
                 f.write_str(" FOR ");
                 f.write_node(role);
             }
+        }
+
+        if let ShowObjectType::RoleMembership {
+            role: Some(role), ..
+        } = &self.object_type
+        {
+            f.write_str(" FOR ");
+            f.write_node(role);
         }
 
         if let Some(filter) = &self.filter {

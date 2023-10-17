@@ -103,11 +103,11 @@ use mz_frontegg_auth::Authentication as FronteggAuthentication;
 use mz_ore::future::OreFutureExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
-use mz_ore::server::{ConnectionStream, ListenerHandle, TlsCertConfig};
 use mz_ore::task;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::usage::StorageUsageClient;
 use mz_secrets::SecretsController;
+use mz_server_core::{ConnectionStream, ListenerHandle, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_types::connections::ConnectionContext;
@@ -228,6 +228,11 @@ pub struct ListenersConfig {
     pub sql_listen_addr: SocketAddr,
     /// The IP address and port to listen for HTTP connections on.
     pub http_listen_addr: SocketAddr,
+    /// The IP address and port to listen on for pgwire connections from the cloud
+    /// balancer pods.
+    pub balancer_sql_listen_addr: SocketAddr,
+    /// The IP address and port to listen for HTTP connections from the cloud balancer pods.
+    pub balancer_http_listen_addr: SocketAddr,
     /// The IP address and port to listen for pgwire connections from the cloud
     /// system on.
     pub internal_sql_listen_addr: SocketAddr,
@@ -240,6 +245,8 @@ pub struct Listeners {
     // Drop order matters for these fields.
     sql: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
     http: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
+    balancer_sql: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
+    balancer_http: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
     internal_sql: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
     internal_http: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
 }
@@ -260,17 +267,23 @@ impl Listeners {
         ListenersConfig {
             sql_listen_addr,
             http_listen_addr,
+            balancer_sql_listen_addr,
+            balancer_http_listen_addr,
             internal_sql_listen_addr,
             internal_http_listen_addr,
         }: ListenersConfig,
     ) -> Result<Listeners, anyhow::Error> {
-        let sql = mz_ore::server::listen(sql_listen_addr).await?;
-        let http = mz_ore::server::listen(http_listen_addr).await?;
-        let internal_sql = mz_ore::server::listen(internal_sql_listen_addr).await?;
-        let internal_http = mz_ore::server::listen(internal_http_listen_addr).await?;
+        let sql = mz_server_core::listen(sql_listen_addr).await?;
+        let http = mz_server_core::listen(http_listen_addr).await?;
+        let balancer_sql = mz_server_core::listen(balancer_sql_listen_addr).await?;
+        let balancer_http = mz_server_core::listen(balancer_http_listen_addr).await?;
+        let internal_sql = mz_server_core::listen(internal_sql_listen_addr).await?;
+        let internal_http = mz_server_core::listen(internal_http_listen_addr).await?;
         Ok(Listeners {
             sql,
             http,
+            balancer_sql,
+            balancer_http,
             internal_sql,
             internal_http,
         })
@@ -282,6 +295,8 @@ impl Listeners {
         Listeners::bind(ListenersConfig {
             sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             http_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+            balancer_sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+            balancer_http_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             internal_sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             internal_http_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         })
@@ -296,6 +311,8 @@ impl Listeners {
         let Listeners {
             sql: (sql_listener, sql_conns),
             http: (http_listener, http_conns),
+            balancer_sql: (balancer_sql_listener, balancer_sql_conns),
+            balancer_http: (balancer_http_listener, balancer_http_conns),
             internal_sql: (internal_sql_listener, internal_sql_conns),
             internal_http: (internal_http_listener, internal_http_conns),
         } = self;
@@ -309,9 +326,9 @@ impl Listeners {
             None => (None, None),
             Some(tls_config) => {
                 let context = tls_config.context()?;
-                let pgwire_tls = mz_ore::server::TlsConfig {
+                let pgwire_tls = mz_server_core::TlsConfig {
                     context: context.clone(),
-                    mode: mz_ore::server::TlsMode::Require,
+                    mode: mz_server_core::TlsMode::Require,
                 };
                 let http_tls = http::TlsConfig {
                     context,
@@ -343,7 +360,7 @@ impl Listeners {
                 ready_to_promote: ready_to_promote_rx,
                 internal_console_redirect_url: config.internal_console_redirect_url,
             });
-            mz_ore::server::serve(internal_http_conns, internal_http_server)
+            mz_server_core::serve(internal_http_conns, internal_http_server)
         });
 
         let mut openable_adapter_storage = mz_catalog::stash_backed_catalog_state(StashConfig {
@@ -510,7 +527,7 @@ impl Listeners {
                 internal: false,
                 active_connection_count: Arc::clone(&active_connection_count),
             });
-            mz_ore::server::serve(sql_conns, sql_server)
+            mz_server_core::serve(sql_conns, sql_server)
         });
 
         // Launch internal SQL server.
@@ -523,16 +540,16 @@ impl Listeners {
                     //
                     // TODO(benesch): migrate all internal applications to TLS and
                     // remove `TlsMode::Allow`.
-                    pgwire_tls.mode = mz_ore::server::TlsMode::Allow;
+                    pgwire_tls.mode = mz_server_core::TlsMode::Allow;
                     pgwire_tls
                 }),
                 adapter_client: adapter_client.clone(),
                 frontegg: None,
-                metrics,
+                metrics: metrics.clone(),
                 internal: true,
                 active_connection_count: Arc::clone(&active_connection_count),
             });
-            mz_ore::server::serve(internal_sql_conns, internal_sql_server)
+            mz_server_core::serve(internal_sql_conns, internal_sql_server)
         });
 
         // Launch HTTP server.
@@ -542,6 +559,23 @@ impl Listeners {
                 tls: http_tls,
                 frontegg: config.frontegg.clone(),
                 adapter_client: adapter_client.clone(),
+                allowed_origin: config.cors_allowed_origin.clone(),
+                active_connection_count: Arc::clone(&active_connection_count),
+                concurrent_webhook_req_count: config
+                    .concurrent_webhook_req_count
+                    .unwrap_or(http::WEBHOOK_CONCURRENCY_LIMIT),
+                metrics: http_metrics.clone(),
+            });
+            mz_server_core::serve(http_conns, http_server)
+        });
+
+        // Launch HTTP server exposed to balancers
+        task::spawn(|| "balancer_http_server", {
+            let balancer_http_server = HttpServer::new(HttpConfig {
+                // TODO(Alex): implement self-signed TLS for all internal connections
+                tls: None,
+                frontegg: config.frontegg.clone(),
+                adapter_client: adapter_client.clone(),
                 allowed_origin: config.cors_allowed_origin,
                 active_connection_count: Arc::clone(&active_connection_count),
                 concurrent_webhook_req_count: config
@@ -549,7 +583,20 @@ impl Listeners {
                     .unwrap_or(http::WEBHOOK_CONCURRENCY_LIMIT),
                 metrics: http_metrics,
             });
-            mz_ore::server::serve(http_conns, http_server)
+            mz_server_core::serve(balancer_http_conns, balancer_http_server)
+        });
+
+        // Launch SQL server exposed to balancers
+        task::spawn(|| "balancer_sql_server", {
+            let balancer_sql_server = mz_pgwire::Server::new(mz_pgwire::Config {
+                tls: None,
+                adapter_client: adapter_client.clone(),
+                frontegg: config.frontegg.clone(),
+                metrics,
+                internal: false,
+                active_connection_count: Arc::clone(&active_connection_count),
+            });
+            mz_server_core::serve(balancer_sql_conns, balancer_sql_server)
         });
 
         // Start telemetry reporting loop.
@@ -578,6 +625,8 @@ impl Listeners {
         Ok(Server {
             sql_listener,
             http_listener,
+            balancer_sql_listener,
+            balancer_http_listener,
             internal_sql_listener,
             internal_http_listener,
             _adapter_handle: adapter_handle,
@@ -606,6 +655,8 @@ pub struct Server {
     // Drop order matters for these fields.
     sql_listener: ListenerHandle,
     http_listener: ListenerHandle,
+    balancer_sql_listener: ListenerHandle,
+    balancer_http_listener: ListenerHandle,
     internal_sql_listener: ListenerHandle,
     internal_http_listener: ListenerHandle,
     _adapter_handle: mz_adapter::Handle,
@@ -618,6 +669,14 @@ impl Server {
 
     pub fn http_local_addr(&self) -> SocketAddr {
         self.http_listener.local_addr()
+    }
+
+    pub fn balancer_sql_local_addr(&self) -> SocketAddr {
+        self.balancer_sql_listener.local_addr()
+    }
+
+    pub fn balancer_http_local_addr(&self) -> SocketAddr {
+        self.balancer_http_listener.local_addr()
     }
 
     pub fn internal_sql_local_addr(&self) -> SocketAddr {

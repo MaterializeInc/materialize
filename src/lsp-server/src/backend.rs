@@ -16,6 +16,7 @@
 // The original source code is subject to the terms of the <APACHE|MIT> license, a copy
 // of which can be found in the LICENSE file at the root of this repository.
 
+use regex::Regex;
 use ropey::Rope;
 use serde_json::Value;
 use tower_lsp::jsonrpc::Result;
@@ -185,6 +186,7 @@ struct TextDocumentItem {
 }
 
 impl Backend {
+    /// Parses the SQL code and publishes diagnosis about it.
     async fn parse(&self, params: TextDocumentItem) {
         self.client
             .log_message(MessageType::INFO, format!("on_change {:?}", params.uri))
@@ -196,11 +198,7 @@ impl Backend {
 
         match parse_result {
             // The parser will return Ok when everything is well written.
-            Ok(results) => {
-                self.client
-                    .log_message(MessageType::INFO, format!("Results: {:?}", results))
-                    .await;
-
+            Ok(_results) => {
                 // Clear the diagnostics in case there were issues before.
                 self.client
                     .publish_diagnostics(params.uri.clone(), vec![], Some(params.version))
@@ -209,15 +207,19 @@ impl Backend {
 
             // If there is at least one error the parser will return Err.
             Err(err_parsing) => {
-                self.client
-                    .log_message(MessageType::INFO, format!("Error: {:?}", err_parsing))
-                    .await;
-
                 let error_position = err_parsing.error.pos;
                 let start = offset_to_position(error_position, &rope).unwrap();
                 let end = start;
-                let diagnostics =
-                    Diagnostic::new_simple(Range { start, end }, err_parsing.error.message);
+                let range = Range { start, end };
+
+                // Check for Jinja code (dbt)
+                // If Jinja code is detected, inform that parsing is not available..
+                if self.is_jinja(&err_parsing.error.message, params.text) {
+                    // Do not send any new diagnostics
+                    return;
+                }
+
+                let diagnostics = Diagnostic::new_simple(range, err_parsing.error.message);
 
                 self.client
                     .publish_diagnostics(
@@ -228,6 +230,28 @@ impl Backend {
                     .await;
             }
         }
+    }
+
+    /// Detects if the code contains Jinja code using RegEx and
+    /// looks for Jinja's delimiters:
+    /// - {% ... %} for Statements
+    /// - {{ ... }} for Expressions to print to the template output
+    /// - {# ... #} for Comments not included in the template output
+    ///
+    /// Reference: <https://jinja.palletsprojects.com/en/3.0.x/templates/#synopsis>
+    ///
+    /// The trade-off is that the regex is simple, but it may detect some code as Jinja
+    /// when it is not actually Jinja. For example: `SELECT '{{ 100 }}';`.
+    /// To handle such cases more successfully, the server will first attempt to parse the
+    /// file, and if it fails, it will then check if it contains Jinja code.
+    fn contains_jinja_code(&self, s: &str) -> bool {
+        let re = Regex::new(r"\{\{.*?\}\}|\{%.*?%\}|\{#.*?#\}").unwrap();
+        re.is_match(s)
+    }
+
+    /// Returns true if Jinja code is detected.
+    fn is_jinja(&self, s: &str, code: String) -> bool {
+        s == "unexpected character in input: {" && self.contains_jinja_code(&code)
     }
 }
 
