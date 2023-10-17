@@ -169,10 +169,7 @@ where
         // TODO(vmarcos): We should implement arrangement specialization here (#22103).
         CollectionBundle::from_columns(
             0..key_arity,
-            ArrangementFlavor::Local(
-                SpecializedArrangement::RowRow(arrangement),
-                errs.mz_arrange("Arrange bundle err"),
-            ),
+            ArrangementFlavor::Local(arrangement, errs.mz_arrange("Arrange bundle err")),
         )
     }
 
@@ -182,44 +179,44 @@ where
         collection: Collection<S, (Row, Row), Diff>,
         errors: &mut Vec<Collection<S, DataflowError, Diff>>,
         key_arity: usize,
-    ) -> Arrangement<S, Row>
+    ) -> SpecializedArrangement<S>
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
-        let arrangement: Arrangement<S, Row> = match plan {
+        let arrangement = match plan {
             // If we have no aggregations or just a single type of reduction, we
             // can go ahead and render them directly.
             ReducePlan::Distinct => {
                 let (arranged_output, errs) = self.build_distinct(collection);
                 errors.push(errs);
-                arranged_output
+                SpecializedArrangement::RowUnit(arranged_output)
             }
             ReducePlan::Accumulable(expr) => {
                 let (arranged_output, errs) = self.build_accumulable(collection, expr);
                 errors.push(errs);
-                arranged_output
+                SpecializedArrangement::RowRow(arranged_output)
             }
             ReducePlan::Hierarchical(HierarchicalPlan::Monotonic(expr)) => {
                 let (output, errs) = self.build_monotonic(collection, expr);
                 errors.push(errs);
-                output
+                SpecializedArrangement::RowRow(output)
             }
             ReducePlan::Hierarchical(HierarchicalPlan::Bucketed(expr)) => {
                 let (output, errs) = self.build_bucketed(collection, expr);
                 if let Some(e) = errs {
                     errors.push(e);
                 }
-                output
+                SpecializedArrangement::RowRow(output)
             }
             ReducePlan::Basic(BasicPlan::Single(index, aggr)) => {
                 let (output, errs) = self.build_basic_aggregate(collection, index, &aggr, true);
                 errors.push(errs.expect("validation should have occurred as it was requested"));
-                output
+                SpecializedArrangement::RowRow(output)
             }
             ReducePlan::Basic(BasicPlan::Multiple(aggrs)) => {
                 let (output, errs) = self.build_basic_aggregates(collection, aggrs);
                 errors.push(errs);
-                output
+                SpecializedArrangement::RowRow(output)
             }
             // Otherwise, we need to render something different for each type of
             // reduction, and then stitch them together.
@@ -238,8 +235,24 @@ where
                     let r#type = ReductionType::try_from(&plan)
                         .expect("only representable reduction types were used above");
 
-                    let arrangement =
-                        self.render_reduce_plan_inner(plan, collection.clone(), errors, key_arity);
+                    let arrangement = match self.render_reduce_plan_inner(
+                        plan,
+                        collection.clone(),
+                        errors,
+                        key_arity,
+                    ) {
+                        SpecializedArrangement::Bytes9Row(_, _) => {
+                            unreachable!(
+                                "Unexpected Bytes9Row arrangement in reduce collation rendering"
+                            )
+                        }
+                        SpecializedArrangement::RowUnit(_) => {
+                            unreachable!(
+                                "Unexpected RowUnit arrangement in reduce collation rendering"
+                            )
+                        }
+                        SpecializedArrangement::RowRow(arranged) => arranged,
+                    };
                     to_collate.push((r#type, arrangement));
                 }
 
@@ -247,7 +260,7 @@ where
                 let (oks, errs) =
                     self.build_collation(to_collate, expr.aggregate_types, &mut collection.scope());
                 errors.push(errs);
-                oks
+                SpecializedArrangement::RowRow(oks)
             }
         };
         arrangement
@@ -423,22 +436,29 @@ where
     fn build_distinct<S>(
         &self,
         collection: Collection<S, (Row, Row), Diff>,
-    ) -> (Arrangement<S, Row>, Collection<S, DataflowError, Diff>)
+    ) -> (
+        KeyValArrangement<S, Row, ()>,
+        Collection<S, DataflowError, Diff>,
+    )
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
         let error_logger = self.error_logger();
 
         let (output, errors) = collection
-            .mz_arrange::<RowSpine<_, _, _, _>>("Arranged DistinctBy")
+            .map(|(k, v)| {
+                assert!(v.is_empty());
+                (k, ())
+            })
+            .mz_arrange::<RowSpine<_, _, _, _>>("Arranged DistinctBy [val: empty]")
             .reduce_pair::<_, RowSpine<_, _, _, _>, _, ErrValSpine<_, _, _>>(
-                "DistinctBy",
+                "DistinctBy [val: empty]",
                 "DistinctByErrorCheck",
                 |_key, _input, output| {
-                    // We're pushing an empty row here because the key is implicitly added by the
+                    // We're pushing a unit value here because the key is implicitly added by the
                     // arrangement, and the permutation logic takes care of using the key part of the
                     // output.
-                    output.push((Row::default(), 1));
+                    output.push(((), 1));
                 },
                 move |key, input: &[(_, Diff)], output| {
                     for (_, count) in input.iter() {

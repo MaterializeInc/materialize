@@ -67,7 +67,7 @@ ALTER SYSTEM SET enable_specialized_arrangements = true
   CREATE MATERIALIZED VIEW empty_val_join AS
   SELECT v.b
   FROM v_empty AS v
-      JOIN t AS t ON v.a = t.a AND v.b = t.b;
+      JOIN t ON v.a = t.a AND v.b = t.b;
 materialize.public.empty_val_join:
   Join::Linear
     linear_stage[0]
@@ -97,7 +97,7 @@ Used Indexes:
 > CREATE MATERIALIZED VIEW empty_val_join AS
   SELECT v.b
   FROM v_empty AS v
-      JOIN t AS t ON v.a = t.a AND v.b = t.b;
+      JOIN t ON v.a = t.a AND v.b = t.b;
 
 > SELECT * FROM empty_val_join;
 42
@@ -106,6 +106,52 @@ Used Indexes:
   FROM mz_internal.mz_dataflow_operator_dataflows
   WHERE name LIKE '%ArrangeBy%[val: empty]%';
 2
+
+? EXPLAIN PHYSICAL PLAN FOR
+  CREATE MATERIALIZED VIEW empty_val_distinct_join AS
+  SELECT v.b
+  FROM v_empty AS v
+      JOIN (SELECT DISTINCT a, b FROM t) AS t ON v.a = t.a AND v.b = t.b;
+materialize.public.empty_val_distinct_join:
+  Join::Linear
+    linear_stage[0]
+      closure
+        project=(#1)
+        filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
+      lookup={ relation=0, key=[#0, #1] }
+      stream={ key=[#0, #1], thinning=() }
+    source={ relation=1, key=[#0, #1] }
+    Get::PassArrangements materialize.public.v_empty
+      raw=false
+      arrangements[0]={ key=[#0, #1], permutation=id, thinning=() }
+      types=[integer?, integer?]
+    Reduce::Distinct
+      val_plan
+        project=()
+      key_plan=id
+      Get::Collection materialize.public.t
+        raw=true
+
+Source materialize.public.t
+  filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
+
+Used Indexes:
+  - materialize.public.v_empty_primary_idx (differential join)
+
+> CREATE MATERIALIZED VIEW empty_val_distinct_join AS
+  SELECT v.b
+  FROM v_empty AS v
+      JOIN (SELECT DISTINCT a, b FROM t) AS t ON v.a = t.a AND v.b = t.b;
+
+> SELECT * FROM empty_val_distinct_join;
+42
+
+# Note DistinctBy introduces two arrangements, one input and one output one.
+> SELECT COUNT(*)
+  FROM mz_internal.mz_dataflow_operator_dataflows
+  WHERE name LIKE '%ArrangeBy%[val: empty]%'
+     OR name LIKE '%DistinctBy%[val: empty]%';
+4
 
 # Test that single-column indexes with fixed-length 8-byte types use specialized arrangements.
 > CREATE TABLE t_boolean (a boolean NOT NULL);
