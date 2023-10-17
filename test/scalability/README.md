@@ -68,6 +68,13 @@ In both of those cases, Materialize, CRDB and Python will run within the same ma
 ./mzcompose run default --target=remote \--materialize-url="postgres://user:password@host:6875/materialize?sslmode=require" --cluster-name= ...
 ```
 
+## Detecting regressions
+A regression is defined as a deterioration in performance (transactions per seconds) of more than 10% for a given
+workload and count factor compared to the baseline.
+
+To detect a regression, add the parameter `--regression-against` and specify a target. The specified target will be
+added to the `--target`s if it is not already present.
+
 ## Specifying the concurrencies to be benchmarked
 
 The framework uses an exponential function to determine what concurrencies to test. By default, exponent base of 2 is used, with a default
