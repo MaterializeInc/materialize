@@ -273,7 +273,7 @@ impl<'a> Transaction<'a> {
 
     /// Iterates over a collection.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) async fn iter<K, V>(
+    pub async fn iter<K, V>(
         &self,
         collection: StashCollection<K, V>,
     ) -> Result<Vec<((K, V), Timestamp, Diff)>, StashError>

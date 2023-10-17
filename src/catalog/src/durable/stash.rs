@@ -9,7 +9,7 @@
 
 use async_trait::async_trait;
 use derivative::Derivative;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -26,11 +26,12 @@ use mz_ore::soft_assert_eq;
 use mz_proto::{ProtoType, RustType};
 use mz_repr::Timestamp;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
-use mz_stash::{AppendBatch, DebugStashFactory, Stash, StashFactory, TypedCollection};
+use mz_stash::{AppendBatch, DebugStashFactory, Diff, Stash, StashFactory, TypedCollection};
 use mz_stash_types::objects::proto;
 use mz_stash_types::StashError;
 use mz_storage_types::sources::Timeline;
 
+use crate::durable::debug::{Collection, CollectionTrace, Trace};
 use crate::durable::initialize::DEPLOY_GENERATION;
 use crate::durable::objects::{
     AuditLogKey, DurableType, IdAllocKey, IdAllocValue, Snapshot, StorageUsageKey,
@@ -38,8 +39,8 @@ use crate::durable::objects::{
 };
 use crate::durable::transaction::{Transaction, TransactionBatch};
 use crate::durable::{
-    initialize, BootstrapArgs, CatalogError, DurableCatalogState, Epoch,
-    OpenableDurableCatalogState, ReadOnlyDurableCatalogState,
+    initialize, BootstrapArgs, CatalogError, DebugCatalogState, DurableCatalogError,
+    DurableCatalogState, Epoch, OpenableDurableCatalogState, ReadOnlyDurableCatalogState,
 };
 
 pub const SETTING_COLLECTION: TypedCollection<proto::SettingKey, proto::SettingValue> =
@@ -209,6 +210,13 @@ impl OpenableDurableCatalogState for OpenableConnection {
         retry_open(stash, now, bootstrap_args, deploy_generation).await
     }
 
+    #[tracing::instrument(name = "storage::open_debug", level = "info", skip_all)]
+    async fn open_debug(mut self: Box<Self>) -> Result<DebugCatalogState, CatalogError> {
+        self.open_stash().await?;
+        let stash = self.stash.take().expect("opened above");
+        Ok(DebugCatalogState::Stash(stash))
+    }
+
     async fn is_initialized(&mut self) -> Result<bool, CatalogError> {
         let stash = match &mut self.stash {
             None => match self.open_stash_read_only().await {
@@ -242,6 +250,141 @@ impl OpenableDurableCatalogState for OpenableConnection {
             .map(|v| v.value);
 
         Ok(deployment_generation)
+    }
+
+    #[tracing::instrument(level = "info", skip_all)]
+    async fn trace(&mut self) -> Result<Trace, CatalogError> {
+        fn stringify<T: Collection>(
+            values: Vec<((T::Key, T::Value), mz_stash::Timestamp, Diff)>,
+        ) -> CollectionTrace<T> {
+            let values = values
+                .into_iter()
+                .map(|((k, v), ts, diff)| ((k, v), ts.to_string(), diff))
+                .collect();
+            CollectionTrace { values }
+        }
+
+        let stash = match self.open_stash_read_only().await {
+            Err(e) if e.can_recover_with_write_mode() => {
+                return Err(CatalogError::Durable(DurableCatalogError::Uninitialized))
+            }
+            res => res?,
+        };
+
+        let (
+            audit_log,
+            clusters,
+            introspection_sources,
+            cluster_replicas,
+            comments,
+            configs,
+            databases,
+            default_privileges,
+            id_allocator,
+            items,
+            roles,
+            schemas,
+            settings,
+            storage_usage,
+            timestamps,
+            system_object_mappings,
+            system_configurations,
+            system_privileges,
+        ): (
+            Vec<((proto::AuditLogKey, ()), _, _)>,
+            Vec<((proto::ClusterKey, proto::ClusterValue), _, _)>,
+            Vec<(
+                (
+                    proto::ClusterIntrospectionSourceIndexKey,
+                    proto::ClusterIntrospectionSourceIndexValue,
+                ),
+                _,
+                _,
+            )>,
+            Vec<((proto::ClusterReplicaKey, proto::ClusterReplicaValue), _, _)>,
+            Vec<((proto::CommentKey, proto::CommentValue), _, _)>,
+            Vec<((proto::ConfigKey, proto::ConfigValue), _, _)>,
+            Vec<((proto::DatabaseKey, proto::DatabaseValue), _, _)>,
+            Vec<(
+                (proto::DefaultPrivilegesKey, proto::DefaultPrivilegesValue),
+                _,
+                _,
+            )>,
+            Vec<((proto::IdAllocKey, proto::IdAllocValue), _, _)>,
+            Vec<((proto::ItemKey, proto::ItemValue), _, _)>,
+            Vec<((proto::RoleKey, proto::RoleValue), _, _)>,
+            Vec<((proto::SchemaKey, proto::SchemaValue), _, _)>,
+            Vec<((proto::SettingKey, proto::SettingValue), _, _)>,
+            Vec<((proto::StorageUsageKey, ()), _, _)>,
+            Vec<((proto::TimestampKey, proto::TimestampValue), _, _)>,
+            Vec<((proto::GidMappingKey, proto::GidMappingValue), _, _)>,
+            Vec<(
+                (
+                    proto::ServerConfigurationKey,
+                    proto::ServerConfigurationValue,
+                ),
+                _,
+                _,
+            )>,
+            Vec<(
+                (proto::SystemPrivilegesKey, proto::SystemPrivilegesValue),
+                _,
+                _,
+            )>,
+        ) = stash
+            .with_transaction(|tx| {
+                Box::pin(async move {
+                    // Peek the catalog collections in any order and a single transaction.
+                    futures::try_join!(
+                        tx.iter(tx.collection(AUDIT_LOG_COLLECTION.name()).await?),
+                        tx.iter(tx.collection(CLUSTER_COLLECTION.name()).await?),
+                        tx.iter(
+                            tx.collection(CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION.name())
+                                .await?,
+                        ),
+                        tx.iter(tx.collection(CLUSTER_REPLICA_COLLECTION.name()).await?),
+                        tx.iter(tx.collection(COMMENTS_COLLECTION.name()).await?),
+                        tx.iter(tx.collection(CONFIG_COLLECTION.name()).await?),
+                        tx.iter(tx.collection(DATABASES_COLLECTION.name()).await?),
+                        tx.iter(tx.collection(DEFAULT_PRIVILEGES_COLLECTION.name()).await?),
+                        tx.iter(tx.collection(ID_ALLOCATOR_COLLECTION.name()).await?),
+                        tx.iter(tx.collection(ITEM_COLLECTION.name()).await?),
+                        tx.iter(tx.collection(ROLES_COLLECTION.name()).await?),
+                        tx.iter(tx.collection(SCHEMAS_COLLECTION.name()).await?),
+                        tx.iter(tx.collection(SETTING_COLLECTION.name()).await?),
+                        tx.iter(tx.collection(STORAGE_USAGE_COLLECTION.name()).await?),
+                        tx.iter(tx.collection(TIMESTAMP_COLLECTION.name()).await?),
+                        tx.iter(tx.collection(SYSTEM_GID_MAPPING_COLLECTION.name()).await?),
+                        tx.iter(
+                            tx.collection(SYSTEM_CONFIGURATION_COLLECTION.name())
+                                .await?
+                        ),
+                        tx.iter(tx.collection(SYSTEM_PRIVILEGES_COLLECTION.name()).await?),
+                    )
+                })
+            })
+            .await?;
+
+        Ok(Trace {
+            audit_log: stringify(audit_log),
+            clusters: stringify(clusters),
+            introspection_sources: stringify(introspection_sources),
+            cluster_replicas: stringify(cluster_replicas),
+            comments: stringify(comments),
+            configs: stringify(configs),
+            databases: stringify(databases),
+            default_privileges: stringify(default_privileges),
+            id_allocator: stringify(id_allocator),
+            items: stringify(items),
+            roles: stringify(roles),
+            schemas: stringify(schemas),
+            settings: stringify(settings),
+            storage_usage: stringify(storage_usage),
+            timestamps: stringify(timestamps),
+            system_object_mappings: stringify(system_object_mappings),
+            system_configurations: stringify(system_configurations),
+            system_privileges: stringify(system_privileges),
+        })
     }
 
     async fn expire(self) {
@@ -828,6 +971,43 @@ impl DurableCatalogState for Connection {
     }
 }
 
+// Debug methods.
+
+/// Manually update value of `key` in collection `T` to `value`.
+#[tracing::instrument(level = "info", skip(stash))]
+pub(crate) async fn debug_edit<T: Collection>(
+    stash: &mut Stash,
+    key: T::Key,
+    value: T::Value,
+) -> Result<Option<T::Value>, CatalogError>
+where
+    T::Key: mz_stash::Data + Clone + 'static,
+    T::Value: mz_stash::Data + Clone + 'static,
+{
+    let stash_collection = T::stash_collection();
+    let (prev, _next) = stash_collection
+        .upsert_key(stash, key, move |_| Ok::<_, CatalogError>(value))
+        .await??;
+    Ok(prev)
+}
+
+/// Manually delete `key` from collection `T`.
+#[tracing::instrument(level = "info", skip(stash))]
+pub(crate) async fn debug_delete<T: Collection>(
+    stash: &mut Stash,
+    key: T::Key,
+) -> Result<(), CatalogError>
+where
+    T::Key: mz_stash::Data + Clone + 'static,
+    T::Value: mz_stash::Data + Clone,
+{
+    let stash_collection = T::stash_collection();
+    stash_collection
+        .delete_keys(stash, BTreeSet::from([key]))
+        .await?;
+    Ok(())
+}
+
 pub const ALL_COLLECTIONS: &[&str] = &[
     AUDIT_LOG_COLLECTION.name(),
     CLUSTER_COLLECTION.name(),
@@ -849,17 +1029,17 @@ pub const ALL_COLLECTIONS: &[&str] = &[
     TIMESTAMP_COLLECTION.name(),
 ];
 
-/// A [`DebugOpenableConnection`] represent a struct capable of opening a debug connection to the
+/// A [`TestOpenableConnection`] represent a struct capable of opening a debug connection to the
 /// stash for usage in tests.
 #[derive(Debug)]
-pub struct DebugOpenableConnection<'a> {
+pub struct TestOpenableConnection<'a> {
     _debug_stash_factory: &'a DebugStashFactory,
     openable_connection: Box<OpenableConnection>,
 }
 
-impl DebugOpenableConnection<'_> {
-    pub(crate) fn new(debug_stash_factory: &DebugStashFactory) -> DebugOpenableConnection {
-        DebugOpenableConnection {
+impl TestOpenableConnection<'_> {
+    pub(crate) fn new(debug_stash_factory: &DebugStashFactory) -> TestOpenableConnection {
+        TestOpenableConnection {
             _debug_stash_factory: debug_stash_factory,
             openable_connection: Box::new(OpenableConnection {
                 stash: None,
@@ -875,7 +1055,7 @@ impl DebugOpenableConnection<'_> {
 }
 
 #[async_trait]
-impl OpenableDurableCatalogState for DebugOpenableConnection<'_> {
+impl OpenableDurableCatalogState for TestOpenableConnection<'_> {
     async fn open_savepoint(
         mut self: Box<Self>,
         now: NowFn,
@@ -908,12 +1088,20 @@ impl OpenableDurableCatalogState for DebugOpenableConnection<'_> {
             .await
     }
 
+    async fn open_debug(mut self: Box<Self>) -> Result<DebugCatalogState, CatalogError> {
+        self.openable_connection.open_debug().await
+    }
+
     async fn is_initialized(&mut self) -> Result<bool, CatalogError> {
         self.openable_connection.is_initialized().await
     }
 
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError> {
         self.openable_connection.get_deployment_generation().await
+    }
+
+    async fn trace(&mut self) -> Result<Trace, CatalogError> {
+        self.openable_connection.trace().await
     }
 
     async fn expire(self) {

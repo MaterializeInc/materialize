@@ -17,6 +17,7 @@ use uuid::Uuid;
 
 use mz_stash::DebugStashFactory;
 
+use crate::durable::debug::{DebugCatalogState, Trace};
 pub use crate::durable::error::{CatalogError, DurableCatalogError};
 use crate::durable::objects::Snapshot;
 pub use crate::durable::objects::{
@@ -25,7 +26,7 @@ pub use crate::durable::objects::{
     SystemConfiguration, SystemObjectMapping, TimelineTimestamp,
 };
 use crate::durable::persist::PersistHandle;
-use crate::durable::stash::{DebugOpenableConnection, OpenableConnection};
+use crate::durable::stash::{OpenableConnection, TestOpenableConnection};
 pub use crate::durable::stash::{
     StashConfig, ALL_COLLECTIONS, AUDIT_LOG_COLLECTION, CLUSTER_COLLECTION,
     CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION, CLUSTER_REPLICA_COLLECTION, COMMENTS_COLLECTION,
@@ -44,6 +45,7 @@ use mz_persist_client::PersistClient;
 use mz_repr::GlobalId;
 use mz_storage_types::sources::Timeline;
 
+pub mod debug;
 mod error;
 pub mod initialize;
 pub mod objects;
@@ -113,11 +115,18 @@ pub trait OpenableDurableCatalogState: Debug + Send {
         deploy_generation: Option<u64>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError>;
 
+    /// Opens the catalog for manual editing of the underlying data. This is helpful for
+    /// fixing a corrupt catalog.
+    async fn open_debug(mut self: Box<Self>) -> Result<DebugCatalogState, CatalogError>;
+
     /// Reports if the catalog state has been initialized.
     async fn is_initialized(&mut self) -> Result<bool, CatalogError>;
 
     /// Get the deployment generation of this instance.
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError>;
+
+    /// Generate an unconsolidated [`Trace`] of catalog contents.
+    async fn trace(&mut self) -> Result<Trace, CatalogError>;
 
     /// Politely releases all external resources that can only be released in an async context.
     async fn expire(self);
@@ -163,10 +172,6 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
 
     /// Get a snapshot of the catalog.
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError>;
-
-    // TODO(jkosh44) Implement this for the catalog debug tool.
-    /*    /// Dumps the entire catalog contents in human readable JSON.
-    async fn dump(&self) -> Result<String, Error>;*/
 }
 
 /// A read-write API for the durable catalog state.
@@ -246,12 +251,12 @@ pub fn stash_backed_catalog_state(config: StashConfig) -> OpenableConnection {
     OpenableConnection::new(config)
 }
 
-/// Creates an openable debug durable catalog state implemented using the stash that is meant to be
+/// Creates an openable durable catalog state implemented using the stash that is meant to be
 /// used in tests.
-pub fn debug_stash_backed_catalog_state(
+pub fn test_stash_backed_catalog_state(
     debug_stash_factory: &DebugStashFactory,
-) -> DebugOpenableConnection {
-    DebugOpenableConnection::new(debug_stash_factory)
+) -> TestOpenableConnection {
+    TestOpenableConnection::new(debug_stash_factory)
 }
 
 /// Creates an openable durable catalog state implemented using persist.
@@ -262,7 +267,7 @@ pub async fn persist_backed_catalog_state(
     PersistHandle::new(persist_client, organization_id).await
 }
 
-pub fn debug_bootstrap_args() -> BootstrapArgs {
+pub fn test_bootstrap_args() -> BootstrapArgs {
     BootstrapArgs {
         default_cluster_replica_size: "1".into(),
         bootstrap_role: None,

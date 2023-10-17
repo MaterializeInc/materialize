@@ -28,8 +28,7 @@ use mz_catalog::builtin::{
     BUILTIN_PREFIXES, MZ_INTROSPECTION_CLUSTER,
 };
 use mz_catalog::durable::{
-    debug_bootstrap_args, DurableCatalogState, OpenableDurableCatalogState, StashConfig,
-    Transaction,
+    test_bootstrap_args, DurableCatalogState, OpenableDurableCatalogState, StashConfig, Transaction,
 };
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller::clusters::{
@@ -449,11 +448,11 @@ impl Catalog {
         debug_stash_factory: &DebugStashFactory,
         now: NowFn,
     ) -> Result<Catalog, anyhow::Error> {
-        let openable_storage = Box::new(mz_catalog::durable::debug_stash_backed_catalog_state(
+        let openable_storage = Box::new(mz_catalog::durable::test_stash_backed_catalog_state(
             debug_stash_factory,
         ));
         let storage = openable_storage
-            .open(now.clone(), &debug_bootstrap_args(), None)
+            .open(now.clone(), &test_bootstrap_args(), None)
             .await?;
         Self::open_debug_stash_catalog(storage, now).await
     }
@@ -479,7 +478,7 @@ impl Catalog {
             stash_config,
         ));
         let storage = openable_storage
-            .open(now.clone(), &debug_bootstrap_args(), None)
+            .open(now.clone(), &test_bootstrap_args(), None)
             .await?;
         Self::open_debug_stash_catalog(storage, now).await
     }
@@ -495,7 +494,7 @@ impl Catalog {
             stash_config,
         ));
         let storage = openable_storage
-            .open_read_only(now.clone(), &debug_bootstrap_args())
+            .open_read_only(now.clone(), &test_bootstrap_args())
             .await?;
         Self::open_debug_stash_catalog(storage, now).await
     }
