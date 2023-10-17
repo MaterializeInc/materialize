@@ -107,7 +107,7 @@ def run_with_concurrency(
             cursor.execute(connect_sql.encode("utf8"))
         cursor_pool.append(cursor)
 
-    print(f"Benchmarking workload {type(workload)} at concurrency {concurrency} ...")
+    print(f"Benchmarking workload '{workload.__class__.__name__}' at concurrency {concurrency} ...")
     operations = workload.operations()
 
     global next_worker_id
