@@ -525,6 +525,9 @@ impl<'a> Parser<'a> {
         // because the `date` type name is not followed by a string literal, but
         // in fact is a valid expression that should parse as the column name
         // "date".
+        //
+        // Note: the maybe! block here does swallow valid parsing errors
+        // See <https://github.com/MaterializeInc/materialize/issues/22397> for more details
         maybe!(self.maybe_parse(|parser| {
             let data_type = parser.parse_data_type()?;
             if data_type.to_string().as_str() == "interval" {
@@ -565,15 +568,6 @@ impl<'a> Parser<'a> {
             Token::Keyword(EXISTS) => self.parse_exists_expr(),
             Token::Keyword(EXTRACT) => self.parse_extract_expr(),
             Token::Keyword(INTERVAL) => Ok(Expr::Value(self.parse_interval_value()?)),
-            // having timestamps separately here because errors are swallowed by the maybe! block
-            Token::Keyword(TIMESTAMP) | Token::Keyword(TIMESTAMPTZ) => {
-                self.prev_token();
-                let data_type = self.parse_data_type()?;
-                Ok(Expr::Cast {
-                    expr: Box::new(Expr::Value(Value::String(self.parse_literal_string()?))),
-                    data_type,
-                })
-            }
             Token::Keyword(NOT) => Ok(Expr::Not {
                 expr: Box::new(self.parse_subexpr(Precedence::PrefixNot)?),
             }),
@@ -5226,13 +5220,26 @@ impl<'a> Parser<'a> {
 
     /// Parse a signed literal integer.
     fn parse_literal_int(&mut self) -> Result<i64, ParserError> {
+        let negative = self.consume_token(&Token::Op("-".into()));
         match self.next_token() {
-            Some(Token::Number(s)) => s.parse::<i64>().map_err(|e| {
-                self.error(
-                    self.peek_prev_pos(),
-                    format!("Could not parse '{}' as i64: {}", s, e),
-                )
-            }),
+            Some(Token::Number(s)) => {
+                let n = s.parse::<i64>().map_err(|e| {
+                    self.error(
+                        self.peek_prev_pos(),
+                        format!("Could not parse '{}' as i64: {}", s, e),
+                    )
+                })?;
+                if negative {
+                    n.checked_neg().ok_or_else(|| {
+                        self.error(
+                            self.peek_prev_pos(),
+                            format!("Could not parse '{}' as i64: overflows i64", s),
+                        )
+                    })
+                } else {
+                    Ok(n)
+                }
+            }
             other => self.expected(self.peek_prev_pos(), "literal integer", other),
         }
     }
@@ -5413,12 +5420,7 @@ impl<'a> Parser<'a> {
     // parses the precision in timestamp(<precision>) and timestamptz(<precision>)
     fn parse_timestamp_precision(&mut self) -> Result<Vec<i64>, ParserError> {
         if self.consume_token(&Token::LParen) {
-            let typ_mod = self.parse_literal_uint()?.try_into().map_err(|_| {
-                self.error(
-                    self.index,
-                    "number too large to fit in target type".to_string(),
-                )
-            })?;
+            let typ_mod = self.parse_literal_int()?;
             self.expect_token(&Token::RParen)?;
             Ok(vec![typ_mod])
         } else {
