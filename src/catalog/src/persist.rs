@@ -9,26 +9,12 @@
 
 use std::str::FromStr;
 
-use crate::initialize::DEPLOY_GENERATION;
-use crate::objects::{
-    AuditLogKey, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
-    DurableType, IntrospectionSourceIndex, Snapshot, StorageUsageKey, TimestampValue,
-};
-use crate::transaction::{
-    add_new_builtin_cluster_replicas_migration, add_new_builtin_clusters_migration,
-    TransactionBatch,
-};
-use crate::{
-    initialize, BootstrapArgs, CatalogError, Cluster, ClusterReplica, Comment, Database,
-    DefaultPrivilege, DurableCatalogError, DurableCatalogState, Epoch, OpenableDurableCatalogState,
-    ReadOnlyDurableCatalogState, ReplicaConfig, Role, Schema, SystemConfiguration,
-    SystemObjectMapping, TimelineTimestamp, Transaction,
-};
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller_types::{ClusterId, ReplicaId};
+use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
 use mz_ore::{soft_assert, soft_assert_eq};
 use mz_persist_client::read::ReadHandle;
@@ -52,7 +38,24 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 use timely::progress::Antichain;
+use tracing::debug;
 use uuid::Uuid;
+
+use crate::initialize::DEPLOY_GENERATION;
+use crate::objects::{
+    AuditLogKey, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
+    DurableType, IntrospectionSourceIndex, Snapshot, StorageUsageKey, TimestampValue,
+};
+use crate::transaction::{
+    add_new_builtin_cluster_replicas_migration, add_new_builtin_clusters_migration,
+    TransactionBatch,
+};
+use crate::{
+    initialize, BootstrapArgs, CatalogError, Cluster, ClusterReplica, Comment, Database,
+    DefaultPrivilege, DurableCatalogError, DurableCatalogState, Epoch, OpenableDurableCatalogState,
+    ReadOnlyDurableCatalogState, ReplicaConfig, Role, Schema, SystemConfiguration,
+    SystemObjectMapping, TimelineTimestamp, Transaction,
+};
 
 /// New-type used to represent timestamps in persist.
 type Timestamp = mz_repr::Timestamp;
@@ -203,7 +206,7 @@ impl Codec for StateUpdateKind {
     type Schema = VecU8Schema;
 
     fn codec_name() -> String {
-        "StateUpdateProto".to_string()
+        "StateUpdateJson".to_string()
     }
 
     fn encode<B>(&self, buf: &mut B)
@@ -298,9 +301,10 @@ impl PersistHandle {
         let version = self.get_user_version(upper).await;
         let read_only = matches!(mode, Mode::Readonly);
 
+        // Grab the current catalog contents from persist.
         let mut initial_snapshot: Vec<_> = self.snapshot(upper).await.collect();
+        // Sniff out the most recent epoch.
         let mut epoch = if is_initialized {
-            // Sniff out the most recent epoch.
             let epoch_idx = initial_snapshot
                 .iter()
                 .rposition(|update| {
@@ -337,6 +341,7 @@ impl PersistHandle {
             persist_handle: self,
             upper,
             epoch,
+            // Initialize empty in-memory state.
             snapshot: Snapshot::empty(),
             fenced: false,
         };
@@ -351,7 +356,9 @@ impl PersistHandle {
                 }
             }
 
+            // Update in-memory contents with with persist snapshot.
             catalog.apply_updates(initial_snapshot.into_iter())?;
+
             let mut txn = catalog.transaction().await?;
             if let Some(deploy_generation) = deploy_generation {
                 txn.set_config(DEPLOY_GENERATION.into(), deploy_generation)?;
@@ -440,16 +447,27 @@ impl PersistHandle {
     ///
     /// Some configs need to be read before the catalog is opened for bootstrapping.
     async fn get_config(&mut self, key: &str, upper: Timestamp) -> Option<u64> {
-        self.snapshot(upper).await.rev().find_map(
-            |StateUpdate {
-                 kind,
-                 ts: _,
-                 diff: _,
-             }| match kind {
-                StateUpdateKind::Config(k, v) if k.key == key => Some(v.value),
-                _ => None,
-            },
-        )
+        let mut configs: Vec<_> = self
+            .snapshot(upper)
+            .await
+            .rev()
+            .filter_map(
+                |StateUpdate {
+                     kind,
+                     ts: _,
+                     diff: _,
+                 }| match kind {
+                    StateUpdateKind::Config(k, v) if k.key == key => Some(v.value),
+                    _ => None,
+                },
+            )
+            .collect();
+        soft_assert!(
+            configs.len(),
+            1,
+            "multiple configs should not share the same key: {configs:?}"
+        );
+        configs.pop()
     }
 
     /// Get the user version of this instance.
@@ -540,6 +558,7 @@ impl PersistCatalogState {
         }
 
         for update in updates {
+            debug!("applying catalog update: {update:?}");
             match update {
                 StateUpdate { kind, ts: _, diff } if diff == 1 || diff == -1 => match kind {
                     StateUpdateKind::AuditLog(_, _) => {
@@ -611,6 +630,17 @@ impl PersistCatalogState {
 
         Ok(())
     }
+
+    /// Execute and return the results of `f` on the current catalog snapshot.
+    ///
+    /// Will return an error if the catalog has been fenced out.
+    async fn with_snapshot<T>(
+        &mut self,
+        f: impl FnOnce(&Snapshot) -> Result<T, CatalogError>,
+    ) -> Result<T, CatalogError> {
+        self.confirm_leadership().await?;
+        f(&self.snapshot)
+    }
 }
 
 #[async_trait]
@@ -620,192 +650,192 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
     }
 
     async fn get_catalog_content_version(&mut self) -> Result<Option<String>, CatalogError> {
-        self.confirm_leadership().await?;
-        Ok(self
-            .snapshot
-            .settings
-            .get(&proto::SettingKey {
-                name: "catalog_content_version".to_string(),
-            })
-            .map(|value| value.value.clone()))
+        self.with_snapshot(|snapshot| {
+            Ok(snapshot
+                .settings
+                .get(&proto::SettingKey {
+                    name: "catalog_content_version".to_string(),
+                })
+                .map(|value| value.value.clone()))
+        })
     }
 
     async fn get_clusters(&mut self) -> Result<Vec<Cluster>, CatalogError> {
-        self.confirm_leadership().await?;
-        Ok(self
-            .snapshot
-            .clusters
-            .clone()
-            .into_iter()
-            .map(RustType::from_proto)
-            .map_ok(|(k, v)| Cluster::from_key_value(k, v))
-            .collect::<Result<_, _>>()?)
+        self.with_snapshot(|snapshot| {
+            Ok(snapshot
+                .clusters
+                .clone()
+                .into_iter()
+                .map(RustType::from_proto)
+                .map_ok(|(k, v)| Cluster::from_key_value(k, v))
+                .collect::<Result<_, _>>()?)
+        })
     }
 
     async fn get_cluster_replicas(&mut self) -> Result<Vec<ClusterReplica>, CatalogError> {
-        self.confirm_leadership().await?;
-        Ok(self
-            .snapshot
-            .cluster_replicas
-            .clone()
-            .into_iter()
-            .map(RustType::from_proto)
-            .map_ok(|(k, v)| ClusterReplica::from_key_value(k, v))
-            .collect::<Result<_, _>>()?)
+        self.with_snapshot(|snapshot| {
+            Ok(snapshot
+                .cluster_replicas
+                .clone()
+                .into_iter()
+                .map(RustType::from_proto)
+                .map_ok(|(k, v)| ClusterReplica::from_key_value(k, v))
+                .collect::<Result<_, _>>()?)
+        })
     }
 
     async fn get_databases(&mut self) -> Result<Vec<Database>, CatalogError> {
-        self.confirm_leadership().await?;
-        Ok(self
-            .snapshot
-            .databases
-            .clone()
-            .into_iter()
-            .map(RustType::from_proto)
-            .map_ok(|(k, v)| Database::from_key_value(k, v))
-            .collect::<Result<_, _>>()?)
+        self.with_snapshot(|snapshot| {
+            Ok(snapshot
+                .databases
+                .clone()
+                .into_iter()
+                .map(RustType::from_proto)
+                .map_ok(|(k, v)| Database::from_key_value(k, v))
+                .collect::<Result<_, _>>()?)
+        })
     }
 
     async fn get_schemas(&mut self) -> Result<Vec<Schema>, CatalogError> {
-        self.confirm_leadership().await?;
-        Ok(self
-            .snapshot
-            .schemas
-            .clone()
-            .into_iter()
-            .map(RustType::from_proto)
-            .map_ok(|(k, v)| Schema::from_key_value(k, v))
-            .collect::<Result<_, _>>()?)
+        self.with_snapshot(|snapshot| {
+            Ok(snapshot
+                .schemas
+                .clone()
+                .into_iter()
+                .map(RustType::from_proto)
+                .map_ok(|(k, v)| Schema::from_key_value(k, v))
+                .collect::<Result<_, _>>()?)
+        })
     }
 
     async fn get_system_items(&mut self) -> Result<Vec<SystemObjectMapping>, CatalogError> {
-        self.confirm_leadership().await?;
-        Ok(self
-            .snapshot
-            .system_object_mappings
-            .clone()
-            .into_iter()
-            .map(RustType::from_proto)
-            .map_ok(|(k, v)| SystemObjectMapping::from_key_value(k, v))
-            .collect::<Result<_, _>>()?)
+        self.with_snapshot(|snapshot| {
+            Ok(snapshot
+                .system_object_mappings
+                .clone()
+                .into_iter()
+                .map(RustType::from_proto)
+                .map_ok(|(k, v)| SystemObjectMapping::from_key_value(k, v))
+                .collect::<Result<_, _>>()?)
+        })
     }
 
     async fn get_introspection_source_indexes(
         &mut self,
         cluster_id: ClusterId,
     ) -> Result<BTreeMap<String, GlobalId>, CatalogError> {
-        self.confirm_leadership().await?;
-        Ok(self
-            .snapshot
-            .introspection_sources
-            .clone()
-            .into_iter()
-            .map(RustType::from_proto)
-            .filter_map_ok(
-                |(k, v): (
-                    ClusterIntrospectionSourceIndexKey,
-                    ClusterIntrospectionSourceIndexValue,
-                )| {
-                    if k.cluster_id == cluster_id {
-                        Some((k.name, GlobalId::System(v.index_id)))
-                    } else {
-                        None
-                    }
-                },
-            )
-            .collect::<Result<_, _>>()?)
+        self.with_snapshot(|snapshot| {
+            Ok(snapshot
+                .introspection_sources
+                .clone()
+                .into_iter()
+                .map(RustType::from_proto)
+                .filter_map_ok(
+                    |(k, v): (
+                        ClusterIntrospectionSourceIndexKey,
+                        ClusterIntrospectionSourceIndexValue,
+                    )| {
+                        if k.cluster_id == cluster_id {
+                            Some((k.name, GlobalId::System(v.index_id)))
+                        } else {
+                            None
+                        }
+                    },
+                )
+                .collect::<Result<_, _>>()?)
+        })
     }
 
     async fn get_roles(&mut self) -> Result<Vec<Role>, CatalogError> {
-        self.confirm_leadership().await?;
-        Ok(self
-            .snapshot
-            .roles
-            .clone()
-            .into_iter()
-            .map(RustType::from_proto)
-            .map_ok(|(k, v)| Role::from_key_value(k, v))
-            .collect::<Result<_, _>>()?)
+        self.with_snapshot(|snapshot| {
+            Ok(snapshot
+                .roles
+                .clone()
+                .into_iter()
+                .map(RustType::from_proto)
+                .map_ok(|(k, v)| Role::from_key_value(k, v))
+                .collect::<Result<_, _>>()?)
+        })
     }
 
     async fn get_default_privileges(&mut self) -> Result<Vec<DefaultPrivilege>, CatalogError> {
-        self.confirm_leadership().await?;
-        Ok(self
-            .snapshot
-            .default_privileges
-            .clone()
-            .into_iter()
-            .map(RustType::from_proto)
-            .map_ok(|(k, v)| DefaultPrivilege::from_key_value(k, v))
-            .collect::<Result<_, _>>()?)
+        self.with_snapshot(|snapshot| {
+            Ok(snapshot
+                .default_privileges
+                .clone()
+                .into_iter()
+                .map(RustType::from_proto)
+                .map_ok(|(k, v)| DefaultPrivilege::from_key_value(k, v))
+                .collect::<Result<_, _>>()?)
+        })
     }
 
     async fn get_system_privileges(&mut self) -> Result<Vec<MzAclItem>, CatalogError> {
-        self.confirm_leadership().await?;
-        Ok(self
-            .snapshot
-            .system_privileges
-            .clone()
-            .into_iter()
-            .map(RustType::from_proto)
-            .map_ok(|(k, v)| MzAclItem::from_key_value(k, v))
-            .collect::<Result<_, _>>()?)
+        self.with_snapshot(|snapshot| {
+            Ok(snapshot
+                .system_privileges
+                .clone()
+                .into_iter()
+                .map(RustType::from_proto)
+                .map_ok(|(k, v)| MzAclItem::from_key_value(k, v))
+                .collect::<Result<_, _>>()?)
+        })
     }
 
     async fn get_system_configurations(
         &mut self,
     ) -> Result<Vec<SystemConfiguration>, CatalogError> {
-        self.confirm_leadership().await?;
-        Ok(self
-            .snapshot
-            .system_configurations
-            .clone()
-            .into_iter()
-            .map(RustType::from_proto)
-            .map_ok(|(k, v)| SystemConfiguration::from_key_value(k, v))
-            .collect::<Result<_, _>>()?)
+        self.with_snapshot(|snapshot| {
+            Ok(snapshot
+                .system_configurations
+                .clone()
+                .into_iter()
+                .map(RustType::from_proto)
+                .map_ok(|(k, v)| SystemConfiguration::from_key_value(k, v))
+                .collect::<Result<_, _>>()?)
+        })
     }
 
     async fn get_comments(&mut self) -> Result<Vec<Comment>, CatalogError> {
-        self.confirm_leadership().await?;
-        Ok(self
-            .snapshot
-            .comments
-            .clone()
-            .into_iter()
-            .map(RustType::from_proto)
-            .map_ok(|(k, v)| Comment::from_key_value(k, v))
-            .collect::<Result<_, _>>()?)
+        self.with_snapshot(|snapshot| {
+            Ok(snapshot
+                .comments
+                .clone()
+                .into_iter()
+                .map(RustType::from_proto)
+                .map_ok(|(k, v)| Comment::from_key_value(k, v))
+                .collect::<Result<_, _>>()?)
+        })
     }
 
     async fn get_timestamps(&mut self) -> Result<Vec<TimelineTimestamp>, CatalogError> {
-        self.confirm_leadership().await?;
-        Ok(self
-            .snapshot
-            .timestamps
-            .clone()
-            .into_iter()
-            .map(RustType::from_proto)
-            .map_ok(|(k, v)| TimelineTimestamp::from_key_value(k, v))
-            .collect::<Result<_, _>>()?)
+        self.with_snapshot(|snapshot| {
+            Ok(snapshot
+                .timestamps
+                .clone()
+                .into_iter()
+                .map(RustType::from_proto)
+                .map_ok(|(k, v)| TimelineTimestamp::from_key_value(k, v))
+                .collect::<Result<_, _>>()?)
+        })
     }
 
     async fn get_timestamp(
         &mut self,
         timeline: &Timeline,
     ) -> Result<Option<mz_repr::Timestamp>, CatalogError> {
-        self.confirm_leadership().await?;
         let key = proto::TimestampKey {
             id: timeline.to_string(),
         };
-        let val: Option<TimestampValue> = self
-            .snapshot
-            .timestamps
-            .get(&key)
-            .cloned()
-            .map(RustType::from_proto)
-            .transpose()?;
-        Ok(val.map(|v| v.ts))
+        self.with_snapshot(|snapshot| {
+            let val: Option<TimestampValue> = snapshot
+                .timestamps
+                .get(&key)
+                .cloned()
+                .map(RustType::from_proto)
+                .transpose()?;
+            Ok(val.map(|v| v.ts))
+        })
     }
 
     async fn get_audit_logs(&mut self) -> Result<Vec<VersionedEvent>, CatalogError> {
@@ -833,21 +863,16 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
     }
 
     async fn get_next_id(&mut self, id_type: &str) -> Result<u64, CatalogError> {
-        self.confirm_leadership().await?;
         let key = proto::IdAllocKey {
             name: id_type.to_string(),
         };
-        Ok(self
-            .snapshot
-            .id_allocator
-            .get(&key)
-            .expect("must exist")
-            .next_id)
+        self.with_snapshot(|snapshot| {
+            Ok(snapshot.id_allocator.get(&key).expect("must exist").next_id)
+        })
     }
 
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError> {
-        self.confirm_leadership().await?;
-        Ok(self.snapshot.clone())
+        self.with_snapshot(|snapshot| Ok(snapshot.clone()))
     }
 }
 
