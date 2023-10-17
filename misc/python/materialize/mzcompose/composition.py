@@ -623,7 +623,7 @@ class Composition:
         )
 
     def pull_if_variable(self, services: list[str], max_tries: int = 2) -> None:
-        """Pull fresh service images in case the tag indicates thee underlying image may change over time.
+        """Pull fresh service images in case the tag indicates the underlying image may change over time.
 
         Args:
             services: List of service names
@@ -631,7 +631,7 @@ class Composition:
 
         for service in services:
             if "image" in self.compose["services"][service] and any(
-                self.compose["services"][service]["image"].endswith(tag)
+                tag in self.compose["services"][service]["image"]
                 for tag in [":latest", ":unstable", ":rolling"]
             ):
                 self.pull_single_image(service, max_tries=max_tries)
