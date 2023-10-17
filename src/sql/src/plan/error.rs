@@ -348,7 +348,7 @@ impl PlanError {
                     [column] => Some(format!("The similarly named column {} does exist. {suffix}", ColumnDisplay { table, column })),
                     names => {
                         let similar = names.into_iter().map(|column| ColumnDisplay { table, column }).join(", ");
-                        Some(format!("There are similarly named columns that do exist {similar}. {suffix}"))
+                        Some(format!("There are similarly named columns that do exist: {similar}. {suffix}"))
                     }
                 }
             }

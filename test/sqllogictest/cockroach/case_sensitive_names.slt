@@ -219,7 +219,7 @@ y Y
 statement ok
 CREATE TABLE foo_multi_case ("cAsE" INT, "CASE" INT)
 
-statement error ERROR: column "foo_multi_case.case" does not exist\nHINT: There are similarly named columns that do exist "foo_multi_case.cAsE", "foo_multi_case.CASE". Make sure to surround case sensitive names in double quotes.
+statement error ERROR: column "foo_multi_case.case" does not exist\nHINT: There are similarly named columns that do exist: "foo_multi_case.cAsE", "foo_multi_case.CASE". Make sure to surround case sensitive names in double quotes.
 SELECT foo_multi_case.case FROM foo_multi_case;
 
 statement ok
