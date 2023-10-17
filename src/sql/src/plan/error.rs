@@ -342,12 +342,13 @@ impl PlanError {
             Self::TestScriptSourcePurification(e) => e.hint(),
             Self::LoadGeneratorSourcePurification(e) => e.hint(),
             Self::UnknownColumn { table, similar, .. } => {
+                let suffix = "Make sure to surround case sensitive names in double quotes.";
                 match &similar[..] {
                     [] => None,
-                    [column] => Some(format!("The similarly named column {} does exist.", ColumnDisplay { table, column })),
+                    [column] => Some(format!("The similarly named column {} does exist. {suffix}", ColumnDisplay { table, column })),
                     names => {
                         let similar = names.into_iter().map(|column| ColumnDisplay { table, column }).join(", ");
-                        Some(format!("There are similarly named columns that do exist {similar}."))
+                        Some(format!("There are similarly named columns that do exist {similar}. {suffix}"))
                     }
                 }
             }
