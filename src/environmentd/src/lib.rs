@@ -103,11 +103,11 @@ use mz_frontegg_auth::Authentication as FronteggAuthentication;
 use mz_ore::future::OreFutureExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
-use mz_ore::server::{ConnectionStream, ListenerHandle, TlsCertConfig};
 use mz_ore::task;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::usage::StorageUsageClient;
 use mz_secrets::SecretsController;
+use mz_server_core::{ConnectionStream, ListenerHandle, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
 use mz_storage_types::connections::ConnectionContext;
@@ -273,12 +273,12 @@ impl Listeners {
             internal_http_listen_addr,
         }: ListenersConfig,
     ) -> Result<Listeners, anyhow::Error> {
-        let sql = mz_ore::server::listen(sql_listen_addr).await?;
-        let http = mz_ore::server::listen(http_listen_addr).await?;
-        let balancer_sql = mz_ore::server::listen(balancer_sql_listen_addr).await?;
-        let balancer_http = mz_ore::server::listen(balancer_http_listen_addr).await?;
-        let internal_sql = mz_ore::server::listen(internal_sql_listen_addr).await?;
-        let internal_http = mz_ore::server::listen(internal_http_listen_addr).await?;
+        let sql = mz_server_core::listen(sql_listen_addr).await?;
+        let http = mz_server_core::listen(http_listen_addr).await?;
+        let balancer_sql = mz_server_core::listen(balancer_sql_listen_addr).await?;
+        let balancer_http = mz_server_core::listen(balancer_http_listen_addr).await?;
+        let internal_sql = mz_server_core::listen(internal_sql_listen_addr).await?;
+        let internal_http = mz_server_core::listen(internal_http_listen_addr).await?;
         Ok(Listeners {
             sql,
             http,
@@ -326,9 +326,9 @@ impl Listeners {
             None => (None, None),
             Some(tls_config) => {
                 let context = tls_config.context()?;
-                let pgwire_tls = mz_ore::server::TlsConfig {
+                let pgwire_tls = mz_server_core::TlsConfig {
                     context: context.clone(),
-                    mode: mz_ore::server::TlsMode::Require,
+                    mode: mz_server_core::TlsMode::Require,
                 };
                 let http_tls = http::TlsConfig {
                     context,
@@ -360,7 +360,7 @@ impl Listeners {
                 ready_to_promote: ready_to_promote_rx,
                 internal_console_redirect_url: config.internal_console_redirect_url,
             });
-            mz_ore::server::serve(internal_http_conns, internal_http_server)
+            mz_server_core::serve(internal_http_conns, internal_http_server)
         });
 
         let mut openable_adapter_storage = mz_catalog::stash_backed_catalog_state(StashConfig {
@@ -527,7 +527,7 @@ impl Listeners {
                 internal: false,
                 active_connection_count: Arc::clone(&active_connection_count),
             });
-            mz_ore::server::serve(sql_conns, sql_server)
+            mz_server_core::serve(sql_conns, sql_server)
         });
 
         // Launch internal SQL server.
@@ -540,7 +540,7 @@ impl Listeners {
                     //
                     // TODO(benesch): migrate all internal applications to TLS and
                     // remove `TlsMode::Allow`.
-                    pgwire_tls.mode = mz_ore::server::TlsMode::Allow;
+                    pgwire_tls.mode = mz_server_core::TlsMode::Allow;
                     pgwire_tls
                 }),
                 adapter_client: adapter_client.clone(),
@@ -549,7 +549,7 @@ impl Listeners {
                 internal: true,
                 active_connection_count: Arc::clone(&active_connection_count),
             });
-            mz_ore::server::serve(internal_sql_conns, internal_sql_server)
+            mz_server_core::serve(internal_sql_conns, internal_sql_server)
         });
 
         // Launch HTTP server.
@@ -566,7 +566,7 @@ impl Listeners {
                     .unwrap_or(http::WEBHOOK_CONCURRENCY_LIMIT),
                 metrics: http_metrics.clone(),
             });
-            mz_ore::server::serve(http_conns, http_server)
+            mz_server_core::serve(http_conns, http_server)
         });
 
         // Launch HTTP server exposed to balancers
@@ -583,7 +583,7 @@ impl Listeners {
                     .unwrap_or(http::WEBHOOK_CONCURRENCY_LIMIT),
                 metrics: http_metrics,
             });
-            mz_ore::server::serve(balancer_http_conns, balancer_http_server)
+            mz_server_core::serve(balancer_http_conns, balancer_http_server)
         });
 
         // Launch SQL server exposed to balancers
@@ -596,7 +596,7 @@ impl Listeners {
                 internal: false,
                 active_connection_count: Arc::clone(&active_connection_count),
             });
-            mz_ore::server::serve(balancer_sql_conns, balancer_sql_server)
+            mz_server_core::serve(balancer_sql_conns, balancer_sql_server)
         });
 
         // Start telemetry reporting loop.

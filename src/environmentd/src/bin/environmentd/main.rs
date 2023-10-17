@@ -112,7 +112,6 @@ use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
-use mz_ore::server::TlsCliArgs;
 use mz_ore::task::RuntimeExt;
 use mz_ore::{halt, metric};
 use mz_persist_client::cache::PersistClientCache;
@@ -122,6 +121,7 @@ use mz_persist_client::rpc::{
 };
 use mz_persist_client::PersistLocation;
 use mz_secrets::SecretsController;
+use mz_server_core::TlsCliArgs;
 use mz_service::emit_boot_diagnostics;
 use mz_service::secrets::{SecretsControllerKind, SecretsReaderCliArgs};
 use mz_sql::catalog::EnvironmentId;

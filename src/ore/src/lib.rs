@@ -137,8 +137,6 @@ pub mod result;
 pub mod retry;
 #[cfg(feature = "serde")]
 pub mod serde;
-#[cfg(feature = "server")]
-pub mod server;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "stack")))]
 #[cfg(feature = "stack")]
 pub mod stack;

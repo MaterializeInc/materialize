@@ -3650,6 +3650,7 @@ dependencies = [
  "mz-orchestrator-tracing",
  "mz-ore",
  "mz-pgwire-common",
+ "mz-server-core",
  "num_cpus",
  "openssl",
  "semver",
@@ -4095,6 +4096,7 @@ dependencies = [
  "mz-repr",
  "mz-secrets",
  "mz-segment",
+ "mz-server-core",
  "mz-service",
  "mz-sql",
  "mz-sql-parser",
@@ -4577,12 +4579,10 @@ dependencies = [
  "serde",
  "serde_json",
  "smallvec",
- "socket2 0.4.9",
  "stacker",
  "tokio",
  "tokio-native-tls",
  "tokio-openssl",
- "tokio-stream",
  "tokio-test",
  "tonic",
  "tracing",
@@ -4800,6 +4800,7 @@ dependencies = [
  "mz-pgrepr",
  "mz-pgwire-common",
  "mz-repr",
+ "mz-server-core",
  "mz-sql",
  "openssl",
  "postgres",
@@ -4820,6 +4821,7 @@ dependencies = [
  "bytes",
  "bytesize",
  "mz-ore",
+ "mz-server-core",
  "tokio",
  "tokio-openssl",
  "tokio-postgres",
@@ -5102,6 +5104,22 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-server-core"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "futures",
+ "mz-ore",
+ "openssl",
+ "socket2 0.4.9",
+ "tokio",
+ "tokio-stream",
+ "tracing",
  "workspace-hack",
 ]
 
@@ -9526,6 +9544,7 @@ dependencies = [
  "sha2",
  "similar",
  "smallvec",
+ "socket2 0.4.9",
  "syn 1.0.107",
  "syn 2.0.18",
  "textwrap",
