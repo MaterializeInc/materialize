@@ -38,8 +38,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use crate::catalog::{CatalogItem, DataSourceDesc, Source};
 use crate::client::{ConnectionId, ConnectionIdType};
 use crate::command::{
-    AppendWebhookResponse, AppendWebhookValidator, Canceled, CatalogSnapshot, Command,
-    ExecuteResponse, GetVariablesResponse, StartupResponse,
+    Canceled, CatalogSnapshot, Command, ExecuteResponse, GetVariablesResponse, StartupResponse,
 };
 use crate::coord::appends::{Deferred, PendingWriteTxn};
 use crate::coord::peek::PendingPeek;
@@ -48,6 +47,7 @@ use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
 use crate::session::{Session, TransactionOps, TransactionStatus};
 use crate::util::{ClientTransmitter, ResultExt};
+use crate::webhook::{AppendWebhookResponse, AppendWebhookValidator};
 use crate::{catalog, metrics, ExecuteContext};
 
 use super::ExecuteContextExtra;

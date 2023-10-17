@@ -42,8 +42,8 @@ use uuid::Uuid;
 
 use crate::catalog::Catalog;
 use crate::command::{
-    AppendWebhookResponse, Canceled, CatalogDump, CatalogSnapshot, Command, ExecuteResponse,
-    GetVariablesResponse, Response,
+    Canceled, CatalogDump, CatalogSnapshot, Command, ExecuteResponse, GetVariablesResponse,
+    Response,
 };
 use crate::coord::{Coordinator, ExecuteContextExtra};
 use crate::error::AdapterError;
@@ -51,6 +51,7 @@ use crate::metrics::Metrics;
 use crate::session::{EndTransactionAction, PreparedStatement, Session, TransactionId};
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::telemetry::{self, SegmentClientExt, StatementFailureType};
+use crate::webhook::AppendWebhookResponse;
 use crate::{AdapterNotice, PeekResponseUnary, StartupResponse};
 
 /// Inner type of a [`ConnectionId`], `u32` for postgres compatibility.
