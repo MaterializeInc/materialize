@@ -337,6 +337,28 @@ steps:
               composition: platform-checks
               args: [--scenario=RestartEntireMz, "--seed=$BUILDKITE_JOB_ID"]
 
+      - id: checks-backup-restore-before-manipulate
+        label: "Checks backup + restore between the two manipulate()"
+        timeout_in_minutes: 60
+        artifact_paths: junit_*.xml
+        agents:
+          queue: builder-linux-x86_64
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=BackupAndRestoreBeforeManipulate, "--seed=$BUILDKITE_JOB_ID"]
+
+      - id: checks-backup-restore-after-manipulate
+        label: "Checks backup + restore after manipulate()"
+        timeout_in_minutes: 60
+        artifact_paths: junit_*.xml
+        agents:
+          queue: builder-linux-x86_64
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=BackupAndRestoreAfterManipulate, "--seed=$BUILDKITE_JOB_ID"]
+
       - id: checks-parallel-drop-create-default-replica
         label: "Checks parallel + DROP/CREATE replica"
         skip: "Affected by #21317"

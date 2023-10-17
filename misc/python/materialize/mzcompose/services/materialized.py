@@ -21,6 +21,7 @@ from materialize.mzcompose.service import (
     ServiceConfig,
     ServiceDependency,
 )
+from materialize.mzcompose.services.minio import MINIO_BLOB_URI
 from materialize.util import MzVersion
 
 
@@ -107,7 +108,7 @@ class Materialized(Service):
 
         if external_minio:
             depends_graph["minio"] = {"condition": "service_healthy"}
-            persist_blob_url = "s3://minioadmin:minioadmin@persist/persist?endpoint=http://minio:9000/&region=minio"
+            persist_blob_url = MINIO_BLOB_URI
 
         if persist_blob_url:
             command.append(f"--persist-blob-url={persist_blob_url}")
