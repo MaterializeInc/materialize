@@ -737,6 +737,48 @@ SHOW PRIVILEGES ON SOURCES
                    ^
 
 parse-statement
+SHOW DEFAULT PRIVILEGES
+----
+SHOW DEFAULT PRIVILEGES
+=>
+Show(ShowObjects(ShowObjectsStatement { object_type: DefaultPrivileges { object_type: None, role: None }, from: None, filter: None }))
+
+parse-statement
+SHOW DEFAULT PRIVILEGES ON TABLES
+----
+SHOW DEFAULT PRIVILEGES ON TABLES
+=>
+Show(ShowObjects(ShowObjectsStatement { object_type: DefaultPrivileges { object_type: Some(Table), role: None }, from: None, filter: None }))
+
+parse-statement
+SHOW DEFAULT PRIVILEGES FOR joe
+----
+SHOW DEFAULT PRIVILEGES FOR joe
+=>
+Show(ShowObjects(ShowObjectsStatement { object_type: DefaultPrivileges { object_type: None, role: Some(Ident("joe")) }, from: None, filter: None }))
+
+parse-statement
+SHOW DEFAULT PRIVILEGES ON CLUSTERS  FOR mike
+----
+SHOW DEFAULT PRIVILEGES ON CLUSTERS FOR mike
+=>
+Show(ShowObjects(ShowObjectsStatement { object_type: DefaultPrivileges { object_type: Some(Cluster), role: Some(Ident("mike")) }, from: None, filter: None }))
+
+parse-statement
+SHOW DEFAULT PRIVILEGES ON MATERIALIZED VIEWS
+----
+error: For object type MATERIALIZED VIEWS, you must specify 'TABLES'
+SHOW DEFAULT PRIVILEGES ON MATERIALIZED VIEWS
+                           ^
+
+parse-statement
+SHOW DEFAULT PRIVILEGES ON SOURCES
+----
+error: For object type SOURCES, you must specify 'TABLES'
+SHOW DEFAULT PRIVILEGES ON SOURCES
+                           ^
+
+parse-statement
 SHOW ROLE MEMBERSHIP
 ----
 SHOW ROLE MEMBERSHIP

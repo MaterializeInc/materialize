@@ -6349,6 +6349,8 @@ impl<'a> Parser<'a> {
             }))
         } else if self.parse_keyword(PRIVILEGES) {
             self.parse_show_privileges()
+        } else if self.parse_keywords(&[DEFAULT, PRIVILEGES]) {
+            self.parse_show_default_privileges()
         } else if self.parse_keyword(ROLE) {
             self.expect_keyword(MEMBERSHIP)?;
             let role = if self.parse_keyword(FOR) {
@@ -6447,6 +6449,24 @@ impl<'a> Parser<'a> {
         };
         Ok(ShowStatement::ShowObjects(ShowObjectsStatement {
             object_type: ShowObjectType::Privileges { object_type, role },
+            from: None,
+            filter: self.parse_show_statement_filter()?,
+        }))
+    }
+
+    fn parse_show_default_privileges(&mut self) -> Result<ShowStatement<Raw>, ParserError> {
+        let object_type = if self.parse_keyword(ON) {
+            Some(self.expect_plural_object_type_for_privileges()?)
+        } else {
+            None
+        };
+        let role = if self.parse_keyword(FOR) {
+            Some(self.parse_identifier()?)
+        } else {
+            None
+        };
+        Ok(ShowStatement::ShowObjects(ShowObjectsStatement {
+            object_type: ShowObjectType::DefaultPrivileges { object_type, role },
             from: None,
             filter: self.parse_show_statement_filter()?,
         }))
@@ -7707,6 +7727,47 @@ impl<'a> Parser<'a> {
                 DATABASES => ObjectType::Database,
                 SCHEMAS => ObjectType::Schema,
                 SUBSOURCES => ObjectType::Subsource,
+                _ => unreachable!(),
+            },
+        )
+    }
+
+    /// Bail out if the current token is not a privilege object type, or consume and
+    /// return it if it is.
+    fn expect_plural_object_type_for_privileges(&mut self) -> Result<ObjectType, ParserError> {
+        if let Some(object_type) = self.parse_one_of_keywords(&[VIEWS, SOURCES]) {
+            return parser_err!(
+                self,
+                self.peek_prev_pos(),
+                format!("For object type {object_type}, you must specify 'TABLES'")
+            );
+        }
+        if self.parse_keywords(&[MATERIALIZED, VIEWS]) {
+            self.prev_token();
+            return parser_err!(
+                self,
+                self.peek_prev_pos(),
+                format!("For object type MATERIALIZED VIEWS, you must specify 'TABLES'")
+            );
+        }
+
+        Ok(
+            match self.expect_one_of_keywords(&[
+                TABLES,
+                TYPES,
+                CLUSTERS,
+                SECRETS,
+                CONNECTIONS,
+                DATABASES,
+                SCHEMAS,
+            ])? {
+                TABLES => ObjectType::Table,
+                TYPES => ObjectType::Type,
+                CLUSTERS => ObjectType::Cluster,
+                SECRETS => ObjectType::Secret,
+                CONNECTIONS => ObjectType::Connection,
+                DATABASES => ObjectType::Database,
+                SCHEMAS => ObjectType::Schema,
                 _ => unreachable!(),
             },
         )

@@ -2448,6 +2448,10 @@ pub enum ShowObjectType<T: AstInfo> {
         object_type: Option<SystemObjectType>,
         role: Option<T::RoleName>,
     },
+    DefaultPrivileges {
+        object_type: Option<ObjectType>,
+        role: Option<T::RoleName>,
+    },
     RoleMembership {
         role: Option<T::RoleName>,
     },
@@ -2490,6 +2494,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ShowObjectType::Schema { .. } => "SCHEMAS",
             ShowObjectType::Subsource { .. } => "SUBSOURCES",
             ShowObjectType::Privileges { .. } => "PRIVILEGES",
+            ShowObjectType::DefaultPrivileges { .. } => "DEFAULT PRIVILEGES",
             ShowObjectType::RoleMembership { .. } => "ROLE MEMBERSHIP",
         });
 
@@ -2538,6 +2543,18 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
                 if let SystemObjectType::Object(_) = object_type {
                     f.write_str("S");
                 }
+            }
+            if let Some(role) = role {
+                f.write_str(" FOR ");
+                f.write_node(role);
+            }
+        }
+
+        if let ShowObjectType::DefaultPrivileges { object_type, role } = &self.object_type {
+            if let Some(object_type) = object_type {
+                f.write_str(" ON ");
+                f.write_node(object_type);
+                f.write_str("S");
             }
             if let Some(role) = role {
                 f.write_str(" FOR ");

@@ -90,6 +90,7 @@ The privileges required to execute this statement are:
 
 ## Related pages
 
+- [SHOW DEFAULT PRIVILEGES](../show-default-privileges)
 - [CREATE ROLE](../create-role)
 - [ALTER ROLE](../alter-role)
 - [DROP ROLE](../drop-role)

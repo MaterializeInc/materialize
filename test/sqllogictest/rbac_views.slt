@@ -502,6 +502,35 @@ materialize,NULL,NULL,table,r1,SELECT
 PUBLIC,NULL,NULL,type,PUBLIC,USAGE
 COMPLETE 6
 
+query TTTTTT
+SELECT * FROM (SHOW DEFAULT PRIVILEGES) ORDER BY object_type, database, schema, grantee
+----
+materialize  materialize  s     connection  r3      USAGE
+r5           NULL         NULL  database    PUBLIC  CREATE
+PUBLIC       NULL         NULL  schema      r4      USAGE
+materialize  materialize  s     secret      r5      USAGE
+materialize  d            NULL  table       r1      UPDATE
+materialize  NULL         NULL  table       r1      INSERT
+materialize  NULL         NULL  table       r1      SELECT
+PUBLIC       NULL         NULL  type        PUBLIC  USAGE
+
+query TTTTTT
+SELECT * FROM (SHOW DEFAULT PRIVILEGES ON TABLES) ORDER BY object_type, database, schema, grantee
+----
+materialize  d            NULL  table       r1      UPDATE
+materialize  NULL         NULL  table       r1      INSERT
+materialize  NULL         NULL  table       r1      SELECT
+
+query TTTTTT
+SELECT * FROM (SHOW DEFAULT PRIVILEGES FOR r1) ORDER BY object_type, database, schema, grantee
+----
+materialize  materialize  s     connection  r3      USAGE
+r5           NULL         NULL  database    PUBLIC  CREATE
+materialize  d            NULL  table       r1      UPDATE
+materialize  NULL         NULL  table       r1      INSERT
+materialize  NULL         NULL  table       r1      SELECT
+PUBLIC       NULL         NULL  type        PUBLIC  USAGE
+
 # Disable rbac checks.
 
 simple conn=mz_system,user=mz_system
