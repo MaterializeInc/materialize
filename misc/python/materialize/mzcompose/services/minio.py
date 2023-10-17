@@ -59,7 +59,5 @@ class Mc(Service):
             name=name,
             config={
                 "image": image,
-                "volumes": ["../../mzdata/mc:/root/.mc"],
-                "depends_on": {"minio": {"condition": "service_started"}},
             },
         )

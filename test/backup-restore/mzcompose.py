@@ -36,7 +36,9 @@ def workflow_default(c: Composition) -> None:
 
     # Enable versioning for the Persist bucket
     c.up("minio")
-    c.run(
+    c.up("mc", persistent=True)
+    c.exec(
+        "mc",
         "mc",
         "alias",
         "set",
@@ -45,12 +47,12 @@ def workflow_default(c: Composition) -> None:
         "minioadmin",
         "minioadmin",
     )
-    c.run("mc", "version", "enable", "persist/persist")
+    c.exec("mc", "mc", "version", "enable", "persist/persist")
     blob_uri = "s3://minioadmin:minioadmin@persist/persist?endpoint=http://minio:9000/&region=minio"
 
     # Set up a backupable connection for CRDB
     c.up("cockroach")
-    c.run("mc", "mb", "persist/crdb-backup")
+    c.exec("mc", "mc", "mb", "persist/crdb-backup")
     c.exec(
         "cockroach",
         "cockroach",
