@@ -93,6 +93,7 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context};
 use mz_adapter::catalog::ClusterReplicaSizeMap;
 use mz_adapter::config::{system_parameter_sync, SystemParameterSyncConfig};
+use mz_adapter::webhook::WebhookConcurrencyLimiter;
 use mz_build_info::{build_info, BuildInfo};
 use mz_catalog::{
     BootstrapArgs, OpenableDurableCatalogState, ReadOnlyDurableCatalogState, StashConfig,
@@ -143,8 +144,6 @@ pub struct Config {
     pub tls: Option<TlsCertConfig>,
     /// Frontegg JWT authentication configuration.
     pub frontegg: Option<FronteggAuthentication>,
-    /// Number of concurrent requests accepted for webhooks, `None` indicates a default limit.
-    pub concurrent_webhook_req_count: Option<usize>,
 
     // === Connection options. ===
     /// Configuration for source and sink connections created by the storage
@@ -481,6 +480,7 @@ impl Listeners {
 
         // Initialize adapter.
         let segment_client = config.segment_api_key.map(mz_segment::Client::new);
+        let webhook_concurrency_limit = WebhookConcurrencyLimiter::default();
         let (adapter_handle, adapter_client) = mz_adapter::serve(mz_adapter::Config {
             dataflow_client: controller,
             storage: adapter_storage,
@@ -506,6 +506,7 @@ impl Listeners {
             aws_account_id: config.aws_account_id,
             aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
             active_connection_count: Arc::clone(&active_connection_count),
+            webhook_concurrency_limit: webhook_concurrency_limit.clone(),
             http_host_name: config.http_host_name,
             tracing_handle: config.tracing_handle,
         })
@@ -561,9 +562,7 @@ impl Listeners {
                 adapter_client: adapter_client.clone(),
                 allowed_origin: config.cors_allowed_origin.clone(),
                 active_connection_count: Arc::clone(&active_connection_count),
-                concurrent_webhook_req_count: config
-                    .concurrent_webhook_req_count
-                    .unwrap_or(http::WEBHOOK_CONCURRENCY_LIMIT),
+                concurrent_webhook_req: webhook_concurrency_limit.semaphore(),
                 metrics: http_metrics.clone(),
             });
             mz_ore::server::serve(http_conns, http_server)
@@ -578,9 +577,7 @@ impl Listeners {
                 adapter_client: adapter_client.clone(),
                 allowed_origin: config.cors_allowed_origin,
                 active_connection_count: Arc::clone(&active_connection_count),
-                concurrent_webhook_req_count: config
-                    .concurrent_webhook_req_count
-                    .unwrap_or(http::WEBHOOK_CONCURRENCY_LIMIT),
+                concurrent_webhook_req: webhook_concurrency_limit.semaphore(),
                 metrics: http_metrics,
             });
             mz_ore::server::serve(balancer_http_conns, balancer_http_server)

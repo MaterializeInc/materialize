@@ -931,7 +931,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 tls,
                 frontegg,
                 cors_allowed_origin,
-                concurrent_webhook_req_count: None,
                 adapter_stash_url: args.adapter_stash_url,
                 controller,
                 secrets_controller,

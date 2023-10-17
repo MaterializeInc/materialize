@@ -146,6 +146,7 @@ use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, ResultExt};
+use crate::webhook::WebhookConcurrencyLimiter;
 use crate::{flags, AdapterNotice, TimestampProvider};
 use mz_catalog::builtin::BUILTINS;
 
@@ -562,6 +563,7 @@ pub struct Config {
     pub aws_account_id: Option<String>,
     pub aws_privatelink_availability_zones: Option<Vec<String>>,
     pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
+    pub webhook_concurrency_limit: WebhookConcurrencyLimiter,
     pub http_host_name: Option<String>,
     pub tracing_handle: TracingHandle,
 }
@@ -1056,6 +1058,9 @@ pub struct Coordinator {
 
     /// Whether to start replicas with the new variable-length row encoding scheme.
     variable_length_row_encoding: bool,
+
+    /// Limit for how many conncurrent webhook requests we allow.
+    webhook_concurrency_limit: WebhookConcurrencyLimiter,
 }
 
 impl Coordinator {
@@ -2076,6 +2081,7 @@ pub async fn serve(
         aws_privatelink_availability_zones,
         system_parameter_sync_config,
         active_connection_count,
+        webhook_concurrency_limit,
         http_host_name,
         tracing_handle,
     }: Config,
@@ -2212,6 +2218,7 @@ pub async fn serve(
                 tracing_handle,
                 statement_logging: StatementLogging::new(),
                 variable_length_row_encoding,
+                webhook_concurrency_limit,
             };
             let bootstrap = handle.block_on(async {
                 coord

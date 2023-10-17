@@ -12,7 +12,6 @@ use std::fmt;
 use std::sync::Arc;
 
 use anyhow::Context;
-use mz_ore::task::RuntimeExt;
 use mz_repr::{ColumnType, Datum, Row, RowArena};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::SecretsReader;
@@ -213,3 +212,91 @@ impl fmt::Debug for AppendWebhookResponse {
     }
 }
 
+/// Manages how many concurrent webhook requests we allow at once.
+#[derive(Debug, Clone)]
+pub struct WebhookConcurrencyLimiter {
+    semaphore: Arc<Semaphore>,
+    prev_limit: usize,
+}
+
+impl WebhookConcurrencyLimiter {
+    pub fn new(limit: usize) -> Self {
+        let semaphore = Arc::new(Semaphore::new(limit));
+
+        WebhookConcurrencyLimiter {
+            semaphore,
+            prev_limit: limit,
+        }
+    }
+
+    /// Returns the underlying [`Semaphore`] used for limiting.
+    pub fn semaphore(&self) -> Arc<Semaphore> {
+        Arc::clone(&self.semaphore)
+    }
+
+    /// Updates the limit of how many concurrent requests can be run at once.
+    pub fn set_limit(&mut self, new_limit: usize) {
+        if new_limit > self.prev_limit {
+            // Add permits.
+            let diff = new_limit.saturating_sub(self.prev_limit);
+            tracing::debug!("Adding {diff} permits");
+
+            self.semaphore.add_permits(diff);
+        } else if new_limit < self.prev_limit {
+            // Remove permits.
+            let diff = self.prev_limit.saturating_sub(new_limit);
+            let diff = u32::try_from(diff).unwrap_or(u32::MAX);
+            tracing::debug!("Removing {diff} permits");
+
+            let semaphore = self.semaphore();
+
+            // Kind of janky, but the recommended way to reduce the amount of permits is to spawn
+            // a task the acquires and then forgets old permits.
+            mz_ore::task::spawn(|| "webhook-concurrency-limiter-drop-permits", async move {
+                if let Ok(permit) = Semaphore::acquire_many_owned(semaphore, diff).await {
+                    permit.forget()
+                }
+            });
+        }
+
+        // Store our new limit.
+        self.prev_limit = new_limit;
+        tracing::debug!("New limit, {} permits", self.prev_limit);
+    }
+}
+
+impl Default for WebhookConcurrencyLimiter {
+    fn default() -> Self {
+        WebhookConcurrencyLimiter::new(mz_sql::WEBHOOK_CONCURRENCY_LIMIT)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::WebhookConcurrencyLimiter;
+
+    #[mz_ore::test(tokio::test)]
+    async fn smoke_test_concurrency_limiter() {
+        let mut limiter = WebhookConcurrencyLimiter::new(10);
+
+        let semaphore_a = limiter.semaphore();
+        let _permit_a = semaphore_a.try_acquire_many(10).expect("acquire");
+
+        let semaphore_b = limiter.semaphore();
+        assert!(semaphore_b.try_acquire().is_err());
+
+        // Increase our limit.
+        limiter.set_limit(15);
+
+        // This should now succeed!
+        let _permit_b = semaphore_b.try_acquire().expect("acquire");
+
+        // Decrease our limit.
+        limiter.set_limit(5);
+
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+
+        // This should fail again.
+        assert!(semaphore_b.try_acquire().is_err());
+    }
+}
