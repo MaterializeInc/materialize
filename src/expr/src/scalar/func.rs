@@ -7583,7 +7583,11 @@ impl VariadicFunc {
                 .nullable(true),
             ListSliceLinear { .. } => input_types[0].scalar_type.clone().nullable(in_nullable),
             RecordCreate { field_names } => ScalarType::Record {
-                fields: field_names.clone().into_iter().zip(input_types).collect(),
+                fields: field_names
+                    .clone()
+                    .into_iter()
+                    .zip_eq(input_types)
+                    .collect(),
                 custom_id: None,
             }
             .nullable(false),

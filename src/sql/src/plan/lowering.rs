@@ -987,7 +987,7 @@ impl HirScalarExpr {
                             agg_input.extend(order_by_mir.clone());
                             let agg_input = MirScalarExpr::CallVariadic {
                                 func: mz_expr::VariadicFunc::RecordCreate {
-                                    field_names: (0..1)
+                                    field_names: (0..agg_input.len())
                                         .map(|_| ColumnName::from("?column?"))
                                         .collect_vec(),
                                 },
@@ -1063,7 +1063,7 @@ impl HirScalarExpr {
                             agg_input.extend(order_by_mir.clone());
                             let agg_input = MirScalarExpr::CallVariadic {
                                 func: mz_expr::VariadicFunc::RecordCreate {
-                                    field_names: (0..2)
+                                    field_names: (0..agg_input.len())
                                         .map(|_| ColumnName::from("?column?"))
                                         .collect_vec(),
                                 },

@@ -6911,3 +6911,69 @@ Explained Query (fast path):
     - (17, 91, 360)
 
 EOF
+
+# Regression test for https://github.com/MaterializeInc/materialize/pull/22270#issuecomment-1761432124
+statement error db error: ERROR: Evaluation error: "4294967295 \* 2" uint4 out of range
+select max(1) over (partition by 1 order by 1, 1)
+from
+  (select
+        subq_2."c9" as c0
+      from
+        (select
+              subq_1."c0" as c0,
+              subq_1."c2" as c1,
+              subq_1."c4" as c2,
+              subq_1."c2" as c3,
+              subq_1."c1" as c4,
+              subq_1."c0" as c5,
+              subq_1."c5" as c6,
+              subq_1."c0" as c7,
+              subq_1."c5" as c8,
+              subq_1."c1" as c9,
+              subq_1."c2" as c10,
+              87 as c11,
+              subq_1."c1" as c12
+            from
+              (select
+                    subq_0."c1" as c0,
+                    subq_0."c0" as c1,
+                    subq_0."c1" as c2,
+                    subq_0."c0" as c3,
+                    subq_0."c1" as c4,
+                    subq_0."c0" as c5
+                  from
+                    (select
+                          ref_0."form_of_use" as c0,
+                          ref_0."default_collate_schema" as c1
+                        from
+                          information_schema.character_sets as ref_0
+                        ) as subq_0
+                    ) as subq_1
+            ) as subq_2
+      ) as subq_3
+where (case when (((select "collection_timestamp" from mz_internal.mz_storage_usage_by_shard limit 1 offset 4)
+          ) < ((select pg_catalog.min("occurred_at") from mz_internal.mz_source_status_history)
+          ))
+      and ((case when subq_3."c0" is NULL then TIMESTAMPTZ '2023-01-01 01:23:45+06' else TIMESTAMPTZ '2023-01-01 01:23:45+06' end
+          ) <> (pg_catalog.now())) then case when (((select pg_catalog.sum("id") from mz_internal.mz_sessions)
+            ) - (0::uint8)) >= ((select "worker_id" from mz_internal.mz_arrangement_sharing_per_worker limit 1 offset 3)
+          ) then numrange(0,0) else numrange(0,0) end
+       else case when (((select pg_catalog.sum("id") from mz_internal.mz_sessions)
+            ) - (0::uint8)) >= ((select "worker_id" from mz_internal.mz_arrangement_sharing_per_worker limit 1 offset 3)
+          ) then numrange(0,0) else numrange(0,0) end
+       end
+    ) >= (case when (0::uint4) > (pg_catalog.mod(
+        CAST((select "session_id" from mz_internal.mz_subscriptions limit 1 offset 2)
+           as uint4),
+        CAST((4294967295::uint4) * (2::uint4) as uint4))) then case when (mz_catalog.map_length(
+          mz_internal.mz_role_oid_memberships())) = ((select pg_catalog.min("rolconnlimit") from pg_catalog.pg_roles)
+          ) then case when (null::uint4) = (null::uint4) then numrange(0,0) else numrange(0,0) end
+         else case when (null::uint4) = (null::uint4) then numrange(0,0) else numrange(0,0) end
+         end
+       else case when (mz_catalog.map_length(
+          mz_internal.mz_role_oid_memberships())) = ((select pg_catalog.min("rolconnlimit") from pg_catalog.pg_roles)
+          ) then case when (null::uint4) = (null::uint4) then numrange(0,0) else numrange(0,0) end
+         else case when (null::uint4) = (null::uint4) then numrange(0,0) else numrange(0,0) end
+         end
+       end
+    );
