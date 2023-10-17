@@ -93,6 +93,7 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     gnupg2 \
     jq \
     lcov \
+    libc-dbg \
     libclang-dev \
     libpq-dev \
     lld \
@@ -110,6 +111,7 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     unzip \
     xz-utils \
     yamllint \
+    zstd \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Node.js LTS, for our Python typechecker. This is up here because we don't

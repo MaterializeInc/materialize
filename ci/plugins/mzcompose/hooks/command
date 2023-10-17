@@ -13,14 +13,6 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
-cores="$HOME"/cores
-rm -rf "$cores"
-mkdir -m 777 "$cores"
-# Max 128 characters, so don't use $PWD which will make it too long
-sudo sysctl -w kernel.core_pattern="|/usr/bin/env tee $cores/core.%e.%p"
-echo -n "Core pattern: "
-cat /proc/sys/kernel/core_pattern
-
 mzcompose() {
     bin/ci-builder run stable bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
 }
@@ -53,6 +45,15 @@ rm -f services.log
 
 ci_collapsed_heading ":docker: Rebuilding non-mzbuild containers"
 mzcompose --mz-quiet build
+
+# Clean up cores here so that just killed processes' core files are ignored
+cores="$HOME"/cores
+rm -rf "$cores"
+mkdir -m 777 "$cores"
+# Max 128 characters, so don't use $PWD which will make it too long
+sudo sysctl -w kernel.core_pattern="|/usr/bin/env tee $cores/core.%E.%t"
+echo -n "Core pattern: "
+cat /proc/sys/kernel/core_pattern
 
 # Start dependencies under a different heading so that the main heading is less
 # noisy. But not if the service is actually a workflow, in which case it will

@@ -102,9 +102,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         try:
             spawn.runv(cmd + args.args, env=env)
         finally:
-            spawn.runv(["xz", "-0", "coverage/cargotest.lcov"])
+            spawn.runv(["zstd", "coverage/cargotest.lcov"])
             spawn.runv(
-                ["buildkite-agent", "artifact", "upload", "coverage/cargotest.lcov.xz"]
+                [
+                    "buildkite-agent",
+                    "artifact",
+                    "upload",
+                    "coverage/cargotest.lcov.zst",
+                ]
             )
     else:
         if args.miri_full:

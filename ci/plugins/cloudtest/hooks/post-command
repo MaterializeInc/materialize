@@ -56,8 +56,8 @@ if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
         if [ "${#ARGS[@]}" != 0 ]; then
           bin/ci-builder run stable lcov "${ARGS[@]}" -o coverage/"$BUILDKITE_JOB_ID".lcov
           rm coverage/"$BUILDKITE_JOB_ID"-*.lcov
-          bin/ci-builder run stable xz -0 coverage/"$BUILDKITE_JOB_ID".lcov
-          buildkite-agent artifact upload coverage/"$BUILDKITE_JOB_ID".lcov.xz
+          bin/ci-builder run stable zstd coverage/"$BUILDKITE_JOB_ID".lcov
+          buildkite-agent artifact upload coverage/"$BUILDKITE_JOB_ID".lcov.zst
         fi
     fi
 fi
