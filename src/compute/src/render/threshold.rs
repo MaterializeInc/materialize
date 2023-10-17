@@ -71,6 +71,10 @@ where
             let oks = threshold_arrangement(inner, name, logic);
             SpecializedArrangement::Bytes9Row(key_types.clone(), oks)
         }
+        SpecializedArrangement::RowUnit(inner) => {
+            let oks = threshold_arrangement(inner, name, logic);
+            SpecializedArrangement::RowUnit(oks)
+        }
         SpecializedArrangement::RowRow(inner) => {
             let oks = threshold_arrangement(inner, name, logic);
             SpecializedArrangement::RowRow(oks)
@@ -94,6 +98,10 @@ where
         SpecializedArrangementImport::Bytes9Row(key_types, inner) => {
             let oks = threshold_arrangement(inner, name, logic);
             SpecializedArrangement::Bytes9Row(key_types.clone(), oks)
+        }
+        SpecializedArrangementImport::RowUnit(inner) => {
+            let oks = threshold_arrangement(inner, name, logic);
+            SpecializedArrangement::RowUnit(oks)
         }
         SpecializedArrangementImport::RowRow(inner) => {
             let oks = threshold_arrangement(inner, name, logic);

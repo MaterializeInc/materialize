@@ -647,6 +647,10 @@ where
                 let oks = self.rearrange_iterative(inner);
                 SpecializedArrangement::Bytes9Row(key_types, oks)
             }
+            SpecializedArrangement::RowUnit(inner) => {
+                let oks = self.rearrange_iterative(inner);
+                SpecializedArrangement::RowUnit(oks)
+            }
             SpecializedArrangement::RowRow(inner) => {
                 let oks = self.rearrange_iterative(inner);
                 SpecializedArrangement::RowRow(oks)

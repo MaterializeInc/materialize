@@ -234,6 +234,7 @@ where
     <S as ScopeParent>::Timestamp: Lattice,
 {
     Bytes9Row(Vec<ColumnType>, KeyValArrangement<S, Bytes9, Row>),
+    RowUnit(KeyValArrangement<S, Row, ()>),
     RowRow(KeyValArrangement<S, Row, Row>),
 }
 
@@ -245,6 +246,7 @@ where
     pub fn scope(&self) -> S {
         match self {
             SpecializedArrangement::Bytes9Row(_, inner) => inner.stream.scope(),
+            SpecializedArrangement::RowUnit(inner) => inner.stream.scope(),
             SpecializedArrangement::RowRow(inner) => inner.stream.scope(),
         }
     }
@@ -257,6 +259,9 @@ where
         match self {
             SpecializedArrangement::Bytes9Row(key_types, inner) => {
                 SpecializedArrangement::Bytes9Row(key_types.clone(), inner.enter_region(region))
+            }
+            SpecializedArrangement::RowUnit(inner) => {
+                SpecializedArrangement::RowUnit(inner.enter_region(region))
             }
             SpecializedArrangement::RowRow(inner) => {
                 SpecializedArrangement::RowRow(inner.enter_region(region))
@@ -280,6 +285,12 @@ where
                     logic(&datums_borrow)
                 })
             }
+            SpecializedArrangement::RowUnit(inner) => inner.as_collection(move |k, v| {
+                let mut datums_borrow = datums.borrow();
+                datums_borrow.extend(&**k);
+                datums_borrow.extend(v.into_datum_iter(Some(&[])));
+                logic(&datums_borrow)
+            }),
             SpecializedArrangement::RowRow(inner) => inner.as_collection(move |k, v| {
                 let datums_borrow = datums.borrow_with_many(&[k, v]);
                 logic(&datums_borrow)
@@ -317,6 +328,17 @@ where
                     refuel,
                 )
             }
+            SpecializedArrangement::RowUnit(inner) => CollectionBundle::<S, T>::flat_map_core(
+                inner,
+                key,
+                move |k, v, t, d| {
+                    let mut datums_borrow = datums.borrow();
+                    datums_borrow.extend(&**k);
+                    datums_borrow.extend(v.into_datum_iter(Some(&[])));
+                    logic(&mut datums_borrow, t, d)
+                },
+                refuel,
+            ),
             SpecializedArrangement::RowRow(inner) => CollectionBundle::<S, T>::flat_map_core(
                 inner,
                 key,
@@ -340,6 +362,9 @@ where
             SpecializedArrangement::Bytes9Row(key_types, inner) => {
                 SpecializedArrangement::Bytes9Row(key_types.clone(), inner.leave_region())
             }
+            SpecializedArrangement::RowUnit(inner) => {
+                SpecializedArrangement::RowUnit(inner.leave_region())
+            }
             SpecializedArrangement::RowRow(inner) => {
                 SpecializedArrangement::RowRow(inner.leave_region())
             }
@@ -358,6 +383,9 @@ where
             SpecializedArrangement::Bytes9Row(_, inner) => {
                 inner.stream.probe_notify_with(probes);
             }
+            SpecializedArrangement::RowUnit(inner) => {
+                inner.stream.probe_notify_with(probes);
+            }
             SpecializedArrangement::RowRow(inner) => {
                 inner.stream.probe_notify_with(probes);
             }
@@ -369,6 +397,9 @@ where
         match self {
             SpecializedArrangement::Bytes9Row(key_types, inner) => {
                 SpecializedTraceHandle::Bytes9Row(key_types.clone(), inner.trace.clone())
+            }
+            SpecializedArrangement::RowUnit(inner) => {
+                SpecializedTraceHandle::RowUnit(inner.trace.clone())
             }
             SpecializedArrangement::RowRow(inner) => {
                 SpecializedTraceHandle::RowRow(inner.trace.clone())
@@ -386,6 +417,7 @@ where
     <S as ScopeParent>::Timestamp: Lattice + Refines<T>,
 {
     Bytes9Row(Vec<ColumnType>, KeyValArrangementImport<S, Bytes9, Row, T>),
+    RowUnit(KeyValArrangementImport<S, Row, (), T>),
     RowRow(KeyValArrangementImport<S, Row, Row, T>),
 }
 
@@ -398,6 +430,7 @@ where
     pub fn scope(&self) -> S {
         match self {
             SpecializedArrangementImport::Bytes9Row(_, inner) => inner.stream.scope(),
+            SpecializedArrangementImport::RowUnit(inner) => inner.stream.scope(),
             SpecializedArrangementImport::RowRow(inner) => inner.stream.scope(),
         }
     }
@@ -413,6 +446,9 @@ where
                     key_types.clone(),
                     inner.enter_region(region),
                 )
+            }
+            SpecializedArrangementImport::RowUnit(inner) => {
+                SpecializedArrangementImport::RowUnit(inner.enter_region(region))
             }
             SpecializedArrangementImport::RowRow(inner) => {
                 SpecializedArrangementImport::RowRow(inner.enter_region(region))
@@ -436,6 +472,12 @@ where
                     logic(&datums_borrow)
                 })
             }
+            SpecializedArrangementImport::RowUnit(inner) => inner.as_collection(move |k, v| {
+                let mut datums_borrow = datums.borrow();
+                datums_borrow.extend(&**k);
+                datums_borrow.extend(v.into_datum_iter(Some(&[])));
+                logic(&datums_borrow)
+            }),
             SpecializedArrangementImport::RowRow(inner) => inner.as_collection(move |k, v| {
                 let datums_borrow = datums.borrow_with_many(&[k, v]);
                 logic(&datums_borrow)
@@ -471,6 +513,19 @@ where
                     refuel,
                 )
             }
+            SpecializedArrangementImport::RowUnit(inner) => {
+                CollectionBundle::<S, T>::flat_map_core(
+                    inner,
+                    key,
+                    move |k, v, t, d| {
+                        let mut datums_borrow = datums.borrow();
+                        datums_borrow.extend(&**k);
+                        datums_borrow.extend(v.into_datum_iter(Some(&[])));
+                        logic(&mut datums_borrow, t, d)
+                    },
+                    refuel,
+                )
+            }
             SpecializedArrangementImport::RowRow(inner) => CollectionBundle::<S, T>::flat_map_core(
                 inner,
                 key,
@@ -494,6 +549,9 @@ where
         match self {
             SpecializedArrangementImport::Bytes9Row(key_types, inner) => {
                 SpecializedArrangementImport::Bytes9Row(key_types.clone(), inner.leave_region())
+            }
+            SpecializedArrangementImport::RowUnit(inner) => {
+                SpecializedArrangementImport::RowUnit(inner.leave_region())
             }
             SpecializedArrangementImport::RowRow(inner) => {
                 SpecializedArrangementImport::RowRow(inner.leave_region())
@@ -1075,13 +1133,13 @@ where
         key: &Vec<MirScalarExpr>,
         thinning: &Vec<usize>,
         key_types: Vec<ColumnType>,
-        _val_types: Vec<ColumnType>,
+        val_types: Vec<ColumnType>,
         enable_specialized_arrangements: bool,
     ) -> (SpecializedArrangement<S>, Collection<S, DataflowError, i64>) {
         if enable_specialized_arrangements && Bytes9::valid_schema(&key_types) {
             // 9-byte key specialization.
             let (oks, errs) = oks.map_fallible(
-                "FormArrangementKey [9-byte]",
+                "FormArrangementKey [key: 9-byte]",
                 specialized_arrangement_key(
                     key.clone(),
                     thinning.clone(),
@@ -1089,9 +1147,18 @@ where
                     None,
                 ),
             );
-            let name = &format!("{} [9-byte]", name);
+            let name = &format!("{} [key: 9-byte]", name);
             let oks = oks.mz_arrange::<RowSpine<Bytes9, Row, _, _>>(name);
             (SpecializedArrangement::Bytes9Row(key_types, oks), errs)
+        } else if enable_specialized_arrangements && val_types.is_empty() {
+            // Emtpy value specialization.
+            let (oks, errs) = oks.map_fallible(
+                "FormArrangementKey [val: empty]",
+                specialized_arrangement_key(key.clone(), thinning.clone(), None, Some(vec![])),
+            );
+            let name = &format!("{} [val: empty]", name);
+            let oks = oks.mz_arrange::<RowSpine<Row, (), _, _>>(name);
+            (SpecializedArrangement::RowUnit(oks), errs)
         } else {
             // Catch-all: Just use RowRow.
             let (oks, errs) = oks.map_fallible(

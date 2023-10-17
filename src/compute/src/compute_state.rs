@@ -701,6 +701,9 @@ impl PendingPeek {
                     max_result_size,
                 )
             }
+            SpecializedTraceHandle::RowUnit(oks_handle) => {
+                Self::collect_ok_finished_data(peek, oks_handle, None, Some(&[]), max_result_size)
+            }
             SpecializedTraceHandle::RowRow(oks_handle) => {
                 Self::collect_ok_finished_data(peek, oks_handle, None, None, max_result_size)
             }

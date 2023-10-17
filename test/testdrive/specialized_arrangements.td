@@ -19,6 +19,94 @@ ALTER SYSTEM SET enable_specialized_arrangements = true
 
 > SET cluster_replica = r1;
 
+# Test specialization to empty values.
+> CREATE TABLE v_empty(a int, b int);
+
+> INSERT INTO v_empty SELECT a, a FROM generate_series(1, 10) a;
+
+> CREATE DEFAULT INDEX on v_empty;
+
+> SELECT COUNT(*)
+  FROM mz_internal.mz_dataflow_operator_dataflows
+  WHERE name LIKE '%ArrangeBy%[val: empty]%';
+1
+
+# Fast-path peek over specialized index.
+> SELECT * FROM v_empty WHERE a = 1 AND b = 1;
+1 1
+
+# Literal lookup over specialized index.
+> SELECT COUNT(*) FROM v_empty WHERE a = 1 AND b = 1;
+1
+
+# Full scan over specialized index.
+> SELECT b FROM v_empty WHERE a = 1;
+1
+
+# Uses of specialized index along with non-specialized collection.
+> CREATE TABLE t (a int, b int);
+
+> INSERT INTO t VALUES (42, 42), (NULL, NULL);
+
+> SELECT b FROM v_empty WHERE a = 1
+  UNION ALL
+  SELECT a FROM t WHERE a IS NOT NULL
+  ORDER BY 1;
+1
+42
+
+> SELECT a FROM t WHERE a IS NOT NULL
+  EXCEPT ALL
+  SELECT b FROM v_empty WHERE a = 1
+  ORDER BY 1;
+42
+
+> INSERT INTO v_empty VALUES (42, 42);
+
+? EXPLAIN PHYSICAL PLAN FOR
+  CREATE MATERIALIZED VIEW empty_val_join AS
+  SELECT v.b
+  FROM v_empty AS v
+      JOIN t AS t ON v.a = t.a AND v.b = t.b;
+materialize.public.empty_val_join:
+  Join::Linear
+    linear_stage[0]
+      closure
+        project=(#1)
+        filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
+      lookup={ relation=1, key=[#0, #1] }
+      stream={ key=[#0, #1], thinning=() }
+    source={ relation=0, key=[#0, #1] }
+    Get::PassArrangements materialize.public.v_empty
+      raw=false
+      arrangements[0]={ key=[#0, #1], permutation=id, thinning=() }
+      types=[integer?, integer?]
+    ArrangeBy
+      raw=true
+      arrangements[0]={ key=[#0, #1], permutation=id, thinning=() }
+      types=[integer, integer]
+      Get::Collection materialize.public.t
+        raw=true
+
+Source materialize.public.t
+  filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
+
+Used Indexes:
+  - materialize.public.v_empty_primary_idx (differential join)
+
+> CREATE MATERIALIZED VIEW empty_val_join AS
+  SELECT v.b
+  FROM v_empty AS v
+      JOIN t AS t ON v.a = t.a AND v.b = t.b;
+
+> SELECT * FROM empty_val_join;
+42
+
+> SELECT COUNT(*)
+  FROM mz_internal.mz_dataflow_operator_dataflows
+  WHERE name LIKE '%ArrangeBy%[val: empty]%';
+2
+
 # Test that single-column indexes with fixed-length 8-byte types use specialized arrangements.
 > CREATE TABLE t_boolean (a boolean NOT NULL);
 
@@ -141,7 +229,7 @@ ALTER SYSTEM SET enable_specialized_arrangements = true
 # 19 specialized arrangements in total.
 > SELECT COUNT(*)
   FROM mz_internal.mz_dataflow_operator_dataflows
-  WHERE name LIKE '%ArrangeBy%[9-byte]%';
+  WHERE name LIKE '%ArrangeBy%[key: 9-byte]%';
 13
 
 # Test query patterns. Note that we focus on bigint as a representative, but the same patterns
@@ -204,7 +292,7 @@ Used Indexes:
 
 > SELECT COUNT(*)
   FROM mz_internal.mz_dataflow_operator_dataflows
-  WHERE name LIKE '%ArrangeBy%[9-byte]%';
+  WHERE name LIKE '%ArrangeBy%[key: 9-byte]%';
 14
 
 # Illustrates joins across types.
@@ -244,7 +332,7 @@ Used Indexes:
 
 > SELECT COUNT(*)
   FROM mz_internal.mz_dataflow_operator_dataflows
-  WHERE name LIKE '%ArrangeBy%[9-byte]%';
+  WHERE name LIKE '%ArrangeBy%[key: 9-byte]%';
 15
 
 > RESET cluster;

@@ -116,6 +116,7 @@ pub enum SpecializedTraceHandle {
         Vec<ColumnType>,
         TraceRowHandle<Bytes9, Row, Timestamp, Diff>,
     ),
+    RowUnit(TraceRowHandle<Row, (), Timestamp, Diff>),
     RowRow(TraceRowHandle<Row, Row, Timestamp, Diff>),
 }
 
@@ -124,6 +125,7 @@ impl SpecializedTraceHandle {
     fn get_logical_compaction(&mut self) -> AntichainRef<Timestamp> {
         match self {
             SpecializedTraceHandle::Bytes9Row(_, handle) => handle.get_logical_compaction(),
+            SpecializedTraceHandle::RowUnit(handle) => handle.get_logical_compaction(),
             SpecializedTraceHandle::RowRow(handle) => handle.get_logical_compaction(),
         }
     }
@@ -132,6 +134,7 @@ impl SpecializedTraceHandle {
     pub fn set_logical_compaction(&mut self, frontier: AntichainRef<Timestamp>) {
         match self {
             SpecializedTraceHandle::Bytes9Row(_, handle) => handle.set_logical_compaction(frontier),
+            SpecializedTraceHandle::RowUnit(handle) => handle.set_logical_compaction(frontier),
             SpecializedTraceHandle::RowRow(handle) => handle.set_logical_compaction(frontier),
         }
     }
@@ -142,6 +145,7 @@ impl SpecializedTraceHandle {
             SpecializedTraceHandle::Bytes9Row(_, handle) => {
                 handle.set_physical_compaction(frontier)
             }
+            SpecializedTraceHandle::RowUnit(handle) => handle.set_physical_compaction(frontier),
             SpecializedTraceHandle::RowRow(handle) => handle.set_physical_compaction(frontier),
         }
     }
@@ -150,6 +154,7 @@ impl SpecializedTraceHandle {
     pub fn read_upper(&mut self, target: &mut Antichain<Timestamp>) {
         match self {
             SpecializedTraceHandle::Bytes9Row(_, handle) => handle.read_upper(target),
+            SpecializedTraceHandle::RowUnit(handle) => handle.read_upper(target),
             SpecializedTraceHandle::RowRow(handle) => handle.read_upper(target),
         }
     }
@@ -184,6 +189,19 @@ impl SpecializedTraceHandle {
                 };
                 (
                     SpecializedArrangementImport::Bytes9Row(key_types.clone(), oks.enter(scope)),
+                    oks_button,
+                )
+            }
+            SpecializedTraceHandle::RowUnit(handle) => {
+                let (oks, oks_button) =
+                    handle.import_frontier_core(&scope.parent, name, since, until);
+                let oks = if let Some(logger) = logger {
+                    oks.log_import_frontiers(logger, idx_id, export_ids)
+                } else {
+                    oks
+                };
+                (
+                    SpecializedArrangementImport::RowUnit(oks.enter(scope)),
                     oks_button,
                 )
             }

@@ -372,20 +372,70 @@ where
             )
         }
         (
+            SpecializedArrangement::RowUnit(prev_keyed),
+            SpecializedArrangement::RowUnit(next_input),
+        ) => differential_join_inner(
+            join_spec,
+            prev_keyed,
+            next_input,
+            None,
+            Some(vec![]),
+            Some(vec![]),
+            closure,
+        ),
+        (
+            SpecializedArrangement::RowUnit(prev_keyed),
+            SpecializedArrangement::RowRow(next_input),
+        ) => differential_join_inner(
+            join_spec,
+            prev_keyed,
+            next_input,
+            None,
+            Some(vec![]),
+            None,
+            closure,
+        ),
+        (
+            SpecializedArrangement::RowRow(prev_keyed),
+            SpecializedArrangement::RowUnit(next_input),
+        ) => differential_join_inner(
+            join_spec,
+            prev_keyed,
+            next_input,
+            None,
+            None,
+            Some(vec![]),
+            closure,
+        ),
+        (
             SpecializedArrangement::RowRow(prev_keyed),
             SpecializedArrangement::RowRow(next_input),
         ) => differential_join_inner(join_spec, prev_keyed, next_input, None, None, None, closure),
+        (SpecializedArrangement::Bytes9Row(key_types, _), SpecializedArrangement::RowUnit(_)) => {
+            panic!(
+                "Invalid combination of type specializations: key types differ! \
+                Bytes9Row local vs. RowUnit local, key_types: {:?}",
+                key_types
+            )
+        }
+        (SpecializedArrangement::RowUnit(_), SpecializedArrangement::Bytes9Row(key_types, _)) => {
+            panic!(
+                "Invalid combination of type specializations: key types differ! \
+                RowUnit local vs. Bytes9Row local, key_types: {:?}",
+                key_types
+            )
+        }
         (SpecializedArrangement::Bytes9Row(key_types, _), SpecializedArrangement::RowRow(_)) => {
             panic!(
                 "Invalid combination of type specializations: key types differ! \
-                Bytes9 local vs. Row local, key_types: {:?}",
+                Bytes9Row local vs. RowRow local, key_types: {:?}",
                 key_types
             )
         }
         (SpecializedArrangement::RowRow(_), SpecializedArrangement::Bytes9Row(key_types, _)) => {
             panic!(
                 "Invalid combination of type specializations: key types differ! \
-                Row local vs. Bytes9 local, key_types: {:?}",
+                RowRow local vs. Bytes9Row local, key_types: {:?}",
                 key_types
             )
         }
@@ -427,15 +477,67 @@ where
             )
         }
         (
+            SpecializedArrangement::RowUnit(prev_keyed),
+            SpecializedArrangementImport::RowUnit(next_input),
+        ) => differential_join_inner(
+            join_spec,
+            prev_keyed,
+            next_input,
+            None,
+            Some(vec![]),
+            Some(vec![]),
+            closure,
+        ),
+        (
+            SpecializedArrangement::RowUnit(prev_keyed),
+            SpecializedArrangementImport::RowRow(next_input),
+        ) => differential_join_inner(
+            join_spec,
+            prev_keyed,
+            next_input,
+            None,
+            Some(vec![]),
+            None,
+            closure,
+        ),
+        (
+            SpecializedArrangement::RowRow(prev_keyed),
+            SpecializedArrangementImport::RowUnit(next_input),
+        ) => differential_join_inner(
+            join_spec,
+            prev_keyed,
+            next_input,
+            None,
+            None,
+            Some(vec![]),
+            closure,
+        ),
+        (
             SpecializedArrangement::RowRow(prev_keyed),
             SpecializedArrangementImport::RowRow(next_input),
         ) => differential_join_inner(join_spec, prev_keyed, next_input, None, None, None, closure),
         (
             SpecializedArrangement::Bytes9Row(key_types, _),
+            SpecializedArrangementImport::RowUnit(_),
+        ) => panic!(
+            "Invalid combination of type specializations: key types differ! \
+            Bytes9Row local vs. RowUnit trace, key_types: {:?}",
+            key_types
+        ),
+        (
+            SpecializedArrangement::RowUnit(_),
+            SpecializedArrangementImport::Bytes9Row(key_types, _),
+        ) => panic!(
+            "Invalid combination of type specializations: key types differ! \
+            RowUnit local vs. Bytes9Row trace, key_types: {:?}",
+            key_types
+        ),
+        (
+            SpecializedArrangement::Bytes9Row(key_types, _),
             SpecializedArrangementImport::RowRow(_),
         ) => panic!(
             "Invalid combination of type specializations: key types differ! \
-            Bytes9 local vs. Row trace, key_types: {:?}",
+            Bytes9Row local vs. RowRow trace, key_types: {:?}",
             key_types
         ),
         (
@@ -443,7 +545,7 @@ where
             SpecializedArrangementImport::Bytes9Row(key_types, _),
         ) => panic!(
             "Invalid combination of type specializations: key types differ! \
-            Row local vs. Bytes9 trace, key_types: {:?}",
+            RowRow local vs. Bytes9Row trace, key_types: {:?}",
             key_types
         ),
     }
@@ -484,15 +586,67 @@ where
             )
         }
         (
+            SpecializedArrangementImport::RowUnit(prev_keyed),
+            SpecializedArrangement::RowUnit(next_input),
+        ) => differential_join_inner(
+            join_spec,
+            prev_keyed,
+            next_input,
+            None,
+            Some(vec![]),
+            Some(vec![]),
+            closure,
+        ),
+        (
+            SpecializedArrangementImport::RowUnit(prev_keyed),
+            SpecializedArrangement::RowRow(next_input),
+        ) => differential_join_inner(
+            join_spec,
+            prev_keyed,
+            next_input,
+            None,
+            Some(vec![]),
+            None,
+            closure,
+        ),
+        (
+            SpecializedArrangementImport::RowRow(prev_keyed),
+            SpecializedArrangement::RowUnit(next_input),
+        ) => differential_join_inner(
+            join_spec,
+            prev_keyed,
+            next_input,
+            None,
+            None,
+            Some(vec![]),
+            closure,
+        ),
+        (
             SpecializedArrangementImport::RowRow(prev_keyed),
             SpecializedArrangement::RowRow(next_input),
         ) => differential_join_inner(join_spec, prev_keyed, next_input, None, None, None, closure),
         (
             SpecializedArrangementImport::Bytes9Row(key_types, _),
+            SpecializedArrangement::RowUnit(_),
+        ) => panic!(
+            "Invalid combination of type specializations: key types differ! \
+            Bytes9Row trace vs. RowUnit local, key_types: {:?}",
+            key_types
+        ),
+        (
+            SpecializedArrangementImport::RowUnit(_),
+            SpecializedArrangement::Bytes9Row(key_types, _),
+        ) => panic!(
+            "Invalid combination of type specializations: key types differ! \
+            RowUnit trace vs. Bytes9Row local, key_types: {:?}",
+            key_types
+        ),
+        (
+            SpecializedArrangementImport::Bytes9Row(key_types, _),
             SpecializedArrangement::RowRow(_),
         ) => panic!(
             "Invalid combination of type specializations: key types differ! \
-            Bytes9 trace vs. Row local, key_types: {:?}",
+            Bytes9Row trace vs. RowRow local, key_types: {:?}",
             key_types
         ),
         (
@@ -500,7 +654,7 @@ where
             SpecializedArrangement::Bytes9Row(key_types, _),
         ) => panic!(
             "Invalid combination of type specializations: key types differ! \
-            Row trace vs. Bytes9 local, key_types: {:?}",
+            RowRow trace vs. Bytes9Row local, key_types: {:?}",
             key_types
         ),
     }
@@ -541,15 +695,67 @@ where
             )
         }
         (
+            SpecializedArrangementImport::RowUnit(prev_keyed),
+            SpecializedArrangementImport::RowUnit(next_input),
+        ) => differential_join_inner(
+            join_spec,
+            prev_keyed,
+            next_input,
+            None,
+            Some(vec![]),
+            Some(vec![]),
+            closure,
+        ),
+        (
+            SpecializedArrangementImport::RowUnit(prev_keyed),
+            SpecializedArrangementImport::RowRow(next_input),
+        ) => differential_join_inner(
+            join_spec,
+            prev_keyed,
+            next_input,
+            None,
+            Some(vec![]),
+            None,
+            closure,
+        ),
+        (
+            SpecializedArrangementImport::RowRow(prev_keyed),
+            SpecializedArrangementImport::RowUnit(next_input),
+        ) => differential_join_inner(
+            join_spec,
+            prev_keyed,
+            next_input,
+            None,
+            None,
+            Some(vec![]),
+            closure,
+        ),
+        (
             SpecializedArrangementImport::RowRow(prev_keyed),
             SpecializedArrangementImport::RowRow(next_input),
         ) => differential_join_inner(join_spec, prev_keyed, next_input, None, None, None, closure),
         (
             SpecializedArrangementImport::Bytes9Row(key_types, _),
+            SpecializedArrangementImport::RowUnit(_),
+        ) => panic!(
+            "Invalid combination of type specializations: key types differ! \
+            Bytes9Row trace vs. RowUnit trace, key_types: {:?}",
+            key_types
+        ),
+        (
+            SpecializedArrangementImport::RowUnit(_),
+            SpecializedArrangementImport::Bytes9Row(key_types, _),
+        ) => panic!(
+            "Invalid combination of type specializations: key types differ! \
+            RowUnit trace vs. Bytes9Row trace, key_types: {:?}",
+            key_types
+        ),
+        (
+            SpecializedArrangementImport::Bytes9Row(key_types, _),
             SpecializedArrangementImport::RowRow(_),
         ) => panic!(
             "Invalid combination of type specializations: key types differ! \
-            Bytes9 trace vs. Row trace, key_types: {:?}",
+            Bytes9Row trace vs. RowRow trace, key_types: {:?}",
             key_types
         ),
         (
@@ -557,7 +763,7 @@ where
             SpecializedArrangementImport::Bytes9Row(key_types, _),
         ) => panic!(
             "Invalid combination of type specializations: key types differ! \
-            Row trace vs. Bytes9 trace, key_types: {:?}",
+            RowRow trace vs. Bytes9Row trace, key_types: {:?}",
             key_types
         ),
     }
