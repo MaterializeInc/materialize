@@ -4747,7 +4747,7 @@ fn plan_function<'a>(
                 sql_bail!("OVER clause not allowed on {name}. The OVER clause can only be used with window functions (including aggregations).");
             }
             impls
-        },
+        }
         Func::ScalarWindow(impls) => {
             let (
                 ignore_nulls,
