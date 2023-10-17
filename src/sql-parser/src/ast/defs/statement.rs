@@ -2448,6 +2448,9 @@ pub enum ShowObjectType<T: AstInfo> {
         object_type: Option<SystemObjectType>,
         role: Option<T::RoleName>,
     },
+    RoleMembership {
+        role: Option<T::RoleName>,
+    },
 }
 /// `SHOW <object>S`
 ///
@@ -2487,6 +2490,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ShowObjectType::Schema { .. } => "SCHEMAS",
             ShowObjectType::Subsource { .. } => "SUBSOURCES",
             ShowObjectType::Privileges { .. } => "PRIVILEGES",
+            ShowObjectType::RoleMembership { .. } => "ROLE MEMBERSHIP",
         });
 
         if let ShowObjectType::Index { on_object, .. } = &self.object_type {
@@ -2539,6 +2543,14 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
                 f.write_str(" FOR ");
                 f.write_node(role);
             }
+        }
+
+        if let ShowObjectType::RoleMembership {
+            role: Some(role), ..
+        } = &self.object_type
+        {
+            f.write_str(" FOR ");
+            f.write_node(role);
         }
 
         if let Some(filter) = &self.filter {

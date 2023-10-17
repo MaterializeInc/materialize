@@ -63,6 +63,19 @@ r2,r1,mz_system
 r3,r2,mz_system
 COMPLETE 2
 
+query TTT
+SELECT * FROM (SHOW ROLE MEMBERSHIP) ORDER BY role, member
+----
+r2  r1  mz_system
+r3  r2  mz_system
+r5  r4  mz_system
+
+query TTT
+SELECT * FROM (SHOW ROLE MEMBERSHIP FOR r2) ORDER BY role, member
+----
+r2  r1  mz_system
+r3  r2  mz_system
+
 # SHOW SYSTEM PRIVILEGES
 
 simple conn=mz_system,user=mz_system

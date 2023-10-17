@@ -735,3 +735,17 @@ SHOW PRIVILEGES ON SOURCES
 error: For object type SOURCES, you must specify 'TABLES'
 SHOW PRIVILEGES ON SOURCES
                    ^
+
+parse-statement
+SHOW ROLE MEMBERSHIP
+----
+SHOW ROLE MEMBERSHIP
+=>
+Show(ShowObjects(ShowObjectsStatement { object_type: RoleMembership { role: None }, from: None, filter: None }))
+
+parse-statement
+SHOW ROLE MEMBERSHIP FOR joe
+----
+SHOW ROLE MEMBERSHIP FOR joe
+=>
+Show(ShowObjects(ShowObjectsStatement { object_type: RoleMembership { role: Some(Ident("joe")) }, from: None, filter: None }))

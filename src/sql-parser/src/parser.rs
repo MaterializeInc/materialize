@@ -6349,6 +6349,18 @@ impl<'a> Parser<'a> {
             }))
         } else if self.parse_keyword(PRIVILEGES) {
             self.parse_show_privileges()
+        } else if self.parse_keyword(ROLE) {
+            self.expect_keyword(MEMBERSHIP)?;
+            let role = if self.parse_keyword(FOR) {
+                Some(self.parse_identifier()?)
+            } else {
+                None
+            };
+            Ok(ShowStatement::ShowObjects(ShowObjectsStatement {
+                object_type: ShowObjectType::RoleMembership { role },
+                from: None,
+                filter: self.parse_show_statement_filter()?,
+            }))
         } else if self.parse_keywords(&[CREATE, VIEW]) {
             Ok(ShowStatement::ShowCreateView(ShowCreateViewStatement {
                 view_name: self.parse_raw_name()?,
