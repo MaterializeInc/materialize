@@ -1757,9 +1757,11 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 let name = normalize::column_name(column_name.column);
                 let Some((index, _typ)) = desc.get_by_name(&name) else {
                     if self.status.is_ok() {
+                        let similar = desc.iter_similar_names(&name).cloned().collect();
                         self.status = Err(PlanError::UnknownColumn {
                             table: Some(full_name.clone().into()),
                             column: name,
+                            similar,
                         })
                     }
                     return ResolvedColumnName::Error;

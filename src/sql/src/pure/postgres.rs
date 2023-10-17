@@ -146,6 +146,15 @@ pub(super) fn generate_text_columns(
                 })?;
 
         if !desc.columns.iter().any(|column| column.name == col) {
+            let column = mz_repr::ColumnName::from(col);
+            let similar = desc
+                .columns
+                .iter()
+                .filter_map(|c| {
+                    let c_name = mz_repr::ColumnName::from(c.name.clone());
+                    c_name.is_similar(&column).then_some(c_name)
+                })
+                .collect();
             return Err(PlanError::InvalidOptionValue {
                 option_name: option_name.to_string(),
                 err: Box::new(PlanError::UnknownColumn {
@@ -153,7 +162,8 @@ pub(super) fn generate_text_columns(
                         normalize::unresolved_item_name(fully_qualified_name)
                             .expect("known to be of valid len"),
                     ),
-                    column: mz_repr::ColumnName::from(col),
+                    column,
+                    similar,
                 }),
             });
         }

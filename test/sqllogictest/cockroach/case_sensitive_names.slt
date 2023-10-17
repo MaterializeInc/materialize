@@ -204,10 +204,10 @@ SELECT x, X, "Y" FROM foo
 ----
 x x Y
 
-statement error column "X" does not exist
+statement error db error: ERROR: column "X" does not exist\nHINT: The similarly named column "x" does exist.
 SELECT "X" FROM foo
 
-statement error column "y" does not exist
+statement error column "y" does not exist\nHINT: The similarly named column "Y" does exist.
 SELECT Y FROM foo
 
 # The following should not be ambiguous.
@@ -215,6 +215,33 @@ query II colnames
 SELECT Y, "Y" FROM (SELECT x as y, "Y" FROM foo)
 ----
 y Y
+
+statement ok
+CREATE TABLE foo_multi_case ("cAsE" INT, "CASE" INT)
+
+statement error db error: ERROR: column "foo_multi_case.case" does not exist\nHINT: There are similarly named columns that do exist "foo_multi_case.cAsE", "foo_multi_case.CASE".
+SELECT foo_multi_case.case FROM foo_multi_case;
+
+statement ok
+CREATE TABLE j1 ("X" int);
+
+statement ok
+INSERT INTO j1 VALUES (1), (2), (3);
+
+statement ok
+CREATE TABLE j2 ("X" int, "Y" int);
+
+statement ok
+INSERT INTO j2 VALUES (1, 5), (2, 7), (8, 9);
+
+statement error db error: ERROR: column "Y" does not exist\nHINT: The similarly named column "y" does exist.
+SELECT "Y" FROM ( SELECT "X" as y FROM j1 NATURAL JOIN j2 );
+
+query I
+SELECT y FROM ( SELECT "X" as y FROM j1 NATURAL JOIN j2 );
+----
+1
+2
 
 # Case sensitivity of view names.
 

@@ -283,10 +283,21 @@ impl Scope {
             .all_items(outer_scopes)
             .filter(|(column, lat_level, item)| (matches)(*column, *lat_level, item));
         match results.next() {
-            None => Err(PlanError::UnknownColumn {
-                table: table_name.cloned(),
-                column: column_name.clone(),
-            }),
+            None => {
+                let similar = self
+                    .all_items(outer_scopes)
+                    .filter_map(|(_column, _lat_level, item)| {
+                        item.column_name
+                            .is_similar(column_name)
+                            .then(|| item.column_name.clone())
+                    })
+                    .collect();
+                Err(PlanError::UnknownColumn {
+                    table: table_name.cloned(),
+                    column: column_name.clone(),
+                    similar,
+                })
+            }
             Some((column, lat_level, item)) => {
                 if results
                     .find(|(_column, lat_level2, _item)| lat_level == *lat_level2)
