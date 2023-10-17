@@ -84,6 +84,7 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::num::NonZeroI64;
 use std::time::Duration;
+use uuid::Uuid;
 
 use mz_stash::DebugStashFactory;
 
@@ -94,6 +95,7 @@ pub use crate::objects::{
     SystemConfiguration, SystemObjectMapping, TimelineTimestamp,
 };
 use crate::objects::{IntrospectionSourceIndex, Snapshot};
+use crate::persist::{PersistCatalogState, PersistHandle};
 use crate::stash::{Connection, DebugOpenableConnection, OpenableConnection};
 pub use crate::stash::{
     StashConfig, ALL_COLLECTIONS, AUDIT_LOG_COLLECTION, CLUSTER_COLLECTION,
@@ -109,6 +111,7 @@ use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
+use mz_persist_client::PersistClient;
 use mz_repr::adt::mz_acl_item::MzAclItem;
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
@@ -121,6 +124,7 @@ pub mod builtin;
 mod error;
 pub mod initialize;
 pub mod objects;
+mod persist;
 
 pub const DATABASE_ID_ALLOC_KEY: &str = "database";
 pub const SCHEMA_ID_ALLOC_KEY: &str = "schema";
@@ -141,6 +145,8 @@ pub struct BootstrapArgs {
     pub bootstrap_role: Option<String>,
 }
 
+pub type Epoch = NonZeroI64;
+
 /// An API for opening a durable catalog state.
 #[async_trait]
 pub trait OpenableDurableCatalogState<D: DurableCatalogState>: Debug + Send {
@@ -153,7 +159,7 @@ pub trait OpenableDurableCatalogState<D: DurableCatalogState>: Debug + Send {
     ///   - Catalog initialization fails.
     ///   - Catalog migrations fail.
     async fn open_savepoint(
-        &mut self,
+        mut self,
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
@@ -165,7 +171,7 @@ pub trait OpenableDurableCatalogState<D: DurableCatalogState>: Debug + Send {
     /// If the catalog is uninitialized or requires a migrations, then
     /// it will fail to open in read only mode.
     async fn open_read_only(
-        &mut self,
+        mut self,
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
     ) -> Result<D, CatalogError>;
@@ -174,7 +180,7 @@ pub trait OpenableDurableCatalogState<D: DurableCatalogState>: Debug + Send {
     /// catalog, if it has not been initialized, and perform any migrations
     /// needed.
     async fn open(
-        &mut self,
+        mut self,
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
@@ -200,7 +206,7 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
     /// for their epoch.
     ///
     /// NB: We may remove this in later iterations of Pv2.
-    fn epoch(&mut self) -> NonZeroI64;
+    fn epoch(&mut self) -> Epoch;
 
     /// Returns the version of Materialize that last wrote to the catalog.
     ///
@@ -389,20 +395,27 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     }
 }
 
-/// Creates a durable catalog state implemented using the stash. The catalog status is unopened,
-/// and must be opened before use.
+/// Creates a openable durable catalog state implemented using the stash.
 pub fn stash_backed_catalog_state(
     config: StashConfig,
 ) -> impl OpenableDurableCatalogState<Connection> {
     OpenableConnection::new(config)
 }
 
-/// Creates a debug durable catalog state implemented using the stash that is meant to be used in
-/// tests. The catalog status is unopened, and must be opened before use.
+/// Creates an openable debug durable catalog state implemented using the stash that is meant to be
+/// used in tests.
 pub fn debug_stash_backed_catalog_state(
     debug_stash_factory: &DebugStashFactory,
 ) -> impl OpenableDurableCatalogState<Connection> + '_ {
     DebugOpenableConnection::new(debug_stash_factory)
+}
+
+/// Creates an openable durable catalog state implemented using persist.
+pub async fn persist_backed_catalog_state(
+    persist_client: PersistClient,
+    environment_id: Uuid,
+) -> impl OpenableDurableCatalogState<PersistCatalogState> {
+    PersistHandle::new(persist_client, environment_id).await
 }
 
 pub fn debug_bootstrap_args() -> BootstrapArgs {

@@ -3687,7 +3687,9 @@ name = "mz-catalog"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "bytes",
  "derivative",
+ "differential-dataflow",
  "futures",
  "insta",
  "itertools",
@@ -3696,6 +3698,8 @@ dependencies = [
  "mz-controller",
  "mz-controller-types",
  "mz-ore",
+ "mz-persist-client",
+ "mz-persist-types",
  "mz-pgrepr",
  "mz-postgres-util",
  "mz-proto",
@@ -3714,9 +3718,11 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+ "timely",
  "tokio",
  "tokio-postgres",
  "tracing",
+ "uuid",
  "workspace-hack",
 ]
 

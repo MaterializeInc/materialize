@@ -11,7 +11,6 @@ use async_trait::async_trait;
 use derivative::Derivative;
 use std::collections::BTreeMap;
 use std::iter::once;
-use std::num::NonZeroI64;
 use std::pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -49,8 +48,8 @@ use crate::transaction::{
     TransactionBatch,
 };
 use crate::{
-    initialize, BootstrapArgs, CatalogError, DurableCatalogState, OpenableDurableCatalogState,
-    ReadOnlyDurableCatalogState,
+    initialize, BootstrapArgs, CatalogError, DurableCatalogState, Epoch,
+    OpenableDurableCatalogState, ReadOnlyDurableCatalogState,
 };
 
 pub const SETTING_COLLECTION: TypedCollection<proto::SettingKey, proto::SettingValue> =
@@ -106,7 +105,7 @@ pub const SYSTEM_PRIVILEGES_COLLECTION: TypedCollection<
 // [`mz_stash::upgrade::v17_to_v18`] as an example.
 
 /// Configuration needed to connect to the stash.
-#[derive(Derivative)]
+#[derive(Derivative, Clone)]
 #[derivative(Debug)]
 pub struct StashConfig {
     pub stash_factory: StashFactory,
@@ -187,7 +186,7 @@ impl OpenableConnection {
 impl OpenableDurableCatalogState<Connection> for OpenableConnection {
     #[tracing::instrument(name = "storage::open_check", level = "info", skip_all)]
     async fn open_savepoint(
-        &mut self,
+        mut self,
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
@@ -199,7 +198,7 @@ impl OpenableDurableCatalogState<Connection> for OpenableConnection {
 
     #[tracing::instrument(name = "storage::open_read_only", level = "info", skip_all)]
     async fn open_read_only(
-        &mut self,
+        mut self,
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
     ) -> Result<Connection, CatalogError> {
@@ -210,7 +209,7 @@ impl OpenableDurableCatalogState<Connection> for OpenableConnection {
 
     #[tracing::instrument(name = "storage::open", level = "info", skip_all)]
     async fn open(
-        &mut self,
+        mut self,
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
@@ -420,10 +419,10 @@ impl Connection {
 
 #[async_trait]
 impl ReadOnlyDurableCatalogState for Connection {
-    fn epoch(&mut self) -> NonZeroI64 {
+    fn epoch(&mut self) -> Epoch {
         self.stash
             .epoch()
-            .expect("a opened stash should always have an epoch number")
+            .expect("an opened stash should always have an epoch number")
     }
 
     async fn get_catalog_content_version(&mut self) -> Result<Option<String>, CatalogError> {
@@ -1169,7 +1168,7 @@ impl DebugOpenableConnection<'_> {
 #[async_trait]
 impl OpenableDurableCatalogState<Connection> for DebugOpenableConnection<'_> {
     async fn open_savepoint(
-        &mut self,
+        mut self,
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
@@ -1180,7 +1179,7 @@ impl OpenableDurableCatalogState<Connection> for DebugOpenableConnection<'_> {
     }
 
     async fn open_read_only(
-        &mut self,
+        mut self,
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
     ) -> Result<Connection, CatalogError> {
@@ -1190,7 +1189,7 @@ impl OpenableDurableCatalogState<Connection> for DebugOpenableConnection<'_> {
     }
 
     async fn open(
-        &mut self,
+        mut self,
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
