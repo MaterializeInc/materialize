@@ -183,10 +183,7 @@ pub trait ArrangementSize {
 #[inline]
 fn vec_size<T>(data: &Vec<T>, mut callback: impl FnMut(usize, usize)) {
     let size_of_t = std::mem::size_of::<T>();
-    // A vector only owns an allocation if the capacity is > 0.
-    if data.capacity() > 0 {
-        callback(data.len() * size_of_t, data.capacity() * size_of_t);
-    }
+    callback(data.len() * size_of_t, data.capacity() * size_of_t);
 }
 
 /// Helper for [`ArrangementSize`] to install a common operator holding on to a trace.
@@ -282,7 +279,7 @@ where
         log_arrangement_size_inner(self, |trace| {
             let (mut size, mut capacity, mut allocations) = (0, 0, 0);
             let mut callback = |siz, cap| {
-                allocations += 1;
+                allocations += usize::from(cap > 0);
                 size += siz;
                 capacity += cap
             };
@@ -310,7 +307,7 @@ where
         log_arrangement_size_inner(self, |trace| {
             let (mut size, mut capacity, mut allocations) = (0, 0, 0);
             let mut callback = |siz, cap| {
-                allocations += 1;
+                allocations += usize::from(cap > 0);
                 size += siz;
                 capacity += cap
             };
