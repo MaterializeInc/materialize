@@ -166,7 +166,6 @@ where
         let mut errors = Default::default();
         let arrangement = self.render_reduce_plan_inner(plan, collection, &mut errors, key_arity);
         let errs: KeyCollection<_, _, _> = err_input.concatenate(errors).into();
-        // TODO(vmarcos): We should implement arrangement specialization here (#22103).
         CollectionBundle::from_columns(
             0..key_arity,
             ArrangementFlavor::Local(arrangement, errs.mz_arrange("Arrange bundle err")),
@@ -183,6 +182,8 @@ where
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
+        // TODO(vmarcos): Arrangement specialization here could eventually be extended to keys,
+        // not only values (#22103).
         let arrangement = match plan {
             // If we have no aggregations or just a single type of reduction, we
             // can go ahead and render them directly.
@@ -241,11 +242,6 @@ where
                         errors,
                         key_arity,
                     ) {
-                        SpecializedArrangement::Bytes9Row(_, _) => {
-                            unreachable!(
-                                "Unexpected Bytes9Row arrangement in reduce collation rendering"
-                            )
-                        }
                         SpecializedArrangement::RowUnit(_) => {
                             unreachable!(
                                 "Unexpected RowUnit arrangement in reduce collation rendering"

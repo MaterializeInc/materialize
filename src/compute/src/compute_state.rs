@@ -692,15 +692,6 @@ impl PendingPeek {
         let peek = &mut self.peek;
         let oks = self.trace_bundle.oks_mut();
         match oks {
-            SpecializedTraceHandle::Bytes9Row(key_types, oks_handle) => {
-                Self::collect_ok_finished_data(
-                    peek,
-                    oks_handle,
-                    Some(key_types),
-                    None,
-                    max_result_size,
-                )
-            }
             SpecializedTraceHandle::RowUnit(oks_handle) => {
                 Self::collect_ok_finished_data(peek, oks_handle, None, Some(&[]), max_result_size)
             }

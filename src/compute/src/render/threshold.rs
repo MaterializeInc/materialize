@@ -67,10 +67,6 @@ where
     L: Fn(&Diff) -> bool + 'static,
 {
     match oks {
-        SpecializedArrangement::Bytes9Row(key_types, inner) => {
-            let oks = threshold_arrangement(inner, name, logic);
-            SpecializedArrangement::Bytes9Row(key_types.clone(), oks)
-        }
         SpecializedArrangement::RowUnit(inner) => {
             let oks = threshold_arrangement(inner, name, logic);
             SpecializedArrangement::RowUnit(oks)
@@ -95,10 +91,6 @@ where
     L: Fn(&Diff) -> bool + 'static,
 {
     match oks {
-        SpecializedArrangementImport::Bytes9Row(key_types, inner) => {
-            let oks = threshold_arrangement(inner, name, logic);
-            SpecializedArrangement::Bytes9Row(key_types.clone(), oks)
-        }
         SpecializedArrangementImport::RowUnit(inner) => {
             let oks = threshold_arrangement(inner, name, logic);
             SpecializedArrangement::RowUnit(oks)

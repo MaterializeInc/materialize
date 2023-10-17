@@ -643,10 +643,6 @@ where
         oks: SpecializedArrangement<Child<'g, G, T>>,
     ) -> SpecializedArrangement<G> {
         match oks {
-            SpecializedArrangement::Bytes9Row(key_types, inner) => {
-                let oks = self.rearrange_iterative(inner);
-                SpecializedArrangement::Bytes9Row(key_types, oks)
-            }
             SpecializedArrangement::RowUnit(inner) => {
                 let oks = self.rearrange_iterative(inner);
                 SpecializedArrangement::RowUnit(oks)
