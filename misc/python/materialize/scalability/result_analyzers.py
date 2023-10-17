@@ -42,28 +42,22 @@ class DefaultResultAnalyzer(ResultAnalyzer):
         if count_endpoints <= 1:
             raise RuntimeError("Cannot compute regressions with a single target")
 
-        if count_endpoints > 2:
-            raise RuntimeError(
-                "Regressions for more than two targets are currently not supported"
-            )
-
         if regression_baseline_endpoint not in endpoint_result_data_by_endpoint.keys():
             raise RuntimeError("Regression baseline endpoint not in results!")
 
-        other_endpoint = next(
-            iter(
-                endpoint_result_data_by_endpoint.keys() - {regression_baseline_endpoint}
-            )
+        other_endpoints = list(
+            endpoint_result_data_by_endpoint.keys() - {regression_baseline_endpoint}
         )
 
-        self.determine_regression_in_workload(
-            regression_outcome,
-            workload_name,
-            regression_baseline_endpoint,
-            other_endpoint,
-            endpoint_result_data_by_endpoint[regression_baseline_endpoint],
-            endpoint_result_data_by_endpoint[other_endpoint],
-        )
+        for other_endpoint in other_endpoints:
+            self.determine_regression_in_workload(
+                regression_outcome,
+                workload_name,
+                regression_baseline_endpoint,
+                other_endpoint,
+                endpoint_result_data_by_endpoint[regression_baseline_endpoint],
+                endpoint_result_data_by_endpoint[other_endpoint],
+            )
 
     def determine_regression_in_workload(
         self,
