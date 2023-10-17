@@ -525,6 +525,9 @@ impl<'a> Parser<'a> {
         // because the `date` type name is not followed by a string literal, but
         // in fact is a valid expression that should parse as the column name
         // "date".
+        //
+        // Note: the maybe! block here does swallow valid parsing errors
+        // See <https://github.com/MaterializeInc/materialize/issues/22397> for more details
         maybe!(self.maybe_parse(|parser| {
             let data_type = parser.parse_data_type()?;
             if data_type.to_string().as_str() == "interval" {
@@ -565,39 +568,6 @@ impl<'a> Parser<'a> {
             Token::Keyword(EXISTS) => self.parse_exists_expr(),
             Token::Keyword(EXTRACT) => self.parse_extract_expr(),
             Token::Keyword(INTERVAL) => Ok(Expr::Value(self.parse_interval_value()?)),
-            // having timestamps separately here because errors are swallowed by the maybe! block
-            Token::Keyword(id @ TIMESTAMP) | Token::Keyword(id @ TIMESTAMPTZ) => {
-                let index = self.index;
-                let maybe_data_type = |parser: &mut Parser| {
-                    parser.prev_token();
-                    match parser.parse_data_type() {
-                        Ok(data_type) => Ok(Expr::Cast {
-                            expr: Box::new(Expr::Value(Value::String(
-                                parser.parse_literal_string()?,
-                            ))),
-                            data_type,
-                        }),
-                        Err(e) => Err(e),
-                    }
-                };
-
-                // Check if it's a valid data type.
-                // If not, check if it can be a identifier.
-                // Return the data type parsing error in case all fails
-                match maybe_data_type(self) {
-                    Ok(data_type_expr) => Ok(data_type_expr),
-                    Err(e) => {
-                        self.index = index;
-                        match self.parse_qualified_identifier(id.into()) {
-                            // It cannot be a function, it's a type with modifiers
-                            // Returning the original parsing error
-                            Ok(Expr::Function(_)) => Err(e),
-                            Ok(expr) => Ok(expr),
-                            Err(_) => Err(e),
-                        }
-                    }
-                }
-            }
             Token::Keyword(NOT) => Ok(Expr::Not {
                 expr: Box::new(self.parse_subexpr(Precedence::PrefixNot)?),
             }),

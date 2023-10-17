@@ -1574,13 +1574,15 @@ SELECT '95143-12-31 23:59:59.123456789+06'::timestamp(-1);
 query error precision for type timestamp or timestamptz must be between 0 and 6
 SELECT timestamptz(-1) '95143-12-31 23:59:59.123456789+06';
 
-query error number too large to fit in target type
+# Note: we regressed the error messages for the following
+# See <https://github.com/MaterializeInc/materialize/issues/22397>
+query error Expected end of statement
 SELECT timestamp(10000000000000000000) '95143-12-31 23:59:59.123456789+06';
 
-query error number too large to fit in target type
+query error Expected end of statement
 SELECT timestamptz(10000000000000000000) '95143-12-31 23:59:59.123456789+06';
 
-query error number too large to fit in target type
+query error Expected end of statement
 SELECT timestamp(9223372036854775808) '95143-12-31 23:59:59.123456789+06';
 
 # checking we are not converting between the same precision again
