@@ -354,7 +354,7 @@ contains:upsert key could not be validated as unique
 > SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 "Arrange ReduceMinsMaxes"
 "Arrange ReduceMinsMaxes"
-"Arranged DistinctBy"
+"Arranged DistinctBy [val: empty]"
 "Arranged MinsMaxesHierarchical input"
 "Arranged MinsMaxesHierarchical input"
 "Arranged MinsMaxesHierarchical input"
@@ -369,7 +369,7 @@ contains:upsert key could not be validated as unique
 "Arranged MinsMaxesHierarchical input"
 "Arranged MinsMaxesHierarchical input"
 "Arranged MinsMaxesHierarchical input"
-DistinctBy
+"DistinctBy [val: empty]"
 DistinctByErrorCheck
 ReduceMinsMaxes
 ReduceMinsMaxes
