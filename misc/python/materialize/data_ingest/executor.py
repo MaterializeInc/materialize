@@ -34,14 +34,20 @@ class Executor:
     mz_conn: pg8000.Connection
     fields: list[Field]
     database: str
+    schema: str
 
     def __init__(
-        self, ports: dict[str, int], fields: list[Field] = [], database: str = ""
+        self,
+        ports: dict[str, int],
+        fields: list[Field] = [],
+        database: str = "",
+        schema: str = "public",
     ) -> None:
         self.num_transactions = 0
         self.ports = ports
         self.fields = fields
         self.database = database
+        self.schema = schema
         self.reconnect()
 
     def reconnect(self) -> None:
@@ -102,8 +108,9 @@ class KafkaExecutor(Executor):
         ports: dict[str, int],
         fields: list[Field],
         database: str,
+        schema: str = "public",
     ):
-        super().__init__(ports, fields, database)
+        super().__init__(ports, fields, database, schema)
 
         self.topic = f"data-ingest-{num}"
         self.table = f"kafka_table{num}"
@@ -186,7 +193,7 @@ class KafkaExecutor(Executor):
         with self.mz_conn.cursor() as cur:
             self.execute(
                 cur,
-                f"""CREATE SOURCE {self.table}
+                f"""CREATE SOURCE {self.schema}.{self.table}
                     FROM KAFKA CONNECTION kafka_conn (TOPIC '{self.topic}')
                     FORMAT AVRO
                     USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -252,8 +259,9 @@ class PgExecutor(Executor):
         ports: dict[str, int],
         fields: list[Field],
         database: str,
+        schema: str = "public",
     ):
-        super().__init__(ports, fields, database)
+        super().__init__(ports, fields, database, schema)
         self.table = f"table{num}"
         self.source = f"postres_source{num}"
         self.num = num
@@ -301,7 +309,7 @@ class PgExecutor(Executor):
             )
             self.execute(
                 cur,
-                f"""CREATE SOURCE {self.source}
+                f"""CREATE SOURCE {self.schema}.{self.source}
                     FROM POSTGRES CONNECTION pg{self.num} (PUBLICATION 'postgres_source')
                     FOR TABLES ({self.table} AS {self.table})""",
             )
@@ -370,8 +378,9 @@ class KafkaRoundtripExecutor(Executor):
         ports: dict[str, int],
         fields: list[Field],
         database: str,
+        schema: str = "public",
     ):
-        super().__init__(ports, fields, database)
+        super().__init__(ports, fields, database, schema)
         self.table_original = f"table_rt_source{num}"
         self.table = f"table_rt{num}"
         self.topic = f"data-ingest-rt-{num}"
@@ -390,13 +399,13 @@ class KafkaRoundtripExecutor(Executor):
             self.execute(cur, f"DROP TABLE IF EXISTS {self.table_original}")
             self.execute(
                 cur,
-                f"""CREATE TABLE {self.table_original} (
+                f"""CREATE TABLE {self.schema}.{self.table_original} (
                         {", ".join(values)},
                         PRIMARY KEY ({", ".join(keys)}));""",
             )
             self.execute(
                 cur,
-                f"""CREATE SINK sink{self.num} FROM {self.table_original}
+                f"""CREATE SINK {self.schema}.sink{self.num} FROM {self.table_original}
                     INTO KAFKA CONNECTION kafka_conn (TOPIC '{self.topic}')
                     KEY ({", ".join(keys)})
                     FORMAT AVRO
@@ -405,7 +414,7 @@ class KafkaRoundtripExecutor(Executor):
             )
             self.execute(
                 cur,
-                f"""CREATE SOURCE {self.table}
+                f"""CREATE SOURCE {self.schema}.{self.table}
                     FROM KAFKA CONNECTION kafka_conn (TOPIC '{self.topic}')
                     FORMAT AVRO
                     USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn

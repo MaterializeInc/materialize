@@ -16,25 +16,18 @@ from enum import Enum
 from pg8000.native import identifier
 
 from materialize.data_ingest.data_type import (
-    DoubleType,
-    FloatType,
-    IntType,
-    LongType,
-    StringType,
-)
-from materialize.data_ingest.executor import KafkaExecutor, PgExecutor
-from materialize.data_ingest.field import Field
-from materialize.data_ingest.transaction import Transaction
-from materialize.data_ingest.workload import WORKLOADS
-from materialize.parallel_workload.data_type import (
     DATA_TYPES,
+    DATA_TYPES_FOR_AVRO,
     Bytea,
     DataType,
     Jsonb,
     Text,
     TextTextMap,
-    to_pw_type,
 )
+from materialize.data_ingest.executor import KafkaExecutor, PgExecutor
+from materialize.data_ingest.field import Field
+from materialize.data_ingest.transaction import Transaction
+from materialize.data_ingest.workload import WORKLOADS
 from materialize.parallel_workload.executor import Executor
 from materialize.parallel_workload.settings import Complexity, Scenario
 
@@ -97,7 +90,9 @@ class Column:
         self.data_type = data_type
         self.db_object = db_object
         self.nullable = rng.choice([True, False])
-        self.default = rng.choice([None, str(data_type.value(rng, True))])
+        self.default = rng.choice(
+            [None, str(data_type.random_value(rng, in_query=True))]
+        )
         self._name = f"c{self.column_id}_{self.data_type.name()}"
 
     def __str__(self) -> str:
@@ -110,7 +105,7 @@ class Column:
         self._name = new_name
 
     def value(self, rng: random.Random, in_query: bool = False) -> str:
-        return str(self.data_type.value(rng, in_query))
+        return str(self.data_type.random_value(rng, in_query=in_query))
 
     def create(self) -> str:
         result = f"{self.name(True)} {self.data_type.name()}"
@@ -393,16 +388,16 @@ class KafkaSource(DBObject):
         self.cluster = cluster
         self.schema = schema
         fields = []
-        types = (StringType, IntType, LongType, FloatType, DoubleType)
         for i in range(rng.randint(1, 10)):
-            fields.append(Field(f"key{i}", rng.choice(types), True))
+            fields.append(Field(f"key{i}", rng.choice(DATA_TYPES_FOR_AVRO), True))
         for i in range(rng.randint(0, 20)):
-            fields.append(Field(f"value{i}", rng.choice(types), False))
+            fields.append(Field(f"value{i}", rng.choice(DATA_TYPES_FOR_AVRO), False))
         self.columns = [
-            KafkaColumn(field.name, to_pw_type(field.data_type), False, self)
-            for field in fields
+            KafkaColumn(field.name, field.data_type, False, self) for field in fields
         ]
-        self.executor = KafkaExecutor(self.source_id, ports, fields, database, schema)
+        self.executor = KafkaExecutor(
+            self.source_id, ports, fields, database, str(schema)
+        )
         self.generator = rng.choice(WORKLOADS)(None).generate(fields)
         self.lock = threading.Lock()
 
@@ -503,16 +498,14 @@ class PostgresSource(DBObject):
         self.cluster = cluster
         self.schema = schema
         fields = []
-        types = (StringType, IntType, LongType, FloatType, DoubleType)
         for i in range(rng.randint(1, 10)):
-            fields.append(Field(f"key{i}", rng.choice(types), True))
+            fields.append(Field(f"key{i}", rng.choice(DATA_TYPES_FOR_AVRO), True))
         for i in range(rng.randint(0, 20)):
-            fields.append(Field(f"value{i}", rng.choice(types), False))
+            fields.append(Field(f"value{i}", rng.choice(DATA_TYPES_FOR_AVRO), False))
         self.columns = [
-            PostgresColumn(field.name, to_pw_type(field.data_type), False, self)
-            for field in fields
+            PostgresColumn(field.name, field.data_type, False, self) for field in fields
         ]
-        self.executor = PgExecutor(self.source_id, ports, fields, database, schema)
+        self.executor = PgExecutor(self.source_id, ports, fields, database, str(schema))
         self.generator = rng.choice(WORKLOADS)(None).generate(fields)
         self.lock = threading.Lock()
 
@@ -521,7 +514,6 @@ class PostgresSource(DBObject):
 
     def __str__(self) -> str:
         return f"{self.schema}.{self.name()}"
-
 
     def create(self, exe: Executor) -> None:
         self.executor.create()
@@ -684,12 +676,26 @@ class Database:
         ]
         self.webhook_source_id = len(self.webhook_sources)
         self.kafka_sources = [
-            KafkaSource(str(self), i, rng.choice(self.clusters), rng.choice(self.schemas), ports, rng)
+            KafkaSource(
+                str(self),
+                i,
+                rng.choice(self.clusters),
+                rng.choice(self.schemas),
+                ports,
+                rng,
+            )
             for i in range(rng.randint(0, MAX_INITIAL_KAFKA_SOURCES))
         ]
         self.kafka_source_id = len(self.kafka_sources)
         self.postgres_sources = [
-            PostgresSource(str(self), i, rng.choice(self.clusters), rng.choice(self.schemas), ports, rng)
+            PostgresSource(
+                str(self),
+                i,
+                rng.choice(self.clusters),
+                rng.choice(self.schemas),
+                ports,
+                rng,
+            )
             for i in range(rng.randint(0, MAX_INITIAL_POSTGRES_SOURCES))
         ]
         self.postgres_source_id = len(self.postgres_sources)
@@ -729,7 +735,9 @@ class Database:
 
     def __iter__(self):
         """Returns all relations"""
-        return (self.schemas + self.clusters + self.roles + self.db_objects()).__iter__()
+        return (
+            self.schemas + self.clusters + self.roles + self.db_objects()
+        ).__iter__()
 
     def drop(self, exe: Executor) -> None:
         exe.execute(f"DROP DATABASE IF EXISTS {self}")

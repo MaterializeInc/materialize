@@ -14,8 +14,8 @@ from typing import TYPE_CHECKING
 import pg8000
 import requests
 
+from materialize.data_ingest.data_type import Text, TextTextMap
 from materialize.mzcompose.composition import Composition
-from materialize.parallel_workload.data_type import Text, TextTextMap
 from materialize.parallel_workload.database import (
     MAX_CLUSTER_REPLICAS,
     MAX_CLUSTERS,
@@ -281,9 +281,9 @@ class CommentAction(Action):
 
         if self.rng.choice([True, False]):
             column = self.rng.choice(table.columns)
-            query = f"COMMENT ON COLUMN {column} IS '{Text.value(self.rng)}'"
+            query = f"COMMENT ON COLUMN {column} IS '{Text.random_value(self.rng)}'"
         else:
-            query = f"COMMENT ON TABLE {table} IS '{Text.value(self.rng)}'"
+            query = f"COMMENT ON TABLE {table} IS '{Text.random_value(self.rng)}'"
 
         exe.execute(query)
 
@@ -880,7 +880,7 @@ class HttpPostAction(Action):
             source = self.rng.choice(self.db.webhook_sources)
             url = f"http://{self.db.host}:{self.db.ports['http']}/api/webhook/{self.db}/public/{source}"
 
-            payload = source.body_format.to_data_type().value(self.rng)
+            payload = source.body_format.to_data_type().random_value(self.rng)
 
             header_fields = source.explicit_include_headers
             if source.include_headers:
@@ -889,7 +889,7 @@ class HttpPostAction(Action):
                 )
 
             headers = {
-                header: f'"{Text.value(self.rng)}"'.encode()
+                header: f'"{Text.random_value(self.rng)}"'.encode()
                 for header in self.rng.sample(header_fields, len(header_fields))
             }
 
@@ -979,7 +979,7 @@ ddl_action_list = ActionList(
         (DropKafkaSourceAction, 1),
         (CreatePostgresSourceAction, 4),
         (DropPostgresSourceAction, 1),
-        (GrantPrivilegesAction, 2),
+        (GrantPrivilegesAction, 4),
         (RevokePrivilegesAction, 1),
         (ReconnectAction, 1),
         (CreateSchemaAction, 1),

@@ -45,7 +45,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     args = parser.parse_args()
 
     print(f"--- Random seed is {args.seed}")
-    services = [
+    service_names = [
         "cockroach",
         "postgres",
         "zookeeper",
@@ -53,9 +53,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "schema-registry",
         "materialized",
     ]
-    c.up(*services)
+    c.up(*service_names)
 
-    ports = {s: c.default_port(s) for s in services}
+    ports = {s: c.default_port(s) for s in service_names}
     ports["http"] = c.port("materialized", 6876)
     ports["mz_system"] = c.port("materialized", 6877)
     # try:
