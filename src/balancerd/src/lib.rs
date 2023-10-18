@@ -95,15 +95,15 @@ use std::time::Instant;
 use bytes::BytesMut;
 use mz_build_info::{build_info, BuildInfo};
 use mz_frontegg_auth::Authentication as FronteggAuthentication;
-use mz_ore::metric;
 use mz_ore::metrics::{ComputedGauge, MetricsRegistry};
 use mz_ore::netio::AsyncReady;
 use mz_ore::task::JoinSetExt;
+use mz_ore::{metric, netio};
 use mz_pgwire_common::{
     decode_startup, Conn, ErrorResponse, FrontendMessage, FrontendStartupMessage,
     ACCEPT_SSL_ENCRYPTION, REJECT_ENCRYPTION, VERSION_3,
 };
-use mz_server_core::{listen, TlsCertConfig, TlsConfig, TlsMode};
+use mz_server_core::{listen, ConnectionStream, ListenerHandle, TlsCertConfig, TlsConfig, TlsMode};
 use openssl::ssl::{NameType, Ssl, SslContext};
 use semver::Version;
 use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt};
@@ -178,21 +178,24 @@ impl Metrics {
 
 pub struct BalancerService {
     cfg: BalancerConfig,
+    pub pgwire: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
+    pub https: (ListenerHandle, Pin<Box<dyn ConnectionStream>>),
     _metrics: Metrics,
 }
 
 impl BalancerService {
-    pub fn new(cfg: BalancerConfig, metrics: Metrics) -> Self {
-        Self {
+    pub async fn new(cfg: BalancerConfig, metrics: Metrics) -> Result<Self, anyhow::Error> {
+        let pgwire = listen(&cfg.pgwire_listen_addr).await?;
+        let https = listen(&cfg.https_listen_addr).await?;
+        Ok(Self {
             cfg,
             _metrics: metrics,
-        }
+            pgwire,
+            https,
+        })
     }
 
     pub async fn serve(self) -> Result<(), anyhow::Error> {
-        let (_pgwire_listen_handle, pgwire_stream) = listen(&self.cfg.pgwire_listen_addr).await?;
-        let (_https_listen_handle, https_stream) = listen(&self.cfg.https_listen_addr).await?;
-
         let (pgwire_tls, https_tls) = match &self.cfg.tls {
             Some(tls) => {
                 let context = tls.context()?;
@@ -214,7 +217,7 @@ impl BalancerService {
                 tls: pgwire_tls,
             };
             set.spawn_named(|| "pgwire_stream", async move {
-                mz_server_core::serve(pgwire_stream, pgwire).await;
+                mz_server_core::serve(self.pgwire.1, pgwire).await;
             });
         }
         {
@@ -223,14 +226,14 @@ impl BalancerService {
                 resolve_template: Arc::from(self.cfg.https_addr_template),
             };
             set.spawn_named(|| "https_stream", async move {
-                mz_server_core::serve(https_stream, https).await;
+                mz_server_core::serve(self.https.1, https).await;
             });
         }
 
         println!("balancerd {} listening...", BUILD_INFO.human_version());
         println!(" TLS enabled: {}", self.cfg.tls.is_some());
-        println!(" pgwire address: {}", self.cfg.pgwire_listen_addr);
-        println!(" HTTPS address: {}", self.cfg.https_listen_addr);
+        println!(" pgwire address: {}", self.pgwire.0.local_addr());
+        println!(" HTTPS address: {}", self.https.0.local_addr());
 
         // The tasks should never exit, so complain if they do.
         while let Some(res) = set.join_next().await {
@@ -315,7 +318,6 @@ impl PgwireBalancer {
     where
         A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
     {
-        let client_stream = conn.inner_mut();
         let mut mz_stream = TcpStream::connect(envd_addr).await?;
         let mut buf = BytesMut::new();
 
@@ -325,11 +327,35 @@ impl PgwireBalancer {
             params,
         };
         startup.encode(&mut buf)?;
-        if let Some(password) = password {
-            let password = FrontendMessage::Password { password };
-            password.encode(&mut buf)?;
-        }
         mz_stream.write_all(&buf).await?;
+        let client_stream = conn.inner_mut();
+
+        // Read a single backend message, which may be a password request. Send ours if so.
+        // Otherwise start shuffling bytes. message type (len 1, 'R') + message len (len 4, 8_i32) +
+        // auth type (len 4, 3_i32).
+        let mut maybe_auth_frame = [0; 1 + 4 + 4];
+        let nread = netio::read_exact_or_eof(&mut mz_stream, &mut maybe_auth_frame).await?;
+        // 'R' for auth message, 0008 for message length, 0003 for password cleartext variant.
+        // See: https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-AUTHENTICATIONCLEARTEXTPASSWORD
+        const AUTH_PASSWORD_CLEARTEXT: [u8; 9] = [b'R', 0, 0, 0, 8, 0, 0, 0, 3];
+        if nread == AUTH_PASSWORD_CLEARTEXT.len()
+            && maybe_auth_frame == AUTH_PASSWORD_CLEARTEXT
+            && password.is_some()
+        {
+            // If we got exactly a cleartext password request and have one, send it.
+            let Some(password) = password else {
+                unreachable!("verified some above");
+            };
+            let password = FrontendMessage::Password { password };
+            buf.clear();
+            password.encode(&mut buf)?;
+            mz_stream.write_all(&buf).await?;
+            mz_stream.flush().await?;
+        } else {
+            // Otherwise pass on the bytes we just got. This *might* even be a password request, but
+            // we don't have a password. In which case it can be forwarded up to the client.
+            client_stream.write_all(&maybe_auth_frame[0..nread]).await?;
+        }
 
         // Now blindly shuffle bytes back and forth until closed.
         // TODO: Limit total memory use.
@@ -352,7 +378,6 @@ impl mz_server_core::Server for PgwireBalancer {
                 let mut conn = Conn::Unencrypted(conn);
                 loop {
                     let message = decode_startup(&mut conn).await?;
-
                     conn = match message {
                         // Clients sometimes hang up during the startup sequence, e.g.
                         // because they receive an unacceptable response to an
@@ -435,7 +460,6 @@ impl mz_server_core::Server for HttpsBalancer {
                         }
                         let servername: Option<String> =
                             ssl_stream.ssl().servername(NameType::HOST_NAME).map(|sn| {
-                                debug!("full servername: {sn}");
                                 match sn.split_once('.') {
                                     Some((left, _right)) => left,
                                     None => sn,
@@ -474,6 +498,7 @@ impl mz_server_core::Server for HttpsBalancer {
 trait ClientStream: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> ClientStream for T {}
 
+#[derive(Debug)]
 pub enum Resolver {
     Static(SocketAddr),
     Frontegg(FronteggResolver),
@@ -532,11 +557,13 @@ impl Resolver {
     }
 }
 
+#[derive(Debug)]
 pub struct FronteggResolver {
     pub auth: FronteggAuthentication,
     pub addr_template: String,
 }
 
+#[derive(Debug)]
 struct ResolvedAddr {
     addr: SocketAddr,
     password: Option<String>,

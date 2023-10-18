@@ -544,6 +544,16 @@ impl Server {
             .user("mz_system");
         config
     }
+    pub fn pg_config_balancer(&self) -> postgres::Config {
+        let local_addr = self.inner.balancer_sql_local_addr();
+        let mut config = postgres::Config::new();
+        config
+            .host(&Ipv4Addr::LOCALHOST.to_string())
+            .port(local_addr.port())
+            .user("materialize")
+            .ssl_mode(tokio_postgres::config::SslMode::Disable);
+        config
+    }
 
     pub fn pg_config_async(&self) -> tokio_postgres::Config {
         let local_addr = self.inner.sql_local_addr();
