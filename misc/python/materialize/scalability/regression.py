@@ -31,7 +31,11 @@ class Regression:
         self.endpoint = endpoint
 
     def __str__(self) -> str:
-        return f"Regression in workload '{self.workload_name}' at concurrency {self.concurrency} with {self.endpoint}: {round(self.tps, 2)} tps ({round(self.tps_diff, 2)} tps; {round(100*self.tps_diff_percent, 2)}%)"
+        return (
+            f"Regression in workload '{self.workload_name}' at concurrency {self.concurrency} with {self.endpoint}:"
+            f" {round(self.tps, 2)} tps vs. {round(self.tps_baseline, 2)} tps"
+            f" ({round(self.tps_diff, 2)} tps; {round(100 * self.tps_diff_percent, 2)}%)"
+        )
 
 
 class RegressionOutcome:
