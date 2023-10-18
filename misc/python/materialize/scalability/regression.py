@@ -26,6 +26,7 @@ class Regression:
         self.count = count
         self.tps = tps
         self.tps_baseline = tps_baseline
+        assert tps_diff < 0, "Not a regression!"
         self.tps_diff = tps_diff
         self.tps_diff_percent = tps_diff_percent
         self.endpoint = endpoint
