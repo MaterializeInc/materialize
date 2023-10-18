@@ -1957,6 +1957,7 @@ fn plan_view_select(
     }
 
     // Step 3. Gather aggregates and table functions.
+    // (But skip window aggregates.)
     let (aggregates, table_funcs) = {
         let mut visitor = AggregateTableFuncVisitor::new(qcx.scx);
         visitor.visit_select_mut(&mut s);
@@ -2001,6 +2002,7 @@ fn plan_view_select(
     };
 
     // Step 5. Handle GROUP BY clause.
+    // This will also plan the aggregates gathered in Step 3.
     let (mut group_scope, select_all_mapping) = {
         // Compute GROUP BY expressions.
         let ecx = &ExprContext {
@@ -2145,6 +2147,7 @@ fn plan_view_select(
     }
 
     // Step 7. Gather window functions from SELECT and ORDER BY, and plan them.
+    // (This includes window aggregations.)
     //
     // Note that window functions can be present only in SELECT and ORDER BY (including
     // DISTINCT ON), because they are executed after grouped aggregations and HAVING.
@@ -4809,7 +4812,8 @@ fn plan_function<'a>(
             if f.over.is_none() {
                 // Not a window aggregate. Something is wrong.
                 if ecx.allow_aggregates {
-                    // should already have been caught by `scope.resolve_expr` in `plan_expr`
+                    // Should already have been caught by `scope.resolve_expr` in `plan_expr_inner`
+                    // (after having been planned earlier in `Step 5` of `plan_view_select`).
                     sql_bail!(
                         "Internal error: encountered unplanned non-windowed aggregate function: {:?}",
                         name,
@@ -4849,6 +4853,7 @@ fn plan_function<'a>(
                 }
 
                 if ignore_nulls {
+                    // https://github.com/MaterializeInc/materialize/issues/22272
                     // If we ever add support for ignore_nulls for a window aggregate, then don't
                     // forget to also update HIR EXPLAIN.
                     bail_unsupported!(IGNORE_NULLS_ERROR_MSG);

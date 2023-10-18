@@ -1188,6 +1188,22 @@ impl HirScalarExpr {
         //         Project (#1)
         //           Reduce group_by=[(#0 + #1)] aggregates=[window_agg[sum order_by=[#0 asc nulls_last, #1 asc nulls_last]](row(row(row(#0, #1), (#0 * #1)), (#0 - #1), (#0 / #1)))]
         //             ReadStorage materialize.public.t7
+        //
+        // The `row(row(row(...), ...), ...)` stuff means the following:
+        // `row(row(row(<original row>), <arguments to window function>), <order by values>...)`
+        //   - The <arguments to window function> can be either a single value or itself a
+        //     `row` if there are multiple arguments.
+        //   - The <order by values> are _not_ wrapped in a `row`, even if there are more than one
+        //     ORDER BY columns.
+        //   - The <original row> currently always captures the entire original row. This should
+        //     improve when we make `ProjectionPushdown` smarter, see
+        //     https://github.com/MaterializeInc/materialize/issues/17522
+        //
+        // TODO:
+        // We should probably introduce some dedicated Datum constructor functions instead of `row`
+        // to make MIR plans and MIR construction/manipulation code more readable. Additionally, we
+        // might even introduce dedicated Datum enum variants, so that the rendering code also
+        // becomes more readable (and possibly slightly more performant).
 
         *inner = inner
             .take_dangerous()

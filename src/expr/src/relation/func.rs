@@ -775,6 +775,7 @@ where
 }
 
 // The expected input is in the format of [((OriginalRow, InputValue), OrderByExprs...)]
+// See also in the comment in `window_func_applied_to`.
 fn window_aggr<'a, I, A>(
     input_datums: I, // An entire window partition.
     callers_temp_storage: &'a RowArena,
