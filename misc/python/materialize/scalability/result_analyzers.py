@@ -33,37 +33,35 @@ class DefaultResultAnalyzer(ResultAnalyzer):
     def determine_regressions_in_workload(
         self,
         regression_outcome: RegressionOutcome,
-        regression_baseline_endpoint: Endpoint,
+        baseline_endpoint: Endpoint,
         workload_name: str,
-        endpoint_result_data_by_endpoint: dict[Endpoint, WorkloadResult],
+        results_by_endpoint: dict[Endpoint, WorkloadResult],
     ) -> None:
-        count_endpoints = len(endpoint_result_data_by_endpoint)
+        count_endpoints = len(results_by_endpoint)
 
         if count_endpoints <= 1:
             raise RuntimeError("Cannot compute regressions with a single target")
 
-        if regression_baseline_endpoint not in endpoint_result_data_by_endpoint.keys():
+        if baseline_endpoint not in results_by_endpoint.keys():
             raise RuntimeError("Regression baseline endpoint not in results!")
 
-        other_endpoints = list(
-            endpoint_result_data_by_endpoint.keys() - {regression_baseline_endpoint}
-        )
+        other_endpoints = list(results_by_endpoint.keys() - {baseline_endpoint})
 
         for other_endpoint in other_endpoints:
             self.determine_regression_in_workload(
                 regression_outcome,
                 workload_name,
-                regression_baseline_endpoint,
+                baseline_endpoint,
                 other_endpoint,
-                endpoint_result_data_by_endpoint[regression_baseline_endpoint],
-                endpoint_result_data_by_endpoint[other_endpoint],
+                results_by_endpoint[baseline_endpoint],
+                results_by_endpoint[other_endpoint],
             )
 
     def determine_regression_in_workload(
         self,
         regression_outcome: RegressionOutcome,
         workload_name: str,
-        regression_baseline_endpoint: Endpoint,
+        baseline_endpoint: Endpoint,
         other_endpoint: Endpoint,
         regression_baseline_result: WorkloadResult,
         other_result: WorkloadResult,
@@ -91,7 +89,7 @@ class DefaultResultAnalyzer(ResultAnalyzer):
         self.collect_regressions(
             regression_outcome,
             workload_name,
-            regression_baseline_endpoint,
+            baseline_endpoint,
             other_endpoint,
             entries_exceeding_threshold,
         )
@@ -100,7 +98,7 @@ class DefaultResultAnalyzer(ResultAnalyzer):
         self,
         regression_outcome: RegressionOutcome,
         workload_name: str,
-        regression_baseline_endpoint: Endpoint,
+        baseline_endpoint: Endpoint,
         other_endpoint: Endpoint,
         entries_exceeding_threshold: pd.DataFrame,
     ) -> None:

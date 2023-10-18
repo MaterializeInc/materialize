@@ -304,7 +304,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     print(f"Checking regression against: {regression_against_target}")
 
     endpoints: list[Endpoint] = []
-    regression_baseline_endpoint: Endpoint | None = None
+    baseline_endpoint: Endpoint | None = None
     for i, target in enumerate(args.target):
         endpoint: Endpoint | None = None
         if target == "local":
@@ -326,7 +326,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         assert endpoint is not None
 
         if target == regression_against_target:
-            regression_baseline_endpoint = endpoint
+            baseline_endpoint = endpoint
 
         endpoints.append(endpoint)
 
@@ -347,41 +347,35 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     df_workloads = pd.DataFrame(data={"workload": workload_names})
     df_workloads.to_csv(RESULTS_DIR / "workloads.csv")
 
-    endpoint_result_data_by_workload_name: dict[
-        str, dict[Endpoint, WorkloadResult]
-    ] = dict()
+    results_by_workload_name: dict[str, dict[Endpoint, WorkloadResult]] = dict()
 
     for workload in workloads:
         assert issubclass(workload, Workload), f"{workload} is not a Workload"
-        result_data_of_current_workload = dict()
-        endpoint_result_data_by_workload_name[
-            workload.__name__
-        ] = result_data_of_current_workload
+        results_of_current_workload = dict()
+        results_by_workload_name[workload.__name__] = results_of_current_workload
 
         for endpoint in endpoints:
             result = run_workload(c, args, endpoint, schema, workload())
-            result_data_of_current_workload[endpoint] = result
+            results_of_current_workload[endpoint] = result
 
-    handle_regression_detection(
-        args, regression_baseline_endpoint, endpoint_result_data_by_workload_name
-    )
+    handle_regression_detection(args, baseline_endpoint, results_by_workload_name)
 
 
 def handle_regression_detection(
     args: argparse.Namespace,
-    regression_baseline_endpoint: Endpoint | None,
-    endpoint_result_data_by_workload_name: dict[str, dict[Endpoint, WorkloadResult]],
+    baseline_endpoint: Endpoint | None,
+    results_by_workload_name: dict[str, dict[Endpoint, WorkloadResult]],
 ) -> None:
-    if regression_baseline_endpoint is None:
+    if baseline_endpoint is None:
         print("No regression detection because '--regression-against' param is not set")
     else:
         outcome = create_result_analyzer(args).determine_regression(
-            regression_baseline_endpoint, endpoint_result_data_by_workload_name
+            baseline_endpoint, results_by_workload_name
         )
 
         if outcome.has_regressions():
             print(
-                f"ERROR: The following regressions were detected (baseline: {regression_baseline_endpoint}):\n{outcome}"
+                f"ERROR: The following regressions were detected (baseline: {baseline_endpoint}):\n{outcome}"
             )
             sys.exit(1)
         else:

@@ -18,18 +18,16 @@ from materialize.scalability.workload_result import WorkloadResult
 class ResultAnalyzer:
     def determine_regression(
         self,
-        regression_baseline_endpoint: Endpoint,
-        endpoint_result_data_by_workload_name: dict[
-            str, dict[Endpoint, WorkloadResult]
-        ],
+        baseline_endpoint: Endpoint,
+        results_by_workload_name: dict[str, dict[Endpoint, WorkloadResult]],
     ) -> RegressionOutcome:
         regression_outcome = RegressionOutcome()
-        for workload_name in endpoint_result_data_by_workload_name.keys():
+        for workload_name in results_by_workload_name.keys():
             self.determine_regressions_in_workload(
                 regression_outcome,
-                regression_baseline_endpoint,
+                baseline_endpoint,
                 workload_name,
-                endpoint_result_data_by_workload_name[workload_name],
+                results_by_workload_name[workload_name],
             )
 
         return regression_outcome
@@ -37,8 +35,8 @@ class ResultAnalyzer:
     def determine_regressions_in_workload(
         self,
         regression_outcome: RegressionOutcome,
-        regression_baseline_endpoint: Endpoint,
+        baseline_endpoint: Endpoint,
         workload_name: str,
-        endpoint_result_data_by_endpoint: dict[Endpoint, WorkloadResult],
+        results_by_endpoint: dict[Endpoint, WorkloadResult],
     ) -> bool:
         raise NotImplementedError
