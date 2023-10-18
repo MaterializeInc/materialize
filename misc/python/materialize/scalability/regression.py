@@ -6,12 +6,15 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+import pandas as pd
+
 from materialize.scalability.endpoint import Endpoint
 
 
 class Regression:
     def __init__(
         self,
+        row: pd.Series,
         workload_name: str,
         concurrency: int,
         count: int,
@@ -21,6 +24,7 @@ class Regression:
         tps_diff_percent: float,
         endpoint: Endpoint,
     ):
+        self.row = row
         self.workload_name = workload_name
         self.concurrency = concurrency
         self.count = count
@@ -44,6 +48,7 @@ class RegressionOutcome:
         self,
     ):
         self.regressions: list[Regression] = []
+        self.raw_regression_data = pd.DataFrame()
 
     def has_regressions(self) -> bool:
         return len(self.regressions) > 0
@@ -53,3 +58,8 @@ class RegressionOutcome:
             return "No regressions"
 
         return "\n".join(f"* {x}" for x in self.regressions)
+
+    def append_raw_data(self, regressions_frame: pd.DataFrame) -> None:
+        self.raw_regression_data = pd.concat(
+            [self.raw_regression_data, regressions_frame], ignore_index=True
+        )

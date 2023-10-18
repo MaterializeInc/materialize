@@ -104,6 +104,7 @@ class DefaultResultAnalyzer(ResultAnalyzer):
     ) -> None:
         for index, row in entries_exceeding_threshold.iterrows():
             regression = Regression(
+                row,
                 workload_name,
                 concurrency=int(row[COL_CONCURRENCY]),
                 count=int(row[COL_COUNT]),
@@ -115,6 +116,4 @@ class DefaultResultAnalyzer(ResultAnalyzer):
             )
             regression_outcome.regressions.append(regression)
 
-
-def row_count(data_frame: pd.DataFrame) -> int:
-    return len(data_frame.index)
+        regression_outcome.append_raw_data(entries_exceeding_threshold)

@@ -20,7 +20,7 @@ import pandas as pd
 from jupyter_core.command import main as jupyter_core_command_main
 from psycopg import Cursor
 
-from materialize import MZ_ROOT, benchmark_utils
+from materialize import MZ_ROOT, benchmark_utils, buildkite, spawn
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
@@ -33,6 +33,7 @@ from materialize.scalability.endpoints import (
     endpoint_name_to_description,
 )
 from materialize.scalability.operation import Operation
+from materialize.scalability.regression import RegressionOutcome
 from materialize.scalability.result_analyzer import ResultAnalyzer
 from materialize.scalability.result_analyzers import DefaultResultAnalyzer
 from materialize.scalability.schema import Schema, TransactionIsolation
@@ -381,6 +382,10 @@ def handle_regression_detection(
             print(
                 f"ERROR: The following regressions were detected (baseline: {baseline_desc}):\n{outcome}"
             )
+
+            if buildkite.is_in_buildkite():
+                upload_regressions_to_buildkite(outcome)
+
             sys.exit(1)
         else:
             print("No regressions were detected.")
@@ -388,6 +393,16 @@ def handle_regression_detection(
 
 def create_result_analyzer(_args: argparse.Namespace) -> ResultAnalyzer:
     return DefaultResultAnalyzer(max_deviation_in_percent=0.1)
+
+
+def upload_regressions_to_buildkite(outcome: RegressionOutcome) -> None:
+    if not outcome.has_regressions():
+        return
+
+    file_name = "regressions.csv"
+    file_path = RESULTS_DIR / file_name
+    outcome.raw_regression_data.to_csv(file_path)
+    spawn.runv(["buildkite-agent", "artifact", "upload", file_name], cwd=RESULTS_DIR)
 
 
 def workflow_lab(c: Composition) -> None:
