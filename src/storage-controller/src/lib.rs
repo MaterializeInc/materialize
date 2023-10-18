@@ -837,6 +837,12 @@ where
                                 self.partially_truncate_statement_log().await;
                             }
                         }
+
+                        // Truncate compute-maintained collections.
+                        IntrospectionType::ComputeDependencies
+                        | IntrospectionType::ComputeReplicaHeartbeats => {
+                            self.reconcile_managed_collection(id, vec![]).await;
+                        }
                     }
                 }
                 DataSource::Webhook => {
@@ -1769,34 +1775,13 @@ where
         )
         .await;
     }
-    async fn send_statement_log_updates(
+    async fn record_introspection_updates(
         &mut self,
-        statement_execution_history_updates: Vec<(Row, Diff)>,
-        prepared_statement_history_updates: Vec<Row>,
-        session_history_updates: Vec<Row>,
+        type_: IntrospectionType,
+        updates: Vec<(Row, Diff)>,
     ) {
-        let mseh_id = self.introspection_ids[&IntrospectionType::StatementExecutionHistory];
-        let mpsh_id = self.introspection_ids[&IntrospectionType::PreparedStatementHistory];
-        let msh_id = self.introspection_ids[&IntrospectionType::SessionHistory];
-
-        self.append_to_managed_collection(mseh_id, statement_execution_history_updates)
-            .await;
-        self.append_to_managed_collection(
-            mpsh_id,
-            prepared_statement_history_updates
-                .into_iter()
-                .map(|update| (update, 1))
-                .collect(),
-        )
-        .await;
-        self.append_to_managed_collection(
-            msh_id,
-            session_history_updates
-                .into_iter()
-                .map(|update| (update, 1))
-                .collect(),
-        )
-        .await;
+        let id = self.introspection_ids[&type_];
+        self.append_to_managed_collection(id, updates).await;
     }
 }
 

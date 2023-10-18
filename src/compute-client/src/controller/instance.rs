@@ -11,9 +11,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroI64;
-use std::sync::mpsc;
 use std::time::Instant;
 
+use chrono::{Duration, DurationRound, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::stream::FuturesUnordered;
 use futures::{future, StreamExt};
@@ -25,8 +25,8 @@ use mz_compute_types::sources::SourceInstanceDesc;
 use mz_expr::RowSetFinishing;
 use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::{GlobalId, Row};
-use mz_storage_client::controller::{ReadPolicy, StorageController};
+use mz_repr::{Datum, Diff, GlobalId, Row};
+use mz_storage_client::controller::{IntrospectionType, ReadPolicy, StorageController};
 use thiserror::Error;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use timely::PartialOrder;
@@ -34,7 +34,9 @@ use uuid::Uuid;
 
 use crate::controller::error::CollectionMissing;
 use crate::controller::replica::{Replica, ReplicaConfig};
-use crate::controller::{CollectionState, ComputeControllerResponse, ReplicaId};
+use crate::controller::{
+    CollectionState, ComputeControllerResponse, IntrospectionUpdates, ReplicaId,
+};
 use crate::logging::LogVariant;
 use crate::metrics::InstanceMetrics;
 use crate::metrics::UIntGauge;
@@ -147,7 +149,9 @@ pub(super) struct Instance<T> {
     /// IDs of replicas that have failed and require rehydration.
     failed_replicas: BTreeSet<ReplicaId>,
     /// Sender for responses to be delivered.
-    response_tx: mpsc::Sender<ComputeControllerResponse<T>>,
+    response_tx: crossbeam_channel::Sender<ComputeControllerResponse<T>>,
+    /// Sender for introspection updates to be recorded.
+    introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
     /// A number that increases with each restart of `environmentd`.
     envd_epoch: NonZeroI64,
     /// Numbers that increase with each restart of a replica.
@@ -188,6 +192,17 @@ impl<T> Instance<T> {
     fn deliver_response(&mut self, response: ComputeControllerResponse<T>) {
         self.response_tx
             .send(response)
+            .expect("global controller never drops");
+    }
+
+    /// Enqueue the given introspection updates for recording.
+    fn deliver_introspection_updates(
+        &mut self,
+        type_: IntrospectionType,
+        updates: Vec<(Row, Diff)>,
+    ) {
+        self.introspection_tx
+            .send((type_, updates))
             .expect("global controller never drops");
     }
 
@@ -270,17 +285,19 @@ impl<T> Instance<T> {
     /// Panics if the identified collection does not exist.
     fn report_dependency_updates(&mut self, id: GlobalId, diff: i64) {
         let collection = self.collections.get(&id).expect("collection must exist");
+        let dependencies = collection.dependency_ids();
 
-        let mut dependencies = Vec::new();
-        dependencies.extend(collection.compute_dependencies.iter());
-        dependencies.extend(collection.storage_dependencies.iter());
+        let updates = dependencies
+            .map(|dependency_id| {
+                let row = Row::pack_slice(&[
+                    Datum::String(&id.to_string()),
+                    Datum::String(&dependency_id.to_string()),
+                ]);
+                (row, diff)
+            })
+            .collect();
 
-        let resp = ComputeControllerResponse::DependencyUpdate {
-            id,
-            dependencies,
-            diff,
-        };
-        self.deliver_response(resp);
+        self.deliver_introspection_updates(IntrospectionType::ComputeDependencies, updates);
     }
 
     /// List compute collections that depend on the given collection.
@@ -305,7 +322,8 @@ where
         arranged_logs: BTreeMap<LogVariant, GlobalId>,
         envd_epoch: NonZeroI64,
         metrics: InstanceMetrics,
-        response_tx: mpsc::Sender<ComputeControllerResponse<T>>,
+        response_tx: crossbeam_channel::Sender<ComputeControllerResponse<T>>,
+        introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
         variable_length_row_encoding: bool,
     ) -> Self {
         let collections = arranged_logs
@@ -328,6 +346,7 @@ where
             history,
             failed_replicas: Default::default(),
             response_tx,
+            introspection_tx,
             envd_epoch,
             replica_epochs: Default::default(),
             metrics,
@@ -423,9 +442,49 @@ where
             }
             Some((replica_id, Some(response))) => {
                 // A replica has produced a response. Return it.
+                self.register_replica_heartbeat(replica_id);
                 Ok((replica_id, response))
             }
         }
+    }
+
+    /// Register a heartbeat from the given replica.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the specified replica does not exist.
+    fn register_replica_heartbeat(&mut self, replica_id: ReplicaId) {
+        let replica = self
+            .replicas
+            .get_mut(&replica_id)
+            .expect("replica must exist");
+
+        let now = Utc::now()
+            .duration_trunc(Duration::seconds(60))
+            .expect("cannot fail");
+
+        let mut updates = Vec::new();
+        if let Some(old) = replica.last_heartbeat {
+            if old == now {
+                return; // nothing new to report
+            }
+
+            let retraction = Row::pack_slice(&[
+                Datum::String(&replica_id.to_string()),
+                Datum::TimestampTz(old.try_into().expect("must fit")),
+            ]);
+            updates.push((retraction, -1));
+        }
+
+        replica.last_heartbeat = Some(now);
+
+        let insertion = Row::pack_slice(&[
+            Datum::String(&replica_id.to_string()),
+            Datum::TimestampTz(now.try_into().expect("must fit")),
+        ]);
+        updates.push((insertion, 1));
+
+        self.deliver_introspection_updates(IntrospectionType::ComputeReplicaHeartbeats, updates);
     }
 
     /// Assign a target replica to the identified subscribe.
@@ -526,7 +585,8 @@ where
 
     /// Remove an existing instance replica, by ID.
     pub fn remove_replica(&mut self, id: ReplicaId) -> Result<(), ReplicaMissing> {
-        self.compute
+        let replica = self
+            .compute
             .replicas
             .remove(&id)
             .ok_or(ReplicaMissing(id))?;
@@ -535,6 +595,18 @@ where
 
         // Remove frontier tracking for this replica.
         self.remove_write_frontiers(id);
+
+        // Remove introspection for this replica.
+        if let Some(time) = replica.last_heartbeat {
+            let row = Row::pack_slice(&[
+                Datum::String(&id.to_string()),
+                Datum::TimestampTz(time.try_into().expect("must fit")),
+            ]);
+            self.compute.deliver_introspection_updates(
+                IntrospectionType::ComputeReplicaHeartbeats,
+                vec![(row, -1)],
+            );
+        }
 
         // Subscribes targeting this replica either won't be served anymore (if the replica is
         // dropped) or might produce inconsistent output (if the target collection is an

@@ -47,15 +47,15 @@ use crate::coord::ConnMeta;
 use crate::subscribe::ActiveSubscribe;
 use mz_catalog::builtin::{
     MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES,
-    MZ_CLUSTERS, MZ_CLUSTER_LINKS, MZ_CLUSTER_REPLICAS, MZ_CLUSTER_REPLICA_HEARTBEATS,
-    MZ_CLUSTER_REPLICA_METRICS, MZ_CLUSTER_REPLICA_SIZES, MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS,
-    MZ_COMMENTS, MZ_COMPUTE_DEPENDENCIES, MZ_CONNECTIONS, MZ_DATABASES, MZ_DEFAULT_PRIVILEGES,
-    MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_INTERNAL_CLUSTER_REPLICAS,
-    MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS, MZ_KAFKA_SOURCES, MZ_LIST_TYPES, MZ_MAP_TYPES,
-    MZ_MATERIALIZED_VIEWS, MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS, MZ_POSTGRES_SOURCES,
-    MZ_PSEUDO_TYPES, MZ_ROLES, MZ_ROLE_MEMBERS, MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS,
-    MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS,
-    MZ_SYSTEM_PRIVILEGES, MZ_TABLES, MZ_TYPES, MZ_TYPE_PG_METADATA, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
+    MZ_CLUSTERS, MZ_CLUSTER_LINKS, MZ_CLUSTER_REPLICAS, MZ_CLUSTER_REPLICA_METRICS,
+    MZ_CLUSTER_REPLICA_SIZES, MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS, MZ_COMMENTS, MZ_CONNECTIONS,
+    MZ_DATABASES, MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS,
+    MZ_INTERNAL_CLUSTER_REPLICAS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS, MZ_KAFKA_SOURCES,
+    MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS,
+    MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_ROLE_MEMBERS, MZ_SCHEMAS, MZ_SECRETS,
+    MZ_SESSIONS, MZ_SINKS, MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD,
+    MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES, MZ_TABLES, MZ_TYPES, MZ_TYPE_PG_METADATA, MZ_VIEWS,
+    MZ_WEBHOOKS_SOURCES,
 };
 
 /// An update to a built-in table.
@@ -1168,22 +1168,6 @@ impl CatalogState {
         })
     }
 
-    pub fn pack_replica_heartbeat_update(
-        &self,
-        id: ReplicaId,
-        last_heartbeat: DateTime<Utc>,
-        diff: Diff,
-    ) -> BuiltinTableUpdate {
-        BuiltinTableUpdate {
-            id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_HEARTBEATS),
-            row: Row::pack_slice(&[
-                Datum::String(&id.to_string()),
-                Datum::TimestampTz(last_heartbeat.try_into().expect("must fit")),
-            ]),
-            diff,
-        }
-    }
-
     pub fn pack_storage_usage_update(
         &self,
         VersionedStorageUsage::V1(event): &VersionedStorageUsage,
@@ -1386,22 +1370,6 @@ impl CatalogState {
             )
             .expect("privileges is 1 dimensional, and its length is used for the array length");
         row
-    }
-
-    pub fn pack_compute_dependency_update(
-        &self,
-        object_id: GlobalId,
-        dependency_id: GlobalId,
-        diff: Diff,
-    ) -> BuiltinTableUpdate {
-        BuiltinTableUpdate {
-            id: self.resolve_builtin_table(&MZ_COMPUTE_DEPENDENCIES),
-            row: Row::pack_slice(&[
-                Datum::String(&object_id.to_string()),
-                Datum::String(&dependency_id.to_string()),
-            ]),
-            diff,
-        }
     }
 
     pub fn pack_comment_update(

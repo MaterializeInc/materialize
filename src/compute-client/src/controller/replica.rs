@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
+use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
@@ -65,6 +66,8 @@ pub(super) struct Replica<T> {
     pub config: ReplicaConfig,
     /// Replica metrics.
     metrics: ReplicaMetrics,
+    /// The time of the last reported heartbeat.
+    pub last_heartbeat: Option<DateTime<Utc>>,
 }
 
 impl<T> Replica<T>
@@ -106,6 +109,7 @@ where
             _task: task.abort_on_drop(),
             config,
             metrics,
+            last_heartbeat: None,
         }
     }
 

@@ -13,7 +13,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
-use chrono::DurationRound;
 use mz_controller::clusters::ClusterEvent;
 use mz_controller::ControllerResponse;
 use mz_ore::now::EpochMillis;
@@ -267,40 +266,6 @@ impl Coordinator {
                     }
                 }
             }
-            ControllerResponse::ComputeReplicaHeartbeat(replica_id, when) => {
-                let replica_status_interval = chrono::Duration::seconds(60);
-                let new = when
-                    .duration_trunc(replica_status_interval)
-                    .expect("Time coarsening should not fail");
-                let hb = match self
-                    .transient_replica_metadata
-                    .entry(replica_id)
-                    .or_insert_with(|| Some(Default::default()))
-                {
-                    // `None` is the tombstone for a removed replica
-                    None => return,
-                    Some(md) => &mut md.last_heartbeat,
-                };
-                let old = std::mem::replace(hb, Some(new));
-
-                if old.as_ref() != Some(&new) {
-                    let retraction = old.map(|old| {
-                        self.catalog()
-                            .state()
-                            .pack_replica_heartbeat_update(replica_id, old, -1)
-                    });
-                    let insertion = self
-                        .catalog()
-                        .state()
-                        .pack_replica_heartbeat_update(replica_id, new, 1);
-                    let updates = if let Some(retraction) = retraction {
-                        vec![retraction, insertion]
-                    } else {
-                        vec![insertion]
-                    };
-                    self.buffer_builtin_table_updates(updates);
-                }
-            }
             ControllerResponse::ComputeReplicaMetrics(replica_id, new) => {
                 let m = match self
                     .transient_replica_metadata
@@ -332,18 +297,6 @@ impl Coordinator {
                     };
                     self.buffer_builtin_table_updates(updates);
                 }
-            }
-            ControllerResponse::ComputeDependencyUpdate {
-                id,
-                dependencies,
-                diff,
-            } => {
-                let state = self.catalog().state();
-                let updates = dependencies
-                    .into_iter()
-                    .map(|dep_id| state.pack_compute_dependency_update(id, dep_id, diff))
-                    .collect();
-                self.buffer_builtin_table_updates(updates);
             }
         }
     }

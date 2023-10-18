@@ -63,6 +63,10 @@ pub enum IntrospectionType {
     StatementExecutionHistory,
     SessionHistory,
     PreparedStatementHistory,
+
+    // Collections written by the compute controller.
+    ComputeDependencies,
+    ComputeReplicaHeartbeats,
 }
 
 /// Describes how data is written to the collection.
@@ -508,11 +512,14 @@ pub trait StorageController: Debug + Send {
         external_frontiers: BTreeMap<(GlobalId, ReplicaId), Antichain<Self::Timestamp>>,
     );
 
-    async fn send_statement_log_updates(
+    /// Records updates for the given introspection type.
+    ///
+    /// Rows passed in `updates` MUST have the correct schema for the given introspection type,
+    /// as readers rely on this and might panic otherwise.
+    async fn record_introspection_updates(
         &mut self,
-        statement_execution_history_updates: Vec<(Row, Diff)>,
-        prepared_statement_history_updates: Vec<Row>,
-        session_history_updates: Vec<Row>,
+        type_: IntrospectionType,
+        updates: Vec<(Row, Diff)>,
     );
 }
 

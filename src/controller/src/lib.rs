@@ -94,7 +94,6 @@ use std::mem;
 use std::num::NonZeroI64;
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::future::BoxFuture;
 use futures::stream::{Peekable, StreamExt};
@@ -173,17 +172,8 @@ pub enum ControllerResponse<T = mz_repr::Timestamp> {
     PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
     /// The worker's next response to a specified subscribe.
     SubscribeResponse(GlobalId, SubscribeResponse<T>),
-    /// Notification that we have received a message from the given compute replica
-    /// at the given time.
-    ComputeReplicaHeartbeat(ReplicaId, DateTime<Utc>),
     /// Notification that new resource usage metrics are available for a given replica.
     ComputeReplicaMetrics(ReplicaId, Vec<ServiceProcessMetrics>),
-    /// Notification about compute dependency updates.
-    ComputeDependencyUpdate {
-        id: GlobalId,
-        dependencies: Vec<GlobalId>,
-        diff: i64,
-    },
 }
 
 impl<T> From<ComputeControllerResponse<T>> for ControllerResponse<T> {
@@ -195,18 +185,6 @@ impl<T> From<ComputeControllerResponse<T>> for ControllerResponse<T> {
             ComputeControllerResponse::SubscribeResponse(id, tail) => {
                 ControllerResponse::SubscribeResponse(id, tail)
             }
-            ComputeControllerResponse::ReplicaHeartbeat(id, when) => {
-                ControllerResponse::ComputeReplicaHeartbeat(id, when)
-            }
-            ComputeControllerResponse::DependencyUpdate {
-                id,
-                dependencies,
-                diff,
-            } => ControllerResponse::ComputeDependencyUpdate {
-                id,
-                dependencies,
-                diff,
-            },
         }
     }
 }
@@ -327,7 +305,7 @@ where
                 Ok(None)
             }
             Readiness::Compute => {
-                let response = self.active_compute().process();
+                let response = self.active_compute().process().await;
                 Ok(response.map(Into::into))
             }
             Readiness::Metrics => Ok(self
