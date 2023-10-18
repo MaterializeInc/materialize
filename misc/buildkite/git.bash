@@ -16,8 +16,8 @@ set -euo pipefail
 export BUILDKITE_REPO_REF="${BUILDKITE_REPO_REF:-origin}"
 export BUILDKITE_PULL_REQUEST_BASE_BRANCH="${BUILDKITE_PULL_REQUEST_BASE_BRANCH:-main}"
 
-configure_git_user() {
-  if [[ "$BUILDKITE" == "true" ]]; then
+configure_git_user_if_in_buildkite() {
+  if [[ "${BUILDKITE:-}" == "true" ]]; then
     ci_collapsed_heading "Configure git"
     run git config --global user.email "buildkite@materialize.com"
     run git config --global user.name "Buildkite"
@@ -30,7 +30,7 @@ fetch_pr_target_branch() {
 }
 
 merge_pr_target_branch() {
-  configure_git_user
+  configure_git_user_if_in_buildkite
 
   ci_collapsed_heading "Merge target branch"
   run git merge "$BUILDKITE_REPO_REF"/"$BUILDKITE_PULL_REQUEST_BASE_BRANCH" --message "Merge"

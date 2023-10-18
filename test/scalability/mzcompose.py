@@ -20,7 +20,7 @@ import pandas as pd
 from jupyter_core.command import main as jupyter_core_command_main
 from psycopg import Cursor
 
-from materialize import MZ_ROOT
+from materialize import MZ_ROOT, benchmark_utils
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
@@ -200,7 +200,7 @@ def run_workload(
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--target",
-        help="Target for the benchmark: 'HEAD', 'local', 'remote', 'Postgres', or a DockerHub tag",
+        help="Target for the benchmark: 'HEAD', 'local', 'remote', 'common-ancestor', 'Postgres', or a DockerHub tag",
         action="append",
         default=[],
     )
@@ -292,8 +292,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         elif target == "HEAD":
             endpoint = MaterializeContainer(composition=c)
         else:
+            if target == "common-ancestor":
+                target = benchmark_utils.resolve_tag_of_common_ancestor()
             endpoint = MaterializeContainer(
-                composition=c, image=f"materialize/materialized:{target}"
+                composition=c,
+                image=f"materialize/materialized:{target}",
+                alternative_image="materialize/materialized:latest",
             )
         assert endpoint is not None
 

@@ -26,6 +26,7 @@ from scenarios_scale import *  # noqa: F401 F403
 from scenarios_skew import *  # noqa: F401 F403
 from scenarios_subscribe import *  # noqa: F401 F403
 
+from materialize import benchmark_utils
 from materialize.feature_benchmark.aggregation import Aggregation, MinAggregation
 from materialize.feature_benchmark.benchmark import Benchmark, Report
 from materialize.feature_benchmark.comparator import (
@@ -123,6 +124,9 @@ def run_one_scenario(
             else (args.other_tag, args.other_size, args.other_params)
         )
 
+        if tag == "common-ancestor":
+            tag = benchmark_utils.resolve_tag_of_common_ancestor()
+
         c.up("testdrive", persistent=True)
 
         additional_system_parameter_defaults = None
@@ -132,29 +136,17 @@ def run_one_scenario(
                 param_name, param_value = param.split("=")
                 additional_system_parameter_defaults[param_name] = param_value
 
-        mz = Materialized(
-            image=f"materialize/materialized:{tag}" if tag else None,
-            default_size=size,
-            # Avoid clashes with the Kafka sink progress topic across restarts
-            environment_id=f"local-az1-{uuid.uuid4()}-0",
-            soft_assertions=False,
-            additional_system_parameter_defaults=additional_system_parameter_defaults,
-            external_cockroach=True,
-            external_minio=True,
-            sanity_restart=False,
-        )
+        mz_image = f"materialize/materialized:{tag}" if tag else None
+        mz = create_mz_service(mz_image, size, additional_system_parameter_defaults)
 
-        with c.override(mz):
-            print(f"The version of the '{instance.upper()}' Mz instance is:")
-            c.run(
-                "materialized",
-                "-c",
-                "environmentd --version | grep environmentd",
-                entrypoint="bash",
-                rm=True,
+        if tag is not None and not c.try_pull_service_image(mz):
+            print(
+                f"Unable to find materialize image with tag {tag}, proceeding with latest instead!"
             )
+            mz_image = "materialize/materialized:latest"
+            mz = create_mz_service(mz_image, size, additional_system_parameter_defaults)
 
-            c.up("cockroach", "materialized")
+        start_overridden_mz_and_cockroach(c, mz, instance)
 
         executor = Docker(composition=c, seed=common_seed, materialized=mz)
 
@@ -178,6 +170,40 @@ def run_one_scenario(
         c.rm_volumes("mzdata")
 
     return comparators
+
+
+def create_mz_service(
+    mz_image: str | None,
+    default_size: int,
+    additional_system_parameter_defaults: dict[str, str] | None,
+) -> Materialized:
+    return Materialized(
+        image=mz_image,
+        default_size=default_size,
+        # Avoid clashes with the Kafka sink progress topic across restarts
+        environment_id=f"local-az1-{uuid.uuid4()}-0",
+        soft_assertions=False,
+        additional_system_parameter_defaults=additional_system_parameter_defaults,
+        external_cockroach=True,
+        external_minio=True,
+        sanity_restart=False,
+    )
+
+
+def start_overridden_mz_and_cockroach(
+    c: Composition, mz: Materialized, instance: str
+) -> None:
+    with c.override(mz):
+        print(f"The version of the '{instance.upper()}' Mz instance is:")
+        c.run(
+            "materialized",
+            "-c",
+            "environmentd --version | grep environmentd",
+            entrypoint="bash",
+            rm=True,
+        )
+
+        c.up("cockroach", "materialized")
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
