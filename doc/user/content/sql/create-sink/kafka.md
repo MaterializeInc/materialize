@@ -181,18 +181,69 @@ There are two ways to add comments to the generated avro schema
 
 Usage example:
 ```sql
+CREATE TABLE t (c1 int, c2 text);
+COMMENT ON TABLE t IS 'materialize comment on t';
+COMMENT ON COLUMN t.c2 IS 'materialize comment on t.c2';
+
 CREATE SINK avro_sink
   IN CLUSTER my_io_cluster
-  FROM mview
+  FROM t
   INTO KAFKA CONNECTION kafka_connection (TOPIC 'test_avro_topic')
-  KEY (key_col)
+  KEY (c1)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   (
-    DOC ON TYPE mview = 'top-level comment for avro record in both key and value schemas',
-    KEY DOC ON COLUMN mview.key_col = 'comment on column only in key schema',
-    VALUE DOC ON COLUMN mview.key_col = 'comment on column only in value schema',
+    DOC ON TYPE t = 'top-level comment for avro record in both key and value schemas',
+    KEY DOC ON COLUMN t.c1 = 'comment on column only in key schema',
+    VALUE DOC ON COLUMN t.c1 = 'comment on column only in value schema'
   )
   ENVELOPE UPSERT;
+```
+The above will create the following key and value avro schemas.
+##### Key Schema:
+```json
+{
+  "type": "record",
+  "name": "row",
+  "doc": "top-level comment for avro record in both key and value schemas",
+  "fields": [
+    {
+      "name": "c1",
+      "type": [
+        "null",
+        "int"
+      ],
+      "doc": "comment on column only in key schema"
+    }
+  ]
+}
+
+```
+
+##### Value Schema:
+```json
+{
+  "type": "record",
+  "name": "envelope",
+  "doc": "top-level comment for avro record in both key and value schemas",
+  "fields": [
+    {
+      "name": "c1",
+      "type": [
+        "null",
+        "int"
+      ],
+      "doc": "comment on column only in value schema"
+    },
+    {
+      "name": "c2",
+      "type": [
+        "null",
+        "string"
+      ],
+      "doc": "materialize comment on t.c2"
+    }
+  ]
+}
 
 ```
 
