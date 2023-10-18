@@ -131,7 +131,10 @@ fn bench_transact(c: &mut Criterion) {
                     .await
                     .unwrap();
             })
-        })
+        });
+        runtime.block_on(async {
+            catalog.expire().await;
+        });
     });
 }
 

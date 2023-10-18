@@ -308,6 +308,7 @@ impl State {
             )
             .await?;
             let res = f(catalog.for_session(&Session::dummy()));
+            catalog.expire().await;
             Ok(Some(res))
         } else {
             Ok(None)

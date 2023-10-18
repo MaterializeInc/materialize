@@ -197,6 +197,10 @@ async fn datadriven() {
                 }
             })
             .await;
+            if let Some(catalog) = Arc::into_inner(catalog) {
+                let catalog = catalog.into_inner();
+                catalog.expire().await;
+            }
             f
         })
         .await

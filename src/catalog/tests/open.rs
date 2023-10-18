@@ -138,10 +138,11 @@ async fn test_is_initialized<D: DurableCatalogState>(
         "catalog has not been opened yet"
     );
 
-    let _ = openable_state1
+    let state = openable_state1
         .open(SYSTEM_TIME.clone(), &debug_bootstrap_args(), None)
         .await
         .unwrap();
+    Box::new(state).expire().await;
 
     assert!(
         openable_state2.is_initialized().await.unwrap(),
@@ -196,10 +197,11 @@ async fn test_get_deployment_generation<D: DurableCatalogState>(
         "deployment generation has not been set"
     );
 
-    let _ = openable_state1
+    let state = openable_state1
         .open(SYSTEM_TIME.clone(), &debug_bootstrap_args(), Some(42))
         .await
         .unwrap();
+    Box::new(state).expire().await;
 
     assert_eq!(
         openable_state2.get_deployment_generation().await.unwrap(),
@@ -296,6 +298,7 @@ async fn test_open_savepoint<D: DurableCatalogState>(
                 .await
                 .unwrap();
             assert_eq!(state.epoch(), Epoch::new(2).expect("known to be non-zero"));
+            Box::new(state).expire().await;
         }
 
         // Open catalog in check mode.
@@ -318,7 +321,9 @@ async fn test_open_savepoint<D: DurableCatalogState>(
             .unwrap()
             .into_iter()
             .find(|db| db.name == "db");
-        assert!(db.is_some(), "database should exist")
+        assert!(db.is_some(), "database should exist");
+
+        Box::new(state).expire().await;
     }
 
     {
@@ -334,7 +339,8 @@ async fn test_open_savepoint<D: DurableCatalogState>(
             .unwrap()
             .into_iter()
             .find(|db| db.name == "db");
-        assert!(db.is_none(), "database should not exist")
+        assert!(db.is_none(), "database should not exist");
+        Box::new(state).expire().await;
     }
 }
 
@@ -406,6 +412,7 @@ async fn test_open_read_only<D: DurableCatalogState>(
             .await
             .unwrap();
         assert_eq!(state.epoch(), Epoch::new(2).expect("known to be non-zero"));
+        Box::new(state).expire().await;
     }
 
     let mut state = openable_state3
@@ -425,6 +432,7 @@ async fn test_open_read_only<D: DurableCatalogState>(
                     .contains("cannot execute UPDATE in a read-only transaction")
         ),
     }
+    Box::new(state).expire().await;
 }
 
 #[mz_ore::test(tokio::test)]
@@ -476,6 +484,7 @@ async fn test_open<D: DurableCatalogState>(
         insta::assert_debug_snapshot!(snapshot);
         let audit_log = state.get_audit_logs().await.unwrap();
         insta::assert_debug_snapshot!(audit_log);
+        Box::new(state).expire().await;
         (snapshot, audit_log)
     };
     // Reopening the catalog will increment the epoch, but shouldn't change the initial snapshot.
@@ -488,6 +497,7 @@ async fn test_open<D: DurableCatalogState>(
         assert_eq!(state.epoch(), Epoch::new(3).expect("known to be non-zero"));
         assert_eq!(state.snapshot().await.unwrap(), snapshot);
         assert_eq!(state.get_audit_logs().await.unwrap(), audit_log);
+        Box::new(state).expire().await;
     }
 }
 

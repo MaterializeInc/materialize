@@ -253,6 +253,10 @@ impl OpenableDurableCatalogState<Connection> for OpenableConnection {
 
         Ok(deployment_generation)
     }
+
+    async fn expire(self) {
+        // Nothing to release in the stash.
+    }
 }
 
 /// Opens a new [`Connection`] to the stash, retrying any retryable errors. Optionally
@@ -423,6 +427,10 @@ impl ReadOnlyDurableCatalogState for Connection {
         self.stash
             .epoch()
             .expect("an opened stash should always have an epoch number")
+    }
+
+    async fn expire(self: Box<Self>) {
+        // Nothing to release in the stash.
     }
 
     async fn get_catalog_content_version(&mut self) -> Result<Option<String>, CatalogError> {
@@ -1205,5 +1213,9 @@ impl OpenableDurableCatalogState<Connection> for DebugOpenableConnection<'_> {
 
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError> {
         self.openable_connection.get_deployment_generation().await
+    }
+
+    async fn expire(self) {
+        self.openable_connection.expire().await
     }
 }

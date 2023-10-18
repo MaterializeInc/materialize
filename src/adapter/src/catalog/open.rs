@@ -1717,6 +1717,16 @@ impl Catalog {
             migrated_builtins,
         })
     }
+
+    /// Politely releases all external resources that can only be released in an async context.
+    pub async fn expire(self) {
+        // If no one else holds a reference to storage, then clean up the storage resources.
+        // Otherwise, hopefully the other reference cleans up the resources when it's dropped.
+        if let Some(storage) = Arc::into_inner(self.storage) {
+            let storage = storage.into_inner();
+            storage.expire().await;
+        }
+    }
 }
 
 #[mz_ore::test(tokio::test)]
@@ -2387,6 +2397,7 @@ async fn test_builtin_migration() {
                 "{} test failed with wrong migrated system object mappings",
                 test_case.test_name
             );
+            catalog.expire().await;
         })
         .await
     }
