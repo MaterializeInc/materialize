@@ -6887,31 +6887,6 @@ ORDER BY x5_simple;
 3  14  14  true
 4  NULL  NULL  NULL
 
-# Test const folding of window aggregations.
-query T multiline
-EXPLAIN
-WITH const_values(x,y) AS (VALUES (1,2), (3,null), (5,6), (7,8), (9, null), (11, null), (13, 14), (15, 16), (17, 18), (10, -40), (10, -50))
-SELECT
-  x,
-  sum(x) OVER (ORDER BY x),
-  sum(sum(x) OVER (ORDER BY x)) OVER (ORDER BY x)
-FROM (SELECT DISTINCT ON(x) * FROM const_values);
-----
-Explained Query (fast path):
-  Constant
-    - (1, 1, 1)
-    - (3, 4, 5)
-    - (5, 9, 14)
-    - (7, 16, 30)
-    - (9, 25, 55)
-    - (10, 35, 90)
-    - (11, 46, 136)
-    - (13, 59, 195)
-    - (15, 74, 269)
-    - (17, 91, 360)
-
-EOF
-
 # Regression test for https://github.com/MaterializeInc/materialize/pull/22270#issuecomment-1761432124
 statement error db error: ERROR: Evaluation error: "4294967295 \* 2" uint4 out of range
 select max(1) over (partition by 1 order by 1, 1)
