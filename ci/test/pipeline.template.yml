@@ -162,41 +162,44 @@ steps:
           queue: linux-x86_64
         coverage: skip
 
-  - id: cargo-test
-    label: Cargo test
-    timeout_in_minutes: 30
-    artifact_paths: [junit_*.xml, target/nextest/ci/junit_cargo-test.xml]
-    inputs:
-      - Cargo.lock
-      - "**/Cargo.toml"
-      - "**/*.rs"
-      - "**/*.proto"
-      - "**/testdata/**"
-    env:
-      AWS_DEFAULT_REGION: "us-east-1"
-      # cargo-test's coverage is handled separately by cargo-llvm-cov
-      BUILDKITE_MZCOMPOSE_PLUGIN_SKIP_COVERAGE: "true"
-    plugins:
-      - ./ci/plugins/scratch-aws-access: ~
-      - ./ci/plugins/mzcompose:
-          composition: cargo-test
-    agents:
-      queue: builder-linux-x86_64
+  - group: "Cargo tests"
+    key: cargo-tests
+    steps:
+      - id: cargo-test
+        label: Cargo test
+        timeout_in_minutes: 30
+        artifact_paths: [junit_*.xml, target/nextest/ci/junit_cargo-test.xml]
+        inputs:
+          - Cargo.lock
+          - "**/Cargo.toml"
+          - "**/*.rs"
+          - "**/*.proto"
+          - "**/testdata/**"
+        env:
+          AWS_DEFAULT_REGION: "us-east-1"
+          # cargo-test's coverage is handled separately by cargo-llvm-cov
+          BUILDKITE_MZCOMPOSE_PLUGIN_SKIP_COVERAGE: "true"
+        plugins:
+          - ./ci/plugins/scratch-aws-access: ~
+          - ./ci/plugins/mzcompose:
+              composition: cargo-test
+        agents:
+          queue: builder-linux-x86_64
 
-  - id: miri-test
-    label: Miri test (fast) %n
-    inputs: [src]
-    parallelism: 2
-    timeout_in_minutes: 30
-    artifact_paths: [junit_*.xml, target/nextest/ci/junit_cargo-test.xml]
-    plugins:
-      - ./ci/plugins/scratch-aws-access: ~
-      - ./ci/plugins/mzcompose:
-          composition: cargo-test
-          args: [--miri-fast]
-    agents:
-      queue: builder-linux-x86_64
-    coverage: skip
+      - id: miri-test
+        label: Miri test (fast) %n
+        inputs: [src]
+        parallelism: 2
+        timeout_in_minutes: 30
+        artifact_paths: [junit_*.xml, target/nextest/ci/junit_cargo-test.xml]
+        plugins:
+          - ./ci/plugins/scratch-aws-access: ~
+          - ./ci/plugins/mzcompose:
+              composition: cargo-test
+              args: [--miri-fast]
+        agents:
+          queue: builder-linux-x86_64
+        coverage: skip
 
   - id: testdrive
     label: Testdrive %n
