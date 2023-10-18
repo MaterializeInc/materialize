@@ -17,3 +17,6 @@ futures = "0.3.25"
 mz-ore = { path = "../ore", default-features = false }
 tokio = "1.24.2"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]
