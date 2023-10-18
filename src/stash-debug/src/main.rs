@@ -486,7 +486,7 @@ impl Usage {
         ));
         let storage = openable_storage
             .open_savepoint(
-                now.clone(),
+                now(),
                 &BootstrapArgs {
                     default_cluster_replica_size: "1".into(),
                     bootstrap_role: None,

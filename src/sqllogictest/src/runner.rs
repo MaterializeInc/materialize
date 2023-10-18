@@ -970,8 +970,9 @@ impl<'a> RunnerInner<'a> {
         ));
         let listeners = mz_environmentd::Listeners::bind_any_local().await?;
         let host_name = format!("localhost:{}", listeners.http_local_addr().port());
-        let catalog_config = CatalogConfig::Stash {
+        let catalog_config = CatalogConfig::Shadow {
             url: adapter_stash_url,
+            persist_clients: Arc::clone(&persist_clients),
         };
         let server_config = mz_environmentd::Config {
             catalog_config,

@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use derivative::Derivative;
 use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -45,7 +46,11 @@ use crate::durable::{
 };
 
 /// A [`Transaction`] batches multiple catalog operations together and commits them atomically.
+#[derive(Derivative)]
+#[derivative(Debug, PartialEq)]
 pub struct Transaction<'a> {
+    #[derivative(Debug = "ignore")]
+    #[derivative(PartialEq = "ignore")]
     durable_catalog: &'a mut dyn DurableCatalogState,
     databases: TableTransaction<DatabaseKey, DatabaseValue>,
     schemas: TableTransaction<SchemaKey, SchemaValue>,

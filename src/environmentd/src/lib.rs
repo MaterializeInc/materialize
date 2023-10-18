@@ -254,6 +254,14 @@ pub enum CatalogConfig {
         /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
         persist_clients: Arc<PersistClientCache>,
     },
+    /// The catalog contents are stored in both persist and the stash and their contents are
+    /// compared. This is mostly used for testing purposes.
+    Shadow {
+        /// The PostgreSQL URL for the adapter stash.
+        url: String,
+        /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
+        persist_clients: Arc<PersistClientCache>,
+    },
 }
 
 /// Listeners for an `environmentd` server.
@@ -374,6 +382,9 @@ impl Listeners {
             mz_server_core::serve(internal_http_conns, internal_http_server)
         });
 
+        // Get the current timestamp so we can record when we booted.
+        let boot_ts = (config.now)();
+
         'leader_promotion: {
             let Some(deploy_generation) = config.deploy_generation else {
                 break 'leader_promotion;
@@ -398,7 +409,7 @@ impl Listeners {
                 tracing::info!("Stash generation {stash_generation:?} is less than deploy generation {deploy_generation}. Performing pre-flight checks");
                 match openable_adapter_storage
                     .open_savepoint(
-                        config.now.clone(),
+                        boot_ts.clone(),
                         &BootstrapArgs {
                             default_cluster_replica_size: config
                                 .bootstrap_default_cluster_replica_size
@@ -444,7 +455,7 @@ impl Listeners {
         .await?;
         let mut adapter_storage = openable_adapter_storage
             .open(
-                config.now.clone(),
+                boot_ts,
                 &BootstrapArgs {
                     default_cluster_replica_size: config
                         .bootstrap_default_cluster_replica_size
@@ -690,6 +701,31 @@ async fn catalog_opener(
 
             Box::new(
                 mz_catalog::durable::persist_backed_catalog_state(
+                    persist_client,
+                    environment_id.organization_id(),
+                )
+                .await,
+            )
+        }
+        CatalogConfig::Shadow {
+            url,
+            persist_clients,
+        } => {
+            info!("Using shadow catalog");
+            let stash_factory =
+                mz_stash::StashFactory::from_metrics(Arc::clone(&controller_config.stash_metrics));
+            let tls = mz_tls_util::make_tls(&tokio_postgres::config::Config::from_str(url)?)?;
+            let persist_client = persist_clients
+                .open(controller_config.persist_location.clone())
+                .await?;
+            Box::new(
+                mz_catalog::durable::shadow_catalog_state(
+                    StashConfig {
+                        stash_factory,
+                        stash_url: url.clone(),
+                        schema: None,
+                        tls,
+                    },
                     persist_client,
                     environment_id.organization_id(),
                 )

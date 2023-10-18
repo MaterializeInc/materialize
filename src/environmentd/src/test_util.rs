@@ -176,6 +176,7 @@ pub struct Config {
     system_parameter_defaults: BTreeMap<String, String>,
     internal_console_redirect_url: Option<String>,
     metrics_registry: Option<MetricsRegistry>,
+    environment_id: EnvironmentId,
 }
 
 impl Default for Config {
@@ -208,6 +209,7 @@ impl Default for Config {
                 startup_log_filter: CloneableEnvFilter::from_str("error").expect("must parse"),
                 ..Default::default()
             },
+            environment_id: EnvironmentId::for_tests(),
         }
     }
 }
@@ -330,7 +332,6 @@ impl Listeners {
     }
 
     pub fn serve(self, config: Config) -> Result<Server, anyhow::Error> {
-        let environment_id = EnvironmentId::for_tests();
         let (data_directory, temp_dir) = match config.data_directory {
             None => {
                 // If no data directory is provided, we create a temporary
@@ -370,7 +371,7 @@ impl Listeners {
                         .unwrap()
                         .to_path_buf(),
                     suppress_output: false,
-                    environment_id: environment_id.to_string(),
+                    environment_id: config.environment_id.to_string(),
                     secrets_dir: data_directory.join("secrets"),
                     command_wrapper: vec![],
                     propagate_crashes: config.propagate_crashes,
@@ -451,8 +452,9 @@ impl Listeners {
             (TracingHandle::disabled(), None)
         };
         let host_name = format!("localhost:{}", self.inner.http_local_addr().port());
-        let catalog_config = CatalogConfig::Stash {
+        let catalog_config = CatalogConfig::Shadow {
             url: adapter_stash_url,
+            persist_clients: Arc::clone(&persist_clients),
         };
 
         let inner = self.runtime.block_on(async {
@@ -493,7 +495,7 @@ impl Listeners {
                     all_features: false,
                     metrics_registry: metrics_registry.clone(),
                     now: config.now,
-                    environment_id,
+                    environment_id: config.environment_id,
                     cors_allowed_origin: AllowOrigin::list([]),
                     cluster_replica_sizes: Default::default(),
                     default_storage_cluster_size: None,

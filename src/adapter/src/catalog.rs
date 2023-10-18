@@ -20,6 +20,7 @@ use mz_adapter_types::connection::ConnectionId;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::MutexGuard;
 use tracing::{info, trace};
+use uuid::Uuid;
 
 use mz_audit_log::{EventDetails, EventType, FullNameV1, IdFullNameV1, ObjectType, VersionedEvent};
 use mz_build_info::DUMMY_BUILD_INFO;
@@ -44,6 +45,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::option::FallibleMapExt;
 use mz_ore::result::ResultExt as _;
+use mz_persist_client::PersistClient;
 use mz_repr::adt::mz_acl_item::{merge_mz_acl_items, AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::namespaces::MZ_TEMP_SCHEMA;
@@ -417,7 +419,7 @@ impl Catalog {
         self.transient_revision
     }
 
-    /// Creates a debug catalog from a debug stash based on the current
+    /// Creates a debug catalog from the current
     /// `COCKROACH_URL` with parameters set appropriately for debug contexts,
     /// like in tests.
     ///
@@ -434,26 +436,41 @@ impl Catalog {
         Fut: Future<Output = T>,
     {
         let debug_stash_factory = DebugStashFactory::new().await;
-        let catalog = Self::open_debug_stash_catalog_factory(&debug_stash_factory, now)
-            .await
-            .expect("unable to open debug stash");
+        let persist_client = PersistClient::new_for_tests().await;
+        let environmentd_id = Uuid::new_v4();
+        let catalog =
+            Self::open_debug_catalog(&debug_stash_factory, persist_client, environmentd_id, now)
+                .await
+                .expect("unable to open debug stash");
         let res = f(catalog).await;
         debug_stash_factory.drop().await;
         res
     }
 
-    /// Opens a debug stash backed catalog using `debug_stash_factory`.
+    /// Opens a debug catalog.
     ///
     /// See [`Catalog::with_debug`].
-    pub async fn open_debug_stash_catalog_factory(
+    pub async fn open_debug_catalog(
         debug_stash_factory: &DebugStashFactory,
+        persist_client: PersistClient,
+        organization_id: Uuid,
         now: NowFn,
     ) -> Result<Catalog, anyhow::Error> {
-        let openable_storage = Box::new(mz_catalog::durable::debug_stash_backed_catalog_state(
-            debug_stash_factory,
-        ));
+        let openable_storage = Box::new(
+            mz_catalog::durable::shadow_catalog_state(
+                StashConfig {
+                    stash_factory: debug_stash_factory.stash_factory().clone(),
+                    stash_url: debug_stash_factory.url().to_string(),
+                    schema: Some(debug_stash_factory.schema().to_string()),
+                    tls: debug_stash_factory.tls().clone(),
+                },
+                persist_client,
+                organization_id,
+            )
+            .await,
+        );
         let storage = openable_storage
-            .open(now.clone(), &debug_bootstrap_args(), None)
+            .open(now(), &debug_bootstrap_args(), None)
             .await?;
         Self::open_debug_stash_catalog(storage, now).await
     }
@@ -479,7 +496,7 @@ impl Catalog {
             stash_config,
         ));
         let storage = openable_storage
-            .open(now.clone(), &debug_bootstrap_args(), None)
+            .open(now(), &debug_bootstrap_args(), None)
             .await?;
         Self::open_debug_stash_catalog(storage, now).await
     }
@@ -495,7 +512,7 @@ impl Catalog {
             stash_config,
         ));
         let storage = openable_storage
-            .open_read_only(now.clone(), &debug_bootstrap_args())
+            .open_read_only(now(), &debug_bootstrap_args())
             .await?;
         Self::open_debug_stash_catalog(storage, now).await
     }
@@ -4303,6 +4320,7 @@ mod tests {
     use itertools::Itertools;
     use tokio_postgres::types::Type;
     use tokio_postgres::NoTls;
+    use uuid::Uuid;
 
     use mz_catalog::builtin::{Builtin, BuiltinType, BUILTINS};
     use mz_controller_types::{ClusterId, ReplicaId};
@@ -4310,6 +4328,7 @@ mod tests {
     use mz_ore::collections::CollectionExt;
     use mz_ore::now::{to_datetime, NOW_ZERO, SYSTEM_TIME};
     use mz_ore::task;
+    use mz_persist_client::PersistClient;
     use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_UNPINNED_OID, FIRST_USER_OID};
     use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
     use mz_repr::namespaces::{INFORMATION_SCHEMA, PG_CATALOG_SCHEMA};
@@ -4417,11 +4436,17 @@ mod tests {
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_catalog_revision() {
         let debug_stash_factory = DebugStashFactory::new().await;
+        let persist_client = PersistClient::new_for_tests().await;
+        let organization_id = Uuid::new_v4();
         {
-            let mut catalog =
-                Catalog::open_debug_stash_catalog_factory(&debug_stash_factory, NOW_ZERO.clone())
-                    .await
-                    .expect("unable to open debug catalog");
+            let mut catalog = Catalog::open_debug_catalog(
+                &debug_stash_factory,
+                persist_client.clone(),
+                organization_id.clone(),
+                NOW_ZERO.clone(),
+            )
+            .await
+            .expect("unable to open debug catalog");
             assert_eq!(catalog.transient_revision(), 1);
             catalog
                 .transact(
@@ -4441,10 +4466,14 @@ mod tests {
             catalog.expire().await;
         }
         {
-            let catalog =
-                Catalog::open_debug_stash_catalog_factory(&debug_stash_factory, NOW_ZERO.clone())
-                    .await
-                    .expect("unable to open debug catalog");
+            let catalog = Catalog::open_debug_catalog(
+                &debug_stash_factory,
+                persist_client,
+                organization_id,
+                NOW_ZERO.clone(),
+            )
+            .await
+            .expect("unable to open debug catalog");
             // Re-opening the same stash resets the transient_revision to 1.
             assert_eq!(catalog.transient_revision(), 1);
             catalog.expire().await;
@@ -4642,10 +4671,14 @@ mod tests {
         assert!(mz_sql_parser::parser::parse_statements_with_limit(&create_sql).is_err());
 
         let debug_stash_factory = DebugStashFactory::new().await;
+        let persist_client = PersistClient::new_for_tests().await;
+        let organization_id = Uuid::new_v4();
         let id = GlobalId::User(1);
         {
-            let mut catalog = Catalog::open_debug_stash_catalog_factory(
+            let mut catalog = Catalog::open_debug_catalog(
                 &debug_stash_factory,
+                persist_client.clone(),
+                organization_id.clone(),
                 SYSTEM_TIME.clone(),
             )
             .await
@@ -4678,8 +4711,10 @@ mod tests {
             catalog.expire().await;
         }
         {
-            let catalog = Catalog::open_debug_stash_catalog_factory(
+            let catalog = Catalog::open_debug_catalog(
                 &debug_stash_factory,
+                persist_client,
+                organization_id,
                 SYSTEM_TIME.clone(),
             )
             .await
