@@ -379,6 +379,10 @@ impl Coordinator {
                 // planning.
                 ctx.retire(Err(AdapterError::Unsupported("ALTER ... SWAP ...")));
             }
+            Plan::AlterSchemaRename(plan) => {
+                let result = self.sequence_alter_schema_rename(ctx.session(), plan).await;
+                ctx.retire(result);
+            }
             Plan::AlterIndexSetOptions(plan) => {
                 let result = self.sequence_alter_index_set_options(plan);
                 ctx.retire(result);

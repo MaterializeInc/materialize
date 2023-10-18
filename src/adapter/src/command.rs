@@ -797,6 +797,7 @@ impl ExecuteResponse {
             | AlterItemRename
             | AlterItemSwap
             | AlterNoop
+            | AlterSchemaRename
             | AlterSecret
             | AlterSink
             | AlterSource

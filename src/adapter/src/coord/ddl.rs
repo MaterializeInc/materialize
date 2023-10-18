@@ -1083,6 +1083,7 @@ impl Coordinator {
                 | Op::RenameCluster { .. }
                 | Op::RenameClusterReplica { .. }
                 | Op::RenameItem { .. }
+                | Op::RenameSchema { .. }
                 | Op::UpdateOwner { .. }
                 | Op::RevokeRole { .. }
                 | Op::UpdateClusterConfig { .. }

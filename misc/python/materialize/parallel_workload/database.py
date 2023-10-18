@@ -30,12 +30,14 @@ MAX_COLUMNS = 100
 MAX_ROWS = 1000
 MAX_CLUSTERS = 10
 MAX_CLUSTER_REPLICAS = 4
+MAX_SCHEMAS = 10
 MAX_TABLES = 100
 MAX_VIEWS = 100
 MAX_ROLES = 100
 MAX_SOURCES = 20
 MAX_INCLUDE_HEADERS = 5
 
+MAX_INITIAL_SCHEMAS = 1
 MAX_INITIAL_CLUSTERS = 2
 MAX_INITIAL_TABLES = 10
 MAX_INITIAL_VIEWS = 10
@@ -101,17 +103,40 @@ class Column:
         return result
 
 
+class Schema:
+    schema_id: int
+    rename: int
+
+    def __init__(self, rng: random.Random, schema_id: int):
+        self.schema_id = schema_id
+        self.rename = 0
+
+    def __str__(self) -> str:
+        if self.rename:
+            return f"s{self.schema_id}_{self.rename}"
+        return f"s{self.schema_id}"
+
+    def create(self, exe: Executor) -> None:
+        query = f"CREATE SCHEMA {self}"
+        exe.execute(query)
+
+
 class DBObject:
     columns: Sequence[Column]
+
+    def name(self) -> str:
+        raise NotImplementedError
 
 
 class Table(DBObject):
     table_id: int
     rename: int
     num_rows: int
+    schema: Schema
 
-    def __init__(self, rng: random.Random, table_id: int):
+    def __init__(self, rng: random.Random, table_id: int, schema: Schema):
         self.table_id = table_id
+        self.schema = schema
         self.columns = [
             Column(rng, i, rng.choice(DATA_TYPES), self)
             for i in range(rng.randint(2, MAX_COLUMNS))
@@ -119,10 +144,13 @@ class Table(DBObject):
         self.num_rows = 0
         self.rename = 0
 
-    def __str__(self) -> str:
+    def name(self) -> str:
         if self.rename:
             return f"t{self.table_id}_{self.rename}"
         return f"t{self.table_id}"
+
+    def __str__(self) -> str:
+        return f"{self.schema}.{self.name()}"
 
     def create(self, exe: Executor) -> None:
         query = f"CREATE TABLE {self}("
@@ -142,6 +170,7 @@ class View(DBObject):
     join_column: Column | None
     join_column2: Column | None
     assert_not_null: list[Column]
+    schema: Schema
 
     def __init__(
         self,
@@ -149,10 +178,12 @@ class View(DBObject):
         view_id: int,
         base_object: DBObject,
         base_object2: DBObject | None,
+        schema: Schema,
     ):
         self.view_id = view_id
         self.base_object = base_object
         self.base_object2 = base_object2
+        self.schema = schema
         all_columns = list(base_object.columns) + (
             list(base_object2.columns) if base_object2 else []
         )
@@ -190,8 +221,11 @@ class View(DBObject):
             if columns:
                 self.join_column2 = rng.choice(columns)
 
-    def __str__(self) -> str:
+    def name(self) -> str:
         return f"v{self.view_id}"
+
+    def __str__(self) -> str:
+        return f"{self.schema}.{self.name()}"
 
     def create(self, exe: Executor) -> None:
         if self.materialized:
@@ -247,10 +281,14 @@ class WebhookSource(DBObject):
     include_headers: bool
     explicit_include_headers: list[str]
     check: str | None
+    schema: Schema
 
-    def __init__(self, source_id: int, cluster: "Cluster", rng: random.Random):
+    def __init__(
+        self, source_id: int, cluster: "Cluster", schema: Schema, rng: random.Random
+    ):
         self.source_id = source_id
         self.cluster = cluster
+        self.schema = schema
         self.rename = 0
         self.body_format = rng.choice([e for e in BodyFormat])
         self.include_headers = rng.choice([True, False])
@@ -283,10 +321,13 @@ class WebhookSource(DBObject):
         # TODO: CHECK WITH SECRET
         # TODO: NOT IN INCLUDE HEADERS
 
-    def __str__(self) -> str:
+    def name(self) -> str:
         if self.rename:
             return f"wh{self.source_id}_{self.rename}"
         return f"wh{self.source_id}"
+
+    def __str__(self) -> str:
+        return f"{self.schema}.{self.name()}"
 
     def create(self, exe: Executor) -> None:
         query = f"CREATE SOURCE {self} IN CLUSTER {self.cluster} FROM WEBHOOK BODY FORMAT {self.body_format.name}"
@@ -381,6 +422,8 @@ class Database:
     port: int
     system_port: int
     http_port: int
+    schemas: list[Schema]
+    schema_id: int
     tables: list[Table]
     table_id: int
     views: list[View]
@@ -413,7 +456,14 @@ class Database:
         self.complexity = complexity
         self.scenario = scenario
 
-        self.tables = [Table(rng, i) for i in range(rng.randint(2, MAX_INITIAL_TABLES))]
+        self.schemas = [
+            Schema(rng, i) for i in range(rng.randint(1, MAX_INITIAL_SCHEMAS))
+        ]
+        self.schema_id = len(self.schemas)
+        self.tables = [
+            Table(rng, i, rng.choice(self.schemas))
+            for i in range(rng.randint(2, MAX_INITIAL_TABLES))
+        ]
         self.table_id = len(self.tables)
         self.views = []
         for i in range(rng.randint(2, MAX_INITIAL_VIEWS)):
@@ -423,7 +473,7 @@ class Database:
             base_object2: Table | None = rng.choice(self.tables)
             if rng.choice([True, False]) or base_object2 == base_object:
                 base_object2 = None
-            view = View(rng, i, base_object, base_object2)
+            view = View(rng, i, base_object, base_object2, rng.choice(self.schemas))
             self.views.append(view)
         self.view_id = len(self.views)
         self.roles = [Role(i) for i in range(rng.randint(0, MAX_INITIAL_ROLES))]
@@ -442,7 +492,7 @@ class Database:
         self.cluster_id = len(self.clusters)
         self.indexes = set()
         self.sources = [
-            WebhookSource(i, rng.choice(self.clusters), rng)
+            WebhookSource(i, rng.choice(self.clusters), rng.choice(self.schemas), rng)
             for i in range(rng.randint(0, MAX_INITIAL_SOURCES))
         ]
         self.source_id = len(self.sources)
@@ -453,9 +503,7 @@ class Database:
 
     def __iter__(self):
         """Returns all relations"""
-        return (
-            self.clusters + self.tables + self.views + self.roles + self.sources
-        ).__iter__()
+        return (self.clusters + self.tables + self.views + self.sources).__iter__()
 
     def drop(self, exe: Executor) -> None:
         exe.execute(f"DROP DATABASE IF EXISTS {self}")
@@ -473,5 +521,5 @@ class Database:
         for row in exe.cur.fetchall():
             exe.execute(f"DROP ROLE {row[0]}")
 
-        for relation in self:
-            relation.create(exe)
+        for obj in self.schemas + list(self) + self.roles:
+            obj.create(exe)

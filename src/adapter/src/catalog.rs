@@ -39,6 +39,7 @@ use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::OptimizedMirRelationExpr;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
+use mz_ore::collections::HashSet;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::option::FallibleMapExt;
@@ -2841,6 +2842,123 @@ impl Catalog {
                         )?;
                     }
                 }
+                Op::RenameSchema {
+                    database_spec,
+                    schema_spec,
+                    new_name,
+                } => {
+                    let conn_id = session
+                        .map(|session| session.conn_id())
+                        .unwrap_or(&SYSTEM_CONN_ID);
+                    let schema = state.get_schema(&database_spec, &schema_spec, conn_id);
+                    let cur_name = schema.name().schema.clone();
+
+                    let mut updates = Vec::new();
+                    let mut already_updated = HashSet::new();
+
+                    let mut update_item = |id| {
+                        if already_updated.contains(id) {
+                            return Ok(());
+                        }
+
+                        let entry = state.get_entry(id);
+
+                        // Update our item.
+                        let mut new_entry = entry.clone();
+                        new_entry.item = entry
+                            .item
+                            .rename_schema_refs(&cur_name, new_name.clone())
+                            .expect("no failures");
+
+                        // Update the Stash and Builtin Tables.
+                        if !new_entry.item().is_temporary() {
+                            tx.update_item(*id, new_entry.clone().into())?;
+                        }
+                        builtin_table_updates.extend(state.pack_item_update(*id, -1));
+                        updates.push((id.clone(), entry.name().clone(), new_entry.item));
+
+                        // Track which IDs we update.
+                        already_updated.insert(id);
+
+                        Ok::<_, AdapterError>(())
+                    };
+
+                    // Update all of the items in the schema.
+                    for (_name, item_id) in &schema.items {
+                        // Update the item itself.
+                        update_item(item_id)?;
+
+                        // Update everything that depends on this item.
+                        for id in state.get_entry(item_id).used_by() {
+                            update_item(id)?;
+                        }
+                    }
+
+                    // Renaming temporary schemas is not supported.
+                    let SchemaSpecifier::Id(schema_id) = *schema.id() else {
+                        let schema_name = schema.name().schema.clone();
+                        return Err(AdapterError::Catalog(crate::catalog::Error::new(
+                            crate::catalog::ErrorKind::ReadOnlySystemSchema(schema_name),
+                        )));
+                    };
+                    // Delete the old schema from the builtin table.
+                    builtin_table_updates.push(state.pack_schema_update(
+                        &database_spec,
+                        &schema_id,
+                        -1,
+                    ));
+
+                    // Update the schema itself.
+                    let schema = state.get_schema_mut(&database_spec, &schema_spec, conn_id);
+                    let old_name = schema.name().schema.clone();
+                    schema.name.schema = new_name.clone();
+                    let new_schema = schema.clone().into_durable_schema(database_spec.id());
+                    tx.update_schema(schema_id, new_schema)?;
+
+                    // Update the references to this schema.
+                    match (&database_spec, &schema_spec) {
+                        (ResolvedDatabaseSpecifier::Id(db_id), SchemaSpecifier::Id(_)) => {
+                            let database = state.get_database_mut(db_id);
+                            let Some(prev_id) = database.schemas_by_name.remove(&old_name) else {
+                                panic!("Catalog state inconsistency! Expected to find schema with name {old_name}");
+                            };
+                            database.schemas_by_name.insert(new_name.clone(), prev_id);
+                        }
+                        (ResolvedDatabaseSpecifier::Ambient, SchemaSpecifier::Id(_)) => {
+                            let Some(prev_id) = state.ambient_schemas_by_name.remove(&old_name)
+                            else {
+                                panic!("Catalog state inconsistency! Expected to find schema with name {old_name}");
+                            };
+                            state
+                                .ambient_schemas_by_name
+                                .insert(new_name.clone(), prev_id);
+                        }
+                        (ResolvedDatabaseSpecifier::Ambient, SchemaSpecifier::Temporary) => {
+                            // No external references to rename.
+                        }
+                        (ResolvedDatabaseSpecifier::Id(_), SchemaSpecifier::Temporary) => {
+                            unreachable!("temporary schemas are in the ambient database")
+                        }
+                    }
+
+                    // Update the new schema in the builtin table.
+                    builtin_table_updates.push(state.pack_schema_update(
+                        &database_spec,
+                        &schema_id,
+                        1,
+                    ));
+
+                    for (id, new_name, new_item) in updates {
+                        Self::update_item(
+                            state,
+                            builtin_table_updates,
+                            id,
+                            new_name,
+                            new_item,
+                            drop_ids,
+                        )?;
+                    }
+                }
                 Op::UpdateOwner { id, new_owner } => {
                     let conn_id = session
                         .map(|session| session.conn_id())
@@ -3855,6 +3973,11 @@ pub enum Op {
         id: GlobalId,
         current_full_name: FullItemName,
         to_name: String,
+    },
+    RenameSchema {
+        database_spec: ResolvedDatabaseSpecifier,
+        schema_spec: SchemaSpecifier,
+        new_name: String,
     },
     UpdateOwner {
         id: ObjectId,

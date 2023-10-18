@@ -181,7 +181,7 @@ def run(
         )
         thread.start()
         threads.append(thread)
-    elif scenario == Scenario.Regression:
+    elif scenario in (Scenario.Regression, Scenario.Rename):
         pass
     else:
         raise ValueError(f"Unknown scenario {scenario}")

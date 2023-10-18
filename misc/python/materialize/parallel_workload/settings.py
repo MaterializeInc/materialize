@@ -20,3 +20,4 @@ class Scenario(Enum):
     Regression = "regression"
     Cancel = "cancel"
     Kill = "kill"
+    Rename = "rename"

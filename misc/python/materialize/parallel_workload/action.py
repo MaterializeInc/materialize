@@ -21,6 +21,7 @@ from materialize.parallel_workload.database import (
     MAX_CLUSTERS,
     MAX_ROLES,
     MAX_ROWS,
+    MAX_SCHEMAS,
     MAX_SOURCES,
     MAX_TABLES,
     MAX_VIEWS,
@@ -29,6 +30,7 @@ from materialize.parallel_workload.database import (
     Database,
     DBObject,
     Role,
+    Schema,
     Table,
     View,
     WebhookSource,
@@ -86,6 +88,12 @@ class Action:
                     "network error",
                     "Can't create a connection to host",
                     "Connection refused",
+                ]
+            )
+        if self.db.scenario == Scenario.Rename:
+            result.extend(
+                [
+                    "unknown schema",
                 ]
             )
         return result
@@ -276,7 +284,7 @@ class CreateIndexAction(Action):
         columns = self.rng.sample(table.columns, len(table.columns))
         columns_str = "_".join(column.name() for column in columns)
         # columns_str may exceed 255 characters, so it is converted to a positive number with hash
-        index_name = f"idx_{table}_{abs(hash(columns_str))}"
+        index_name = f"idx_{table.name()}_{abs(hash(columns_str))}"
         index_elems = []
         for i, column in enumerate(columns):
             order = self.rng.choice(["ASC", "DESC"])
@@ -306,7 +314,7 @@ class CreateTableAction(Action):
                 return
             table_id = self.db.table_id
             self.db.table_id += 1
-            table = Table(self.rng, table_id)
+            table = Table(self.rng, table_id, self.rng.choice(self.db.schemas))
             table.create(exe)
             self.db.tables.append(table)
 
@@ -330,6 +338,8 @@ class DropTableAction(Action):
 
 class RenameTableAction(Action):
     def run(self, exe: Executor) -> None:
+        if self.db.scenario != Scenario.Rename:
+            return
         with self.db.lock:
             if not self.db.tables:
                 return
@@ -337,9 +347,54 @@ class RenameTableAction(Action):
             old_name = str(table)
             table.rename += 1
             try:
-                exe.execute(f"ALTER TABLE {old_name} RENAME TO {table}")
-            finally:
+                exe.execute(f"ALTER TABLE {old_name} RENAME TO {table.name()}")
+            except:
                 table.rename -= 1
+                raise
+
+
+class CreateSchemaAction(Action):
+    def run(self, exe: Executor) -> None:
+        with self.db.lock:
+            if len(self.db.schemas) > MAX_SCHEMAS:
+                return
+            schema_id = self.db.schema_id
+            self.db.schema_id += 1
+            schema = Schema(self.rng, schema_id)
+            schema.create(exe)
+            self.db.schemas.append(schema)
+
+
+class DropSchemaAction(Action):
+    def errors_to_ignore(self) -> list[str]:
+        return [
+            "cannot be dropped without CASCADE while it contains objects",
+        ] + super().errors_to_ignore()
+
+    def run(self, exe: Executor) -> None:
+        with self.db.lock:
+            if len(self.db.schemas) <= 1:
+                return
+            schema_id = self.rng.randrange(len(self.db.schemas))
+            schema = self.db.schemas[schema_id]
+            query = f"DROP SCHEMA {schema}"
+            exe.execute(query)
+            del self.db.schemas[schema_id]
+
+
+class RenameSchemaAction(Action):
+    def run(self, exe: Executor) -> None:
+        if self.db.scenario != Scenario.Rename:
+            return
+        with self.db.lock:
+            schema = self.rng.choice(self.db.schemas)
+            old_name = str(schema)
+            schema.rename += 1
+            try:
+                exe.execute(f"ALTER SCHEMA {old_name} RENAME TO {schema}")
+            except:
+                schema.rename -= 1
+                raise
 
 
 class TransactionIsolationAction(Action):
@@ -371,7 +426,13 @@ class CreateViewAction(Action):
             )
             if self.rng.choice([True, False]) or base_object2 == base_object:
                 base_object2 = None
-            view = View(self.rng, view_id, base_object, base_object2)
+            view = View(
+                self.rng,
+                view_id,
+                base_object,
+                base_object2,
+                self.rng.choice(self.db.schemas),
+            )
             view.create(exe)
             self.db.views.append(view)
 
@@ -667,7 +728,8 @@ class CreateWebhookSourceAction(Action):
             self.db.source_id += 1
             potential_clusters = [c for c in self.db.clusters if len(c.replicas) == 1]
             cluster = self.rng.choice(potential_clusters)
-            source = WebhookSource(source_id, cluster, self.rng)
+            schema = self.rng.choice(self.db.schemas)
+            source = WebhookSource(source_id, cluster, schema, self.rng)
             source.create(exe)
             self.db.sources.append(source)
 
@@ -793,7 +855,10 @@ ddl_action_list = ActionList(
         (GrantPrivilegesAction, 2),
         (RevokePrivilegesAction, 1),
         (ReconnectAction, 1),
-        # (RenameTableAction, 1),  # TODO(def-) enable
+        (CreateSchemaAction, 1),
+        (DropSchemaAction, 1),
+        (RenameSchemaAction, 10),
+        (RenameTableAction, 10),
         # (TransactionIsolationAction, 1),
     ],
     autocommit=True,

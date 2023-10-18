@@ -865,6 +865,78 @@ impl CatalogItem {
         self.conn_id().is_some()
     }
 
+    pub(crate) fn rename_schema_refs(
+        &self,
+        cur_schema_name: &str,
+        new_schema_name: String,
+    ) -> Result<CatalogItem, String> {
+        let do_rewrite = |create_sql: String| -> String {
+            let mut create_stmt = mz_sql::parse::parse(&create_sql)
+                .expect("invalid create sql persisted to catalog")
+                .into_element()
+                .ast;
+
+            // Rename all references to cur_schema_name.
+            mz_sql::ast::transform::create_stmt_rename_schema_refs(
+                &mut create_stmt,
+                cur_schema_name,
+                new_schema_name,
+            );
+
+            create_stmt.to_ast_string_stable()
+        };
+
+        match self {
+            CatalogItem::Table(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql);
+                Ok(CatalogItem::Table(i))
+            }
+            CatalogItem::Log(i) => Ok(CatalogItem::Log(i.clone())),
+            CatalogItem::Source(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql);
+                Ok(CatalogItem::Source(i))
+            }
+            CatalogItem::Sink(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql);
+                Ok(CatalogItem::Sink(i))
+            }
+            CatalogItem::View(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql);
+                Ok(CatalogItem::View(i))
+            }
+            CatalogItem::MaterializedView(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql);
+                Ok(CatalogItem::MaterializedView(i))
+            }
+            CatalogItem::Index(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql);
+                Ok(CatalogItem::Index(i))
+            }
+            CatalogItem::Secret(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql);
+                Ok(CatalogItem::Secret(i))
+            }
+            CatalogItem::Connection(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql);
+                Ok(CatalogItem::Connection(i))
+            }
+            CatalogItem::Type(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql);
+                Ok(CatalogItem::Type(i))
+            }
+            CatalogItem::Func(i) => Ok(CatalogItem::Func(i.clone())),
+        }
+    }
+
     /// Returns a clone of `self` with all instances of `from` renamed to `to`
     /// (with the option of including the item's own name) or errors if request
     /// is ambiguous.
