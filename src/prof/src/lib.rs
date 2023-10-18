@@ -78,6 +78,7 @@
 use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::io::Write;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -106,11 +107,13 @@ pub struct WeightedStack {
     pub weight: f64,
 }
 
+#[derive(Clone, Debug)]
 pub struct Mapping {
     pub memory_start: usize,
     pub memory_end: usize,
+    pub memory_offset: usize,
     pub file_offset: u64,
-    pub pathname: Option<String>,
+    pub pathname: PathBuf,
     pub build_id: Option<BuildId>,
 }
 
@@ -206,8 +209,8 @@ mz_fg_version: 1
             .expect("the year 2554 is far away");
 
         for (mapping, mapping_id) in self.mappings.iter().zip(1..) {
-            let pathname = mapping.pathname.as_deref().unwrap_or("");
-            let filename_idx = strings.insert(pathname);
+            let pathname = mapping.pathname.to_string_lossy();
+            let filename_idx = strings.insert(&pathname);
 
             let build_id_idx = match &mapping.build_id {
                 Some(build_id) => strings.insert(&build_id.to_string()),
@@ -223,6 +226,26 @@ mz_fg_version: 1
                 build_id: build_id_idx,
                 ..Default::default()
             });
+
+            // This is a is a Polar Signals-specific extension: For correct offline symbolization
+            // they need access to the memory offset of mappings, but the pprof format only has a
+            // field for the file offset. So we instead encode additional information about
+            // mappings in magic comments. There must be exactly one comment for each mapping.
+
+            // Take a shortcut and assume the ELF type is always `ET_DYN`. This is true for shared
+            // libraries and for position-independent executable, so it should always be true for
+            // any mappings we have.
+            // Getting the actual information is annoying. It's in the ELF header (the `e_type`
+            // field), but there is no guarantee that the full ELF header gets mapped, so we might
+            // not be able to find it in memory. We could try to load it from disk instead, but
+            // then we'd have to worry about blocking disk I/O.
+            let elf_type = 3;
+
+            let comment = format!(
+                "executableInfo={:x};{:x};{:x}",
+                elf_type, mapping.file_offset, mapping.memory_offset
+            );
+            profile.comment.push(strings.insert(&comment));
         }
 
         let mut location_ids = BTreeMap::new();

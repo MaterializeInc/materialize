@@ -12,20 +12,17 @@
 //! (1) Turn jemalloc profiling on and off, and dump heap profiles (`PROF_CTL`)
 //! (2) Parse jemalloc heap files and make them into a hierarchical format (`parse_jeheap`)
 
-use std::collections::BTreeMap;
 use std::ffi::CString;
 use std::io::BufRead;
 use std::os::unix::ffi::OsStrExt;
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, bail};
+use anyhow::bail;
 use libc::size_t;
 use mz_ore::cast::CastFrom;
 use mz_ore::metric;
 use mz_ore::metrics::{MetricsRegistry, UIntGauge};
-use mz_proc::BuildId;
 use once_cell::sync::Lazy;
 use tempfile::NamedTempFile;
 use tikv_jemalloc_ctl::{epoch, raw, stats};
@@ -53,11 +50,31 @@ pub static PROF_CTL: Lazy<Option<Arc<Mutex<JemallocProfCtl>>>> = Lazy::new(|| {
 });
 
 #[cfg(target_os = "linux")]
-static BUILD_IDS: Lazy<Option<BTreeMap<PathBuf, BuildId>>> = Lazy::new(|| {
+static MAPPINGS: Lazy<Option<Vec<Mapping>>> = Lazy::new(|| {
+    use mz_proc::SharedObject;
+
+    fn build_mappings(objects: &[SharedObject]) -> Vec<Mapping> {
+        let mut mappings = Vec::new();
+        for object in objects {
+            for segment in &object.loaded_segments {
+                let memory_start = object.base_address + segment.memory_offset;
+                mappings.push(Mapping {
+                    memory_start,
+                    memory_end: memory_start + segment.memory_size,
+                    memory_offset: segment.memory_offset,
+                    file_offset: segment.file_offset,
+                    pathname: object.path_name.clone(),
+                    build_id: object.build_id.clone(),
+                });
+            }
+        }
+        mappings
+    }
+
     // SAFETY: We are on Linux, and this is the only place in the program this
     // function is called.
-    match unsafe { mz_proc::linux::all_build_ids() } {
-        Ok(ids) => Some(ids),
+    match unsafe { mz_proc::linux::collect_shared_objects() } {
+        Ok(objects) => Some(build_mappings(&objects)),
         Err(err) => {
             error!("build ID fetching failed: {err}");
             None
@@ -66,7 +83,7 @@ static BUILD_IDS: Lazy<Option<BTreeMap<PathBuf, BuildId>>> = Lazy::new(|| {
 });
 
 #[cfg(not(target_os = "linux"))]
-static BUILD_IDS: Lazy<Option<BTreeMap<PathBuf, BuildId>>> = Lazy::new(|| {
+static BUILD_IDS: Lazy<Option<Vec<Mapping>>> = Lazy::new(|| {
     error!("build ID fetching is only supported on Linux");
     None
 });
@@ -96,14 +113,9 @@ pub fn parse_jeheap<R: BufRead>(r: R) -> anyhow::Result<StackProfile> {
     // number is the inverse probability of a byte being sampled.
     let sampling_rate: f64 = str::parse(first_line.trim_start_matches("heap_v2/"))?;
 
-    let mut parse_mapped_libraries = false;
     while let Some(line) = lines.next() {
         let line = line?;
         let line = line.trim();
-        if line == "MAPPED_LIBRARIES:" {
-            parse_mapped_libraries = true;
-            break;
-        }
 
         let words: Vec<_> = line.split_ascii_whitespace().collect();
         if words.len() > 0 && words[0] == "@" {
@@ -159,58 +171,13 @@ pub fn parse_jeheap<R: BufRead>(r: R) -> anyhow::Result<StackProfile> {
         bail!("Stack without corresponding weight!");
     }
 
-    if parse_mapped_libraries {
-        // jemalloc just dumps the contents of `/proc/[pid]/maps`.
-        while let Some(line) = lines.next() {
-            let line = line?;
-            let line = line.trim();
-
-            let mut mapping = parse_proc_map(line)?;
-
-            if let Some(pathname) = &mapping.pathname {
-                mapping.build_id = BUILD_IDS
-                    .as_ref()
-                    .and_then(|ids| ids.get(Path::new(&pathname)))
-                    .cloned();
-            }
-
-            profile.push_mapping(mapping);
+    if let Some(mappings) = MAPPINGS.as_ref() {
+        for mapping in mappings {
+            profile.push_mapping(mapping.clone());
         }
     }
 
     Ok(profile)
-}
-
-/// Parse a line from `/proc/[pid]/maps` into a `Mapping`.
-///
-/// See `man 5 proc` for the format.
-fn parse_proc_map(line: &str) -> anyhow::Result<Mapping> {
-    let error = |msg| anyhow!("{msg}: {line}");
-
-    let mut fields = line.split_ascii_whitespace();
-    let address = fields
-        .next()
-        .ok_or_else(|| error("missing address field"))?;
-    let _perms = fields.next().ok_or_else(|| error("missing perms field"))?;
-    let offset = fields.next().ok_or_else(|| error("missing offset field"))?;
-    let _dev = fields.next().ok_or_else(|| error("missing dev field"))?;
-    let _inode = fields.next().ok_or_else(|| error("missing inode field"))?;
-    let pathname = fields.next().map(Into::into);
-
-    let (start, end) = address
-        .split_once('-')
-        .ok_or_else(|| error("invalid address"))?;
-    let start = usize::from_str_radix(start, 16).map_err(|_| error("invalid address"))?;
-    let end = usize::from_str_radix(end, 16).map_err(|_| error("invalid address"))?;
-    let offset = u64::from_str_radix(offset, 16).map_err(|_| error("invalid offset"))?;
-
-    Ok(Mapping {
-        memory_start: start,
-        memory_end: end,
-        file_offset: offset,
-        pathname,
-        build_id: None,
-    })
 }
 
 // See stats.{allocated, active, ...} in http://jemalloc.net/jemalloc.3.html for details
