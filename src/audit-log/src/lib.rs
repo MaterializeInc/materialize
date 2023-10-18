@@ -329,6 +329,7 @@ pub enum EventDetails {
     SchemaV1(SchemaV1),
     SchemaV2(SchemaV2),
     UpdateItemV1(UpdateItemV1),
+    RenameSchemaV1(RenameSchemaV1),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
@@ -959,6 +960,36 @@ impl RustType<proto::audit_log_event_v1::SchemaV2> for SchemaV2 {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct RenameSchemaV1 {
+    pub id: String,
+    pub database_name: Option<String>,
+    pub old_name: String,
+    pub new_name: String,
+}
+
+impl RustType<proto::audit_log_event_v1::RenameSchemaV1> for RenameSchemaV1 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::RenameSchemaV1 {
+        proto::audit_log_event_v1::RenameSchemaV1 {
+            id: self.id.to_string(),
+            database_name: self.database_name.clone(),
+            old_name: self.old_name.clone(),
+            new_name: self.new_name.clone(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::RenameSchemaV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(RenameSchemaV1 {
+            id: proto.id,
+            database_name: proto.database_name,
+            old_name: proto.old_name,
+            new_name: proto.new_name,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
 pub struct UpdateItemV1 {
     pub id: String,
     #[serde(flatten)]
@@ -1001,6 +1032,7 @@ impl EventDetails {
             EventDetails::IdNameV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::SchemaV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::SchemaV2(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::RenameSchemaV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::CreateSourceSinkV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::CreateSourceSinkV2(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::AlterSourceSinkV1(v) => serde_json::to_value(v).expect("must serialize"),
@@ -1052,6 +1084,7 @@ impl RustType<proto::audit_log_event_v1::Details> for EventDetails {
             EventDetails::IdNameV1(details) => IdNameV1(details.into_proto()),
             EventDetails::SchemaV1(details) => SchemaV1(details.into_proto()),
             EventDetails::SchemaV2(details) => SchemaV2(details.into_proto()),
+            EventDetails::RenameSchemaV1(details) => RenameSchemaV1(details.into_proto()),
             EventDetails::UpdateItemV1(details) => UpdateItemV1(details.into_proto()),
         }
     }
@@ -1092,6 +1125,7 @@ impl RustType<proto::audit_log_event_v1::Details> for EventDetails {
             IdNameV1(details) => Ok(EventDetails::IdNameV1(details.into_rust()?)),
             SchemaV1(details) => Ok(EventDetails::SchemaV1(details.into_rust()?)),
             SchemaV2(details) => Ok(EventDetails::SchemaV2(details.into_rust()?)),
+            RenameSchemaV1(details) => Ok(EventDetails::RenameSchemaV1(details.into_rust()?)),
             UpdateItemV1(details) => Ok(EventDetails::UpdateItemV1(details.into_rust()?)),
         }
     }

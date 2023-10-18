@@ -939,6 +939,7 @@ impl Stash {
                             37 => upgrade::v37_to_v38::upgrade(&tx).await?,
                             38 => upgrade::v38_to_v39::upgrade(&tx).await?,
                             39 => upgrade::v39_to_v40::upgrade(&tx).await?,
+                            40 => upgrade::v40_to_v41::upgrade(),
 
                             // Up-to-date, no migration needed!
                             STASH_VERSION => return Ok(STASH_VERSION),

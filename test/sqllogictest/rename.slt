@@ -12,12 +12,6 @@ mode standard
 # Start from a pristine server
 reset-server
 
-# Enable the feature.
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_rename_schema TO true;
-----
-COMPLETE 0
-
 statement ok
 CREATE SCHEMA a1
 
@@ -61,6 +55,13 @@ ALTER SCHEMA b1 RENAME TO a1
 
 statement ok
 ALTER SCHEMA b1 RENAME TO b2
+
+query TTT
+SELECT event_type, object_type, details FROM mz_audit_events WHERE event_type = 'alter' AND object_type = 'schema';
+----
+alter
+schema
+{"database_name":"materialize","id":"u7","new_name":"b2","old_name":"b1"}
 
 query I
 SELECT x FROM b2.t
@@ -517,13 +518,3 @@ SELECT bar FROM t1;
 100
 200
 300
-
-# Disable the feature.
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_rename_schema TO false;
-----
-COMPLETE 0
-
-statement error db error: ERROR: ALTER SCHEMA RENAME is not supported
-ALTER SCHEMA d RENAME TO d1;

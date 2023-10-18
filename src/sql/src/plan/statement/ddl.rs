@@ -4849,8 +4849,6 @@ pub fn plan_alter_schema_rename(
     to_schema_name: Ident,
     if_exists: bool,
 ) -> Result<Plan, PlanError> {
-    scx.require_feature_flag(&vars::ENABLE_RENAME_SCHEMA)?;
-
     let Some((db_spec, schema_spec)) = resolve_schema(scx, name.clone(), if_exists)? else {
         let object_type = ObjectType::Schema;
         scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
