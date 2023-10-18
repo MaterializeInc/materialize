@@ -121,9 +121,11 @@ class MaterializeContainer(MaterializeNonRemote):
         if (
             self.image is not None
             and self.alternative_image is not None
-            and not self.composition.try_pull_single_image(self.image)
+            and not self.composition.try_pull_service_image(
+                Materialized(image=self.image)
+            )
         ):
-            # image cannot be found and alternative exists
+            # explicitly specified image cannot be found and alternative exists
             print(
                 f"Unable to find image {self.image}, proceeding with alternative image {self.alternative_image}!"
             )

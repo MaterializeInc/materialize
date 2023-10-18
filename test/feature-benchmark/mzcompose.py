@@ -137,12 +137,15 @@ def run_one_scenario(
                 additional_system_parameter_defaults[param_name] = param_value
 
         mz_image = f"materialize/materialized:{tag}" if tag else None
-
-        if mz_image is not None and not c.try_pull_single_image(mz_image):
-            print(f"Unable to find tag {tag}, proceeding with latest instead!")
-            mz_image = "materialize/materialized:latest"
-
         mz = create_mz_service(mz_image, size, additional_system_parameter_defaults)
+
+        if tag is not None and not c.try_pull_service_image(mz):
+            print(
+                f"Unable to find materialize image with tag {tag}, proceeding with latest instead!"
+            )
+            mz_image = "materialize/materialized:latest"
+            mz = create_mz_service(mz_image, size, additional_system_parameter_defaults)
+
         start_overridden_mz_and_cockroach(c, mz, instance)
 
         executor = Docker(composition=c, seed=common_seed, materialized=mz)
