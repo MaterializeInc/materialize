@@ -1700,9 +1700,14 @@ mod monoids {
     //
     // The one we use is called a "semigroup", and it means that the structure has a
     // symmetric addition operator. The trait we use also allows the semigroup elements
-    // to present as "zero", meaning they always act as the identity under +, but we
-    // will not have such elements in this case (they would correspond to positive and
-    // negative infinity, which we do not represent).
+    // to present as "zero", meaning they always act as the identity under +. Here,
+    // `Datum::Null` acts as the identity under +, _but_ we don't want to make this
+    // known to DD by the `is_zero` method, see comment there. So, from the point of view
+    // of DD, this Semigroup should _not_ have a zero.
+    //
+    // WARNING: `Datum::Null` should continue to act as the identity of our + (even if we
+    // add a new enum variant here), because other code (e.g., `HierarchicalOneByOneAggr`)
+    // assumes this.
 
     use differential_dataflow::difference::{Multiply, Semigroup};
     use mz_expr::AggregateFunc;
@@ -1772,6 +1777,11 @@ mod monoids {
         }
 
         fn is_zero(&self) -> bool {
+            // It totally looks like we could return true here for `Datum::Null`, but don't do this!
+            // DD uses true results of this method to make stuff disappear. This makes sense when
+            // diffs mean really just diffs, but for `ReductionMonoid` diffs hold reduction results.
+            // We don't want funny stuff, like disappearing, happening to reduction results even
+            // when they are null. (This would confuse, e.g., `ReduceCollation` for null inputs.)
             false
         }
     }
@@ -1924,36 +1934,32 @@ mod window_agg_helpers {
 
     pub struct HierarchicalOneByOneAggr {
         aggr_func: AggregateFunc,
-        monoid: Option<ReductionMonoid>,
+        // Warning: We are assuming that `Datum::Null` acts as the identity for `ReductionMonoid`'s
+        // `plus_equals`. (But _not_ relying here on `ReductionMonoid::is_zero`.)
+        monoid: ReductionMonoid,
     }
 
     impl HierarchicalOneByOneAggr {
         fn new(aggr_func: &AggregateFunc) -> Self {
+            let mut row_buf = Row::default();
+            row_buf.packer().push(Datum::Null);
             HierarchicalOneByOneAggr {
                 aggr_func: aggr_func.clone(),
-                monoid: None,
+                monoid: get_monoid(row_buf, aggr_func)
+                    .expect("aggr_func should be a hierarchical aggregation function"),
             }
         }
 
         fn give(&mut self, d: &Datum) {
             let mut row_buf = Row::default();
             row_buf.packer().push(d);
-            let m = get_monoid(row_buf, &self.aggr_func).unwrap();
-            match &mut self.monoid {
-                None => {
-                    self.monoid = Some(m);
-                }
-                Some(state) => {
-                    state.plus_equals(&m);
-                }
-            }
+            let m = get_monoid(row_buf, &self.aggr_func)
+                .expect("aggr_func should be a hierarchical aggregation function");
+            self.monoid.plus_equals(&m);
         }
 
         fn get_current_aggregate<'a>(&self, temp_storage: &'a RowArena) -> Datum<'a> {
-            temp_storage.make_datum(|packer| match &self.monoid {
-                None => packer.push(Datum::Null),
-                Some(monoid) => packer.extend(monoid.finalize().iter()),
-            })
+            temp_storage.make_datum(|packer| packer.extend(self.monoid.finalize().iter()))
         }
     }
 }
