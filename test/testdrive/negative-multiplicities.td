@@ -86,3 +86,13 @@ contains:Invalid data in source, saw non-positive accumulation
 ! SELECT * FROM collation;
 # Case-insensitive match for both 'Non' and 'non'
 contains:on-positive accumulation
+
+# Window aggregations
+! SELECT list_agg(data) OVER ()[1] FROM data;
+contains:Non-positive accumulation in ReduceInaccumulable
+
+! SELECT sum(data) OVER () FROM data;
+contains:Non-positive accumulation in ReduceInaccumulable
+
+! SELECT max(data) OVER () FROM data;
+contains:Non-positive accumulation in ReduceInaccumulable
