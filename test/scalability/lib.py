@@ -8,12 +8,11 @@
 # by the Apache License, Version 2.0.
 
 import os
-import subprocess
 
 import pandas as pd
 from matplotlib import pyplot as plt  # type: ignore
 
-from materialize import MZ_ROOT
+from materialize import MZ_ROOT, git
 
 RESULTS_DIR = MZ_ROOT / "test" / "scalability" / "results"
 
@@ -26,15 +25,8 @@ def plotit(csv_file_name: str) -> None:
     for i, target in enumerate(targets):
         target_sha = target.split(" ")[1].strip("()")
 
-        target_comment = None
-        try:
-            target_comment = subprocess.check_output(
-                ["git", "log", "-1", "--pretty=format:%s", target_sha], text=True
-            )
-        except subprocess.CalledProcessError:
-            # Sometimes mz_version() will report a Git SHA that is not available
-            # in the current repository
-            pass
+        # empty when mz_version() reports a Git SHA that is not available in the current repository
+        target_comment = git.get_commit_message(target_sha)
 
         legend.append(f"{target} - {target_comment}")
 
