@@ -37,7 +37,7 @@ from typing import IO, Any, cast
 
 import boto3
 import yaml
-from botocore.exceptions import NoCredentialsError
+from botocore.exceptions import ClientError, NoCredentialsError
 
 from materialize import cargo, git, rustc_flags, spawn, ui, xcompile
 from materialize.elf import get_build_id
@@ -272,6 +272,13 @@ class S3UploadDebuginfo(PreImage):
             except NoCredentialsError:
                 print("Failed to find S3 credentials; not uploading build.")
                 return
+            except ClientError as err:
+                if err.response["Error"]["Code"] == "AccessDenied":
+                    print("Incorrect S3 credentials; not uploading build.")
+                    return
+                else:
+                    raise err
+
             print(
                 f"Attempting to upload debug info to s3://{self.bucket}/{dbg_object_name}"
             )
