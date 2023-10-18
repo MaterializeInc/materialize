@@ -57,14 +57,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if args.compaction_disabled:
         materialized_environment_extra[0] = "MZ_PERSIST_COMPACTION_DISABLED=true"
 
-    for name in [
-        "rehydration",
-        "testdrive",
-        "failpoint",
-        "incident-49",
-        "rocksdb-cleanup",
-        "autospill",
-    ]:
+    for name in c.workflows:
+        if name == "default":
+            continue
         with c.test_case(name):
             c.workflow(name)
 
@@ -168,6 +163,7 @@ def workflow_rehydration(c: Composition) -> None:
                     "--orchestrator-process-scratch-directory=/scratch",
                 ],
                 additional_system_parameter_defaults={
+                    "enable_unmanaged_cluster_replicas": "true",
                     "disk_cluster_replicas_default": "true",
                     "enable_disk_cluster_replicas": "true",
                     # Force backpressure to be enabled.
@@ -196,6 +192,7 @@ def workflow_rehydration(c: Composition) -> None:
                     "--orchestrator-process-scratch-directory=/scratch",
                 ],
                 additional_system_parameter_defaults={
+                    "enable_unmanaged_cluster_replicas": "true",
                     # Force backpressure to be enabled.
                     "storage_dataflow_max_inflight_bytes": "1",
                     "storage_dataflow_max_inflight_bytes_to_cluster_size_fraction": "0.01",
@@ -214,6 +211,7 @@ def workflow_rehydration(c: Composition) -> None:
             clusterd,
             Testdrive(no_reset=True, consistent_seed=True),
         ):
+
             print(f"Running rehydration workflow {style}")
             c.down(destroy_volumes=True)
 

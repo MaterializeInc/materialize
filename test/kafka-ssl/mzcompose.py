@@ -112,8 +112,11 @@ SERVICES = [
 
 def workflow_default(c: Composition) -> None:
     """Run testdrive against an SSL-enabled Confluent Platform."""
-    c.workflow("smoketest")
-    c.workflow("ssh-tunnel")
+    for name in c.workflows:
+        if name == "default":
+            continue
+        with c.test_case(name):
+            c.workflow(name)
 
 
 def workflow_smoketest(c: Composition) -> None:
