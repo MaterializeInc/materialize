@@ -825,7 +825,7 @@ impl Coordinator {
                 .connection
                 .clone()
                 .into_inline_connection(self.catalog().state()),
-            envelope: Some(sink.envelope),
+            envelope: sink.envelope,
             as_of,
             status_id,
             from_storage_metadata: (),

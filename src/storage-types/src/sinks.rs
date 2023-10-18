@@ -38,7 +38,7 @@ pub struct StorageSinkDesc<S: StorageSinkDescFillState, T = mz_repr::Timestamp> 
     pub from: GlobalId,
     pub from_desc: RelationDesc,
     pub connection: StorageSinkConnection,
-    pub envelope: Option<SinkEnvelope>,
+    pub envelope: SinkEnvelope,
     pub as_of: SinkAsOf<T>,
     pub status_id: Option<<S as StorageSinkDescFillState>::StatusId>,
     pub from_storage_metadata: <S as StorageSinkDescFillState>::StorageMetadata,
@@ -72,7 +72,7 @@ impl Arbitrary for StorageSinkDesc<MetadataFilled, mz_repr::Timestamp> {
             any::<GlobalId>(),
             any::<RelationDesc>(),
             any::<StorageSinkConnection>(),
-            any::<Option<SinkEnvelope>>(),
+            any::<SinkEnvelope>(),
             any::<SinkAsOf<mz_repr::Timestamp>>(),
             any::<Option<ShardId>>(),
             any::<CollectionMetadata>(),
@@ -108,7 +108,7 @@ impl RustType<ProtoStorageSinkDesc> for StorageSinkDesc<MetadataFilled, mz_repr:
             connection: Some(self.connection.into_proto()),
             from: Some(self.from.into_proto()),
             from_desc: Some(self.from_desc.into_proto()),
-            envelope: self.envelope.into_proto(),
+            envelope: Some(self.envelope.into_proto()),
             as_of: Some(self.as_of.into_proto()),
             status_id: self.status_id.into_proto(),
             from_storage_metadata: Some(self.from_storage_metadata.into_proto()),
@@ -124,7 +124,9 @@ impl RustType<ProtoStorageSinkDesc> for StorageSinkDesc<MetadataFilled, mz_repr:
             connection: proto
                 .connection
                 .into_rust_if_some("ProtoStorageSinkDesc::connection")?,
-            envelope: proto.envelope.into_rust()?,
+            envelope: proto
+                .envelope
+                .into_rust_if_some("ProtoStorageSinkDesc::envelope")?,
             as_of: proto
                 .as_of
                 .into_rust_if_some("ProtoStorageSinkDesc::as_of")?,

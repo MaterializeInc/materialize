@@ -156,7 +156,7 @@ where
     // * Upsert" does the same, except at the last step, it renders the diff pair in upsert format.
     //   (As part of doing so, it asserts that there are not multiple conflicting values at the same timestamp)
     let collection = match sink.envelope {
-        Some(SinkEnvelope::Debezium) => {
+        SinkEnvelope::Debezium => {
             // Allow access to `arrange_named` because we cannot access Mz's wrapper from here.
             // TODO(#17413): Revisit with cluster unification.
             #[allow(clippy::disallowed_methods)]
@@ -189,7 +189,7 @@ where
             });
             collection
         }
-        Some(SinkEnvelope::Upsert) => {
+        SinkEnvelope::Upsert => {
             // Allow access to `arrange_named` because we cannot access Mz's wrapper from here.
             // TODO(#17413): Revisit with cluster unification.
             #[allow(clippy::disallowed_methods)]
@@ -208,7 +208,6 @@ where
             });
             collection
         }
-        None => keyed.map(|(key, value)| (key, Some(value))),
     };
 
     collection
