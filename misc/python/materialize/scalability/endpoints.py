@@ -9,10 +9,13 @@
 
 import pg8000
 
+from materialize import git
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.scalability.endpoint import Endpoint
+
+POSTGRES_ENDPOINT_NAME = "postgres"
 
 
 class MaterializeRemote(Endpoint):
@@ -26,6 +29,9 @@ class MaterializeRemote(Endpoint):
 
     def up(self) -> None:
         pass
+
+    def __str__(self) -> str:
+        return f"MaterializeRemote ({self.materialize_url})"
 
 
 class PostgresContainer(Endpoint):
@@ -54,7 +60,10 @@ class PostgresContainer(Endpoint):
             self._port = self.composition.default_port("postgres")
 
     def name(self) -> str:
-        return "postgres"
+        return POSTGRES_ENDPOINT_NAME
+
+    def __str__(self) -> str:
+        return "PostgresContainer"
 
 
 class MaterializeNonRemote(Endpoint):
@@ -91,6 +100,9 @@ class MaterializeLocal(MaterializeNonRemote):
 
     def up(self) -> None:
         self.lift_limits()
+
+    def __str__(self) -> str:
+        return f"MaterializeLocal ({self.host()})"
 
 
 class MaterializeContainer(MaterializeNonRemote):
@@ -140,3 +152,17 @@ class MaterializeContainer(MaterializeNonRemote):
         ):
             self.composition.up("materialized")
             self._port = self.composition.default_port("materialized")
+
+    def __str__(self) -> str:
+        return f"MaterializeContainer ({self.image})"
+
+
+def endpoint_name_to_description(endpoint_name: str) -> str:
+    if endpoint_name == POSTGRES_ENDPOINT_NAME:
+        return endpoint_name
+
+    commit_sha = endpoint_name.split(" ")[1].strip("()")
+
+    # empty when mz_version() reports a Git SHA that is not available in the current repository
+    commit_message = git.get_commit_message(commit_sha)
+    return f"{endpoint_name} - {commit_message}"

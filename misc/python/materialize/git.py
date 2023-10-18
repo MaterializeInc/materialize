@@ -185,6 +185,16 @@ def get_common_ancestor_commit(remote: str, branch: str, fetch_branch: bool) -> 
     return spawn.capture(command).strip()
 
 
+def get_commit_message(commit_sha: str) -> str | None:
+    try:
+        command = ["git", "log", "-1", "--pretty=format:%s", commit_sha]
+        return spawn.capture(command).strip()
+    except subprocess.CalledProcessError:
+        # Sometimes mz_version() will report a Git SHA that is not available
+        # in the current repository
+        return None
+
+
 # Work tree mutation
 
 
