@@ -560,7 +560,7 @@ where
         if distinct {
             if validating {
                 let (oks, errs) = self
-                    .build_reduce_inaccumulable_distinct::<_, Result<(), String>>(partial)
+                    .build_reduce_inaccumulable_distinct::<_, Result<(), String>>(partial, None)
                     .as_collection(|k, v| (k.clone(), v.clone()))
                     .map_fallible("Demux Errors", move |(key, result)| match result {
                         Ok(()) => Ok(key),
@@ -570,7 +570,7 @@ where
                 partial = oks;
             } else {
                 partial = self
-                    .build_reduce_inaccumulable_distinct::<_, ()>(partial)
+                    .build_reduce_inaccumulable_distinct::<_, ()>(partial, Some(" [val: empty]"))
                     .as_collection(|k, _| k.clone());
             }
         }
@@ -633,6 +633,7 @@ where
     fn build_reduce_inaccumulable_distinct<S, R>(
         &self,
         input: Collection<S, (Row, Row), Diff>,
+        name_tag: Option<&str>,
     ) -> KeyValArrangement<S, (Row, Row), R>
     where
         S: Scope<Timestamp = G::Timestamp>,
@@ -640,28 +641,31 @@ where
     {
         let error_logger = self.error_logger();
 
+        let output_name = format!(
+            "ReduceInaccumulable Distinct{}",
+            name_tag.unwrap_or_default()
+        );
+
         let input: KeyCollection<_, _, _> = input.into();
         input
-            .mz_arrange::<RowSpine<(Row, Row), _, _, _>>("Arranged ReduceInaccumulable")
-            .mz_reduce_abelian::<_, RowSpine<_, _, _, _>>(
-                "ReduceInaccumulable",
-                move |_, source, t| {
-                    if let Some(err) = R::into_error() {
-                        for (value, count) in source.iter() {
-                            if count.is_positive() {
-                                continue;
-                            }
-
-                            let message =
-                                "Non-positive accumulation in ReduceInaccumulable DISTINCT";
-                            error_logger.log(message, &format!("value={value:?}, count={count}"));
-                            t.push((err(message.to_string()), 1));
-                            return;
-                        }
-                    }
-                    t.push((R::ok(()), 1))
-                },
+            .mz_arrange::<RowSpine<(Row, Row), _, _, _>>(
+                "Arranged ReduceInaccumulable Distinct [val: empty]",
             )
+            .mz_reduce_abelian::<_, RowSpine<_, _, _, _>>(&output_name, move |_, source, t| {
+                if let Some(err) = R::into_error() {
+                    for (value, count) in source.iter() {
+                        if count.is_positive() {
+                            continue;
+                        }
+
+                        let message = "Non-positive accumulation in ReduceInaccumulable DISTINCT";
+                        error_logger.log(message, &format!("value={value:?}, count={count}"));
+                        t.push((err(message.to_string()), 1));
+                        return;
+                    }
+                }
+                t.push((R::ok(()), 1))
+            })
     }
 
     /// Build the dataflow to compute and arrange multiple hierarchical aggregations
@@ -930,7 +934,7 @@ where
         });
         let partial: KeyCollection<_, _, _> = partial.into();
         let output = partial
-            .mz_arrange::<RowKeySpine<_, _, Vec<ReductionMonoid>>>("ArrangeMonotonic")
+            .mz_arrange::<RowKeySpine<_, _, Vec<ReductionMonoid>>>("ArrangeMonotonic [val: empty]")
             .mz_reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceMonotonic", {
                 let mut row_buf = Row::default();
                 move |_key, input, output| {
@@ -1033,9 +1037,11 @@ where
                     (key, row_buf.clone())
                 })
                 .map(|k| (k, ()))
-                .mz_arrange::<RowKeySpine<(Row, Row), _, _>>("Arranged Accumulable")
+                .mz_arrange::<RowKeySpine<(Row, Row), _, _>>(
+                    "Arranged Accumulable Distinct [val: empty]",
+                )
                 .mz_reduce_abelian::<_, RowKeySpine<_, _, _>>(
-                    "Reduced Accumulable",
+                    "Reduced Accumulable Distinct [val: empty]",
                     move |_k, _s, t| t.push(((), 1)),
                 )
                 .as_collection(|k, _| k.clone())
@@ -1062,7 +1068,7 @@ where
         let error_logger = self.error_logger();
         let err_full_aggrs = full_aggrs.clone();
         let (arranged_output, arranged_errs) = collection
-            .mz_arrange::<RowKeySpine<_, _, (Vec<Accum>, Diff)>>("ArrangeAccumulable")
+            .mz_arrange::<RowKeySpine<_, _, (Vec<Accum>, Diff)>>("ArrangeAccumulable [val: empty]")
             .reduce_pair::<_, RowSpine<_, _, _, _>, _, ErrValSpine<_, _, _>>(
                 "ReduceAccumulable",
                 "AccumulableErrorCheck",

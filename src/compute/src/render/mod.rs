@@ -596,7 +596,7 @@ where
 
         match bundle.arrangement(&idx.key) {
             Some(ArrangementFlavor::Local(oks, errs)) => {
-                let oks = self.dispatch_rearrange_iterative(oks);
+                let oks = self.dispatch_rearrange_iterative(oks, "Arrange export iterative");
                 oks.probe_notify_with(probes);
                 let oks_trace = oks.trace_handle();
 
@@ -641,14 +641,16 @@ where
     fn dispatch_rearrange_iterative(
         &self,
         oks: SpecializedArrangement<Child<'g, G, T>>,
+        name: &str,
     ) -> SpecializedArrangement<G> {
         match oks {
             SpecializedArrangement::RowUnit(inner) => {
-                let oks = self.rearrange_iterative(inner);
+                let name = format!("{} [val: empty]", name);
+                let oks = self.rearrange_iterative(inner, &name);
                 SpecializedArrangement::RowUnit(oks)
             }
             SpecializedArrangement::RowRow(inner) => {
-                let oks = self.rearrange_iterative(inner);
+                let oks = self.rearrange_iterative(inner, name);
                 SpecializedArrangement::RowRow(oks)
             }
         }
@@ -659,6 +661,7 @@ where
     fn rearrange_iterative<K, V>(
         &self,
         oks: Arranged<Child<'g, G, T>, TraceRowHandle<K, V, T, Diff>>,
+        name: &str,
     ) -> Arranged<G, TraceRowHandle<K, V, G::Timestamp, Diff>>
     where
         K: Columnation + ExchangeData + Hashable,
@@ -666,7 +669,7 @@ where
     {
         oks.as_collection(|k, v| (k.clone(), v.clone()))
             .leave()
-            .mz_arrange("Arrange export iterative")
+            .mz_arrange(name)
     }
 }
 

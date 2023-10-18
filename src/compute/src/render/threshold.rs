@@ -68,7 +68,8 @@ where
 {
     match oks {
         SpecializedArrangement::RowUnit(inner) => {
-            let oks = threshold_arrangement(inner, name, logic);
+            let name = format!("{} [val: empty]", name);
+            let oks = threshold_arrangement(inner, &name, logic);
             SpecializedArrangement::RowUnit(oks)
         }
         SpecializedArrangement::RowRow(inner) => {
@@ -92,7 +93,8 @@ where
 {
     match oks {
         SpecializedArrangementImport::RowUnit(inner) => {
-            let oks = threshold_arrangement(inner, name, logic);
+            let name = format!("{} [val: empty]", name);
+            let oks = threshold_arrangement(inner, &name, logic);
             SpecializedArrangement::RowUnit(oks)
         }
         SpecializedArrangementImport::RowRow(inner) => {
