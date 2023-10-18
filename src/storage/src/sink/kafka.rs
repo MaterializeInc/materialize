@@ -789,7 +789,7 @@ fn kafka<G>(
     collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
     id: GlobalId,
     connection: KafkaSinkConnection,
-    envelope: Option<SinkEnvelope>,
+    envelope: SinkEnvelope,
     as_of: SinkAsOf,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
     metrics: KafkaBaseMetrics,
@@ -813,7 +813,7 @@ where
         &name,
         connection.clone(),
         connection_context.clone(),
-        envelope.clone(),
+        envelope,
     );
 
     let (produce_health_stream, produce_token) = produce_to_kafka(
@@ -1142,7 +1142,7 @@ fn encode_stream<G>(
     name_prefix: &str,
     mut connection: KafkaSinkConnection,
     connection_context: ConnectionContext,
-    envelope: Option<SinkEnvelope>,
+    envelope: SinkEnvelope,
 ) -> (
     Stream<G, ((Option<Vec<u8>>, Option<Vec<u8>>), Timestamp, Diff)>,
     Stream<G, HealthStatusMessage>,
@@ -1209,7 +1209,7 @@ where
                 value_schema_id,
             }) => {
                 let options = AvroSchemaOptions {
-                    is_debezium: matches!(envelope, Some(SinkEnvelope::Debezium)),
+                    is_debezium: matches!(envelope, SinkEnvelope::Debezium),
                     ..Default::default()
                 };
 
@@ -1227,7 +1227,7 @@ where
             KafkaSinkFormat::Json => Box::new(JsonEncoder::new(
                 key_desc,
                 value_desc,
-                matches!(envelope, Some(SinkEnvelope::Debezium)),
+                matches!(envelope, SinkEnvelope::Debezium),
             )),
         };
 
