@@ -234,6 +234,12 @@ CREATE TABLE j2 ("X" int, "Y" int);
 statement ok
 INSERT INTO j2 VALUES (1, 5), (2, 7), (8, 9);
 
+statement ok
+CREATE TABLE j3 ("X" int, "Z" int);
+
+statement ok
+INSERT INTO j3 VALUES (1, 7), (10, 11), (12, 13);
+
 statement error db error: ERROR: column "Y" does not exist\nHINT: The similarly named column "y" does exist.
 SELECT "Y" FROM ( SELECT "X" as y FROM j1 NATURAL JOIN j2 );
 
@@ -242,6 +248,11 @@ SELECT y FROM ( SELECT "X" as y FROM j1 NATURAL JOIN j2 );
 ----
 1
 2
+
+# Even though the column "Y" exists, it should not get suggested since it's not in scope.
+
+statement error db error: ERROR: column "y" does not exist
+SELECT "X", y FROM j1 LEFT JOIN ( SELECT "X", "Z" FROM j2 LEFT JOIN j3 USING ("X") ) USING ("X");
 
 # Case sensitivity of view names.
 
