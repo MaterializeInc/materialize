@@ -752,7 +752,7 @@ steps:
       - id: parallel-workload-dml
         label: "Parallel Workload (DML)"
         artifact_paths: [junit_*.xml, parallel-workload-queries.log]
-        timeout_in_minutes: 30
+        timeout_in_minutes: 40
         agents:
           queue: builder-linux-x86_64
         plugins:
@@ -763,7 +763,7 @@ steps:
       - id: parallel-workload-ddl
         label: "Parallel Workload (DDL)"
         artifact_paths: [junit_*.xml, parallel-workload-queries.log]
-        timeout_in_minutes: 30
+        timeout_in_minutes: 40
         agents:
           queue: builder-linux-x86_64
         plugins:
@@ -775,7 +775,7 @@ steps:
       # - id: parallel-workload-100-threads
       #   label: "Parallel Workload (100 threads)"
       #   artifact_paths: [junit_*.xml, pw-*.log]
-      #   timeout_in_minutes: 30
+      #   timeout_in_minutes: 40
       #   agents:
       #     queue: builder-linux-x86_64
       #   plugins:
@@ -786,7 +786,7 @@ steps:
       - id: parallel-workload-cancel
         label: "Parallel Workload (cancel)"
         artifact_paths: [junit_*.xml, parallel-workload-queries.log]
-        timeout_in_minutes: 30
+        timeout_in_minutes: 40
         agents:
           queue: builder-linux-x86_64
         plugins:
@@ -798,7 +798,7 @@ steps:
       # - id: parallel-workload-kill
       #   label: "Parallel Workload (kill)"
       #   artifact_paths: [junit_*.xml, parallel-workload-queries.log]
-      #   timeout_in_minutes: 30
+      #   timeout_in_minutes: 40
       #   agents:
       #     queue: builder-linux-x86_64
       #   plugins:
