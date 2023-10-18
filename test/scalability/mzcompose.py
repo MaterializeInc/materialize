@@ -30,6 +30,7 @@ from materialize.scalability.endpoints import (
     MaterializeLocal,
     MaterializeRemote,
     PostgresContainer,
+    endpoint_name_to_description,
 )
 from materialize.scalability.operation import Operation
 from materialize.scalability.result_analyzer import ResultAnalyzer
@@ -373,9 +374,11 @@ def handle_regression_detection(
             baseline_endpoint, results_by_workload_name
         )
 
+        baseline_desc = endpoint_name_to_description(baseline_endpoint.name())
+
         if outcome.has_regressions():
             print(
-                f"ERROR: The following regressions were detected (baseline: {baseline_endpoint}):\n{outcome}"
+                f"ERROR: The following regressions were detected (baseline: {baseline_desc}):\n{outcome}"
             )
             sys.exit(1)
         else:
