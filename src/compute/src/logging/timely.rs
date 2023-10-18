@@ -24,7 +24,7 @@ use mz_timely_util::replay::MzReplay;
 use serde::{Deserialize, Serialize};
 use timely::communication::Allocate;
 use timely::container::columnation::{Columnation, CopyRegion};
-use timely::dataflow::channels::pact::{Exchange, Pipeline};
+use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::{Filter, InputCapability};
@@ -118,11 +118,7 @@ pub(super) fn construct<A: Allocate>(
                 input.for_each(|cap, data| {
                     data.swap(&mut demux_buffer);
 
-                    for (time, logger_id, event) in demux_buffer.drain(..) {
-                        // We expect the logging infrastructure to not shuffle events between
-                        // workers and this code relies on the assumption that each worker handles
-                        // its own events.
-                        assert_eq!(logger_id, worker_id);
+                    for (time, event) in demux_buffer.drain(..) {
                         if let TimelyEvent::Messages(msg) = &event {
                             match msg.is_send {
                                 true => assert_eq!(msg.source, worker_id),
@@ -151,10 +147,7 @@ pub(super) fn construct<A: Allocate>(
         let mut packer = PermutedRowPacker::new(TimelyLog::Operates);
         let operates = operates
             .as_collection()
-            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
-                Exchange::new(move |_| u64::cast_from(worker_id)),
-                "PreArrange Timely operates",
-            )
+            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(Pipeline, "PreArrange Timely operates")
             .as_collection(move |id, name| {
                 packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(*id)),
@@ -165,10 +158,7 @@ pub(super) fn construct<A: Allocate>(
         let mut packer = PermutedRowPacker::new(TimelyLog::Channels);
         let channels = channels
             .as_collection()
-            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
-                Exchange::new(move |_| u64::cast_from(worker_id)),
-                "PreArrange Timely operates",
-            )
+            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(Pipeline, "PreArrange Timely operates")
             .as_collection(move |datum, ()| {
                 let (source_node, source_port) = datum.source;
                 let (target_node, target_port) = datum.target;
@@ -185,10 +175,7 @@ pub(super) fn construct<A: Allocate>(
         let mut packer = PermutedRowPacker::new(TimelyLog::Addresses);
         let addresses = addresses
             .as_collection()
-            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
-                Exchange::new(move |_| u64::cast_from(worker_id)),
-                "PreArrange Timely addresses",
-            )
+            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(Pipeline, "PreArrange Timely addresses")
             .as_collection({
                 move |id, address| {
                     packer.pack_by_index(|packer, index| match index {
@@ -203,10 +190,7 @@ pub(super) fn construct<A: Allocate>(
         let mut packer = PermutedRowPacker::new(TimelyLog::Parks);
         let parks = parks
             .as_collection()
-            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
-                Exchange::new(move |_| u64::cast_from(worker_id)),
-                "PreArrange Timely parks",
-            )
+            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(Pipeline, "PreArrange Timely parks")
             .as_collection(move |datum, ()| {
                 packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(worker_id)),
@@ -220,10 +204,7 @@ pub(super) fn construct<A: Allocate>(
         let mut packer = PermutedRowPacker::new(TimelyLog::BatchesSent);
         let batches_sent = batches_sent
             .as_collection()
-            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
-                Exchange::new(move |_| u64::cast_from(worker_id)),
-                "PreArrange Timely batches sent",
-            )
+            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(Pipeline, "PreArrange Timely batches sent")
             .as_collection(move |datum, ()| {
                 packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(datum.channel)),
@@ -235,7 +216,7 @@ pub(super) fn construct<A: Allocate>(
         let batches_received = batches_received
             .as_collection()
             .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
-                Exchange::new(move |_| u64::cast_from(worker_id)),
+                Pipeline,
                 "PreArrange Timely batches received",
             )
             .as_collection(move |datum, ()| {
@@ -248,10 +229,7 @@ pub(super) fn construct<A: Allocate>(
         let mut packer = PermutedRowPacker::new(TimelyLog::MessagesSent);
         let messages_sent = messages_sent
             .as_collection()
-            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
-                Exchange::new(move |_| u64::cast_from(worker_id)),
-                "PreArrange Timely messages sent",
-            )
+            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(Pipeline, "PreArrange Timely messages sent")
             .as_collection(move |datum, ()| {
                 packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(datum.channel)),
@@ -263,7 +241,7 @@ pub(super) fn construct<A: Allocate>(
         let messages_received = messages_received
             .as_collection()
             .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
-                Exchange::new(move |_| u64::cast_from(worker_id)),
+                Pipeline,
                 "PreArrange Timely messages received",
             )
             .as_collection(move |datum, ()| {
@@ -276,10 +254,7 @@ pub(super) fn construct<A: Allocate>(
         let mut packer = PermutedRowPacker::new(TimelyLog::Elapsed);
         let elapsed = schedules_duration
             .as_collection()
-            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
-                Exchange::new(move |_| u64::cast_from(worker_id)),
-                "PreArrange Timely duration",
-            )
+            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(Pipeline, "PreArrange Timely duration")
             .as_collection(move |operator, _| {
                 packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(*operator)),
@@ -289,10 +264,7 @@ pub(super) fn construct<A: Allocate>(
         let mut packer = PermutedRowPacker::new(TimelyLog::Histogram);
         let histogram = schedules_histogram
             .as_collection()
-            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
-                Exchange::new(move |_| u64::cast_from(worker_id)),
-                "PreArrange Timely histogram",
-            )
+            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(Pipeline, "PreArrange Timely histogram")
             .as_collection(move |datum, _| {
                 packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(datum.operator)),

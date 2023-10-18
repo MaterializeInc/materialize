@@ -20,7 +20,6 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use ::timely::dataflow::operators::capture::{Event, EventLink, EventPusher};
-use ::timely::logging::WorkerIdentifier;
 use ::timely::progress::Timestamp as TimelyTimestamp;
 use ::timely::scheduling::Activator;
 use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
@@ -33,32 +32,32 @@ use crate::logging::compute::Logger as ComputeLogger;
 pub use crate::logging::initialize::initialize;
 
 /// Logs events as a timely stream, with progress statements.
-struct BatchLogger<T, E, P>
+struct BatchLogger<T, P>
 where
-    P: EventPusher<Timestamp, (Duration, E, T)>,
+    P: EventPusher<Timestamp, (Duration, T)>,
 {
     /// Time in milliseconds of the current expressed capability.
     time_ms: Timestamp,
     event_pusher: P,
-    _phantom: ::std::marker::PhantomData<(E, T)>,
+    _phantom: ::std::marker::PhantomData<T>,
     /// Each time is advanced to the strictly next millisecond that is a multiple of this interval.
     /// This means we should be able to perform the same action on timestamp capabilities, and only
     /// flush buffers when this timestamp advances.
     interval_ms: u64,
     /// A stash for data that does not yet need to be sent.
-    buffer: Vec<(Duration, E, T)>,
+    buffer: Vec<(Duration, T)>,
 }
 
-impl<T, E, P> BatchLogger<T, E, P>
+impl<T, P> BatchLogger<T, P>
 where
-    P: EventPusher<Timestamp, (Duration, E, T)>,
+    P: EventPusher<Timestamp, (Duration, T)>,
 {
     /// Batch size in bytes for batches
     const BATCH_SIZE_BYTES: usize = 1 << 13;
 
-    /// Calculate the default buffer size based on `(Duration, E, T)` tuples.
+    /// Calculate the default buffer size based on `(Duration, T)` tuples.
     fn buffer_capacity() -> usize {
-        let size = ::std::mem::size_of::<(Duration, E, T)>();
+        let size = ::std::mem::size_of::<(Duration, T)>();
         if size == 0 {
             Self::BATCH_SIZE_BYTES
         } else if size <= Self::BATCH_SIZE_BYTES {
@@ -80,7 +79,7 @@ where
     }
 
     /// Publishes a batch of logged events and advances the capability.
-    fn publish_batch(&mut self, time: &Duration, data: &mut Vec<(Duration, E, T)>) {
+    fn publish_batch(&mut self, time: &Duration, data: &mut Vec<(Duration, T)>) {
         // TODO(benesch): avoid dangerous `as` conversion.
         #[allow(clippy::as_conversions)]
         let new_time_ms = Timestamp::try_from(
@@ -117,9 +116,9 @@ where
         self.time_ms = new_time_ms;
     }
 }
-impl<T, E, P> Drop for BatchLogger<T, E, P>
+impl<T, P> Drop for BatchLogger<T, P>
 where
-    P: EventPusher<Timestamp, (Duration, E, T)>,
+    P: EventPusher<Timestamp, (Duration, T)>,
 {
     fn drop(&mut self) {
         self.event_pusher
@@ -133,7 +132,7 @@ where
 /// initialization code more convenient.
 #[derive(Clone)]
 struct EventQueue<E> {
-    link: Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, E)>>,
+    link: Rc<EventLink<Timestamp, (Duration, E)>>,
     activator: RcActivator,
 }
 
