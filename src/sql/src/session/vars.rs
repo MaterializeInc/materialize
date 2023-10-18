@@ -1296,6 +1296,16 @@ const ENABLE_MZ_JOIN_CORE: ServerVar<bool> = ServerVar {
     internal: true,
 };
 
+pub static DEFAULT_LINEAR_JOIN_YIELDING: Lazy<String> = Lazy::new(|| "work:1000000".into());
+static LINEAR_JOIN_YIELDING: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
+    name: UncasedStr::new("linear_join_yielding"),
+    value: &DEFAULT_LINEAR_JOIN_YIELDING,
+    description:
+        "The yielding behavior compute rendering should apply for linear join operators. Either \
+         'work:<amount>' or 'time:<milliseconds>'.",
+    internal: true,
+});
+
 pub const ENABLE_DEFAULT_CONNECTION_VALIDATION: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_default_connection_validation"),
     value: &true,
@@ -2471,6 +2481,7 @@ impl SystemVars {
             .with_var(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
             .with_var(&KEEP_N_SINK_STATUS_HISTORY_ENTRIES)
             .with_var(&ENABLE_MZ_JOIN_CORE)
+            .with_var(&LINEAR_JOIN_YIELDING)
             .with_var(&ENABLE_STORAGE_SHARD_FINALIZATION)
             .with_var(&ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE)
             .with_var(&ENABLE_SPECIALIZED_ARRANGEMENTS)
@@ -3126,6 +3137,11 @@ impl SystemVars {
     /// Returns the `enable_mz_join_core` configuration parameter.
     pub fn enable_mz_join_core(&self) -> bool {
         *self.expect_value(&ENABLE_MZ_JOIN_CORE)
+    }
+
+    /// Returns the `linear_join_yielding` configuration parameter.
+    pub fn linear_join_yielding(&self) -> &String {
+        self.expect_value(&LINEAR_JOIN_YIELDING)
     }
 
     /// Returns the `enable_storage_shard_finalization` configuration parameter.
@@ -4797,6 +4813,7 @@ pub fn is_tracing_var(name: &str) -> bool {
 pub fn is_compute_config_var(name: &str) -> bool {
     name == MAX_RESULT_SIZE.name()
         || name == DATAFLOW_MAX_INFLIGHT_BYTES.name()
+        || name == LINEAR_JOIN_YIELDING.name()
         || name == ENABLE_MZ_JOIN_CORE.name()
         || name == ENABLE_JEMALLOC_PROFILING.name()
         || name == ENABLE_SPECIALIZED_ARRANGEMENTS.name()

@@ -10,12 +10,13 @@
 use std::time::Duration;
 
 use mz_compute_client::protocol::command::ComputeParameters;
+use mz_compute_types::dataflows::YieldSpec;
 use mz_orchestrator::scheduling_config::{ServiceSchedulingConfig, ServiceTopologySpreadConfig};
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_persist_client::cfg::{PersistParameters, RetryParameters};
 use mz_service::params::GrpcClientParameters;
-use mz_sql::session::vars::SystemVars;
+use mz_sql::session::vars::{SystemVars, DEFAULT_LINEAR_JOIN_YIELDING};
 use mz_storage_types::parameters::{
     StorageMaxInflightBytesConfig, StorageParameters, UpsertAutoSpillConfig,
 };
@@ -23,15 +24,38 @@ use mz_tracing::params::TracingParameters;
 
 /// Return the current compute configuration, derived from the system configuration.
 pub fn compute_config(config: &SystemVars) -> ComputeParameters {
+    let linear_join_yielding = config.linear_join_yielding();
+    let linear_join_yielding = parse_yield_spec(linear_join_yielding).unwrap_or_else(|| {
+        tracing::error!("invalid `linear_join_yielding` config: {linear_join_yielding}");
+        parse_yield_spec(&DEFAULT_LINEAR_JOIN_YIELDING).expect("default is valid")
+    });
+
     ComputeParameters {
         max_result_size: Some(config.max_result_size()),
         dataflow_max_inflight_bytes: Some(config.dataflow_max_inflight_bytes()),
+        linear_join_yielding: Some(linear_join_yielding),
         enable_mz_join_core: Some(config.enable_mz_join_core()),
         enable_jemalloc_profiling: Some(config.enable_jemalloc_profiling()),
         enable_specialized_arrangements: Some(config.enable_specialized_arrangements()),
         persist: persist_config(config),
         tracing: tracing_config(config),
         grpc_client: grpc_client_config(config),
+    }
+}
+
+fn parse_yield_spec(s: &str) -> Option<YieldSpec> {
+    let parts: Vec<_> = s.split(':').collect();
+    match &parts[..] {
+        ["work", amount] => {
+            let amount = amount.parse().ok()?;
+            Some(YieldSpec::ByWork(amount))
+        }
+        ["time", millis] => {
+            let millis = millis.parse().ok()?;
+            let duration = Duration::from_millis(millis);
+            Some(YieldSpec::ByTime(duration))
+        }
+        _ => None,
     }
 }
 

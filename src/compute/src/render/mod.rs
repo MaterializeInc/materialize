@@ -150,7 +150,7 @@ mod threshold;
 mod top_k;
 
 pub use context::CollectionBundle;
-pub use join::LinearJoinImpl;
+pub use join::{LinearJoinImpl, LinearJoinSpec};
 
 /// Assemble the "compute"  side of a dataflow, i.e. all but the sources.
 ///
@@ -289,7 +289,7 @@ pub fn build_compute_dataflow<A: Allocate>(
         if recursive {
             scope.clone().iterative::<PointStamp<u64>, _, _>(|region| {
                 let mut context = Context::for_dataflow_in(&dataflow, region.clone());
-                context.linear_join_impl = compute_state.linear_join_impl;
+                context.linear_join_spec = compute_state.linear_join_spec;
                 context.enable_specialized_arrangements =
                     compute_state.enable_specialized_arrangements;
 
@@ -351,7 +351,7 @@ pub fn build_compute_dataflow<A: Allocate>(
         } else {
             scope.clone().region_named(&build_name, |region| {
                 let mut context = Context::for_dataflow_in(&dataflow, region.clone());
-                context.linear_join_impl = compute_state.linear_join_impl;
+                context.linear_join_spec = compute_state.linear_join_spec;
                 context.enable_specialized_arrangements =
                     compute_state.enable_specialized_arrangements;
 
