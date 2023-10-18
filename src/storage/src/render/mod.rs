@@ -342,6 +342,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 &health_stream,
                 health_configs,
                 crate::healthcheck::DefaultWriter(Rc::clone(&storage_state.internal_cmd_tx)),
+                storage_state.dataflow_parameters.record_namespaced_errors,
             );
             tokens.push(health_token);
 
@@ -408,6 +409,7 @@ pub fn build_export_dataflow<A: Allocate>(
                 &health_stream,
                 health_configs,
                 crate::healthcheck::DefaultWriter(Rc::clone(&storage_state.internal_cmd_tx)),
+                storage_state.dataflow_parameters.record_namespaced_errors,
             );
             tokens.push(health_token);
 
