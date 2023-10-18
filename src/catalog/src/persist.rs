@@ -247,7 +247,7 @@ impl mz_persist_types::columnar::Schema<StateUpdateKind> for VecU8Schema {
 
 /// Handles and metadata needed to interact with persist.
 ///
-/// Production users should call [`Self::_expire`] before dropping a [`PersistHandle`] so that it
+/// Production users should call [`Self::expire`] before dropping a [`PersistHandle`] so that it
 /// can expire its leases. If/when rust gets AsyncDrop, this will be done automatically.
 #[derive(Debug)]
 pub struct PersistHandle {
