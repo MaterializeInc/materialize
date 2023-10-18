@@ -2104,14 +2104,20 @@ fn plan_view_select(
     // Checks if an unknown column error was the result of not including that
     // column in the GROUP BY clause and produces a friendlier error instead.
     let check_ungrouped_col = |e| match e {
-        PlanError::UnknownColumn { table, column } => {
-            match from_scope.resolve(&qcx.outer_scopes, table.as_ref(), &column) {
-                Ok(ColumnRef { level: 0, column }) => {
-                    PlanError::ungrouped_column(&from_scope.items[column])
-                }
-                _ => PlanError::UnknownColumn { table, column },
+        PlanError::UnknownColumn {
+            table,
+            column,
+            similar,
+        } => match from_scope.resolve(&qcx.outer_scopes, table.as_ref(), &column) {
+            Ok(ColumnRef { level: 0, column }) => {
+                PlanError::ungrouped_column(&from_scope.items[column])
             }
-        }
+            _ => PlanError::UnknownColumn {
+                table,
+                column,
+                similar,
+            },
+        },
         e => e,
     };
 
@@ -2453,6 +2459,7 @@ fn plan_group_by_expr<'a>(
             Err(PlanError::UnknownColumn {
                 table: None,
                 column,
+                similar,
             }) => {
                 // The expression was a simple identifier that did not match an
                 // input column. See if it matches an output column.
@@ -2469,6 +2476,7 @@ fn plan_group_by_expr<'a>(
                     Err(PlanError::UnknownColumn {
                         table: None,
                         column,
+                        similar,
                     })
                 }
             }
@@ -4627,12 +4635,13 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
         return Ok(HirScalarExpr::Column(i));
     }
 
-    // If the name is unqualified, first check if it refers to a column.
-    match ecx.scope.resolve_column(&ecx.qcx.outer_scopes, &col_name) {
+    // If the name is unqualified, first check if it refers to a column. Track any similar names
+    // that might exist for a better error message.
+    let similar_names = match ecx.scope.resolve_column(&ecx.qcx.outer_scopes, &col_name) {
         Ok(i) => return Ok(HirScalarExpr::Column(i)),
-        Err(PlanError::UnknownColumn { .. }) => (),
+        Err(PlanError::UnknownColumn { similar, .. }) => similar,
         Err(e) => return Err(e),
-    }
+    };
 
     // The name doesn't refer to a column. Check if it is a whole-row reference
     // to a table.
@@ -4649,6 +4658,7 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
         [] => Err(PlanError::UnknownColumn {
             table: None,
             column: col_name,
+            similar: similar_names,
         }),
         // The name refers to a table that is the result of a function that
         // returned a single column. Per PostgreSQL, this is a special case

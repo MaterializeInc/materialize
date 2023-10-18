@@ -599,6 +599,17 @@ DELETE FROM conflict_schema.conflict_table;
   );
 contains: invalid TEXT COLUMNS option value: column "pk_table.col_dne" does not exist
 
+! CREATE SOURCE case_sensitive_names
+  FROM POSTGRES CONNECTION pg (
+    PUBLICATION 'mz_source',
+    TEXT COLUMNS [pk_table."F2"]
+  )
+  FOR TABLES (
+    "enum_table"
+  );
+contains: invalid TEXT COLUMNS option value: column "pk_table.F2" does not exist
+hint: The similarly named column "pk_table.f2" does exist.
+
 ! CREATE SOURCE enum_source
   FROM POSTGRES CONNECTION pg (
     PUBLICATION 'mz_source',
