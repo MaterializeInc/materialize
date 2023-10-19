@@ -78,13 +78,14 @@
 use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::io::Write;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use mz_build_id::BuildId;
 use mz_ore::cast::{CastFrom, TryCastFrom};
+use mz_proc::BuildId;
 use prost::Message;
 
 mod pprof_types;
@@ -106,11 +107,13 @@ pub struct WeightedStack {
     pub weight: f64,
 }
 
+#[derive(Clone, Debug)]
 pub struct Mapping {
     pub memory_start: usize,
     pub memory_end: usize,
+    pub memory_offset: usize,
     pub file_offset: u64,
-    pub pathname: Option<String>,
+    pub pathname: PathBuf,
     pub build_id: Option<BuildId>,
 }
 
@@ -185,30 +188,17 @@ mz_fg_version: 1
         use crate::pprof_types as proto;
 
         let mut profile = proto::Profile::default();
-
-        const SAMPLE_TYPE_IDX: i64 = 1;
-        const SAMPLE_UNIT_IDX: i64 = 2;
-        const PERIOD_TYPE_IDX: i64 = 3;
-        const PERIOD_UNIT_IDX: i64 = 4;
-        const ANNO_KEY_IDX: i64 = 5;
+        let mut strings = StringTable::new();
 
         let anno_key = anno_key.unwrap_or_else(|| "annotation".into());
-        profile.string_table = vec![
-            "".into(),
-            sample_type.0.into(),
-            sample_type.1.into(),
-            period_type.0.into(),
-            period_type.1.into(),
-            anno_key,
-        ];
 
         profile.sample_type = vec![proto::ValueType {
-            r#type: SAMPLE_TYPE_IDX,
-            unit: SAMPLE_UNIT_IDX,
+            r#type: strings.insert(sample_type.0),
+            unit: strings.insert(sample_type.1),
         }];
         profile.period_type = Some(proto::ValueType {
-            r#type: PERIOD_TYPE_IDX,
-            unit: PERIOD_UNIT_IDX,
+            r#type: strings.insert(period_type.0),
+            unit: strings.insert(period_type.1),
         });
 
         profile.time_nanos = SystemTime::now()
@@ -218,24 +208,12 @@ mz_fg_version: 1
             .try_into()
             .expect("the year 2554 is far away");
 
-        let mut filename_indices = BTreeMap::new();
-        let mut build_id_indices = BTreeMap::new();
         for (mapping, mapping_id) in self.mappings.iter().zip(1..) {
-            let pathname = mapping.pathname.as_deref().unwrap_or("");
-            let filename_idx = *filename_indices.entry(pathname).or_insert_with(|| {
-                let index = profile.string_table.len();
-                profile.string_table.push(pathname.to_string());
-                i64::try_from(index).expect("must fit")
-            });
+            let pathname = mapping.pathname.to_string_lossy();
+            let filename_idx = strings.insert(&pathname);
 
             let build_id_idx = match &mapping.build_id {
-                Some(build_id) => *build_id_indices
-                    .entry(&mapping.build_id)
-                    .or_insert_with(|| {
-                        let index = profile.string_table.len();
-                        profile.string_table.push(build_id.to_string());
-                        i64::try_from(index).expect("must fit")
-                    }),
+                Some(build_id) => strings.insert(&build_id.to_string()),
                 None => 0,
             };
 
@@ -248,10 +226,29 @@ mz_fg_version: 1
                 build_id: build_id_idx,
                 ..Default::default()
             });
+
+            // This is a is a Polar Signals-specific extension: For correct offline symbolization
+            // they need access to the memory offset of mappings, but the pprof format only has a
+            // field for the file offset. So we instead encode additional information about
+            // mappings in magic comments. There must be exactly one comment for each mapping.
+
+            // Take a shortcut and assume the ELF type is always `ET_DYN`. This is true for shared
+            // libraries and for position-independent executable, so it should always be true for
+            // any mappings we have.
+            // Getting the actual information is annoying. It's in the ELF header (the `e_type`
+            // field), but there is no guarantee that the full ELF header gets mapped, so we might
+            // not be able to find it in memory. We could try to load it from disk instead, but
+            // then we'd have to worry about blocking disk I/O.
+            let elf_type = 3;
+
+            let comment = format!(
+                "executableInfo={:x};{:x};{:x}",
+                elf_type, mapping.file_offset, mapping.memory_offset
+            );
+            profile.comment.push(strings.insert(&comment));
         }
 
         let mut location_ids = BTreeMap::new();
-        let mut anno_indices = BTreeMap::new();
         for (stack, anno) in self.iter() {
             let mut sample = proto::Sample::default();
 
@@ -294,14 +291,9 @@ mz_fg_version: 1
                 sample.location_id.push(loc_id);
 
                 if let Some(anno) = anno {
-                    let index = anno_indices.entry(anno).or_insert_with(|| {
-                        let index = profile.string_table.len();
-                        profile.string_table.push(anno.into());
-                        i64::try_from(index).expect("must fit")
-                    });
                     sample.label.push(proto::Label {
-                        key: ANNO_KEY_IDX,
-                        str: *index,
+                        key: strings.insert(&anno_key),
+                        str: strings.insert(anno),
                         ..Default::default()
                     })
                 }
@@ -310,11 +302,41 @@ mz_fg_version: 1
             profile.sample.push(sample);
         }
 
+        profile.string_table = strings.finish();
+
         let encoded = profile.encode_to_vec();
 
         let mut gz = GzEncoder::new(Vec::new(), Compression::default());
         gz.write_all(&encoded).unwrap();
         gz.finish().unwrap()
+    }
+}
+
+/// Helper struct to simplify building a `string_table` for the pprof format.
+#[derive(Default)]
+struct StringTable(BTreeMap<String, i64>);
+
+impl StringTable {
+    fn new() -> Self {
+        // Element 0 must always be the emtpy string.
+        let inner = [("".into(), 0)].into();
+        Self(inner)
+    }
+
+    fn insert(&mut self, s: &str) -> i64 {
+        if let Some(idx) = self.0.get(s) {
+            *idx
+        } else {
+            let idx = i64::try_from(self.0.len()).expect("must fit");
+            self.0.insert(s.into(), idx);
+            idx
+        }
+    }
+
+    fn finish(self) -> Vec<String> {
+        let mut vec: Vec<_> = self.0.into_iter().collect();
+        vec.sort_by_key(|(_, idx)| *idx);
+        vec.into_iter().map(|(s, _)| s).collect()
     }
 }
 

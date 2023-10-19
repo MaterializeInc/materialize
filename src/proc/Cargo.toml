@@ -1,6 +1,6 @@
 [package]
-name = "mz-build-id"
-description = "Utility for getting build IDs of all loaded processes."
+name = "mz-proc"
+description = "Utility for introspecting the running process."
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
