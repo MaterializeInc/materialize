@@ -219,10 +219,9 @@ class PgPostExecutionInconsistencyIgnoreFilter(
     ) -> IgnoreVerdict:
         pg_error_msg = pg_outcome.error_message
 
-        if (
-            "No function matches the given name and argument types" in pg_error_msg
-            or "No operator matches the given name and argument types" in pg_error_msg
-        ):
+        if is_unknown_function_or_operation_invocation(pg_error_msg):
+            # this does not necessarily mean that the function exists in one database but not the other; it could also
+            # be a subsequent error when an expression (an argument) is evaluated to another type
             return YesIgnore(
                 "Not supported in Postgres: No function / operator matches the given name and argument types"
             )
@@ -252,14 +251,11 @@ class PgPostExecutionInconsistencyIgnoreFilter(
     ) -> IgnoreVerdict:
         mz_error_msg = mz_outcome.error_message
 
-        if (
-            "No function matches the given name and argument types" in mz_error_msg
-            or "No operator matches the given name and argument types" in mz_error_msg
-        ):
-            # this does not necessarily mean that the function exists in Postgres; it could also be that an expression
-            # (an argument) is evaluated to another type
+        if is_unknown_function_or_operation_invocation(mz_error_msg):
+            # this does not necessarily mean that the function exists in one database but not the other; it could also
+            # be a subsequent error when an expression (an argument) is evaluated to another type
             return YesIgnore(
-                f"#22024: non-existing functions for given parameters in mz ({mz_error_msg})"
+                f"#22024: non-existing functions or operation: ({mz_error_msg})"
             )
 
         def matches_round_function(expression: Expression) -> bool:
@@ -510,3 +506,11 @@ def matches_op_by_pattern(expression: Expression, pattern: str) -> bool:
     ):
         return expression.operation.pattern == pattern
     return False
+
+
+def is_unknown_function_or_operation_invocation(error_msg: str) -> bool:
+    return (
+        "No function matches the given name and argument types" in error_msg
+        or "No operator matches the given name and argument types" in error_msg
+        or ("WHERE clause error: " in error_msg and "does not exist" in error_msg)
+    )
