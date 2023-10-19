@@ -24,8 +24,7 @@ already exists. Pass `--force` to instead update the existing secret with the
 new value, if it exists.
 
 {{< note >}}
-Using this command is preferred to executing <a
-href="/sql/create-secret">`CREATE SECRET`</a> directly, as it avoids leaving the
+Using this command is preferred to executing [`CREATE SECRET`](/sql/create-secret) directly, as it avoids leaving the
 secret's value in your shell history.
 {{< /note >}}
 
