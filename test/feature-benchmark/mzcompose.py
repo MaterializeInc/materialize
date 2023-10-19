@@ -162,8 +162,8 @@ def run_one_scenario(
         )
 
         aggregations = benchmark.run()
-        for i, comparator in enumerate(comparators):
-            comparator.append(aggregations[i].aggregate())
+        for aggregation, comparator in zip(aggregations, comparators):
+            comparator.append(aggregation.aggregate())
 
         c.kill("cockroach", "materialized", "testdrive")
         c.rm("cockroach", "materialized", "testdrive")

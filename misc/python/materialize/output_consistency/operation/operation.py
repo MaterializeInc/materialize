@@ -97,9 +97,7 @@ class DbOperationOrFunction:
             if validator.is_expected_to_cause_error(args):
                 return True
 
-        for arg_index, arg in enumerate(args):
-            param = self.params[arg_index]
-
+        for param, arg in zip(self.params, args):
             if not param.supports_expression(arg):
                 return True
 
