@@ -80,7 +80,7 @@ use mz_transform::{EmptyStatisticsOracle, Optimizer, StatisticsOracle};
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
 use tracing::instrument::WithSubscriber;
-use tracing::{event, warn, Level};
+use tracing::{event, warn, Level, Span};
 use tracing_core::callsite::rebuild_interest_cache;
 
 use crate::catalog::{
@@ -1975,6 +1975,7 @@ impl Coordinator {
             }
             Ok((Some(TransactionOps::Writes(writes)), write_lock_guard)) => {
                 self.submit_write(PendingWriteTxn::User {
+                    span: Span::current(),
                     writes,
                     write_lock_guard,
                     pending_txn: PendingTxn {
