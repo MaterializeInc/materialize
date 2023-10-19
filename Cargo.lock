@@ -4596,6 +4596,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "arrow2",
+ "async-stream",
  "async-trait",
  "aws-config",
  "aws-credential-types",

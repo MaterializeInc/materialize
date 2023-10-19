@@ -17,10 +17,7 @@ use crate::internal::state_versions::StateVersions;
 use crate::ShardId;
 use anyhow::anyhow;
 use mz_persist::location::Blob;
-use std::time::Duration;
-use tracing::{info, warn};
-
-const DIFF_TIMEOUT: Duration = Duration::from_secs(30);
+use tracing::info;
 
 /// Attempt to restore all the blobs referenced by the current state in consensus.
 /// Returns a list of blobs that were not possible to restore.
@@ -30,20 +27,7 @@ pub(crate) async fn restore_blob(
     build_version: &semver::Version,
     shard_id: ShardId,
 ) -> anyhow::Result<Vec<BlobKey>> {
-    // For an as-yet-undetermined reason, we sometimes see this call hang in CI
-    // as this tool starts up. A retry loop should logically live at a lower level
-    // of the stack, but to minimize impact we'll retry at a high level for now.
-    // TODO(bkirwi): move this to the proper location once we've identified the cause of
-    // the timeout.
-    let diffs = loop {
-        let result =
-            tokio::time::timeout(DIFF_TIMEOUT, versions.fetch_all_live_diffs(&shard_id)).await;
-
-        match result {
-            Ok(data) => break data,
-            Err(_) => warn!("Timed out while trying to fetch live diffs; retrying"),
-        }
-    };
+    let diffs = versions.fetch_all_live_diffs(&shard_id).await;
     let Some(first_live_seqno) = diffs.0.first().map(|d| d.seqno) else {
         info!("No diffs for shard {shard_id}.");
         return Ok(vec![]);
