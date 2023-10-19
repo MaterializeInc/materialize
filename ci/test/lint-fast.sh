@@ -29,13 +29,25 @@ try cargo deplint Cargo.lock ci/test/lint-deps.toml
 try cargo --locked about generate ci/deploy/licenses.hbs > /dev/null
 
 CURRENT_GIT_BRANCH=$(try git branch --show-current)
-BUILDKITE=${BUILDKITE:-false}
-BUILDKITE_PULL_REQUEST=${BUILDKITE_PULL_REQUEST:-false}
+IN_BUILDKITE=in_ci
+IN_BUILDKITE_PR=0
+ON_MAIN_BRANCH=0
+IN_LOCAL_NON_MAIN_BRANCH=0
 
-IN_BUILDKITE_PR=$(expr "$BUILDKITE_PULL_REQUEST" != "false")
-IN_BUILDKITE=$(expr "$BUILDKITE" = "true")
-ON_MAIN_BRANCH=$(expr "$CURRENT_GIT_BRANCH" = "main")
-IN_LOCAL_NON_MAIN_BRANCH=$(expr "$IN_BUILDKITE" != 1 \& "$ON_MAIN_BRANCH" != 1)
+if [[ ${BUILDKITE_PULL_REQUEST:-false} != "false" ]]; then
+  IN_BUILDKITE_PR=1
+fi
+
+if [[ "$CURRENT_GIT_BRANCH" == "main" ]]; then
+  ON_MAIN_BRANCH=1
+fi
+
+if [[ "$IN_BUILDKITE" != 1 && "$ON_MAIN_BRANCH" != 1 ]]; then
+  IN_LOCAL_NON_MAIN_BRANCH=1
+fi
+
+echo $IN_BUILDKITE_PR
+echo $IN_LOCAL_NON_MAIN_BRANCH
 
 if [[ $IN_BUILDKITE_PR || $IN_LOCAL_NON_MAIN_BRANCH ]]; then
   # see ./ci/test/lint-buf/README.md
