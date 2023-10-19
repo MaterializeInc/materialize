@@ -784,10 +784,21 @@ steps:
       #         composition: parallel-workload
       #         args: [--runtime=1500, --threads=100]
 
+      - id: parallel-workload-rename-naughty
+        label: "Parallel Workload (rename + naughty identifiers)"
+        artifact_paths: [junit_*.xml, parallel-workload-queries.log]
+        timeout_in_minutes: 40
+        agents:
+          queue: builder-linux-x86_64
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: parallel-workload
+              args: [--runtime=1500, --scenario=rename, --naughty-identifiers]
+
       - id: parallel-workload-rename
         label: "Parallel Workload (rename)"
         artifact_paths: [junit_*.xml, parallel-workload-queries.log]
-        timeout_in_minutes: 30
+        timeout_in_minutes: 40
         agents:
           queue: builder-linux-x86_64
         plugins:

@@ -13,7 +13,7 @@ from collections.abc import Iterator, Sequence
 from copy import copy
 from enum import Enum
 
-from pg8000.native import identifier
+from pg8000.native import identifier, literal
 
 from materialize.data_ingest.data_type import (
     DATA_TYPES,
@@ -30,6 +30,7 @@ from materialize.data_ingest.transaction import Transaction
 from materialize.data_ingest.workload import WORKLOADS
 from materialize.parallel_workload.executor import Executor
 from materialize.parallel_workload.settings import Complexity, Scenario
+from materialize.util import naughty_strings
 
 MAX_COLUMNS = 100
 MAX_ROWS = 1000
@@ -54,6 +55,23 @@ MAX_INITIAL_WEBHOOK_SOURCES = 3
 MAX_INITIAL_KAFKA_SOURCES = 3
 MAX_INITIAL_POSTGRES_SOURCES = 3
 MAX_INITIAL_KAFKA_SINKS = 3
+
+NAUGHTY_IDENTIFIERS = False
+
+
+def naughtify(name: str) -> str:
+    """Makes a string into a naughty identifier, always returns the same
+    identifier when called with the same input."""
+    global NAUGHTY_IDENTIFIERS
+
+    if not NAUGHTY_IDENTIFIERS:
+        return name
+
+    strings = naughty_strings()
+    # This rng is just to get a more interesting integer for the name
+    index = abs(hash(name)) % len(strings)
+    # Keep them short so we can combine later with other identifiers, 255 char limit
+    return f"{name}_{strings[index].encode('utf-8')[:8].decode('utf-8', 'ignore')}"
 
 
 class BodyFormat(Enum):
@@ -93,13 +111,13 @@ class Column:
         self.default = rng.choice(
             [None, str(data_type.random_value(rng, in_query=True))]
         )
-        self._name = f"c{self.column_id}_{self.data_type.name()}"
+        self._name = f"c-{self.column_id}-{self.data_type.name()}"
 
     def __str__(self) -> str:
         return f"{self.db_object}.{self.name(True)}"
 
     def name(self, in_query: bool = False) -> str:
-        return identifier(self._name) if in_query else self._name
+        return identifier(naughtify(self._name)) if in_query else naughtify(self._name)
 
     def set_name(self, new_name: str) -> None:
         self._name = new_name
@@ -124,10 +142,13 @@ class Schema:
         self.schema_id = schema_id
         self.rename = 0
 
-    def __str__(self) -> str:
+    def name(self) -> str:
         if self.rename:
-            return f"s{self.schema_id}_{self.rename}"
-        return f"s{self.schema_id}"
+            return naughtify(f"s-{self.schema_id}-{self.rename}")
+        return naughtify(f"s-{self.schema_id}")
+
+    def __str__(self) -> str:
+        return identifier(self.name())
 
     def create(self, exe: Executor) -> None:
         query = f"CREATE SCHEMA {self}"
@@ -162,11 +183,11 @@ class Table(DBObject):
 
     def name(self) -> str:
         if self.rename:
-            return f"t{self.table_id}_{self.rename}"
-        return f"t{self.table_id}"
+            return naughtify(f"t-{self.table_id}-{self.rename}")
+        return naughtify(f"t-{self.table_id}")
 
     def __str__(self) -> str:
-        return f"{self.schema}.{self.name()}"
+        return f"{self.schema}.{identifier(self.name())}"
 
     def create(self, exe: Executor) -> None:
         query = f"CREATE TABLE {self}("
@@ -209,7 +230,7 @@ class View(DBObject):
         ]
         self.columns = [copy(column) for column in self.source_columns]
         for column in self.columns:
-            column.set_name(f"{column.name()}_{column.db_object}")
+            column.set_name(f"{column.name()}-{column.db_object}")
             column.db_object = self
 
         self.materialized = rng.choice([True, False])
@@ -238,10 +259,10 @@ class View(DBObject):
                 self.join_column2 = rng.choice(columns)
 
     def name(self) -> str:
-        return f"v{self.view_id}"
+        return naughtify(f"v-{self.view_id}")
 
     def __str__(self) -> str:
-        return f"{self.schema}.{self.name()}"
+        return f"{self.schema}.{identifier(self.name())}"
 
     def create(self, exe: Executor) -> None:
         if self.materialized:
@@ -288,6 +309,9 @@ class WebhookColumn(Column):
         self.nullable = nullable
         self.db_object = db_object
 
+    def name(self, in_query: bool = False) -> str:
+        return identifier(self._name) if in_query else self._name
+
 
 class WebhookSource(DBObject):
     source_id: int
@@ -322,6 +346,7 @@ class WebhookSource(DBObject):
             self.columns.append(WebhookColumn("headers", TextTextMap, False, self))
 
         for i in range(rng.randint(0, MAX_INCLUDE_HEADERS)):
+            # naughtify: UnicodeEncodeError: 'ascii' codec can't encode characters
             self.explicit_include_headers.append(f"ih{i}")
         self.columns += [
             WebhookColumn(include_header, Text, True, self)
@@ -339,18 +364,18 @@ class WebhookSource(DBObject):
 
     def name(self) -> str:
         if self.rename:
-            return f"wh{self.source_id}_{self.rename}"
-        return f"wh{self.source_id}"
+            return naughtify(f"wh-{self.source_id}-{self.rename}")
+        return naughtify(f"wh-{self.source_id}")
 
     def __str__(self) -> str:
-        return f"{self.schema}.{self.name()}"
+        return f"{self.schema}.{identifier(self.name())}"
 
     def create(self, exe: Executor) -> None:
         query = f"CREATE SOURCE {self} IN CLUSTER {self.cluster} FROM WEBHOOK BODY FORMAT {self.body_format.name}"
         if self.include_headers:
             query += " INCLUDE HEADERS"
         for include_header in self.explicit_include_headers:
-            query += f" INCLUDE HEADER '{include_header}' as {include_header}"
+            query += f" INCLUDE HEADER {literal(include_header)} as {identifier(include_header)}"
         if self.check_expr:
             query += f" CHECK (WITH (BODY, HEADERS) {self.check_expr})"
         exe.execute(query)
@@ -364,6 +389,9 @@ class KafkaColumn(Column):
         self.data_type = data_type
         self.nullable = nullable
         self.db_object = db_object
+
+    def name(self, in_query: bool = False) -> str:
+        return identifier(self._name) if in_query else self._name
 
 
 class KafkaSource(DBObject):
@@ -389,14 +417,17 @@ class KafkaSource(DBObject):
         self.schema = schema
         fields = []
         for i in range(rng.randint(1, 10)):
-            fields.append(Field(f"key{i}", rng.choice(DATA_TYPES_FOR_AVRO), True))
+            fields.append(
+                # naughtify: Invalid schema
+                Field(f"key{i}", rng.choice(DATA_TYPES_FOR_AVRO), True)
+            )
         for i in range(rng.randint(0, 20)):
             fields.append(Field(f"value{i}", rng.choice(DATA_TYPES_FOR_AVRO), False))
         self.columns = [
             KafkaColumn(field.name, field.data_type, False, self) for field in fields
         ]
         self.executor = KafkaExecutor(
-            self.source_id, ports, fields, database, str(schema)
+            self.source_id, ports, fields, database, schema.name()
         )
         self.generator = rng.choice(list(WORKLOADS))(None).generate(fields)
         self.lock = threading.Lock()
@@ -454,11 +485,11 @@ class KafkaSink(DBObject):
 
     def name(self) -> str:
         if self.rename:
-            return f"sink{self.sink_id}_{self.rename}"
-        return f"sink{self.sink_id}"
+            return naughtify(f"sink-{self.sink_id}-{self.rename}")
+        return naughtify(f"sink-{self.sink_id}")
 
     def __str__(self) -> str:
-        return f"{self.schema}.{self.name()}"
+        return f"{self.schema}.{identifier(self.name())}"
 
     def create(self, exe: Executor) -> None:
         topic = f"sink_topic{self.sink_id}"
@@ -474,6 +505,9 @@ class PostgresColumn(Column):
         self.data_type = data_type
         self.nullable = nullable
         self.db_object = db_object
+
+    def name(self, in_query: bool = False) -> str:
+        return identifier(self._name) if in_query else self._name
 
 
 class PostgresSource(DBObject):
@@ -499,13 +533,18 @@ class PostgresSource(DBObject):
         self.schema = schema
         fields = []
         for i in range(rng.randint(1, 10)):
-            fields.append(Field(f"key{i}", rng.choice(DATA_TYPES_FOR_AVRO), True))
+            fields.append(
+                # naughtify: Postgres column identifiers are escaped differently for postgres sources: key3_ЁЂЃЄЅІЇЈЉЊЋЌЍЎЏА gets "", but pg8000.native.identifier() doesn't
+                Field(f"key{i}", rng.choice(DATA_TYPES_FOR_AVRO), True)
+            )
         for i in range(rng.randint(0, 20)):
             fields.append(Field(f"value{i}", rng.choice(DATA_TYPES_FOR_AVRO), False))
         self.columns = [
             PostgresColumn(field.name, field.data_type, False, self) for field in fields
         ]
-        self.executor = PgExecutor(self.source_id, ports, fields, database, str(schema))
+        self.executor = PgExecutor(
+            self.source_id, ports, fields, database, schema.name()
+        )
         self.generator = rng.choice(list(WORKLOADS))(None).generate(fields)
         self.lock = threading.Lock()
 
@@ -542,8 +581,11 @@ class ClusterReplica:
         self.size = size
         self.cluster = cluster
 
+    def name(self) -> str:
+        return naughtify(f"r-{self.replica_id+1}")
+
     def __str__(self) -> str:
-        return f"r{self.replica_id+1}"
+        return identifier(self.name())
 
     def create(self, exe: Executor) -> None:
         # TODO: More Cluster Replica settings
@@ -577,8 +619,11 @@ class Cluster:
         self.replica_id = len(self.replicas)
         self.introspection_interval = introspection_interval
 
+    def name(self) -> str:
+        return naughtify(f"cluster-{self.cluster_id}")
+
     def __str__(self) -> str:
-        return f"cluster_{self.cluster_id}"
+        return identifier(self.name())
 
     def create(self, exe: Executor) -> None:
         query = f"CREATE CLUSTER {self} "
@@ -628,12 +673,15 @@ class Database:
         ports: dict[str, int],
         complexity: Complexity,
         scenario: Scenario,
+        naughty_identifiers: bool,
     ):
+        global NAUGHTY_IDENTIFIERS
         self.seed = seed
         self.host = host
         self.ports = ports
         self.complexity = complexity
         self.scenario = scenario
+        NAUGHTY_IDENTIFIERS = naughty_identifiers
 
         self.schemas = [
             Schema(rng, i) for i in range(rng.randint(1, MAX_INITIAL_SCHEMAS))
@@ -677,7 +725,7 @@ class Database:
         self.webhook_source_id = len(self.webhook_sources)
         self.kafka_sources = [
             KafkaSource(
-                str(self),
+                self.name(),
                 i,
                 rng.choice(self.clusters),
                 rng.choice(self.schemas),
@@ -689,7 +737,7 @@ class Database:
         self.kafka_source_id = len(self.kafka_sources)
         self.postgres_sources = [
             PostgresSource(
-                str(self),
+                self.name(),
                 i,
                 rng.choice(self.clusters),
                 rng.choice(self.schemas),
@@ -712,8 +760,11 @@ class Database:
         self.kafka_sink_id = len(self.kafka_sinks)
         self.lock = threading.Lock()
 
+    def name(self) -> str:
+        return naughtify(f"db-pw-{self.seed}")
+
     def __str__(self) -> str:
-        return f"db_pw_{self.seed}"
+        return identifier(self.name())
 
     def db_objects(
         self,

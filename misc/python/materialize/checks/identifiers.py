@@ -16,7 +16,7 @@ from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
 from materialize.checks.executors import Executor
-from materialize.util import MzVersion
+from materialize.util import MzVersion, naughty_strings
 
 
 def dq(ident: str) -> str:
@@ -47,163 +47,43 @@ class Identifiers(Check):
         # CREATE ROLE not compatible with older releases
         return self.base_version >= MzVersion.parse("0.47.0-dev")
 
-    # Some identifiers taken from https://github.com/minimaxir/big-list-of-naughty-strings
-    # Under MIT license, Copyright (c) 2015-2020 Max Woolf
-    IDENTS = [
-        {
-            "db": "-1",
-            "schema": "0",
-            "type": "1",
-            "table": "2",
-            "column": "3",
-            "value1": "4",
-            "value2": "5",
-            "source": "6",
-            "source_view": "7",
-            "kafka_conn": "8",
-            "csr_conn": "9",
-            "secret": "10",
-            "secret_value": "11",
-            "mv0": "12",
-            "mv1": "13",
-            "mv2": "14",
-            "sink0": "15",
-            "sink1": "16",
-            "sink2": "17",
-            "alias": "18",
-            "role": "19",
-            "comment_table": "20",
-            "comment_column": "21",
-        },
-        {
-            "db": "-1.0",
-            "schema": "0.0",
-            "type": "1.0",
-            "table": "2.0",
-            "column": "3.0",
-            "value1": "4.0",
-            "value2": "5.0",
-            "source": "6.0",
-            "source_view": "7.0",
-            "kafka_conn": "8.0",
-            "csr_conn": "9.0",
-            "secret": "10.0",
-            "secret_value": "11.0",
-            "mv0": "12.0",
-            "mv1": "13.0",
-            "mv2": "14.0",
-            "sink0": "15.0",
-            "sink1": "16.0",
-            "sink2": "17.0",
-            "alias": "18.0",
-            "role": "19.0",
-            "comment_table": "20.0",
-            "comment_column": "21.0",
-        },
-        {
-            "db": "\u0001\u0002\u0003\u0004\u0005\u0006\u0007\b\u000e\u000f\u0010\u0011\u0012\u0013\u0014\u0015\u0016\u0017\u0018\u0019\u001a\u001b\u001c\u001d\u001e\u001f^?",
-            "schema": ",./;'[]\\-=",
-            "type": '<>?:"{}|_+',
-            "table": '<>?:"{}|_+',
-            "column": "!@#$%^&*()`~",
-            "value1": "",
-            "value2": "\t\u000b\f              ​    　",
-            "source": "Ω≈ç√∫˜µ≤≥÷",
-            "source_view": "œ∑´®†¥¨ˆøπ“‘",
-            "kafka_conn": "¡™£¢∞§¶•ªº–≠",
-            "csr_conn": "¸˛Ç◊ı˜Â¯˘¿",
-            "secret": "ÅÍÎÏ˝ÓÔÒÚÆ☃",
-            "secret_value": "Œ„´‰ˇÁ¨ˆØ∏”’",
-            "mv0": "┬─┬ノ( º _ ºノ)",
-            "mv1": "( ͡° ͜ʖ ͡°)",
-            "mv2": "¯\\_(ツ)_/¯",
-            "sink0": "åß∂ƒ©˙∆˚¬…æ",
-            "sink1": "￾",
-            "sink2": "﻿",
-            "alias": "₀₁₂",
-            "role": "⁰⁴⁵₀₁₂",
-            "comment_table": "ด้้้้้็็็็็้้้้้็็็็็้้้้้้้้็็็็็้้้้้็็็็็้้้้้้้้็็็็็้้้้้็็็็็้้้้้้้้็็็็็้้้้้็็็็ ด้้้้้็็็็็้้้้้็็็็็้้้้้้้้็็็็็้้้้้็็็็็้้้้้้้้็็็็็้้้้้็็็็็้้้้้้้้็็็็็้้้้้็็็็ ด้้้้้็็็็็้้้้้็็็็็้้้้้้้้็็็็็้้้้้็็็็็้้้้้้้้็็็็็้้้้้็็็็็้้้้้้้้็็็็็้้้้้็็็็",
-            "comment_column": "٠١٢٣٤٥٦٧٨٩",
-        },
-        {
-            "db": "찦차를 타고 온 펲시맨과 쑛다리 똠방각하",
-            "schema": "田中さんにあげて下さい",
-            "type": "パーティーへ行かないか",
-            "table": "和製漢語",
-            "column": "部落格",
-            "value1": "사회과학원 어학연구소",
-            "value2": "社會科學院語學研究所",
-            "source": "울란바토르",
-            "source_view": "𐐜 𐐔𐐇𐐝𐐀𐐡𐐇𐐓 𐐙𐐊𐐡𐐝𐐓/𐐝𐐇𐐗𐐊𐐤𐐔 𐐒𐐋𐐗 𐐒𐐌 𐐜 𐐡𐐀𐐖𐐇𐐤𐐓𐐝 𐐱𐑂 𐑄 𐐔𐐇𐐝𐐀𐐡𐐇𐐓 𐐏𐐆𐐅𐐤𐐆𐐚𐐊𐐡𐐝𐐆𐐓𐐆",
-            "kafka_conn": "表ポあA鷗ŒéＢ逍Üßªąñ丂㐀𠀀",
-            "csr_conn": "Ⱥ",
-            "secret": "ヽ༼ຈل͜ຈ༽ﾉ ヽ༼ຈل͜ຈ༽ﾉ",
-            "secret_value": "(｡◕ ∀ ◕｡)",
-            "mv0": "Ṱ̺̺o͞ ̷i̲̬n̝̗v̟̜o̶̙kè͚̮ ̖t̝͕h̼͓e͇̣ ̢̼h͚͎i̦̲v̻͍e̺̭-m̢iͅn̖̺d̵̼ ̞̥r̛̗e͙p͠r̼̞e̺̠s̘͇e͉̥ǹ̬͎t͍̬i̪̱n͠g̴͉ ͏͉c̬̟h͡a̫̻o̫̟s̗̦.̨̹",
-            "mv1": "I̗̘n͇͇v̮̫ok̲̫i̖͙n̡̻g̲͈ ̰t͔̦h̞̲e̢̤ ͍̬f̴̘è͖ẹ̥̩l͖͔i͓͚n͖͍g͍ ̨o͚̪f̘̣ ̖̘c҉͔h̵̤á̗̼o̼̣s̱͈.̛̖",
-            "mv2": "Ṯ̤͍h̲́e͏͓ ͇̜N͕͠e̗̱z̘̝p̤̺e̠̻r̨̤d̠̟i̦͖a̠̗n͚͜ ̻̞h̵͉i̳̞v̢͇ḙ͎͟-҉̭m̤̭i͕͇n̗͙ḍ̟ ̯̲ǫ̟̯f ̪̰c̦͍ḥ͚a̮͎ơ̩̹s̤.̝̝ ҉Z̡̖a͖̰l̲̫g̡̟o̗͜.̟",
-            "sink0": "𠜎𠜱𠝹𠱓𠱸𠲖𠳏",
-            "sink1": "Ⱦ",
-            "sink2": "｀ｨ(´∀｀∩",
-            "alias": "⅛⅜⅝⅞",
-            "role": "ЁЂЃЄЅІЇЈЉЊЋЌЍЎЏАБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдежзийклмнопрстуфхцчшщъыьэюя",
-            "comment_table": "`⁄€‹›ﬁﬂ‡°·‚—±",
-            "comment_column": "Œ„´‰ˇÁ¨ˆØ∏”’",
-        },
-        {
-            "db": "❤️ 💔 💌 💕 💞 💓 💗 💖 💘 💝 💟 💜 💛 💚 💙",
-            "schema": "😍",
-            "type": "👩🏽",
-            "table": "👨‍🦰 👨🏿‍🦰 👨‍🦱 👨🏿‍🦱 🦹🏿‍♂️",
-            "column": "👾 🙇 💁 🙅 🙆 🙋 🙎 🙍",
-            "value1": "🐵 🙈 🙉 🙊",
-            "value2": "✋🏿 💪🏿   👐🏿   🙌🏿   👏🏿   🙏🏿",
-            "source": "🚾 🆒 🆓 🆕 🆖 🆗 🆙 🏧",
-            "source_view": "🇺 🇸 🇷 🇺 🇸  🇦 🇫 🇦 🇲 🇸",
-            "kafka_conn": "🇺 🇸 🇷 🇺 🇸 🇦 🇫 🇦 🇲",
-            "csr_conn": "🇺 🇸 🇷 🇺 🇸 🇦",
-            "secret": "１２３",
-            "secret_value": "١٢٣",
-            "mv0": "🇺s🇸r🇷p🇺>🇸l🇦r",
-            "mv1": "Ⱦ",
-            "mv2": "👨‍👩‍👦 👨‍👩‍👧‍👦 👨‍👨‍👦 👩‍👩‍👧 👨‍👦 👨‍👧‍👦 👩‍👦 👩‍👧‍👦",
-            "sink0": "0️⃣ 1️⃣ 2️⃣ 3️⃣ 4️⃣ 5️⃣ 6️⃣ 7️⃣ 8️⃣ 9️⃣ 🔟",
-            "sink1": " test ",
-            "sink2": "‫test‫",
-            "alias": "1#INF",
-            "role": "0xffffffffffffffff",
-            "comment_table": "0xabad1dea",
-            "comment_column": "123456789012345678901234567890123456789",
-        },
-        {
-            "db": "ﺍﻺﻃﻼﻗ ﻊﻟ ﺈﻳﻭ.",
-            "schema": "בְּרֵאשִׁית, בָּרָא אֱלֹהִים, אֵת הַשָּמַיִם, וְאֵת הָאָרֶץ",
-            "type": "הָיְתָהtestﺎﻠﺼﻔﺣﺎﺗ ﺎﻠﺘّﺣﻮﻟ",
-            "table": "﷽",
-            "column": "undefined",
-            "value1": "undef",
-            "value2": "NULL",
-            "source": "(null)",
-            "source_view": "NIL",
-            "kafka_conn": "true",
-            "csr_conn": "FALSE",
-            "secret": "None",
-            "secret_value": "'",
-            "mv0": "\\",
-            "mv1": "\\\\",
-            "mv2": '"',
-            "sink0": "nil",
-            "sink1": "⁦test⁧",
-            "sink2": "‪‪᚛                 ᚜‪",
-            "alias": "0xabad1dea",
-            "role": "1.000.000,00",
-            "comment_table": "2.2250738585072011e-308",
-            "comment_column": "09",
-        },
+    IDENT_KEYS = [
+        "db",
+        "schema",
+        "type",
+        "table",
+        "column",
+        "value1",
+        "value2",
+        # "source",
+        "source_view",
+        "kafka_conn",
+        "csr_conn",
+        "secret",
+        # "secret_value",
+        "mv0",
+        "mv1",
+        "mv2",
+        "sink0",
+        "sink1",
+        "sink2",
+        "alias",
+        "role",
+        "comment_table",
+        "comment_column",
     ]
 
     def __init__(self, base_version: MzVersion, rng: Random | None) -> None:
-        self.ident = rng.choice(self.IDENTS) if rng else self.IDENTS[0]
+        strings = naughty_strings()
+        values = (rng or Random(0)).sample(strings, len(self.IDENT_KEYS))
+        self.ident = {
+            key: value.encode("utf-8")[:255].decode("utf-8", "ignore")
+            for key, value in zip(self.IDENT_KEYS, values)
+        }
+        # ERROR: invalid input syntax for type bytea: invalid escape sequence
+        self.ident["secret_value"] = "secret_value"
+        # https://github.com/MaterializeInc/materialize/issues/22535
+        self.ident["source"] = "source"
         super().__init__(base_version, rng)
 
     def initialize(self) -> Testdrive:
@@ -272,11 +152,11 @@ class Identifiers(Check):
         cmds = f"""
         > SHOW DATABASES WHERE name NOT LIKE 'to_be_created%' AND name NOT LIKE 'owner_db%' AND name NOT LIKE 'privilege_db%' AND name <> 'defpriv_db';
         materialize
-        {dq(self.ident["db"])}
+        {dq_print(self.ident["db"])}
 
         > SET DATABASE={dq(self.ident["db"])};
 
-        > SELECT name FROM mz_roles WHERE name LIKE {sq(self.ident["role"])}
+        > SELECT name FROM mz_roles WHERE name = {sq(self.ident["role"])}
         {dq_print(self.ident["role"])}
 
         > SHOW TYPES;

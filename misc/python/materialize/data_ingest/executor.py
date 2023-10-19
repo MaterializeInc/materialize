@@ -21,6 +21,7 @@ from confluent_kafka.serialization import (  # type: ignore
     SerializationContext,
 )
 from pg8000.exceptions import InterfaceError
+from pg8000.native import identifier
 
 from materialize.data_ingest.data_type import Backend
 from materialize.data_ingest.field import Field, formatted_value
@@ -193,7 +194,7 @@ class KafkaExecutor(Executor):
         with self.mz_conn.cursor() as cur:
             self.execute(
                 cur,
-                f"""CREATE SOURCE {self.schema}.{self.table}
+                f"""CREATE SOURCE {identifier(self.schema)}.{identifier(self.table)}
                     FROM KAFKA CONNECTION kafka_conn (TOPIC '{self.topic}')
                     FORMAT AVRO
                     USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -263,7 +264,7 @@ class PgExecutor(Executor):
     ):
         super().__init__(ports, fields, database, schema)
         self.table = f"table{num}"
-        self.source = f"postres_source{num}"
+        self.source = f"postgres_source{num}"
         self.num = num
 
     def create(self) -> None:
@@ -275,7 +276,7 @@ class PgExecutor(Executor):
         )
 
         values = [
-            f"{field.name} {str(field.data_type.name(Backend.POSTGRES)).lower()}"
+            f"{identifier(field.name)} {str(field.data_type.name(Backend.POSTGRES)).lower()}"
             for field in self.fields
         ]
         keys = [field.name for field in self.fields if field.is_key]
@@ -284,11 +285,11 @@ class PgExecutor(Executor):
         with self.pg_conn.cursor() as cur:
             self.execute(
                 cur,
-                f"""DROP TABLE IF EXISTS {self.table};
-                    CREATE TABLE {self.table} (
+                f"""DROP TABLE IF EXISTS {identifier(self.table)};
+                    CREATE TABLE {identifier(self.table)} (
                         {", ".join(values)},
-                        PRIMARY KEY ({", ".join(keys)}));
-                    ALTER TABLE {self.table} REPLICA IDENTITY FULL;
+                        PRIMARY KEY ({", ".join([identifier(key) for key in keys])}));
+                    ALTER TABLE {identifier(self.table)} REPLICA IDENTITY FULL;
                     CREATE USER postgres{self.num} WITH SUPERUSER PASSWORD 'postgres';
                     ALTER USER postgres{self.num} WITH replication;
                     DROP PUBLICATION IF EXISTS postgres_source;
@@ -309,9 +310,9 @@ class PgExecutor(Executor):
             )
             self.execute(
                 cur,
-                f"""CREATE SOURCE {self.schema}.{self.source}
+                f"""CREATE SOURCE {identifier(self.schema)}.{identifier(self.source)}
                     FROM POSTGRES CONNECTION pg{self.num} (PUBLICATION 'postgres_source')
-                    FOR TABLES ({self.table} AS {self.table})""",
+                    FOR TABLES ({identifier(self.table)} AS {identifier(self.table)})""",
             )
         self.mz_conn.autocommit = False
 
@@ -325,7 +326,7 @@ class PgExecutor(Executor):
                         )
                         self.execute(
                             cur,
-                            f"""INSERT INTO {self.table}
+                            f"""INSERT INTO {identifier(self.table)}
                                 VALUES ({values_str})
                             """,
                         )
@@ -334,15 +335,17 @@ class PgExecutor(Executor):
                             str(formatted_value(value)) for value in row.values
                         )
                         keys_str = ", ".join(
-                            field.name for field in row.fields if field.is_key
+                            identifier(field.name)
+                            for field in row.fields
+                            if field.is_key
                         )
                         update_str = ", ".join(
-                            f"{field.name} = EXCLUDED.{field.name}"
+                            f"{identifier(field.name)} = EXCLUDED.{identifier(field.name)}"
                             for field in row.fields
                         )
                         self.execute(
                             cur,
-                            f"""INSERT INTO {self.table}
+                            f"""INSERT INTO {identifier(self.table)}
                                 VALUES ({values_str})
                                 ON CONFLICT ({keys_str})
                                 DO UPDATE SET {update_str}
@@ -350,13 +353,13 @@ class PgExecutor(Executor):
                         )
                     elif row.operation == Operation.DELETE:
                         cond_str = " AND ".join(
-                            f"{field.name} = {formatted_value(value)}"
+                            f"{identifier(field.name)} = {formatted_value(value)}"
                             for field, value in zip(row.fields, row.values)
                             if field.is_key
                         )
                         self.execute(
                             cur,
-                            f"""DELETE FROM {self.table}
+                            f"""DELETE FROM {identifier(self.table)}
                                 WHERE {cond_str}
                             """,
                         )
@@ -396,25 +399,25 @@ class KafkaRoundtripExecutor(Executor):
 
         self.mz_conn.autocommit = True
         with self.mz_conn.cursor() as cur:
-            self.execute(cur, f"DROP TABLE IF EXISTS {self.table_original}")
+            self.execute(cur, f"DROP TABLE IF EXISTS {identifier(self.table_original)}")
             self.execute(
                 cur,
-                f"""CREATE TABLE {self.schema}.{self.table_original} (
+                f"""CREATE TABLE {identifier(self.schema)}.{identifier(self.table_original)} (
                         {", ".join(values)},
                         PRIMARY KEY ({", ".join(keys)}));""",
             )
             self.execute(
                 cur,
-                f"""CREATE SINK {self.schema}.sink{self.num} FROM {self.table_original}
+                f"""CREATE SINK {identifier(self.schema)}.sink{self.num} FROM {identifier(self.table_original)}
                     INTO KAFKA CONNECTION kafka_conn (TOPIC '{self.topic}')
-                    KEY ({", ".join(keys)})
+                    KEY ({", ".join([identifier(key) for key in keys])})
                     FORMAT AVRO
                     USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                     ENVELOPE DEBEZIUM""",
             )
             self.execute(
                 cur,
-                f"""CREATE SOURCE {self.schema}.{self.table}
+                f"""CREATE SOURCE {identifier(self.schema)}.{identifier(self.table)}
                     FROM KAFKA CONNECTION kafka_conn (TOPIC '{self.topic}')
                     FORMAT AVRO
                     USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -437,7 +440,7 @@ class KafkaRoundtripExecutor(Executor):
                         )
                         self.execute(
                             cur,
-                            f"""INSERT INTO {self.table_original}
+                            f"""INSERT INTO {identifier(self.schema)}.{identifier(self.table_original)}
                                 VALUES ({values_str})
                             """,
                         )
@@ -452,18 +455,18 @@ class KafkaRoundtripExecutor(Executor):
                             # Can't update anything if there are no values, only a key, and the key is already in the table
                             if non_key_values:
                                 cond_str = " AND ".join(
-                                    f"{field.name} = {formatted_value(value)}"
+                                    f"{identifier(field.name)} = {formatted_value(value)}"
                                     for field, value in zip(row.fields, row.values)
                                     if field.is_key
                                 )
                                 set_str = ", ".join(
-                                    f"{field.name} = {formatted_value(value)}"
+                                    f"{identifier(field.name)} = {formatted_value(value)}"
                                     for field, value in non_key_values
                                 )
                                 self.mz_conn.autocommit = True
                                 self.execute(
                                     cur,
-                                    f"""UPDATE {self.table_original}
+                                    f"""UPDATE {identifier(self.schema)}.{identifier(self.table_original)}
                                         SET {set_str}
                                         WHERE {cond_str}
                                     """,
@@ -475,21 +478,21 @@ class KafkaRoundtripExecutor(Executor):
                             )
                             self.execute(
                                 cur,
-                                f"""INSERT INTO {self.table_original}
+                                f"""INSERT INTO {identifier(self.schema)}.{identifier(self.table_original)}
                                     VALUES ({values_str})
                                 """,
                             )
                             self.known_keys.add(key_values)
                     elif row.operation == Operation.DELETE:
                         cond_str = " AND ".join(
-                            f"{field.name} = {formatted_value(value)}"
+                            f"{identifier(field.name)} = {formatted_value(value)}"
                             for field, value in zip(row.fields, row.values)
                             if field.is_key
                         )
                         self.mz_conn.autocommit = True
                         self.execute(
                             cur,
-                            f"""DELETE FROM {self.table_original}
+                            f"""DELETE FROM {identifier(self.schema)}.{identifier(self.table_original)}
                                 WHERE {cond_str}
                             """,
                         )

@@ -80,3 +80,16 @@ def all_subclasses(cls: type[T]) -> set[type[T]]:
     """Returns a recursive set of all subclasses of a class"""
     sc = cls.__subclasses__()
     return set(sc).union([subclass for c in sc for subclass in all_subclasses(c)])
+
+
+NAUGHTY_STRINGS = None
+
+
+def naughty_strings() -> list[str]:
+    # Naughty strings taken from https://github.com/minimaxir/big-list-of-naughty-strings
+    # Under MIT license, Copyright (c) 2015-2020 Max Woolf
+    global NAUGHTY_STRINGS
+    if not NAUGHTY_STRINGS:
+        with open(MZ_ROOT / "misc" / "python" / "materialize" / "blns.json") as f:
+            NAUGHTY_STRINGS = json.load(f)
+    return NAUGHTY_STRINGS
