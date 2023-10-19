@@ -364,6 +364,7 @@ class PgPostExecutionInconsistencyIgnoreFilter(
                     "log",
                     "log10",
                     "ln",
+                    "pow",
                     "radians",
                 ]
             return False
