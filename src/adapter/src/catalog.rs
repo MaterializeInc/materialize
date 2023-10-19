@@ -636,6 +636,14 @@ impl Catalog {
             .err_into()
     }
 
+    pub async fn allocate_system_replica_id(&self) -> Result<ReplicaId, Error> {
+        self.storage()
+            .await
+            .allocate_system_replica_id()
+            .await
+            .err_into()
+    }
+
     pub fn allocate_oid(&mut self) -> Result<u32, Error> {
         self.state.allocate_oid()
     }

@@ -483,7 +483,13 @@ impl Coordinator {
 
         // Replicas have the same owner as their cluster.
         let owner_id = cluster.owner_id();
-        let id = self.catalog_mut().allocate_user_replica_id().await?;
+
+        let id = if config.location.internal() {
+            self.catalog_mut().allocate_system_replica_id().await?
+        } else {
+            self.catalog_mut().allocate_user_replica_id().await?
+        };
+
         let op = catalog::Op::CreateClusterReplica {
             cluster_id,
             id,

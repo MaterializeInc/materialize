@@ -380,6 +380,13 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         Ok(ClusterId::System(id))
     }
 
+    /// Allocates and returns a system [`ReplicaId`].
+    async fn allocate_system_replica_id(&mut self) -> Result<ReplicaId, CatalogError> {
+        let id = self.allocate_id(SYSTEM_REPLICA_ID_ALLOC_KEY, 1).await?;
+        let id = id.into_element();
+        Ok(ReplicaId::System(id))
+    }
+
     /// Allocates and returns a user [`ClusterId`].
     async fn allocate_user_cluster_id(&mut self) -> Result<ClusterId, CatalogError> {
         let id = self.allocate_id(USER_CLUSTER_ID_ALLOC_KEY, 1).await?;
