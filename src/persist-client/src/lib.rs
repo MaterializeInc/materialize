@@ -126,6 +126,7 @@ pub mod cfg;
 pub mod cli {
     //! Persist command-line utilities
     pub mod admin;
+    pub mod args;
     pub mod inspect;
 }
 pub mod critical;
