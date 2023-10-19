@@ -332,6 +332,7 @@ impl ShouldHalt for StorageError {
             | StorageError::Generic(_)
             | StorageError::DataflowError(_)
             | StorageError::InvalidAlterSource { .. }
+            | StorageError::IncompatibleSinkDescriptions { .. }
             | StorageError::ShuttingDown(_) => false,
             StorageError::IOError(e) => e.is_unrecoverable(),
         }
