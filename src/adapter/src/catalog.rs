@@ -2908,6 +2908,27 @@ impl Catalog {
                         -1,
                     ));
 
+                    // Add an entry to the audit log.
+                    let database_name = database_spec
+                        .id()
+                        .map(|id| state.get_database(&id).name.clone());
+                    let details = EventDetails::RenameSchemaV1(mz_audit_log::RenameSchemaV1 {
+                        id: schema_id.to_string(),
+                        old_name: schema.name().schema.clone(),
+                        new_name: new_name.clone(),
+                        database_name,
+                    });
+                    state.add_to_audit_log(
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        builtin_table_updates,
+                        audit_events,
+                        EventType::Alter,
+                        mz_audit_log::ObjectType::Schema,
+                        details,
+                    )?;
+
                     // Update the schema itself.
                     let schema = state.get_schema_mut(&database_spec, &schema_spec, conn_id);
                     let old_name = schema.name().schema.clone();

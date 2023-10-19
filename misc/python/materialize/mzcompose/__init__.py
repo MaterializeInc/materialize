@@ -72,7 +72,6 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_comment": "true",
     "enable_sink_doc_on_option": "true",
     "enable_assert_not_null": "true",
-    "enable_rename_schema": "true",
 }
 
 DEFAULT_CRDB_ENVIRONMENT = [

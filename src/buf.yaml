@@ -34,6 +34,8 @@ breaking:
     # reason: does currently not require backward-compatibility
     - stash-types/protos/objects_v40.proto
     # reason: does currently not require backward-compatibility
+    - stash-types/protos/objects_v41.proto
+    # reason: does currently not require backward-compatibility
     - storage-client/src/client.proto
     # reason: Ignored until #21887 is reverted
     - storage-types/src/errors.proto

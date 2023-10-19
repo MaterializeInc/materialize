@@ -1792,12 +1792,6 @@ feature_flags!(
     (
         enable_assert_not_null,
         "ASSERT NOT NULL for materialized views"
-    ),
-    (
-        enable_rename_schema,
-        "ALTER SCHEMA RENAME",
-        false, // default false
-        false  // internal false
     )
 );
 
