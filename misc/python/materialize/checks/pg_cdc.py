@@ -19,6 +19,7 @@ from materialize.util import MzVersion
 class PgCdcBase:
     base_version: MzVersion
     wait: bool
+    suffix: str
     repeats: int
     expects: int
 
@@ -26,6 +27,7 @@ class PgCdcBase:
         self.wait = wait
         self.repeats = 1024 if wait else 16384
         self.expects = 97350 if wait else 1633350
+        self.suffix = f"_{str(wait).lower()}"
         super().__init__(**kwargs)  # foward unused args to Check/CheckDisabled
 
     def initialize(self) -> Testdrive:
@@ -33,26 +35,26 @@ class PgCdcBase:
             dedent(
                 f"""
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                CREATE USER postgres1 WITH SUPERUSER PASSWORD 'postgres';
-                ALTER USER postgres1 WITH replication;
-                DROP PUBLICATION IF EXISTS postgres_source;
+                CREATE USER postgres1{self.suffix} WITH SUPERUSER PASSWORD 'postgres';
+                ALTER USER postgres1{self.suffix} WITH replication;
+                DROP PUBLICATION IF EXISTS postgres_source{self.suffix};
 
-                DROP TABLE IF EXISTS postgres_source_table;
+                DROP TABLE IF EXISTS postgres_source_table{self.suffix};
 
-                CREATE TABLE postgres_source_table (f1 TEXT, f2 INTEGER, f3 TEXT UNIQUE NOT NULL, PRIMARY KEY(f1, f2));
-                ALTER TABLE postgres_source_table REPLICA IDENTITY FULL;
+                CREATE TABLE postgres_source_table{self.suffix} (f1 TEXT, f2 INTEGER, f3 TEXT UNIQUE NOT NULL, PRIMARY KEY(f1, f2));
+                ALTER TABLE postgres_source_table{self.suffix} REPLICA IDENTITY FULL;
 
-                INSERT INTO postgres_source_table SELECT 'A', i, REPEAT('A', {self.repeats} - i) FROM generate_series(1,100) AS i;
+                INSERT INTO postgres_source_table{self.suffix} SELECT 'A', i, REPEAT('A', {self.repeats} - i) FROM generate_series(1,100) AS i;
 
-                CREATE PUBLICATION postgres_source FOR ALL TABLES;
+                CREATE PUBLICATION postgres_source{self.suffix} FOR ALL TABLES;
 
-                > CREATE SECRET pgpass1 AS 'postgres';
+                > CREATE SECRET pgpass1{self.suffix} AS 'postgres';
 
-                > CREATE CONNECTION pg1 FOR POSTGRES
+                > CREATE CONNECTION pg1{self.suffix} FOR POSTGRES
                   HOST 'postgres',
                   DATABASE postgres,
-                  USER postgres1,
-                  PASSWORD SECRET pgpass1
+                  USER postgres1{self.suffix},
+                  PASSWORD SECRET pgpass1{self.suffix}
                 """
             )
         )
@@ -62,33 +64,33 @@ class PgCdcBase:
             Testdrive(dedent(s))
             for s in [
                 f"""
-                > CREATE SOURCE postgres_source1
-                  FROM POSTGRES CONNECTION pg1
-                  (PUBLICATION 'postgres_source')
-                  FOR TABLES (postgres_source_table AS postgres_source_tableA);
+                > CREATE SOURCE postgres_source1{self.suffix}
+                  FROM POSTGRES CONNECTION pg1{self.suffix}
+                  (PUBLICATION 'postgres_source{self.suffix}')
+                  FOR TABLES (postgres_source_table{self.suffix} AS postgres_source_tableA{self.suffix});
 
-                > CREATE DEFAULT INDEX ON postgres_source_tableA;
+                > CREATE DEFAULT INDEX ON postgres_source_tableA{self.suffix};
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                INSERT INTO postgres_source_table SELECT 'B', i, REPEAT('B', {self.repeats} - i) FROM generate_series(1,100) AS i;
-                UPDATE postgres_source_table SET f2 = f2 + 100;
+                INSERT INTO postgres_source_table{self.suffix} SELECT 'B', i, REPEAT('B', {self.repeats} - i) FROM generate_series(1,100) AS i;
+                UPDATE postgres_source_table{self.suffix} SET f2 = f2 + 100;
 
-                > CREATE SECRET pgpass2 AS 'postgres';
+                > CREATE SECRET pgpass2{self.suffix} AS 'postgres';
 
-                > CREATE CONNECTION pg2 FOR POSTGRES
+                > CREATE CONNECTION pg2{self.suffix} FOR POSTGRES
                   HOST 'postgres',
                   DATABASE postgres,
-                  USER postgres1,
-                  PASSWORD SECRET pgpass1
+                  USER postgres1{self.suffix},
+                  PASSWORD SECRET pgpass1{self.suffix}
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                INSERT INTO postgres_source_table SELECT 'C', i, REPEAT('C', {self.repeats} - i) FROM generate_series(1,100) AS i;
-                UPDATE postgres_source_table SET f2 = f2 + 100;
+                INSERT INTO postgres_source_table{self.suffix} SELECT 'C', i, REPEAT('C', {self.repeats} - i) FROM generate_series(1,100) AS i;
+                UPDATE postgres_source_table{self.suffix} SET f2 = f2 + 100;
                 """
                 + (
-                    """
+                    f"""
                 # Wait until Pg snapshot is complete in order to avoid #18940
-                > SELECT COUNT(*) > 0 FROM postgres_source_tableA
+                > SELECT COUNT(*) > 0 FROM postgres_source_tableA{self.suffix}
                 true
                 """
                     if self.wait
@@ -96,53 +98,53 @@ class PgCdcBase:
                 ),
                 f"""
                 $[version>=5200] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
-                GRANT USAGE ON CONNECTION pg2 TO materialize
+                GRANT USAGE ON CONNECTION pg2{self.suffix} TO materialize
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                INSERT INTO postgres_source_table SELECT 'D', i, REPEAT('D', {self.repeats} - i) FROM generate_series(1,100) AS i;
-                UPDATE postgres_source_table SET f2 = f2 + 100;
+                INSERT INTO postgres_source_table{self.suffix} SELECT 'D', i, REPEAT('D', {self.repeats} - i) FROM generate_series(1,100) AS i;
+                UPDATE postgres_source_table{self.suffix} SET f2 = f2 + 100;
 
-                > CREATE SOURCE postgres_source2
-                  FROM POSTGRES CONNECTION pg2
-                  (PUBLICATION 'postgres_source')
-                  FOR TABLES (postgres_source_table AS postgres_source_tableB);
-
-                $ postgres-execute connection=postgres://postgres:postgres@postgres
-                INSERT INTO postgres_source_table SELECT 'E', i, REPEAT('E', {self.repeats} - i) FROM generate_series(1,100) AS i;
-                UPDATE postgres_source_table SET f2 = f2 + 100;
+                > CREATE SOURCE postgres_source2{self.suffix}
+                  FROM POSTGRES CONNECTION pg2{self.suffix}
+                  (PUBLICATION 'postgres_source{self.suffix}')
+                  FOR TABLES (postgres_source_table{self.suffix} AS postgres_source_tableB{self.suffix});
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                INSERT INTO postgres_source_table SELECT 'F', i, REPEAT('F', {self.repeats} - i) FROM generate_series(1,100) AS i;
-                UPDATE postgres_source_table SET f2 = f2 + 100;
+                INSERT INTO postgres_source_table{self.suffix} SELECT 'E', i, REPEAT('E', {self.repeats} - i) FROM generate_series(1,100) AS i;
+                UPDATE postgres_source_table{self.suffix} SET f2 = f2 + 100;
 
-                > CREATE SECRET pgpass3 AS 'postgres';
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
+                INSERT INTO postgres_source_table{self.suffix} SELECT 'F', i, REPEAT('F', {self.repeats} - i) FROM generate_series(1,100) AS i;
+                UPDATE postgres_source_table{self.suffix} SET f2 = f2 + 100;
 
-                > CREATE CONNECTION pg3 FOR POSTGRES
+                > CREATE SECRET pgpass3{self.suffix} AS 'postgres';
+
+                > CREATE CONNECTION pg3{self.suffix} FOR POSTGRES
                   HOST 'postgres',
                   DATABASE postgres,
-                  USER postgres1,
-                  PASSWORD SECRET pgpass3
+                  USER postgres1{self.suffix},
+                  PASSWORD SECRET pgpass3{self.suffix}
 
-                > CREATE SOURCE postgres_source3
-                  FROM POSTGRES CONNECTION pg3
-                  (PUBLICATION 'postgres_source')
-                  FOR TABLES (postgres_source_table AS postgres_source_tableC);
-
-                $ postgres-execute connection=postgres://postgres:postgres@postgres
-                INSERT INTO postgres_source_table SELECT 'G', i, REPEAT('G', {self.repeats} - i) FROM generate_series(1,100) AS i;
-                UPDATE postgres_source_table SET f2 = f2 + 100;
-
+                > CREATE SOURCE postgres_source3{self.suffix}
+                  FROM POSTGRES CONNECTION pg3{self.suffix}
+                  (PUBLICATION 'postgres_source{self.suffix}')
+                  FOR TABLES (postgres_source_table{self.suffix} AS postgres_source_tableC{self.suffix});
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                INSERT INTO postgres_source_table SELECT 'H', i, REPEAT('X', {self.repeats} - i) FROM generate_series(1,100) AS i;
-                UPDATE postgres_source_table SET f2 = f2 + 100;
+                INSERT INTO postgres_source_table{self.suffix} SELECT 'G', i, REPEAT('G', {self.repeats} - i) FROM generate_series(1,100) AS i;
+                UPDATE postgres_source_table{self.suffix} SET f2 = f2 + 100;
+
+
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
+                INSERT INTO postgres_source_table{self.suffix} SELECT 'H', i, REPEAT('X', {self.repeats} - i) FROM generate_series(1,100) AS i;
+                UPDATE postgres_source_table{self.suffix} SET f2 = f2 + 100;
                 """
                 + (
-                    """
+                    f"""
                 # Wait until Pg snapshot is complete in order to avoid #18940
-                > SELECT COUNT(*) > 0 FROM postgres_source_tableB
+                > SELECT COUNT(*) > 0 FROM postgres_source_tableB{self.suffix}
                 true
-                > SELECT COUNT(*) > 0 FROM postgres_source_tableC
+                > SELECT COUNT(*) > 0 FROM postgres_source_tableC{self.suffix}
                 true
                 """
                     if self.wait
@@ -156,11 +158,11 @@ class PgCdcBase:
             dedent(
                 f"""
                 $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
-                GRANT SELECT ON postgres_source_tableA TO materialize
-                GRANT SELECT ON postgres_source_tableB TO materialize
-                GRANT SELECT ON postgres_source_tableC TO materialize
+                GRANT SELECT ON postgres_source_tableA{self.suffix} TO materialize
+                GRANT SELECT ON postgres_source_tableB{self.suffix} TO materialize
+                GRANT SELECT ON postgres_source_tableC{self.suffix} TO materialize
 
-                > SELECT f1, max(f2), SUM(LENGTH(f3)) FROM postgres_source_tableA GROUP BY f1;
+                > SELECT f1, max(f2), SUM(LENGTH(f3)) FROM postgres_source_tableA{self.suffix} GROUP BY f1;
                 A 800 {self.expects}
                 B 800 {self.expects}
                 C 700 {self.expects}
@@ -170,7 +172,7 @@ class PgCdcBase:
                 G 300 {self.expects}
                 H 200 {self.expects}
 
-                > SELECT f1, max(f2), SUM(LENGTH(f3)) FROM postgres_source_tableB GROUP BY f1;
+                > SELECT f1, max(f2), SUM(LENGTH(f3)) FROM postgres_source_tableB{self.suffix} GROUP BY f1;
                 A 800 {self.expects}
                 B 800 {self.expects}
                 C 700 {self.expects}
@@ -180,7 +182,7 @@ class PgCdcBase:
                 G 300 {self.expects}
                 H 200 {self.expects}
 
-                > SELECT f1, max(f2), SUM(LENGTH(f3)) FROM postgres_source_tableC GROUP BY f1;
+                > SELECT f1, max(f2), SUM(LENGTH(f3)) FROM postgres_source_tableC{self.suffix} GROUP BY f1;
                 A 800 {self.expects}
                 B 800 {self.expects}
                 C 700 {self.expects}
@@ -193,18 +195,18 @@ class PgCdcBase:
             )
             + (
                 dedent(
-                    """
+                    f"""
                     # Confirm that the primary key information has been propagated from Pg
-                    > SELECT key FROM (SHOW INDEXES ON postgres_source_tableA);
-                    {f1,f2}
+                    > SELECT key FROM (SHOW INDEXES ON postgres_source_tableA{self.suffix});
+                    {{f1,f2}}
 
-                    ? EXPLAIN SELECT DISTINCT f1, f2 FROM postgres_source_tableA;
+                    ? EXPLAIN SELECT DISTINCT f1, f2 FROM postgres_source_tableA{self.suffix};
                     Explained Query (fast path):
                       Project (#0, #1)
-                        ReadIndex on=materialize.public.postgres_source_tablea postgres_source_tablea_primary_idx=[*** full scan ***]
+                        ReadIndex on=materialize.public.postgres_source_tablea{self.suffix} postgres_source_tablea{self.suffix}_primary_idx=[*** full scan ***]
 
                     Used Indexes:
-                      - materialize.public.postgres_source_tablea_primary_idx (*** full scan ***)
+                      - materialize.public.postgres_source_tablea{self.suffix}_primary_idx (*** full scan ***)
                     """
                 )
                 if self.base_version >= MzVersion.parse("0.50.0-dev")

@@ -20,6 +20,7 @@ from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
+from materialize.util import all_subclasses
 
 
 class Generator:
@@ -1467,7 +1468,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         c.up("testdrive", persistent=True)
 
         scenarios = (
-            [globals()[args.scenario]] if args.scenario else Generator.__subclasses__()
+            [globals()[args.scenario]]
+            if args.scenario
+            else list(all_subclasses(Generator))
         )
 
         for scenario in scenarios:

@@ -15,6 +15,8 @@ from typing import Any
 
 from pg8000.native import literal
 
+from materialize.util import all_subclasses
+
 
 class RecordSize(Enum):
     TINY = 1
@@ -309,10 +311,10 @@ class Jsonb(DataType):
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
         result = {f"key{num}": str(num)}
-        return literal(json.dumps(result)) if in_query else json.dumps(result)
+        return f"'{json.dumps(result)}'::jsonb" if in_query else json.dumps(result)
 
 
-class TextTextMap(Jsonb):
+class TextTextMap(DataType):
     @staticmethod
     def name(backend: Backend = Backend.POSTGRES) -> str:
         if backend == Backend.AVRO:
@@ -322,10 +324,43 @@ class TextTextMap(Jsonb):
         else:
             return "map[text=>text]"
 
+    @staticmethod
+    def random_value(
+        rng: random.Random,
+        record_size: RecordSize = RecordSize.LARGE,
+        in_query: bool = False,
+    ) -> Any:
+        if record_size == RecordSize.TINY:
+            key_range = 1
+        elif record_size == RecordSize.SMALL:
+            key_range = 5
+        elif record_size == RecordSize.MEDIUM:
+            key_range = 10
+        elif record_size == RecordSize.LARGE:
+            key_range = 20
+        else:
+            raise ValueError(f"Unexpected record size {record_size}")
+        values = [
+            f"{Text.numeric_value(i)} => {str(rng.randint(-100, 100))}"
+            for i in range(0, key_range)
+        ]
+        values_str = f"{{{', '.join(values)}}}"
+        return f"'{values_str}'::map[text=>text]" if in_query else values_str
 
-DATA_TYPES = DataType.__subclasses__()
+    @staticmethod
+    def numeric_value(num: int, in_query: bool = False) -> Any:
+        values = [
+            f"{Text.numeric_value(num)} => {Text.numeric_value(num)}"
+            for i in range(0, num)
+        ]
+        values_str = f"{{{', '.join(values)}}}"
+        return f"'{values_str}'::map[text=>text]" if in_query else values_str
+
+
+DATA_TYPES = list(all_subclasses(DataType))
 
 # fastavro._schema_common.UnknownType: record
-DATA_TYPES_FOR_AVRO = list(set(DATA_TYPES) - {TextTextMap, Jsonb, Boolean})
+# bytea requires Python bytes type instead of str
+DATA_TYPES_FOR_AVRO = list(set(DATA_TYPES) - {TextTextMap, Jsonb, Bytea, Boolean})
 
 NUMBER_TYPES = [SmallInt, Int, Long, Float, Double]

@@ -40,6 +40,7 @@ from materialize.scalability.workload import Workload, WorkloadSelfTest
 from materialize.scalability.workload_result import WorkloadResult
 from materialize.scalability.workloads import *  # noqa: F401 F403
 from materialize.scalability.workloads_test import *  # noqa: F401 F403
+from materialize.util import all_subclasses
 
 RESULTS_DIR = MZ_ROOT / "test" / "scalability" / "results"
 SERVICES = [
@@ -334,7 +335,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     workloads = (
         [globals()[workload] for workload in args.workload]
         if args.workload
-        else [w for w in Workload.__subclasses__() if not w == WorkloadSelfTest]
+        else [w for w in all_subclasses(Workload) if not w == WorkloadSelfTest]
     )
 
     schema = Schema(

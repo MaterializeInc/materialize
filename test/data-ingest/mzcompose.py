@@ -12,7 +12,7 @@ import time
 
 from materialize.data_ingest.executor import KafkaExecutor, KafkaRoundtripExecutor
 from materialize.data_ingest.workload import *  # noqa: F401 F403
-from materialize.data_ingest.workload import Workload, execute_workload
+from materialize.data_ingest.workload import WORKLOADS, execute_workload
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
@@ -64,7 +64,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     workloads = (
         [globals()[workload] for workload in args.workload]
         if args.workload
-        else Workload.__subclasses__()
+        else WORKLOADS
     )
 
     print(f"--- Random seed is {args.seed}")

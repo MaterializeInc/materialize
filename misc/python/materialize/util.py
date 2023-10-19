@@ -14,6 +14,7 @@ import os
 import random
 import subprocess
 from pathlib import Path
+from typing import TypeVar
 
 try:
     from semver.version import Version
@@ -70,3 +71,12 @@ class MzVersion(Version):
 
     def __str__(self) -> str:
         return "v" + super().__str__()
+
+
+T = TypeVar("T")
+
+
+def all_subclasses(cls: type[T]) -> set[type[T]]:
+    """Returns a recursive set of all subclasses of a class"""
+    sc = cls.__subclasses__()
+    return set(sc).union([subclass for c in sc for subclass in all_subclasses(c)])

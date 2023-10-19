@@ -23,6 +23,7 @@ from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.testdrive import Testdrive as TestdriveService
+from materialize.util import all_subclasses
 
 SERVICES = [
     Cockroach(
@@ -101,7 +102,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         assert args.scenario in globals(), f"scenario {args.scenario} does not exist"
         scenarios = [globals()[args.scenario]]
     else:
-        scenarios = Scenario.__subclasses__()
+        scenarios = all_subclasses(Scenario)
 
     if args.check:
         for check in args.check:
@@ -112,7 +113,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         checks = [globals()[check] for check in args.check]
     else:
-        checks = Check.__subclasses__()
+        checks = list(all_subclasses(Check))
 
     executor = MzcomposeExecutor(composition=c)
     for scenario_class in scenarios:

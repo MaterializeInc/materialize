@@ -44,7 +44,7 @@ from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.testdrive import Testdrive as TestdriveService
-from materialize.util import MzVersion
+from materialize.util import MzVersion, all_subclasses
 from materialize.version_list import VersionsFromDocs
 
 SERVICES = [
@@ -127,7 +127,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     checks = (
         [globals()[check] for check in args.check]
         if args.check
-        else Check.__subclasses__()
+        else list(all_subclasses(Check))
     )
 
     print(f"--- Checks to use: {checks}")

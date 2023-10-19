@@ -32,6 +32,7 @@ from materialize.data_ingest.transaction_def import (
     TransactionSize,
 )
 from materialize.mzcompose.composition import Composition
+from materialize.util import all_subclasses
 
 
 class Workload:
@@ -142,7 +143,7 @@ class DeleteDataAtEndOfDayDisruptions(Workload):
 #        ]
 
 
-WORKLOADS = Workload.__subclasses__()
+WORKLOADS = all_subclasses(Workload)
 
 
 def execute_workload(
