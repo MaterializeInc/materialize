@@ -54,6 +54,24 @@ steps:
                - --other-tag
                # common-ancestor will default to latest if not in a PR
                - common-ancestor
+    - id: scalability-benchmark
+      label: "Scalability benchmark against merge base or 'latest'"
+      timeout_in_minutes: 120
+      agents:
+        queue: linux-x86_64-large
+      artifact_paths: junit_*.xml
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: scalability
+            args:
+              - --target
+              - HEAD
+              - --target
+              - common-ancestor
+              - --regression-against
+              - common-ancestor
+              - --max-concurrency
+              - "256"
 
   - id: kafka-matrix
     label: Kafka smoke test against previous Kafka versions
