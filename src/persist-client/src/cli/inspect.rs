@@ -19,7 +19,6 @@ use anyhow::anyhow;
 use bytes::BufMut;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::trace::Description;
-use mz_build_info::BuildInfo;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
@@ -32,7 +31,7 @@ use serde_json::json;
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::cache::StateCache;
-use crate::cli::admin::{make_blob, make_consensus};
+use crate::cli::args::{make_blob, make_consensus, StateArgs, NO_COMMIT, READ_ALL_BUILD_INFO};
 use crate::error::CodecConcreteType;
 use crate::fetch::{Cursor, EncodedPart};
 use crate::internal::encoding::{Rollup, UntypedState};
@@ -42,16 +41,7 @@ use crate::internal::paths::{
 use crate::internal::state::{ProtoRollup, ProtoStateDiff, State};
 use crate::rpc::NoopPubSubSender;
 use crate::usage::{HumanBytes, StorageUsageClient};
-use crate::{Metrics, PersistClient, PersistConfig, ShardId, StateVersions};
-
-// BuildInfo with a larger version than any version we expect to see in prod,
-// to ensure that any data read is from a smaller version and does not trigger
-// alerts.
-const READ_ALL_BUILD_INFO: BuildInfo = BuildInfo {
-    version: "99.999.99+test",
-    sha: "0000000000000000000000000000000000000000",
-    time: "",
-};
+use crate::{Metrics, PersistClient, PersistConfig, ShardId};
 
 /// Commands for read-only inspection of persist state
 #[derive(Debug, clap::Args)]
@@ -183,69 +173,6 @@ pub struct StateRollupArgs {
     /// Inspect the state rollup with the given ID, if available.
     #[clap(long)]
     pub(crate) rollup_key: Option<String>,
-}
-
-/// Arguments for commands that work over both backing stores.
-/// TODO: squish this into `StateArgs`.
-#[derive(Debug, Clone, clap::Parser)]
-pub struct StoreArgs {
-    /// Consensus to use.
-    ///
-    /// When connecting to a deployed environment's consensus table, the Postgres/CRDB connection
-    /// string must contain the database name and `options=--search_path=consensus`.
-    ///
-    /// When connecting to Cockroach Cloud, use the following format:
-    ///
-    /// ```text
-    /// postgresql://<user>:$COCKROACH_PW@<hostname>:<port>/environment_<environment-id>
-    ///   ?sslmode=verify-full
-    ///   &sslrootcert=/path/to/cockroach-cloud/certs/cluster-ca.crt
-    ///   &options=--search_path=consensus
-    /// ```
-    ///
-    #[clap(long, verbatim_doc_comment, env = "CONSENSUS_URI")]
-    pub(crate) consensus_uri: String,
-
-    /// Blob to use
-    ///
-    /// When connecting to a deployed environment's blob, the necessary connection glue must be in
-    /// place. e.g. for S3, sign into SSO, set AWS_PROFILE and AWS_REGION appropriately, with a blob
-    /// URI scoped to the environment's bucket prefix.
-    #[clap(long, env = "BLOB_URI")]
-    pub(crate) blob_uri: String,
-}
-
-/// Arguments for viewing the current state of a given shard
-#[derive(Debug, Clone, clap::Parser)]
-pub struct StateArgs {
-    /// Shard to view
-    #[clap(long)]
-    pub(crate) shard_id: String,
-
-    /// Consensus to use.
-    ///
-    /// When connecting to a deployed environment's consensus table, the Postgres/CRDB connection
-    /// string must contain the database name and `options=--search_path=consensus`.
-    ///
-    /// When connecting to Cockroach Cloud, use the following format:
-    ///
-    /// ```text
-    /// postgresql://<user>:$COCKROACH_PW@<hostname>:<port>/environment_<environment-id>
-    ///   ?sslmode=verify-full
-    ///   &sslrootcert=/path/to/cockroach-cloud/certs/cluster-ca.crt
-    ///   &options=--search_path=consensus
-    /// ```
-    ///
-    #[clap(long, verbatim_doc_comment, env = "CONSENSUS_URI")]
-    pub(crate) consensus_uri: String,
-
-    /// Blob to use
-    ///
-    /// When connecting to a deployed environment's blob, the necessary connection glue must be in
-    /// place. e.g. for S3, sign into SSO, set AWS_PROFILE and AWS_REGION appropriately, with a blob
-    /// URI scoped to the environment's bucket prefix.
-    #[clap(long, env = "BLOB_URI")]
-    pub(crate) blob_uri: String,
 }
 
 /// Fetches the current state of a given shard
@@ -676,24 +603,6 @@ pub async fn blob_usage(args: &StateArgs) -> Result<(), anyhow::Error> {
     }
 
     Ok(())
-}
-
-// All `inspect` command are read-only.
-const NO_COMMIT: bool = false;
-
-impl StateArgs {
-    fn shard_id(&self) -> ShardId {
-        ShardId::from_str(&self.shard_id).expect("invalid shard id")
-    }
-
-    async fn open(&self) -> Result<StateVersions, anyhow::Error> {
-        let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
-        let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
-        let consensus =
-            make_consensus(&cfg, &self.consensus_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
-        let blob = make_blob(&cfg, &self.blob_uri, NO_COMMIT, Arc::clone(&metrics)).await?;
-        Ok(StateVersions::new(cfg, consensus, blob, metrics))
-    }
 }
 
 /// The following is a very terrible hack that no one should draw inspiration from. Currently State

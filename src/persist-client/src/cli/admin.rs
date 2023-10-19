@@ -16,33 +16,25 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{anyhow, bail};
-use async_trait::async_trait;
-use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures_util::{stream, StreamExt, TryStreamExt};
-use mz_ore::bytes::SegmentedBytes;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
-use mz_persist::cfg::{BlobConfig, ConsensusConfig};
-use mz_persist::location::{
-    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, ExternalError, ResultStream, SeqNo,
-    VersionedData,
-};
+use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist_types::codec_impls::TodoSchema;
 use mz_persist_types::{Codec, Codec64};
 use prometheus::proto::{MetricFamily, MetricType};
 use timely::progress::Timestamp;
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::cache::StateCache;
-use crate::cli::inspect::{StateArgs, StoreArgs};
+use crate::cli::args::{make_blob, make_consensus, StateArgs, StoreArgs};
 use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
 use crate::internal::encoding::Schemas;
 use crate::internal::gc::{GarbageCollector, GcReq};
 use crate::internal::machine::Machine;
-use crate::internal::metrics::{MetricsBlob, MetricsConsensus};
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::rpc::NoopPubSubSender;
 use crate::write::WriterId;
@@ -340,117 +332,6 @@ where
         info!("expired writer {}", writer_id);
         return Ok(());
     }
-}
-
-/// Wrap a lower-level service (Blob or Consensus) to make it read only.
-/// This is probably not elaborate enough to work in general -- folks may expect to read
-/// their own writes, among other things -- but it should handle the case of GC, where
-/// all reads finish before the writes begin.
-#[derive(Debug)]
-struct ReadOnly<T>(T);
-
-#[async_trait]
-impl Blob for ReadOnly<Arc<dyn Blob + Sync + Send>> {
-    async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
-        self.0.get(key).await
-    }
-
-    async fn list_keys_and_metadata(
-        &self,
-        key_prefix: &str,
-        f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
-    ) -> Result<(), ExternalError> {
-        self.0.list_keys_and_metadata(key_prefix, f).await
-    }
-
-    async fn set(&self, key: &str, _value: Bytes, _atomic: Atomicity) -> Result<(), ExternalError> {
-        warn!("ignoring set({key}) in read-only mode");
-        Ok(())
-    }
-
-    async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
-        warn!("ignoring delete({key}) in read-only mode");
-        Ok(None)
-    }
-
-    async fn restore(&self, key: &str) -> Result<(), ExternalError> {
-        warn!("ignoring restore({key}) in read-only mode");
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl Consensus for ReadOnly<Arc<dyn Consensus + Sync + Send>> {
-    fn list_keys(&self) -> ResultStream<String> {
-        self.0.list_keys()
-    }
-
-    async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
-        self.0.head(key).await
-    }
-
-    async fn compare_and_set(
-        &self,
-        key: &str,
-        _expected: Option<SeqNo>,
-        _new: VersionedData,
-    ) -> Result<CaSResult, ExternalError> {
-        warn!("ignoring cas({key}) in read-only mode");
-        Ok(CaSResult::Committed)
-    }
-
-    async fn scan(
-        &self,
-        key: &str,
-        from: SeqNo,
-        limit: usize,
-    ) -> Result<Vec<VersionedData>, ExternalError> {
-        self.0.scan(key, from, limit).await
-    }
-
-    async fn truncate(&self, key: &str, _seqno: SeqNo) -> Result<usize, ExternalError> {
-        warn!("ignoring truncate({key}) in read-only mode");
-        Ok(0)
-    }
-}
-
-pub(super) async fn make_consensus(
-    cfg: &PersistConfig,
-    consensus_uri: &str,
-    commit: bool,
-    metrics: Arc<Metrics>,
-) -> anyhow::Result<Arc<dyn Consensus + Send + Sync>> {
-    let consensus = ConsensusConfig::try_from(
-        consensus_uri,
-        Box::new(cfg.clone()),
-        metrics.postgres_consensus.clone(),
-    )?;
-    let consensus = consensus.clone().open().await?;
-    let consensus = if commit {
-        consensus
-    } else {
-        Arc::new(ReadOnly(consensus))
-    };
-    let consensus = Arc::new(MetricsConsensus::new(consensus, Arc::clone(&metrics)));
-    Ok(consensus)
-}
-
-pub(super) async fn make_blob(
-    cfg: &PersistConfig,
-    blob_uri: &str,
-    commit: bool,
-    metrics: Arc<Metrics>,
-) -> anyhow::Result<Arc<dyn Blob + Send + Sync>> {
-    let blob =
-        BlobConfig::try_from(blob_uri, Box::new(cfg.clone()), metrics.s3_blob.clone()).await?;
-    let blob = blob.clone().open().await?;
-    let blob = if commit {
-        blob
-    } else {
-        Arc::new(ReadOnly(blob))
-    };
-    let blob = Arc::new(MetricsBlob::new(blob, Arc::clone(&metrics)));
-    Ok(blob)
 }
 
 async fn make_machine(
