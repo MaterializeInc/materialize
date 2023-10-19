@@ -14,11 +14,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::anyhow;
+use async_stream::try_stream;
 use async_trait::async_trait;
 use bytes::Bytes;
 use deadpool_postgres::tokio_postgres::types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
 use deadpool_postgres::{Object, PoolError};
-use futures_util::TryStreamExt;
+use futures_util::StreamExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_postgres_client::metrics::PostgresClientMetrics;
@@ -224,22 +225,18 @@ impl Consensus for PostgresConsensus {
     fn list_keys(&self) -> ResultStream<String> {
         let q = "SELECT DISTINCT shard FROM consensus";
 
-        let rows = futures_util::stream::once(async {
+        Box::pin(try_stream! {
+            // NB: it's important that we hang on to this client for the lifetime of the stream,
+            // to avoid returning it to the pool prematurely.
             let client = self.get_connection().await?;
             let statement = client.prepare_cached(q).await?;
             let params: &[String] = &[];
-            client
-                .query_raw(&statement, params)
-                .await
-                .map_err(ExternalError::from)
-        });
-        let shards = rows
-            .map_ok(|rows| {
-                rows.and_then(|row| async move { row.try_get("shard") })
-                    .map_err(ExternalError::from)
-            })
-            .try_flatten();
-        Box::pin(shards)
+            let mut rows = Box::pin(client.query_raw(&statement, params).await?);
+            while let Some(row) = rows.next().await {
+                let shard: String = row?.try_get("shard")?;
+                yield shard;
+            }
+        })
     }
 
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
