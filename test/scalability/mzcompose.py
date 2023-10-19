@@ -88,6 +88,9 @@ def run_with_concurrency(
     concurrency: int,
     count: int,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    print(
+        f"Preparing benchmark for workload '{workload.name()}' at concurrency {concurrency} ..."
+    )
     endpoint.up()
 
     init_sqls = schema.init_sqls()
@@ -113,9 +116,7 @@ def run_with_concurrency(
             cursor.execute(connect_sql.encode("utf8"))
         cursor_pool.append(cursor)
 
-    print(
-        f"Benchmarking workload '{workload.__class__.__name__}' at concurrency {concurrency} ..."
-    )
+    print(f"Benchmarking workload '{workload.name()}' at concurrency {concurrency} ...")
     operations = workload.operations()
 
     global next_worker_id
