@@ -28,8 +28,16 @@ try cargo deplint Cargo.lock ci/test/lint-deps.toml
 # discover the failures after a merge to main.
 try cargo --locked about generate ci/deploy/licenses.hbs > /dev/null
 
+CURRENT_GIT_BRANCH=$(try git branch --show-current)
+BUILDKITE=${BUILDKITE:-false}
+BUILDKITE_PULL_REQUEST=${BUILDKITE_PULL_REQUEST:-false}
 
-if [[ "${BUILDKITE_PULL_REQUEST:-true}" != "false" ]]; then
+IN_BUILDKITE_PR=$(expr "$BUILDKITE_PULL_REQUEST" != "false")
+IN_BUILDKITE=$(expr "$BUILDKITE" = "true")
+ON_MAIN_BRANCH=$(expr "$CURRENT_GIT_BRANCH" = "main")
+IN_LOCAL_NON_MAIN_BRANCH=$(expr "$IN_BUILDKITE" != 1 \& "$ON_MAIN_BRANCH" != 1)
+
+if [[ $IN_BUILDKITE_PR || $IN_LOCAL_NON_MAIN_BRANCH ]]; then
   # see ./ci/test/lint-buf/README.md
 
   fetch_pr_target_branch
