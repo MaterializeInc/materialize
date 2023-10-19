@@ -15,17 +15,19 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
 
-use anyhow::anyhow;
+use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use futures_util::StreamExt;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist::location::{
-    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, ExternalError, SeqNo, VersionedData,
+    Atomicity, Blob, BlobMetadata, CaSResult, Consensus, ExternalError, ResultStream, SeqNo,
+    VersionedData,
 };
 use mz_persist_types::codec_impls::TodoSchema;
 use mz_persist_types::{Codec, Codec64};
@@ -35,7 +37,7 @@ use tracing::{info, warn};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::cache::StateCache;
-use crate::cli::inspect::StateArgs;
+use crate::cli::inspect::{StateArgs, StoreArgs};
 use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
 use crate::internal::encoding::Schemas;
 use crate::internal::gc::{GarbageCollector, GcReq};
@@ -64,6 +66,9 @@ pub(crate) enum Command {
     ForceCompaction(ForceCompactionArgs),
     /// Manually kick off a GC run for a shard.
     ForceGc(ForceGcArgs),
+    /// Attempt to ensure that all the files referenced by consensus are available
+    /// in Blob.
+    RestoreBlob(StoreArgs),
 }
 
 /// Manually completes all fueled compactions in a shard.
@@ -125,6 +130,54 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
             .await?;
             info_log_non_zero_metrics(&metrics_registry.gather());
         }
+        Command::RestoreBlob(args) => {
+            let StoreArgs {
+                consensus_uri,
+                blob_uri,
+            } = args;
+            let commit = command.commit;
+            let cfg = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone());
+            let metrics_registry = MetricsRegistry::new();
+            let metrics = Arc::new(Metrics::new(&cfg, &metrics_registry));
+            let consensus =
+                make_consensus(&cfg, &consensus_uri, commit, Arc::clone(&metrics)).await?;
+            let blob = make_blob(&cfg, &blob_uri, commit, Arc::clone(&metrics)).await?;
+            let versions = StateVersions::new(
+                cfg.clone(),
+                Arc::clone(&consensus),
+                Arc::clone(&blob),
+                metrics,
+            );
+
+            let mut shards = consensus.list_keys();
+            let mut not_restored = vec![];
+
+            // TODO: this should be safe (and appealing) to parallelize.
+            while let Some(shard) = shards.next().await {
+                let shard_id = shard?;
+                let shard_id = ShardId::from_str(&shard_id).expect("invalid shard id");
+                let start = Instant::now();
+                info!("Restoring blob state for shard {shard_id}.",);
+                let shard_not_restored = crate::internal::restore::restore_blob(
+                    &versions,
+                    blob.as_ref(),
+                    &cfg.build_version,
+                    shard_id,
+                )
+                .await?;
+                info!(
+                    "Restored blob state for shard {shard_id}; {} errors, {:?} elapsed.",
+                    shard_not_restored.len(),
+                    start.elapsed()
+                );
+                not_restored.extend(shard_not_restored);
+            }
+
+            info_log_non_zero_metrics(&metrics_registry.gather());
+            if !not_restored.is_empty() {
+                bail!("referenced blobs were not restored: {not_restored:#?}")
+            }
+        }
     }
     Ok(())
 }
@@ -136,7 +189,7 @@ pub(crate) fn info_log_non_zero_metrics(metric_families: &[MetricFamily]) {
                 MetricType::COUNTER => m.get_counter().get_value(),
                 MetricType::GAUGE => m.get_gauge().get_value(),
                 x => {
-                    warn!("unhandled {} metric type: {:?}", mf.get_name(), x);
+                    info!("unhandled {} metric type: {:?}", mf.get_name(), x);
                     continue;
                 }
             };
@@ -314,10 +367,19 @@ impl Blob for ReadOnly<Arc<dyn Blob + Sync + Send>> {
         warn!("ignoring delete({key}) in read-only mode");
         Ok(None)
     }
+
+    async fn restore(&self, key: &str) -> Result<(), ExternalError> {
+        warn!("ignoring restore({key}) in read-only mode");
+        Ok(())
+    }
 }
 
 #[async_trait]
 impl Consensus for ReadOnly<Arc<dyn Consensus + Sync + Send>> {
+    fn list_keys(&self) -> ResultStream<String> {
+        self.0.list_keys()
+    }
+
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
         self.0.head(key).await
     }

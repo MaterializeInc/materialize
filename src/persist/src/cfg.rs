@@ -14,13 +14,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::anyhow;
-use mz_postgres_client::metrics::PostgresClientMetrics;
-use mz_postgres_client::PostgresClientKnobs;
 use tracing::warn;
 use url::Url;
 
+use mz_postgres_client::metrics::PostgresClientMetrics;
+use mz_postgres_client::PostgresClientKnobs;
+
 use crate::file::{FileBlob, FileBlobConfig};
-use crate::location::{Blob, Consensus, ExternalError};
+use crate::location::{Blob, Consensus, Determinate, ExternalError};
 use crate::mem::{MemBlob, MemBlobConfig, MemConsensus};
 use crate::metrics::S3BlobMetrics;
 use crate::postgres::{PostgresConsensus, PostgresConsensusConfig};
@@ -35,7 +36,7 @@ pub enum BlobConfig {
     S3(S3BlobConfig),
     /// Config for [MemBlob], only available in testing to prevent
     /// footguns.
-    Mem,
+    Mem(bool),
 }
 
 /// Configuration knobs for [Blob].
@@ -56,7 +57,9 @@ impl BlobConfig {
         match self {
             BlobConfig::File(config) => Ok(Arc::new(FileBlob::open(config).await?)),
             BlobConfig::S3(config) => Ok(Arc::new(S3Blob::open(config).await?)),
-            BlobConfig::Mem => Ok(Arc::new(MemBlob::open(MemBlobConfig::default()))),
+            BlobConfig::Mem(tombstone) => {
+                Ok(Arc::new(MemBlob::open(MemBlobConfig::new(tombstone))))
+            }
         }
     }
 
@@ -72,7 +75,10 @@ impl BlobConfig {
 
         let config = match url.scheme() {
             "file" => {
-                let config = FileBlobConfig::from(url.path());
+                let mut config = FileBlobConfig::from(url.path());
+                if query_params.remove("tombstone").is_some() {
+                    config.tombstone = true;
+                }
                 Ok(BlobConfig::File(config))
             }
             "s3" => {
@@ -112,8 +118,15 @@ impl BlobConfig {
                 if !cfg!(debug_assertions) {
                     warn!("persist unexpectedly using in-mem blob in a release binary");
                 }
+                let tombstone = match query_params.remove("tombstone").as_deref() {
+                    None | Some("true") => true,
+                    Some("false") => false,
+                    Some(other) => Err(Determinate::new(anyhow!(
+                        "invalid tombstone param value: {other}"
+                    )))?,
+                };
                 query_params.clear();
-                Ok(BlobConfig::Mem)
+                Ok(BlobConfig::Mem(tombstone))
             }
             p => Err(anyhow!(
                 "unknown persist blob scheme {}: {}",

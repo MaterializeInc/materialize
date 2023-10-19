@@ -529,6 +529,17 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: source-sink-errors
 
+  - id: backup-restore
+    label: "CRDB / Persist backup and restore"
+    artifact_paths: junit_*.xml
+    depends_on: build-x86_64
+    timeout_in_minutes: 10
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: backup-restore
+
   - id: feature-benchmark-kafka-only
     label: "Feature benchmark (Kafka only)"
     depends_on: build-x86_64
