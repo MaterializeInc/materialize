@@ -365,6 +365,32 @@ maintenance or a CRDB write, but this is also true for registering a reader. On
 the balance, I think this is a _much_ better set of tradeoffs than the original
 plan.
 
+### Compaction
+
+Compaction of data shards is initially delegated to the txns user (the storage
+controller). Because txn writes intentionally never read data shards and in no
+way depend on the sinces, the since of a data shard is free to be arbitrarily
+far ahead of or behind the txns upper. Data shard reads, when run through the
+above process, then follow the usual rules (can read at times beyond the since
+but not beyond the upper).
+
+Compaction of the txns shard relies on the following invariant that is carefully
+maintained: every write less than the since of the txns shard has been applied.
+Mechanically, this is accomplished by a critical since capability held
+internally by the txns system. Any txn writer is free to advance it to a time
+once it has proven that all writes before that time have been applied.
+
+It is advantageous to compact the txns shard aggressively so that applied writes
+are promptly consolidated out, minimizing the size. For a snapshot read at
+`as_of`, we need to be able to distinguish when the latest write `<= as_of` has
+been applied. The above invariant enables this as follows:
+
+- If `as_of <= txns_shard.since()`, then the invariant guarantees that all
+  writes `<= as_of` have been applied, so we're free to read as described in the
+  section above.
+- Otherwise, we haven't compacted `as_of` in the txns shard yet, and still have
+  perfect information about which writes happened when. We can look at the data shard upper to determine which have been applied.
+
 ### Forget
 
 A data shard is removed from the txns set using a `forget` operation that writes
