@@ -30,8 +30,11 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
-    c.workflow("sink-networking")
-    c.workflow("source-resumption")
+    for name in c.workflows:
+        if name == "default":
+            continue
+        with c.test_case(name):
+            c.workflow(name)
 
 
 #

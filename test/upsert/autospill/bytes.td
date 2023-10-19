@@ -59,7 +59,7 @@ animal:
     SUM(u.envelope_state_count)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
-  WHERE s.name IN ('autospill')
+  WHERE s.name = 'autospill'
   GROUP BY s.name
   ORDER BY s.name
 0 0

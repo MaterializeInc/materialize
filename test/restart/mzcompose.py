@@ -402,11 +402,8 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
 
 
 def workflow_default(c: Composition) -> None:
-    c.workflow("github-17578")
-    c.workflow("github-8021")
-    c.workflow("audit-log")
-    c.workflow("timelines")
-    c.workflow("stash")
-    c.workflow("allowed-cluster-replica-sizes")
-    c.workflow("drop-materialize-database")
-    c.workflow("bound-size-mz-status-history")
+    for name in c.workflows:
+        if name == "default":
+            continue
+        with c.test_case(name):
+            c.workflow(name)
