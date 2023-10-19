@@ -92,7 +92,7 @@ use uncased::UncasedStr;
 
 use crate::ast::Ident;
 use crate::session::user::{User, SYSTEM_USER};
-use crate::DEFAULT_SCHEMA;
+use crate::{DEFAULT_SCHEMA, WEBHOOK_CONCURRENCY_LIMIT};
 
 /// The action to take during end_transaction.
 ///
@@ -1423,6 +1423,13 @@ pub const MAX_TIMESTAMP_INTERVAL: ServerVar<Duration> = ServerVar {
     internal: true,
 };
 
+pub const WEBHOOK_CONCURRENT_REQUEST_LIMIT: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("webhook_concurrent_request_limit"),
+    value: &WEBHOOK_CONCURRENCY_LIMIT,
+    description: "Maximum number of concurrent requests for appending to a webhook source.",
+    internal: true,
+};
+
 /// Configuration for gRPC client connections.
 mod grpc_client {
     use super::*;
@@ -2533,7 +2540,8 @@ impl SystemVars {
             .with_var(&TRUNCATE_STATEMENT_LOG)
             .with_var(&STATEMENT_LOGGING_RETENTION)
             .with_var(&OPTIMIZER_STATS_TIMEOUT)
-            .with_var(&OPTIMIZER_ONESHOT_STATS_TIMEOUT);
+            .with_var(&OPTIMIZER_ONESHOT_STATS_TIMEOUT)
+            .with_var(&WEBHOOK_CONCURRENT_REQUEST_LIMIT);
 
         for flag in PersistFeatureFlag::ALL {
             vars = vars.with_var(&flag.into())
@@ -3294,6 +3302,11 @@ impl SystemVars {
     /// Returns the `optimizer_oneshot_stats_timeout` configuration parameter.
     pub fn optimizer_oneshot_stats_timeout(&self) -> Duration {
         *self.expect_value(&OPTIMIZER_ONESHOT_STATS_TIMEOUT)
+    }
+
+    /// Returns the `webhook_concurrent_request_limit` configuration parameter.
+    pub fn webhook_concurrent_request_limit(&self) -> usize {
+        *self.expect_value(&WEBHOOK_CONCURRENT_REQUEST_LIMIT)
     }
 }
 
@@ -4919,6 +4932,11 @@ pub fn is_cluster_scheduling_var(name: &str) -> bool {
         || name == cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_SOFT.name()
         || name == cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY.name()
         || name == cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT.name()
+}
+
+/// Returns whether the named variable is an HTTP server related config var.
+pub fn is_http_config_var(name: &str) -> bool {
+    name == WEBHOOK_CONCURRENT_REQUEST_LIMIT.name()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

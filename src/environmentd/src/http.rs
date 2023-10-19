@@ -58,6 +58,7 @@ use tokio::net::TcpStream;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::TryRecvError;
 use tokio_openssl::SslStream;
+use tower::limit::GlobalConcurrencyLimitLayer;
 use tower::ServiceBuilder;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing::{error, warn};
@@ -75,7 +76,6 @@ mod webhook;
 
 pub use metrics::Metrics;
 pub use sql::{SqlResponse, WebSocketAuth, WebSocketResponse};
-pub use webhook::CONCURRENCY_LIMIT as WEBHOOK_CONCURRENCY_LIMIT;
 
 /// Maximum allowed size for a request.
 pub const MAX_REQUEST_SIZE: usize = u64_to_usize(2 * bytesize::MB);
@@ -87,7 +87,7 @@ pub struct HttpConfig {
     pub adapter_client: mz_adapter::Client,
     pub allowed_origin: AllowOrigin,
     pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
-    pub concurrent_webhook_req_count: usize,
+    pub concurrent_webhook_req: Arc<tokio::sync::Semaphore>,
     pub metrics: Metrics,
 }
 
@@ -124,7 +124,7 @@ impl HttpServer {
             adapter_client,
             allowed_origin,
             active_connection_count,
-            concurrent_webhook_req_count,
+            concurrent_webhook_req,
             metrics,
         }: HttpConfig,
     ) -> HttpServer {
@@ -180,7 +180,9 @@ impl HttpServer {
                 ServiceBuilder::new()
                     .layer(HandleErrorLayer::new(handle_load_error))
                     .load_shed()
-                    .concurrency_limit(concurrent_webhook_req_count),
+                    .layer(GlobalConcurrencyLimitLayer::with_semaphore(
+                        concurrent_webhook_req,
+                    )),
             );
 
         let router = Router::new()

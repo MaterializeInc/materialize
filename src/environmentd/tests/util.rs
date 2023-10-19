@@ -145,7 +145,6 @@ pub struct Config {
     bootstrap_role: Option<String>,
     deploy_generation: Option<u64>,
     system_parameter_defaults: BTreeMap<String, String>,
-    concurrent_webhook_req_count: Option<usize>,
     internal_console_redirect_url: Option<String>,
     metrics_registry: Option<MetricsRegistry>,
 }
@@ -169,7 +168,6 @@ impl Default for Config {
             bootstrap_role: Some("materialize".into()),
             deploy_generation: None,
             system_parameter_defaults: BTreeMap::new(),
-            concurrent_webhook_req_count: None,
             internal_console_redirect_url: None,
             metrics_registry: None,
         }
@@ -264,11 +262,6 @@ impl Config {
 
     pub fn with_system_parameter_default(mut self, param: String, value: String) -> Self {
         self.system_parameter_defaults.insert(param, value);
-        self
-    }
-
-    pub fn with_concurrent_webhook_req_count(mut self, limit: usize) -> Self {
-        self.concurrent_webhook_req_count = Some(limit);
         self
     }
 
@@ -452,7 +445,6 @@ impl Listeners {
                     cloud_resource_controller: None,
                     tls: config.tls,
                     frontegg: config.frontegg,
-                    concurrent_webhook_req_count: config.concurrent_webhook_req_count,
                     unsafe_mode: config.unsafe_mode,
                     all_features: false,
                     metrics_registry: metrics_registry.clone(),
