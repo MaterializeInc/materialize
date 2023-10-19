@@ -428,11 +428,21 @@ mod tests {
             let (txns_id, client, log) = (txns.txns_id(), client.clone(), log.clone());
 
             let task = async move {
-                let data_write = writer(&client, d0).await;
                 let mut txns = TxnsHandle::expect_open_id(client.clone(), txns_id).await;
-                let register_ts = 1;
-                txns.register(register_ts, [data_write]).await.unwrap();
-                debug!("{} registered at {}", idx, register_ts);
+                let mut register_ts = 1;
+                loop {
+                    let data_write = writer(&client, d0).await;
+                    match txns.register(register_ts, [data_write]).await {
+                        Ok(()) => {
+                            debug!("{} registered at {}", idx, register_ts);
+                            break;
+                        }
+                        Err(ts) => {
+                            register_ts = ts;
+                            continue;
+                        }
+                    }
+                }
 
                 // Add some jitter to the commit timestamps (to create gaps) and
                 // to the execution (to create interleaving).

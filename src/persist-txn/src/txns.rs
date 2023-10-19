@@ -193,7 +193,10 @@ where
     /// the minimum time the data shards could be registered.
     ///
     /// This method is idempotent. Data shards currently registered at
-    /// `register_ts` will not be registered a second time.
+    /// `register_ts` will not be registered a second time. Specifically, this
+    /// method will return success when the most recent register ts `R` is
+    /// less_equal to `register_ts`` AND there is no forget ts between `R` and
+    /// `register_ts`?
     ///
     /// **WARNING!** While a data shard is registered to the txn set, writing to
     /// it directly (i.e. using a WriteHandle instead of the TxnHandle,
@@ -242,17 +245,13 @@ where
             // Return success if we have nothing left to write or an Error if we
             // do.
             if register_ts < txns_upper {
-                if updates.is_empty() {
-                    break;
-                } else {
-                    debug!(
-                        "txns register {} at {:?} mismatch current={:?}",
-                        data_ids_debug(),
-                        register_ts,
-                        txns_upper,
-                    );
-                    return Err(txns_upper);
-                }
+                debug!(
+                    "txns register {} at {:?} mismatch current={:?}",
+                    data_ids_debug(),
+                    register_ts,
+                    txns_upper,
+                );
+                return Err(txns_upper);
             }
 
             let res = crate::small_caa(
@@ -294,7 +293,10 @@ where
     /// be returned with the minimum time the data shards could be forgotten.
     ///
     /// This method is idempotent. Data shards currently forgotten at
-    /// `forget_ts` will not be forgotten a second time.
+    /// `forget_ts` will not be forgotten a second time. Specifically, this
+    /// method will return success when the most recent forget ts (if any) `F`
+    /// is less_equal to `forget_ts` AND there is no register ts between `F` and
+    /// `forget_ts`?
     ///
     /// **WARNING!** While a data shard is registered to the txn set, writing to
     /// it directly (i.e. using a WriteHandle instead of the TxnHandle,
@@ -324,17 +326,13 @@ where
             // Return success if we have nothing left to write or an Error if we
             // do.
             if forget_ts < txns_upper {
-                if updates.is_empty() {
-                    return Ok(());
-                } else {
-                    debug!(
-                        "txns forget {:.9} at {:?} mismatch current={:?}",
-                        data_id.to_string(),
-                        forget_ts,
-                        txns_upper,
-                    );
-                    return Err(txns_upper);
-                }
+                debug!(
+                    "txns forget {:.9} at {:?} mismatch current={:?}",
+                    data_id.to_string(),
+                    forget_ts,
+                    txns_upper,
+                );
+                return Err(txns_upper);
             }
 
             // Ensure the latest write has been applied, so we don't run into
@@ -626,10 +624,7 @@ mod tests {
         let d0 = txns.expect_register(2).await;
         txns.apply_le(&2).await;
 
-        // Register a second time is a no-op and returns the original
-        // registration time, regardless of whether the second attempt is for
-        // before or after the original time.
-        assert_eq!(txns.register(1, [writer(&client, d0).await]).await, Ok(()));
+        // Register a second time is a no-op (idempotent).
         assert_eq!(txns.register(3, [writer(&client, d0).await]).await, Ok(()));
         txns.apply_le(&3).await;
 
@@ -854,7 +849,7 @@ mod tests {
         txn.write(&d0, "foo".into(), (), 1).await;
         let commit_apply = txn.commit_at(&mut txns, 2).await.unwrap();
 
-        txns.register(2, [writer(&client, d0).await]).await.unwrap();
+        txns.register(3, [writer(&client, d0).await]).await.unwrap();
 
         // Make sure that we can read empty at the register commit time even
         // before the txn commit apply.
