@@ -1101,13 +1101,15 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         } else if let Some(existing) = self.storage_state.exports.get(&export.id) {
                             stale_exports.remove(&export.id);
                             // If we've been asked to create an export that is
-                            // already installed, the descriptions must match
-                            // exactly.
-                            assert_eq!(
-                                *existing, export.description,
-                                "New export with same ID {:?}",
-                                export.id,
-                            );
+                            // already installed, the descriptions must be
+                            // compatible.
+                            //
+                            // TODO(ALTER CONNECTION): we will need to update
+                            // the stored connection description if it's
+                            // changed.
+                            existing
+                                .alter_compatible(export.id, &export.description)
+                                .expect("reconciled sinks must have compatible descriptions");
                             false
                         } else {
                             true
