@@ -1086,6 +1086,15 @@ const STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES: ServerVar<usize> = ServerVar {
     internal: true
 };
 
+/// Controls [`mz_persist_client::cfg::PersistConfig::storage_source_decode_fuel`].
+const STORAGE_SOURCE_DECODE_FUEL: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("storage_source_decode_fuel"),
+    value: &PersistConfig::DEFAULT_STORAGE_SOURCE_DECODE_FUEL,
+    description: "The maximum amount of work to do in the persist_source mfp_and_decode \
+                  operator before yielding.",
+    internal: true,
+};
+
 const STORAGE_RECORD_SOURCE_SINK_NAMESPACED_ERRORS: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("storage_record_source_sink_namespaced_errors"),
     value: &true,
@@ -2459,6 +2468,7 @@ impl SystemVars {
             .with_var(&STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO)
             .with_var(&PERSIST_SINK_MINIMUM_BATCH_UPDATES)
             .with_var(&STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES)
+            .with_var(&STORAGE_SOURCE_DECODE_FUEL)
             .with_var(&STORAGE_RECORD_SOURCE_SINK_NAMESPACED_ERRORS)
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF)
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER)
@@ -3052,6 +3062,10 @@ impl SystemVars {
     /// Returns the `storage_persist_sink_minimum_batch_updates` configuration parameter.
     pub fn storage_persist_sink_minimum_batch_updates(&self) -> usize {
         *self.expect_value(&STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES)
+    }
+
+    pub fn storage_source_decode_fuel(&self) -> usize {
+        *self.expect_value(&STORAGE_SOURCE_DECODE_FUEL)
     }
 
     /// Returns the `storage_record_source_sink_namespaced_errors` configuration parameter.
@@ -4879,6 +4893,7 @@ fn is_persist_config_var(name: &str) -> bool {
         || name == PERSIST_SINK_MINIMUM_BATCH_UPDATES.name()
         || name == STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES.name()
         || name == STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES.name()
+        || name == STORAGE_SOURCE_DECODE_FUEL.name()
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF.name()
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER.name()
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP.name()
