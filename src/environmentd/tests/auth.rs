@@ -2214,14 +2214,33 @@ fn test_refresh_task_metrics() {
 
     drop(pg_client);
 
-    // After dropping the client we should not have any refresh tasks running.
-    let metrics = server.metrics_registry.gather();
-    let mut metrics: Vec<_> = metrics
-        .into_iter()
-        .filter(|family| family.get_name() == "mz_auth_refresh_tasks_active")
-        .collect();
-    assert_eq!(metrics.len(), 1);
-    let metric = metrics.pop().unwrap();
-    let metric = &metric.get_metric()[0];
-    assert_eq!(metric.get_gauge().get_value(), 0.0);
+    // The refresh task asynchronously notices the client has been dropped, so it might take a
+    // moment, hence the retry.
+    let result = mz_ore::retry::Retry::default()
+        .max_duration(Duration::from_secs(5))
+        .retry(|_| {
+            // After dropping the client we should not have any refresh tasks running.
+            let metrics = server.metrics_registry.gather();
+            let mut metrics: Vec<_> = metrics
+                .into_iter()
+                .filter(|family| family.get_name() == "mz_auth_refresh_tasks_active")
+                .collect();
+
+            // If we're retrying, and the metric hasn't changed, then our set will be empty.
+            if metrics.len() != 1 {
+                return Err(-1.0);
+            }
+
+            let metric = metrics.pop().unwrap();
+            let metric = &metric.get_metric()[0];
+
+            let guage_value = metric.get_gauge().get_value();
+            if guage_value == 0.0 {
+                Ok(())
+            } else {
+                Err(guage_value)
+            }
+        });
+
+    assert_eq!(result, Ok(()));
 }
