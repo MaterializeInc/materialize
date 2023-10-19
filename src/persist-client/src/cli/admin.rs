@@ -60,7 +60,7 @@ pub(crate) enum Command {
     ForceGc(ForceGcArgs),
     /// Attempt to ensure that all the files referenced by consensus are available
     /// in Blob.
-    RestoreBlob(StoreArgs),
+    RestoreBlob(RestoreBlobArgs),
 }
 
 /// Manually completes all fueled compactions in a shard.
@@ -79,6 +79,17 @@ pub(crate) struct ForceCompactionArgs {
 pub(crate) struct ForceGcArgs {
     #[clap(flatten)]
     state: StateArgs,
+}
+
+/// Attempt to restore all the blobs that are referenced by the current state of consensus.
+#[derive(Debug, clap::Parser)]
+pub(crate) struct RestoreBlobArgs {
+    #[clap(flatten)]
+    state: StoreArgs,
+
+    /// The number of concurrent restore operations to run at once.
+    #[clap(long, default_value_t = 16)]
+    concurrency: usize,
 }
 
 /// Runs the given read-write admin command.
@@ -123,9 +134,13 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
             info_log_non_zero_metrics(&metrics_registry.gather());
         }
         Command::RestoreBlob(args) => {
-            let StoreArgs {
-                consensus_uri,
-                blob_uri,
+            let RestoreBlobArgs {
+                state:
+                    StoreArgs {
+                        consensus_uri,
+                        blob_uri,
+                    },
+                concurrency,
             } = args;
             let commit = command.commit;
             let cfg = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone());
@@ -143,7 +158,7 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
 
             let not_restored: Vec<_> = consensus
                 .list_keys()
-                .flat_map_unordered(4, |shard| {
+                .flat_map_unordered(concurrency, |shard| {
                     stream::once(Box::pin(async {
                         let shard_id = shard?;
                         let shard_id = ShardId::from_str(&shard_id).expect("invalid shard id");
