@@ -18,6 +18,6 @@ def resolve_tag_of_common_ancestor(tag_when_on_default_branch: str = "latest") -
         return tag_when_on_default_branch
     else:
         commit_hash = buildkite.get_merge_base()
-        tag = f"unstable-{commit_hash}"
+        tag = f"devel-{commit_hash}"
         print(f"Resolved common-ancestor to {tag} (commit: {commit_hash})")
         return tag
