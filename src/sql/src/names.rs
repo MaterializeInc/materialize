@@ -543,7 +543,7 @@ impl AstDisplay for ResolvedColumnName {
             ResolvedColumnName::Column { relation, name, .. } => {
                 f.write_node(relation);
                 f.write_str(".");
-                f.write_str(name);
+                f.write_node(&Ident::new(name.as_str()));
             }
             ResolvedColumnName::Error => {}
         }
