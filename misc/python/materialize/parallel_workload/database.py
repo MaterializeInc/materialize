@@ -398,7 +398,7 @@ class KafkaSource(DBObject):
         self.executor = KafkaExecutor(
             self.source_id, ports, fields, database, str(schema)
         )
-        self.generator = rng.choice(WORKLOADS)(None).generate(fields)
+        self.generator = rng.choice(list(WORKLOADS))(None).generate(fields)
         self.lock = threading.Lock()
 
     def name(self) -> str:
@@ -506,7 +506,7 @@ class PostgresSource(DBObject):
             PostgresColumn(field.name, field.data_type, False, self) for field in fields
         ]
         self.executor = PgExecutor(self.source_id, ports, fields, database, str(schema))
-        self.generator = rng.choice(WORKLOADS)(None).generate(fields)
+        self.generator = rng.choice(list(WORKLOADS))(None).generate(fields)
         self.lock = threading.Lock()
 
     def name(self) -> str:
