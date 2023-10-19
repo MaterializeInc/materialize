@@ -17,7 +17,6 @@ use std::time::Instant;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
-
 use futures_util::Stream;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::u64_to_usize;
@@ -25,6 +24,7 @@ use mz_postgres_client::error::PostgresError;
 use mz_proto::RustType;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
+use tracing::{Instrument, Span};
 
 use crate::error::Error;
 
@@ -421,7 +421,7 @@ impl<A: Consensus + Sync + Send + 'static> Consensus for Tasked<A> {
         let key = key.to_owned();
         mz_ore::task::spawn(
             || "persist::task::head",
-            async move { backing.head(&key).await },
+            async move { backing.head(&key).await }.instrument(Span::current()),
         )
         .await?
     }
@@ -434,9 +434,11 @@ impl<A: Consensus + Sync + Send + 'static> Consensus for Tasked<A> {
     ) -> Result<CaSResult, ExternalError> {
         let backing = self.clone_backing();
         let key = key.to_owned();
-        mz_ore::task::spawn(|| "persist::task::cas", async move {
-            backing.compare_and_set(&key, expected, new).await
-        })
+        mz_ore::task::spawn(
+            || "persist::task::cas",
+            async move { backing.compare_and_set(&key, expected, new).await }
+                .instrument(Span::current()),
+        )
         .await?
     }
 
@@ -448,18 +450,20 @@ impl<A: Consensus + Sync + Send + 'static> Consensus for Tasked<A> {
     ) -> Result<Vec<VersionedData>, ExternalError> {
         let backing = self.clone_backing();
         let key = key.to_owned();
-        mz_ore::task::spawn(|| "persist::task::scan", async move {
-            backing.scan(&key, from, limit).await
-        })
+        mz_ore::task::spawn(
+            || "persist::task::scan",
+            async move { backing.scan(&key, from, limit).await }.instrument(Span::current()),
+        )
         .await?
     }
 
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
         let backing = self.clone_backing();
         let key = key.to_owned();
-        mz_ore::task::spawn(|| "persist::task::truncate", async move {
-            backing.truncate(&key, seqno).await
-        })
+        mz_ore::task::spawn(
+            || "persist::task::truncate",
+            async move { backing.truncate(&key, seqno).await }.instrument(Span::current()),
+        )
         .await?
     }
 }
@@ -533,7 +537,7 @@ impl<A: Blob + Sync + Send + 'static> Blob for Tasked<A> {
         let key = key.to_owned();
         mz_ore::task::spawn(
             || "persist::task::get",
-            async move { backing.get(&key).await },
+            async move { backing.get(&key).await }.instrument(Span::current()),
         )
         .await?
     }
@@ -559,9 +563,10 @@ impl<A: Blob + Sync + Send + 'static> Blob for Tasked<A> {
     async fn set(&self, key: &str, value: Bytes, atomic: Atomicity) -> Result<(), ExternalError> {
         let backing = self.clone_backing();
         let key = key.to_owned();
-        mz_ore::task::spawn(|| "persist::task::set", async move {
-            backing.set(&key, value, atomic).await
-        })
+        mz_ore::task::spawn(
+            || "persist::task::set",
+            async move { backing.set(&key, value, atomic).await }.instrument(Span::current()),
+        )
         .await?
     }
 
@@ -572,18 +577,20 @@ impl<A: Blob + Sync + Send + 'static> Blob for Tasked<A> {
     async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
         let backing = self.clone_backing();
         let key = key.to_owned();
-        mz_ore::task::spawn(|| "persist::task::delete", async move {
-            backing.delete(&key).await
-        })
+        mz_ore::task::spawn(
+            || "persist::task::delete",
+            async move { backing.delete(&key).await }.instrument(Span::current()),
+        )
         .await?
     }
 
     async fn restore(&self, key: &str) -> Result<(), ExternalError> {
         let backing = self.clone_backing();
         let key = key.to_owned();
-        mz_ore::task::spawn(|| "persist::task::restore", async move {
-            backing.restore(&key).await
-        })
+        mz_ore::task::spawn(
+            || "persist::task::restore",
+            async move { backing.restore(&key).await }.instrument(Span::current()),
+        )
         .await?
     }
 }
