@@ -179,12 +179,19 @@ def prioritize_pipeline(pipeline: Any) -> None:
     if tag.startswith("v"):
         priority = 10
 
+    def visit(config: Any) -> None:
+        config["priority"] = config.get("priority", 0) + priority
+
     if priority is not None:
         for config in pipeline["steps"]:
             if "trigger" in config or "wait" in config:
                 # Trigger and Wait steps do not allow priorities.
                 continue
-            config["priority"] = config.get("priority", 0) + priority
+            if "group" in config:
+                for inner_config in config.get("steps", []):
+                    visit(inner_config)
+                continue
+            visit(config)
 
 
 def permit_rerunning_successful_steps(pipeline: Any) -> None:
