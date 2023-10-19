@@ -14,14 +14,14 @@ The `mz app-password` command manages app passwords for your user account.
 Create an app password.
 
 ```shell
-mz app-password create [options...]
+mz app-password create <NAME> [options...]
 ```
 
 ### Arguments
 
 Argument              | Environment variables | Description
 ----------------------|-----------------------|------------
-`--name=<NAME>`       |                       | Set the name of the app password. If unspecified, `mz` automatically generates a name.
+`<NAME>`              |                       | Set the name of the app password. If unspecified, `mz` automatically generates a name.
 `--profile=<PROFILE>` | `MZ_PROFILE`          | Use the specified [authentication profile].
 
 ### Examples
@@ -29,7 +29,7 @@ Argument              | Environment variables | Description
 Create an app password for a continuous integration tool:
 
 ```shell
-$ mz app-password create --name=CI
+$ mz app-password create CI
 ```
 ```
 mzp_f283gag2t3...

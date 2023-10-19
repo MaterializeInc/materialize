@@ -25,13 +25,13 @@ Argument              | Environment variables | Description
 Launch a SQL shell against the `aws/us-east-1` region:
 
 ```shell
-$ mz sql --region=aws/us-east-1
+mz sql --region=aws/us-east-1
 ```
 
 Execute a single SQL query against the default region for the profile:
 
 ```shell
-$ mz sql -- -c "SELECT * FROM mz_sources"
+mz sql -- -c "SELECT * FROM mz_sources"
 ```
 
 ## Global flags

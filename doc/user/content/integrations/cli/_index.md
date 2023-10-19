@@ -51,7 +51,7 @@ You can use `mz` to:
 3. Show enabled regions in your organization:
 
    ```shell
-   mz region list
+   $ mz region list
    ```
    ```
    aws/us-east-1  enabled
@@ -62,7 +62,7 @@ You can use `mz` to:
    organization:
 
    ```shell
-   mz sql
+   $ mz sql
    ```
    ```
    Authenticated using profile 'default'.
@@ -82,10 +82,11 @@ You can use `mz` to:
 Command          | Description
 -----------------|------------
 [`app-password`] | Manage app passwords for your user account.
-[`auth`]         | Manage authentication profiles for `mz`.
 [`config`]       | Manage configuration for `mz`.
-[`sql`]          | Execute SQL statements in a region.
+[`profile`]      | Manage authentication profiles for `mz`.
 [`region`]       | Manage regions in your organization.
+[`secret`]       | Manage secrets in a region.
+[`sql`]          | Execute SQL statements in a region.
 [`user`]         | Manage users in your organization.
 
 ## Global flags
@@ -98,8 +99,9 @@ command-specific flags.
 [Homebrew]: https://brew.sh
 [homebrew-tap]: https://github.com/MaterializeInc/homebrew-materialize
 [`app-password`]: reference/app-password
-[`auth`]: reference/auth
 [`config`]: reference/config
-[`sql`]: reference/sql
+[`profile`]: reference/profile
 [`region`]: reference/region
+[`secret`]: reference/secret
+[`sql`]: reference/sql
 [`user`]: reference/user

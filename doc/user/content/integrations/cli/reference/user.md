@@ -14,15 +14,15 @@ The `mz user` command manages users in your organization.
 Invite a user to your organization.
 
 ```shell
-mz user create <EMAIL> [options...]
+mz user create <EMAIL> <NAME> [options...]
 ```
 
 ### Arguments
 
 Flag                  | Environment variables | Description
 ----------------------|-----------------------|------------
-`<EMAIL>    `         |                       | **Required.** Set the email address of the user.
-`--name=<NAME>      ` |                       | Set the name of the user.
+`<EMAIL>`             |                       | **Required.** Set the email address of the user.
+`<NAME>`              |                       | **Required.** Set the name of the user.
 `--profile=<PROFILE>` | `MZ_PROFILE`          | Use the specified [authentication profile].
 
 ### Examples
@@ -30,7 +30,7 @@ Flag                  | Environment variables | Description
 Invite Franz Kafka to your organization:
 
 ```shell
-$ mz user create franz@kafka.org --name="Franz Kafka"
+mz user create franz@kafka.org "Franz Kafka"
 ```
 
 ## `list`, `ls`
@@ -80,7 +80,7 @@ Argument              | Environment variables | Description
 Remove Franz Kafka from your organization:
 
 ```shell
-$ mz user remove franz@kafka.org
+mz user remove franz@kafka.org
 ```
 
 ## Global arguments

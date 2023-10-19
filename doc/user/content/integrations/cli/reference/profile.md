@@ -31,7 +31,7 @@ Argument                    | Environment variables | Description
 ### Examples
 
 ```shell
-mz profile init --no-browser
+$ mz profile init --no-browser
 ```
 ```
 Email: remote@example.com
@@ -50,7 +50,7 @@ mz profile {list,ls} [options...]
 ### Examples
 
 ```shell
-mz profile list
+$ mz profile list
 ```
 ```
 Name
@@ -102,7 +102,7 @@ Argument              | Environment variables | Description
 Get the default region for the `acme-corp` profile:
 
 ```shell
-mz profile config get region --profile=acme-corp
+$ mz profile config get region --profile=acme-corp
 ```
 ```
 aws/us-east-1
