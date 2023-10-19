@@ -120,7 +120,10 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
 
     /// Returns whether the data shard was registered to the txns set at the
     /// given timestamp.
-    pub(crate) fn registered_at(&self, data_id: &ShardId, ts: &T) -> bool {
+    ///
+    /// Specifically, a data shard is registered at a timestamp `ts` if it has a
+    /// `register_ts <= ts` but no `forget_ts >= ts`.
+    pub fn registered_at(&self, data_id: &ShardId, ts: &T) -> bool {
         let Some(data_times) = self.datas.get(data_id) else {
             return false;
         };
@@ -187,7 +190,6 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
     /// take.
     ///
     /// Returns Err if that data shard has not been registered at the given ts.
-    #[allow(clippy::unused_async)]
     pub fn data_listen_next(&self, data_id: &ShardId, ts: T) -> DataListenNext<T> {
         assert!(self.progress_exclusive >= ts);
         use DataListenNext::*;

@@ -195,8 +195,8 @@ where
     /// This method is idempotent. Data shards currently registered at
     /// `register_ts` will not be registered a second time. Specifically, this
     /// method will return success when the most recent register ts `R` is
-    /// less_equal to `register_ts`` AND there is no forget ts between `R` and
-    /// `register_ts`?
+    /// less_equal to `register_ts` AND there is no forget ts between `R` and
+    /// `register_ts`.
     ///
     /// **WARNING!** While a data shard is registered to the txn set, writing to
     /// it directly (i.e. using a WriteHandle instead of the TxnHandle,
@@ -296,7 +296,7 @@ where
     /// `forget_ts` will not be forgotten a second time. Specifically, this
     /// method will return success when the most recent forget ts (if any) `F`
     /// is less_equal to `forget_ts` AND there is no register ts between `F` and
-    /// `forget_ts`?
+    /// `forget_ts`.
     ///
     /// **WARNING!** While a data shard is registered to the txn set, writing to
     /// it directly (i.e. using a WriteHandle instead of the TxnHandle,
