@@ -23,7 +23,7 @@ use timely::progress::frontier::Antichain;
 use timely::PartialOrder;
 
 use crate::connections::{CsrConnection, KafkaConnection};
-use crate::controller::CollectionMetadata;
+use crate::controller::{CollectionMetadata, StorageError};
 
 use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
@@ -42,6 +42,63 @@ pub struct StorageSinkDesc<S: StorageSinkDescFillState, T = mz_repr::Timestamp> 
     pub as_of: SinkAsOf<T>,
     pub status_id: Option<<S as StorageSinkDescFillState>::StatusId>,
     pub from_storage_metadata: <S as StorageSinkDescFillState>::StorageMetadata,
+}
+
+impl<S: Debug + StorageSinkDescFillState + PartialEq, T: Debug + PartialEq + PartialOrder>
+    StorageSinkDesc<S, T>
+{
+    /// Determines if `self` is compatible with another `StorageSinkDesc`, in
+    /// such a way that it is possible to turn `self` into `other` through a
+    /// valid series of transformations.
+    ///
+    /// Currently, the only "valid transformation" is the passage of time such
+    /// that the sink's as ofs may differ. However, this will change once we
+    /// support `ALTER CONNECTION` or `ALTER SINK`.
+    pub fn alter_compatible(
+        &self,
+        id: GlobalId,
+        other: &StorageSinkDesc<S, T>,
+    ) -> Result<(), StorageError> {
+        if self == other {
+            return Ok(());
+        }
+        let StorageSinkDesc {
+            from,
+            from_desc,
+            connection,
+            envelope,
+            // The as of of the descriptions may differ.
+            as_of: _,
+            status_id,
+            from_storage_metadata,
+        } = self;
+
+        let compatibility_checks = [
+            (from == &other.from, "from"),
+            (from_desc == &other.from_desc, "from_desc"),
+            (connection == &other.connection, "connection"),
+            (envelope == &other.envelope, "envelope"),
+            (status_id == &other.status_id, "status_id"),
+            (
+                from_storage_metadata == &other.from_storage_metadata,
+                "from_storage_metadata",
+            ),
+        ];
+
+        for (compatible, desc) in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "StorageSinkDesc incompatible at {desc}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(StorageError::IncompatibleSinkDescriptions { id });
+            }
+        }
+
+        Ok(())
+    }
 }
 
 pub trait StorageSinkDescFillState {
