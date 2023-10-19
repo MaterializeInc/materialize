@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use mz_ore::str::StrExt;
 use mz_repr::GlobalId;
+use mz_sql_parser::ast::CreateSubsourceStatement;
 
 use crate::ast::visit::{self, Visit};
 use crate::ast::visit_mut::{self, VisitMut};
@@ -51,7 +52,8 @@ pub fn create_stmt_rename_schema_refs(
         | Statement::CreateConnection(CreateConnectionStatement { name, .. })
         | Statement::CreateWebhookSource(CreateWebhookSourceStatement { name, .. })
         | Statement::CreateType(CreateTypeStatement { name, .. })
-        | Statement::CreateSource(CreateSourceStatement { name, .. }) => {
+        | Statement::CreateSource(CreateSourceStatement { name, .. })
+        | Statement::CreateSubsource(CreateSubsourceStatement { name, .. }) => {
             maybe_update_item_name(name);
         }
         Statement::CreateView(CreateViewStatement {
@@ -64,7 +66,9 @@ pub fn create_stmt_rename_schema_refs(
             maybe_update_item_name(name);
             rewrite_query_schema(cur_schema_name, new_schema_name, query);
         }
-        _ => unreachable!("Internal error: only catalog items need to update item refs"),
+        stmt => {
+            unreachable!("Internal error: only catalog items need to update item refs. {stmt:?}")
+        }
     }
 }
 
