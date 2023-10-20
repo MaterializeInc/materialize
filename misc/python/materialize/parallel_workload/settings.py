@@ -21,3 +21,4 @@ class Scenario(Enum):
     Cancel = "cancel"
     Kill = "kill"
     Rename = "rename"
+    BackupRestore = "backup-restore"

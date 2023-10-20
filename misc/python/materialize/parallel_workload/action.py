@@ -231,9 +231,9 @@ class SourceInsertAction(Action):
             if not sources:
                 return
             source = self.rng.choice(sources)
+        with source.lock:
             transaction = next(source.generator)
-            with source.lock:
-                source.executor.run(transaction)
+            source.executor.run(transaction)
 
 
 class UpdateAction(Action):
@@ -341,14 +341,13 @@ class DropIndexAction(Action):
 
 class CreateTableAction(Action):
     def run(self, exe: Executor) -> None:
-        with self.db.lock:
-            if len(self.db.tables) > MAX_TABLES:
-                return
-            table_id = self.db.table_id
-            self.db.table_id += 1
-            table = Table(self.rng, table_id, self.rng.choice(self.db.schemas))
-            table.create(exe)
-            self.db.tables.append(table)
+        if len(self.db.tables) > MAX_TABLES:
+            return
+        table_id = self.db.table_id
+        self.db.table_id += 1
+        table = Table(self.rng, table_id, self.rng.choice(self.db.schemas))
+        table.create(exe)
+        self.db.tables.append(table)
 
 
 class DropTableAction(Action):
@@ -361,11 +360,10 @@ class DropTableAction(Action):
         with self.db.lock:
             if len(self.db.tables) <= 2:
                 return
-            table_id = self.rng.randrange(len(self.db.tables))
-            table = self.db.tables[table_id]
+            table = self.rng.choice(self.db.tables)
             query = f"DROP TABLE {table}"
             exe.execute(query)
-            del self.db.tables[table_id]
+            self.db.tables.remove(table)
 
 
 class RenameTableAction(Action):
@@ -376,15 +374,49 @@ class RenameTableAction(Action):
             if not self.db.tables:
                 return
             table = self.rng.choice(self.db.tables)
-            old_name = str(table)
-            table.rename += 1
+        old_name = str(table)
+        table.rename += 1
+        try:
+            exe.execute(f"ALTER TABLE {old_name} RENAME TO {identifier(table.name())}")
+        except:
+            table.rename -= 1
+            raise
+
+
+class RenameViewAction(Action):
+    def run(self, exe: Executor) -> None:
+        if self.db.scenario != Scenario.Rename:
+            return
+        with self.db.lock:
+            if not self.db.views:
+                return
+            view = self.rng.choice(self.db.views)
+            old_name = str(view)
+            view.rename += 1
             try:
                 exe.execute(
-                    f"ALTER TABLE {old_name} RENAME TO {identifier(table.name())}"
+                    f"ALTER {'MATERIALIZED VIEW' if view.materialized else 'VIEW'} {old_name} RENAME TO {identifier(view.name())}"
                 )
             except:
-                table.rename -= 1
+                view.rename -= 1
                 raise
+
+
+class RenameSinkAction(Action):
+    def run(self, exe: Executor) -> None:
+        if self.db.scenario != Scenario.Rename:
+            return
+        with self.db.lock:
+            if not self.db.kafka_sinks:
+                return
+            sink = self.rng.choice(self.db.kafka_sinks)
+        old_name = str(sink)
+        sink.rename += 1
+        try:
+            exe.execute(f"ALTER SINK {old_name} RENAME TO {identifier(sink.name())}")
+        except:
+            sink.rename -= 1
+            raise
 
 
 class CreateSchemaAction(Action):
@@ -394,9 +426,9 @@ class CreateSchemaAction(Action):
                 return
             schema_id = self.db.schema_id
             self.db.schema_id += 1
-            schema = Schema(self.rng, schema_id)
-            schema.create(exe)
-            self.db.schemas.append(schema)
+        schema = Schema(self.rng, schema_id)
+        schema.create(exe)
+        self.db.schemas.append(schema)
 
 
 class DropSchemaAction(Action):
@@ -422,13 +454,13 @@ class RenameSchemaAction(Action):
             return
         with self.db.lock:
             schema = self.rng.choice(self.db.schemas)
-            old_name = str(schema)
-            schema.rename += 1
-            try:
-                exe.execute(f"ALTER SCHEMA {old_name} RENAME TO {schema}")
-            except:
-                schema.rename -= 1
-                raise
+        old_name = str(schema)
+        schema.rename += 1
+        try:
+            exe.execute(f"ALTER SCHEMA {old_name} RENAME TO {schema}")
+        except:
+            schema.rename -= 1
+            raise
 
 
 class SwapSchemaAction(Action):
@@ -476,21 +508,21 @@ class CreateViewAction(Action):
                 return
             view_id = self.db.view_id
             self.db.view_id += 1
-            # Don't use views for now since LIMIT 1 and statement_timeout are
-            # not effective yet at preventing long-running queries and OoMs.
-            base_object = self.rng.choice(self.db.db_objects())
-            base_object2: DBObject | None = self.rng.choice(self.db.db_objects())
-            if self.rng.choice([True, False]) or base_object2 == base_object:
-                base_object2 = None
-            view = View(
-                self.rng,
-                view_id,
-                base_object,
-                base_object2,
-                self.rng.choice(self.db.schemas),
-            )
-            view.create(exe)
-            self.db.views.append(view)
+        # Don't use views for now since LIMIT 1 and statement_timeout are
+        # not effective yet at preventing long-running queries and OoMs.
+        base_object = self.rng.choice(self.db.db_objects())
+        base_object2: DBObject | None = self.rng.choice(self.db.db_objects())
+        if self.rng.choice([True, False]) or base_object2 == base_object:
+            base_object2 = None
+        view = View(
+            self.rng,
+            view_id,
+            base_object,
+            base_object2,
+            self.rng.choice(self.db.schemas),
+        )
+        view.create(exe)
+        self.db.views.append(view)
 
 
 class DropViewAction(Action):
@@ -520,9 +552,9 @@ class CreateRoleAction(Action):
                 return
             role_id = self.db.role_id
             self.db.role_id += 1
-            role = Role(role_id)
-            role.create(exe)
-            self.db.roles.append(role)
+        role = Role(role_id)
+        role.create(exe)
+        self.db.roles.append(role)
 
 
 class DropRoleAction(Action):
@@ -550,15 +582,15 @@ class CreateClusterAction(Action):
                 return
             cluster_id = self.db.cluster_id
             self.db.cluster_id += 1
-            cluster = Cluster(
-                cluster_id,
-                managed=self.rng.choice([True, False]),
-                size=self.rng.choice(["1", "2", "4"]),
-                replication_factor=self.rng.choice([1, 2, 4, 5]),
-                introspection_interval=self.rng.choice(["0", "1s", "10s"]),
-            )
-            cluster.create(exe)
-            self.db.clusters.append(cluster)
+        cluster = Cluster(
+            cluster_id,
+            managed=self.rng.choice([True, False]),
+            size=self.rng.choice(["1", "2", "4"]),
+            replication_factor=self.rng.choice([1, 2, 4, 5]),
+            introspection_interval=self.rng.choice(["0", "1s", "10s"]),
+        )
+        cluster.create(exe)
+        self.db.clusters.append(cluster)
 
 
 class DropClusterAction(Action):
@@ -591,15 +623,19 @@ class SetClusterAction(Action):
             if not self.db.clusters:
                 return
             cluster = self.rng.choice(self.db.clusters)
-            query = f"SET CLUSTER = {cluster}"
-            exe.execute(query)
+        query = f"SET CLUSTER = {cluster}"
+        exe.execute(query)
 
 
 class CreateClusterReplicaAction(Action):
     def errors_to_ignore(self) -> list[str]:
-        return [
-            "cannot create more than one replica of a cluster containing sources or sinks"
+        result = [
+            "cannot create more than one replica of a cluster containing sources or sinks",
+            # Can happen with reduced locking
+            "cannot create multiple replicas named",
         ] + super().errors_to_ignore()
+
+        return result
 
     def run(self, exe: Executor) -> None:
         with self.db.lock:
@@ -615,9 +651,13 @@ class CreateClusterReplicaAction(Action):
                 size=self.rng.choice(["1", "2", "4"]),
                 cluster=cluster,
             )
+            cluster.replica_id += 1
+        try:
             replica.create(exe)
             cluster.replicas.append(replica)
-            cluster.replica_id += 1
+        except:
+            cluster.replica_id -= 1
+            raise
 
 
 class DropClusterReplicaAction(Action):
@@ -631,11 +671,10 @@ class DropClusterReplicaAction(Action):
             # Avoid "has no replicas available to service request" error
             if len(cluster.replicas) <= 1:
                 return
-            replica_id = self.rng.randrange(len(cluster.replicas))
-            replica = cluster.replicas[replica_id]
+            replica = self.rng.choice(cluster.replicas)
             query = f"DROP CLUSTER REPLICA {cluster}.{replica}"
             exe.execute(query)
-            del cluster.replicas[replica_id]
+            cluster.replicas.remove(replica)
 
 
 class GrantPrivilegesAction(Action):
@@ -644,11 +683,11 @@ class GrantPrivilegesAction(Action):
             if not self.db.roles:
                 return
             role = self.rng.choice(self.db.roles)
-            privilege = self.rng.choice(["SELECT", "INSERT", "UPDATE", "ALL"])
-            tables_views: list[DBObject] = [*self.db.tables, *self.db.views]
-            table = self.rng.choice(tables_views)
-            query = f"GRANT {privilege} ON {table} TO {role}"
-            exe.execute(query)
+        privilege = self.rng.choice(["SELECT", "INSERT", "UPDATE", "ALL"])
+        tables_views: list[DBObject] = [*self.db.tables, *self.db.views]
+        table = self.rng.choice(tables_views)
+        query = f"GRANT {privilege} ON {table} TO {role}"
+        exe.execute(query)
 
 
 class RevokePrivilegesAction(Action):
@@ -657,11 +696,11 @@ class RevokePrivilegesAction(Action):
             if not self.db.roles:
                 return
             role = self.rng.choice(self.db.roles)
-            privilege = self.rng.choice(["SELECT", "INSERT", "UPDATE", "ALL"])
-            tables_views: list[DBObject] = [*self.db.tables, *self.db.views]
-            table = self.rng.choice(tables_views)
-            query = f"REVOKE {privilege} ON {table} FROM {role}"
-            exe.execute(query)
+        privilege = self.rng.choice(["SELECT", "INSERT", "UPDATE", "ALL"])
+        tables_views: list[DBObject] = [*self.db.tables, *self.db.views]
+        table = self.rng.choice(tables_views)
+        query = f"REVOKE {privilege} ON {table} FROM {role}"
+        exe.execute(query)
 
 
 # TODO: Should factor this out so can easily use it without action
@@ -774,7 +813,7 @@ class KillAction(Action):
         # Otherwise getting failure on "up" locally
         time.sleep(1)
         self.composition.up("materialized", detach=True)
-        time.sleep(self.rng.uniform(20, 60))
+        time.sleep(self.rng.uniform(20, 180))
 
 
 class CreateWebhookSourceAction(Action):
@@ -784,12 +823,12 @@ class CreateWebhookSourceAction(Action):
                 return
             webhook_source_id = self.db.webhook_source_id
             self.db.webhook_source_id += 1
-            potential_clusters = [c for c in self.db.clusters if len(c.replicas) == 1]
-            cluster = self.rng.choice(potential_clusters)
-            schema = self.rng.choice(self.db.schemas)
-            source = WebhookSource(webhook_source_id, cluster, schema, self.rng)
-            source.create(exe)
-            self.db.webhook_sources.append(source)
+        potential_clusters = [c for c in self.db.clusters if len(c.replicas) == 1]
+        cluster = self.rng.choice(potential_clusters)
+        schema = self.rng.choice(self.db.schemas)
+        source = WebhookSource(webhook_source_id, cluster, schema, self.rng)
+        source.create(exe)
+        self.db.webhook_sources.append(source)
 
 
 class DropWebhookSourceAction(Action):
@@ -816,14 +855,18 @@ class CreateKafkaSourceAction(Action):
                 return
             source_id = self.db.kafka_source_id
             self.db.kafka_source_id += 1
-            potential_clusters = [c for c in self.db.clusters if len(c.replicas) == 1]
-            cluster = self.rng.choice(potential_clusters)
-            schema = self.rng.choice(self.db.schemas)
+        potential_clusters = [c for c in self.db.clusters if len(c.replicas) == 1]
+        cluster = self.rng.choice(potential_clusters)
+        schema = self.rng.choice(self.db.schemas)
+        try:
             source = KafkaSource(
                 self.db.name(), source_id, cluster, schema, self.db.ports, self.rng
             )
             source.create(exe)
             self.db.kafka_sources.append(source)
+        except:
+            if self.db.scenario != Scenario.Kill:
+                raise
 
 
 class DropKafkaSourceAction(Action):
@@ -853,11 +896,15 @@ class CreatePostgresSourceAction(Action):
             potential_clusters = [c for c in self.db.clusters if len(c.replicas) == 1]
             schema = self.rng.choice(self.db.schemas)
             cluster = self.rng.choice(potential_clusters)
+        try:
             source = PostgresSource(
                 self.db.name(), source_id, cluster, schema, self.db.ports, self.rng
             )
             source.create(exe)
             self.db.postgres_sources.append(source)
+        except:
+            if self.db.scenario != Scenario.Kill:
+                raise
 
 
 class DropPostgresSourceAction(Action):
@@ -878,6 +925,12 @@ class DropPostgresSourceAction(Action):
 
 
 class CreateKafkaSinkAction(Action):
+    def errors_to_ignore(self) -> list[str]:
+        return [
+            # Another replica can be created in parallel
+            "cannot create sink in cluster with more than one replica",
+        ] + super().errors_to_ignore()
+
     def run(self, exe: Executor) -> None:
         with self.db.lock:
             if len(self.db.kafka_sinks) > MAX_KAFKA_SINKS:
@@ -887,15 +940,15 @@ class CreateKafkaSinkAction(Action):
             potential_clusters = [c for c in self.db.clusters if len(c.replicas) == 1]
             cluster = self.rng.choice(potential_clusters)
             schema = self.rng.choice(self.db.schemas)
-            sink = KafkaSink(
-                sink_id,
-                cluster,
-                schema,
-                self.rng.choice(self.db.db_objects_without_views()),
-                self.rng,
-            )
-            sink.create(exe)
-            self.db.kafka_sinks.append(sink)
+        sink = KafkaSink(
+            sink_id,
+            cluster,
+            schema,
+            self.rng.choice(self.db.db_objects_without_views()),
+            self.rng,
+        )
+        sink.create(exe)
+        self.db.kafka_sinks.append(sink)
 
 
 class DropKafkaSinkAction(Action):
@@ -922,26 +975,31 @@ class HttpPostAction(Action):
                 return
 
             source = self.rng.choice(self.db.webhook_sources)
-            url = f"http://{self.db.host}:{self.db.ports['http']}/api/webhook/{self.db}/public/{source}"
+        url = f"http://{self.db.host}:{self.db.ports['http']}/api/webhook/{self.db}/public/{source}"
 
-            payload = source.body_format.to_data_type().random_value(self.rng)
+        payload = source.body_format.to_data_type().random_value(self.rng)
 
-            header_fields = source.explicit_include_headers
-            if source.include_headers:
-                header_fields.extend(
-                    ["timestamp", "x-event-type", "signature", "x-mz-api-key"]
-                )
-
-            headers = {
-                header: f'"{Text.random_value(self.rng)}"'.encode()
-                for header in self.rng.sample(header_fields, len(header_fields))
-            }
-
-            headers_strs = [f"{key}: {value}" for key, value in enumerate(headers)]
-            exe.log(
-                f"POST Headers: {', '.join(headers_strs)} Body: {payload.encode('utf-8')}"
+        header_fields = source.explicit_include_headers
+        if source.include_headers:
+            header_fields.extend(
+                ["timestamp", "x-event-type", "signature", "x-mz-api-key"]
             )
+
+        headers = {
+            header: f'"{Text.random_value(self.rng)}"'.encode()
+            for header in self.rng.sample(header_fields, len(header_fields))
+        }
+
+        headers_strs = [f"{key}: {value}" for key, value in enumerate(headers)]
+        exe.log(
+            f"POST Headers: {', '.join(headers_strs)} Body: {payload.encode('utf-8')}"
+        )
+        try:
             requests.post(url, data=payload.encode("utf-8"), headers=headers)
+        except requests.exceptions.ConnectionError:
+            # Expeceted when Mz is killed
+            if self.db.scenario != Scenario.Kill:
+                raise
 
 
 class ActionList:
@@ -1012,8 +1070,8 @@ ddl_action_list = ActionList(
         (DropRoleAction, 1),
         (CreateClusterAction, 2),
         (DropClusterAction, 1),
-        (CreateClusterReplicaAction, 8),
-        (DropClusterReplicaAction, 4),
+        (CreateClusterReplicaAction, 4),
+        (DropClusterReplicaAction, 2),
         (SetClusterAction, 1),
         (CreateWebhookSourceAction, 2),
         (DropWebhookSourceAction, 1),
@@ -1030,6 +1088,8 @@ ddl_action_list = ActionList(
         (DropSchemaAction, 1),
         (RenameSchemaAction, 10),
         (RenameTableAction, 10),
+        (RenameViewAction, 10),
+        (RenameSinkAction, 10),
         (SwapSchemaAction, 10),
         # (TransactionIsolationAction, 1),
     ],

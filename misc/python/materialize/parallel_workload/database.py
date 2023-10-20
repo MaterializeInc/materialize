@@ -210,6 +210,7 @@ class View(DBObject):
     join_column: Column | None
     join_column2: Column | None
     assert_not_null: list[Column]
+    rename: int
     schema: Schema
 
     def __init__(
@@ -220,6 +221,7 @@ class View(DBObject):
         base_object2: DBObject | None,
         schema: Schema,
     ):
+        self.rename = 0
         self.view_id = view_id
         self.base_object = base_object
         self.base_object2 = base_object2
@@ -262,6 +264,8 @@ class View(DBObject):
                 self.join_column2 = rng.choice(columns)
 
     def name(self) -> str:
+        if self.rename:
+            return naughtify(f"v-{self.view_id}-{self.rename}")
         return naughtify(f"v-{self.view_id}")
 
     def __str__(self) -> str:
@@ -578,13 +582,17 @@ class ClusterReplica:
     replica_id: int
     size: str
     cluster: "Cluster"
+    rename: int
 
     def __init__(self, replica_id: int, size: str, cluster: "Cluster"):
         self.replica_id = replica_id
         self.size = size
         self.cluster = cluster
+        self.rename = 0
 
     def name(self) -> str:
+        if self.rename:
+            return naughtify(f"r-{self.replica_id+1}-{self.rename}")
         return naughtify(f"r-{self.replica_id+1}")
 
     def __str__(self) -> str:
@@ -604,6 +612,7 @@ class Cluster:
     replicas: list[ClusterReplica]
     replica_id: int
     introspection_interval: str
+    rename: int
 
     def __init__(
         self,
@@ -621,8 +630,11 @@ class Cluster:
         ]
         self.replica_id = len(self.replicas)
         self.introspection_interval = introspection_interval
+        self.rename = 0
 
     def name(self) -> str:
+        if self.rename:
+            return naughtify(f"cluster-{self.cluster_id}-{self.rename}")
         return naughtify(f"cluster-{self.cluster_id}")
 
     def __str__(self) -> str:
@@ -798,7 +810,39 @@ class Database:
 
     def create(self, exe: Executor) -> None:
         self.drop(exe)
+        exe.execute("ALTER SYSTEM SET enable_webhook_sources TO true")
+        exe.execute("ALTER SYSTEM SET max_schemas_per_database = 105")
+        # The presence of ALTER TABLE RENAME can cause the total number of tables to exceed MAX_TABLES
+        exe.execute("ALTER SYSTEM SET max_tables = 200")
+        exe.execute("ALTER SYSTEM SET max_materialized_views = 105")
+        exe.execute("ALTER SYSTEM SET max_sources = 105")
+        exe.execute("ALTER SYSTEM SET max_roles = 105")
+        exe.execute("ALTER SYSTEM SET max_clusters = 105")
+        exe.execute("ALTER SYSTEM SET max_replicas_per_cluster = 105")
+        # Most queries should not fail because of privileges
+        exe.execute(
+            "ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL PRIVILEGES ON TABLES TO PUBLIC"
+        )
+        exe.execute(
+            "ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL PRIVILEGES ON TYPES TO PUBLIC"
+        )
+        exe.execute(
+            "ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL PRIVILEGES ON SECRETS TO PUBLIC"
+        )
+        exe.execute(
+            "ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL PRIVILEGES ON CONNECTIONS TO PUBLIC"
+        )
+        exe.execute(
+            "ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL PRIVILEGES ON DATABASES TO PUBLIC"
+        )
+        exe.execute(
+            "ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL PRIVILEGES ON SCHEMAS TO PUBLIC"
+        )
+        exe.execute(
+            "ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL PRIVILEGES ON CLUSTERS TO PUBLIC"
+        )
         exe.execute(f"CREATE DATABASE {self}")
+        exe.execute(f"ALTER DATABASE {self} OWNER TO materialize")
 
     def create_relations(self, exe: Executor) -> None:
         exe.execute("SELECT name FROM mz_clusters WHERE name LIKE 'c%'")

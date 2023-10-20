@@ -871,7 +871,17 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
               args: [--runtime=1500, --scenario=kill]
-        skip: "TODO(def-) Enable after figuring out restoring catalog"
+
+      - id: parallel-workload-backup-restore
+        label: "Parallel Workload (backup & restore)"
+        artifact_paths: [junit_*.xml, parallel-workload-queries.log.zst]
+        timeout_in_minutes: 40
+        agents:
+          queue: builder-linux-x86_64
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: parallel-workload
+              args: [--runtime=1500, --scenario=backup-restore]
 
   - id: incident-70
     label: "Test for incident 70"

@@ -58,22 +58,6 @@ def run(
     )
     initialize_logging()
 
-    system_conn = pg8000.connect(
-        host=host, port=ports["mz_system"], user="mz_system", database="materialize"
-    )
-    system_conn.autocommit = True
-    with system_conn.cursor() as cur:
-        cur.execute("ALTER SYSTEM SET enable_webhook_sources TO true")
-        cur.execute("ALTER SYSTEM SET max_schemas_per_database = 105")
-        # The presence of ALTER TABLE RENAME can cause the total number of tables to exceed MAX_TABLES
-        cur.execute("ALTER SYSTEM SET max_tables = 200")
-        cur.execute("ALTER SYSTEM SET max_materialized_views = 105")
-        cur.execute("ALTER SYSTEM SET max_sources = 105")
-        cur.execute("ALTER SYSTEM SET max_roles = 105")
-        cur.execute("ALTER SYSTEM SET max_clusters = 105")
-        cur.execute("ALTER SYSTEM SET max_replicas_per_cluster = 105")
-    system_conn.close()
-
     end_time = (
         datetime.datetime.now() + datetime.timedelta(seconds=runtime)
     ).timestamp()
@@ -82,11 +66,14 @@ def run(
     database = Database(
         rng, seed, host, ports, complexity, scenario, naughty_identifiers
     )
-    conn = pg8000.connect(host=host, port=ports["materialized"], user="materialize")
-    conn.autocommit = True
-    with conn.cursor() as cur:
+
+    system_conn = pg8000.connect(
+        host=host, port=ports["mz_system"], user="mz_system", database="materialize"
+    )
+    system_conn.autocommit = True
+    with system_conn.cursor() as cur:
         database.create(Executor(rng, cur))
-    conn.close()
+    system_conn.close()
 
     conn = pg8000.connect(
         host=host,
