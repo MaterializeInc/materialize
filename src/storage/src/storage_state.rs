@@ -1009,6 +1009,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
         let mut drop_commands = BTreeSet::new();
         let mut running_ingestion_descriptions = self.storage_state.ingestions.clone();
+        let mut running_exports_descriptions = self.storage_state.exports.clone();
 
         for command in &mut commands {
             match command {
@@ -1041,13 +1042,26 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         }
                     }
                 }
-                StorageCommand::InitializationComplete
-                | StorageCommand::UpdateConfiguration(_)
-                | StorageCommand::CreateSinks(_) => (),
+                StorageCommand::CreateSinks(exports) => {
+                    // Ensure that exports are forward-rolling alter compatible.
+                    for export in exports {
+                        let prev = running_exports_descriptions
+                            .insert(export.id, export.description.clone());
+
+                        if let Some(prev_export) = prev {
+                            prev_export
+                                .alter_compatible(export.id, &export.description)
+                                .expect("only alter compatible ingestions permitted");
+                        }
+                    }
+                }
+                StorageCommand::InitializationComplete | StorageCommand::UpdateConfiguration(_) => {
+                    ()
+                }
             }
         }
 
-        let mut seen_most_recent_ingestion = BTreeSet::new();
+        let mut seen_most_recent_definition = BTreeSet::new();
 
         // We iterate over this backward to ensure that we keep only the most recent ingestion
         // description.
@@ -1081,34 +1095,34 @@ impl<'w, A: Allocate> Worker<'w, A> {
                             //   is why these commands are run in reverse.
                             // - Ingestions whose descriptions are not exactly
                             //   those that are currently running.
-                            seen_most_recent_ingestion.insert(ingestion.id)
+                            seen_most_recent_definition.insert(ingestion.id)
                                 && running_ingestion != Some(&ingestion.description)
                         }
                     })
                 }
                 StorageCommand::CreateSinks(exports) => {
                     exports.retain_mut(|export| {
-                        if drop_commands.remove(&export.id) {
+                        if drop_commands.remove(&export.id)
+                            || self.storage_state.dropped_ids.contains(&export.id)
+                        {
                             // Make sure that we report back that the ID was
                             // dropped.
                             self.storage_state.dropped_ids.insert(export.id);
 
                             false
-                        } else if let Some(existing) = self.storage_state.exports.get(&export.id) {
-                            expected_objects.insert(export.id);
-                            // If we've been asked to create an export that is
-                            // already installed, the descriptions must be
-                            // compatible.
-                            //
-                            // TODO(ALTER CONNECTION): we will need to update
-                            // the stored connection description if it's
-                            // changed.
-                            existing
-                                .alter_compatible(export.id, &export.description)
-                                .expect("reconciled sinks must have compatible descriptions");
-                            false
                         } else {
-                            true
+                            expected_objects.insert(export.id);
+
+                            let running_sink = self.storage_state.exports.get(&export.id);
+                            export.update = running_sink.is_some();
+
+                            // We keep only:
+                            // - The most recent version of the sink, which
+                            //   is why these commands are run in reverse.
+                            // - Sinks whose descriptions are not exactly
+                            //   those that are currently running.
+                            seen_most_recent_definition.insert(export.id)
+                                && running_sink != Some(&export.description)
                         }
                     })
                 }
@@ -1273,23 +1287,41 @@ impl StorageState {
                 for export in exports {
                     // Remember the sink description to facilitate possible
                     // reconciliation later.
-                    self.exports.insert(export.id, export.description.clone());
+                    let prev = self.exports.insert(export.id, export.description.clone());
 
-                    self.reported_frontiers.insert(
-                        export.id,
-                        Antichain::from_elem(mz_repr::Timestamp::minimum()),
+                    assert!(
+                        prev.is_some() == export.update,
+                        "can only and must update reported frontiers if RunSinkCommand is update"
                     );
 
-                    self.sink_handles.insert(
-                        export.id,
-                        SinkHandle::new(
+                    if export.update {
+                        assert!(
+                            self.reported_frontiers.contains_key(&export.id),
+                            "if update, must contain frontier for sink {}",
+                            export.id
+                        );
+                        assert!(
+                            self.sink_handles.contains_key(&export.id),
+                            "if update, must contain handle for sink {}",
+                            export.id
+                        );
+                    } else {
+                        self.reported_frontiers.insert(
                             export.id,
-                            &export.description.from_storage_metadata,
-                            export.description.from_storage_metadata.data_shard,
-                            export.description.as_of.frontier.clone(),
-                            Arc::clone(&self.persist_clients),
-                        ),
-                    );
+                            Antichain::from_elem(mz_repr::Timestamp::minimum()),
+                        );
+
+                        self.sink_handles.insert(
+                            export.id,
+                            SinkHandle::new(
+                                export.id,
+                                &export.description.from_storage_metadata,
+                                export.description.from_storage_metadata.data_shard,
+                                export.description.as_of.frontier.clone(),
+                                Arc::clone(&self.persist_clients),
+                            ),
+                        );
+                    }
 
                     // This needs to be broadcast by one worker and go through the internal command
                     // fabric, to ensure consistent ordering of dataflow rendering across all

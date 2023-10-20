@@ -113,7 +113,7 @@ use mz_repr::{ColumnName, Datum, Diff, GlobalId, RelationDesc, Row, TimestampMan
 use mz_stash::{self, AppendBatch, StashFactory, TypedCollection};
 use mz_stash_types::metrics::Metrics as StashMetrics;
 use mz_storage_client::client::{
-    CreateSinkCommand, ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand,
+    ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand, RunSinkCommand,
     SinkStatisticsUpdate, SourceStatisticsUpdate, StorageCommand, StorageResponse,
     TimestamplessUpdate,
 };
@@ -1104,7 +1104,7 @@ where
                 None
             };
 
-            let cmd = CreateSinkCommand {
+            let cmd = RunSinkCommand {
                 id,
                 description: StorageSinkDesc {
                     from: from_id,
@@ -1115,6 +1115,7 @@ where
                     status_id,
                     from_storage_metadata,
                 },
+                update: false,
             };
 
             // Fetch the client for this exports's cluster.
@@ -1182,7 +1183,7 @@ where
                 None
             };
 
-            let cmd = CreateSinkCommand {
+            let cmd = RunSinkCommand {
                 id,
                 description: StorageSinkDesc {
                     from: export.description.sink.from,
@@ -1193,6 +1194,7 @@ where
                     status_id,
                     from_storage_metadata,
                 },
+                update: true,
             };
 
             // Fetch the client for this exports's cluster.

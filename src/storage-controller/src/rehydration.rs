@@ -32,7 +32,7 @@ use mz_repr::GlobalId;
 use mz_service::client::{GenericClient, Partitioned};
 use mz_service::params::GrpcClientParameters;
 use mz_storage_client::client::{
-    CreateSinkCommand, RunIngestionCommand, StorageClient, StorageCommand, StorageGrpcClient,
+    RunIngestionCommand, RunSinkCommand, StorageClient, StorageCommand, StorageGrpcClient,
     StorageResponse,
 };
 use mz_storage_client::metrics::RehydratingStorageClientMetrics;
@@ -147,7 +147,7 @@ struct RehydrationTask<T> {
     /// The sources that have been observed.
     sources: BTreeMap<GlobalId, RunIngestionCommand>,
     /// The exports that have been observed.
-    sinks: BTreeMap<GlobalId, CreateSinkCommand<T>>,
+    sinks: BTreeMap<GlobalId, RunSinkCommand<T>>,
     /// The upper frontier information received.
     uppers: BTreeMap<GlobalId, Antichain<T>>,
     /// The since frontiers that have been observed.
@@ -433,10 +433,29 @@ where
             }
             StorageCommand::CreateSinks(exports) => {
                 for export in exports {
-                    self.sinks.insert(export.id, export.clone());
-                    // Initialize the uppers we are tracking
-                    self.uppers
-                        .insert(export.id, Antichain::from_elem(T::minimum()));
+                    let prev = self.sinks.insert(export.id, export.clone());
+                    assert!(
+                        prev.is_some() == export.update,
+                        "can only and must update source if RunSinkCommand is update"
+                    );
+
+                    if export.update {
+                        assert!(
+                            self.uppers.contains_key(&export.id),
+                            "tried to update description of sink {} without tracked upper",
+                            export.id
+                        )
+                    } else {
+                        // Initialize the uppers we are tracking
+                        let prev = self
+                            .uppers
+                            .insert(export.id, Antichain::from_elem(T::minimum()));
+
+                        assert!(
+                            prev.is_some() == export.update,
+                            "can only and must update uppers if RunSinkCommand is update"
+                        );
+                    }
                 }
             }
             StorageCommand::AllowCompaction(frontiers) => {
