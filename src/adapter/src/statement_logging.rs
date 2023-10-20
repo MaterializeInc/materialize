@@ -10,22 +10,25 @@
 use mz_controller_types::ClusterId;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
+use ordered_float::OrderedFloat;
 use uuid::Uuid;
 
 use crate::{AdapterError, ExecuteResponse};
 /// Contains all the information necessary to generate the initial
 /// entry in `mz_statement_execution_history`. We need to keep this
 /// around in order to modify the entry later once the statement finishes executing.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StatementBeganExecutionRecord {
     pub id: Uuid,
     pub prepared_statement_id: Uuid,
-    pub sample_rate: f64,
+    pub sample_rate: OrderedFloat<f64>,
     pub params: Vec<Option<String>>,
     pub began_at: EpochMillis,
     pub cluster_id: Option<ClusterId>,
     pub cluster_name: Option<String>,
     pub application_name: String,
+    pub transaction_isolation: String,
+    pub execution_timestamp: Option<EpochMillis>,
 }
 
 #[derive(Clone, Copy, Debug)]

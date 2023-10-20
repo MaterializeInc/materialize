@@ -16,9 +16,10 @@ use mz_ore::now::to_datetime;
 use mz_ore::task::spawn;
 use mz_ore::{cast::CastFrom, now::EpochMillis};
 use mz_repr::adt::array::ArrayDimension;
-use mz_repr::{Datum, Diff, Row, RowPacker};
+use mz_repr::{Datum, Diff, Row, RowPacker, Timestamp};
 use mz_sql::plan::Params;
 use mz_storage_client::controller::IntrospectionType;
+use ordered_float::OrderedFloat;
 use qcell::QCell;
 use rand::SeedableRng;
 use rand::{distributions::Bernoulli, prelude::Distribution, thread_rng};
@@ -247,6 +248,8 @@ impl Coordinator {
             cluster_id,
             cluster_name,
             application_name,
+            transaction_isolation,
+            execution_timestamp,
         } = record;
 
         let cluster = cluster_id.map(|id| id.to_string());
@@ -260,6 +263,8 @@ impl Coordinator {
             },
             Datum::String(&*application_name),
             cluster_name.as_ref().map(String::as_str).into(),
+            Datum::String(&*transaction_isolation),
+            (*execution_timestamp).into(),
         ]);
         packer
             .push_array(
@@ -381,31 +386,50 @@ impl Coordinator {
         vec![(retraction, -1), (new, 1)]
     }
 
-    /// Set the `cluster_id` for a statement, once it's known.
-    pub fn set_statement_execution_cluster(
+    /// Mutate a statement execution record via the given function `f`.
+    fn mutate_record<F: FnOnce(&mut StatementBeganExecutionRecord)>(
         &mut self,
         StatementLoggingId(id): StatementLoggingId,
-        cluster_id: ClusterId,
+        f: F,
     ) {
-        let cluster_name = self.catalog().get_cluster(cluster_id).name.clone();
         let record = self
             .statement_logging
             .executions_begun
             .get_mut(&id)
-            .expect("set_statement_execution_cluster must not be called after execution ends");
-        if record.cluster_id == Some(cluster_id) {
-            return;
-        }
+            .expect("mutate_record must not be called after execution ends");
         let retraction = Self::pack_statement_began_execution_update(record);
         self.statement_logging
             .pending_statement_execution_events
             .push((retraction, -1));
-        record.cluster_name = Some(cluster_name);
-        record.cluster_id = Some(cluster_id);
+        f(record);
         let update = Self::pack_statement_began_execution_update(record);
         self.statement_logging
             .pending_statement_execution_events
             .push((update, 1));
+    }
+
+    /// Set the `cluster_id` for a statement, once it's known.
+    pub fn set_statement_execution_cluster(
+        &mut self,
+        id: StatementLoggingId,
+        cluster_id: ClusterId,
+    ) {
+        let cluster_name = self.catalog().get_cluster(cluster_id).name.clone();
+        self.mutate_record(id, |record| {
+            record.cluster_name = Some(cluster_name);
+            record.cluster_id = Some(cluster_id);
+        });
+    }
+
+    /// Set the `execution_timestamp` for a statement, once it's known
+    pub fn set_statement_execution_timestamp(
+        &mut self,
+        id: StatementLoggingId,
+        timestamp: Timestamp,
+    ) {
+        self.mutate_record(id, |record| {
+            record.execution_timestamp = Some(u64::from(timestamp));
+        })
     }
 
     /// Possibly record the beginning of statement execution, depending on a randomly-chosen value.
@@ -472,13 +496,17 @@ impl Coordinator {
         let record = StatementBeganExecutionRecord {
             id: ev_id,
             prepared_statement_id: ps_uuid,
-            sample_rate,
+            sample_rate: OrderedFloat(sample_rate),
             params,
             began_at: self.now(),
             // Cluster is not known yet; we'll fill it in later
             cluster_id: None,
             cluster_name: None,
+            // Timetsamp is not known yet; we'll fill it in later
+            // (if any exists)
+            execution_timestamp: None,
             application_name: session.application_name().to_string(),
+            transaction_isolation: session.vars().transaction_isolation().to_string(),
         };
         let mseh_update = Self::pack_statement_began_execution_update(&record);
         self.statement_logging

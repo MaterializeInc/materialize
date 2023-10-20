@@ -313,6 +313,10 @@ impl Coordinator {
                             appends.entry(id).or_default().extend(rows);
                         }
                     }
+                    if let Some(id) = ctx.extra().contents() {
+                        self.set_statement_execution_timestamp(id, timestamp);
+                    }
+
                     responses.push(CompletedClientTransmitter::new(ctx, response, action));
                 }
                 PendingWriteTxn::System { updates, source } => {

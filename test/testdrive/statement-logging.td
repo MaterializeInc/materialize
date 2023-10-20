@@ -90,6 +90,12 @@ contains: column "f_nonexistent" does not exist
 > SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics
 true
 
+# Test that we're correctly recording transaction isolation
+> SET transaction_isolation TO serializable
+
+> SELECT 'serializable'
+serializable
+
 # Assumptions encoded here:
 # (1) "Inner" statement executions are not logged. For example,
 #     if SQL-level `PREPARE` and `EXECUTE` are used, those statements will
@@ -108,25 +114,27 @@ true
 
 > WITH all_stmts AS (SELECT * FROM mz_internal.mz_statement_execution_history mseh RIGHT JOIN mz_internal.mz_prepared_statement_history mpsh ON mseh.prepared_statement_id = mpsh.id),
        test_begin AS (SELECT began_at FROM all_stmts WHERE sql = 'SELECT ''beginning real test!''' ORDER BY began_at DESC LIMIT 1)
-  SELECT c.name, all_stmts.cluster_name, all_stmts.application_name, all_stmts.sample_rate, all_stmts.params, all_stmts.finished_status, all_stmts.error_message, all_stmts.rows_returned, all_stmts.execution_strategy, all_stmts.name LIKE 's%', all_stmts.sql
+  SELECT c.name, all_stmts.cluster_name, all_stmts.application_name, all_stmts.sample_rate, all_stmts.params, all_stmts.finished_status, all_stmts.error_message, all_stmts.rows_returned, all_stmts.execution_strategy, all_stmts.name LIKE 's%', all_stmts.sql, all_stmts.transaction_isolation
   FROM all_stmts, test_begin LEFT JOIN mz_clusters c ON c.id = all_stmts.cluster_id WHERE all_stmts.began_at >= test_begin.began_at AND all_stmts.sql NOT LIKE '%sduiahsdfuoiahsdf%'
-<null> c my_app 1 {} success <null> 1 standard true "SELECT count(*) FROM t"
-<null> c my_app 1 {} success <null> <null> <null> true "DROP CLUSTER c"
-default default my_app 1 {} error "Evaluation error: division by zero" <null> <null> true "SELECT f/0 FROM t"
-default default my_app 1 {} success <null> 1 constant true "EXECUTE p('hello world')"
-default default my_app 1 {} success <null> 1 fast-path true "SELECT * FROM t"
-default default my_app 1 {} success <null> 1 standard true "SELECT count(*) FROM t"
-default default my_app 1 {} success <null> 2 constant true "FETCH c"
-default default my_app 1 {} success <null> <null> <null> true BEGIN
-default default my_app 1 {} success <null> <null> <null> true COMMIT
-default default my_app 1 {} success <null> <null> <null> true "CREATE CLUSTER c REPLICAS (r1 (size '1'))"
-default default my_app 1 {} success <null> <null> <null> true "CREATE DEFAULT INDEX i ON t"
-default default my_app 1 {} success <null> <null> <null> true "CREATE TABLE t(f int)"
-default default my_app 1 {} success <null> <null> <null> true "DECLARE c CURSOR FOR VALUES (1), (2)"
-default default my_app 1 {} success <null> <null> <null> true "FETCH c"
-default default my_app 1 {} success <null> <null> <null> true "FETCH c"
-default default my_app 1 {} success <null> <null> <null> true "INSERT INTO t VALUES (1)"
-default default my_app 1 {} success <null> <null> <null> true "PREPARE p AS values ($1)"
-default default my_app 1 {} success <null> <null> <null> true "SET cluster TO c"
-mz_introspection mz_introspection my_app 1 {} success <null> 1 constant true "SELECT 'beginning real test!'"
-mz_introspection mz_introspection my_app 1 {} success <null> 1 standard true "SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics"
+<null> <null> my_app 1 {} success <null> <null> <null> true "SET transaction_isolation TO serializable" "strict serializable"
+<null> c my_app 1 {} success <null> 1 standard true "SELECT count(*) FROM t" "strict serializable"
+<null> c my_app 1 {} success <null> <null> <null> true "DROP CLUSTER c" "strict serializable"
+default default my_app 1 {} error "Evaluation error: division by zero" <null> <null> true "SELECT f/0 FROM t" "strict serializable"
+default default my_app 1 {} success <null> 1 constant true "EXECUTE p('hello world')" "strict serializable"
+default default my_app 1 {} success <null> 1 fast-path true "SELECT * FROM t" "strict serializable"
+default default my_app 1 {} success <null> 1 standard true "SELECT count(*) FROM t" "strict serializable"
+default default my_app 1 {} success <null> 2 constant true "FETCH c" "strict serializable"
+default default my_app 1 {} success <null> <null> <null> true BEGIN "strict serializable"
+default default my_app 1 {} success <null> <null> <null> true COMMIT "strict serializable"
+default default my_app 1 {} success <null> <null> <null> true "CREATE CLUSTER c REPLICAS (r1 (size '1'))" "strict serializable"
+default default my_app 1 {} success <null> <null> <null> true "CREATE DEFAULT INDEX i ON t" "strict serializable"
+default default my_app 1 {} success <null> <null> <null> true "CREATE TABLE t(f int)" "strict serializable"
+default default my_app 1 {} success <null> <null> <null> true "DECLARE c CURSOR FOR VALUES (1), (2)" "strict serializable"
+default default my_app 1 {} success <null> <null> <null> true "FETCH c" "strict serializable"
+default default my_app 1 {} success <null> <null> <null> true "FETCH c" "strict serializable"
+default default my_app 1 {} success <null> <null> <null> true "INSERT INTO t VALUES (1)" "strict serializable"
+default default my_app 1 {} success <null> <null> <null> true "PREPARE p AS values ($1)" "strict serializable"
+default default my_app 1 {} success <null> <null> <null> true "SET cluster TO c" "strict serializable"
+mz_introspection mz_introspection my_app 1 {} success <null> 1 constant true "SELECT 'beginning real test!'" "strict serializable"
+mz_introspection mz_introspection my_app 1 {} success <null> 1 constant true "SELECT 'serializable'" serializable
+mz_introspection mz_introspection my_app 1 {} success <null> 1 standard true "SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" "strict serializable"

@@ -487,6 +487,9 @@ impl crate::coord::Coordinator {
         }
 
         let timestamp = determination.timestamp_context.timestamp_or_default();
+        if let Some(id) = ctx_extra.contents() {
+            self.set_statement_execution_timestamp(id, timestamp)
+        }
 
         if let PeekPlan::FastPath(FastPathPlan::PeekPersist(id, mfp_plan)) = fast_path {
             let mut cursor = self
