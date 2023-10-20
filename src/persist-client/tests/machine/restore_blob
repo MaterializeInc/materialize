@@ -1,0 +1,123 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+
+# Pre-populate some non-trivial state in our shard.
+
+write-batch output=b0 lower=0 upper=1
+k1 0 1
+----
+parts=1 len=1
+
+write-batch output=b1 lower=1 upper=2
+k2 1 -1
+k3 1 1
+----
+parts=1 len=2
+
+write-batch output=b2 lower=2 upper=3
+k3 2 -1
+k4 2 1
+----
+parts=1 len=2
+
+compare-and-append input=b0 writer_id=w11111111-1111-1111-1111-111111111111
+----
+v2 [1]
+
+compare-and-append input=b1 writer_id=w11111111-1111-1111-1111-111111111111
+----
+v3 [2]
+
+write-rollup output=v3
+----
+state=v3 diffs=[v2, v4)
+
+compare-and-append input=b2 writer_id=w11111111-1111-1111-1111-111111111111
+----
+v4 [3]
+
+write-rollup output=v4
+----
+state=v4 diffs=[v2, v5)
+
+# write a bunch of rollups to verify GC bounds
+add-rollup input=v3
+----
+v5
+
+write-rollup output=v5
+----
+state=v5 diffs=[v4, v6)
+
+add-rollup input=v4
+----
+v6
+
+add-rollup input=v5
+----
+v7
+
+consensus-scan from_seqno=v1
+----
+seqno=v1 batches= rollups=v1
+seqno=v2 batches=b0 rollups=v1
+seqno=v3 batches=b0,b1 rollups=v1
+seqno=v4 batches=b0,b1,b2 rollups=v1
+seqno=v5 batches=b0,b1,b2 rollups=v1,v3
+seqno=v6 batches=b0,b1,b2 rollups=v1,v3,v4
+seqno=v7 batches=b0,b1,b2 rollups=v1,v3,v4,v5
+
+gc to_seqno=v3
+----
+v8 batch_parts=0 rollups=0 truncated=v3 state_rollups=v1
+
+consensus-scan from_seqno=v1
+----
+seqno=v3 batches=b0,b1 rollups=v1
+seqno=v4 batches=b0,b1,b2 rollups=v1
+seqno=v5 batches=b0,b1,b2 rollups=v1,v3
+seqno=v6 batches=b0,b1,b2 rollups=v1,v3,v4
+seqno=v7 batches=b0,b1,b2 rollups=v1,v3,v4,v5
+seqno=v8 batches=b0,b1,b2 rollups=v3,v4,v5
+
+# Delete our state
+clear-blob
+----
+deleted=7
+
+restore-blob
+----
+<empty>
+
+consensus-scan from_seqno=v1
+----
+seqno=v3 batches=b0,b1 rollups=v1
+seqno=v4 batches=b0,b1,b2 rollups=v1
+seqno=v5 batches=b0,b1,b2 rollups=v1,v3
+seqno=v6 batches=b0,b1,b2 rollups=v1,v3,v4
+seqno=v7 batches=b0,b1,b2 rollups=v1,v3,v4,v5
+seqno=v8 batches=b0,b1,b2 rollups=v3,v4,v5
+
+snapshot as_of=2
+----
+<batch [0]-[1]>
+<run 0>
+<part 0>
+k1 2 1
+<batch [1]-[2]>
+<run 0>
+<part 0>
+k2 2 -1
+k3 2 1
+<batch [2]-[3]>
+<run 0>
+<part 0>
+k3 2 -1
+k4 2 1

@@ -8,6 +8,8 @@
 # by the Apache License, Version 2.0.
 
 
+from copy import copy
+
 from materialize.mzcompose import (
     DEFAULT_CRDB_ENVIRONMENT,
     DEFAULT_MZ_ENVIRONMENT_ID,
@@ -79,7 +81,9 @@ class Materialized(Service):
         ]
 
         if system_parameter_defaults is None:
-            system_parameter_defaults = DEFAULT_SYSTEM_PARAMETERS
+            # Has to be copied so we later don't modify the
+            # DEFAULT_SYSTEM_PARAMETERS dictionary
+            system_parameter_defaults = copy(DEFAULT_SYSTEM_PARAMETERS)
 
         if additional_system_parameter_defaults is not None:
             system_parameter_defaults.update(additional_system_parameter_defaults)

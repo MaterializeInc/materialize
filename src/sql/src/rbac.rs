@@ -909,6 +909,25 @@ fn generate_rbac_requirements(
             ownership: vec![ObjectId::Item(*id_a), ObjectId::Item(*id_b)],
             ..Default::default()
         },
+        Plan::AlterSchemaRename(plan::AlterSchemaRenamePlan {
+            cur_schema_spec,
+            new_schema_name: _,
+        }) => {
+            let privileges = match cur_schema_spec.0 {
+                ResolvedDatabaseSpecifier::Id(db_id) => vec![(
+                    SystemObjectId::Object(ObjectId::Database(db_id)),
+                    AclMode::CREATE,
+                    role_id,
+                )],
+                ResolvedDatabaseSpecifier::Ambient => vec![],
+            };
+
+            RbacRequirements {
+                ownership: vec![ObjectId::Schema(*cur_schema_spec)],
+                privileges,
+                ..Default::default()
+            }
+        }
         Plan::AlterSecret(plan::AlterSecretPlan { id, secret_as: _ }) => RbacRequirements {
             ownership: vec![ObjectId::Item(*id)],
             ..Default::default()

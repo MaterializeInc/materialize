@@ -31,7 +31,7 @@ use tracing::{debug, error, info};
 use crate::{persist_handles, StorageError};
 
 // Note(parkmycar): The capacity here was chosen arbitrarily.
-const CHANNEL_CAPACITY: usize = 255;
+const CHANNEL_CAPACITY: usize = 2048;
 // Default rate at which we append data and advance the uppers of managed collections.
 const DEFAULT_TICK: Duration = Duration::from_secs(1);
 

@@ -92,7 +92,7 @@ use uncased::UncasedStr;
 
 use crate::ast::Ident;
 use crate::session::user::{User, SYSTEM_USER};
-use crate::DEFAULT_SCHEMA;
+use crate::{DEFAULT_SCHEMA, WEBHOOK_CONCURRENCY_LIMIT};
 
 /// The action to take during end_transaction.
 ///
@@ -1086,6 +1086,15 @@ const STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES: ServerVar<usize> = ServerVar {
     internal: true
 };
 
+/// Controls [`mz_persist_client::cfg::PersistConfig::storage_source_decode_fuel`].
+const STORAGE_SOURCE_DECODE_FUEL: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("storage_source_decode_fuel"),
+    value: &PersistConfig::DEFAULT_STORAGE_SOURCE_DECODE_FUEL,
+    description: "The maximum amount of work to do in the persist_source mfp_and_decode \
+                  operator before yielding.",
+    internal: true,
+};
+
 const STORAGE_RECORD_SOURCE_SINK_NAMESPACED_ERRORS: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("storage_record_source_sink_namespaced_errors"),
     value: &true,
@@ -1411,6 +1420,13 @@ pub const MAX_TIMESTAMP_INTERVAL: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("max_timestamp_interval"),
     value: &Duration::from_millis(1000),
     description: "Maximum timestamp interval",
+    internal: true,
+};
+
+pub const WEBHOOK_CONCURRENT_REQUEST_LIMIT: ServerVar<usize> = ServerVar {
+    name: UncasedStr::new("webhook_concurrent_request_limit"),
+    value: &WEBHOOK_CONCURRENCY_LIMIT,
+    description: "Maximum number of concurrent requests for appending to a webhook source.",
     internal: true,
 };
 
@@ -1770,7 +1786,7 @@ feature_flags!(
     ),
     (
         enable_unified_optimizer_api,
-        "use the new unified optimzier API in bootstrap() and coordinator methods",
+        "use the new unified optimizer API in bootstrap() and coordinator methods",
         true
     ),
     (
@@ -2453,6 +2469,7 @@ impl SystemVars {
             .with_var(&STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO)
             .with_var(&PERSIST_SINK_MINIMUM_BATCH_UPDATES)
             .with_var(&STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES)
+            .with_var(&STORAGE_SOURCE_DECODE_FUEL)
             .with_var(&STORAGE_RECORD_SOURCE_SINK_NAMESPACED_ERRORS)
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF)
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER)
@@ -2517,7 +2534,8 @@ impl SystemVars {
             .with_var(&TRUNCATE_STATEMENT_LOG)
             .with_var(&STATEMENT_LOGGING_RETENTION)
             .with_var(&OPTIMIZER_STATS_TIMEOUT)
-            .with_var(&OPTIMIZER_ONESHOT_STATS_TIMEOUT);
+            .with_var(&OPTIMIZER_ONESHOT_STATS_TIMEOUT)
+            .with_var(&WEBHOOK_CONCURRENT_REQUEST_LIMIT);
 
         for flag in PersistFeatureFlag::ALL {
             vars = vars.with_var(&flag.into())
@@ -3048,6 +3066,10 @@ impl SystemVars {
         *self.expect_value(&STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES)
     }
 
+    pub fn storage_source_decode_fuel(&self) -> usize {
+        *self.expect_value(&STORAGE_SOURCE_DECODE_FUEL)
+    }
+
     /// Returns the `storage_record_source_sink_namespaced_errors` configuration parameter.
     pub fn storage_record_source_sink_namespaced_errors(&self) -> bool {
         *self.expect_value(&STORAGE_RECORD_SOURCE_SINK_NAMESPACED_ERRORS)
@@ -3274,6 +3296,11 @@ impl SystemVars {
     /// Returns the `optimizer_oneshot_stats_timeout` configuration parameter.
     pub fn optimizer_oneshot_stats_timeout(&self) -> Duration {
         *self.expect_value(&OPTIMIZER_ONESHOT_STATS_TIMEOUT)
+    }
+
+    /// Returns the `webhook_concurrent_request_limit` configuration parameter.
+    pub fn webhook_concurrent_request_limit(&self) -> usize {
+        *self.expect_value(&WEBHOOK_CONCURRENT_REQUEST_LIMIT)
     }
 }
 
@@ -4873,6 +4900,7 @@ fn is_persist_config_var(name: &str) -> bool {
         || name == PERSIST_SINK_MINIMUM_BATCH_UPDATES.name()
         || name == STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES.name()
         || name == STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES.name()
+        || name == STORAGE_SOURCE_DECODE_FUEL.name()
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF.name()
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER.name()
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP.name()
@@ -4898,6 +4926,11 @@ pub fn is_cluster_scheduling_var(name: &str) -> bool {
         || name == cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_SOFT.name()
         || name == cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY.name()
         || name == cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT.name()
+}
+
+/// Returns whether the named variable is an HTTP server related config var.
+pub fn is_http_config_var(name: &str) -> bool {
+    name == WEBHOOK_CONCURRENT_REQUEST_LIMIT.name()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

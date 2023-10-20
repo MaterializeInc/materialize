@@ -107,4 +107,8 @@ impl Blob for InterceptBlob {
             None => ret,
         }
     }
+
+    async fn restore(&self, key: &str) -> Result<(), ExternalError> {
+        self.blob.restore(key).await
+    }
 }

@@ -543,7 +543,7 @@ impl AstDisplay for ResolvedColumnName {
             ResolvedColumnName::Column { relation, name, .. } => {
                 f.write_node(relation);
                 f.write_str(".");
-                f.write_str(name);
+                f.write_node(&Ident::new(name.as_str()));
             }
             ResolvedColumnName::Error => {}
         }
@@ -1764,9 +1764,11 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 let name = normalize::column_name(column_name.column);
                 let Some((index, _typ)) = desc.get_by_name(&name) else {
                     if self.status.is_ok() {
+                        let similar = desc.iter_similar_names(&name).cloned().collect();
                         self.status = Err(PlanError::UnknownColumn {
                             table: Some(full_name.clone().into()),
                             column: name,
+                            similar,
                         })
                     }
                     return ResolvedColumnName::Error;

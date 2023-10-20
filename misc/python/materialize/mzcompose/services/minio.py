@@ -47,3 +47,17 @@ class Minio(Service):
                 },
             },
         )
+
+
+class Mc(Service):
+    def __init__(
+        self,
+        name: str = "mc",
+        image: str = "minio/mc:RELEASE.2023-07-07T05-25-51Z",
+    ) -> None:
+        super().__init__(
+            name=name,
+            config={
+                "image": image,
+            },
+        )

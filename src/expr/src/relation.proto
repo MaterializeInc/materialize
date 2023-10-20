@@ -9,6 +9,8 @@
 
 // See https://developers.google.com/protocol-buffers for what's going on here.
 
+// buf breaking: ignore (Ignore because plans are currently not persisted.)
+
 syntax = "proto3";
 
 import "google/protobuf/empty.proto";
@@ -71,9 +73,15 @@ message ProtoAggregateFunc {
         bool ignore_nulls = 4;
     };
 
-    message ProtoWindowFrame {
+    message ProtoFramedWindowFunc {
         ProtoColumnOrders order_by = 1;
         mz_expr.relation.ProtoWindowFrame window_frame = 2;
+    }
+
+    message ProtoWindowAggregate {
+        ProtoAggregateFunc wrapped_aggregate = 1;
+        ProtoColumnOrders order_by = 2;
+        mz_expr.relation.ProtoWindowFrame window_frame = 3;
     }
 
     oneof kind {
@@ -118,8 +126,9 @@ message ProtoAggregateFunc {
         ProtoColumnOrders dense_rank  = 38;
         ProtoLagLead lag_lead  = 39;
         google.protobuf.Empty dummy = 40;
-        ProtoWindowFrame first_value = 41;
-        ProtoWindowFrame last_value = 42;
+        ProtoFramedWindowFunc first_value = 41;
+        ProtoFramedWindowFunc last_value = 42;
+        ProtoWindowAggregate window_aggregate = 55;
         google.protobuf.Empty max_uint16 = 43;
         google.protobuf.Empty max_uint32 = 44;
         google.protobuf.Empty max_uint64 = 45;

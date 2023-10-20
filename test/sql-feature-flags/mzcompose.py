@@ -16,6 +16,7 @@ from materialize.mzcompose.composition import Composition, WorkflowArgumentParse
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.util import all_subclasses
 
 SERVICES = [
     Redpanda(),
@@ -233,7 +234,7 @@ def run_test(c: Composition, args: argparse.Namespace) -> None:
     scenarios = (
         [globals()[args.scenario]]
         if args.scenario
-        else FeatureTestScenario.__subclasses__()
+        else all_subclasses(FeatureTestScenario)
     )
 
     # To add a new scenario create a new FeatureTestScenario subclass

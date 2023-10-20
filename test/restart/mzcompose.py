@@ -189,8 +189,8 @@ def workflow_storage_managed_collections(c: Composition) -> None:
     # Storage collections are eventually consistent, so loop to be sure updates
     # have made it.
 
-    user_shards = None
-    while user_shards == None:
+    user_shards: list[str] = []
+    while len(user_shards) == 0:
         user_shards = c.sql_query(
             "SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id LIKE 'u%';"
         )
@@ -200,8 +200,8 @@ def workflow_storage_managed_collections(c: Composition) -> None:
     c.up("materialized")
 
     # Verify the shard mappings are still present and have not changed.
-    restart_user_shards = None
-    while restart_user_shards == None:
+    restart_user_shards: list[str] = []
+    while len(restart_user_shards) == 0:
         restart_user_shards = c.sql_query(
             "SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id LIKE 'u%';"
         )
@@ -402,11 +402,8 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
 
 
 def workflow_default(c: Composition) -> None:
-    c.workflow("github-17578")
-    c.workflow("github-8021")
-    c.workflow("audit-log")
-    c.workflow("timelines")
-    c.workflow("stash")
-    c.workflow("allowed-cluster-replica-sizes")
-    c.workflow("drop-materialize-database")
-    c.workflow("bound-size-mz-status-history")
+    for name in c.workflows:
+        if name == "default":
+            continue
+        with c.test_case(name):
+            c.workflow(name)

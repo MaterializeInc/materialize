@@ -13,17 +13,124 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use mz_ore::str::StrExt;
 use mz_repr::GlobalId;
-use mz_sql_parser::ast::CreateWebhookSourceStatement;
+use mz_sql_parser::ast::CreateSubsourceStatement;
 
 use crate::ast::visit::{self, Visit};
 use crate::ast::visit_mut::{self, VisitMut};
 use crate::ast::{
     AstInfo, CreateConnectionStatement, CreateIndexStatement, CreateMaterializedViewStatement,
     CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateTableStatement,
-    CreateViewStatement, Expr, Ident, Query, Raw, RawItemName, Statement, UnresolvedItemName,
-    ViewDefinition,
+    CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement, Expr, Ident, Query,
+    Raw, RawItemName, Statement, UnresolvedItemName, ViewDefinition,
 };
 use crate::names::FullItemName;
+
+/// Given a [`Statement`] rewrites all references of the schema name `cur_schema_name` to
+/// `new_schema_name`.
+pub fn create_stmt_rename_schema_refs(
+    create_stmt: &mut Statement<Raw>,
+    cur_schema_name: &str,
+    new_schema_name: String,
+) {
+    let maybe_update_item_name = |item_name: &mut UnresolvedItemName| {
+        if let [.., schema, _item] = &mut item_name.0[..] {
+            if schema.as_str() == cur_schema_name {
+                *schema = Ident::new(new_schema_name.clone());
+            }
+        }
+    };
+
+    match create_stmt {
+        Statement::CreateIndex(CreateIndexStatement { on_name, .. }) => {
+            maybe_update_item_name(on_name.name_mut());
+        }
+        Statement::CreateSink(CreateSinkStatement { from, .. }) => {
+            maybe_update_item_name(from.name_mut());
+        }
+        Statement::CreateTable(CreateTableStatement { name, .. })
+        | Statement::CreateSecret(CreateSecretStatement { name, .. })
+        | Statement::CreateConnection(CreateConnectionStatement { name, .. })
+        | Statement::CreateWebhookSource(CreateWebhookSourceStatement { name, .. })
+        | Statement::CreateType(CreateTypeStatement { name, .. })
+        | Statement::CreateSource(CreateSourceStatement { name, .. })
+        | Statement::CreateSubsource(CreateSubsourceStatement { name, .. }) => {
+            maybe_update_item_name(name);
+        }
+        Statement::CreateView(CreateViewStatement {
+            definition: ViewDefinition { query, name, .. },
+            ..
+        })
+        | Statement::CreateMaterializedView(CreateMaterializedViewStatement {
+            query, name, ..
+        }) => {
+            maybe_update_item_name(name);
+            rewrite_query_schema(cur_schema_name, new_schema_name, query);
+        }
+        stmt => {
+            unreachable!("Internal error: only catalog items need to update item refs. {stmt:?}")
+        }
+    }
+}
+
+/// Rewrites `query`'s references of `from` to `to` or errors if too ambiguous.
+fn rewrite_query_schema<'a>(
+    cur_schema_name: &'a str,
+    new_schema_name: String,
+    query: &mut Query<Raw>,
+) {
+    let new_schema = Ident::new(new_schema_name);
+    let mut visitor = CreateSqlRewriteSchema {
+        cur_schema: cur_schema_name,
+        new_schema,
+    };
+    visitor.visit_query_mut(query);
+}
+
+struct CreateSqlRewriteSchema<'a> {
+    cur_schema: &'a str,
+    new_schema: Ident,
+}
+
+impl<'a> CreateSqlRewriteSchema<'a> {
+    fn maybe_rewrite_idents(&mut self, name: &mut [Ident]) {
+        if let [.., schema, _item] = name {
+            if schema.as_str() == self.cur_schema {
+                *schema = self.new_schema.clone();
+            }
+        }
+    }
+}
+
+impl<'a, 'ast> VisitMut<'ast, Raw> for CreateSqlRewriteSchema<'a> {
+    fn visit_expr_mut(&mut self, e: &'ast mut Expr<Raw>) {
+        match e {
+            Expr::Identifier(id) => {
+                // The last ID component is a column name that should not be
+                // considered in the rewrite.
+                let i = id.len() - 1;
+                self.maybe_rewrite_idents(&mut id[..i]);
+            }
+            Expr::QualifiedWildcard(id) => {
+                self.maybe_rewrite_idents(id);
+            }
+            _ => visit_mut::visit_expr_mut(self, e),
+        }
+    }
+    fn visit_unresolved_item_name_mut(
+        &mut self,
+        unresolved_item_name: &'ast mut UnresolvedItemName,
+    ) {
+        self.maybe_rewrite_idents(&mut unresolved_item_name.0);
+    }
+    fn visit_item_name_mut(
+        &mut self,
+        item_name: &'ast mut <mz_sql_parser::ast::Raw as AstInfo>::ItemName,
+    ) {
+        match item_name {
+            RawItemName::Name(n) | RawItemName::Id(_, n) => self.maybe_rewrite_idents(&mut n.0),
+        }
+    }
+}
 
 /// Changes the `name` used in an item's `CREATE` statement. To complete a
 /// rename operation, you must also call `create_stmt_rename_refs` on all dependent
@@ -41,22 +148,13 @@ pub fn create_stmt_rename(create_stmt: &mut Statement<Raw>, to_item_name: String
             ..
         })
         | Statement::CreateMaterializedView(CreateMaterializedViewStatement { name, .. })
-        | Statement::CreateTable(CreateTableStatement { name, .. }) => {
+        | Statement::CreateTable(CreateTableStatement { name, .. })
+        | Statement::CreateSecret(CreateSecretStatement { name, .. })
+        | Statement::CreateConnection(CreateConnectionStatement { name, .. })
+        | Statement::CreateWebhookSource(CreateWebhookSourceStatement { name, .. }) => {
             // The last name in an ItemName is the item name. The item name
             // does not have a fixed index.
             // TODO: https://github.com/MaterializeInc/materialize/issues/5591
-            let item_name_len = name.0.len() - 1;
-            name.0[item_name_len] = Ident::new(to_item_name);
-        }
-        Statement::CreateSecret(CreateSecretStatement { name, .. }) => {
-            let item_name_len = name.0.len() - 1;
-            name.0[item_name_len] = Ident::new(to_item_name);
-        }
-        Statement::CreateConnection(CreateConnectionStatement { name, .. }) => {
-            let item_name_len = name.0.len() - 1;
-            name.0[item_name_len] = Ident::new(to_item_name);
-        }
-        Statement::CreateWebhookSource(CreateWebhookSourceStatement { name, .. }) => {
             let item_name_len = name.0.len() - 1;
             name.0[item_name_len] = Ident::new(to_item_name);
         }

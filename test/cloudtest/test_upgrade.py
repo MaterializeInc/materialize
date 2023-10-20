@@ -20,7 +20,7 @@ from materialize.checks.executors import CloudtestExecutor
 from materialize.checks.scenarios import Scenario
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
 from materialize.cloudtest.util.wait import wait
-from materialize.util import MzVersion
+from materialize.util import MzVersion, all_subclasses
 from materialize.version_list import VersionsFromDocs
 
 LOGGER = logging.getLogger(__name__)
@@ -64,5 +64,5 @@ def test_upgrade(aws_region: str | None, log_filter: str | None, dev: bool) -> N
     )
 
     executor = CloudtestExecutor(application=mz, version=LAST_RELEASED_VERSION)
-    scenario = CloudtestUpgrade(checks=Check.__subclasses__(), executor=executor)
+    scenario = CloudtestUpgrade(checks=list(all_subclasses(Check)), executor=executor)
     scenario.run()

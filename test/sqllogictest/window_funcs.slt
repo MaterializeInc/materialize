@@ -16,9 +16,8 @@ statement error db error: ERROR: window function pg_catalog\.row_number requires
 WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
 SELECT row_number() FROM t
 
-statement error aggregate window functions not yet supported
-WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
-SELECT array_agg(x) OVER () FROM t
+statement error db error: ERROR: OVER clause not allowed on pg_catalog\.int8range\. The OVER clause can only be used with window functions \(including aggregations\)\.
+SELECT int8range(1, 1, '') OVER (PARTITION BY 1 ORDER BY 1);
 
 query IT
 WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
@@ -359,6 +358,37 @@ query error window functions are not allowed in WHERE
 WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
 SELECT * FROM t
 WHERE row_number() over () > 1;
+
+statement ok
+CREATE TABLE not_allowed_tests (
+  v INT,
+  w INT,
+  k INT
+);
+
+query error window functions are not allowed in GROUP BY
+SELECT * FROM not_allowed_tests GROUP BY v, count(w) OVER ();
+
+query error window functions are not allowed in GROUP BY
+SELECT count(w) OVER () FROM not_allowed_tests GROUP BY 1;
+
+query error window functions are not allowed in RETURNING
+INSERT INTO not_allowed_tests (k, v) VALUES (99, 100) RETURNING sum(v) OVER ();
+
+query error LIMIT must be an integer constant
+SELECT sum(v) FROM not_allowed_tests GROUP BY k LIMIT sum(v) OVER ();
+
+query error OFFSET must be an integer constant
+SELECT sum(v) FROM not_allowed_tests GROUP BY k LIMIT 1 OFFSET sum(v) OVER ();
+
+query error window functions are not allowed in VALUES
+INSERT INTO not_allowed_tests (k, v) VALUES (99, count(1) OVER ());
+
+query error window functions are not allowed in WHERE
+SELECT k FROM not_allowed_tests WHERE avg(k) OVER () > 1;
+
+query error window functions are not allowed in HAVING
+SELECT 1 FROM not_allowed_tests GROUP BY 1 HAVING sum(1) OVER (PARTITION BY 1) > 1;
 
 query T
 WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
@@ -3263,76 +3293,24 @@ ORDER BY f2, f3, f1, first_value
 3  c  9  NULL
 7  d  10  NULL
 
-# Test near-overflow behavior on offsets
-# u64::MAX FOLLOWING
-query ITII
+# Test offset limits
+query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
 WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
-SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 18446744073709551615 FOLLOWING AND 18446744073709551615 FOLLOWING)
+SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 100 FOLLOWING AND 1000001 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
-----
-1  a  1  NULL
-2  a  2  NULL
-2  a  3  NULL
-3  a  4  NULL
-4  b  5  NULL
-4  b  6  NULL
-1  c  7  NULL
-2  c  8  NULL
-3  c  9  NULL
-7  d  10  NULL
 
-query ITII
+query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
 WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
-SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 18446744073709551614 FOLLOWING AND 18446744073709551615 FOLLOWING)
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 1000001 PRECEDING AND 100 FOLLOWING)
 FROM t
-ORDER BY f2, f3, f1, first_value
-----
-1  a  1  NULL
-2  a  2  NULL
-2  a  3  NULL
-3  a  4  NULL
-4  b  5  NULL
-4  b  6  NULL
-1  c  7  NULL
-2  c  8  NULL
-3  c  9  NULL
-7  d  10  NULL
+ORDER BY f2, f3, f1, last_value
 
-# u64::MAX PRECEDING
-query ITII
+query error Expected literal unsigned integer, found operator "\-"
 WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
-SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 18446744073709551615 PRECEDING AND 18446744073709551615 PRECEDING)
+SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 10 PRECEDING AND -1 FOLLOWING)
 FROM t
-ORDER BY f2, f3, f1, first_value
-----
-1  a  1  NULL
-2  a  2  NULL
-2  a  3  NULL
-3  a  4  NULL
-4  b  5  NULL
-4  b  6  NULL
-1  c  7  NULL
-2  c  8  NULL
-3  c  9  NULL
-7  d  10  NULL
-
-query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
-SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 18446744073709551615 PRECEDING AND 18446744073709551614 PRECEDING)
-FROM t
-ORDER BY f2, f3, f1, first_value
-----
-1  a  1  NULL
-2  a  2  NULL
-2  a  3  NULL
-3  a  4  NULL
-4  b  5  NULL
-4  b  6  NULL
-1  c  7  NULL
-2  c  8  NULL
-3  c  9  NULL
-7  d  10  NULL
+ORDER BY f2, f3, f1, last_value
 
 # reduce_elision code path
 statement ok
@@ -4638,77 +4616,6 @@ ORDER BY f2, f3, f1, last_value
 3  c  9  NULL
 7  d  10  NULL
 
-# Test near-overflow behavior on offsets
-# u64::MAX FOLLOWING
-query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
-SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 18446744073709551615 PRECEDING AND 18446744073709551615 PRECEDING)
-FROM t
-ORDER BY f2, f3, f1, last_value
-----
-1  a  1  NULL
-2  a  2  NULL
-2  a  3  NULL
-3  a  4  NULL
-4  b  5  NULL
-4  b  6  NULL
-1  c  7  NULL
-2  c  8  NULL
-3  c  9  NULL
-7  d  10  NULL
-
-query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
-SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 18446744073709551615 PRECEDING AND 18446744073709551614 PRECEDING)
-FROM t
-ORDER BY f2, f3, f1, last_value
-----
-1  a  1  NULL
-2  a  2  NULL
-2  a  3  NULL
-3  a  4  NULL
-4  b  5  NULL
-4  b  6  NULL
-1  c  7  NULL
-2  c  8  NULL
-3  c  9  NULL
-7  d  10  NULL
-
-# u64::MAX PRECEDING
-query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
-SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 18446744073709551615 FOLLOWING AND 18446744073709551615 FOLLOWING)
-FROM t
-ORDER BY f2, f3, f1, last_value
-----
-1  a  1  NULL
-2  a  2  NULL
-2  a  3  NULL
-3  a  4  NULL
-4  b  5  NULL
-4  b  6  NULL
-1  c  7  NULL
-2  c  8  NULL
-3  c  9  NULL
-7  d  10  NULL
-
-query ITII
-WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
-SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 18446744073709551614 FOLLOWING AND 18446744073709551615 FOLLOWING)
-FROM t
-ORDER BY f2, f3, f1, last_value
-----
-1  a  1  NULL
-2  a  2  NULL
-2  a  3  NULL
-3  a  4  NULL
-4  b  5  NULL
-4  b  6  NULL
-1  c  7  NULL
-2  c  8  NULL
-3  c  9  NULL
-7  d  10  NULL
-
 # reduce_elision code path
 # Using the same table as first_value
 
@@ -5746,3 +5653,1302 @@ Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0..=#2]
             Get materialize.public.foo
 
 EOF
+
+##################################
+## Window aggregations
+##################################
+
+statement ok
+CREATE TABLE t7(x INT, y INT);
+
+# Plans
+query T multiline
+EXPLAIN DECORRELATED PLAN FOR
+SELECT
+  sum(y-3) OVER (PARTITION BY 2*x, 3*y ORDER BY x+1, y+2 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+FROM t7
+ORDER BY x;
+----
+Finish order_by=[#0 asc nulls_last] output=[#2]
+  Project (#0, #1, #3)
+    Map (#2)
+      Project (#4..=#6)
+        Map (record_get[0](record_get[1](#3)), record_get[1](record_get[1](#3)), record_get[0](#3))
+          FlatMap unnest_list(#2)
+            Reduce group_by=[#2, #3] aggregates=[window_agg[sum order_by=[#0 asc nulls_last, #1 asc nulls_last] rows between unbounded preceding and current row](row(row(row(#0, #1), (#1 - 3)), (#0 + 1), (#1 + 2)))]
+              Map ((2 * #0), (3 * #1))
+                CrossJoin
+                  Constant
+                    - ()
+                  Get materialize.public.t7
+
+EOF
+
+query T multiline
+EXPLAIN
+SELECT
+  sum(y-3) OVER (PARTITION BY 2*x, 3*y ORDER BY x+1, y+2 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+FROM t7
+ORDER BY x;
+----
+Explained Query:
+  Finish order_by=[#0 asc nulls_last] output=[#2]
+    Project (#3..=#5)
+      Map (record_get[1](#1), record_get[0](#2), record_get[1](#2), record_get[0](#1))
+        FlatMap unnest_list(#0)
+          Project (#2)
+            Reduce group_by=[(2 * #0), (3 * #1)] aggregates=[window_agg[sum order_by=[#0 asc nulls_last, #1 asc nulls_last] rows between unbounded preceding and current row](row(row(row(#0, #1), (#1 - 3)), (#0 + 1), (#1 + 2)))]
+              ReadStorage materialize.public.t7
+
+EOF
+
+# Empty aggregations
+
+query IIIIIT
+SELECT
+  x,
+  y,
+  sum(y) OVER (ORDER BY x ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),
+  max(y) OVER (ORDER BY x ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),
+  min(y) OVER (ORDER BY x ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),
+  array_agg(y) OVER (ORDER BY x ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+FROM t7
+ORDER BY x;
+----
+
+query IIIIIT
+SELECT
+  x,
+  y,
+  sum(y) OVER (ORDER BY x ROWS BETWEEN 2 PRECEDING AND CURRENT ROW),
+  max(y) OVER (ORDER BY x ROWS BETWEEN 2 PRECEDING AND CURRENT ROW),
+  min(y) OVER (ORDER BY x ROWS BETWEEN 2 PRECEDING AND CURRENT ROW),
+  jsonb_agg(y) OVER (ORDER BY x ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)
+FROM t7
+ORDER BY x;
+----
+
+query IIIIIT
+SELECT
+  x,
+  y,
+  sum(y) OVER (ORDER BY x ROWS BETWEEN 2 FOLLOWING AND 5 FOLLOWING),
+  max(y) OVER (ORDER BY x ROWS BETWEEN 2 FOLLOWING AND 5 FOLLOWING),
+  min(y) OVER (ORDER BY x ROWS BETWEEN 2 FOLLOWING AND 5 FOLLOWING),
+  list_agg(y) OVER (ORDER BY x ROWS BETWEEN 2 FOLLOWING AND 5 FOLLOWING)[1]
+FROM t7
+ORDER BY x;
+----
+
+statement ok
+INSERT INTO t7 VALUES (1,2), (3,null), (5,6), (7,8), (9, null), (11, null), (13, 14), (15, 16), (17, 18), (10, -40), (10, -50);
+
+# Test various nestings
+
+# Postgres also doesn't support this.
+query error db error: ERROR: window functions are not allowed in aggregate function \(function pg_catalog\.sum\)
+SELECT sum(sum(x) OVER ()) FROM t7;
+
+# Other way around: grouped aggregate inside a window aggregate.
+# What this query is asking us to do is to
+# 1. First, perform the inner sum (with its GROUP BY), and then
+# 2. the outer sum (with its OVER clause).
+# (Postgres handles this the same.)
+query I
+SELECT sum(sum(x)) OVER (ORDER BY y) FROM t7 GROUP BY y;
+----
+10
+20
+21
+26
+33
+46
+61
+78
+101
+
+# Window aggregation inside a window aggregation. We support this, and queries like this might actually make sense in
+# some cases. (I think we already had a customer with some other window functions nested inside each other.)
+# (Postgres doesn't support this.)
+query I
+SELECT sum(sum(x) OVER ()) OVER () FROM t7;
+----
+1111
+1111
+1111
+1111
+1111
+1111
+1111
+1111
+1111
+1111
+1111
+
+query III
+SELECT
+  x,
+  sum(x) OVER (ORDER BY x),
+  sum(sum(x) OVER (ORDER BY x)) OVER (ORDER BY x)
+FROM (SELECT DISTINCT ON(x) * FROM t7);
+----
+1  1  1
+3  4  5
+5  9  14
+7  16  30
+9  25  55
+10  35  90
+11  46  136
+13  59  195
+15  74  269
+17  91  360
+
+# Lots of different aggregation functions. This covers
+# - basic, hierarchical, accumulable aggregations
+# - count's null handling
+# - count(*)
+# - FILTER clause
+# - Aggregations functions that are transformed away by `transform_ast.rs`: bool_and, bool_or.
+# These are all supported by Postgres, and the output should be identical.
+query IIIIIITIIIITT
+SELECT
+  x-y,
+  x,
+  y,
+  sum(x+x) OVER (PARTITION BY x-y ORDER BY x ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING),
+  max(x*y+1) OVER (PARTITION BY x-y ORDER BY x ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING),
+  min(x*y+1) OVER (PARTITION BY x-y ORDER BY x ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING),
+  array_agg(2*x) OVER (PARTITION BY x-y ORDER BY x ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING),
+  count(2*x) OVER (PARTITION BY x-y ORDER BY x ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING),
+  count(CASE WHEN x%3 != 0 THEN x ELSE null END) OVER (PARTITION BY x-y ORDER BY x ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING),
+  count(*) OVER (PARTITION BY x-y ORDER BY x ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING),
+  sum(x) FILTER (WHERE x%3 != 0) OVER (PARTITION BY x-y ORDER BY x ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING),
+  bool_and(x%3 != 0) OVER (PARTITION BY x-y ORDER BY x ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING),
+  bool_or(x%3 = 0) OVER (PARTITION BY x-y ORDER BY x ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
+FROM t7
+ORDER BY x-y, x;
+----
+-1  1  2  116  307  3  {2,10,14,26,30,34}  6  5  6  43  false  true
+-1  5  6  114  307  31  {10,14,26,30,34}  5  4  5  42  false  true
+-1  7  8  104  307  57  {14,26,30,34}  4  3  4  37  false  true
+-1  13  14  90  307  183  {26,30,34}  3  2  3  30  false  true
+-1  15  16  64  307  241  {30,34}  2  1  2  17  false  true
+-1  17  18  34  307  307  {34}  1  1  1  17  true  false
+50  10  -40  20  -399  -399  {20}  1  1  1  10  true  false
+60  10  -50  20  -499  -499  {20}  1  1  1  10  true  false
+NULL  3  NULL  46  NULL  NULL  {6,18,22}  3  1  3  11  false  true
+NULL  9  NULL  40  NULL  NULL  {18,22}  2  1  2  11  false  true
+NULL  11  NULL  22  NULL  NULL  {22}  1  1  1  11  true  false
+
+# Also supported by Postgres, but output text formatting is a bit different, so putting this in a separate test.
+# avg, variance, var_pop, stddev, stddev_pop are transformed away by `transform_ast.rs`.
+query IIITRRRRR
+SELECT
+  x-y,
+  x,
+  y,
+  jsonb_agg(2*x) OVER (PARTITION BY x-y ORDER BY x ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING),
+  avg(x+y) OVER (PARTITION BY x-y ORDER BY x ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING),
+  variance(x+y) OVER (PARTITION BY x-y ORDER BY x ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING),
+  var_pop(x+y) OVER (PARTITION BY x-y ORDER BY x ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING),
+  stddev(x+y) OVER (PARTITION BY x-y ORDER BY x ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING),
+  stddev_pop(x+y) OVER (PARTITION BY x-y ORDER BY x ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
+FROM t7
+ORDER BY x-y, x;
+----
+-1  1  2  [2,10,14,26,30,34]  20.3333333333333333333333333333333333333  157.866666666666666666666666666666666666  131.555555555555555555555555555555555555  12.5645002553490628940078294328743895394  11.469767022723502362305964713399618176
+-1  5  6  [10,14,26,30,34]  23.8  107.2  85.76  10.3537432844358276565421773235938072887  9.26066952223218037884464808956388302968
+-1  7  8  [14,26,30,34]  27  74.6666666666666666666666666666666666667  56  8.64098759787714697462128991478399554361  7.48331477354788277116749746463309860351
+-1  13  14  [26,30,34]  31  16  10.6666666666666666666666666666666666667  4  3.26598632371090413092971209960785518929
+-1  15  16  [30,34]  33  8  4  2.82842712474619009760337744841939615714  2
+-1  17  18  [34]  35  NULL  0  NULL  0
+50  10  -40  [20]  -30  NULL  0  NULL  0
+60  10  -50  [20]  -40  NULL  0  NULL  0
+NULL  3  NULL  [6,18,22]  NULL  NULL  NULL  NULL  NULL
+NULL  9  NULL  [18,22]  NULL  NULL  NULL  NULL  NULL
+NULL  11  NULL  [22]  NULL  NULL  NULL  NULL  NULL
+
+# These are not supported by Postgres.
+# - ORDER BY in aggr
+# - list indexing after the OVER clause
+query IIITTI
+SELECT
+  x-y,
+  x,
+  y,
+  array_agg(x ORDER BY CASE WHEN y IS NOT NULL THEN y ELSE x%5 END DESC) OVER (PARTITION BY x-y ORDER BY x ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING),
+  array_agg(2*x) OVER (PARTITION BY x-y ORDER BY x ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING),
+  list_agg(2*x) OVER (PARTITION BY x-y ORDER BY x ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)[2]
+FROM t7
+ORDER BY x-y, x;
+----
+-1  1  2  {17,15,13,7,5,1}  {2,10,14,26,30,34}  10
+-1  5  6  {17,15,13,7,5}  {10,14,26,30,34}  14
+-1  7  8  {17,15,13,7}  {14,26,30,34}  26
+-1  13  14  {17,15,13}  {26,30,34}  30
+-1  15  16  {17,15}  {30,34}  34
+-1  17  18  {17}  {34}  NULL
+50  10  -40  {10}  {20}  NULL
+60  10  -50  {10}  {20}  NULL
+NULL  3  NULL  {9,3,11}  {6,18,22}  18
+NULL  9  NULL  {9,11}  {18,22}  22
+NULL  11  NULL  {11}  {22}  NULL
+
+# https://github.com/MaterializeInc/materialize/issues/22015
+query error db error: ERROR: DISTINCT in window aggregates not yet supported
+SELECT
+  x-y,
+  x,
+  y,
+  array_agg(x/10) OVER (PARTITION BY x-y ORDER BY x ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING),
+  count(DISTINCT x/10) OVER (PARTITION BY x-y ORDER BY x ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
+FROM t7
+ORDER BY x-y, x;
+
+# No ORDER BY in OVER clause.
+query IIIIITTTT
+SELECT
+  x,
+  y,
+  sum(y) OVER (),
+  max(y) OVER (),
+  min(y) OVER (),
+  array_agg(y ORDER BY y) OVER (),
+  array_agg(y ORDER BY y NULLS LAST) OVER (),
+  array_agg(y ORDER BY y NULLS FIRST) OVER (),
+  bool_and(x%3 != 0) OVER ()
+FROM t7
+ORDER BY x;
+----
+1  2  -26  18  -50  {-50,-40,2,6,8,14,16,18,NULL,NULL,NULL}  {-50,-40,2,6,8,14,16,18,NULL,NULL,NULL}  {NULL,NULL,NULL,-50,-40,2,6,8,14,16,18}  false
+3  NULL  -26  18  -50  {-50,-40,2,6,8,14,16,18,NULL,NULL,NULL}  {-50,-40,2,6,8,14,16,18,NULL,NULL,NULL}  {NULL,NULL,NULL,-50,-40,2,6,8,14,16,18}  false
+5  6  -26  18  -50  {-50,-40,2,6,8,14,16,18,NULL,NULL,NULL}  {-50,-40,2,6,8,14,16,18,NULL,NULL,NULL}  {NULL,NULL,NULL,-50,-40,2,6,8,14,16,18}  false
+7  8  -26  18  -50  {-50,-40,2,6,8,14,16,18,NULL,NULL,NULL}  {-50,-40,2,6,8,14,16,18,NULL,NULL,NULL}  {NULL,NULL,NULL,-50,-40,2,6,8,14,16,18}  false
+9  NULL  -26  18  -50  {-50,-40,2,6,8,14,16,18,NULL,NULL,NULL}  {-50,-40,2,6,8,14,16,18,NULL,NULL,NULL}  {NULL,NULL,NULL,-50,-40,2,6,8,14,16,18}  false
+10  -50  -26  18  -50  {-50,-40,2,6,8,14,16,18,NULL,NULL,NULL}  {-50,-40,2,6,8,14,16,18,NULL,NULL,NULL}  {NULL,NULL,NULL,-50,-40,2,6,8,14,16,18}  false
+10  -40  -26  18  -50  {-50,-40,2,6,8,14,16,18,NULL,NULL,NULL}  {-50,-40,2,6,8,14,16,18,NULL,NULL,NULL}  {NULL,NULL,NULL,-50,-40,2,6,8,14,16,18}  false
+11  NULL  -26  18  -50  {-50,-40,2,6,8,14,16,18,NULL,NULL,NULL}  {-50,-40,2,6,8,14,16,18,NULL,NULL,NULL}  {NULL,NULL,NULL,-50,-40,2,6,8,14,16,18}  false
+13  14  -26  18  -50  {-50,-40,2,6,8,14,16,18,NULL,NULL,NULL}  {-50,-40,2,6,8,14,16,18,NULL,NULL,NULL}  {NULL,NULL,NULL,-50,-40,2,6,8,14,16,18}  false
+15  16  -26  18  -50  {-50,-40,2,6,8,14,16,18,NULL,NULL,NULL}  {-50,-40,2,6,8,14,16,18,NULL,NULL,NULL}  {NULL,NULL,NULL,-50,-40,2,6,8,14,16,18}  false
+17  18  -26  18  -50  {-50,-40,2,6,8,14,16,18,NULL,NULL,NULL}  {-50,-40,2,6,8,14,16,18,NULL,NULL,NULL}  {NULL,NULL,NULL,-50,-40,2,6,8,14,16,18}  false
+
+query IIIIIIT
+SELECT
+  x-y+x/10,
+  x,
+  y,
+  sum(y) OVER (PARTITION BY x-y+x/10),
+  max(y) OVER (PARTITION BY x-y+x/10),
+  min(y) OVER (PARTITION BY x-y+x/10),
+  array_agg(y) OVER (PARTITION BY x-y+x/10)
+FROM t7
+ORDER BY x-y+x/10;
+----
+-1  1  2  16  8  2  {2,6,8}
+-1  5  6  16  8  2  {2,6,8}
+-1  7  8  16  8  2  {2,6,8}
+0  13  14  48  18  14  {14,16,18}
+0  15  16  48  18  14  {14,16,18}
+0  17  18  48  18  14  {14,16,18}
+51  10  -40  -40  -40  -40  {-40}
+61  10  -50  -50  -50  -50  {-50}
+NULL  3  NULL  NULL  NULL  NULL  {NULL,NULL,NULL}
+NULL  9  NULL  NULL  NULL  NULL  {NULL,NULL,NULL}
+NULL  11  NULL  NULL  NULL  NULL  {NULL,NULL,NULL}
+
+# Test the situation when we don't have an ORDER BY, but we have a frame that doesn't include the current row.
+# This verifies that the `order_by.is_empty()` if condition also includes `window_frame.includes_current_row()`.
+query IIIIITR
+SELECT
+  x-y+x/10,
+  x,
+  y,
+  sum(y) OVER (PARTITION BY x-y+x/10 ROWS BETWEEN 200 PRECEDING AND 100 PRECEDING),
+  count(y) OVER (PARTITION BY x-y+x/10 ROWS BETWEEN 200 PRECEDING AND 100 PRECEDING),
+  array_agg(y) OVER (PARTITION BY x-y+x/10 ROWS BETWEEN 200 PRECEDING AND 100 PRECEDING),
+  avg(y) OVER (PARTITION BY x-y+x/10 ROWS BETWEEN 200 PRECEDING AND 100 PRECEDING)
+FROM t7
+ORDER BY x, y;
+----
+-1  1  2  NULL  0  NULL  NULL
+NULL  3  NULL  NULL  0  NULL  NULL
+-1  5  6  NULL  0  NULL  NULL
+-1  7  8  NULL  0  NULL  NULL
+NULL  9  NULL  NULL  0  NULL  NULL
+61  10  -50  NULL  0  NULL  NULL
+51  10  -40  NULL  0  NULL  NULL
+NULL  11  NULL  NULL  0  NULL  NULL
+0  13  14  NULL  0  NULL  NULL
+0  15  16  NULL  0  NULL  NULL
+0  17  18  NULL  0  NULL  NULL
+
+# ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+
+query IIIIIT
+SELECT
+  x,
+  y,
+  sum(y) OVER (ORDER BY x ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),
+  max(y) OVER (ORDER BY x ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),
+  min(y) OVER (ORDER BY x ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),
+  array_agg(y) OVER (ORDER BY x ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+FROM t7
+ORDER BY x;
+----
+1  2  2  2  2  {2}
+3  NULL  2  2  2  {2,NULL}
+5  6  8  6  2  {2,NULL,6}
+7  8  16  8  2  {2,NULL,6,8}
+9  NULL  16  8  2  {2,NULL,6,8,NULL}
+10  -50  -34  8  -50  {2,NULL,6,8,NULL,-50}
+10  -40  -74  8  -50  {2,NULL,6,8,NULL,-50,-40}
+11  NULL  -74  8  -50  {2,NULL,6,8,NULL,-50,-40,NULL}
+13  14  -60  14  -50  {2,NULL,6,8,NULL,-50,-40,NULL,14}
+15  16  -44  16  -50  {2,NULL,6,8,NULL,-50,-40,NULL,14,16}
+17  18  -26  18  -50  {2,NULL,6,8,NULL,-50,-40,NULL,14,16,18}
+
+statement ok
+CREATE TABLE t8(o1 INT, o2 INT, v INT);
+
+statement ok
+INSERT INTO t8 VALUES (1,1,-2), (1,1,-3), (1,2,-4), (1,3,-7), (1,3,-8), (2,1,-10), (2,2,-1000), (2,2,-1000), (2,2,-1000), (3,0,-100);
+
+# Default frame, i.e. RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+
+query IIIIIIT
+SELECT
+  o1,
+  o2,
+  v,
+  sum(v) OVER (ORDER BY o1, o2),
+  max(v) OVER (ORDER BY o1, o2),
+  min(v) OVER (ORDER BY o1, o2),
+  array_agg(v) OVER (ORDER BY o1, o2 RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+FROM t8
+ORDER BY o1, o2;
+----
+1  1  -3  -5  -2  -3  {-3,-2}
+1  1  -2  -5  -2  -3  {-3,-2}
+1  2  -4  -9  -2  -4  {-3,-2,-4}
+1  3  -8  -24  -2  -8  {-3,-2,-4,-8,-7}
+1  3  -7  -24  -2  -8  {-3,-2,-4,-8,-7}
+2  1  -10  -34  -2  -10  {-3,-2,-4,-8,-7,-10}
+2  2  -1000  -3034  -2  -1000  {-3,-2,-4,-8,-7,-10,-1000,-1000,-1000}
+2  2  -1000  -3034  -2  -1000  {-3,-2,-4,-8,-7,-10,-1000,-1000,-1000}
+2  2  -1000  -3034  -2  -1000  {-3,-2,-4,-8,-7,-10,-1000,-1000,-1000}
+3  0  -100  -3134  -2  -1000  {-3,-2,-4,-8,-7,-10,-1000,-1000,-1000,-100}
+
+query IIIIIIT
+SELECT
+  o1,
+  o2,
+  v,
+  sum(v) OVER (PARTITION BY o1 ORDER BY o2),
+  max(v) OVER (PARTITION BY o1 ORDER BY o2),
+  min(v) OVER (PARTITION BY o1 ORDER BY o2),
+  array_agg(v) OVER (PARTITION BY o1 ORDER BY o2 RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+FROM t8
+ORDER BY o1, o2;
+----
+1  1  -3  -5  -2  -3  {-3,-2}
+1  1  -2  -5  -2  -3  {-3,-2}
+1  2  -4  -9  -2  -4  {-3,-2,-4}
+1  3  -8  -24  -2  -8  {-3,-2,-4,-8,-7}
+1  3  -7  -24  -2  -8  {-3,-2,-4,-8,-7}
+2  1  -10  -10  -10  -10  {-10}
+2  2  -1000  -3010  -10  -1000  {-10,-1000,-1000,-1000}
+2  2  -1000  -3010  -10  -1000  {-10,-1000,-1000,-1000}
+2  2  -1000  -3010  -10  -1000  {-10,-1000,-1000,-1000}
+3  0  -100  -100  -100  -100  {-100}
+
+# ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+# Note that x=10 occurs twice. This means that the ordering of these rows is undefined, so it can change between
+# Materialize versions.
+query IIIIIT
+SELECT
+  x,
+  y,
+  sum(y) OVER (ORDER BY x ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING),
+  max(y) OVER (ORDER BY x ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING),
+  min(y) OVER (ORDER BY x ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING),
+  array_agg(y) OVER (ORDER BY x ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
+FROM t7
+ORDER BY x;
+----
+1  2  -26  18  -50  {2,NULL,6,8,NULL,-50,-40,NULL,14,16,18}
+3  NULL  -28  18  -50  {NULL,6,8,NULL,-50,-40,NULL,14,16,18}
+5  6  -28  18  -50  {6,8,NULL,-50,-40,NULL,14,16,18}
+7  8  -34  18  -50  {8,NULL,-50,-40,NULL,14,16,18}
+9  NULL  -42  18  -50  {NULL,-50,-40,NULL,14,16,18}
+10  -40  -42  18  -50  {-40,NULL,14,16,18}
+10  -50  -2  18  -50  {-50,-40,NULL,14,16,18}
+11  NULL  48  18  14  {NULL,14,16,18}
+13  14  48  18  14  {14,16,18}
+15  16  34  18  16  {16,18}
+17  18  18  18  18  {18}
+
+# RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+# TODO: Actually, we already have the rendering code for this. So, we just need to either hack planning a bit to add an
+# exception for window aggregations, or add rendering support also for other window functions.
+query error RANGE in non-default window frames not yet supported
+SELECT
+  x,
+  y,
+  sum(y) OVER (ORDER BY x RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING),
+  max(y) OVER (ORDER BY x RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING),
+  min(y) OVER (ORDER BY x RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING),
+  array_agg(y) OVER (ORDER BY x RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
+FROM t7
+ORDER BY x;
+
+# PARTITION BY
+# ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+# Here, x=10 occurring twice does NOT mean that the result for these rows would be undefined.
+query IIIIIIT
+SELECT
+  x-y,
+  x,
+  y,
+  sum(x+x) OVER (PARTITION BY x-y ORDER BY x ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING),
+  max(x+x) OVER (PARTITION BY x-y ORDER BY x ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING),
+  min(x+x) OVER (PARTITION BY x-y ORDER BY x ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING),
+  array_agg(x+x) OVER (PARTITION BY x-y ORDER BY x ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
+FROM t7
+ORDER BY x-y, x;
+----
+-1  1  2  116  34  2  {2,10,14,26,30,34}
+-1  5  6  114  34  10  {10,14,26,30,34}
+-1  7  8  104  34  14  {14,26,30,34}
+-1  13  14  90  34  26  {26,30,34}
+-1  15  16  64  34  30  {30,34}
+-1  17  18  34  34  34  {34}
+50  10  -40  20  20  20  {20}
+60  10  -50  20  20  20  {20}
+NULL  3  NULL  46  22  6  {6,18,22}
+NULL  9  NULL  40  22  18  {18,22}
+NULL  11  NULL  22  22  22  {22}
+
+query IIIIIT
+SELECT
+  x,
+  y,
+  sum(x+x) OVER (PARTITION BY x-y ORDER BY x ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING),
+  max(x+x) OVER (PARTITION BY x-y ORDER BY x ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING),
+  min(x+x) OVER (PARTITION BY x-y ORDER BY x ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING),
+  array_agg(x+x) OVER (PARTITION BY x-y ORDER BY x ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
+FROM t7
+ORDER BY x-y, x;
+----
+1  2  116  34  2  {2,10,14,26,30,34}
+5  6  114  34  10  {10,14,26,30,34}
+7  8  104  34  14  {14,26,30,34}
+13  14  90  34  26  {26,30,34}
+15  16  64  34  30  {30,34}
+17  18  34  34  34  {34}
+10  -40  20  20  20  {20}
+10  -50  20  20  20  {20}
+3  NULL  46  22  6  {6,18,22}
+9  NULL  40  22  18  {18,22}
+11  NULL  22  22  22  {22}
+
+# PARTITION BY
+# RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+query error RANGE in non-default window frames not yet supported
+SELECT
+  x,
+  y,
+  sum(x+x) OVER (PARTITION BY x-y ORDER BY x RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING),
+  max(x+x) OVER (PARTITION BY x-y ORDER BY x RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING),
+  min(x+x) OVER (PARTITION BY x-y ORDER BY x RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING),
+  array_agg(x+x) OVER (PARTITION BY x-y ORDER BY x RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
+FROM t7
+ORDER BY x-y, x;
+
+# ROWS BETWEEN offset PRECEDING AND offset FOLLOWING
+query IIIIIT
+SELECT
+  x,
+  y,
+  sum(x) OVER (ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING),
+  max(x) OVER (ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING),
+  min(x) OVER (ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING),
+  array_agg(x) OVER (ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING)
+FROM t7
+ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END;
+----
+10  -50  20  10  10  {10,10}
+10  -40  21  10  1  {10,10,1}
+1  2  24  10  1  {10,10,1,3}
+3  NULL  23  10  1  {10,1,3,9}
+9  NULL  24  11  1  {1,3,9,11}
+11  NULL  28  11  3  {3,9,11,5}
+5  6  32  11  5  {9,11,5,7}
+7  8  36  13  5  {11,5,7,13}
+13  14  40  15  5  {5,7,13,15}
+15  16  52  17  7  {7,13,15,17}
+17  18  45  17  13  {13,15,17}
+
+query IIIIIT
+SELECT
+  x,
+  y,
+  sum(x) OVER (ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END ROWS BETWEEN 0 PRECEDING AND 1 FOLLOWING),
+  max(x) OVER (ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END ROWS BETWEEN 0 PRECEDING AND 1 FOLLOWING),
+  min(x) OVER (ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END ROWS BETWEEN 0 PRECEDING AND 1 FOLLOWING),
+  array_agg(x) OVER (ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END ROWS BETWEEN 0 PRECEDING AND 1 FOLLOWING)
+FROM t7
+ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END;
+----
+10  -50  20  10  10  {10,10}
+10  -40  11  10  1  {10,1}
+1  2  4  3  1  {1,3}
+3  NULL  12  9  3  {3,9}
+9  NULL  20  11  9  {9,11}
+11  NULL  16  11  5  {11,5}
+5  6  12  7  5  {5,7}
+7  8  20  13  7  {7,13}
+13  14  28  15  13  {13,15}
+15  16  32  17  15  {15,17}
+17  18  17  17  17  {17}
+
+query IIIIIT
+SELECT
+  x,
+  y,
+  sum(x) OVER (ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END ROWS BETWEEN 0 PRECEDING AND 0 FOLLOWING),
+  max(x) OVER (ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END ROWS BETWEEN 0 PRECEDING AND 0 FOLLOWING),
+  min(x) OVER (ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END ROWS BETWEEN 0 PRECEDING AND 0 FOLLOWING),
+  array_agg(x) OVER (ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END ROWS BETWEEN 0 PRECEDING AND 0 FOLLOWING)
+FROM t7
+ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END;
+----
+10  -50  10  10  10  {10}
+10  -40  10  10  10  {10}
+1  2  1  1  1  {1}
+3  NULL  3  3  3  {3}
+9  NULL  9  9  9  {9}
+11  NULL  11  11  11  {11}
+5  6  5  5  5  {5}
+7  8  7  7  7  {7}
+13  14  13  13  13  {13}
+15  16  15  15  15  {15}
+17  18  17  17  17  {17}
+
+# mixed UNBOUNDED - OFFSET frames
+query error db error: ERROR: mixed unbounded \- offset frames not yet supported
+SELECT
+  sum(y) OVER (ORDER BY x ROWS BETWEEN UNBOUNDED PRECEDING AND 2 PRECEDING)
+FROM t7;
+
+query error db error: ERROR: mixed unbounded \- offset frames not yet supported
+SELECT
+  sum(y) OVER (ORDER BY x ROWS BETWEEN UNBOUNDED PRECEDING AND 2 FOLLOWING)
+FROM t7;
+
+query error db error: ERROR: mixed unbounded \- offset frames not yet supported
+SELECT
+  sum(y) OVER (ORDER BY x ROWS BETWEEN 2 PRECEDING AND UNBOUNDED FOLLOWING)
+FROM t7;
+
+query error db error: ERROR: mixed unbounded \- offset frames not yet supported
+SELECT
+  sum(y) OVER (ORDER BY x ROWS BETWEEN 3 FOLLOWING AND UNBOUNDED FOLLOWING)
+FROM t7;
+
+# And a parse error as a bonus
+query error Expected PRECEDING or FOLLOWING, found UNBOUNDED
+SELECT
+  sum(y) OVER (ORDER BY x ROWS BETWEEN 3 FOLLOWING AND 2 UNBOUNDED FOLLOWING)
+FROM t7;
+
+# ROWS BETWEEN offset PRECEDING AND offset PRECEDING
+query IIIIIT
+SELECT
+  x,
+  y,
+  sum(x) OVER (ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END ROWS BETWEEN 3 PRECEDING AND 1 PRECEDING),
+  max(x) OVER (ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END ROWS BETWEEN 3 PRECEDING AND 1 PRECEDING),
+  min(x) OVER (ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END ROWS BETWEEN 3 PRECEDING AND 1 PRECEDING),
+  array_agg(x) OVER (ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END ROWS BETWEEN 3 PRECEDING AND 1 PRECEDING)
+FROM t7
+ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END;
+----
+10  -50  NULL  NULL  NULL  NULL
+10  -40  10  10  10  {10}
+1  2  20  10  10  {10,10}
+3  NULL  21  10  1  {10,10,1}
+9  NULL  14  10  1  {10,1,3}
+11  NULL  13  9  1  {1,3,9}
+5  6  23  11  3  {3,9,11}
+7  8  25  11  5  {9,11,5}
+13  14  23  11  5  {11,5,7}
+15  16  25  13  5  {5,7,13}
+17  18  35  15  7  {7,13,15}
+
+# ROWS BETWEEN offset FOLLOWING AND offset FOLLOWING
+query IIIIIT
+SELECT
+  x,
+  y,
+  sum(x) OVER (ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END ROWS BETWEEN 2 FOLLOWING AND 4 FOLLOWING),
+  max(x) OVER (ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END ROWS BETWEEN 2 FOLLOWING AND 4 FOLLOWING),
+  min(x) OVER (ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END ROWS BETWEEN 2 FOLLOWING AND 4 FOLLOWING),
+  array_agg(x) OVER (ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END ROWS BETWEEN 2 FOLLOWING AND 4 FOLLOWING)
+FROM t7
+ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END;
+----
+10  -50  13  9  1  {1,3,9}
+10  -40  23  11  3  {3,9,11}
+1  2  25  11  5  {9,11,5}
+3  NULL  23  11  5  {11,5,7}
+9  NULL  25  13  5  {5,7,13}
+11  NULL  35  15  7  {7,13,15}
+5  6  45  17  13  {13,15,17}
+7  8  32  17  15  {15,17}
+13  14  17  17  17  {17}
+15  16  NULL  NULL  NULL  NULL
+17  18  NULL  NULL  NULL  NULL
+
+# Frame end is later than frame start. All frames are empty.
+query IIIIIT
+SELECT
+  x,
+  y,
+  sum(x) OVER (ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END ROWS BETWEEN 30 FOLLOWING AND 1 FOLLOWING),
+  max(x) OVER (ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END ROWS BETWEEN 30 FOLLOWING AND 1 FOLLOWING),
+  min(x) OVER (ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END ROWS BETWEEN 30 FOLLOWING AND 1 FOLLOWING),
+  array_agg(x) OVER (ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END ROWS BETWEEN 30 FOLLOWING AND 1 FOLLOWING)
+FROM t7
+ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END;
+----
+10  -50  NULL  NULL  NULL  NULL
+10  -40  NULL  NULL  NULL  NULL
+1  2  NULL  NULL  NULL  NULL
+3  NULL  NULL  NULL  NULL  NULL
+9  NULL  NULL  NULL  NULL  NULL
+11  NULL  NULL  NULL  NULL  NULL
+5  6  NULL  NULL  NULL  NULL
+7  8  NULL  NULL  NULL  NULL
+13  14  NULL  NULL  NULL  NULL
+15  16  NULL  NULL  NULL  NULL
+17  18  NULL  NULL  NULL  NULL
+
+query IIIIIT
+SELECT
+  x,
+  y,
+  sum(x) OVER (ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END ROWS BETWEEN 2 FOLLOWING AND 1 FOLLOWING),
+  max(x) OVER (ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END ROWS BETWEEN 2 FOLLOWING AND 1 FOLLOWING),
+  min(x) OVER (ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END ROWS BETWEEN 2 FOLLOWING AND 1 FOLLOWING),
+  array_agg(x) OVER (ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END ROWS BETWEEN 2 FOLLOWING AND 1 FOLLOWING)
+FROM t7
+ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END;
+----
+10  -50  NULL  NULL  NULL  NULL
+10  -40  NULL  NULL  NULL  NULL
+1  2  NULL  NULL  NULL  NULL
+3  NULL  NULL  NULL  NULL  NULL
+9  NULL  NULL  NULL  NULL  NULL
+11  NULL  NULL  NULL  NULL  NULL
+5  6  NULL  NULL  NULL  NULL
+7  8  NULL  NULL  NULL  NULL
+13  14  NULL  NULL  NULL  NULL
+15  16  NULL  NULL  NULL  NULL
+17  18  NULL  NULL  NULL  NULL
+
+# ROWS BETWEEN offset PRECEDING AND offset FOLLOWING
+query IIIIIIT
+SELECT
+  x-y+x/10,
+  x,
+  y,
+  sum(x+x) OVER (PARTITION BY x-y+x/10 ORDER BY x ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),
+  max(x+x) OVER (PARTITION BY x-y+x/10 ORDER BY x ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),
+  min(x+x) OVER (PARTITION BY x-y+x/10 ORDER BY x ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),
+  array_agg(x+x) OVER (PARTITION BY x-y+x/10 ORDER BY x ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)
+FROM t7
+ORDER BY x-y+x/10, x;
+----
+-1  1  2  12  10  2  {2,10}
+-1  5  6  26  14  2  {2,10,14}
+-1  7  8  24  14  10  {10,14}
+0  13  14  56  30  26  {26,30}
+0  15  16  90  34  26  {26,30,34}
+0  17  18  64  34  30  {30,34}
+51  10  -40  20  20  20  {20}
+61  10  -50  20  20  20  {20}
+NULL  3  NULL  24  18  6  {6,18}
+NULL  9  NULL  46  22  6  {6,18,22}
+NULL  11  NULL  40  22  18  {18,22}
+
+query IIIIIIT
+SELECT
+  x-y+x/10,
+  x,
+  y,
+  sum(x+x) OVER (PARTITION BY x-y+x/10 ORDER BY x ROWS BETWEEN 1000000 PRECEDING AND 1000000 FOLLOWING),
+  max(x+x) OVER (PARTITION BY x-y+x/10 ORDER BY x ROWS BETWEEN 1000000 PRECEDING AND 1000000 FOLLOWING),
+  min(x+x) OVER (PARTITION BY x-y+x/10 ORDER BY x ROWS BETWEEN 1000000 PRECEDING AND 1000000 FOLLOWING),
+  array_agg(x+x) OVER (PARTITION BY x-y+x/10 ORDER BY x ROWS BETWEEN 1000000 PRECEDING AND 1000000 FOLLOWING)
+FROM t7
+ORDER BY x-y+x/10, x;
+----
+-1  1  2  26  14  2  {2,10,14}
+-1  5  6  26  14  2  {2,10,14}
+-1  7  8  26  14  2  {2,10,14}
+0  13  14  90  34  26  {26,30,34}
+0  15  16  90  34  26  {26,30,34}
+0  17  18  90  34  26  {26,30,34}
+51  10  -40  20  20  20  {20}
+61  10  -50  20  20  20  {20}
+NULL  3  NULL  46  22  6  {6,18,22}
+NULL  9  NULL  46  22  6  {6,18,22}
+NULL  11  NULL  46  22  6  {6,18,22}
+
+query IIIIIIT
+SELECT
+  x-row_number() OVER (ORDER BY x+y),
+  x,
+  y,
+  sum(x+x) OVER (PARTITION BY x-row_number() OVER (ORDER BY x+y) ORDER BY x ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),
+  max(x+x) OVER (PARTITION BY x-row_number() OVER (ORDER BY x+y) ORDER BY x ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),
+  min(x+x) OVER (PARTITION BY x-row_number() OVER (ORDER BY x+y) ORDER BY x ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),
+  array_agg(x+x) OVER (PARTITION BY x-row_number() OVER (ORDER BY x+y) ORDER BY x ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)
+FROM t7
+ORDER BY x-row_number() OVER (ORDER BY x+y), x;
+----
+-6  3  NULL  6  6  6  {6}
+-2  1  2  2  2  2  {2}
+-1  9  NULL  18  18  18  {18}
+0  11  NULL  22  22  22  {22}
+1  5  6  10  10  10  {10}
+2  7  8  14  14  14  {14}
+7  13  14  26  26  26  {26}
+8  10  -40  50  30  20  {20,30}
+8  15  16  50  30  20  {20,30}
+9  10  -50  54  34  20  {20,34}
+9  17  18  54  34  20  {20,34}
+
+# Offset has to be a literal
+query error Expected literal unsigned integer, found identifier "row_number"
+SELECT
+  x-row_number() OVER (ORDER BY x+y),
+  x,
+  y,
+  sum(x+x) OVER (PARTITION BY x-row_number() OVER (ORDER BY x+y) ORDER BY x ROWS BETWEEN row_number() OVER (ORDER BY x+y) PRECEDING AND 0 FOLLOWING),
+  max(x+x) OVER (PARTITION BY x-row_number() OVER (ORDER BY x+y) ORDER BY x ROWS BETWEEN row_number() OVER (ORDER BY x+y) PRECEDING AND 0 FOLLOWING),
+  min(x+x) OVER (PARTITION BY x-row_number() OVER (ORDER BY x+y) ORDER BY x ROWS BETWEEN row_number() OVER (ORDER BY x+y) PRECEDING AND 0 FOLLOWING),
+  array_agg(x+x) OVER (PARTITION BY x-row_number() OVER (ORDER BY x+y) ORDER BY x ROWS BETWEEN row_number() OVER (ORDER BY x+y) PRECEDING AND 0 FOLLOWING)
+FROM t7
+ORDER BY x-row_number() OVER (ORDER BY x+y), x;
+
+# ROWS BETWEEN offset PRECEDING AND CURRENT ROW
+query IIIIIIT
+SELECT
+  x-y+x/10,
+  x,
+  y,
+  sum(x+x) OVER (PARTITION BY x-y+x/10 ORDER BY x ROWS BETWEEN 2 PRECEDING AND CURRENT ROW),
+  max(x+x) OVER (PARTITION BY x-y+x/10 ORDER BY x ROWS BETWEEN 2 PRECEDING AND CURRENT ROW),
+  min(x+x) OVER (PARTITION BY x-y+x/10 ORDER BY x ROWS BETWEEN 2 PRECEDING AND CURRENT ROW),
+  array_agg(x+x) OVER (PARTITION BY x-y+x/10 ORDER BY x ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)
+FROM t7
+ORDER BY x-y+x/10, x;
+----
+-1  1  2  2  2  2  {2}
+-1  5  6  12  10  2  {2,10}
+-1  7  8  26  14  2  {2,10,14}
+0  13  14  26  26  26  {26}
+0  15  16  56  30  26  {26,30}
+0  17  18  90  34  26  {26,30,34}
+51  10  -40  20  20  20  {20}
+61  10  -50  20  20  20  {20}
+NULL  3  NULL  6  6  6  {6}
+NULL  9  NULL  24  18  6  {6,18}
+NULL  11  NULL  46  22  6  {6,18,22}
+
+# ROWS BETWEEN CURRENT ROW AND offset FOLLOWING
+query IIIIIIT
+SELECT
+  x-y+x/10,
+  x,
+  y,
+  sum(x+x) OVER (PARTITION BY x-y+x/10 ORDER BY x ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING),
+  max(x+x) OVER (PARTITION BY x-y+x/10 ORDER BY x ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING),
+  min(x+x) OVER (PARTITION BY x-y+x/10 ORDER BY x ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING),
+  array_agg(x+x) OVER (PARTITION BY x-y+x/10 ORDER BY x ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING)
+FROM t7
+ORDER BY x-y+x/10, x;
+----
+-1  1  2  12  10  2  {2,10}
+-1  5  6  24  14  10  {10,14}
+-1  7  8  14  14  14  {14}
+0  13  14  56  30  26  {26,30}
+0  15  16  64  34  30  {30,34}
+0  17  18  34  34  34  {34}
+51  10  -40  20  20  20  {20}
+61  10  -50  20  20  20  {20}
+NULL  3  NULL  24  18  6  {6,18}
+NULL  9  NULL  40  22  18  {18,22}
+NULL  11  NULL  22  22  22  {22}
+
+# ROWS BETWEEN CURRENT ROW AND CURRENT ROW
+query IIIIIIT
+SELECT
+  x-y+x/10,
+  x,
+  y,
+  sum(x+x) OVER (PARTITION BY x-y+x/10 ORDER BY x ROWS BETWEEN CURRENT ROW AND CURRENT ROW),
+  max(x+x) OVER (PARTITION BY x-y+x/10 ORDER BY x ROWS BETWEEN CURRENT ROW AND CURRENT ROW),
+  min(x+x) OVER (PARTITION BY x-y+x/10 ORDER BY x ROWS BETWEEN CURRENT ROW AND CURRENT ROW),
+  array_agg(x+x) OVER (PARTITION BY x-y+x/10 ORDER BY x ROWS BETWEEN CURRENT ROW AND CURRENT ROW)
+FROM t7
+ORDER BY x-y+x/10, x;
+----
+-1  1  2  2  2  2  {2}
+-1  5  6  10  10  10  {10}
+-1  7  8  14  14  14  {14}
+0  13  14  26  26  26  {26}
+0  15  16  30  30  30  {30}
+0  17  18  34  34  34  {34}
+51  10  -40  20  20  20  {20}
+61  10  -50  20  20  20  {20}
+NULL  3  NULL  6  6  6  {6}
+NULL  9  NULL  18  18  18  {18}
+NULL  11  NULL  22  22  22  {22}
+
+## Tests for `AggregateExpr::on_unique`
+
+# In the next several tests, the global aggregates make the input column to the window aggregate a key, so
+# `ReduceElision` invokes `on_unique`.
+#
+# First, let's see that `ReduceElision` indeed kicks in, by observing that the Reduce of the window aggregation is not
+# present in the plan. (There is 1 Reduce present from the global aggregation.)
+#
+# Note that in these tests that rely on the window function's PARTITION BY being a key, we unfortunately can't test more
+# than one window function call in one test, because we currently forget the key information after a window function
+# call (even when `ReduceElision` simplifies the window function call).
+# TODO: Add an optimization that eliminates a Map-FlatMap pair where the Map is just creating a 1-element list on which
+# the FlatMap is immediately calling `unnest_list`.
+query T multiline
+EXPLAIN WITH(keys)
+SELECT
+  sum(sum(x)) OVER ()
+FROM t7;
+----
+Explained Query:
+  Return // { keys: "()" }
+    Project (#2) // { keys: "()" }
+      Map (record_get[0](#1)) // { keys: "()" }
+        FlatMap unnest_list(#0) // { keys: "()" }
+          Project (#1) // { keys: "([])" }
+            Map (list[row(bigint_to_numeric(#0), row(#0))]) // { keys: "([])" }
+              Union // { keys: "([])" }
+                Get l0 // { keys: "([])" }
+                Map (null) // { keys: "()" }
+                  Union // { keys: "()" }
+                    Negate // { keys: "()" }
+                      Project () // { keys: "([])" }
+                        Get l0 // { keys: "([])" }
+                    Constant // { keys: "([])" }
+                      - ()
+  With
+    cte l0 =
+      Reduce aggregates=[sum(#0)] // { keys: "([])" }
+        Project (#0) // { keys: "()" }
+          ReadStorage materialize.public.t7 // { keys: "()" }
+
+EOF
+
+query I
+SELECT
+  sum(sum(x)) OVER ()
+FROM t7;
+----
+101
+
+query I
+SELECT
+  min(count(x)) OVER ()
+FROM t7;
+----
+11
+
+query I
+SELECT
+  count(min(x)) OVER ()
+FROM t7;
+----
+1
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_table_keys = true
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE t9(x INT UNIQUE, y INT);
+
+statement ok
+INSERT INTO t9 VALUES (1,2), (3,null), (5,6), (7,8), (9, null), (11, null), (13, 14), (15, 16), (17, 18);
+
+# Still testing `AggregateExpr::on_unique`. Here, the uniqueness constraint on the table makes `ReduceElision` call
+# `on_unique`. There should be 0 Reduce operations in the plan.
+query T multiline
+EXPLAIN WITH(keys)
+SELECT
+  sum(y) OVER (PARTITION BY x)
+FROM t9
+ORDER BY x;
+----
+Explained Query:
+  Finish order_by=[#0 asc nulls_last] output=[#2]
+    Project (#3..=#5) // { keys: "()" }
+      Map (record_get[1](#1), record_get[0](#2), record_get[1](#2), record_get[0](#1)) // { keys: "()" }
+        FlatMap unnest_list(#0) // { keys: "()" }
+          Project (#2) // { keys: "()" }
+            Map (list[row(integer_to_bigint(#1), row(#0, #1))]) // { keys: "([0])" }
+              ReadStorage materialize.public.t9 // { keys: "([0])" }
+
+EOF
+
+query I
+SELECT
+  sum(y) OVER (PARTITION BY x)
+FROM t9
+ORDER BY x;
+----
+2
+NULL
+6
+8
+NULL
+NULL
+14
+16
+18
+
+query I
+SELECT
+  min(y) OVER (PARTITION BY x)
+FROM t9
+ORDER BY x;
+----
+2
+NULL
+6
+8
+NULL
+NULL
+14
+16
+18
+
+query I
+SELECT
+  count(y) OVER (PARTITION BY x)
+FROM t9
+ORDER BY x;
+----
+1
+0
+1
+1
+0
+0
+1
+1
+1
+
+query I
+SELECT
+  count(*) OVER (PARTITION BY x)
+FROM t9
+ORDER BY x;
+----
+1
+1
+1
+1
+1
+1
+1
+1
+1
+
+query T
+SELECT
+  array_agg(y) OVER (PARTITION BY x)
+FROM t9
+ORDER BY x;
+----
+{2}
+{NULL}
+{6}
+{8}
+{NULL}
+{NULL}
+{14}
+{16}
+{18}
+
+query R
+SELECT
+  avg(y+y) OVER (PARTITION BY x)
+FROM t9
+ORDER BY x;
+----
+4
+NULL
+12
+16
+NULL
+NULL
+28
+32
+36
+
+# Test that, for window aggregations, `on_unique` is properly calling `wrapped_aggregate.default()` when the frame is
+# empty (and not just returns null as the other window function cases in `on_unique`).
+query I
+SELECT
+  count(y) OVER (PARTITION BY x ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING)
+FROM t9
+ORDER BY x;
+----
+0
+0
+0
+0
+0
+0
+0
+0
+0
+
+query I
+SELECT
+  sum(y) OVER (PARTITION BY x ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING)
+FROM t9
+ORDER BY x;
+----
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+
+query T
+SELECT
+  array_agg(y) OVER (PARTITION BY x ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING)
+FROM t9
+ORDER BY x;
+----
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+
+query R
+SELECT
+  avg(y+y) OVER (PARTITION BY x ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING)
+FROM t9
+ORDER BY x;
+----
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+
+# Complex tests with array_agg and then unnesting the array
+
+query R
+SELECT avg(u)
+FROM (
+  SELECT x, unnest(l) AS u
+  FROM (
+    SELECT x, array_agg(y) OVER (PARTITION BY x%5) AS l
+    FROM t7
+  ) AS ff1
+) AS ff2
+GROUP BY x%5
+ORDER BY x%5;
+----
+-17
+2
+13
+14
+NULL
+
+query IBRR
+WITH
+  array_agg_unnest_grouped_agg AS (
+    SELECT x%5 AS k1, avg(u) AS avg1
+    FROM (
+      SELECT x, unnest(l) AS u
+      FROM (
+        SELECT x, array_agg(y) OVER (PARTITION BY x%5) AS l
+        FROM t7
+      ) AS ff1
+    ) AS ff2
+    GROUP BY x%5
+  ),
+  grouped_agg AS (
+    SELECT x%5 AS k2, avg(y) AS avg2
+    FROM t7
+    GROUP BY x%5
+  )
+SELECT k1, avg1 = avg2, avg1, avg2
+FROM array_agg_unnest_grouped_agg, grouped_agg
+WHERE k1 = k2 AND avg1 IS NOT NULL
+ORDER BY k1;
+----
+0  true  -17  -17
+1  true  2  2
+2  true  13  13
+3  true  14  14
+
+query I
+WITH
+  array_agg AS (
+    SELECT x%5, array_agg(y) OVER (PARTITION BY x%5) AS l
+    FROM t7
+  )
+SELECT s
+FROM
+  array_agg,
+  LATERAL (
+    SELECT sum(ul) AS s
+    FROM (SELECT unnest(l) AS ul FROM array_agg) AS sq1
+  ) AS sq2;
+----
+-188
+-188
+-188
+-188
+-188
+-188
+-188
+-188
+-188
+-188
+-188
+
+query IRRB
+WITH
+  simple AS (
+    SELECT
+      x%5 AS x5_simple,
+      avg(y) OVER (PARTITION BY x%5) AS avg_simple
+    FROM t7
+  ),
+  complicated AS ( -- array_agg, then do an unnest and global agg in a subquery in a SELECT
+    WITH
+      array_agg AS (
+        SELECT
+          x%5 AS x5,
+          array_agg(y) OVER (PARTITION BY x%5) AS l
+        FROM t7
+      )
+    SELECT
+      x5 AS x5_complicated,
+      (
+        SELECT avg(uy)
+        FROM unnest(l) AS uy
+      ) AS avg_complicated
+    FROM array_agg
+  )
+SELECT DISTINCT
+  x5_simple,
+  avg_simple,
+  avg_complicated,
+  avg_simple = avg_complicated
+FROM simple, complicated
+WHERE x5_simple = x5_complicated
+ORDER BY x5_simple;
+----
+0  -17  -17  true
+1  2  2  true
+2  13  13  true
+3  14  14  true
+4  NULL  NULL  NULL
+
+# Regression test for https://github.com/MaterializeInc/materialize/pull/22270#issuecomment-1761432124
+statement error db error: ERROR: Evaluation error: "4294967295 \* 2" uint4 out of range
+select max(1) over (partition by 1 order by 1, 1)
+from
+  (select
+        subq_2."c9" as c0
+      from
+        (select
+              subq_1."c0" as c0,
+              subq_1."c2" as c1,
+              subq_1."c4" as c2,
+              subq_1."c2" as c3,
+              subq_1."c1" as c4,
+              subq_1."c0" as c5,
+              subq_1."c5" as c6,
+              subq_1."c0" as c7,
+              subq_1."c5" as c8,
+              subq_1."c1" as c9,
+              subq_1."c2" as c10,
+              87 as c11,
+              subq_1."c1" as c12
+            from
+              (select
+                    subq_0."c1" as c0,
+                    subq_0."c0" as c1,
+                    subq_0."c1" as c2,
+                    subq_0."c0" as c3,
+                    subq_0."c1" as c4,
+                    subq_0."c0" as c5
+                  from
+                    (select
+                          ref_0."form_of_use" as c0,
+                          ref_0."default_collate_schema" as c1
+                        from
+                          information_schema.character_sets as ref_0
+                        ) as subq_0
+                    ) as subq_1
+            ) as subq_2
+      ) as subq_3
+where (case when (((select "collection_timestamp" from mz_internal.mz_storage_usage_by_shard limit 1 offset 4)
+          ) < ((select pg_catalog.min("occurred_at") from mz_internal.mz_source_status_history)
+          ))
+      and ((case when subq_3."c0" is NULL then TIMESTAMPTZ '2023-01-01 01:23:45+06' else TIMESTAMPTZ '2023-01-01 01:23:45+06' end
+          ) <> (pg_catalog.now())) then case when (((select pg_catalog.sum("id") from mz_internal.mz_sessions)
+            ) - (0::uint8)) >= ((select "worker_id" from mz_internal.mz_arrangement_sharing_per_worker limit 1 offset 3)
+          ) then numrange(0,0) else numrange(0,0) end
+       else case when (((select pg_catalog.sum("id") from mz_internal.mz_sessions)
+            ) - (0::uint8)) >= ((select "worker_id" from mz_internal.mz_arrangement_sharing_per_worker limit 1 offset 3)
+          ) then numrange(0,0) else numrange(0,0) end
+       end
+    ) >= (case when (0::uint4) > (pg_catalog.mod(
+        CAST((select "session_id" from mz_internal.mz_subscriptions limit 1 offset 2)
+           as uint4),
+        CAST((4294967295::uint4) * (2::uint4) as uint4))) then case when (mz_catalog.map_length(
+          mz_internal.mz_role_oid_memberships())) = ((select pg_catalog.min("rolconnlimit") from pg_catalog.pg_roles)
+          ) then case when (null::uint4) = (null::uint4) then numrange(0,0) else numrange(0,0) end
+         else case when (null::uint4) = (null::uint4) then numrange(0,0) else numrange(0,0) end
+         end
+       else case when (mz_catalog.map_length(
+          mz_internal.mz_role_oid_memberships())) = ((select pg_catalog.min("rolconnlimit") from pg_catalog.pg_roles)
+          ) then case when (null::uint4) = (null::uint4) then numrange(0,0) else numrange(0,0) end
+         else case when (null::uint4) = (null::uint4) then numrange(0,0) else numrange(0,0) end
+         end
+       end
+    );

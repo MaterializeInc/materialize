@@ -2622,6 +2622,65 @@ impl AggregateExpr {
                 }
             }
 
+            // The input type for window aggs is a ((OriginalRow, InputValue), OrderByExprs...)
+            // See an example MIR in `window_func_applied_to`.
+            AggregateFunc::WindowAggregate {
+                wrapped_aggregate,
+                window_frame,
+                ..
+            } => {
+                // TODO: deduplicate code between the various window function cases.
+
+                let tuple = self
+                    .expr
+                    .clone()
+                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
+
+                // Get the overall return type
+                let return_type = self
+                    .typ(input_type)
+                    .scalar_type
+                    .unwrap_list_element_type()
+                    .clone();
+                let window_agg_return_type = return_type.unwrap_record_element_type()[0].clone();
+
+                // Extract the original row
+                let original_row = tuple
+                    .clone()
+                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
+
+                // Extract the input value
+                let expr = tuple.call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(1)));
+
+                // If the window frame includes the current (single) row, evaluate the aggregate on
+                // that row. Otherwise, return the default value for the aggregate.
+                let value = if window_frame.includes_current_row() {
+                    AggregateExpr {
+                        func: (**wrapped_aggregate).clone(),
+                        expr,
+                        distinct: false, // We have just one input element; DISTINCT doesn't matter.
+                    }
+                    .on_unique(input_type)
+                } else {
+                    MirScalarExpr::literal_ok(wrapped_aggregate.default(), window_agg_return_type)
+                };
+
+                MirScalarExpr::CallVariadic {
+                    func: VariadicFunc::ListCreate {
+                        elem_type: return_type,
+                    },
+                    exprs: vec![MirScalarExpr::CallVariadic {
+                        func: VariadicFunc::RecordCreate {
+                            field_names: vec![
+                                ColumnName::from("?window_agg?"),
+                                ColumnName::from("?record?"),
+                            ],
+                        },
+                        exprs: vec![value, original_row],
+                    }],
+                }
+            }
+
             // All other variants should return the argument to the aggregation.
             AggregateFunc::MaxNumeric
             | AggregateFunc::MaxInt16

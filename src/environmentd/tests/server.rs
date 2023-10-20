@@ -2978,14 +2978,27 @@ fn webhook_concurrent_actions() {
 #[cfg_attr(miri, ignore)] // too slow
 fn webhook_concurrency_limit() {
     let concurrency_limit = 15;
-    let config = util::Config::default().with_concurrent_webhook_req_count(concurrency_limit);
+    let config = util::Config::default();
     let server = util::start_server(config).unwrap();
+
     // Note: we need enable_unstable_dependencies to use mz_sleep.
     server.enable_feature_flags(&[
         "enable_webhook_sources",
         "enable_unstable_dependencies",
         "enable_dangerous_functions",
     ]);
+
+    // Reduce the webhook concurrency limit;
+    let mut mz_client = server
+        .pg_config_internal()
+        .user(&SYSTEM_USER.name)
+        .connect(postgres::NoTls)
+        .unwrap();
+    mz_client
+        .batch_execute(&format!(
+            "ALTER SYSTEM SET webhook_concurrent_request_limit = {concurrency_limit}"
+        ))
+        .unwrap();
 
     let mut client = server.connect(postgres::NoTls).unwrap();
 

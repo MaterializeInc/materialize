@@ -673,6 +673,7 @@ pub fn plan_subscribe(
                 Err(PlanError::UnknownColumn {
                     table: None,
                     column,
+                    similar: _,
                 }) if &column == &mz_diff => {
                     // mz_diff is being used in an expression. Since mz_diff isn't part of the table
                     // it looks like an unknown column. Instead, return a better error

@@ -111,6 +111,7 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::AlterSetCluster(_)
         | Plan::AlterItemRename(_)
         | Plan::AlterItemSwap(_)
+        | Plan::AlterSchemaRename(_)
         | Plan::AlterSecret(_)
         | Plan::AlterSystemSet(_)
         | Plan::AlterSystemReset(_)

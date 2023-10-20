@@ -289,6 +289,11 @@ impl ColumnName {
     pub fn as_mut_str(&mut self) -> &mut String {
         &mut self.0
     }
+
+    /// Returns if this [`ColumnName`] is similar to the provided one.
+    pub fn is_similar(&self, other: &ColumnName) -> bool {
+        self.0.to_lowercase() == other.as_str().to_lowercase()
+    }
 }
 
 impl fmt::Display for ColumnName {
@@ -494,6 +499,15 @@ impl RelationDesc {
     /// Returns an iterator over the names of the columns in this relation.
     pub fn iter_names(&self) -> impl Iterator<Item = &ColumnName> {
         self.names.iter()
+    }
+
+    /// Returns an iterator over the names of the columns in this relation that are "similar" to
+    /// the provided `name`.
+    pub fn iter_similar_names<'a>(
+        &'a self,
+        name: &'a ColumnName,
+    ) -> impl Iterator<Item = &'a ColumnName> {
+        self.iter_names().filter(|n| n.is_similar(name))
     }
 
     /// Finds a column by name.

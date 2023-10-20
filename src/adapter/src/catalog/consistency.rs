@@ -21,6 +21,7 @@ use mz_sql::names::{
     SchemaSpecifier,
 };
 use mz_sql_parser::ast::{self, Statement};
+use mz_sql_parser::parser::ParserStatementError;
 use serde::Serialize;
 
 use super::CatalogState;
@@ -418,9 +419,10 @@ impl CatalogState {
                             });
                             continue;
                         }
-                        Err(_) => {
+                        Err(e) => {
                             item_inconsistencies.push(ItemInconsistency::StatementParseFailure {
                                 create_sql: entry.create_sql().to_string(),
+                                e,
                             });
                             continue;
                         }
@@ -615,7 +617,10 @@ enum ItemInconsistency {
         entry_name: QualifiedItemName,
     },
     /// Failed to parse the `create_sql` persisted with an item.
-    StatementParseFailure { create_sql: String },
+    StatementParseFailure {
+        create_sql: String,
+        e: ParserStatementError,
+    },
     /// Parsing the `create_sql` returned multiple Statements.
     MultiCreateStatement { create_sql: String },
     /// The name from a parsed `create_sql` statement, is not fully qualified.

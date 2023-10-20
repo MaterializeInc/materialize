@@ -16,6 +16,7 @@ use maplit::btreemap;
 use mz_compute_types::plan::Plan;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
+use mz_ore::soft_assert_or_log;
 use mz_repr::explain::trace_plan;
 use mz_repr::{ColumnName, GlobalId, RelationDesc, Timestamp};
 use mz_sql::plan::HirRelationExpr;
@@ -93,8 +94,8 @@ pub struct Resolved;
 /// `DataflowDescription` with `LIR` plans.
 #[derive(Clone)]
 pub struct GlobalLirPlan {
-    pub df_desc: LirDataflowDescription,
-    pub df_meta: DataflowMetainfo,
+    df_desc: LirDataflowDescription,
+    df_meta: DataflowMetainfo,
 }
 
 impl OptimizeMaterializedView {
@@ -218,17 +219,17 @@ impl GlobalMirPlan<Unresolved> {
         // Set the `as_of` timestamp for the dataflow.
         self.df_desc.set_as_of(as_of);
 
-        // If the only outputs of the dataflow are sinks, we might be able to
+        soft_assert_or_log!(
+            self.df_desc.index_exports.is_empty(),
+            "unexpectedly setting until for a DataflowDescription with an index",
+        );
+
+        // The only outputs of the dataflow are sinks, so we might be able to
         // turn off the computation early, if they all have non-trivial
         // `up_to`s.
-        //
-        // TODO: This should always be the case here so we can demote
-        // the outer if to a soft assert.
-        if self.df_desc.index_exports.is_empty() {
-            self.df_desc.until = Antichain::from_elem(Timestamp::MIN);
-            for (_, sink) in &self.df_desc.sink_exports {
-                self.df_desc.until.join_assign(&sink.up_to);
-            }
+        self.df_desc.until = Antichain::from_elem(Timestamp::MIN);
+        for (_, sink) in &self.df_desc.sink_exports {
+            self.df_desc.until.join_assign(&sink.up_to);
         }
 
         GlobalMirPlan {

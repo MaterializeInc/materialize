@@ -58,6 +58,7 @@ pub enum PlanError {
     UnknownColumn {
         table: Option<PartialItemName>,
         column: ColumnName,
+        similar: Box<[ColumnName]>,
     },
     UngroupedColumn {
         table: Option<PartialItemName>,
@@ -340,6 +341,17 @@ impl PlanError {
             Self::KafkaSourcePurification(e) => e.hint(),
             Self::TestScriptSourcePurification(e) => e.hint(),
             Self::LoadGeneratorSourcePurification(e) => e.hint(),
+            Self::UnknownColumn { table, similar, .. } => {
+                let suffix = "Make sure to surround case sensitive names in double quotes.";
+                match &similar[..] {
+                    [] => None,
+                    [column] => Some(format!("The similarly named column {} does exist. {suffix}", ColumnDisplay { table, column })),
+                    names => {
+                        let similar = names.into_iter().map(|column| ColumnDisplay { table, column }).join(", ");
+                        Some(format!("There are similarly named columns that do exist: {similar}. {suffix}"))
+                    }
+                }
+            }
             _ => None,
         }
     }
@@ -362,7 +374,7 @@ impl fmt::Display for PlanError {
                 }
                 Ok(())
             }
-            Self::UnknownColumn { table, column } => write!(
+            Self::UnknownColumn { table, column, similar: _ } => write!(
                 f,
                 "column {} does not exist",
                 ColumnDisplay { table, column }

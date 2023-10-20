@@ -414,7 +414,7 @@ def workflow_default(c: Composition) -> None:
     introducing a Disruption and then checking the mz_internal.mz_*_statuses tables
     """
 
-    for id, disruption in enumerate(disruptions):
+    for disruption in disruptions:
         disruption.run_test(c)
 
 

@@ -10,18 +10,21 @@
 //! Abstractions over files, cloud storage, etc used in persistence.
 
 use std::fmt;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures_util::Stream;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::u64_to_usize;
 use mz_postgres_client::error::PostgresError;
 use mz_proto::RustType;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
+use tracing::{Instrument, Span};
 
 use crate::error::Error;
 
@@ -111,7 +114,7 @@ impl Determinate {
     /// Return a new Determinate wrapping the given error.
     ///
     /// Exposed for testing via [crate::unreliable].
-    pub(crate) fn new(inner: anyhow::Error) -> Self {
+    pub fn new(inner: anyhow::Error) -> Self {
         Determinate { inner }
     }
 }
@@ -343,6 +346,10 @@ impl<A> Tasked<A> {
     }
 }
 
+/// A boxed stream, similar to what `async_trait` desugars async functions to, but hardcoded
+/// to our standard result type.
+pub type ResultStream<'a, T> = Pin<Box<dyn Stream<Item = Result<T, ExternalError>> + Send + 'a>>;
+
 /// An abstraction for [VersionedData] held in a location in persistent storage
 /// where the data are conditionally updated by version.
 ///
@@ -353,6 +360,9 @@ impl<A> Tasked<A> {
 /// range [0, i64::MAX].
 #[async_trait]
 pub trait Consensus: std::fmt::Debug {
+    /// Returns all the keys ever created in the consensus store.
+    fn list_keys(&self) -> ResultStream<String>;
+
     /// Returns a recent version of `data`, and the corresponding sequence number, if
     /// one exists at this location.
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError>;
@@ -397,12 +407,21 @@ pub trait Consensus: std::fmt::Debug {
 
 #[async_trait]
 impl<A: Consensus + Sync + Send + 'static> Consensus for Tasked<A> {
+    fn list_keys(&self) -> ResultStream<String> {
+        // Similarly to Blob::list_keys_and_metadata, this is difficult to make into a task.
+        // (If we use an unbounded channel between the task and the caller, we can buffer forever;
+        // if we use a bounded channel, we lose the isolation benefits of Tasked.)
+        // However, this should only be called in administrative contexts
+        // and not in the main state-machine impl.
+        self.0.list_keys()
+    }
+
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
         let backing = self.clone_backing();
         let key = key.to_owned();
         mz_ore::task::spawn(
             || "persist::task::head",
-            async move { backing.head(&key).await },
+            async move { backing.head(&key).await }.instrument(Span::current()),
         )
         .await?
     }
@@ -415,9 +434,11 @@ impl<A: Consensus + Sync + Send + 'static> Consensus for Tasked<A> {
     ) -> Result<CaSResult, ExternalError> {
         let backing = self.clone_backing();
         let key = key.to_owned();
-        mz_ore::task::spawn(|| "persist::task::cas", async move {
-            backing.compare_and_set(&key, expected, new).await
-        })
+        mz_ore::task::spawn(
+            || "persist::task::cas",
+            async move { backing.compare_and_set(&key, expected, new).await }
+                .instrument(Span::current()),
+        )
         .await?
     }
 
@@ -429,18 +450,20 @@ impl<A: Consensus + Sync + Send + 'static> Consensus for Tasked<A> {
     ) -> Result<Vec<VersionedData>, ExternalError> {
         let backing = self.clone_backing();
         let key = key.to_owned();
-        mz_ore::task::spawn(|| "persist::task::scan", async move {
-            backing.scan(&key, from, limit).await
-        })
+        mz_ore::task::spawn(
+            || "persist::task::scan",
+            async move { backing.scan(&key, from, limit).await }.instrument(Span::current()),
+        )
         .await?
     }
 
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
         let backing = self.clone_backing();
         let key = key.to_owned();
-        mz_ore::task::spawn(|| "persist::task::truncate", async move {
-            backing.truncate(&key, seqno).await
-        })
+        mz_ore::task::spawn(
+            || "persist::task::truncate",
+            async move { backing.truncate(&key, seqno).await }.instrument(Span::current()),
+        )
         .await?
     }
 }
@@ -494,6 +517,17 @@ pub trait Blob: std::fmt::Debug {
     /// Returns Some and the size of the deleted blob if if exists. Succeeds and
     /// returns None if it does not exist.
     async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError>;
+
+    /// Restores a previously-deleted key to the map, if possible.
+    ///
+    /// Returns successfully if the key exists after this call: perhaps because it already existed
+    /// or was restored. (In particular, this makes restore idempotent.)
+    /// Fails if we were unable to restore any value for that key:
+    /// perhaps the key was never written, or was permanently deleted.
+    ///
+    /// It is acceptable for [Blob::restore] to be unable
+    /// to restore keys, in which case this method should succeed iff the key exists.
+    async fn restore(&self, key: &str) -> Result<(), ExternalError>;
 }
 
 #[async_trait]
@@ -503,7 +537,7 @@ impl<A: Blob + Sync + Send + 'static> Blob for Tasked<A> {
         let key = key.to_owned();
         mz_ore::task::spawn(
             || "persist::task::get",
-            async move { backing.get(&key).await },
+            async move { backing.get(&key).await }.instrument(Span::current()),
         )
         .await?
     }
@@ -529,9 +563,10 @@ impl<A: Blob + Sync + Send + 'static> Blob for Tasked<A> {
     async fn set(&self, key: &str, value: Bytes, atomic: Atomicity) -> Result<(), ExternalError> {
         let backing = self.clone_backing();
         let key = key.to_owned();
-        mz_ore::task::spawn(|| "persist::task::set", async move {
-            backing.set(&key, value, atomic).await
-        })
+        mz_ore::task::spawn(
+            || "persist::task::set",
+            async move { backing.set(&key, value, atomic).await }.instrument(Span::current()),
+        )
         .await?
     }
 
@@ -542,9 +577,20 @@ impl<A: Blob + Sync + Send + 'static> Blob for Tasked<A> {
     async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
         let backing = self.clone_backing();
         let key = key.to_owned();
-        mz_ore::task::spawn(|| "persist::task::delete", async move {
-            backing.delete(&key).await
-        })
+        mz_ore::task::spawn(
+            || "persist::task::delete",
+            async move { backing.delete(&key).await }.instrument(Span::current()),
+        )
+        .await?
+    }
+
+    async fn restore(&self, key: &str) -> Result<(), ExternalError> {
+        let backing = self.clone_backing();
+        let key = key.to_owned();
+        mz_ore::task::spawn(
+            || "persist::task::restore",
+            async move { backing.restore(&key).await }.instrument(Span::current()),
+        )
         .await?
     }
 }
@@ -554,6 +600,7 @@ pub mod tests {
     use std::future::Future;
 
     use anyhow::anyhow;
+    use futures_util::TryStreamExt;
     use uuid::Uuid;
 
     use crate::location::Atomicity::{AllowNonAtomic, RequireAtomic};
@@ -687,6 +734,22 @@ pub mod tests {
         blob0.set("empty", Bytes::new(), AllowNonAtomic).await?;
         assert_eq!(blob0.delete("empty").await, Ok(Some(0)));
 
+        // Attempt to restore a key. Not all backends will be able to restore, but
+        // we can confirm that our data is visible iff restore reported success.
+        blob0
+            .set("undelete", Bytes::from("data"), AllowNonAtomic)
+            .await?;
+        // Restoring should always succeed when the key exists.
+        blob0.restore("undelete").await?;
+        assert_eq!(blob0.delete("undelete").await?, Some("data".len()));
+        let expected = match blob0.restore("undelete").await {
+            Ok(()) => Some(Bytes::from("data").into()),
+            Err(ExternalError::Determinate(_)) => None,
+            Err(other) => return Err(other),
+        };
+        assert_eq!(blob0.get("undelete").await?, expected);
+        blob0.delete("undelete").await?;
+
         // Empty blob contains no keys.
         blob0.delete("k0a").await?;
         let mut blob_keys = get_keys(&blob0).await?;
@@ -796,6 +859,10 @@ pub mod tests {
             consensus.compare_and_set(&key, None, state.clone()).await,
             Ok(CaSResult::Committed),
         );
+
+        // The new key is visible in state.
+        let keys: Vec<_> = consensus.list_keys().try_collect().await?;
+        assert_eq!(keys, vec![key.to_owned()]);
 
         // We can observe the a recent value on successful update.
         assert_eq!(consensus.head(&key).await, Ok(Some(state.clone())));

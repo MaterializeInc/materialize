@@ -18,7 +18,7 @@ use mz_repr::namespaces::{MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, PG_CATALOG_SCHE
 use mz_sql_parser::ast::visit_mut::{self, VisitMut, VisitMutNode};
 use mz_sql_parser::ast::{
     Expr, Function, FunctionArgs, Ident, Op, OrderByExpr, Query, Select, SelectItem, TableAlias,
-    TableFactor, TableWithJoins, Value,
+    TableFactor, TableWithJoins, Value, WindowSpec,
 };
 use uuid::Uuid;
 
@@ -116,6 +116,7 @@ impl<'a> FuncRewriter<'a> {
         order_by: Vec<OrderByExpr<Aug>>,
         filter: Option<Box<Expr<Aug>>>,
         distinct: bool,
+        over: Option<WindowSpec<Aug>>,
     ) -> Expr<Aug> {
         if self.rewriting_table_factor && self.status.is_ok() {
             self.status = Err(PlanError::Unstructured(
@@ -129,7 +130,7 @@ impl<'a> FuncRewriter<'a> {
                 order_by,
             },
             filter,
-            over: None,
+            over,
             distinct,
         })
     }
@@ -139,6 +140,7 @@ impl<'a> FuncRewriter<'a> {
         expr: Expr<Aug>,
         filter: Option<Box<Expr<Aug>>>,
         distinct: bool,
+        over: Option<WindowSpec<Aug>>,
     ) -> Expr<Aug> {
         let sum = self
             .plan_agg(
@@ -148,6 +150,7 @@ impl<'a> FuncRewriter<'a> {
                 vec![],
                 filter.clone(),
                 distinct,
+                over.clone(),
             )
             .call_unary(
                 self.scx
@@ -160,6 +163,7 @@ impl<'a> FuncRewriter<'a> {
             vec![],
             filter,
             distinct,
+            over,
         );
         Self::plan_divide(sum, count)
     }
@@ -170,6 +174,7 @@ impl<'a> FuncRewriter<'a> {
         expr: Expr<Aug>,
         filter: Option<Box<Expr<Aug>>>,
         distinct: bool,
+        over: Option<WindowSpec<Aug>>,
     ) -> Expr<Aug> {
         let sum = self
             .plan_agg(
@@ -179,6 +184,7 @@ impl<'a> FuncRewriter<'a> {
                 vec![],
                 filter.clone(),
                 distinct,
+                over.clone(),
             )
             .call_unary(
                 self.scx.dangerous_resolve_name(vec![
@@ -193,6 +199,7 @@ impl<'a> FuncRewriter<'a> {
             vec![],
             filter,
             distinct,
+            over,
         );
         Self::plan_divide(sum, count)
     }
@@ -203,6 +210,7 @@ impl<'a> FuncRewriter<'a> {
         filter: Option<Box<Expr<Aug>>>,
         distinct: bool,
         sample: bool,
+        over: Option<WindowSpec<Aug>>,
     ) -> Expr<Aug> {
         // N.B. this variance calculation uses the "textbook" algorithm, which
         // is known to accumulate problematic amounts of error. The numerically
@@ -230,6 +238,7 @@ impl<'a> FuncRewriter<'a> {
             vec![],
             filter.clone(),
             distinct,
+            over.clone(),
         );
         let sum = self.plan_agg(
             self.scx
@@ -238,6 +247,7 @@ impl<'a> FuncRewriter<'a> {
             vec![],
             filter.clone(),
             distinct,
+            over.clone(),
         );
         let sum_squared = sum.clone().multiply(sum);
         let count = self.plan_agg(
@@ -247,6 +257,7 @@ impl<'a> FuncRewriter<'a> {
             vec![],
             filter,
             distinct,
+            over,
         );
         Self::plan_divide(
             sum_squares.minus(Self::plan_divide(sum_squared, count.clone())),
@@ -264,8 +275,9 @@ impl<'a> FuncRewriter<'a> {
         filter: Option<Box<Expr<Aug>>>,
         distinct: bool,
         sample: bool,
+        over: Option<WindowSpec<Aug>>,
     ) -> Expr<Aug> {
-        self.plan_variance(expr, filter, distinct, sample)
+        self.plan_variance(expr, filter, distinct, sample, over)
             .call_unary(
                 self.scx
                     .dangerous_resolve_name(vec![PG_CATALOG_SCHEMA, "sqrt"]),
@@ -277,6 +289,7 @@ impl<'a> FuncRewriter<'a> {
         expr: Expr<Aug>,
         filter: Option<Box<Expr<Aug>>>,
         distinct: bool,
+        over: Option<WindowSpec<Aug>>,
     ) -> Expr<Aug> {
         // The code below converts `bool_and(x)` into:
         //
@@ -296,6 +309,7 @@ impl<'a> FuncRewriter<'a> {
             vec![],
             filter,
             distinct,
+            over,
         );
         sum.equals(Expr::Value(Value::Number(0.to_string())))
     }
@@ -305,6 +319,7 @@ impl<'a> FuncRewriter<'a> {
         expr: Expr<Aug>,
         filter: Option<Box<Expr<Aug>>>,
         distinct: bool,
+        over: Option<WindowSpec<Aug>>,
     ) -> Expr<Aug> {
         // The code below converts `bool_or(x)`z into:
         //
@@ -313,7 +328,7 @@ impl<'a> FuncRewriter<'a> {
         // It is tempting to use `count` instead, but count does not return NULL
         // when all input values are NULL, as required.
         //
-        // The `(x OR false)` expression implicity casts `x` to `bool` without
+        // The `(x OR false)` expression implicitly casts `x` to `bool` without
         // changing its logical value. It is tempting to use `x::bool` instead,
         // but that performs an explicit cast, and to match PostgreSQL we must
         // perform only an implicit cast.
@@ -325,6 +340,7 @@ impl<'a> FuncRewriter<'a> {
             vec![],
             filter,
             distinct,
+            over,
         );
         sum.gt(Expr::Value(Value::Number(0.to_string())))
     }
@@ -335,7 +351,7 @@ impl<'a> FuncRewriter<'a> {
             args: FunctionArgs::Args { args, order_by: _ },
             filter,
             distinct,
-            over: None,
+            over,
         } = func
         {
             let pg_catalog_id = self
@@ -366,17 +382,20 @@ impl<'a> FuncRewriter<'a> {
 
             let filter = filter.clone();
             let distinct = *distinct;
+            let over = over.clone();
             let expr = if args.len() == 1 {
                 let arg = args[0].clone();
                 match name.as_str() {
-                    "avg_internal_v1" => self.plan_avg_internal_v1(arg, filter, distinct),
-                    "avg" => self.plan_avg(arg, filter, distinct),
-                    "variance" | "var_samp" => self.plan_variance(arg, filter, distinct, true),
-                    "var_pop" => self.plan_variance(arg, filter, distinct, false),
-                    "stddev" | "stddev_samp" => self.plan_stddev(arg, filter, distinct, true),
-                    "stddev_pop" => self.plan_stddev(arg, filter, distinct, false),
-                    "bool_and" => self.plan_bool_and(arg, filter, distinct),
-                    "bool_or" => self.plan_bool_or(arg, filter, distinct),
+                    "avg_internal_v1" => self.plan_avg_internal_v1(arg, filter, distinct, over),
+                    "avg" => self.plan_avg(arg, filter, distinct, over),
+                    "variance" | "var_samp" => {
+                        self.plan_variance(arg, filter, distinct, true, over)
+                    }
+                    "var_pop" => self.plan_variance(arg, filter, distinct, false, over),
+                    "stddev" | "stddev_samp" => self.plan_stddev(arg, filter, distinct, true, over),
+                    "stddev_pop" => self.plan_stddev(arg, filter, distinct, false, over),
+                    "bool_and" => self.plan_bool_and(arg, filter, distinct, over),
+                    "bool_or" => self.plan_bool_or(arg, filter, distinct, over),
                     _ => return None,
                 }
             } else if args.len() == 2 {

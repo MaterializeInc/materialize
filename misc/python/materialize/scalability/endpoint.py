@@ -13,6 +13,9 @@ import psycopg
 
 
 class Endpoint:
+
+    _name: str | None = None
+
     def sql_connection(self) -> psycopg.connection.Connection[tuple[Any, ...]]:
         conn = psycopg.connect(self.url())
         conn.autocommit = True
@@ -44,8 +47,12 @@ class Endpoint:
         cursor.execute(sql.encode("utf8"))
 
     def name(self) -> str:
+        if self._name is not None:
+            return self._name
+
         cursor = self.sql_connection().cursor()
         cursor.execute(b"SELECT mz_version()")
         row = cursor.fetchone()
         assert row is not None
-        return str(row[0])
+        self._name = str(row[0])
+        return self._name

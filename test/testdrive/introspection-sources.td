@@ -264,7 +264,9 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 > CREATE DEFAULT INDEX ii_arr ON vv_arr
 
-> SELECT records >= 300, size >= 300*96, capacity >= 300*96 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_arr' OR name LIKE '%mv_arr'
+# Under arrangement specialization of only empty values, a single-column relation
+# should demand 64 bytes per tuple instead of 96.
+> SELECT records >= 300, size >= 300*64, capacity >= 300*64 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_arr' OR name LIKE '%mv_arr'
 true true true
 true true true
 
@@ -293,7 +295,7 @@ true true true
 
 > INSERT INTO t4 SELECT generate_series(1, 1000)
 
-> SELECT records >= 1000 AND records <= 1001, batches > 0, size > 96*1000 AND size < 2*96*1000, capacity > 96*1000, allocations > 0 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
+> SELECT records >= 1000 AND records <= 1001, batches > 0, size > 64*1000 AND size < 2*64*1000, capacity > 64*1000, allocations > 0 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
 true true true true true
 
 > DROP INDEX ii_t4

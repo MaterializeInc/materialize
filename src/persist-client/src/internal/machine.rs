@@ -1666,6 +1666,42 @@ pub mod datadriven {
         ))
     }
 
+    pub async fn clear_blob(
+        datadriven: &mut MachineState,
+        _args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let mut to_delete = vec![];
+        datadriven
+            .client
+            .blob
+            .list_keys_and_metadata("", &mut |meta| {
+                to_delete.push(meta.key.to_owned());
+            })
+            .await?;
+        for blob in &to_delete {
+            datadriven.client.blob.delete(blob).await?;
+        }
+        Ok(format!("deleted={}\n", to_delete.len()))
+    }
+
+    pub async fn restore_blob(
+        datadriven: &mut MachineState,
+        _args: DirectiveArgs<'_>,
+    ) -> Result<String, anyhow::Error> {
+        let not_restored = crate::internal::restore::restore_blob(
+            &datadriven.state_versions,
+            datadriven.client.blob.as_ref(),
+            &datadriven.client.cfg.build_version,
+            datadriven.shard_id,
+        )
+        .await?;
+        let mut out = String::new();
+        for key in not_restored {
+            writeln!(&mut out, "{key}");
+        }
+        Ok(out)
+    }
+
     pub async fn gc(
         datadriven: &mut MachineState,
         args: DirectiveArgs<'_>,

@@ -36,6 +36,10 @@ ERROR_RE = re.compile(
     | timely\ communication\ error:
     # Expected once compute cluster has panicked, only happens in CI
     | aborting\ because\ propagate_crashes\ is\ enabled
+    # Expected when CRDB is corrupted
+    | restart-materialized-1\ .*relation\ \\"fence\\"\ does\ not\ exist
+    # Expected when CRDB is corrupted
+    | restart-materialized-1\ .*relation\ "consensus"\ does\ not\ exist
     ))
     .)*
     # This block contains unexpected failures, report them

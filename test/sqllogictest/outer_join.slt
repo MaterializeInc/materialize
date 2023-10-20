@@ -121,6 +121,7 @@ Explained Query:
               ArrangeBy
                 raw=true
                 arrangements[0]={ key=[#0], permutation=id, thinning=(#1..=#3) }
+                types=[integer?, integer?, integer?, integer?]
                 Get::PassArrangements l1
                   raw=true
               Reduce::Distinct
@@ -145,12 +146,14 @@ Explained Query:
         ArrangeBy
           raw=true
           arrangements[0]={ key=[#0], permutation=id, thinning=(#1..=#3) }
+          types=[integer, integer?, integer?, integer?]
           Get::Collection l1
             filter=((#0) IS NOT NULL)
             raw=true
         ArrangeBy
           raw=true
           arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+          types=[integer, integer?]
           Get::Collection materialize.public.right2
             raw=true
     cte l1 =
@@ -179,12 +182,14 @@ Explained Query:
         ArrangeBy
           raw=true
           arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+          types=[integer, integer?]
           Get::Collection materialize.public.left
             filter=((#0) IS NOT NULL)
             raw=true
         ArrangeBy
           raw=true
           arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+          types=[integer, integer?]
           TopK::MonotonicTop1 group_by=[#0] must_consolidate
             Get::Collection materialize.public.right1
               raw=true

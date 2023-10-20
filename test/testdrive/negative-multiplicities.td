@@ -10,28 +10,28 @@
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_repeat_row  = true
 
-> CREATE TABLE base (data bigint, diff bigint)
-> CREATE MATERIALIZED VIEW data AS SELECT data FROM base, repeat_row(diff)
+> CREATE TABLE base (data bigint, unsigned_data uint4, diff bigint)
+> CREATE MATERIALIZED VIEW data AS SELECT data, unsigned_data FROM base, repeat_row(diff)
 
-> INSERT INTO base VALUES (1, 1)
+> INSERT INTO base VALUES (1, 1, 1)
 > SELECT * FROM data
-1
+1 1
 
-> INSERT INTO base VALUES (1, -1), (1, -1)
+> INSERT INTO base VALUES (1, 1, -1), (1, 1, -1)
 
 > SELECT count(*) FROM data
 -1
 
 ! SELECT * FROM data
-contains:Invalid data in source, saw retractions (1) for row that does not exist: [Int64(1)]
+contains:Invalid data in source, saw retractions (1) for row that does not exist: [Int64(1), UInt32(1)]
 
-> INSERT INTO base VALUES (1, -1)
+> INSERT INTO base VALUES (1, 1, -1)
 
 > SELECT count(*) FROM data
 -2
 
 ! SELECT * FROM data
-contains:Invalid data in source, saw retractions (2) for row that does not exist: [Int64(1)]
+contains:Invalid data in source, saw retractions (2) for row that does not exist: [Int64(1), UInt32(1)]
 
 # regression scenario per #17963, with non-monotonic rendering
 > CREATE VIEW topk AS
@@ -86,3 +86,22 @@ contains:Invalid data in source, saw non-positive accumulation
 ! SELECT * FROM collation;
 # Case-insensitive match for both 'Non' and 'non'
 contains:on-positive accumulation
+
+# Window aggregations
+! SELECT list_agg(data) OVER ()[1] FROM data;
+contains:Non-positive accumulation in ReduceInaccumulable
+
+! SELECT sum(data) OVER () FROM data;
+contains:Non-positive accumulation in ReduceInaccumulable
+
+! SELECT max(data) OVER () FROM data;
+contains:Non-positive accumulation in ReduceInaccumulable
+
+! SELECT list_agg(unsigned_data) OVER ()[1] FROM data;
+contains:Non-positive accumulation in ReduceInaccumulable
+
+! SELECT sum(unsigned_data) OVER () FROM data;
+contains:Non-positive accumulation in ReduceInaccumulable
+
+! SELECT max(unsigned_data) OVER () FROM data;
+contains:Non-positive accumulation in ReduceInaccumulable

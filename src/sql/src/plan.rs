@@ -60,7 +60,7 @@ use crate::catalog::{
 };
 use crate::names::{
     Aug, CommentObjectId, FullItemName, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier,
-    ResolvedIds, SystemObjectId,
+    ResolvedIds, SchemaSpecifier, SystemObjectId,
 };
 
 pub(crate) mod error;
@@ -154,6 +154,7 @@ pub enum Plan {
     AlterClusterReplicaRename(AlterClusterReplicaRenamePlan),
     AlterItemRename(AlterItemRenamePlan),
     AlterItemSwap(AlterItemSwapPlan),
+    AlterSchemaRename(AlterSchemaRenamePlan),
     AlterSecret(AlterSecretPlan),
     AlterSystemSet(AlterSystemSetPlan),
     AlterSystemReset(AlterSystemResetPlan),
@@ -199,6 +200,7 @@ impl Plan {
                     PlanKind::AlterClusterRename,
                     PlanKind::AlterClusterReplicaRename,
                     PlanKind::AlterItemRename,
+                    PlanKind::AlterSchemaRename,
                     PlanKind::AlterNoop,
                 ]
             }
@@ -369,6 +371,7 @@ impl Plan {
             Plan::AlterSource(_) | Plan::PurifiedAlterSource { .. } => "alter source",
             Plan::AlterItemRename(_) => "rename item",
             Plan::AlterItemSwap(_) => "swap item",
+            Plan::AlterSchemaRename(_) => "alter rename schema",
             Plan::AlterSecret(_) => "alter secret",
             Plan::AlterSystemSet(_) => "alter system",
             Plan::AlterSystemReset(_) => "alter system",
@@ -1047,6 +1050,12 @@ pub struct AlterItemRenamePlan {
     pub current_full_name: FullItemName,
     pub to_name: String,
     pub object_type: ObjectType,
+}
+
+#[derive(Debug)]
+pub struct AlterSchemaRenamePlan {
+    pub cur_schema_spec: (ResolvedDatabaseSpecifier, SchemaSpecifier),
+    pub new_schema_name: String,
 }
 
 #[derive(Debug)]

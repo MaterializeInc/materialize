@@ -89,8 +89,8 @@ use crate::ast::{
     UnresolvedDatabaseName, ViewDefinition,
 };
 use crate::catalog::{
-    CatalogCluster, CatalogDatabase, CatalogItem, CatalogItemType, CatalogRecordField, CatalogType,
-    CatalogTypeDetails, ObjectType, SystemObjectType,
+    CatalogCluster, CatalogDatabase, CatalogError, CatalogItem, CatalogItemType,
+    CatalogRecordField, CatalogType, CatalogTypeDetails, ObjectType, SystemObjectType,
 };
 use crate::kafka_util::{self, KafkaConfigOptionExtracted, KafkaStartOffsetType};
 use crate::names::{
@@ -109,8 +109,8 @@ use crate::plan::with_options::{self, OptionalInterval, TryFromValue};
 use crate::plan::{
     plan_utils, query, transform_ast, AlterClusterPlan, AlterClusterRenamePlan,
     AlterClusterReplicaRenamePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
-    AlterItemRenamePlan, AlterNoopPlan, AlterOptionParameter, AlterRolePlan, AlterSecretPlan,
-    AlterSetClusterPlan, AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan,
+    AlterItemRenamePlan, AlterNoopPlan, AlterOptionParameter, AlterRolePlan, AlterSchemaRenamePlan,
+    AlterSecretPlan, AlterSetClusterPlan, AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan,
     AlterSystemResetPlan, AlterSystemSetPlan, CommentPlan, ComputeReplicaConfig,
     ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan, CreateClusterPlan,
     CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
@@ -4834,10 +4834,50 @@ pub fn plan_alter_object_rename(
         (ObjectType::ClusterReplica, UnresolvedObjectName::ClusterReplica(name)) => {
             plan_alter_cluster_replica_rename(scx, object_type, name, to_item_name, if_exists)
         }
+        (ObjectType::Schema, UnresolvedObjectName::Schema(name)) => {
+            plan_alter_schema_rename(scx, name, to_item_name, if_exists)
+        }
         (object_type, name) => {
             unreachable!("parser set the wrong object type '{object_type:?}' for name {name:?}")
         }
     }
+}
+
+pub fn plan_alter_schema_rename(
+    scx: &mut StatementContext,
+    name: UnresolvedSchemaName,
+    to_schema_name: Ident,
+    if_exists: bool,
+) -> Result<Plan, PlanError> {
+    let Some((db_spec, schema_spec)) = resolve_schema(scx, name.clone(), if_exists)? else {
+        let object_type = ObjectType::Schema;
+        scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+            name: name.to_ast_string(),
+            object_type,
+        });
+        return Ok(Plan::AlterNoop(AlterNoopPlan { object_type }));
+    };
+
+    // Make sure the name is unique.
+    if scx
+        .resolve_schema_in_database(&db_spec, &to_schema_name)
+        .is_ok()
+    {
+        return Err(PlanError::Catalog(CatalogError::SchemaAlreadyExists(
+            to_schema_name.clone().into_string(),
+        )));
+    }
+
+    // Prevent users from renaming system related schemas.
+    let schema = scx.catalog.get_schema(&db_spec, &schema_spec);
+    if schema.id().is_system() {
+        bail_never_supported!(format!("renaming the {} schema", schema.name().schema))
+    }
+
+    Ok(Plan::AlterSchemaRename(AlterSchemaRenamePlan {
+        cur_schema_spec: (db_spec, schema_spec),
+        new_schema_name: to_schema_name.into_string(),
+    }))
 }
 
 pub fn plan_alter_item_rename(

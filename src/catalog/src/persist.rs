@@ -33,6 +33,7 @@ use mz_stash_types::objects::proto;
 use mz_stash_types::STASH_VERSION;
 use mz_storage_types::sources::Timeline;
 use serde::{Deserialize, Serialize};
+use sha2::Digest;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -258,12 +259,18 @@ pub struct PersistHandle {
 }
 
 impl PersistHandle {
+    /// Deterministically generate the a ID for the given `environment_id` and `seed`.
+    fn shard_id(environment_id: Uuid, seed: usize) -> ShardId {
+        let hash = sha2::Sha256::digest(format!("{environment_id}{seed}")).to_vec();
+        soft_assert_eq!(hash.len(), 32, "SHA256 returns 32 bytes (256 bits)");
+        let uuid = Uuid::from_slice(&hash[0..16]).expect("from_slice accepts exactly 16 bytes");
+        ShardId::from_str(&format!("s{uuid}")).expect("known to be valid")
+    }
+
     /// Create a new [`PersistHandle`] to the catalog state associated with `environment_id`.
     pub(crate) async fn new(persist_client: PersistClient, environment_id: Uuid) -> PersistHandle {
-        // TODO(jkosh44) Using the environment ID directly is sufficient for correctness purposes.
-        // However, for observability reasons, it would be much more readble if the shard ID was
-        // constructed as `format!("s{}CATALOG", hash(environment_id))`.
-        let shard_id = ShardId::from_str(&format!("s{environment_id}")).expect("known to be valid");
+        const SEED: usize = 1;
+        let shard_id = Self::shard_id(environment_id, SEED);
         let (write_handle, read_handle) = persist_client
             .open(
                 shard_id,

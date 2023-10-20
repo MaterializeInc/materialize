@@ -33,6 +33,7 @@ pub enum AppPasswordSubcommand {
         /// Set the name of the app password.
         ///
         /// If unspecified, `mz` automatically generates a name.
+        #[clap(default_value = "Materialize CLI (mz)")]
         name: String,
     },
     /// List all app passwords.

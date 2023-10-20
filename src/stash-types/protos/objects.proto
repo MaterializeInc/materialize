@@ -633,6 +633,13 @@ message AuditLogEventV1 {
         StringWrapper database_name = 3;
     }
 
+    message RenameSchemaV1 {
+        string id = 1;
+        optional string database_name = 2;
+        string old_name = 3;
+        string new_name = 4;
+    }
+
     message UpdateItemV1 {
         string id = 1;
         FullNameV1 name = 2;
@@ -644,7 +651,7 @@ message AuditLogEventV1 {
     StringWrapper user = 4;
     EpochMillis occurred_at = 5;
 
-    // next-id: 27
+    // next-id: 28
     oneof details {
         CreateClusterReplicaV1 create_cluster_replica_v1 = 6;
         DropClusterReplicaV1 drop_cluster_replica_v1 = 7;
@@ -666,6 +673,7 @@ message AuditLogEventV1 {
         IdNameV1 id_name_v1 = 17;
         SchemaV1 schema_v1 = 18;
         SchemaV2 schema_v2 = 19;
+        RenameSchemaV1 rename_schema_v1 = 27;
         UpdateItemV1 update_item_v1 = 26;
     }
 }

@@ -9,20 +9,25 @@
 
 import random
 import threading
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from copy import copy
 from enum import Enum
 
 from pg8000.native import identifier
 
-from materialize.parallel_workload.data_type import (
+from materialize.data_ingest.data_type import (
     DATA_TYPES,
+    DATA_TYPES_FOR_AVRO,
     Bytea,
     DataType,
     Jsonb,
     Text,
     TextTextMap,
 )
+from materialize.data_ingest.executor import KafkaExecutor, PgExecutor
+from materialize.data_ingest.field import Field
+from materialize.data_ingest.transaction import Transaction
+from materialize.data_ingest.workload import WORKLOADS
 from materialize.parallel_workload.executor import Executor
 from materialize.parallel_workload.settings import Complexity, Scenario
 
@@ -30,17 +35,25 @@ MAX_COLUMNS = 100
 MAX_ROWS = 1000
 MAX_CLUSTERS = 10
 MAX_CLUSTER_REPLICAS = 4
+MAX_SCHEMAS = 10
 MAX_TABLES = 100
 MAX_VIEWS = 100
 MAX_ROLES = 100
-MAX_SOURCES = 20
+MAX_WEBHOOK_SOURCES = 20
+MAX_KAFKA_SOURCES = 20
+MAX_POSTGRES_SOURCES = 20
+MAX_KAFKA_SINKS = 20
 MAX_INCLUDE_HEADERS = 5
 
+MAX_INITIAL_SCHEMAS = 1
 MAX_INITIAL_CLUSTERS = 2
 MAX_INITIAL_TABLES = 10
 MAX_INITIAL_VIEWS = 10
 MAX_INITIAL_ROLES = 3
-MAX_INITIAL_SOURCES = 3
+MAX_INITIAL_WEBHOOK_SOURCES = 3
+MAX_INITIAL_KAFKA_SOURCES = 3
+MAX_INITIAL_POSTGRES_SOURCES = 3
+MAX_INITIAL_KAFKA_SINKS = 3
 
 
 class BodyFormat(Enum):
@@ -77,7 +90,9 @@ class Column:
         self.data_type = data_type
         self.db_object = db_object
         self.nullable = rng.choice([True, False])
-        self.default = rng.choice([None, str(data_type.value(rng, True))])
+        self.default = rng.choice(
+            [None, str(data_type.random_value(rng, in_query=True))]
+        )
         self._name = f"c{self.column_id}_{self.data_type.name()}"
 
     def __str__(self) -> str:
@@ -90,7 +105,7 @@ class Column:
         self._name = new_name
 
     def value(self, rng: random.Random, in_query: bool = False) -> str:
-        return str(self.data_type.value(rng, in_query))
+        return str(self.data_type.random_value(rng, in_query=in_query))
 
     def create(self) -> str:
         result = f"{self.name(True)} {self.data_type.name()}"
@@ -101,17 +116,43 @@ class Column:
         return result
 
 
+class Schema:
+    schema_id: int
+    rename: int
+
+    def __init__(self, rng: random.Random, schema_id: int):
+        self.schema_id = schema_id
+        self.rename = 0
+
+    def __str__(self) -> str:
+        if self.rename:
+            return f"s{self.schema_id}_{self.rename}"
+        return f"s{self.schema_id}"
+
+    def create(self, exe: Executor) -> None:
+        query = f"CREATE SCHEMA {self}"
+        exe.execute(query)
+
+
 class DBObject:
     columns: Sequence[Column]
+
+    def name(self) -> str:
+        raise NotImplementedError
+
+    def create(self, exe: Executor) -> None:
+        raise NotImplementedError
 
 
 class Table(DBObject):
     table_id: int
     rename: int
     num_rows: int
+    schema: Schema
 
-    def __init__(self, rng: random.Random, table_id: int):
+    def __init__(self, rng: random.Random, table_id: int, schema: Schema):
         self.table_id = table_id
+        self.schema = schema
         self.columns = [
             Column(rng, i, rng.choice(DATA_TYPES), self)
             for i in range(rng.randint(2, MAX_COLUMNS))
@@ -119,10 +160,13 @@ class Table(DBObject):
         self.num_rows = 0
         self.rename = 0
 
-    def __str__(self) -> str:
+    def name(self) -> str:
         if self.rename:
             return f"t{self.table_id}_{self.rename}"
         return f"t{self.table_id}"
+
+    def __str__(self) -> str:
+        return f"{self.schema}.{self.name()}"
 
     def create(self, exe: Executor) -> None:
         query = f"CREATE TABLE {self}("
@@ -142,6 +186,7 @@ class View(DBObject):
     join_column: Column | None
     join_column2: Column | None
     assert_not_null: list[Column]
+    schema: Schema
 
     def __init__(
         self,
@@ -149,10 +194,12 @@ class View(DBObject):
         view_id: int,
         base_object: DBObject,
         base_object2: DBObject | None,
+        schema: Schema,
     ):
         self.view_id = view_id
         self.base_object = base_object
         self.base_object2 = base_object2
+        self.schema = schema
         all_columns = list(base_object.columns) + (
             list(base_object2.columns) if base_object2 else []
         )
@@ -190,8 +237,11 @@ class View(DBObject):
             if columns:
                 self.join_column2 = rng.choice(columns)
 
-    def __str__(self) -> str:
+    def name(self) -> str:
         return f"v{self.view_id}"
+
+    def __str__(self) -> str:
+        return f"{self.schema}.{self.name()}"
 
     def create(self, exe: Executor) -> None:
         if self.materialized:
@@ -247,10 +297,14 @@ class WebhookSource(DBObject):
     include_headers: bool
     explicit_include_headers: list[str]
     check: str | None
+    schema: Schema
 
-    def __init__(self, source_id: int, cluster: "Cluster", rng: random.Random):
+    def __init__(
+        self, source_id: int, cluster: "Cluster", schema: Schema, rng: random.Random
+    ):
         self.source_id = source_id
         self.cluster = cluster
+        self.schema = schema
         self.rename = 0
         self.body_format = rng.choice([e for e in BodyFormat])
         self.include_headers = rng.choice([True, False])
@@ -283,10 +337,13 @@ class WebhookSource(DBObject):
         # TODO: CHECK WITH SECRET
         # TODO: NOT IN INCLUDE HEADERS
 
-    def __str__(self) -> str:
+    def name(self) -> str:
         if self.rename:
             return f"wh{self.source_id}_{self.rename}"
         return f"wh{self.source_id}"
+
+    def __str__(self) -> str:
+        return f"{self.schema}.{self.name()}"
 
     def create(self, exe: Executor) -> None:
         query = f"CREATE SOURCE {self} IN CLUSTER {self.cluster} FROM WEBHOOK BODY FORMAT {self.body_format.name}"
@@ -297,6 +354,169 @@ class WebhookSource(DBObject):
         if self.check_expr:
             query += f" CHECK (WITH (BODY, HEADERS) {self.check_expr})"
         exe.execute(query)
+
+
+class KafkaColumn(Column):
+    def __init__(
+        self, name: str, data_type: type[DataType], nullable: bool, db_object: DBObject
+    ):
+        self._name = name
+        self.data_type = data_type
+        self.nullable = nullable
+        self.db_object = db_object
+
+
+class KafkaSource(DBObject):
+    source_id: int
+    cluster: "Cluster"
+    executor: KafkaExecutor
+    generator: Iterator[Transaction]
+    lock: threading.Lock
+    columns: list[KafkaColumn]
+    schema: Schema
+
+    def __init__(
+        self,
+        database: str,
+        source_id: int,
+        cluster: "Cluster",
+        schema: Schema,
+        ports: dict[str, int],
+        rng: random.Random,
+    ):
+        self.source_id = source_id
+        self.cluster = cluster
+        self.schema = schema
+        fields = []
+        for i in range(rng.randint(1, 10)):
+            fields.append(Field(f"key{i}", rng.choice(DATA_TYPES_FOR_AVRO), True))
+        for i in range(rng.randint(0, 20)):
+            fields.append(Field(f"value{i}", rng.choice(DATA_TYPES_FOR_AVRO), False))
+        self.columns = [
+            KafkaColumn(field.name, field.data_type, False, self) for field in fields
+        ]
+        self.executor = KafkaExecutor(
+            self.source_id, ports, fields, database, str(schema)
+        )
+        self.generator = rng.choice(list(WORKLOADS))(None).generate(fields)
+        self.lock = threading.Lock()
+
+    def name(self) -> str:
+        return self.executor.table
+
+    def __str__(self) -> str:
+        return f"{self.schema}.{self.name()}"
+
+    def create(self, exe: Executor) -> None:
+        self.executor.create()
+
+
+class KafkaSink(DBObject):
+    sink_id: int
+    rename: int
+    cluster: "Cluster"
+    schema: Schema
+    envelope: str
+    format: str
+    key: str
+
+    def __init__(
+        self,
+        sink_id: int,
+        cluster: "Cluster",
+        schema: Schema,
+        base_object: DBObject,
+        rng: random.Random,
+    ):
+        self.sink_id = sink_id
+        self.cluster = cluster
+        self.schema = schema
+        self.base_object = base_object
+        self.format = rng.choice(
+            ["AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn", "JSON"]
+        )
+        self.envelope = (
+            "UPSERT" if self.format == "JSON" else rng.choice(["DEBEZIUM", "UPSERT"])
+        )
+        if self.envelope == "UPSERT":
+            key_cols = ", ".join(
+                [
+                    column.name(True)
+                    for column in rng.sample(
+                        base_object.columns, k=rng.randint(1, len(base_object.columns))
+                    )
+                ]
+            )
+            self.key = f"KEY ({key_cols}) NOT ENFORCED"
+        else:
+            self.key = ""
+        self.rename = 0
+
+    def name(self) -> str:
+        if self.rename:
+            return f"sink{self.sink_id}_{self.rename}"
+        return f"sink{self.sink_id}"
+
+    def __str__(self) -> str:
+        return f"{self.schema}.{self.name()}"
+
+    def create(self, exe: Executor) -> None:
+        topic = f"sink_topic{self.sink_id}"
+        query = f"CREATE SINK {self} IN CLUSTER {self.cluster} FROM {self.base_object} INTO KAFKA CONNECTION kafka_conn (TOPIC {topic}) {self.key} FORMAT {self.format} ENVELOPE {self.envelope}"
+        exe.execute(query)
+
+
+class PostgresColumn(Column):
+    def __init__(
+        self, name: str, data_type: type[DataType], nullable: bool, db_object: DBObject
+    ):
+        self._name = name
+        self.data_type = data_type
+        self.nullable = nullable
+        self.db_object = db_object
+
+
+class PostgresSource(DBObject):
+    source_id: int
+    cluster: "Cluster"
+    executor: PgExecutor
+    generator: Iterator[Transaction]
+    lock: threading.Lock
+    columns: list[PostgresColumn]
+    schema: Schema
+
+    def __init__(
+        self,
+        database: str,
+        source_id: int,
+        cluster: "Cluster",
+        schema: Schema,
+        ports: dict[str, int],
+        rng: random.Random,
+    ):
+        self.source_id = source_id
+        self.cluster = cluster
+        self.schema = schema
+        fields = []
+        for i in range(rng.randint(1, 10)):
+            fields.append(Field(f"key{i}", rng.choice(DATA_TYPES_FOR_AVRO), True))
+        for i in range(rng.randint(0, 20)):
+            fields.append(Field(f"value{i}", rng.choice(DATA_TYPES_FOR_AVRO), False))
+        self.columns = [
+            PostgresColumn(field.name, field.data_type, False, self) for field in fields
+        ]
+        self.executor = PgExecutor(self.source_id, ports, fields, database, str(schema))
+        self.generator = rng.choice(list(WORKLOADS))(None).generate(fields)
+        self.lock = threading.Lock()
+
+    def name(self) -> str:
+        return self.executor.table
+
+    def __str__(self) -> str:
+        return f"{self.schema}.{self.name()}"
+
+    def create(self, exe: Executor) -> None:
+        self.executor.create()
 
 
 class Role:
@@ -378,9 +598,9 @@ class Database:
     complexity: Complexity
     scenario: Scenario
     host: str
-    port: int
-    system_port: int
-    http_port: int
+    ports: dict[str, int]
+    schemas: list[Schema]
+    schema_id: int
     tables: list[Table]
     table_id: int
     views: list[View]
@@ -390,8 +610,14 @@ class Database:
     clusters: list[Cluster]
     cluster_id: int
     indexes: set[str]
-    sources: list[WebhookSource]
-    source_id: int
+    webhook_sources: list[WebhookSource]
+    webhook_source_id: int
+    kafka_sources: list[KafkaSource]
+    kafka_source_id: int
+    postgres_sources: list[PostgresSource]
+    postgres_source_id: int
+    kafka_sinks: list[KafkaSink]
+    kafka_sink_id: int
     lock: threading.Lock
 
     def __init__(
@@ -399,21 +625,24 @@ class Database:
         rng: random.Random,
         seed: str,
         host: str,
-        port: int,
-        system_port: int,
-        http_port: int,
+        ports: dict[str, int],
         complexity: Complexity,
         scenario: Scenario,
     ):
         self.seed = seed
         self.host = host
-        self.port = port
-        self.system_port = system_port
-        self.http_port = http_port
+        self.ports = ports
         self.complexity = complexity
         self.scenario = scenario
 
-        self.tables = [Table(rng, i) for i in range(rng.randint(2, MAX_INITIAL_TABLES))]
+        self.schemas = [
+            Schema(rng, i) for i in range(rng.randint(1, MAX_INITIAL_SCHEMAS))
+        ]
+        self.schema_id = len(self.schemas)
+        self.tables = [
+            Table(rng, i, rng.choice(self.schemas))
+            for i in range(rng.randint(2, MAX_INITIAL_TABLES))
+        ]
         self.table_id = len(self.tables)
         self.views = []
         for i in range(rng.randint(2, MAX_INITIAL_VIEWS)):
@@ -423,7 +652,7 @@ class Database:
             base_object2: Table | None = rng.choice(self.tables)
             if rng.choice([True, False]) or base_object2 == base_object:
                 base_object2 = None
-            view = View(rng, i, base_object, base_object2)
+            view = View(rng, i, base_object, base_object2, rng.choice(self.schemas))
             self.views.append(view)
         self.view_id = len(self.views)
         self.roles = [Role(i) for i in range(rng.randint(0, MAX_INITIAL_ROLES))]
@@ -441,20 +670,73 @@ class Database:
         ]
         self.cluster_id = len(self.clusters)
         self.indexes = set()
-        self.sources = [
-            WebhookSource(i, rng.choice(self.clusters), rng)
-            for i in range(rng.randint(0, MAX_INITIAL_SOURCES))
+        self.webhook_sources = [
+            WebhookSource(i, rng.choice(self.clusters), rng.choice(self.schemas), rng)
+            for i in range(rng.randint(0, MAX_INITIAL_WEBHOOK_SOURCES))
         ]
-        self.source_id = len(self.sources)
+        self.webhook_source_id = len(self.webhook_sources)
+        self.kafka_sources = [
+            KafkaSource(
+                str(self),
+                i,
+                rng.choice(self.clusters),
+                rng.choice(self.schemas),
+                ports,
+                rng,
+            )
+            for i in range(rng.randint(0, MAX_INITIAL_KAFKA_SOURCES))
+        ]
+        self.kafka_source_id = len(self.kafka_sources)
+        self.postgres_sources = [
+            PostgresSource(
+                str(self),
+                i,
+                rng.choice(self.clusters),
+                rng.choice(self.schemas),
+                ports,
+                rng,
+            )
+            for i in range(rng.randint(0, MAX_INITIAL_POSTGRES_SOURCES))
+        ]
+        self.postgres_source_id = len(self.postgres_sources)
+        self.kafka_sinks = [
+            KafkaSink(
+                i,
+                rng.choice(self.clusters),
+                rng.choice(self.schemas),
+                rng.choice(self.db_objects_without_views()),
+                rng,
+            )
+            for i in range(rng.randint(0, MAX_INITIAL_KAFKA_SINKS))
+        ]
+        self.kafka_sink_id = len(self.kafka_sinks)
         self.lock = threading.Lock()
 
     def __str__(self) -> str:
         return f"db_pw_{self.seed}"
 
+    def db_objects(
+        self,
+    ) -> list[WebhookSource | PostgresSource | KafkaSource | View | Table]:
+        return (
+            self.tables
+            + self.views
+            + self.kafka_sources
+            + self.postgres_sources
+            + self.webhook_sources
+        )
+
+    def db_objects_without_views(
+        self,
+    ) -> list[WebhookSource | PostgresSource | KafkaSource | View | Table]:
+        return [
+            obj for obj in self.db_objects() if type(obj) != View or obj.materialized
+        ]
+
     def __iter__(self):
         """Returns all relations"""
         return (
-            self.clusters + self.tables + self.views + self.roles + self.sources
+            self.schemas + self.clusters + self.roles + self.db_objects()
         ).__iter__()
 
     def drop(self, exe: Executor) -> None:
@@ -472,6 +754,17 @@ class Database:
         exe.execute("SELECT name FROM mz_roles WHERE name LIKE 'r%'")
         for row in exe.cur.fetchall():
             exe.execute(f"DROP ROLE {row[0]}")
+
+        exe.execute("CREATE CONNECTION kafka_conn FOR KAFKA BROKER 'kafka:9092'")
+        exe.execute(
+            "CREATE CONNECTION csr_conn FOR CONFLUENT SCHEMA REGISTRY URL 'http://schema-registry:8081'"
+        )
+        print("Created connections")
+
+        exe.execute("CREATE SECRET pgpass AS 'postgres'")
+        exe.execute(
+            "CREATE CONNECTION postgres_conn FOR POSTGRES HOST 'postgres', DATABASE postgres, USER postgres, PASSWORD SECRET pgpass"
+        )
 
         for relation in self:
             relation.create(exe)

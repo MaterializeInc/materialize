@@ -14,21 +14,29 @@ from typing import TYPE_CHECKING
 import pg8000
 import requests
 
+from materialize.data_ingest.data_type import NUMBER_TYPES, Text, TextTextMap
 from materialize.mzcompose.composition import Composition
-from materialize.parallel_workload.data_type import Text, TextTextMap
 from materialize.parallel_workload.database import (
     MAX_CLUSTER_REPLICAS,
     MAX_CLUSTERS,
+    MAX_KAFKA_SINKS,
+    MAX_KAFKA_SOURCES,
+    MAX_POSTGRES_SOURCES,
     MAX_ROLES,
     MAX_ROWS,
-    MAX_SOURCES,
+    MAX_SCHEMAS,
     MAX_TABLES,
     MAX_VIEWS,
+    MAX_WEBHOOK_SOURCES,
     Cluster,
     ClusterReplica,
     Database,
     DBObject,
+    KafkaSink,
+    KafkaSource,
+    PostgresSource,
     Role,
+    Schema,
     Table,
     View,
     WebhookSource,
@@ -88,6 +96,12 @@ class Action:
                     "Connection refused",
                 ]
             )
+        if self.db.scenario == Scenario.Rename:
+            result.extend(
+                [
+                    "unknown schema",
+                ]
+            )
         return result
 
 
@@ -103,8 +117,7 @@ class FetchAction(Action):
         return result
 
     def run(self, exe: Executor) -> None:
-        objects: list[DBObject] = [*self.db.tables, *self.db.views, *self.db.sources]
-        obj = self.rng.choice(objects)
+        obj = self.rng.choice(self.db.db_objects())
         # See https://github.com/MaterializeInc/materialize/issues/20474
         exe.rollback() if self.rng.choice([True, False]) else exe.commit()
         query = f"DECLARE c CURSOR FOR SUBSCRIBE {obj}"
@@ -138,36 +151,51 @@ class SelectAction(Action):
         return result
 
     def run(self, exe: Executor) -> None:
-        objects: list[DBObject] = [*self.db.tables, *self.db.views, *self.db.sources]
-        obj = self.rng.choice(objects)
+        obj = self.rng.choice(self.db.db_objects())
         column = self.rng.choice(obj.columns)
-        obj2 = self.rng.choice(objects)
+        obj2 = self.rng.choice(self.db.db_objects())
         obj_name = str(obj)
         obj2_name = str(obj2)
         columns = [c for c in obj2.columns if c.data_type == column.data_type]
+
+        if obj_name != obj2_name and columns:
+            all_columns = list(obj.columns) + list(obj2.columns)
+        else:
+            all_columns = obj.columns
+
+        if self.rng.choice([True, False]):
+            expressions = ", ".join(
+                str(column)
+                for column in self.rng.sample(
+                    all_columns, k=self.rng.randint(1, len(all_columns))
+                )
+            )
+            if self.rng.choice([True, False]):
+                column1 = self.rng.choice(all_columns)
+                column2 = self.rng.choice(all_columns)
+                column3 = self.rng.choice(all_columns)
+                fns = ["COUNT"]
+                if column1.data_type in NUMBER_TYPES:
+                    fns.extend(["SUM", "AVG", "MAX", "MIN"])
+                window_fn = self.rng.choice(fns)
+                expressions += f", {window_fn}({column1}) OVER (PARTITION BY {column2} ORDER BY {column3})"
+        else:
+            expressions = "*"
+
+        query = f"SELECT {expressions} FROM {obj_name} "
+
         if obj_name != obj2_name and columns:
             column2 = self.rng.choice(columns)
-            query = f"SELECT * FROM {obj_name} JOIN {obj2_name} ON "
+            query += f"JOIN {obj2_name} ON "
             if column.data_type == TextTextMap:
                 query += f"map_length({column}) = map_length({column2})"
             else:
                 query += f"{column} = {column2}"
-            query += " LIMIT 1"
-            exe.execute(query, explainable=True)
-            exe.cur.fetchall()
-        else:
-            if self.rng.choice([True, False]):
-                expressions = ", ".join(
-                    str(column)
-                    for column in random.sample(
-                        obj.columns, k=random.randint(1, len(obj.columns))
-                    )
-                )
-            else:
-                expressions = "*"
-            query = f"SELECT {expressions} FROM {obj} LIMIT 1"
-            exe.execute(query, explainable=True)
-            exe.cur.fetchall()
+
+        query += " LIMIT 1"
+
+        exe.execute(query, explainable=True)
+        exe.cur.fetchall()
 
 
 class InsertAction(Action):
@@ -194,6 +222,18 @@ class InsertAction(Action):
         exe.insert_table = table.table_id
         with self.db.lock:
             table.num_rows += 1
+
+
+class SourceInsertAction(Action):
+    def run(self, exe: Executor) -> None:
+        with self.db.lock:
+            sources = self.db.kafka_sources + self.db.postgres_sources
+            if not sources:
+                return
+            source = self.rng.choice(sources)
+            transaction = next(source.generator)
+            with source.lock:
+                source.executor.run(transaction)
 
 
 class UpdateAction(Action):
@@ -257,9 +297,9 @@ class CommentAction(Action):
 
         if self.rng.choice([True, False]):
             column = self.rng.choice(table.columns)
-            query = f"COMMENT ON COLUMN {column} IS '{Text.value(self.rng)}'"
+            query = f"COMMENT ON COLUMN {column} IS '{Text.random_value(self.rng)}'"
         else:
-            query = f"COMMENT ON TABLE {table} IS '{Text.value(self.rng)}'"
+            query = f"COMMENT ON TABLE {table} IS '{Text.random_value(self.rng)}'"
 
         exe.execute(query)
 
@@ -276,9 +316,9 @@ class CreateIndexAction(Action):
         columns = self.rng.sample(table.columns, len(table.columns))
         columns_str = "_".join(column.name() for column in columns)
         # columns_str may exceed 255 characters, so it is converted to a positive number with hash
-        index_name = f"idx_{table}_{abs(hash(columns_str))}"
+        index_name = f"idx_{table.name()}_{abs(hash(columns_str))}"
         index_elems = []
-        for i, column in enumerate(columns):
+        for column in columns:
             order = self.rng.choice(["ASC", "DESC"])
             index_elems.append(f"{column.name(True)} {order}")
         index_str = ", ".join(index_elems)
@@ -306,7 +346,7 @@ class CreateTableAction(Action):
                 return
             table_id = self.db.table_id
             self.db.table_id += 1
-            table = Table(self.rng, table_id)
+            table = Table(self.rng, table_id, self.rng.choice(self.db.schemas))
             table.create(exe)
             self.db.tables.append(table)
 
@@ -330,6 +370,8 @@ class DropTableAction(Action):
 
 class RenameTableAction(Action):
     def run(self, exe: Executor) -> None:
+        if self.db.scenario != Scenario.Rename:
+            return
         with self.db.lock:
             if not self.db.tables:
                 return
@@ -337,9 +379,54 @@ class RenameTableAction(Action):
             old_name = str(table)
             table.rename += 1
             try:
-                exe.execute(f"ALTER TABLE {old_name} RENAME TO {table}")
-            finally:
+                exe.execute(f"ALTER TABLE {old_name} RENAME TO {table.name()}")
+            except:
                 table.rename -= 1
+                raise
+
+
+class CreateSchemaAction(Action):
+    def run(self, exe: Executor) -> None:
+        with self.db.lock:
+            if len(self.db.schemas) > MAX_SCHEMAS:
+                return
+            schema_id = self.db.schema_id
+            self.db.schema_id += 1
+            schema = Schema(self.rng, schema_id)
+            schema.create(exe)
+            self.db.schemas.append(schema)
+
+
+class DropSchemaAction(Action):
+    def errors_to_ignore(self) -> list[str]:
+        return [
+            "cannot be dropped without CASCADE while it contains objects",
+        ] + super().errors_to_ignore()
+
+    def run(self, exe: Executor) -> None:
+        with self.db.lock:
+            if len(self.db.schemas) <= 1:
+                return
+            schema_id = self.rng.randrange(len(self.db.schemas))
+            schema = self.db.schemas[schema_id]
+            query = f"DROP SCHEMA {schema}"
+            exe.execute(query)
+            del self.db.schemas[schema_id]
+
+
+class RenameSchemaAction(Action):
+    def run(self, exe: Executor) -> None:
+        if self.db.scenario != Scenario.Rename:
+            return
+        with self.db.lock:
+            schema = self.rng.choice(self.db.schemas)
+            old_name = str(schema)
+            schema.rename += 1
+            try:
+                exe.execute(f"ALTER SCHEMA {old_name} RENAME TO {schema}")
+            except:
+                schema.rename -= 1
+                raise
 
 
 class TransactionIsolationAction(Action):
@@ -365,13 +452,17 @@ class CreateViewAction(Action):
             self.db.view_id += 1
             # Don't use views for now since LIMIT 1 and statement_timeout are
             # not effective yet at preventing long-running queries and OoMs.
-            base_object = self.rng.choice(self.db.tables + self.db.sources)
-            base_object2: DBObject | None = self.rng.choice(
-                self.db.tables + self.db.sources
-            )
+            base_object = self.rng.choice(self.db.db_objects())
+            base_object2: DBObject | None = self.rng.choice(self.db.db_objects())
             if self.rng.choice([True, False]) or base_object2 == base_object:
                 base_object2 = None
-            view = View(self.rng, view_id, base_object, base_object2)
+            view = View(
+                self.rng,
+                view_id,
+                base_object,
+                base_object2,
+                self.rng.choice(self.db.schemas),
+            )
             view.create(exe)
             self.db.views.append(view)
 
@@ -560,7 +651,7 @@ class ReconnectAction(Action):
     def run(self, exe: Executor) -> None:
         autocommit = exe.cur._c.autocommit
         host = self.db.host
-        port = self.db.port
+        port = self.db.ports["materialized"]
         with self.db.lock:
             if self.random_role and self.db.roles:
                 user = self.rng.choice(
@@ -661,15 +752,16 @@ class KillAction(Action):
 class CreateWebhookSourceAction(Action):
     def run(self, exe: Executor) -> None:
         with self.db.lock:
-            if len(self.db.sources) > MAX_SOURCES:
+            if len(self.db.webhook_sources) > MAX_WEBHOOK_SOURCES:
                 return
-            source_id = self.db.source_id
-            self.db.source_id += 1
+            webhook_source_id = self.db.webhook_source_id
+            self.db.webhook_source_id += 1
             potential_clusters = [c for c in self.db.clusters if len(c.replicas) == 1]
             cluster = self.rng.choice(potential_clusters)
-            source = WebhookSource(source_id, cluster, self.rng)
+            schema = self.rng.choice(self.db.schemas)
+            source = WebhookSource(webhook_source_id, cluster, schema, self.rng)
             source.create(exe)
-            self.db.sources.append(source)
+            self.db.webhook_sources.append(source)
 
 
 class DropWebhookSourceAction(Action):
@@ -680,25 +772,131 @@ class DropWebhookSourceAction(Action):
 
     def run(self, exe: Executor) -> None:
         with self.db.lock:
-            if not self.db.sources:
+            if not self.db.webhook_sources:
                 return
-            source_id = self.rng.randrange(len(self.db.sources))
-            source = self.db.sources[source_id]
+            source_id = self.rng.randrange(len(self.db.webhook_sources))
+            source = self.db.webhook_sources[source_id]
             query = f"DROP SOURCE {source}"
             exe.execute(query)
-            del self.db.sources[source_id]
+            del self.db.webhook_sources[source_id]
+
+
+class CreateKafkaSourceAction(Action):
+    def run(self, exe: Executor) -> None:
+        with self.db.lock:
+            if len(self.db.kafka_sources) > MAX_KAFKA_SOURCES:
+                return
+            source_id = self.db.kafka_source_id
+            self.db.kafka_source_id += 1
+            potential_clusters = [c for c in self.db.clusters if len(c.replicas) == 1]
+            cluster = self.rng.choice(potential_clusters)
+            schema = self.rng.choice(self.db.schemas)
+            source = KafkaSource(
+                str(self.db), source_id, cluster, schema, self.db.ports, self.rng
+            )
+            source.create(exe)
+            self.db.kafka_sources.append(source)
+
+
+class DropKafkaSourceAction(Action):
+    def errors_to_ignore(self) -> list[str]:
+        return [
+            "still depended upon by",
+        ] + super().errors_to_ignore()
+
+    def run(self, exe: Executor) -> None:
+        with self.db.lock:
+            if not self.db.kafka_sources:
+                return
+            source_id = self.rng.randrange(len(self.db.kafka_sources))
+            source = self.db.kafka_sources[source_id]
+            query = f"DROP SOURCE {source}"
+            exe.execute(query)
+            del self.db.kafka_sources[source_id]
+
+
+class CreatePostgresSourceAction(Action):
+    def run(self, exe: Executor) -> None:
+        with self.db.lock:
+            if len(self.db.postgres_sources) > MAX_POSTGRES_SOURCES:
+                return
+            source_id = self.db.postgres_source_id
+            self.db.postgres_source_id += 1
+            potential_clusters = [c for c in self.db.clusters if len(c.replicas) == 1]
+            schema = self.rng.choice(self.db.schemas)
+            cluster = self.rng.choice(potential_clusters)
+            source = PostgresSource(
+                str(self.db), source_id, cluster, schema, self.db.ports, self.rng
+            )
+            source.create(exe)
+            self.db.postgres_sources.append(source)
+
+
+class DropPostgresSourceAction(Action):
+    def errors_to_ignore(self) -> list[str]:
+        return [
+            "still depended upon by",
+        ] + super().errors_to_ignore()
+
+    def run(self, exe: Executor) -> None:
+        with self.db.lock:
+            if not self.db.postgres_sources:
+                return
+            source_id = self.rng.randrange(len(self.db.postgres_sources))
+            source = self.db.postgres_sources[source_id]
+            query = f"DROP SOURCE {source.executor.source}"
+            exe.execute(query)
+            del self.db.postgres_sources[source_id]
+
+
+class CreateKafkaSinkAction(Action):
+    def run(self, exe: Executor) -> None:
+        with self.db.lock:
+            if len(self.db.kafka_sinks) > MAX_KAFKA_SINKS:
+                return
+            sink_id = self.db.kafka_sink_id
+            self.db.kafka_sink_id += 1
+            potential_clusters = [c for c in self.db.clusters if len(c.replicas) == 1]
+            cluster = self.rng.choice(potential_clusters)
+            schema = self.rng.choice(self.db.schemas)
+            sink = KafkaSink(
+                sink_id,
+                cluster,
+                schema,
+                self.rng.choice(self.db.db_objects_without_views()),
+                self.rng,
+            )
+            sink.create(exe)
+            self.db.kafka_sinks.append(sink)
+
+
+class DropKafkaSinkAction(Action):
+    def errors_to_ignore(self) -> list[str]:
+        return [
+            "still depended upon by",
+        ] + super().errors_to_ignore()
+
+    def run(self, exe: Executor) -> None:
+        with self.db.lock:
+            if not self.db.kafka_sinks:
+                return
+            sink_id = self.rng.randrange(len(self.db.kafka_sinks))
+            sink = self.db.kafka_sinks[sink_id]
+            query = f"DROP SINK {sink}"
+            exe.execute(query)
+            del self.db.kafka_sinks[sink_id]
 
 
 class HttpPostAction(Action):
     def run(self, exe: Executor) -> None:
         with self.db.lock:
-            if not self.db.sources:
+            if not self.db.webhook_sources:
                 return
 
-            source = self.rng.choice(self.db.sources)
-            url = f"http://{self.db.host}:{self.db.http_port}/api/webhook/{self.db}/public/{source}"
+            source = self.rng.choice(self.db.webhook_sources)
+            url = f"http://{self.db.host}:{self.db.ports['http']}/api/webhook/{self.db}/public/{source}"
 
-            payload = source.body_format.to_data_type().value(self.rng)
+            payload = source.body_format.to_data_type().random_value(self.rng)
 
             header_fields = source.explicit_include_headers
             if source.include_headers:
@@ -707,7 +905,7 @@ class HttpPostAction(Action):
                 )
 
             headers = {
-                header: f'"{Text.value(self.rng)}"'.encode()
+                header: f'"{Text.random_value(self.rng)}"'.encode()
                 for header in self.rng.sample(header_fields, len(header_fields))
             }
 
@@ -757,6 +955,7 @@ write_action_list = ActionList(
         (HttpPostAction, 50),
         (CommitRollbackAction, 1),
         (ReconnectAction, 1),
+        (SourceInsertAction, 100),
     ],
     autocommit=False,
 )
@@ -790,10 +989,19 @@ ddl_action_list = ActionList(
         (SetClusterAction, 1),
         (CreateWebhookSourceAction, 2),
         (DropWebhookSourceAction, 1),
-        (GrantPrivilegesAction, 2),
+        (CreateKafkaSinkAction, 4),
+        (DropKafkaSinkAction, 1),
+        (CreateKafkaSourceAction, 4),
+        (DropKafkaSourceAction, 1),
+        (CreatePostgresSourceAction, 4),
+        (DropPostgresSourceAction, 1),
+        (GrantPrivilegesAction, 4),
         (RevokePrivilegesAction, 1),
         (ReconnectAction, 1),
-        # (RenameTableAction, 1),  # TODO(def-) enable
+        (CreateSchemaAction, 1),
+        (DropSchemaAction, 1),
+        (RenameSchemaAction, 10),
+        (RenameTableAction, 10),
         # (TransactionIsolationAction, 1),
     ],
     autocommit=True,

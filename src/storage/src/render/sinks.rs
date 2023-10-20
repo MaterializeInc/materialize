@@ -56,8 +56,6 @@ pub(crate) fn render_sink<'g, G: Scope<Timestamp = ()>>(
         timely::progress::Antichain::new(),
         None,
         None,
-        // Copy the logic in DeltaJoin/Get/Join to start.
-        |_timer, count| count > 1_000_000,
     );
     tokens.push(source_token);
 

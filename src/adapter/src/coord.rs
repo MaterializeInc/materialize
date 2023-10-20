@@ -140,11 +140,12 @@ use crate::coord::timestamp_oracle::catalog_oracle::CatalogTimestampPersistence;
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
-use crate::optimize::{Optimize, OptimizeMaterializedView, OptimizerConfig};
+use crate::optimize::{self, Optimize, OptimizeMaterializedView, OptimizerConfig};
 use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, ResultExt};
+use crate::webhook::WebhookConcurrencyLimiter;
 use crate::{flags, AdapterNotice, TimestampProvider};
 use mz_catalog::builtin::BUILTINS;
 
@@ -561,6 +562,7 @@ pub struct Config {
     pub aws_account_id: Option<String>,
     pub aws_privatelink_availability_zones: Option<Vec<String>>,
     pub active_connection_count: Arc<Mutex<ConnectionCounter>>,
+    pub webhook_concurrency_limit: WebhookConcurrencyLimiter,
     pub http_host_name: Option<String>,
     pub tracing_handle: TracingHandle,
 }
@@ -1053,6 +1055,9 @@ pub struct Coordinator {
 
     /// Whether to start replicas with the new variable-length row encoding scheme.
     variable_length_row_encoding: bool,
+
+    /// Limit for how many conncurrent webhook requests we allow.
+    webhook_concurrency_limit: WebhookConcurrencyLimiter,
 }
 
 impl Coordinator {
@@ -1413,6 +1418,63 @@ impl Coordinator {
                             .entry(idx.cluster_id)
                             .or_insert_with(BTreeSet::new)
                             .insert(entry.id());
+                    } else if enable_unified_optimizer_api {
+                        // Collect optimizer parameters
+                        let compute_instance = self
+                            .instance_snapshot(idx.cluster_id)
+                            .expect("compute instance does not exist");
+                        let optimizer_config =
+                            OptimizerConfig::from(self.catalog().system_config());
+
+                        // Build an INDEX optimizer.
+                        let mut optimizer = optimize::OptimizeIndex::new(
+                            self.owned_catalog(),
+                            compute_instance,
+                            entry.id(),
+                            optimizer_config,
+                        );
+
+                        // MIR ⇒ MIR optimization (global)
+                        let index_plan = optimize::Index::new(entry.name(), &idx.on, &idx.keys);
+                        let global_mir_plan = optimizer.optimize(index_plan)?;
+                        // Timestamp selection
+                        let as_of = self.bootstrap_index_as_of(
+                            global_mir_plan.df_desc(),
+                            global_mir_plan.compute_instance_id(),
+                            idx.is_retained_metrics_object,
+                        );
+                        let global_mir_plan = global_mir_plan.resolve(as_of);
+                        // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+                        let global_lir_plan = optimizer.optimize(global_mir_plan.clone())?;
+
+                        // Note: ideally, the optimized_plan should be computed
+                        // and set when the CatalogItem is re-constructed (in
+                        // parse_item).
+                        //
+                        // However, it's not clear how exactly to change
+                        // `load_catalog_items` in order to accommodate for the
+                        // optimizer pipeline executed above.
+                        self.catalog_mut()
+                            .set_optimized_plan(entry.id(), global_mir_plan.df_desc().clone());
+                        self.catalog_mut()
+                            .set_physical_plan(entry.id(), global_lir_plan.df_desc().clone());
+                        self.catalog_mut()
+                            .set_dataflow_metainfo(entry.id(), global_lir_plan.df_meta().clone());
+
+                        let df_desc = global_lir_plan.unapply().0;
+
+                        // What follows is morally equivalent to `self.ship_dataflow(df, idx.cluster_id)`,
+                        // but we cannot call that as it will also downgrade the read hold on the index.
+                        policy_entry
+                            .compute_ids
+                            .entry(idx.cluster_id)
+                            .or_insert_with(Default::default)
+                            .extend(df_desc.export_ids());
+
+                        self.controller
+                            .active_compute()
+                            .create_dataflow(idx.cluster_id, df_desc)
+                            .unwrap_or_terminate("cannot fail to create dataflows");
                     } else {
                         let (mut df, df_metainfo) = self
                             .dataflow_builder(idx.cluster_id)
@@ -1483,7 +1545,7 @@ impl Coordinator {
                             .catalog()
                             .resolve_full_name(entry.name(), None)
                             .to_string();
-                        let optimzier_config =
+                        let optimizer_config =
                             OptimizerConfig::from(self.catalog().system_config());
 
                         // Build a MATERIALIZED VIEW optimizer for this view.
@@ -1495,7 +1557,7 @@ impl Coordinator {
                             mview.desc.iter_names().cloned().collect(),
                             mview.non_null_assertions.clone(),
                             debug_name,
-                            optimzier_config,
+                            optimizer_config,
                         );
 
                         // MIR ⇒ MIR optimization (global)
@@ -1505,16 +1567,16 @@ impl Coordinator {
                             global_mir_plan.df_desc(),
                             global_mir_plan.compute_instance_id(),
                         );
-                        let timestamped_plan = global_mir_plan.clone().resolve(as_of.clone());
+                        let global_mir_plan = global_mir_plan.resolve(as_of);
                         // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                        let global_lir_plan = optimizer.optimize(timestamped_plan)?;
+                        let global_lir_plan = optimizer.optimize(global_mir_plan.clone())?;
 
                         // Note: ideally, the optimized_plan should be computed
                         // and set when the CatalogItem is re-constructed (in
                         // parse_item).
                         //
                         // However, it's not clear how exactly to change
-                        // `load_catalog_items` in order to accommodate the
+                        // `load_catalog_items` in order to accommodate for the
                         // optimizer pipeline executed above.
                         self.catalog_mut()
                             .set_optimized_plan(entry.id(), global_mir_plan.df_desc().clone());
@@ -1523,9 +1585,8 @@ impl Coordinator {
                         self.catalog_mut()
                             .set_dataflow_metainfo(entry.id(), global_lir_plan.df_meta().clone());
 
-                        let df = global_lir_plan.unapply().0;
-
-                        self.ship_dataflow_new(df, mview.cluster_id).await;
+                        let df_desc = global_lir_plan.unapply().0;
+                        self.ship_dataflow_new(df_desc, mview.cluster_id).await;
                     } else {
                         // Re-create the sink on the compute instance.
                         let internal_view_id = self.allocate_transient_id()?;
@@ -2078,6 +2139,7 @@ pub async fn serve(
         aws_privatelink_availability_zones,
         system_parameter_sync_config,
         active_connection_count,
+        webhook_concurrency_limit,
         http_host_name,
         tracing_handle,
     }: Config,
@@ -2214,6 +2276,7 @@ pub async fn serve(
                 tracing_handle,
                 statement_logging: StatementLogging::new(),
                 variable_length_row_encoding,
+                webhook_concurrency_limit,
             };
             let bootstrap = handle.block_on(async {
                 coord

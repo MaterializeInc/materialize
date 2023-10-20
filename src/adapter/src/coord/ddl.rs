@@ -126,6 +126,7 @@ impl Coordinator {
         let mut update_secrets_caching_config = false;
         let mut update_cluster_scheduling_config = false;
         let mut update_jemalloc_profiling_config = false;
+        let mut update_http_config = false;
         let mut log_indexes_to_drop = Vec::new();
 
         for op in &ops {
@@ -224,6 +225,7 @@ impl Coordinator {
                     update_cluster_scheduling_config |= vars::is_cluster_scheduling_var(name);
                     update_jemalloc_profiling_config |=
                         name == vars::ENABLE_JEMALLOC_PROFILING.name();
+                    update_http_config |= vars::is_http_config_var(name);
                 }
                 catalog::Op::ResetAllSystemConfiguration => {
                     // Assume they all need to be updated.
@@ -236,6 +238,7 @@ impl Coordinator {
                     update_secrets_caching_config = true;
                     update_cluster_scheduling_config = true;
                     update_jemalloc_profiling_config = true;
+                    update_http_config = true;
                 }
                 _ => (),
             }
@@ -511,6 +514,9 @@ impl Coordinator {
             if update_jemalloc_profiling_config {
                 self.update_jemalloc_profiling_config().await;
             }
+            if update_http_config {
+                self.update_http_config();
+            }
         }
         .await;
 
@@ -540,7 +546,11 @@ impl Coordinator {
 
         // Note: It's important that we keep the function call inside macro, this way we only run
         // the consistency checks if sort assertions are enabled.
-        mz_ore::soft_assert_eq!(self.check_consistency(), Ok(()));
+        mz_ore::soft_assert_eq!(
+            self.check_consistency(),
+            Ok(()),
+            "coordinator inconsistency detected"
+        );
 
         Ok(result)
     }
@@ -780,6 +790,15 @@ impl Coordinator {
         } else {
             mz_prof::deactivate_jemalloc_profiling().await
         }
+    }
+
+    fn update_http_config(&mut self) {
+        let webhook_request_limit = self
+            .catalog()
+            .system_config()
+            .webhook_concurrent_request_limit();
+        self.webhook_concurrency_limit
+            .set_limit(webhook_request_limit);
     }
 
     async fn create_storage_export(
@@ -1083,6 +1102,7 @@ impl Coordinator {
                 | Op::RenameCluster { .. }
                 | Op::RenameClusterReplica { .. }
                 | Op::RenameItem { .. }
+                | Op::RenameSchema { .. }
                 | Op::UpdateOwner { .. }
                 | Op::RevokeRole { .. }
                 | Op::UpdateClusterConfig { .. }

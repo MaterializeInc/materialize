@@ -67,43 +67,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if shard_count:
         shard_count = int(shard_count)
 
-    for i, name in enumerate(
-        [
-            "test-smoke",
-            "test-github-12251",
-            "test-github-15531",
-            "test-github-15535",
-            "test-github-15799",
-            "test-github-15930",
-            "test-github-15496",
-            "test-github-17177",
-            "test-github-17510",
-            "test-github-17509",
-            "test-github-19610",
-            "test-single-time-monotonicity-enforcers",
-            "test-remote-storage",
-            "test-drop-default-cluster",
-            "test-upsert",
-            "test-resource-limits",
-            "test-invalid-compute-reuse",
-            "pg-snapshot-resumption",
-            "pg-snapshot-partial-failure",
-            "test-system-table-indexes",
-            "test-replica-targeted-subscribe-abort",
-            "test-replica-targeted-select-abort",
-            "test-compute-reconciliation-reuse",
-            "test-compute-reconciliation-no-errors",
-            "test-mz-subscriptions",
-            "test-mv-source-sink",
-            "test-query-without-default-cluster",
-            "test-clusterd-death-detection",
-            "test-replica-metrics",
-            "test-compute-controller-metrics",
-            "test-metrics-retention-across-restart",
-            "test-concurrent-connections",
-            "test-profile-fetch",
-        ]
-    ):
+    for i, name in enumerate(c.workflows):
+        # incident-70 requires more memory, runs in separate CI step
+        if name in ("default", "test-incident-70"):
+            continue
         if shard is None or shard_count is None or i % int(shard_count) == shard:
             with c.test_case(name):
                 c.workflow(name)
@@ -1415,7 +1382,7 @@ def workflow_test_bootstrap_vars(c: Composition) -> None:
         Testdrive(no_reset=True),
         Materialized(
             options=[
-                "--system-var-default=allowed_cluster_replica_sizes='1', '2', 'oops'"
+                "--system-parameter-default=allowed_cluster_replica_sizes='1', '2', 'oops'"
             ],
         ),
     ):
@@ -1426,9 +1393,9 @@ def workflow_test_bootstrap_vars(c: Composition) -> None:
     with c.override(
         Testdrive(no_reset=True),
         Materialized(
-            environment_extra=[
-                """ MZ_SYSTEM_PARAMETER_DEFAULT=allowed_cluster_replica_sizes='1', '2', 'oops'""".strip()
-            ],
+            additional_system_parameter_defaults={
+                "allowed_cluster_replica_sizes": "'1', '2', 'oops'"
+            },
         ),
     ):
         c.up("materialized")
@@ -2728,3 +2695,23 @@ def workflow_test_incident_70(c: Composition) -> None:
 
         for thread in threads:
             thread.join()
+
+
+def workflow_test_index_source_stuck(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Inspired by incident 78, test that selecting an index of a materialized
+    view still works when the source is stuck, for example because it's busy or
+    it has no replicas."""
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        Testdrive(),
+        Clusterd(name="clusterd1"),
+        Clusterd(name="clusterd2"),
+        Materialized(),
+    ):
+        c.up("materialized")
+        c.up("clusterd1")
+        c.up("clusterd2")
+        c.run("testdrive", "index-source-stuck/run.td")

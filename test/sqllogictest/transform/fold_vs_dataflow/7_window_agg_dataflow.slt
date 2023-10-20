@@ -1,0 +1,64 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+statement ok
+CREATE TABLE t_using_dataflow_rendering(x int, y int);
+
+statement ok
+INSERT INTO t_using_dataflow_rendering VALUES (1,2), (3,null), (5,6), (7,8), (9, null), (11, null), (13, 14), (15, 16), (17, 18), (10, -40), (10, -50);
+
+# There is some difference here in the last 1-2 digits of some numbers!
+query IIRR
+SELECT
+  x,
+  sum(sum(x) OVER (ORDER BY x)) OVER (ORDER BY x),
+  sum(x/3.14) OVER (ORDER BY x),
+  max(x/3.14) OVER (ORDER BY x)
+FROM (SELECT DISTINCT ON(x) * FROM t_using_dataflow_rendering);
+----
+1  1  0.31847133757961783439490445859872611465  0.31847133757961783439490445859872611465
+3  5  1.2738853503184713375796178343949044586  0.955414012738853503184713375796178343949
+5  14  2.86624203821656050955414012738853503185  1.59235668789808917197452229299363057325
+7  30  5.0955414012738853503184713375796178344  2.22929936305732484076433121019108280255
+9  55  7.96178343949044585987261146496815286625  2.86624203821656050955414012738853503185
+10  90  11.1464968152866242038216560509554140127  3.1847133757961783439490445859872611465
+11  136  14.6496815286624203821656050955414012739  3.50318471337579617834394904458598726115
+13  195  18.7898089171974522292993630573248407643  4.14012738853503184713375796178343949045
+15  269  23.5668789808917197452229299363057324841  4.77707006369426751592356687898089171975
+17  360  28.9808917197452229299363057324840764331  5.41401273885350318471337579617834394904
+
+query T multiline
+EXPLAIN
+SELECT
+  x,
+  sum(sum(x) OVER (ORDER BY x)) OVER (ORDER BY x),
+  sum(x/3.14) OVER (ORDER BY x),
+  max(x/3.14) OVER (ORDER BY x)
+FROM (SELECT DISTINCT ON(x) * FROM t_using_dataflow_rendering);
+----
+Explained Query:
+  Project (#3, #6, #5, #4)
+    Map (record_get[1](#1), record_get[0](#2), record_get[2](#2), record_get[3](#2), record_get[0](#1))
+      FlatMap unnest_list(#0)
+        Reduce aggregates=[window_agg[sum order_by=[#0 asc nulls_last]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[3](record_get[1](#0)), record_get[5](record_get[1](#0)), record_get[0](#0)), record_get[0](#0)), record_get[0](record_get[1](#0))))]
+          Project (#1)
+            FlatMap unnest_list(#0)
+              Reduce aggregates=[window_agg[sum order_by=[#0 asc nulls_last]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[2](record_get[1](#0)), record_get[3](record_get[1](#0)), record_get[0](#0), record_get[0](#0)), record_get[0](record_get[1](#0))), record_get[0](record_get[1](#0))))]
+                Project (#1)
+                  FlatMap unnest_list(#0)
+                    Reduce aggregates=[window_agg[sum order_by=[#0 asc nulls_last]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[0](#0), record_get[0](#0)), (integer_to_numeric(record_get[0](record_get[1](#0))) / 3.14)), record_get[0](record_get[1](#0))))]
+                      Project (#1)
+                        FlatMap unnest_list(#0)
+                          Reduce aggregates=[window_agg[max order_by=[#0 asc nulls_last]](row(row(row(#0, #1), (integer_to_numeric(#0) / 3.14)), #0))]
+                            TopK group_by=[#0] limit=1
+                              ReadStorage materialize.public.t_using_dataflow_rendering
+
+EOF

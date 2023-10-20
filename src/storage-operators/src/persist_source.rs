@@ -22,6 +22,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::fetch::FetchedPart;
 use mz_persist_client::fetch::SerdeLeasedBatchPart;
 use mz_persist_client::operators::shard_source::shard_source;
@@ -86,7 +87,7 @@ use crate::metrics::BackpressureMetrics;
 /// using [`timely::dataflow::operators::generic::operator::empty`].
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
-pub fn persist_source<G, YFn>(
+pub fn persist_source<G>(
     scope: &mut G,
     source_id: GlobalId,
     persist_clients: Arc<PersistClientCache>,
@@ -95,7 +96,6 @@ pub fn persist_source<G, YFn>(
     until: Antichain<Timestamp>,
     map_filter_project: Option<&mut MfpPlan>,
     flow_control: Option<FlowControl<G>>,
-    yield_fn: YFn,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
     Stream<G, (DataflowError, Timestamp, Diff)>,
@@ -103,7 +103,6 @@ pub fn persist_source<G, YFn>(
 )
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
-    YFn: Fn(Instant, usize) -> bool + 'static,
 {
     let (stream, token) = scope.scoped(
         &format!("skip_granular_backpressure({})", source_id),
@@ -122,7 +121,6 @@ where
                     summary: Refines::to_inner(fc.summary),
                     metrics: fc.metrics,
                 }),
-                yield_fn,
             );
             (stream.leave(), token)
         },
@@ -143,7 +141,7 @@ type RefinedScope<'g, G> = Child<'g, G, (<G as ScopeParent>::Timestamp, u64)>;
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
 #[allow(clippy::needless_borrow)]
-pub fn persist_source_core<'g, G, YFn>(
+pub fn persist_source_core<'g, G>(
     scope: &RefinedScope<'g, G>,
     source_id: GlobalId,
     persist_clients: Arc<PersistClientCache>,
@@ -152,15 +150,14 @@ pub fn persist_source_core<'g, G, YFn>(
     until: Antichain<Timestamp>,
     map_filter_project: Option<&mut MfpPlan>,
     flow_control: Option<FlowControl<RefinedScope<'g, G>>>,
-    yield_fn: YFn,
 ) -> (
     Stream<RefinedScope<'g, G>, (Result<Row, DataflowError>, (mz_repr::Timestamp, u64), Diff)>,
     Rc<dyn Any>,
 )
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
-    YFn: Fn(Instant, usize) -> bool + 'static,
 {
+    let cfg = persist_clients.cfg().clone();
     let name = source_id.to_string();
     let desc = metadata.relation_desc.clone();
     let filter_plan = map_filter_project.as_ref().map(|p| (*p).clone());
@@ -214,7 +211,7 @@ where
             }
         },
     );
-    let rows = decode_and_mfp(&fetched, &name, until, map_filter_project, yield_fn);
+    let rows = decode_and_mfp(cfg, &fetched, &name, until, map_filter_project);
     (rows, token)
 }
 
@@ -242,16 +239,15 @@ fn filter_may_match(
     result.may_contain(Datum::True) || result.may_fail()
 }
 
-pub fn decode_and_mfp<G, YFn>(
+pub fn decode_and_mfp<G>(
+    cfg: PersistConfig,
     fetched: &Stream<G, FetchedPart<SourceData, (), Timestamp, Diff>>,
     name: &str,
     until: Antichain<Timestamp>,
     mut map_filter_project: Option<&mut MfpPlan>,
-    yield_fn: YFn,
 ) -> Stream<G, (Result<Row, DataflowError>, G::Timestamp, Diff)>
 where
     G: Scope<Timestamp = (mz_repr::Timestamp, u64)>,
-    YFn: Fn(Instant, usize) -> bool + 'static,
 {
     let scope = fetched.scope();
     let mut builder = OperatorBuilder::new(
@@ -291,6 +287,11 @@ where
                 }
             });
 
+            // Get the yield fuel once per schedule to amortize the cost of
+            // loading the atomic.
+            let yield_fuel = cfg.storage_source_decode_fuel();
+            let yield_fn = |_, work| work >= yield_fuel;
+
             let mut work = 0;
             let start_time = Instant::now();
             let mut output = updates_output.activate();
@@ -300,7 +301,7 @@ where
                     &mut work,
                     &name,
                     start_time,
-                    &yield_fn,
+                    yield_fn,
                     &until,
                     map_filter_project.as_ref(),
                     &mut datum_vec,
@@ -365,6 +366,13 @@ impl PendingWork {
             match (key, val) {
                 (Ok(SourceData(Ok(row))), Ok(())) => {
                     if let Some(mfp) = map_filter_project {
+                        // We originally accounted work as the number of outputs, to give downstream
+                        // operators a chance to reduce down anything we've emitted. This mfp call
+                        // might have a restrictive filter, which would have been counted as no
+                        // work. However, in practice, we've been decode_and_mfp be a source of
+                        // interactivity loss during rehydration, so we now also count each mfp
+                        // evaluation against our fuel.
+                        *work += 1;
                         let arena = mz_repr::RowArena::new();
                         let mut datums_local = datum_vec.borrow_with(&row);
                         for result in mfp.evaluate(

@@ -102,8 +102,6 @@ where
         Antichain::new(), // we want all updates
         None,             // no MFP
         None,             // no flow control
-        // Copy the logic in DeltaJoin/Get/Join to start.
-        |_timer, count| count > 1_000_000,
     );
     use differential_dataflow::AsCollection;
     let persist_collection = ok_stream

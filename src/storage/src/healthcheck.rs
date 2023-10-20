@@ -49,6 +49,7 @@ pub async fn write_to_persist(
     client: &PersistClient,
     status_shard: ShardId,
     relation_desc: &RelationDesc,
+    write_namespaced_map: bool,
 ) {
     let now_ms = now();
     let row = mz_storage_client::healthcheck::pack_status_row(
@@ -60,10 +61,14 @@ pub async fn write_to_persist(
         // This is technically an few extra allocations, but its relatively rare so
         // we don't worry about it. Sorting it in a vec like with `Itertools::sorted`
         // would also cost allocations.
-        &namespaced_errors
-            .iter()
-            .map(|(ns, val)| (ns.to_string(), val))
-            .collect(),
+        &if write_namespaced_map {
+            namespaced_errors
+                .iter()
+                .map(|(ns, val)| (ns.to_string(), val))
+                .collect()
+        } else {
+            BTreeMap::new()
+        },
         now_ms,
     );
 
@@ -346,6 +351,7 @@ pub trait HealthOperator {
         client: &PersistClient,
         status_shard: ShardId,
         relation_desc: &RelationDesc,
+        write_namespaced_map: bool,
     );
     async fn send_halt(&self, id: GlobalId, error: Option<(StatusNamespace, HealthStatusUpdate)>);
 
@@ -372,6 +378,7 @@ impl HealthOperator for DefaultWriter {
         client: &PersistClient,
         status_shard: ShardId,
         relation_desc: &RelationDesc,
+        write_namespaced_map: bool,
     ) {
         write_to_persist(
             collection_id,
@@ -383,6 +390,7 @@ impl HealthOperator for DefaultWriter {
             client,
             status_shard,
             relation_desc,
+            write_namespaced_map,
         )
         .await
     }
@@ -438,6 +446,8 @@ pub(crate) fn health_operator<'g, G, P>(
     configs: BTreeMap<usize, ObjectHealthConfig>,
     // An impl of `HealthOperator` that configures the output behavior of this operator.
     health_operator_impl: P,
+    // Whether or not we should actually write namespaced errors in the `details` column.
+    write_namespaced_map: bool,
 ) -> Rc<dyn Any>
 where
     G: Scope<Timestamp = ()>,
@@ -558,6 +568,7 @@ where
                                 persist_client,
                                 status_shard,
                                 state.schema,
+                                write_namespaced_map,
                             )
                             .await;
 
@@ -642,6 +653,7 @@ where
                                     persist_client,
                                     *status_shard,
                                     schema,
+                                    write_namespaced_map,
                                 )
                                 .await;
                         }
@@ -748,6 +760,7 @@ mod tests {
         health_operator_runner(
             2,
             2,
+            true,
             vec![
                 AssertStatus(vec![
                     // Assert both inputs started.
@@ -822,6 +835,48 @@ mod tests {
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // Reports undefined behavior
+    fn test_health_operator_write_namespaced_map() {
+        use Step::*;
+
+        // Test 2 inputs across 2 workers.
+        health_operator_runner(
+            2,
+            2,
+            // testing this
+            false,
+            vec![
+                AssertStatus(vec![
+                    // Assert both inputs started.
+                    StatusToAssert {
+                        collection_index: 0,
+                        status: "starting".to_string(),
+                        ..Default::default()
+                    },
+                    StatusToAssert {
+                        collection_index: 1,
+                        status: "starting".to_string(),
+                        ..Default::default()
+                    },
+                ]),
+                Update(TestUpdate {
+                    worker_id: 0,
+                    namespace: StatusNamespace::TestScript,
+                    input_index: 1,
+                    update: HealthStatusUpdate::stalled("uhoh".to_string(), None),
+                }),
+                AssertStatus(vec![StatusToAssert {
+                    collection_index: 1,
+                    status: "stalled".to_string(),
+                    error: Some("testscript: uhoh".to_string()),
+                    errors: None,
+                    ..Default::default()
+                }]),
+            ],
+        )
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // Reports undefined behavior
     fn test_health_operator_namespaces() {
         use Step::*;
 
@@ -829,6 +884,7 @@ mod tests {
         health_operator_runner(
             2,
             1,
+            true,
             vec![
                 AssertStatus(vec![
                     // Assert both inputs started.
@@ -904,6 +960,7 @@ mod tests {
         health_operator_runner(
             2,
             1,
+            true,
             vec![
                 AssertStatus(vec![
                     // Assert both inputs started.
@@ -979,6 +1036,7 @@ mod tests {
         health_operator_runner(
             2,
             1,
+            true,
             vec![
                 AssertStatus(vec![
                     // Assert both inputs started.
@@ -1125,12 +1183,13 @@ mod tests {
             _client: &PersistClient,
             _status_shard: ShardId,
             _relation_desc: &RelationDesc,
+            write_namespaced_map: bool,
         ) {
             let _ = self.sender.send(StatusToAssert {
                 collection_index: *self.input_mapping.get(&collection_id).unwrap(),
                 status: new_status.to_string(),
                 error: new_error.map(str::to_string),
-                errors: if !namespaced_errors.is_empty() {
+                errors: if !namespaced_errors.is_empty() && write_namespaced_map {
                     Some(
                         namespaced_errors
                             .iter()
@@ -1165,7 +1224,12 @@ mod tests {
 
     /// Setup a `health_operator` with a set number of workers and inputs, and the
     /// steps on the first worker.
-    fn health_operator_runner(workers: usize, inputs: usize, steps: Vec<Step>) {
+    fn health_operator_runner(
+        workers: usize,
+        inputs: usize,
+        write_namespaced_map: bool,
+        steps: Vec<Step>,
+    ) {
         let tokio_runtime = tokio::runtime::Runtime::new().unwrap();
         let tokio_handle = tokio_runtime.handle().clone();
 
@@ -1217,6 +1281,7 @@ mod tests {
                                     sender: out_tx,
                                     input_mapping: inputs,
                                 },
+                                write_namespaced_map,
                             )));
                         });
                 });

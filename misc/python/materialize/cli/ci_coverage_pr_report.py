@@ -16,7 +16,7 @@ from collections.abc import Callable
 
 import junit_xml
 
-from materialize import MZ_ROOT, ci_util
+from materialize import MZ_ROOT, buildkite, ci_util
 
 # - None value indicates that this line is interesting, but we don't know yet
 #   if it can actually be covered.
@@ -55,18 +55,8 @@ def find_modified_lines() -> Coverage:
     """
     Find each line that has been added or modified in the current pull request.
     """
-    base_branch = os.getenv("BUILDKITE_PULL_REQUEST_BASE_BRANCH", "main") or os.getenv(
-        "BUILDKITE_PIPELINE_DEFAULT_BRANCH", "main"
-    )
-    # Make sure we have the latest state to correctly identify the merge base
-    subprocess.run(["git", "fetch", "origin", base_branch], check=True)
-    result = subprocess.run(
-        ["git", "merge-base", "HEAD", f"origin/{base_branch}"],
-        check=True,
-        capture_output=True,
-    )
-    merge_base = result.stdout.strip()
-    print(f"Merge base: {merge_base.decode('utf-8')}")
+    merge_base = buildkite.get_merge_base()
+    print(f"Merge base: {merge_base}")
     result = subprocess.run(
         ["git", "diff", "-U0", merge_base], check=True, capture_output=True
     )

@@ -25,12 +25,16 @@ breaking:
     - compute-client/src/protocol/response.proto
     # reason: does currently not require backward-compatibility
     - compute-client/src/service.proto
+    # reason: Ignore because plans are currently not persisted.
+    - expr/src/relation.proto
     # reason: still under active development
     - persist-types/src/stats.proto
     # reason: does currently not require backward-compatibility
     - stash-types/protos/objects.proto
     # reason: does currently not require backward-compatibility
     - stash-types/protos/objects_v40.proto
+    # reason: does currently not require backward-compatibility
+    - stash-types/protos/objects_v41.proto
     # reason: does currently not require backward-compatibility
     - storage-client/src/client.proto
     # reason: Ignored until #21887 is reverted

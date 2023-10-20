@@ -73,10 +73,10 @@ use crate::names::{Aug, FullItemName, PartialItemName, ResolvedDataType, Resolve
 use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::expr::{
-    AbstractColumnType, AbstractExpr, AggregateExpr, AggregateFunc, BinaryFunc,
-    CoercibleScalarExpr, ColumnOrder, ColumnRef, Hir, HirRelationExpr, HirScalarExpr, JoinKind,
-    ScalarWindowExpr, ScalarWindowFunc, UnaryFunc, ValueWindowExpr, ValueWindowFunc, VariadicFunc,
-    WindowExpr, WindowExprType,
+    AbstractColumnType, AbstractExpr, AggregateExpr, AggregateFunc, AggregateWindowExpr,
+    BinaryFunc, CoercibleScalarExpr, ColumnOrder, ColumnRef, Hir, HirRelationExpr, HirScalarExpr,
+    JoinKind, ScalarWindowExpr, ScalarWindowFunc, UnaryFunc, ValueWindowExpr, ValueWindowFunc,
+    VariadicFunc, WindowExpr, WindowExprType,
 };
 use crate::plan::plan_utils::{self, GroupSizeHints, JoinSide};
 use crate::plan::scope::{Scope, ScopeItem};
@@ -1957,6 +1957,7 @@ fn plan_view_select(
     }
 
     // Step 3. Gather aggregates and table functions.
+    // (But skip window aggregates.)
     let (aggregates, table_funcs) = {
         let mut visitor = AggregateTableFuncVisitor::new(qcx.scx);
         visitor.visit_select_mut(&mut s);
@@ -2001,6 +2002,7 @@ fn plan_view_select(
     };
 
     // Step 5. Handle GROUP BY clause.
+    // This will also plan the aggregates gathered in Step 3.
     let (mut group_scope, select_all_mapping) = {
         // Compute GROUP BY expressions.
         let ecx = &ExprContext {
@@ -2079,7 +2081,12 @@ fn plan_view_select(
         };
         let mut agg_exprs = vec![];
         for sql_function in aggregates {
-            agg_exprs.push(plan_aggregate(ecx, &sql_function)?);
+            if sql_function.over.is_some() {
+                unreachable!(
+                    "Window aggregate; AggregateTableFuncVisitor explicitly filters these out"
+                );
+            }
+            agg_exprs.push(plan_aggregate_common(ecx, &sql_function)?);
             group_scope
                 .items
                 .push(ScopeItem::from_expr(Expr::Function(sql_function.clone())));
@@ -2104,14 +2111,20 @@ fn plan_view_select(
     // Checks if an unknown column error was the result of not including that
     // column in the GROUP BY clause and produces a friendlier error instead.
     let check_ungrouped_col = |e| match e {
-        PlanError::UnknownColumn { table, column } => {
-            match from_scope.resolve(&qcx.outer_scopes, table.as_ref(), &column) {
-                Ok(ColumnRef { level: 0, column }) => {
-                    PlanError::ungrouped_column(&from_scope.items[column])
-                }
-                _ => PlanError::UnknownColumn { table, column },
+        PlanError::UnknownColumn {
+            table,
+            column,
+            similar,
+        } => match from_scope.resolve(&qcx.outer_scopes, table.as_ref(), &column) {
+            Ok(ColumnRef { level: 0, column }) => {
+                PlanError::ungrouped_column(&from_scope.items[column])
             }
-        }
+            _ => PlanError::UnknownColumn {
+                table,
+                column,
+                similar,
+            },
+        },
         e => e,
     };
 
@@ -2134,6 +2147,7 @@ fn plan_view_select(
     }
 
     // Step 7. Gather window functions from SELECT and ORDER BY, and plan them.
+    // (This includes window aggregations.)
     //
     // Note that window functions can be present only in SELECT and ORDER BY (including
     // DISTINCT ON), because they are executed after grouped aggregations and HAVING.
@@ -2453,6 +2467,7 @@ fn plan_group_by_expr<'a>(
             Err(PlanError::UnknownColumn {
                 table: None,
                 column,
+                similar,
             }) => {
                 // The expression was a simple identifier that did not match an
                 // input column. See if it matches an output column.
@@ -2469,6 +2484,7 @@ fn plan_group_by_expr<'a>(
                     Err(PlanError::UnknownColumn {
                         table: None,
                         column,
+                        similar,
                     })
                 }
             }
@@ -4497,13 +4513,14 @@ fn plan_function_order_by(
     Ok((order_by_exprs, col_orders))
 }
 
-fn plan_aggregate(
+/// Common part of the planning of windowed and non-windowed aggregation functions.
+fn plan_aggregate_common(
     ecx: &ExprContext,
     Function::<Aug> {
         name,
         args,
         filter,
-        over,
+        over: _,
         distinct,
     }: &Function<Aug>,
 ) -> Result<AggregateExpr, PlanError> {
@@ -4520,14 +4537,11 @@ fn plan_aggregate(
     // most, so explicitly drop it if the function doesn't care about order. This
     // prevents the projection into Record below from triggering on unsupported
     // functions.
+
     let impls = match resolve_func(ecx, name, args)? {
         Func::Aggregate(impls) => impls,
-        _ => unreachable!("plan_aggregate called on non-aggregate function,"),
+        _ => unreachable!("plan_aggregate_common called on non-aggregate function,"),
     };
-
-    if over.is_some() {
-        bail_unsupported!("aggregate window functions");
-    }
 
     // We follow PostgreSQL's rule here for mapping `count(*)` into the
     // generalized function selection framework. The rule is simple: the user
@@ -4627,12 +4641,13 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
         return Ok(HirScalarExpr::Column(i));
     }
 
-    // If the name is unqualified, first check if it refers to a column.
-    match ecx.scope.resolve_column(&ecx.qcx.outer_scopes, &col_name) {
+    // If the name is unqualified, first check if it refers to a column. Track any similar names
+    // that might exist for a better error message.
+    let similar_names = match ecx.scope.resolve_column(&ecx.qcx.outer_scopes, &col_name) {
         Ok(i) => return Ok(HirScalarExpr::Column(i)),
-        Err(PlanError::UnknownColumn { .. }) => (),
+        Err(PlanError::UnknownColumn { similar, .. }) => similar,
         Err(e) => return Err(e),
-    }
+    };
 
     // The name doesn't refer to a column. Check if it is a whole-row reference
     // to a table.
@@ -4649,6 +4664,7 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
         [] => Err(PlanError::UnknownColumn {
             table: None,
             column: col_name,
+            similar: similar_names,
         }),
         // The name refers to a table that is the result of a function that
         // returned a single column. Per PostgreSQL, this is a special case
@@ -4722,20 +4738,6 @@ fn plan_function<'a>(
     }: &'a Function<Aug>,
 ) -> Result<HirScalarExpr, PlanError> {
     let impls = match resolve_func(ecx, name, args)? {
-        Func::Aggregate(_) if ecx.allow_aggregates => {
-            // should already have been caught by `scope.resolve_expr` in `plan_expr`
-            sql_bail!(
-                "Internal error: encountered unplanned aggregate function: {:?}",
-                name,
-            )
-        }
-        Func::Aggregate(_) => {
-            sql_bail!(
-                "aggregate functions are not allowed in {} (function {})",
-                ecx.name,
-                name
-            );
-        }
         Func::Table(_) => {
             sql_bail!(
                 "table functions are not allowed in {} (function {})",
@@ -4743,67 +4745,142 @@ fn plan_function<'a>(
                 name
             );
         }
-        Func::Scalar(impls) => impls,
+        Func::Scalar(impls) => {
+            if over.is_some() {
+                sql_bail!("OVER clause not allowed on {name}. The OVER clause can only be used with window functions (including aggregations).");
+            }
+            impls
+        }
         Func::ScalarWindow(impls) => {
-            let (window_spec, _, scalar_args, partition) = validate_window_function_plan(ecx, f)?;
+            let (
+                ignore_nulls,
+                order_by_exprs,
+                col_orders,
+                _window_frame,
+                partition_by,
+                scalar_args,
+            ) = plan_window_function_non_aggr(ecx, f)?;
+            assert!(scalar_args.is_empty());
+
+            // Note: the window frame doesn't affect scalar window funcs, but, strangely, we should
+            // accept a window frame here without an error msg. (Postgres also does this.)
 
             let func = func::select_impl(ecx, FuncSpec::Func(name), impls, scalar_args, vec![])?;
 
-            if window_spec.ignore_nulls && window_spec.respect_nulls {
-                sql_bail!("Both IGNORE NULLS and RESPECT NULLS were given.");
-            }
-            if window_spec.ignore_nulls || window_spec.respect_nulls {
+            if ignore_nulls {
                 // If we ever add a scalar window function that supports ignore, then don't forget
                 // to also update HIR EXPLAIN.
                 bail_unsupported!(IGNORE_NULLS_ERROR_MSG);
             }
-
-            let (order_by, col_orders) = plan_function_order_by(ecx, &window_spec.order_by)?;
 
             return Ok(HirScalarExpr::Windowing(WindowExpr {
                 func: WindowExprType::Scalar(ScalarWindowExpr {
                     func,
                     order_by: col_orders,
                 }),
-                partition_by: partition,
-                order_by,
+                partition_by,
+                order_by: order_by_exprs,
             }));
         }
         Func::ValueWindow(impls) => {
-            let (window_spec, window_frame, scalar_args, partition) =
-                validate_window_function_plan(ecx, f)?;
+            let (ignore_nulls, order_by_exprs, col_orders, window_frame, partition_by, scalar_args) =
+                plan_window_function_non_aggr(ecx, f)?;
 
-            let (expr, func) =
+            let (args_encoded, func) =
                 func::select_impl(ecx, FuncSpec::Func(name), impls, scalar_args, vec![])?;
 
-            if window_spec.ignore_nulls && window_spec.respect_nulls {
-                sql_bail!("Both IGNORE NULLS and RESPECT NULLS were given.");
-            }
-            if window_spec.ignore_nulls || window_spec.respect_nulls {
+            if ignore_nulls {
                 match func {
                     ValueWindowFunc::Lag | ValueWindowFunc::Lead => {}
                     _ => bail_unsupported!(IGNORE_NULLS_ERROR_MSG),
                 }
             }
 
-            let (order_by, col_orders) = plan_function_order_by(ecx, &window_spec.order_by)?;
-
             return Ok(HirScalarExpr::Windowing(WindowExpr {
                 func: WindowExprType::Value(ValueWindowExpr {
                     func,
-                    args: Box::new(expr),
+                    args: Box::new(args_encoded),
                     order_by: col_orders,
                     window_frame,
-                    ignore_nulls: window_spec.ignore_nulls, // (RESPECT NULLS is the default)
+                    ignore_nulls, // (RESPECT NULLS is the default)
                 }),
-                partition_by: partition,
-                order_by,
+                partition_by,
+                order_by: order_by_exprs,
             }));
+        }
+        Func::Aggregate(_) => {
+            if f.over.is_none() {
+                // Not a window aggregate. Something is wrong.
+                if ecx.allow_aggregates {
+                    // Should already have been caught by `scope.resolve_expr` in `plan_expr_inner`
+                    // (after having been planned earlier in `Step 5` of `plan_view_select`).
+                    sql_bail!(
+                        "Internal error: encountered unplanned non-windowed aggregate function: {:?}",
+                        name,
+                    );
+                } else {
+                    // scope.resolve_expr didn't catch it because we have not yet planned it,
+                    // because it was in an unsupported context.
+                    sql_bail!(
+                        "aggregate functions are not allowed in {} (function {})",
+                        ecx.name,
+                        name
+                    );
+                }
+            } else {
+                let (ignore_nulls, order_by_exprs, col_orders, window_frame, partition_by) =
+                    plan_window_function_common(ecx, &f.name, &f.over)?;
+
+                // https://github.com/MaterializeInc/materialize/issues/22268
+                match (&window_frame.start_bound, &window_frame.end_bound) {
+                    (
+                        mz_expr::WindowFrameBound::UnboundedPreceding,
+                        mz_expr::WindowFrameBound::OffsetPreceding(..),
+                    )
+                    | (
+                        mz_expr::WindowFrameBound::UnboundedPreceding,
+                        mz_expr::WindowFrameBound::OffsetFollowing(..),
+                    )
+                    | (
+                        mz_expr::WindowFrameBound::OffsetPreceding(..),
+                        mz_expr::WindowFrameBound::UnboundedFollowing,
+                    )
+                    | (
+                        mz_expr::WindowFrameBound::OffsetFollowing(..),
+                        mz_expr::WindowFrameBound::UnboundedFollowing,
+                    ) => bail_unsupported!("mixed unbounded - offset frames"),
+                    (_, _) => {} // other cases are ok
+                }
+
+                if ignore_nulls {
+                    // https://github.com/MaterializeInc/materialize/issues/22272
+                    // If we ever add support for ignore_nulls for a window aggregate, then don't
+                    // forget to also update HIR EXPLAIN.
+                    bail_unsupported!(IGNORE_NULLS_ERROR_MSG);
+                }
+
+                let aggregate_expr = plan_aggregate_common(ecx, f)?;
+
+                if aggregate_expr.distinct {
+                    // https://github.com/MaterializeInc/materialize/issues/22015
+                    bail_unsupported!("DISTINCT in window aggregates");
+                }
+
+                return Ok(HirScalarExpr::Windowing(WindowExpr {
+                    func: WindowExprType::Aggregate(AggregateWindowExpr {
+                        aggregate_expr,
+                        order_by: col_orders,
+                        window_frame,
+                    }),
+                    partition_by,
+                    order_by: order_by_exprs,
+                }));
+            }
         }
     };
 
     if over.is_some() {
-        bail_unsupported!(213, "window functions");
+        unreachable!("If there is an OVER clause, we should have returned already above.");
     }
 
     if *distinct {
@@ -5034,7 +5111,9 @@ fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, PlanError> {
     Ok(expr.into())
 }
 
-fn validate_window_function_plan<'a>(
+/// The common part of the planning of non-aggregate window functions, i.e.,
+/// scalar window functions and value window functions.
+fn plan_window_function_non_aggr<'a>(
     ecx: &ExprContext,
     Function {
         name,
@@ -5045,22 +5124,17 @@ fn validate_window_function_plan<'a>(
     }: &'a Function<Aug>,
 ) -> Result<
     (
-        &'a WindowSpec<Aug>,
-        mz_expr::WindowFrame,
-        Vec<CoercibleScalarExpr>,
+        bool,
         Vec<HirScalarExpr>,
+        Vec<ColumnOrder>,
+        mz_expr::WindowFrame,
+        Vec<HirScalarExpr>,
+        Vec<CoercibleScalarExpr>,
     ),
     PlanError,
 > {
-    if !ecx.allow_windows {
-        sql_bail!(
-            "window functions are not allowed in {} (function {})",
-            ecx.name,
-            name
-        );
-    }
-
-    // Various things are duplicated here and in `plan_function` to improve error messages.
+    let (ignore_nulls, order_by_exprs, col_orders, window_frame, partition) =
+        plan_window_function_common(ecx, name, over)?;
 
     if *distinct {
         sql_bail!(
@@ -5071,19 +5145,6 @@ fn validate_window_function_plan<'a>(
 
     if filter.is_some() {
         bail_unsupported!("FILTER in non-aggregate window functions");
-    }
-
-    let window_spec = match over.as_ref() {
-        Some(over) => over,
-        None => sql_bail!("window function {} requires an OVER clause", name),
-    };
-    let window_frame = match window_spec.window_frame.as_ref() {
-        Some(frame) => plan_window_frame(frame)?,
-        None => mz_expr::WindowFrame::default(),
-    };
-    let mut partition = Vec::new();
-    for expr in &window_spec.partition_by {
-        partition.push(plan_expr(ecx, expr)?.type_as_any(ecx)?);
     }
 
     let scalar_args = match &args {
@@ -5101,7 +5162,64 @@ fn validate_window_function_plan<'a>(
         }
     };
 
-    Ok((window_spec, window_frame, scalar_args, partition))
+    Ok((
+        ignore_nulls,
+        order_by_exprs,
+        col_orders,
+        window_frame,
+        partition,
+        scalar_args,
+    ))
+}
+
+/// The common part of the planning of all window functions.
+fn plan_window_function_common(
+    ecx: &ExprContext,
+    name: &<Aug as AstInfo>::ItemName,
+    over: &Option<WindowSpec<Aug>>,
+) -> Result<
+    (
+        bool,
+        Vec<HirScalarExpr>,
+        Vec<ColumnOrder>,
+        mz_expr::WindowFrame,
+        Vec<HirScalarExpr>,
+    ),
+    PlanError,
+> {
+    if !ecx.allow_windows {
+        sql_bail!(
+            "window functions are not allowed in {} (function {})",
+            ecx.name,
+            name
+        );
+    }
+
+    let window_spec = match over.as_ref() {
+        Some(over) => over,
+        None => sql_bail!("window function {} requires an OVER clause", name),
+    };
+    if window_spec.ignore_nulls && window_spec.respect_nulls {
+        sql_bail!("Both IGNORE NULLS and RESPECT NULLS were given.");
+    }
+    let window_frame = match window_spec.window_frame.as_ref() {
+        Some(frame) => plan_window_frame(frame)?,
+        None => mz_expr::WindowFrame::default(),
+    };
+    let mut partition = Vec::new();
+    for expr in &window_spec.partition_by {
+        partition.push(plan_expr(ecx, expr)?.type_as_any(ecx)?);
+    }
+
+    let (order_by_exprs, col_orders) = plan_function_order_by(ecx, &window_spec.order_by)?;
+
+    Ok((
+        window_spec.ignore_nulls,
+        order_by_exprs,
+        col_orders,
+        window_frame,
+        partition,
+    ))
 }
 
 fn plan_window_frame(
@@ -5136,11 +5254,42 @@ fn plan_window_frame(
         (OffsetFollowing(_), OffsetPreceding(_) | CurrentRow) => {
             sql_bail!("frame starting from following row cannot have preceding rows")
         }
+        // The above rules are adopted from Postgres.
+        // The following rules are Materialize-specific.
+        (OffsetPreceding(o1), OffsetFollowing(o2)) => {
+            // Note that the only hard limit is that partition size + offset should fit in i64, so
+            // in theory, we could support much larger offsets than this. But for our current
+            // performance, even 1000000 is quite big.
+            if *o1 > 1000000 || *o2 > 1000000 {
+                sql_bail!("Window frame offsets greater than 1000000 are currently not supported")
+            }
+        }
+        (OffsetPreceding(o1), OffsetPreceding(o2)) => {
+            if *o1 > 1000000 || *o2 > 1000000 {
+                sql_bail!("Window frame offsets greater than 1000000 are currently not supported")
+            }
+        }
+        (OffsetFollowing(o1), OffsetFollowing(o2)) => {
+            if *o1 > 1000000 || *o2 > 1000000 {
+                sql_bail!("Window frame offsets greater than 1000000 are currently not supported")
+            }
+        }
+        (OffsetPreceding(o), CurrentRow) => {
+            if *o > 1000000 {
+                sql_bail!("Window frame offsets greater than 1000000 are currently not supported")
+            }
+        }
+        (CurrentRow, OffsetFollowing(o)) => {
+            if *o > 1000000 {
+                sql_bail!("Window frame offsets greater than 1000000 are currently not supported")
+            }
+        }
         // Other bounds are valid
         (_, _) => (),
     }
 
     // RANGE is only supported in the default frame
+    // https://github.com/MaterializeInc/materialize/issues/21934
     if units == mz_expr::WindowFrameUnits::Range
         && (start_bound != UnboundedPreceding || end_bound != CurrentRow)
     {
@@ -5491,7 +5640,9 @@ impl<'a> VisitMut<'_, Aug> for AggregateTableFuncVisitor<'a> {
         };
 
         match item.func() {
-            Ok(Func::Aggregate { .. }) => {
+            // We don't want to collect window aggregations, because these will be handled not by
+            // plan_aggregate, but by plan_function.
+            Ok(Func::Aggregate { .. }) if func.over.is_none() => {
                 if self.within_aggregate {
                     self.err = Some(sql_err!("nested aggregate functions are not allowed",));
                     return;
