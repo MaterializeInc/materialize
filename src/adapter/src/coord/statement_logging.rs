@@ -19,7 +19,6 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::{Datum, Diff, Row, RowPacker, Timestamp};
 use mz_sql::plan::Params;
 use mz_storage_client::controller::IntrospectionType;
-use ordered_float::OrderedFloat;
 use qcell::QCell;
 use rand::SeedableRng;
 use rand::{distributions::Bernoulli, prelude::Distribution, thread_rng};
@@ -496,7 +495,7 @@ impl Coordinator {
         let record = StatementBeganExecutionRecord {
             id: ev_id,
             prepared_statement_id: ps_uuid,
-            sample_rate: OrderedFloat(sample_rate),
+            sample_rate,
             params,
             began_at: self.now(),
             // Cluster is not known yet; we'll fill it in later

@@ -3516,7 +3516,6 @@ dependencies = [
  "mz-transform",
  "once_cell",
  "opentelemetry",
- "ordered-float",
  "prometheus",
  "proptest",
  "proptest-derive",
