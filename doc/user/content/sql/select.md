@@ -117,8 +117,7 @@ CTEs have the following limitations, which we are working to improve:
 
 ### Query hints
 
-Users can specify any query hints to help Materialize optimize
-query planning more efficiently.
+Users can specify query hints to help Materialize optimize queries.
 
 The following query hints are valid within the `OPTION` clause.
 
