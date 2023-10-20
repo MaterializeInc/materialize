@@ -173,6 +173,8 @@ async fn test_confirm_leadership<D: DurableCatalogState>(
         err,
         CatalogError::Durable(DurableCatalogError::Fence(_))
     ));
+    Box::new(state1).expire().await;
+    Box::new(state2).expire().await;
 }
 
 #[mz_ore::test(tokio::test)]
@@ -219,6 +221,7 @@ async fn test_catalog_content_version<D: DurableCatalogState>(
             .value,
         "foo".to_string()
     );
+    Box::new(state).expire().await;
 }
 
 #[mz_ore::test(tokio::test)]
@@ -281,6 +284,7 @@ async fn test_get_and_prune_storage_usage<D: DurableCatalogState>(
         .unwrap();
     assert_eq!(events.len(), 1);
     assert_eq!(events.into_element(), recent_event);
+    Box::new(state).expire().await;
 }
 
 #[mz_ore::test(tokio::test)]
@@ -346,7 +350,8 @@ async fn test_system_items<D: DurableCatalogState>(
         .map_ok(|(k, v)| SystemObjectMapping::from_key_value(k, v))
         .collect::<Result<_, _>>()
         .unwrap();
-    assert_eq!(snapshot_mappings, mappings.to_vec())
+    assert_eq!(snapshot_mappings, mappings.to_vec());
+    Box::new(state).expire().await;
 }
 
 #[mz_ore::test(tokio::test)]
@@ -420,7 +425,8 @@ async fn test_introspection_source_indexes<D: DurableCatalogState>(
         .map_ok(|(k, v)| IntrospectionSourceIndex::from_key_value(k, v))
         .collect::<Result<_, _>>()
         .unwrap();
-    assert_eq!(snapshot_mappings, mappings.to_vec())
+    assert_eq!(snapshot_mappings, mappings.to_vec());
+    Box::new(state).expire().await;
 }
 
 #[mz_ore::test(tokio::test)]
@@ -490,6 +496,7 @@ async fn test_replicas<D: DurableCatalogState>(
         .collect::<Result<_, _>>()
         .unwrap();
     assert!(snapshot_replicas.contains(&replica));
+    Box::new(state).expire().await;
 }
 
 #[mz_ore::test(tokio::test)]
@@ -547,7 +554,8 @@ async fn test_timestamps<D: DurableCatalogState>(
         .map_ok(|(k, v)| TimelineTimestamp::from_key_value(k, v))
         .collect::<Result<_, _>>()
         .unwrap();
-    assert!(snapshot_timeline_timestamps.contains(&timeline_timestamp),);
+    assert!(snapshot_timeline_timestamps.contains(&timeline_timestamp));
+    Box::new(state).expire().await;
 }
 
 #[mz_ore::test(tokio::test)]
@@ -596,6 +604,7 @@ async fn test_deploy_generation<D: DurableCatalogState>(
         key: "deploy_generation".to_string(),
         value: deploy_generation
     }));
+    Box::new(state).expire().await;
 }
 
 #[mz_ore::test(tokio::test)]
@@ -643,6 +652,7 @@ async fn test_allocate_id<D: DurableCatalogState>(
         name: id_type.to_string(),
         next_id: start_id + 3,
     }));
+    Box::new(state).expire().await;
 }
 
 #[mz_ore::test(tokio::test)]
@@ -726,6 +736,7 @@ async fn test_clusters<D: DurableCatalogState>(
     for cluster in &clusters {
         assert!(snapshot_clusters.contains(cluster));
     }
+    Box::new(state).expire().await;
 }
 
 #[mz_ore::test(tokio::test)]
@@ -798,6 +809,7 @@ async fn test_databases<D: DurableCatalogState>(
     for database in &databases {
         assert!(snapshot_databases.contains(database));
     }
+    Box::new(state).expire().await;
 }
 
 #[mz_ore::test(tokio::test)]
@@ -871,6 +883,7 @@ async fn test_schemas<D: DurableCatalogState>(openable_state: impl OpenableDurab
     for schema in &schemas {
         assert!(snapshot_schemas.contains(schema));
     }
+    Box::new(state).expire().await;
 }
 
 #[mz_ore::test(tokio::test)]
@@ -948,6 +961,7 @@ async fn test_roles<D: DurableCatalogState>(openable_state: impl OpenableDurable
     for role in &roles {
         assert!(snapshot_roles.contains(role));
     }
+    Box::new(state).expire().await;
 }
 
 #[mz_ore::test(tokio::test)]
@@ -1034,6 +1048,7 @@ async fn test_default_privileges<D: DurableCatalogState>(
     for default_privilege in &default_privileges {
         assert!(snapshot_default_privileges.contains(default_privilege));
     }
+    Box::new(state).expire().await;
 }
 
 #[mz_ore::test(tokio::test)]
@@ -1103,6 +1118,7 @@ async fn test_system_privileges<D: DurableCatalogState>(
     for system_privilege in &system_privileges {
         assert!(snapshot_system_privileges.contains(system_privilege));
     }
+    Box::new(state).expire().await;
 }
 
 #[mz_ore::test(tokio::test)]
@@ -1169,6 +1185,7 @@ async fn test_system_configurations<D: DurableCatalogState>(
     for system_configuration in &system_configurations {
         assert!(snapshot_system_configurations.contains(system_configuration));
     }
+    Box::new(state).expire().await;
 }
 
 #[mz_ore::test(tokio::test)]
@@ -1238,6 +1255,7 @@ async fn test_comments<D: DurableCatalogState>(
     for comment in &comments {
         assert!(snapshot_comments.contains(comment));
     }
+    Box::new(state).expire().await;
 }
 
 #[mz_ore::test(tokio::test)]
@@ -1306,6 +1324,7 @@ async fn test_audit_logs<D: DurableCatalogState>(
     for audit_log in &audit_logs {
         assert!(persisted_audit_logs.contains(audit_log));
     }
+    Box::new(state).expire().await;
 }
 
 #[mz_ore::test(tokio::test)]
@@ -1377,4 +1396,5 @@ async fn test_items<D: DurableCatalogState>(openable_state: impl OpenableDurable
     for item in &items {
         assert!(snapshot_items.contains(item));
     }
+    Box::new(state).expire().await;
 }

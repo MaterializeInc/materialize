@@ -248,7 +248,7 @@ impl mz_persist_types::columnar::Schema<StateUpdateKind> for VecU8Schema {
 
 /// Handles and metadata needed to interact with persist.
 ///
-/// Production users should call [`Self::_expire`] before dropping a [`PersistHandle`] so that it
+/// Production users should call [`Self::expire`] before dropping a [`PersistHandle`] so that it
 /// can expire its leases. If/when rust gets AsyncDrop, this will be done automatically.
 #[derive(Debug)]
 pub struct PersistHandle {
@@ -481,13 +481,6 @@ impl PersistHandle {
     async fn get_user_version(&mut self, upper: Timestamp) -> Option<u64> {
         self.get_config(USER_VERSION_KEY, upper).await
     }
-
-    /// Politely expires all handles to persist, releasing their leases.
-    // TODO(jkosh44) Before enabling this in production we need to expose this through the trait.
-    async fn _expire(self) {
-        self.read_handle.expire().await;
-        self.write_handle.expire().await;
-    }
 }
 
 #[async_trait]
@@ -528,6 +521,11 @@ impl OpenableDurableCatalogState<PersistCatalogState> for PersistHandle {
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError> {
         let upper = self.current_upper().await;
         Ok(self.get_config(DEPLOY_GENERATION, upper).await)
+    }
+
+    async fn expire(self) {
+        self.read_handle.expire().await;
+        self.write_handle.expire().await;
     }
 }
 
@@ -652,6 +650,10 @@ impl PersistCatalogState {
 impl ReadOnlyDurableCatalogState for PersistCatalogState {
     fn epoch(&mut self) -> Epoch {
         self.epoch
+    }
+
+    async fn expire(self: Box<Self>) {
+        self.persist_handle.expire().await
     }
 
     async fn get_catalog_content_version(&mut self) -> Result<Option<String>, CatalogError> {

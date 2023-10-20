@@ -148,6 +148,8 @@ pub struct BootstrapArgs {
 pub type Epoch = NonZeroI64;
 
 /// An API for opening a durable catalog state.
+///
+/// If a catalog is not opened, then resources should be release via [`Self::expire`].
 #[async_trait]
 pub trait OpenableDurableCatalogState<D: DurableCatalogState>: Debug + Send {
     /// Opens the catalog in a mode that accepts and buffers all writes,
@@ -191,6 +193,9 @@ pub trait OpenableDurableCatalogState<D: DurableCatalogState>: Debug + Send {
 
     /// Get the deployment generation of this instance.
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError>;
+
+    /// Politely releases all external resources that can only be released in an async context.
+    async fn expire(self);
 }
 
 // TODO(jkosh44) No method should take &mut self, but due to stash implementations we need it.
@@ -207,6 +212,9 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
     ///
     /// NB: We may remove this in later iterations of Pv2.
     fn epoch(&mut self) -> Epoch;
+
+    /// Politely releases all external resources that can only be released in an async context.
+    async fn expire(self: Box<Self>);
 
     /// Returns the version of Materialize that last wrote to the catalog.
     ///

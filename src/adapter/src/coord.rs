@@ -936,7 +936,7 @@ pub struct Coordinator {
     /// The catalog in an Arc suitable for readonly references. The Arc allows
     /// us to hand out cheap copies of the catalog to functions that can use it
     /// off of the main coordinator thread. If the coordinator needs to mutate
-    /// the catalog, call catalog_mut(), which will clone this struct member,
+    /// the catalog, call [`Self::catalog_mut`], which will clone this struct member,
     /// allowing it to be mutated here while the other off-thread references can
     /// read their catalog as long as needed. In the future we would like this
     /// to be a pTVC, but for now this is sufficient.
@@ -2049,6 +2049,11 @@ impl Coordinator {
                 .observe(histogram_metric)
                 .with_filter(move |wall_time| wall_time >= reporting_threshold)
                 .await;
+        }
+        // Try and cleanup as a best effort. There may be some async tasks out there holding a
+        // reference that prevents us from cleaning up.
+        if let Some(catalog) = Arc::into_inner(self.catalog) {
+            catalog.expire().await;
         }
     }
 

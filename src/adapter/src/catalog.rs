@@ -4691,6 +4691,7 @@ mod tests {
                     tc.normal_output
                 );
             }
+            catalog.expire().await;
         })
         .await
     }
@@ -4720,6 +4721,7 @@ mod tests {
                 .await
                 .expect("failed to transact");
             assert_eq!(catalog.transient_revision(), 2);
+            catalog.expire().await;
         }
         {
             let catalog =
@@ -4728,6 +4730,7 @@ mod tests {
                     .expect("unable to open debug catalog");
             // Re-opening the same stash resets the transient_revision to 1.
             assert_eq!(catalog.transient_revision(), 1);
+            catalog.expire().await;
         }
         debug_stash_factory.drop().await;
     }
@@ -4874,6 +4877,7 @@ mod tests {
                 conn_catalog.effective_search_path(true),
                 vec![mz_catalog_schema, pg_catalog_schema, mz_temp_schema]
             );
+            catalog.expire().await;
         })
         .await
     }
@@ -4882,8 +4886,8 @@ mod tests {
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_normalized_create() {
         Catalog::with_debug(NOW_ZERO.clone(), |catalog| async move {
-            let catalog = catalog.for_system_session();
-            let scx = &mut StatementContext::new(None, &catalog);
+            let conn_catalog = catalog.for_system_session();
+            let scx = &mut StatementContext::new(None, &conn_catalog);
 
             let parsed = mz_sql_parser::parser::parse_statements(
                 "create view public.foo as select 1 as bar",
@@ -4899,6 +4903,7 @@ mod tests {
                 r#"CREATE VIEW "materialize"."public"."foo" AS SELECT 1 AS "bar""#,
                 mz_sql::normalize::create_statement(scx, stmt).expect(""),
             );
+            catalog.expire().await;
         })
         .await;
     }
@@ -4953,6 +4958,7 @@ mod tests {
                 )
                 .await
                 .expect("failed to transact");
+            catalog.expire().await;
         }
         {
             let catalog = Catalog::open_debug_stash_catalog_factory(
@@ -4967,6 +4973,7 @@ mod tests {
                 CatalogItem::View(view) => assert_eq!(create_sql_check, view.create_sql),
                 item => panic!("expected view, got {}", item.typ()),
             }
+            catalog.expire().await;
         }
         debug_stash_factory.drop().await;
     }
@@ -5054,19 +5061,20 @@ mod tests {
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_object_type() {
         Catalog::with_debug(SYSTEM_TIME.clone(), |catalog| async move {
-            let catalog = catalog.for_system_session();
+            let conn_catalog = catalog.for_system_session();
 
             assert_eq!(
                 mz_sql::catalog::ObjectType::ClusterReplica,
-                catalog.get_object_type(&ObjectId::ClusterReplica((
+                conn_catalog.get_object_type(&ObjectId::ClusterReplica((
                     ClusterId::User(1),
                     ReplicaId::User(1)
                 )))
             );
             assert_eq!(
                 mz_sql::catalog::ObjectType::Role,
-                catalog.get_object_type(&ObjectId::Role(RoleId::User(1)))
+                conn_catalog.get_object_type(&ObjectId::Role(RoleId::User(1)))
             );
+            catalog.expire().await;
         })
         .await;
     }
@@ -5075,19 +5083,21 @@ mod tests {
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_get_privileges() {
         Catalog::with_debug(SYSTEM_TIME.clone(), |catalog| async move {
-            let catalog = catalog.for_system_session();
+            let conn_catalog = catalog.for_system_session();
 
             assert_eq!(
                 None,
-                catalog.get_privileges(&SystemObjectId::Object(ObjectId::ClusterReplica((
+                conn_catalog.get_privileges(&SystemObjectId::Object(ObjectId::ClusterReplica((
                     ClusterId::User(1),
                     ReplicaId::User(1),
                 ))))
             );
             assert_eq!(
                 None,
-                catalog.get_privileges(&SystemObjectId::Object(ObjectId::Role(RoleId::User(1))))
+                conn_catalog
+                    .get_privileges(&SystemObjectId::Object(ObjectId::Role(RoleId::User(1))))
             );
+            catalog.expire().await;
         })
         .await;
     }
@@ -5459,6 +5469,7 @@ mod tests {
                     }
                 }
             }
+            catalog.expire().await;
         }
 
         Catalog::with_debug(NOW_ZERO.clone(), inner).await
@@ -5829,6 +5840,7 @@ mod tests {
                     }
                 }
             }
+            catalog.expire().await;
         })
         .await
     }

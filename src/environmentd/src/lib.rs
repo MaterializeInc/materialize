@@ -387,7 +387,7 @@ impl Listeners {
             tracing::info!("Found stash generation {stash_generation:?}");
             if stash_generation < Some(deploy_generation) {
                 tracing::info!("Stash generation {stash_generation:?} is less than deploy generation {deploy_generation}. Performing pre-flight checks");
-                if let Err(e) = openable_adapter_storage
+                match openable_adapter_storage
                     .open_savepoint(
                         config.now.clone(),
                         &BootstrapArgs {
@@ -403,9 +403,12 @@ impl Listeners {
                     )
                     .await
                 {
-                    return Err(
-                        anyhow!(e).context("Stash upgrade would have failed with this error")
-                    );
+                    Ok(adapter_storage) => Box::new(adapter_storage).expire().await,
+                    Err(e) => {
+                        return Err(
+                            anyhow!(e).context("Stash upgrade would have failed with this error")
+                        )
+                    }
                 }
 
                 if let Err(()) = ready_to_promote_tx.send(()) {
