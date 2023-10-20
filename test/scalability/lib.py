@@ -19,7 +19,7 @@ RESULTS_DIR = MZ_ROOT / "test" / "scalability" / "results"
 
 
 def plotit(csv_file_name: str) -> None:
-    endpoints = next(os.walk(RESULTS_DIR))[1]
+    endpoints = get_endpoints_from_results_dir()
     legend = []
     plt.rcParams["figure.figsize"] = (16, 10)
     fig, (summary_subplot, details_subplot) = plt.subplots(2, 1)
@@ -43,3 +43,9 @@ def plotit(csv_file_name: str) -> None:
     details_subplot.set_ylabel("Latency in Seconds")
     details_subplot.set_xlabel("Concurrent SQL Connections")
     details_subplot.legend(legend)
+
+
+def get_endpoints_from_results_dir() -> list[str]:
+    directories = next(os.walk(RESULTS_DIR))[1]
+    endpoints = [entry for entry in directories if not entry.startswith(".")]
+    return endpoints
