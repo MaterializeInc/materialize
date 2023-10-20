@@ -67,7 +67,7 @@ use std::any::Any;
 use std::borrow::Borrow;
 use std::clone::Clone;
 use std::collections::BTreeMap;
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::ops::RangeBounds;
 use std::str::FromStr;
 use std::string::ToString;
@@ -4735,6 +4735,12 @@ impl IsolationLevel {
             Self::Serializable.as_str(),
             Self::StrictSerializable.as_str(),
         ]
+    }
+}
+
+impl Display for IsolationLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 

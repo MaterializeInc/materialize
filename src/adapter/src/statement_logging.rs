@@ -26,6 +26,8 @@ pub struct StatementBeganExecutionRecord {
     pub cluster_id: Option<ClusterId>,
     pub cluster_name: Option<String>,
     pub application_name: String,
+    pub transaction_isolation: String,
+    pub execution_timestamp: Option<EpochMillis>,
 }
 
 #[derive(Clone, Copy, Debug)]

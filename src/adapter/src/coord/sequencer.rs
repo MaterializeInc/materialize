@@ -173,7 +173,7 @@ impl Coordinator {
             }
             Plan::CreateTable(plan) => {
                 let result = self
-                    .sequence_create_table(ctx.session_mut(), plan, resolved_ids)
+                    .sequence_create_table(&mut ctx, plan, resolved_ids)
                     .await;
                 ctx.retire(result);
             }
