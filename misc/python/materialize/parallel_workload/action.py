@@ -318,7 +318,7 @@ class CreateIndexAction(Action):
         # columns_str may exceed 255 characters, so it is converted to a positive number with hash
         index_name = f"idx_{table.name()}_{abs(hash(columns_str))}"
         index_elems = []
-        for i, column in enumerate(columns):
+        for column in columns:
             order = self.rng.choice(["ASC", "DESC"])
             index_elems.append(f"{column.name(True)} {order}")
         index_str = ", ".join(index_elems)
