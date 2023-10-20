@@ -752,7 +752,7 @@ mod tests {
     // Actual timely tests for `health_operator`.
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // Reports undefined behavior
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     fn test_health_operator_basic() {
         use Step::*;
 
@@ -834,7 +834,7 @@ mod tests {
     }
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // Reports undefined behavior
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     fn test_health_operator_write_namespaced_map() {
         use Step::*;
 
@@ -876,7 +876,7 @@ mod tests {
     }
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // Reports undefined behavior
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     fn test_health_operator_namespaces() {
         use Step::*;
 
@@ -953,7 +953,7 @@ mod tests {
     }
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // Reports undefined behavior
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     fn test_health_operator_namespace_side_channel() {
         use Step::*;
 
@@ -1029,7 +1029,7 @@ mod tests {
     }
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // Reports undefined behavior
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     fn test_health_operator_hints() {
         use Step::*;
 

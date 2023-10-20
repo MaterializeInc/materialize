@@ -983,7 +983,6 @@ mod tests {
     }
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // Reports undefined behavior
     fn test_backpressure_non_granular() {
         use Step::*;
         backpressure_runner(
@@ -1123,7 +1122,6 @@ mod tests {
     }
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // Reports undefined behavior
     fn test_backpressure_granular() {
         use Step::*;
         backpressure_runner(

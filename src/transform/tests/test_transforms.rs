@@ -88,7 +88,7 @@ use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::typecheck::TypeErrorHumanizer;
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)]
+#[cfg_attr(miri, ignore)] // can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn run_tests() {
     // Interpret datadriven tests.
     datadriven::walk("tests/test_transforms", |f| {
