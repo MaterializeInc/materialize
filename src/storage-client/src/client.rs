@@ -111,7 +111,7 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// Each entry in the vector names a collection and provides a frontier after which
     /// accumulations must be correct.
     AllowCompaction(Vec<(GlobalId, Antichain<T>)>),
-    CreateSinks(Vec<CreateSinkCommand<T>>),
+    CreateSinks(Vec<RunSinkCommand<T>>),
 }
 
 /// A command that starts ingesting the given ingestion description
@@ -169,32 +169,35 @@ impl RustType<ProtoRunIngestionCommand> for RunIngestionCommand {
     }
 }
 
-impl RustType<ProtoCreateSinkCommand> for CreateSinkCommand<mz_repr::Timestamp> {
-    fn into_proto(&self) -> ProtoCreateSinkCommand {
-        ProtoCreateSinkCommand {
+impl RustType<ProtoRunSinkCommand> for RunSinkCommand<mz_repr::Timestamp> {
+    fn into_proto(&self) -> ProtoRunSinkCommand {
+        ProtoRunSinkCommand {
             id: Some(self.id.into_proto()),
             description: Some(self.description.into_proto()),
+            update: self.update,
         }
     }
 
-    fn from_proto(proto: ProtoCreateSinkCommand) -> Result<Self, TryFromProtoError> {
-        Ok(CreateSinkCommand {
-            id: proto.id.into_rust_if_some("ProtoCreateSinkCommand::id")?,
+    fn from_proto(proto: ProtoRunSinkCommand) -> Result<Self, TryFromProtoError> {
+        Ok(RunSinkCommand {
+            id: proto.id.into_rust_if_some("ProtoRunSinkCommand::id")?,
             description: proto
                 .description
-                .into_rust_if_some("ProtoCreateSinkCommand::description")?,
+                .into_rust_if_some("ProtoRunSinkCommand::description")?,
+            update: proto.update,
         })
     }
 }
 
 /// A command that starts exporting the given sink description
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct CreateSinkCommand<T> {
+pub struct RunSinkCommand<T> {
     pub id: GlobalId,
     pub description: StorageSinkDesc<MetadataFilled, T>,
+    pub update: bool,
 }
 
-impl Arbitrary for CreateSinkCommand<mz_repr::Timestamp> {
+impl Arbitrary for RunSinkCommand<mz_repr::Timestamp> {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
@@ -202,8 +205,13 @@ impl Arbitrary for CreateSinkCommand<mz_repr::Timestamp> {
         (
             any::<GlobalId>(),
             any::<StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>>(),
+            any::<bool>(),
         )
-            .prop_map(|(id, description)| Self { id, description })
+            .prop_map(|(id, description, update)| Self {
+                id,
+                description,
+                update,
+            })
             .boxed()
     }
 }
@@ -277,7 +285,7 @@ impl Arbitrary for StorageCommand<mz_repr::Timestamp> {
             proptest::collection::vec(any::<RunIngestionCommand>(), 1..4)
                 .prop_map(StorageCommand::RunIngestions)
                 .boxed(),
-            proptest::collection::vec(any::<CreateSinkCommand<mz_repr::Timestamp>>(), 1..4)
+            proptest::collection::vec(any::<RunSinkCommand<mz_repr::Timestamp>>(), 1..4)
                 .prop_map(StorageCommand::CreateSinks)
                 .boxed(),
             proptest::collection::vec(
@@ -547,7 +555,7 @@ where
                 .try_for_each(|i| self.insert_new_uppers(i.description.subsource_ids(), i.update)),
             StorageCommand::CreateSinks(exports) => exports
                 .iter()
-                .try_for_each(|e| self.insert_new_uppers([e.id], false)),
+                .try_for_each(|e| self.insert_new_uppers([e.id], e.update)),
             StorageCommand::InitializationComplete
             | StorageCommand::UpdateConfiguration(_)
             | StorageCommand::AllowCompaction(_) => {
