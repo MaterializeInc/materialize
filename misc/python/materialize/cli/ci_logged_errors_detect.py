@@ -40,6 +40,8 @@ ERROR_RE = re.compile(
     | restart-materialized-1\ .*relation\ \\"fence\\"\ does\ not\ exist
     # Expected when CRDB is corrupted
     | restart-materialized-1\ .*relation\ "consensus"\ does\ not\ exist
+    # Will print a separate panic line which will be handled and contains the relevant information
+    | internal\ error:\ panic\ at\ the\ `.*`\ optimization\ stage
     ))
     .)*
     # This block contains unexpected failures, report them

@@ -83,9 +83,12 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use chrono::Utc;
+use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
+use mz_ore::metrics::MetricsRegistry;
 use mz_sqllogictest::runner::{self, Outcomes, RunConfig, Runner, WriteFmt};
 use mz_sqllogictest::util;
+use mz_tracing::CloneableEnvFilter;
 use time::Instant;
 use walkdir::WalkDir;
 
@@ -153,17 +156,38 @@ struct Args {
         value_delimiter = ';'
     )]
     system_parameter_default: Vec<KeyValueArg<String, String>>,
+    #[clap(
+        long,
+        env = "LOG_FILTER",
+        value_name = "FILTER",
+        default_value = "warn"
+    )]
+    pub log_filter: CloneableEnvFilter,
 }
 
 #[tokio::main]
 async fn main() -> ExitCode {
     mz_ore::panic::set_abort_on_panic();
-    mz_ore::test::init_logging_default("warn");
 
     let args: Args = cli::parse_args(CliConfig {
         env_prefix: Some("MZ_"),
         enable_version_flag: false,
     });
+
+    let tracing_args = TracingCliArgs {
+        startup_log_filter: args.log_filter.clone(),
+        ..Default::default()
+    };
+    let (tracing_handle, _tracing_guard) = tracing_args
+        .configure_tracing(
+            StaticTracingConfig {
+                service_name: "sqllogictest",
+                build_info: mz_environmentd::BUILD_INFO,
+            },
+            MetricsRegistry::new(),
+        )
+        .await
+        .unwrap();
 
     let config = RunConfig {
         stdout: &OutputStream::new(io::stdout(), args.timestamps),
@@ -177,6 +201,8 @@ async fn main() -> ExitCode {
         auto_transactions: args.auto_transactions,
         enable_table_keys: args.enable_table_keys,
         orchestrator_process_wrapper: args.orchestrator_process_wrapper.clone(),
+        tracing: tracing_args.clone(),
+        tracing_handle,
         system_parameter_defaults: args
             .system_parameter_default
             .clone()

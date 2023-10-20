@@ -24,6 +24,7 @@ mz-environmentd = { path = "../environmentd", default-features = false }
 mz-ore = { path = "../ore", features = ["async", "tracing_"] }
 mz-orchestrator = { path = "../orchestrator" }
 mz-orchestrator-process = { path = "../orchestrator-process" }
+mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 mz-persist-client = { path = "../persist-client" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-repr = { path = "../repr" }
@@ -33,6 +34,7 @@ mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-stash-types = { path = "../stash-types" }
 mz-storage-types = { path = "../storage-types" }
+mz-tracing = { path = "../tracing" }
 mz-cloud-resources = { path = "../cloud-resources" }
 postgres-protocol = { version = "0.6.5" }
 regex = "1.7.0"
@@ -43,7 +45,11 @@ tempfile = "3.2.0"
 time = "0.3.17"
 tracing = "0.1.37"
 tokio = "1.32.0"
-tokio-postgres = { version = "0.7.8", features = ["with-chrono-0_4", "with-uuid-1", "with-serde_json-1"] }
+tokio-postgres = { version = "0.7.8", features = [
+  "with-chrono-0_4",
+  "with-uuid-1",
+  "with-serde_json-1",
+] }
 tower-http = { version = "0.4.2", features = ["cors"] }
 uuid = "1.2.2"
 walkdir = "2.3.2"

@@ -43,6 +43,7 @@ use futures::sink::SinkExt;
 use md5::{Digest, Md5};
 use mz_controller::ControllerConfig;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
+use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
 use mz_ore::cast::{CastFrom, ReinterpretCast};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
@@ -959,8 +960,13 @@ impl<'a> RunnerInner<'a> {
             |_, _| PubSubClientConnection::noop(),
         );
         let persist_clients = Arc::new(persist_clients);
+
         let secrets_controller = Arc::clone(&orchestrator);
         let connection_context = ConnectionContext::for_tests(orchestrator.reader());
+        let orchestrator = Arc::new(TracingOrchestrator::new(
+            orchestrator,
+            config.tracing.clone(),
+        ));
         let listeners = mz_environmentd::Listeners::bind_any_local().await?;
         let host_name = format!("localhost:{}", listeners.http_local_addr().port());
         let server_config = mz_environmentd::Config {
@@ -1004,11 +1010,19 @@ impl<'a> RunnerInner<'a> {
             cluster_replica_sizes: Default::default(),
             bootstrap_default_cluster_replica_size: "1".into(),
             bootstrap_builtin_cluster_replica_size: "1".into(),
-            system_parameter_defaults: config.system_parameter_defaults.clone(),
+            system_parameter_defaults: {
+                let mut params = BTreeMap::new();
+                params.insert(
+                    "log_filter".to_string(),
+                    config.tracing.startup_log_filter.to_string(),
+                );
+                params.extend(config.system_parameter_defaults.clone());
+                params
+            },
             default_storage_cluster_size: None,
             availability_zones: Default::default(),
             connection_context,
-            tracing_handle: TracingHandle::disabled(),
+            tracing_handle: config.tracing_handle.clone(),
             storage_usage_collection_interval: Duration::from_secs(3600),
             storage_usage_retention_period: None,
             segment_api_key: None,
@@ -1726,6 +1740,8 @@ pub struct RunConfig<'a> {
     pub auto_transactions: bool,
     pub enable_table_keys: bool,
     pub orchestrator_process_wrapper: Option<String>,
+    pub tracing: TracingCliArgs,
+    pub tracing_handle: TracingHandle,
     pub system_parameter_defaults: BTreeMap<String, String>,
     /// Persist state is handled specially because:
     /// - Persist background workers do not necessarily shut down immediately once the server is
