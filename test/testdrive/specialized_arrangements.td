@@ -19,233 +19,356 @@ ALTER SYSTEM SET enable_specialized_arrangements = true
 
 > SET cluster_replica = r1;
 
-# Test that single-column indexes with fixed-length 8-byte types use specialized arrangements.
-> CREATE TABLE t_boolean (a boolean NOT NULL);
+# Test specialization to empty values.
+> CREATE TABLE v_empty(a int, b int);
 
-> INSERT INTO t_boolean VALUES (true);
+> INSERT INTO v_empty SELECT a, a FROM generate_series(1, 10) a;
 
-> CREATE DEFAULT INDEX ON t_boolean;
-
-> CREATE TABLE t_smallint (a smallint NOT NULL);
-
-> INSERT INTO t_smallint VALUES (42);
-
-> CREATE DEFAULT INDEX ON t_smallint;
-
-> CREATE TABLE t_int (a int NOT NULL);
-
-> INSERT INTO t_int VALUES (42);
-
-> CREATE DEFAULT INDEX ON t_int;
-
-> CREATE TABLE t_bigint (a bigint NOT NULL);
-
-> INSERT INTO t_bigint VALUES (42);
-
-> CREATE DEFAULT INDEX ON t_bigint;
-
-> CREATE TABLE t_uint2 (a uint2 NOT NULL);
-
-> INSERT INTO t_uint2 VALUES (42);
-
-> CREATE DEFAULT INDEX ON t_uint2;
-
-> CREATE TABLE t_uint4 (a uint4 NOT NULL);
-
-> INSERT INTO t_uint4 VALUES (42);
-
-> CREATE DEFAULT INDEX ON t_uint4;
-
-> CREATE TABLE t_uint8 (a uint8 NOT NULL);
-
-> INSERT INTO t_uint8 VALUES (42);
-
-> CREATE DEFAULT INDEX ON t_uint8;
-
-> CREATE TABLE t_real (a real NOT NULL);
-
-> INSERT INTO t_real VALUES (42);
-
-> CREATE DEFAULT INDEX ON t_real;
-
-> CREATE TABLE t_double (a double NOT NULL);
-
-> INSERT INTO t_double VALUES (42);
-
-> CREATE DEFAULT INDEX ON t_double;
-
-> CREATE TABLE t_date (a date NOT NULL);
-
-> INSERT INTO t_date VALUES (DATE '1942-04-02');
-
-> CREATE DEFAULT INDEX ON t_date;
-
-> CREATE TABLE t_time (a time NOT NULL);
-
-> INSERT INTO t_time VALUES (TIME '02:42:42');
-
-> CREATE DEFAULT INDEX ON t_time;
-
-> CREATE TABLE t_timestamp (a timestamp NOT NULL);
-
-> INSERT INTO t_timestamp VALUES (TIMESTAMP '1942-04-02 04:02:42');
-
-> CREATE DEFAULT INDEX ON t_timestamp;
-
-> CREATE TABLE t_timestamptz (a timestamp with time zone NOT NULL);
-
-> INSERT INTO t_timestamptz VALUES (TIMESTAMP '1942-04-02 04:02:42+04');
-
-> CREATE DEFAULT INDEX ON t_timestamptz;
-
-> CREATE TABLE t_interval (a interval NOT NULL);
-
-> INSERT INTO t_interval VALUES (INTERVAL '42' MINUTES);
-
-> CREATE DEFAULT INDEX ON t_interval;
-
-> CREATE TABLE t_uuid (a uuid NOT NULL);
-
-> INSERT INTO t_uuid VALUES (UUID 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11');
-
-> CREATE DEFAULT INDEX ON t_uuid;
-
-> CREATE TABLE t_oid (a oid NOT NULL);
-
-> INSERT INTO t_oid VALUES (42);
-
-> CREATE DEFAULT INDEX ON t_oid;
-
-> CREATE TABLE t_mz_timestamp (a mz_timestamp NOT NULL);
-
-> INSERT INTO t_mz_timestamp VALUES (1696841933694);
-
-> CREATE DEFAULT INDEX ON t_mz_timestamp;
-
-> CREATE TABLE t_mz_aclitem_nullable (a mz_aclitem);
-
-# Unfortunately, we cannot mint an mz_aclitem from thin air.
-> INSERT INTO t_mz_aclitem_nullable VALUES (NULL);
-
-> CREATE DEFAULT INDEX ON t_mz_aclitem_nullable;
-
-> CREATE TABLE t_aclitem_nullable (a aclitem);
-
-# Unfortunately, we cannot mint an aclitem from thin air.
-> INSERT INTO t_aclitem_nullable VALUES (NULL);
-
-> CREATE DEFAULT INDEX ON t_aclitem_nullable;
-
-# Out of the types above, uuid, interval, timestamp, timestamptz, mz_aclitem, and aclitem
-# are all too large to fit a 9-byte fixed-length representation. So, we get 13 instead of
-# 19 specialized arrangements in total.
-> SELECT COUNT(*)
-  FROM mz_internal.mz_dataflow_operator_dataflows
-  WHERE name LIKE '%ArrangeBy%[9-byte]%';
-13
-
-# Test query patterns. Note that we focus on bigint as a representative, but the same patterns
-# apply to other types as well.
-> CREATE TABLE t_bigint_nullable(a bigint);
-
-> INSERT INTO t_bigint_nullable VALUES (42), (NULL);
-
-> INSERT INTO t_bigint VALUES (43);
-
-# Illustrates a fast-path peek.
-? EXPLAIN PHYSICAL PLAN FOR
-  SELECT * FROM t_bigint WHERE a = 42;
-Explained Query (fast path):
-  Project (#0)
-    ReadIndex on=materialize.public.t_bigint t_bigint_primary_idx=[lookup value=(42)]
-
-Used Indexes:
-  - materialize.public.t_bigint_primary_idx (lookup)
-
-> SELECT * FROM t_bigint WHERE a = 42;
-42
-
-# Similar to the above, but with a full scan.
-> SELECT * FROM t_bigint WHERE a <> 43;
-42
-
-# Illustrates joins among non-nullable vs. nullable columns of the same type.
-? EXPLAIN PHYSICAL PLAN FOR
-  CREATE MATERIALIZED VIEW null_nonnull_join AS
-  SELECT * FROM t_bigint_nullable JOIN t_bigint USING (a);
-materialize.public.null_nonnull_join:
-  Join::Linear
-    linear_stage[0]
-      lookup={ relation=0, key=[#0] }
-      stream={ key=[#0], thinning=() }
-    source={ relation=1, key=[#0] }
-    ArrangeBy
-      raw=true
-      arrangements[0]={ key=[#0], permutation=id, thinning=() }
-      types=[bigint]
-      Get::Collection materialize.public.t_bigint_nullable
-        raw=true
-    Get::PassArrangements materialize.public.t_bigint
-      raw=false
-      arrangements[0]={ key=[#0], permutation=id, thinning=() }
-      types=[bigint]
-
-Source materialize.public.t_bigint_nullable
-  filter=((#0) IS NOT NULL)
-
-Used Indexes:
-  - materialize.public.t_bigint_primary_idx (differential join)
-
-> CREATE MATERIALIZED VIEW null_nonnull_join AS
-  SELECT * FROM t_bigint_nullable JOIN t_bigint USING (a);
-
-> SELECT * FROM null_nonnull_join;
-42
+> CREATE DEFAULT INDEX on v_empty;
 
 > SELECT COUNT(*)
   FROM mz_internal.mz_dataflow_operator_dataflows
-  WHERE name LIKE '%ArrangeBy%[9-byte]%';
-14
+  WHERE name LIKE '%ArrangeBy%[val: empty]%';
+1
 
-# Illustrates joins across types.
+# Fast-path peek over specialized index.
+> SELECT * FROM v_empty WHERE a = 1 AND b = 1;
+1 1
+
+# Literal lookup over specialized index.
+> SELECT COUNT(*) FROM v_empty WHERE a = 1 AND b = 1;
+1
+
+# Full scan over specialized index.
+> SELECT b FROM v_empty WHERE a = 1;
+1
+
+# Uses of specialized index along with non-specialized collection.
+> CREATE TABLE t (a int, b int);
+
+> INSERT INTO t VALUES (42, 42), (NULL, NULL);
+
+> SELECT b FROM v_empty WHERE a = 1
+  UNION ALL
+  SELECT a FROM t WHERE a IS NOT NULL
+  ORDER BY 1;
+1
+42
+
+> SELECT a FROM t WHERE a IS NOT NULL
+  EXCEPT ALL
+  SELECT b FROM v_empty WHERE a = 1
+  ORDER BY 1;
+42
+
+> INSERT INTO v_empty VALUES (42, 42);
+
+# Linear join: Trace RowUnit - Local RowUnit
 ? EXPLAIN PHYSICAL PLAN FOR
-  CREATE MATERIALIZED VIEW cross_type_join AS
-  SELECT * FROM t_bigint_nullable JOIN t_real USING (a);
-materialize.public.cross_type_join:
+  CREATE MATERIALIZED VIEW empty_val_join AS
+  SELECT v.b
+  FROM v_empty AS v
+      JOIN t ON v.a = t.a AND v.b = t.b;
+materialize.public.empty_val_join:
   Join::Linear
     linear_stage[0]
       closure
         project=(#1)
-      lookup={ relation=0, key=[bigint_to_real(#0)] }
-      stream={ key=[#0], thinning=() }
-    source={ relation=1, key=[#0] }
+        filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
+      lookup={ relation=1, key=[#0, #1] }
+      stream={ key=[#0, #1], thinning=() }
+    source={ relation=0, key=[#0, #1] }
+    Get::PassArrangements materialize.public.v_empty
+      raw=false
+      arrangements[0]={ key=[#0, #1], permutation=id, thinning=() }
+      types=[integer?, integer?]
     ArrangeBy
       raw=true
-      arrangements[0]={ key=[bigint_to_real(#0)], permutation={#0: #1}, thinning=(#0) }
-      types=[bigint]
-      Get::Collection materialize.public.t_bigint_nullable
+      arrangements[0]={ key=[#0, #1], permutation=id, thinning=() }
+      types=[integer, integer]
+      Get::Collection materialize.public.t
         raw=true
-    Get::PassArrangements materialize.public.t_real
-      raw=false
-      arrangements[0]={ key=[#0], permutation=id, thinning=() }
-      types=[real]
 
-Source materialize.public.t_bigint_nullable
-  filter=((#0) IS NOT NULL)
+Source materialize.public.t
+  filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
 
 Used Indexes:
-  - materialize.public.t_real_primary_idx (differential join)
+  - materialize.public.v_empty_primary_idx (differential join)
 
-> CREATE MATERIALIZED VIEW cross_type_join AS
-  SELECT * FROM t_bigint_nullable JOIN t_real USING (a);
+> CREATE MATERIALIZED VIEW empty_val_join AS
+  SELECT v.b
+  FROM v_empty AS v
+      JOIN t ON v.a = t.a AND v.b = t.b;
 
-> SELECT * FROM cross_type_join;
+> SELECT * FROM empty_val_join;
 42
 
 > SELECT COUNT(*)
   FROM mz_internal.mz_dataflow_operator_dataflows
-  WHERE name LIKE '%ArrangeBy%[9-byte]%';
-15
+  WHERE name LIKE '%ArrangeBy%[val: empty]%';
+2
+
+# More linear joins based on coverage: Trace RowUnit - Local RowRow
+> CREATE VIEW v_empty_a AS SELECT a FROM v_empty;
+
+> CREATE DEFAULT INDEX ON v_empty_a;
+
+? EXPLAIN PHYSICAL PLAN FOR
+  SELECT v.a, t.b
+  FROM v_empty_a AS v
+      JOIN t ON v.a = t.a;
+Explained Query:
+  Join::Linear
+    linear_stage[0]
+      closure
+        filter=((#0) IS NOT NULL)
+      lookup={ relation=1, key=[#0] }
+      stream={ key=[#0], thinning=() }
+    source={ relation=0, key=[#0] }
+    Get::PassArrangements materialize.public.v_empty_a
+      raw=false
+      arrangements[0]={ key=[#0], permutation=id, thinning=() }
+      types=[integer?]
+    ArrangeBy
+      raw=true
+      arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+      types=[integer, integer?]
+      Get::Collection materialize.public.t
+        raw=true
+
+Source materialize.public.t
+  filter=((#0) IS NOT NULL)
+
+Used Indexes:
+  - materialize.public.v_empty_a_primary_idx (differential join)
+
+> SELECT v.a, t.b
+  FROM v_empty_a AS v
+      JOIN t ON v.a = t.a;
+42 42
+
+> DROP VIEW v_empty_a;
+
+# More linear joins based on coverage: Trace RowRow - Trace RowUnit
+> CREATE INDEX v_a ON v_empty (a);
+
+> CREATE TABLE t2 (a int);
+
+> INSERT INTO t2 VALUES (42);
+
+> CREATE DEFAULT INDEX ON t2;
+
+? EXPLAIN PHYSICAL PLAN FOR
+  SELECT v.b
+  FROM v_empty AS v
+      JOIN t2 ON v.a = t2.a;
+Explained Query:
+  Join::Linear
+    linear_stage[0]
+      closure
+        project=(#1)
+        filter=((#0) IS NOT NULL)
+      lookup={ relation=1, key=[#0] }
+      stream={ key=[#0], thinning=(#1) }
+    source={ relation=0, key=[#0] }
+    Get::PassArrangements materialize.public.v_empty
+      raw=false
+      arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+      types=[integer?, integer?]
+    Get::PassArrangements materialize.public.t2
+      raw=false
+      arrangements[0]={ key=[#0], permutation=id, thinning=() }
+      types=[integer?]
+
+Used Indexes:
+  - materialize.public.v_a (differential join)
+  - materialize.public.t2_primary_idx (differential join)
+
+> SELECT v.b
+  FROM v_empty AS v
+      JOIN t2 ON v.a = t2.a;
+42
+
+# More linear joins based on coverage: Trace RowUnit - Trace RowUnit
+> CREATE INDEX t_a_b ON t(a, b);
+
+? EXPLAIN PHYSICAL PLAN FOR
+  SELECT v.b
+  FROM v_empty AS v
+      JOIN t ON v.a = t.a AND v.b = t.b;
+Explained Query:
+  Join::Linear
+    linear_stage[0]
+      closure
+        project=(#1)
+        filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
+      lookup={ relation=1, key=[#0, #1] }
+      stream={ key=[#0, #1], thinning=() }
+    source={ relation=0, key=[#0, #1] }
+    Get::PassArrangements materialize.public.v_empty
+      raw=false
+      arrangements[0]={ key=[#0, #1], permutation=id, thinning=() }
+      types=[integer?, integer?]
+    Get::PassArrangements materialize.public.t
+      raw=false
+      arrangements[0]={ key=[#0, #1], permutation=id, thinning=() }
+      types=[integer?, integer?]
+
+Used Indexes:
+  - materialize.public.v_empty_primary_idx (differential join)
+  - materialize.public.t_a_b (differential join)
+
+> SELECT v.b
+  FROM v_empty AS v
+      JOIN t ON v.a = t.a AND v.b = t.b;
+42
+
+# Cover a delta join as well.
+? EXPLAIN PHYSICAL PLAN FOR
+  SELECT (v.b + t.a + t2.a) / 3
+  FROM v_empty AS v
+      JOIN t ON v.a = t.a AND v.b = t.b
+      JOIN t2 ON v.a = t2.a;
+Explained Query:
+  Join::Delta
+    plan_path[0]
+      delta_stage[1]
+        closure
+          project=(#1)
+        lookup={ relation=2, key=[#0] }
+        stream={ key=[#0], thinning=(#1) }
+      delta_stage[0]
+        closure
+          project=(#0, #2)
+        lookup={ relation=1, key=[#0, #1] }
+        stream={ key=[#0, #1], thinning=(#2) }
+      initial_closure
+        project=(#0..=#2)
+        filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
+        map=((((#1 + #0) + #0) / 3))
+      source={ relation=0, key=[#0] }
+    plan_path[1]
+      delta_stage[1]
+        closure
+          project=(#1)
+        lookup={ relation=2, key=[#0] }
+        stream={ key=[#0], thinning=(#1) }
+      delta_stage[0]
+        closure
+          project=(#0, #2)
+          filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
+          map=((((#1 + #0) + #0) / 3))
+        lookup={ relation=0, key=[#0, #1] }
+        stream={ key=[#0, #1], thinning=() }
+      source={ relation=1, key=[#0, #1] }
+    plan_path[2]
+      delta_stage[1]
+        closure
+          project=(#2)
+        lookup={ relation=1, key=[#0, #1] }
+        stream={ key=[#1, #0], thinning=(#2) }
+      delta_stage[0]
+        closure
+          project=(#1, #0, #2)
+          filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
+          map=((((#1 + #0) + #0) / 3))
+        lookup={ relation=0, key=[#0] }
+        stream={ key=[#0], thinning=() }
+      source={ relation=2, key=[#0] }
+    Get::PassArrangements materialize.public.v_empty
+      raw=false
+      arrangements[0]={ key=[#0, #1], permutation=id, thinning=() }
+      arrangements[1]={ key=[#0], permutation=id, thinning=(#1) }
+      types=[integer?, integer?]
+    Get::PassArrangements materialize.public.t
+      raw=false
+      arrangements[0]={ key=[#0, #1], permutation=id, thinning=() }
+      types=[integer?, integer?]
+    Get::PassArrangements materialize.public.t2
+      raw=false
+      arrangements[0]={ key=[#0], permutation=id, thinning=() }
+      types=[integer?]
+
+Used Indexes:
+  - materialize.public.v_empty_primary_idx (delta join 1st input (full scan))
+  - materialize.public.v_a (delta join 1st input (full scan))
+  - materialize.public.t2_primary_idx (delta join lookup)
+  - materialize.public.t_a_b (delta join lookup)
+
+> SELECT (v.b + t.a + t2.a) / 3
+  FROM v_empty AS v
+      JOIN t ON v.a = t.a AND v.b = t.b
+      JOIN t2 ON v.a = t2.a;
+42
+
+> DROP INDEX v_a;
+
+> DROP INDEX t_a_b;
+
+> DROP TABLE t2;
+
+? EXPLAIN PHYSICAL PLAN FOR
+  CREATE MATERIALIZED VIEW empty_val_distinct_join AS
+  SELECT v.b
+  FROM v_empty AS v
+      JOIN (SELECT DISTINCT a, b FROM t) AS t ON v.a = t.a AND v.b = t.b;
+materialize.public.empty_val_distinct_join:
+  Join::Linear
+    linear_stage[0]
+      closure
+        project=(#1)
+        filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
+      lookup={ relation=0, key=[#0, #1] }
+      stream={ key=[#0, #1], thinning=() }
+    source={ relation=1, key=[#0, #1] }
+    Get::PassArrangements materialize.public.v_empty
+      raw=false
+      arrangements[0]={ key=[#0, #1], permutation=id, thinning=() }
+      types=[integer?, integer?]
+    Reduce::Distinct
+      val_plan
+        project=()
+      key_plan=id
+      Get::Collection materialize.public.t
+        raw=true
+
+Source materialize.public.t
+  filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
+
+Used Indexes:
+  - materialize.public.v_empty_primary_idx (differential join)
+
+> CREATE MATERIALIZED VIEW empty_val_distinct_join AS
+  SELECT v.b
+  FROM v_empty AS v
+      JOIN (SELECT DISTINCT a, b FROM t) AS t ON v.a = t.a AND v.b = t.b;
+
+> SELECT * FROM empty_val_distinct_join;
+42
+
+# Note DistinctBy introduces two arrangements, one input and one output one.
+> SELECT COUNT(*)
+  FROM mz_internal.mz_dataflow_operator_dataflows
+  WHERE name LIKE '%ArrangeBy%[val: empty]%'
+     OR name LIKE '%DistinctBy%[val: empty]%';
+4
+
+# Two or more basic distinct aggregates should generate only one validating
+# reduction that cannot use an empty value arrangement for distinctness.
+> CREATE MATERIALIZED VIEW basic_agg_distinct AS
+  SELECT
+    array_agg(DISTINCT a) AS array_a,
+    array_agg(DISTINCT b) AS array_b,
+    list_agg(DISTINCT a) AS list_a
+  FROM v_empty
+  WHERE a = 42;
+
+# Note DistinctBy introduces two arrangements, one input and one output one.
+> SELECT COUNT(*)
+  FROM mz_internal.mz_dataflow_operator_dataflows
+  WHERE name LIKE '%Arranged ReduceInaccumulable Distinct%[val: empty]%'
+     OR name LIKE '%ReduceInaccumulable Distinct%[val: empty]%';
+5
 
 > RESET cluster;
 

@@ -1096,12 +1096,18 @@ impl<'a> RunnerInner<'a> {
     async fn ensure_fixed_features(&self) -> Result<(), anyhow::Error> {
         // We turn on enable_monotonic_oneshot_selects,
         // as that feature has reached enough maturity to do so.
+        // We also turn on enable_specialized_arrangements, as we wish to get
+        // as much coverage of this feature as we can.
         // TODO(vmarcos): Remove this code when we retire these feature flags.
         self.system_client
             .execute(
                 "ALTER SYSTEM SET enable_monotonic_oneshot_selects = on",
                 &[],
             )
+            .await?;
+
+        self.system_client
+            .execute("ALTER SYSTEM SET enable_specialized_arrangements = on", &[])
             .await?;
 
         // Dangerous functions are useful for tests so we enable it for all tests.

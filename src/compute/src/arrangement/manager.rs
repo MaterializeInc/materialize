@@ -17,8 +17,7 @@ use std::time::Instant;
 use differential_dataflow::lattice::{antichain_join, Lattice};
 use differential_dataflow::operators::arrange::ShutdownButton;
 use differential_dataflow::trace::TraceReader;
-use mz_repr::fixed_length::Bytes9;
-use mz_repr::{ColumnType, Diff, GlobalId, Row, Timestamp};
+use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
@@ -112,10 +111,7 @@ impl TraceManager {
 /// arrangements.
 #[derive(Clone)]
 pub enum SpecializedTraceHandle {
-    Bytes9Row(
-        Vec<ColumnType>,
-        TraceRowHandle<Bytes9, Row, Timestamp, Diff>,
-    ),
+    RowUnit(TraceRowHandle<Row, (), Timestamp, Diff>),
     RowRow(TraceRowHandle<Row, Row, Timestamp, Diff>),
 }
 
@@ -123,7 +119,7 @@ impl SpecializedTraceHandle {
     /// Obtains the logical compaction frontier for the underlying trace handle.
     fn get_logical_compaction(&mut self) -> AntichainRef<Timestamp> {
         match self {
-            SpecializedTraceHandle::Bytes9Row(_, handle) => handle.get_logical_compaction(),
+            SpecializedTraceHandle::RowUnit(handle) => handle.get_logical_compaction(),
             SpecializedTraceHandle::RowRow(handle) => handle.get_logical_compaction(),
         }
     }
@@ -131,7 +127,7 @@ impl SpecializedTraceHandle {
     /// Advances the logical compaction frontier for the underlying trace handle.
     pub fn set_logical_compaction(&mut self, frontier: AntichainRef<Timestamp>) {
         match self {
-            SpecializedTraceHandle::Bytes9Row(_, handle) => handle.set_logical_compaction(frontier),
+            SpecializedTraceHandle::RowUnit(handle) => handle.set_logical_compaction(frontier),
             SpecializedTraceHandle::RowRow(handle) => handle.set_logical_compaction(frontier),
         }
     }
@@ -139,9 +135,7 @@ impl SpecializedTraceHandle {
     /// Advances the physical compaction frontier for the underlying trace handle.
     pub fn set_physical_compaction(&mut self, frontier: AntichainRef<Timestamp>) {
         match self {
-            SpecializedTraceHandle::Bytes9Row(_, handle) => {
-                handle.set_physical_compaction(frontier)
-            }
+            SpecializedTraceHandle::RowUnit(handle) => handle.set_physical_compaction(frontier),
             SpecializedTraceHandle::RowRow(handle) => handle.set_physical_compaction(frontier),
         }
     }
@@ -149,7 +143,7 @@ impl SpecializedTraceHandle {
     /// Reads the upper frontier of the underlying trace handle.
     pub fn read_upper(&mut self, target: &mut Antichain<Timestamp>) {
         match self {
-            SpecializedTraceHandle::Bytes9Row(_, handle) => handle.read_upper(target),
+            SpecializedTraceHandle::RowUnit(handle) => handle.read_upper(target),
             SpecializedTraceHandle::RowRow(handle) => handle.read_upper(target),
         }
     }
@@ -174,7 +168,7 @@ impl SpecializedTraceHandle {
         T: Lattice + Refines<G::Timestamp>,
     {
         match self {
-            SpecializedTraceHandle::Bytes9Row(key_types, handle) => {
+            SpecializedTraceHandle::RowUnit(handle) => {
                 let (oks, oks_button) =
                     handle.import_frontier_core(&scope.parent, name, since, until);
                 let oks = if let Some(logger) = logger {
@@ -183,7 +177,7 @@ impl SpecializedTraceHandle {
                     oks
                 };
                 (
-                    SpecializedArrangementImport::Bytes9Row(key_types.clone(), oks.enter(scope)),
+                    SpecializedArrangementImport::RowUnit(oks.enter(scope)),
                     oks_button,
                 )
             }

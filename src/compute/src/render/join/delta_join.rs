@@ -324,11 +324,11 @@ where
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
 {
     match trace {
-        SpecializedArrangement::Bytes9Row(key_types, inner) => build_halfjoin(
+        SpecializedArrangement::RowUnit(inner) => build_halfjoin(
             updates,
             inner,
-            Some(key_types),
             None,
+            Some(vec![]),
             prev_key,
             prev_thinning,
             comparison,
@@ -369,11 +369,11 @@ where
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
 {
     match trace {
-        SpecializedArrangementImport::Bytes9Row(key_types, inner) => build_halfjoin(
+        SpecializedArrangementImport::RowUnit(inner) => build_halfjoin(
             updates,
             inner,
-            Some(key_types),
             None,
+            Some(vec![]),
             prev_key,
             prev_thinning,
             comparison,
@@ -544,10 +544,10 @@ where
     G::Timestamp: crate::render::RenderTimestamp,
 {
     match trace {
-        SpecializedArrangement::Bytes9Row(key_types, inner) => build_update_stream(
+        SpecializedArrangement::RowUnit(inner) => build_update_stream(
             inner,
-            Some(key_types),
             None,
+            Some(vec![]),
             as_of,
             source_relation,
             initial_closure,
@@ -571,10 +571,10 @@ where
     G::Timestamp: Lattice + crate::render::RenderTimestamp + Refines<T>,
 {
     match trace {
-        SpecializedArrangementImport::Bytes9Row(key_types, inner) => build_update_stream(
+        SpecializedArrangementImport::RowUnit(inner) => build_update_stream(
             inner,
-            Some(key_types),
             None,
+            Some(vec![]),
             as_of,
             source_relation,
             initial_closure,
