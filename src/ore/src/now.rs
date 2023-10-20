@@ -27,9 +27,15 @@ pub type EpochMillis = u64;
 #[allow(clippy::as_conversions)]
 pub fn to_datetime(millis: EpochMillis) -> DateTime<Utc> {
     let dur = std::time::Duration::from_millis(millis);
-    Utc.timestamp_opt(dur.as_secs() as i64, dur.subsec_nanos())
+    match Utc
+        .timestamp_opt(dur.as_secs() as i64, dur.subsec_nanos())
         .single()
-        .expect("ambiguous timestamp")
+    {
+        Some(single) => single,
+        None => {
+            panic!("Ambiguous timestamp: {millis} millis")
+        }
+    }
 }
 
 /// A function that returns system or mocked time.

@@ -539,7 +539,7 @@ impl Coordinator {
     #[tracing::instrument(level = "debug", skip(self))]
     pub(super) async fn sequence_create_table(
         &mut self,
-        session: &mut Session,
+        ctx: &mut ExecuteContext,
         plan: plan::CreateTablePlan,
         resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
@@ -550,7 +550,7 @@ impl Coordinator {
         } = plan;
 
         let conn_id = if table.temporary {
-            Some(session.conn_id())
+            Some(ctx.session().conn_id())
         } else {
             None
         };
@@ -570,12 +570,15 @@ impl Coordinator {
             oid: table_oid,
             name: name.clone(),
             item: CatalogItem::Table(table.clone()),
-            owner_id: *session.current_role_id(),
+            owner_id: *ctx.session().current_role_id(),
         }];
-        match self.catalog_transact(Some(session), ops).await {
+        match self.catalog_transact(Some(ctx.session()), ops).await {
             Ok(()) => {
                 // Determine the initial validity for the table.
                 let register_ts = self.get_local_write_ts().await.timestamp;
+                if let Some(id) = ctx.extra().contents() {
+                    self.set_statement_execution_timestamp(id, register_ts);
+                }
 
                 let collection_desc = CollectionDescription::from_desc(
                     table.desc.clone(),
@@ -617,10 +620,11 @@ impl Coordinator {
             Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
-                session.add_notice(AdapterNotice::ObjectAlreadyExists {
-                    name: name.item,
-                    ty: "table",
-                });
+                ctx.session_mut()
+                    .add_notice(AdapterNotice::ObjectAlreadyExists {
+                        name: name.item,
+                        ty: "table",
+                    });
                 Ok(ExecuteResponse::CreatedTable)
             }
             Err(err) => Err(err),
@@ -2827,6 +2831,9 @@ impl Coordinator {
             .await?
             .timestamp_context
             .timestamp_or_default();
+        if let Some(id) = ctx.extra().contents() {
+            self.set_statement_execution_timestamp(id, as_of);
+        }
 
         let up_to = up_to
             .map(|expr| Coordinator::evaluate_when(self.catalog().state(), expr, ctx.session_mut()))

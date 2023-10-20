@@ -100,7 +100,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::cast::CastLossy;
 use mz_ore::cast::TryCastFrom;
 use mz_ore::collections::CollectionExt;
-use mz_ore::now::NowFn;
+use mz_ore::now::{to_datetime, NowFn};
 use mz_ore::retry::Retry;
 use mz_ore::{
     assert_contains,
@@ -343,7 +343,7 @@ ORDER BY mseh.began_at;",
 }
 
 #[mz_ore::test]
-fn test_statement_logging_selects() {
+fn test_statement_logging_basic() {
     let (_server, mut client) = setup_statement_logging(1.0, 1.0);
     client.execute("SELECT 1", &[]).unwrap();
     // We test that queries of this view execute on a cluster.
@@ -359,6 +359,8 @@ fn test_statement_logging_selects() {
     client.execute("CREATE DEFAULT INDEX i ON v", &[]).unwrap();
     client.execute("SELECT * FROM v", &[]).unwrap();
     let _ = client.execute("SELECT 1/0", &[]);
+    client.execute("CREATE TABLE t (x int)", &[]).unwrap();
+    client.execute("SELECT * FROM t", &[]).unwrap();
 
     #[derive(Debug)]
     struct Record {
@@ -370,12 +372,13 @@ fn test_statement_logging_selects() {
         prepared_at: DateTime<Utc>,
         execution_strategy: Option<String>,
         rows_returned: Option<i64>,
+        execution_timestamp: Option<u64>,
     }
 
     let result = Retry::default()
         .max_duration(Duration::from_secs(30))
         .retry(|_| {
-            let sl_selects = client
+            let sl_results = client
                 .query(
                     "SELECT
     mseh.sample_rate,
@@ -385,7 +388,8 @@ fn test_statement_logging_selects() {
     mseh.error_message,
     mpsh.prepared_at,
     mseh.execution_strategy,
-    mseh.rows_returned
+    mseh.rows_returned,
+    mseh.execution_timestamp
 FROM
     mz_internal.mz_statement_execution_history AS mseh
         LEFT JOIN
@@ -393,17 +397,19 @@ FROM
             ON mseh.prepared_statement_id = mpsh.id
 WHERE mpsh.sql ~~ 'SELECT%'
 AND mpsh.sql !~ '%unique string to prevent this query showing up in results after retries%'
+OR mpsh.sql ~~ 'CREATE TABLE%'
 ORDER BY mseh.began_at",
                     &[],
                 )
                 .unwrap();
-            if sl_selects.len() == 4 {
-                Ok(sl_selects)
+
+            if sl_results.len() == 6 {
+                Ok(sl_results)
             } else {
-                Err(sl_selects)
+                Err(sl_results)
             }
         });
-    let sl_selects = match result {
+    let sl_results = match result {
         Ok(rows) => rows
             .into_iter()
             .map(|r| Record {
@@ -415,42 +421,71 @@ ORDER BY mseh.began_at",
                 prepared_at: r.get(5),
                 execution_strategy: r.get(6),
                 rows_returned: r.get(7),
+                execution_timestamp: r.get::<_, Option<UInt8>>(8).map(|UInt8(val)| val),
             })
             .collect::<Vec<_>>(),
         Err(rows) => {
-            panic!("number of results never became correct: {rows:?}")
+            panic!("number of results never became correct: {rows:?}");
         }
     };
-    for r in &sl_selects {
+    // The two queries on generate_series(1,10001) execute at the maximum timestamp
+    assert_eq!(
+        sl_results
+            .iter()
+            .filter(|r| r.execution_timestamp == Some(u64::MAX))
+            .count(),
+        2
+    );
+    // The two queries that can be satisfied by envd (SELECT 1 and SELECT 1/0) have no execution timestamp
+    assert_eq!(
+        sl_results
+            .iter()
+            .filter(|r| r.execution_timestamp.is_none())
+            .count(),
+        2
+    );
+    // All other queries have an execution timestamp, in particular, including `CREATE TABLE`.
+    assert_eq!(sl_results.len(), 6);
+    for r in &sl_results {
         assert_eq!(r.sample_rate, 1.0);
         assert!(r.prepared_at <= r.began_at);
         assert!(r.began_at <= r.finished_at);
+        // It would be nice to be able to control
+        // execution timestamp via a `NowFn`, but
+        // that is hard to get right and interferes with our logic
+        // about when to flush to persist. So instead, just check that they're sane.
+        if let Some(ts) = r.execution_timestamp {
+            if ts != u64::MAX {
+                let ts = to_datetime(ts);
+                assert!((ts - r.prepared_at).abs() < chrono::Duration::seconds(5))
+            }
+        }
     }
-    assert_eq!(sl_selects[0].rows_returned, Some(1));
-    assert_eq!(sl_selects[0].finished_status, "success");
+    assert_eq!(sl_results[0].rows_returned, Some(1));
+    assert_eq!(sl_results[0].finished_status, "success");
     assert_eq!(
-        sl_selects[0].execution_strategy.as_ref().unwrap(),
+        sl_results[0].execution_strategy.as_ref().unwrap(),
         "constant"
     );
-    assert_eq!(sl_selects[1].rows_returned, Some(10001));
-    assert_eq!(sl_selects[1].finished_status, "success");
+    assert_eq!(sl_results[1].rows_returned, Some(10001));
+    assert_eq!(sl_results[1].finished_status, "success");
     assert_eq!(
-        sl_selects[1].execution_strategy.as_ref().unwrap(),
+        sl_results[1].execution_strategy.as_ref().unwrap(),
         "standard"
     );
-    assert_eq!(sl_selects[2].rows_returned, Some(10001));
-    assert_eq!(sl_selects[2].finished_status, "success");
+    assert_eq!(sl_results[2].rows_returned, Some(10001));
+    assert_eq!(sl_results[2].finished_status, "success");
     assert_eq!(
-        sl_selects[2].execution_strategy.as_ref().unwrap(),
+        sl_results[2].execution_strategy.as_ref().unwrap(),
         "fast-path"
     );
-    assert_eq!(sl_selects[3].finished_status, "error");
-    assert!(sl_selects[3]
+    assert_eq!(sl_results[3].finished_status, "error");
+    assert!(sl_results[3]
         .error_message
         .as_ref()
         .unwrap()
         .contains("division by zero"));
-    assert!(sl_selects[3].rows_returned.is_none());
+    assert!(sl_results[3].rows_returned.is_none());
 }
 
 #[mz_ore::test]
