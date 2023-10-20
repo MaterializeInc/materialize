@@ -42,19 +42,19 @@ use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
 use mz_timely_util::buffer::ConsolidateBuffer;
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
+use mz_timely_util::probe::ProbeNotify;
 use timely::communication::Push;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::Bundle;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
+use timely::dataflow::operators::Leave;
 use timely::dataflow::operators::{Capability, OkErr};
 use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Feedback};
-use timely::dataflow::operators::{Enter, Leave};
 use timely::dataflow::scopes::Child;
 use timely::dataflow::ScopeParent;
 use timely::dataflow::{Scope, Stream};
 use timely::order::TotalOrder;
 use timely::progress::timestamp::PathSummary;
-use timely::progress::timestamp::Refines;
 use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
 use timely::scheduling::Activator;
@@ -95,7 +95,7 @@ pub fn persist_source<G>(
     as_of: Option<Antichain<Timestamp>>,
     until: Antichain<Timestamp>,
     map_filter_project: Option<&mut MfpPlan>,
-    flow_control: Option<FlowControl<G>>,
+    max_inflight_bytes: Option<usize>,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
     Stream<G, (DataflowError, Timestamp, Diff)>,
@@ -104,9 +104,33 @@ pub fn persist_source<G>(
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
 {
+    let shard_metrics = persist_clients.shard_metrics(&metadata.data_shard, &source_id.to_string());
+
     let (stream, token) = scope.scoped(
         &format!("skip_granular_backpressure({})", source_id),
         |scope| {
+            let (flow_control, feedback_handle) = match max_inflight_bytes {
+                Some(max_inflight_bytes) => {
+                    let backpressure_metrics = BackpressureMetrics {
+                        emitted_bytes: Arc::clone(&shard_metrics.backpressure_emitted_bytes),
+                        last_backpressured_bytes: Arc::clone(
+                            &shard_metrics.backpressure_last_backpressured_bytes,
+                        ),
+                        retired_bytes: Arc::clone(&shard_metrics.backpressure_retired_bytes),
+                    };
+
+                    let (feedback_handle, feedback_data) = scope.feedback(Default::default());
+                    let flow_control = FlowControl {
+                        progress_stream: feedback_data,
+                        max_inflight_bytes,
+                        summary: (Default::default(), 1),
+                        metrics: Some(backpressure_metrics),
+                    };
+                    (Some(flow_control), Some(feedback_handle))
+                }
+                None => (None, None),
+            };
+
             let (stream, token) = persist_source_core(
                 scope,
                 source_id,
@@ -115,13 +139,23 @@ where
                 as_of,
                 until,
                 map_filter_project,
-                flow_control.map(|fc| FlowControl {
-                    progress_stream: fc.progress_stream.enter(scope),
-                    max_inflight_bytes: fc.max_inflight_bytes,
-                    summary: Refines::to_inner(fc.summary),
-                    metrics: fc.metrics,
-                }),
+                flow_control,
             );
+
+            let stream = match feedback_handle {
+                Some(feedback_handle) => {
+                    let handle = mz_timely_util::probe::Handle::default();
+                    let probe = mz_timely_util::probe::source(
+                        scope.clone(),
+                        format!("upsert_probe({source_id})"),
+                        handle.clone(),
+                    );
+                    probe.connect_loop(feedback_handle);
+                    stream.probe_notify_with(vec![handle])
+                }
+                None => stream,
+            };
+
             (stream.leave(), token)
         },
     );
@@ -905,7 +939,7 @@ mod tests {
     use mz_persist_types::codec_impls::UnitSchema;
     use mz_persist_types::columnar::{PartEncoder, Schema};
     use mz_persist_types::part::PartBuilder;
-    use timely::dataflow::operators::Probe;
+    use timely::dataflow::operators::{Enter, Probe};
     use tokio::sync::mpsc::unbounded_channel;
     use tokio::sync::oneshot;
 

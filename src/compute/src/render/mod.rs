@@ -114,7 +114,6 @@ use mz_compute_types::plan::Plan;
 use mz_expr::{EvalError, Id};
 use mz_repr::{Diff, GlobalId};
 use mz_storage_operators::persist_source;
-use mz_storage_operators::persist_source::FlowControl;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
@@ -187,10 +186,6 @@ pub fn build_compute_dataflow<A: Allocate>(
 
     let worker_logging = timely_worker.log_register().get("timely");
 
-    // Probe providing feedback to `persist_source` flow control.
-    // Only set if the dataflow instantiates any `persist_source`s.
-    let mut flow_control_probe: Option<probe::Handle<_>> = None;
-
     let name = format!("Dataflow: {}", &dataflow.debug_name);
     let input_name = format!("InputRegion: {}", &dataflow.debug_name);
     let build_name = format!("BuildRegion: {}", &dataflow.debug_name);
@@ -211,20 +206,6 @@ pub fn build_compute_dataflow<A: Allocate>(
                             .expect("Linear operators should always be valid")
                     });
 
-                    let probe = flow_control_probe.get_or_insert_with(Default::default);
-                    let flow_control_input = probe::source(
-                        inner.clone(),
-                        format!("flow_control_input({source_id})"),
-                        probe.clone(),
-                    );
-                    let flow_control = FlowControl {
-                        progress_stream: flow_control_input,
-                        max_inflight_bytes: compute_state.dataflow_max_inflight_bytes,
-                        summary: mz_repr::Timestamp::minimum().step_forward(),
-                        // TODO(guswynn): add metrics for compute flow control
-                        metrics: None,
-                    };
-
                     // Note: For correctness, we require that sources only emit times advanced by
                     // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
                     let (mut ok_stream, err_stream, token) = persist_source::persist_source(
@@ -235,7 +216,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                         dataflow.as_of.clone(),
                         dataflow.until.clone(),
                         mfp.as_mut(),
-                        Some(flow_control),
+                        Some(compute_state.dataflow_max_inflight_bytes),
                     );
 
                     // If `mfp` is non-identity, we need to apply what remains.
@@ -279,7 +260,6 @@ pub fn build_compute_dataflow<A: Allocate>(
                 &collection.index_flow_control_probes
             })
             .cloned()
-            .chain(flow_control_probe)
             .collect();
 
         // If there exists a recursive expression, we'll need to use a non-region scope,
