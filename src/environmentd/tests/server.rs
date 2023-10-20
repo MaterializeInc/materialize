@@ -245,7 +245,7 @@ fn test_statement_logging_immediate() {
     let successful_immediates: &[&str] = &[
         "CREATE VIEW v AS SELECT 1;",
         "CREATE DEFAULT INDEX i ON v;",
-        "CREATE TABLE t (x int);",
+        "CREATE TABLE t (x bigint);",
         "INSERT INTO t VALUES (1), (2), (3)",
         "UPDATE t SET x=x+1",
         "DELETE FROM t;",
@@ -396,7 +396,8 @@ FROM
             mz_internal.mz_prepared_statement_history AS mpsh
             ON mseh.prepared_statement_id = mpsh.id
 WHERE mpsh.sql ~~ 'SELECT%'
-AND mpsh.sql !~ '%unique string to prevent this query showing up in results after retries%'
+AND mpsh.sql !~~ '%unique string to prevent this query showing up in results after retries%'
+AND mpsh.sql !~~ '%pg_catalog.pg_type%' --this gets executed behind the scenes by tokio-postgres
 OR mpsh.sql ~~ 'CREATE TABLE%'
 ORDER BY mseh.began_at",
                     &[],
@@ -406,7 +407,7 @@ ORDER BY mseh.began_at",
             if sl_results.len() == 6 {
                 Ok(sl_results)
             } else {
-                Err(sl_results)
+                Err(sl_results.len())
             }
         });
     let sl_results = match result {
@@ -425,7 +426,7 @@ ORDER BY mseh.began_at",
             })
             .collect::<Vec<_>>(),
         Err(rows) => {
-            panic!("number of results never became correct: {rows:?}");
+            panic!("number of results never became correct: {rows}");
         }
     };
     // The two queries on generate_series(1,10001) execute at the maximum timestamp
