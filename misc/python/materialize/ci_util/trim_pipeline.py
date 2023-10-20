@@ -12,6 +12,7 @@
 import argparse
 import subprocess
 import sys
+from pathlib import Path
 
 import yaml
 
@@ -58,6 +59,11 @@ def main() -> int:
         ["buildkite-agent", "pipeline", "upload", "--replace"],
         stdin=yaml.dump(new_steps).encode(),
     )
+
+    # Upload a dummy JUnit report so that the "Analyze tests" step doesn't fail
+    # if we trim away all the JUnit report-generating steps.
+    Path("junit_dummy.xml").write_text("")
+    spawn.runv(["buildkite-agent", "artifact", "upload", "junit_dummy.xml"])
 
     return 0
 

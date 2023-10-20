@@ -85,15 +85,15 @@ so it is executed.""",
             print(
                 "Repository glue code has changed, so the trimmed pipeline below does not apply"
             )
-            trim_pipeline(copy.deepcopy(pipeline), args.coverage)
+            trim_tests_pipeline(copy.deepcopy(pipeline), args.coverage)
         else:
             print("--- Trimming unchanged steps from pipeline")
-            trim_pipeline(pipeline, args.coverage)
+            trim_tests_pipeline(pipeline, args.coverage)
 
         # Upload a dummy JUnit report so that the "Analyze tests" step doesn't fail
         # if we trim away all the JUnit report-generating steps.
-        Path("junit-dummy.xml").write_text("")
-        spawn.runv(["buildkite-agent", "artifact", "upload", "junit-dummy.xml"])
+        Path("junit_dummy.xml").write_text("")
+        spawn.runv(["buildkite-agent", "artifact", "upload", "junit_dummy.xml"])
 
     if args.coverage:
         pipeline["env"]["CI_BUILDER_SCCACHE"] = 1
@@ -246,7 +246,7 @@ def add_test_selection_block(pipeline: Any, pipeline_name: str) -> None:
     pipeline["steps"].insert(0, selection_step)
 
 
-def trim_pipeline(pipeline: Any, coverage: bool) -> None:
+def trim_tests_pipeline(pipeline: Any, coverage: bool) -> None:
     """Trim pipeline steps whose inputs have not changed in this branch.
 
     Steps are assigned inputs in two ways:
