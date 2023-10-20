@@ -18,12 +18,15 @@ from materialize.scalability.result_analyzer import (
 from materialize.scalability.workload_result import WorkloadResult
 
 COL_CONCURRENCY = "concurrency"
+COL_WORKLOAD = "workload"
 COL_COUNT = "count"
 COL_TPS = "tps"
 COL_TPS_DIFF = "tps_diff"
 COL_TPS_DIFF_PERC = "tps_diff_perc"
-COL_TPS_BASELINE = "tps_x"
-COL_TPS_OTHER = "tps_y"
+COL_TPS_BASELINE = "baseline_tps"
+COL_TPS_OTHER = "other_tps"
+COL_INFO_BASELINE = "baseline_info"
+COL_INFO_OTHER = "other_info"
 
 
 class DefaultResultAnalyzer(ResultAnalyzer):
@@ -68,23 +71,13 @@ class DefaultResultAnalyzer(ResultAnalyzer):
     ) -> None:
         # tps = transactions per seconds (higher is better)
 
-        columns_to_keep = [COL_COUNT, COL_CONCURRENCY, COL_TPS]
-        tps_per_endpoint = regression_baseline_result.df_totals[columns_to_keep].merge(
-            other_result.df_totals[columns_to_keep], on=[COL_COUNT, COL_CONCURRENCY]
+        tps_per_endpoint = self._merge_endpoint_result_frames(
+            regression_baseline_result.df_totals, other_result.df_totals
         )
-
-        tps_per_endpoint[COL_TPS_DIFF] = (
-            tps_per_endpoint[COL_TPS_OTHER] - tps_per_endpoint[COL_TPS_BASELINE]
+        self._enrich_result_frame(tps_per_endpoint, baseline_endpoint, other_endpoint)
+        entries_exceeding_threshold = self._filter_entries_above_threshold(
+            tps_per_endpoint
         )
-        tps_per_endpoint[COL_TPS_DIFF_PERC] = (
-            tps_per_endpoint[COL_TPS_DIFF] / tps_per_endpoint[COL_TPS_BASELINE]
-        )
-
-        entries_exceeding_threshold = tps_per_endpoint.loc[
-            # keep entries x% worse than the baseline
-            tps_per_endpoint[COL_TPS_DIFF_PERC] * (-1)
-            > self.max_deviation_in_percent
-        ]
 
         self.collect_regressions(
             regression_outcome,
@@ -93,6 +86,45 @@ class DefaultResultAnalyzer(ResultAnalyzer):
             other_endpoint,
             entries_exceeding_threshold,
         )
+
+    def _merge_endpoint_result_frames(
+        self, regression_baseline_data: pd.DataFrame, other_data: pd.DataFrame
+    ) -> pd.DataFrame:
+        merge_columns = [COL_COUNT, COL_CONCURRENCY, COL_WORKLOAD]
+        columns_to_keep = merge_columns + [COL_TPS]
+        tps_per_endpoint = regression_baseline_data[columns_to_keep].merge(
+            other_data[columns_to_keep], on=merge_columns
+        )
+
+        tps_per_endpoint.rename(
+            columns={f"{COL_TPS}_x": COL_TPS_BASELINE, f"{COL_TPS}_y": COL_TPS_OTHER},
+            inplace=True,
+        )
+        return tps_per_endpoint
+
+    def _enrich_result_frame(
+        self,
+        tps_per_endpoint: pd.DataFrame,
+        baseline_endpoint: Endpoint,
+        other_endpoint: Endpoint,
+    ) -> None:
+        tps_per_endpoint[COL_TPS_DIFF] = (
+            tps_per_endpoint[COL_TPS_OTHER] - tps_per_endpoint[COL_TPS_BASELINE]
+        )
+        tps_per_endpoint[COL_TPS_DIFF_PERC] = (
+            tps_per_endpoint[COL_TPS_DIFF] / tps_per_endpoint[COL_TPS_BASELINE]
+        )
+        tps_per_endpoint[COL_INFO_BASELINE] = baseline_endpoint.name()
+        tps_per_endpoint[COL_INFO_OTHER] = other_endpoint.name()
+
+    def _filter_entries_above_threshold(
+        self, tps_per_endpoint: pd.DataFrame
+    ) -> pd.DataFrame:
+        return tps_per_endpoint.loc[
+            # keep entries x% worse than the baseline
+            tps_per_endpoint[COL_TPS_DIFF_PERC] * (-1)
+            > self.max_deviation_in_percent
+        ]
 
     def collect_regressions(
         self,
