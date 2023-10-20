@@ -310,7 +310,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     endpoints: list[Endpoint] = []
     baseline_endpoint: Endpoint | None = None
     for i, target in enumerate(args.target):
+        original_target = target
         endpoint: Endpoint | None = None
+
         if target == "local":
             endpoint = MaterializeLocal()
         elif target == "remote":
@@ -329,7 +331,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             )
         assert endpoint is not None
 
-        if target == regression_against_target:
+        if original_target == regression_against_target:
             baseline_endpoint = endpoint
 
         endpoints.append(endpoint)
