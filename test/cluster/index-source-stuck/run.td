@@ -41,7 +41,16 @@ ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;
 # Strict serializable is expected to fail, but serializable isolation should still be able to return (out of date) results
 > SET transaction_isolation = serializable;
 
-# Should return instantly since it only uses the index and we have selected serializable isolation
+# Should return instantly since we have selected serializable isolation
+> SELECT min(counter) FROM src;
+1
+
+# Should return instantly, even inside of a transaction
+# > BEGIN
+# > SELECT * FROM src;
+# > COMMIT
+
+# Should return instantly since it only uses the materialized view and we have selected serializable isolation
 > SELECT min(counter) FROM mv;
 1
 
