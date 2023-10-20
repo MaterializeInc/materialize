@@ -484,7 +484,7 @@ async fn test_open<D: DurableCatalogState>(
         insta::assert_debug_snapshot!("initial_snapshot", snapshot);
         let audit_log = state.get_audit_logs().await.unwrap();
         insta::assert_debug_snapshot!("initial_audit_log", audit_log);
-        state.expire().await;
+        Box::new(state).expire().await;
         (snapshot, audit_log)
     };
     // Reopening the catalog will increment the epoch, but shouldn't change the initial snapshot.
