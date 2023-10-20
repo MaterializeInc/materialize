@@ -28,9 +28,10 @@ use crate::names::FullItemName;
 /// `new_schema_name`.
 pub fn create_stmt_rename_schema_refs(
     create_stmt: &mut Statement<Raw>,
-    cur_schema_name: &str,
-    new_schema_name: String,
-) {
+    database: &str,
+    cur_schema: &str,
+    new_schema: &str,
+) -> Result<(), (String, String)> {
     match create_stmt {
         stmt @ Statement::CreateConnection(_)
         | stmt @ Statement::CreateDatabase(_)
@@ -40,17 +41,24 @@ pub fn create_stmt_rename_schema_refs(
         | stmt @ Statement::CreateSubsource(_)
         | stmt @ Statement::CreateSink(_)
         | stmt @ Statement::CreateView(_)
-        | stmt @ Statement::CreateMaterializedView(_) 
+        | stmt @ Statement::CreateMaterializedView(_)
         | stmt @ Statement::CreateTable(_)
         | stmt @ Statement::CreateIndex(_)
-        | stmt @ Statement::CreateType(_) 
-        | stmt @ Statement::CreateSecret(_)=> {
-            let new_schema = Ident::new(new_schema_name);
+        | stmt @ Statement::CreateType(_)
+        | stmt @ Statement::CreateSecret(_) => {
             let mut visitor = CreateSqlRewriteSchema {
-                cur_schema: cur_schema_name,
+                database,
+                cur_schema,
                 new_schema,
+                error: None,
             };
             visitor.visit_statement_mut(stmt);
+
+            if let Some(e) = visitor.error.take() {
+                Err(e)
+            } else {
+                Ok(())
+            }
         }
         stmt => {
             unreachable!("Internal error: only catalog items need to update item refs. {stmt:?}")
@@ -59,16 +67,29 @@ pub fn create_stmt_rename_schema_refs(
 }
 
 struct CreateSqlRewriteSchema<'a> {
+    database: &'a str,
     cur_schema: &'a str,
-    new_schema: Ident,
+    new_schema: &'a str,
+    error: Option<(String, String)>,
 }
 
 impl<'a> CreateSqlRewriteSchema<'a> {
     fn maybe_rewrite_idents(&mut self, name: &mut [Ident]) {
-        if let [.., schema, _item] = name {
-            if schema.as_str() == self.cur_schema {
-                *schema = self.new_schema.clone();
+        match name {
+            [schema, item] if schema.as_str() == self.cur_schema => {
+                // TODO(parkmycar): I _think_ when the database component is not specified we can
+                // always infer we're using the current database. But I'm not positive, so for now
+                // we'll bail in this case.
+                if self.error.is_none() {
+                    self.error = Some((schema.to_string(), item.to_string()));
+                }
             }
+            [database, schema, _item] => {
+                if database.as_str() == self.database && schema.as_str() == self.cur_schema {
+                    *schema = Ident::new(self.new_schema);
+                }
+            }
+            _ => (),
         }
     }
 }
