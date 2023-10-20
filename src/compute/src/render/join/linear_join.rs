@@ -401,10 +401,6 @@ where
         let mut datums = DatumVec::new();
         let mut row_builder = Row::default();
 
-        let mut key_buf = Row::default();
-        let mut old_buf = Row::default();
-        let mut new_buf = Row::default();
-
         if closure.could_error() {
             let (oks, err) = self
                 .linear_join_spec
@@ -413,12 +409,17 @@ where
                     &next_input,
                     self.shutdown_token.clone(),
                     move |key, old, new| {
-                        let key = key.into_row(&mut key_buf, key_types.as_deref());
-                        let old = old.into_row(&mut old_buf, prev_types.as_deref());
-                        let new = new.into_row(&mut new_buf, next_types.as_deref());
-
                         let temp_storage = RowArena::new();
-                        let mut datums_local = datums.borrow_with_many(&[key, old, new]);
+
+                        let key = key.into_datum_iter(key_types.as_deref());
+                        let old = old.into_datum_iter(prev_types.as_deref());
+                        let new = new.into_datum_iter(next_types.as_deref());
+
+                        let mut datums_local = datums.borrow();
+                        datums_local.extend(key);
+                        datums_local.extend(old);
+                        datums_local.extend(new);
+
                         closure
                             .apply(&mut datums_local, &temp_storage, &mut row_builder)
                             .map_err(DataflowError::from)
@@ -441,12 +442,17 @@ where
                 &next_input,
                 self.shutdown_token.clone(),
                 move |key, old, new| {
-                    let key = key.into_row(&mut key_buf, key_types.as_deref());
-                    let old = old.into_row(&mut old_buf, prev_types.as_deref());
-                    let new = new.into_row(&mut new_buf, next_types.as_deref());
-
                     let temp_storage = RowArena::new();
-                    let mut datums_local = datums.borrow_with_many(&[key, old, new]);
+
+                    let key = key.into_datum_iter(key_types.as_deref());
+                    let old = old.into_datum_iter(prev_types.as_deref());
+                    let new = new.into_datum_iter(next_types.as_deref());
+
+                    let mut datums_local = datums.borrow();
+                    datums_local.extend(key);
+                    datums_local.extend(old);
+                    datums_local.extend(new);
+
                     closure
                         .apply(&mut datums_local, &temp_storage, &mut row_builder)
                         .expect("Closure claimed to never error")
