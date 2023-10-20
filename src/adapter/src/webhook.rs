@@ -276,6 +276,7 @@ mod test {
     use super::WebhookConcurrencyLimiter;
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // error: returning ready events from epoll_wait is not yet implemented
     async fn smoke_test_concurrency_limiter() {
         let mut limiter = WebhookConcurrencyLimiter::new(10);
 
