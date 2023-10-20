@@ -76,22 +76,31 @@
 // END LINT CONFIG
 
 use std::collections::BTreeMap;
+use std::convert::Infallible;
 use std::error::Error;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use std::{env, thread};
+use std::{env, fs, iter, thread};
 
 use anyhow::anyhow;
+use headers::{Header, HeaderMapExt};
+use hyper::http::header::HeaderMap;
+use hyper::service::{make_service_fn, service_fn};
+use hyper::{body, Body, Request, Response, Server as HyperServer};
+use jsonwebtoken::{self, EncodingKey};
 use mz_controller::ControllerConfig;
-use mz_environmentd::{CatalogConfig, WebSocketAuth, WebSocketResponse};
-use mz_frontegg_auth::Authentication as FronteggAuthentication;
+use mz_frontegg_auth::{
+    ApiTokenArgs, ApiTokenResponse, Authentication as FronteggAuthentication, Claims, RefreshToken,
+    REFRESH_SUFFIX,
+};
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
 use mz_ore::retry::Retry;
-use mz_ore::task;
+use mz_ore::task::{self, RuntimeExt};
 use mz_ore::tracing::{
     OpenTelemetryConfig, StderrLogConfig, StderrLogFormat, TracingConfig, TracingGuard,
     TracingHandle,
@@ -106,14 +115,25 @@ use mz_sql::catalog::EnvironmentId;
 use mz_stash_types::metrics::Metrics as StashMetrics;
 use mz_storage_types::connections::ConnectionContext;
 use once_cell::sync::Lazy;
+use openssl::asn1::Asn1Time;
+use openssl::error::ErrorStack;
+use openssl::hash::MessageDigest;
+use openssl::nid::Nid;
+use openssl::pkey::{PKey, Private};
+use openssl::rsa::Rsa;
+use openssl::ssl::{SslConnector, SslConnectorBuilder, SslMethod, SslOptions};
+use openssl::x509::extension::{BasicConstraints, SubjectAlternativeName};
+use openssl::x509::{X509Name, X509NameBuilder, X509};
 use postgres::error::DbError;
 use postgres::tls::{MakeTlsConnect, TlsConnect};
 use postgres::types::{FromSql, Type};
 use postgres::{NoTls, Socket};
+use postgres_openssl::MakeTlsConnector;
 use regex::Regex;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::runtime::Runtime;
+use tokio::sync::mpsc::UnboundedReceiver;
 use tokio_postgres::config::Host;
 use tokio_postgres::Client;
 use tokio_stream::wrappers::TcpListenerStream;
@@ -123,6 +143,9 @@ use tracing_subscriber::EnvFilter;
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
 use url::Url;
+use uuid::Uuid;
+
+use crate::{CatalogConfig, WebSocketAuth, WebSocketResponse};
 
 pub static KAFKA_ADDRS: Lazy<String> =
     Lazy::new(|| env::var("KAFKA_ADDRS").unwrap_or_else(|_| "localhost:9092".into()));
@@ -281,14 +304,13 @@ impl Config {
 
 pub struct Listeners {
     pub runtime: Arc<Runtime>,
-    pub inner: mz_environmentd::Listeners,
+    pub inner: crate::Listeners,
 }
 
 impl Listeners {
     pub fn new() -> Result<Listeners, anyhow::Error> {
         let runtime = Arc::new(Runtime::new()?);
-        let inner =
-            runtime.block_on(async { mz_environmentd::Listeners::bind_any_local().await })?;
+        let inner = runtime.block_on(async { crate::Listeners::bind_any_local().await })?;
         Ok(Listeners { runtime, inner })
     }
 
@@ -344,7 +366,7 @@ impl Listeners {
         // Messing with the clock causes persist to expire leases, causing hangs and
         // panics. Is it possible/desirable to put this back somehow?
         let persist_now = SYSTEM_TIME.clone();
-        let mut persist_cfg = PersistConfig::new(&mz_environmentd::BUILD_INFO, persist_now);
+        let mut persist_cfg = PersistConfig::new(&crate::BUILD_INFO, persist_now);
         // Tune down the number of connections to make this all work a little easier
         // with local postgres.
         persist_cfg.consensus_connection_pool_max_size = 1;
@@ -398,9 +420,9 @@ impl Listeners {
                 #[cfg(feature = "tokio-console")]
                 tokio_console: None,
                 sentry: None,
-                build_version: mz_environmentd::BUILD_INFO.version,
-                build_sha: mz_environmentd::BUILD_INFO.sha,
-                build_time: mz_environmentd::BUILD_INFO.time,
+                build_version: crate::BUILD_INFO.version,
+                build_sha: crate::BUILD_INFO.sha,
+                build_time: crate::BUILD_INFO.time,
                 registry: metrics_registry.clone(),
             };
             let (tracing_handle, tracing_guard) =
@@ -416,10 +438,10 @@ impl Listeners {
 
         let inner = self.runtime.block_on(async {
             self.inner
-                .serve(mz_environmentd::Config {
+                .serve(crate::Config {
                     catalog_config,
                     controller: ControllerConfig {
-                        build_info: &mz_environmentd::BUILD_INFO,
+                        build_info: &crate::BUILD_INFO,
                         orchestrator,
                         clusterd_image: "clusterd".into(),
                         init_container_image: None,
@@ -495,7 +517,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
 }
 
 pub struct Server {
-    pub inner: mz_environmentd::Server,
+    pub inner: crate::Server,
     pub runtime: Arc<Runtime>,
     pub metrics_registry: MetricsRegistry,
     _temp_dir: Option<TempDir>,
@@ -855,4 +877,317 @@ pub fn auth_with_ws_impl(
         }
     }
     Ok(msgs)
+}
+
+// Users is a mapping from (client, secret) -> email address.
+pub fn start_mzcloud(
+    encoding_key: EncodingKey,
+    tenant_id: Uuid,
+    users: BTreeMap<(String, String), String>,
+    roles: BTreeMap<String, Vec<String>>,
+    role_updates_rx: UnboundedReceiver<(String, Vec<String>)>,
+    now: NowFn,
+    expires_in_secs: i64,
+    latency_secs: Option<u64>,
+) -> Result<MzCloudServer, anyhow::Error> {
+    let refreshes = Arc::new(Mutex::new(0u64));
+    let enable_refresh = Arc::new(AtomicBool::new(true));
+    let auth_requests = Arc::new(Mutex::new(0u64));
+    #[derive(Clone)]
+    struct Context {
+        encoding_key: EncodingKey,
+        tenant_id: Uuid,
+        users: BTreeMap<(String, String), String>,
+        roles: BTreeMap<String, Vec<String>>,
+        role_updates_rx: Arc<Mutex<tokio::sync::mpsc::UnboundedReceiver<(String, Vec<String>)>>>,
+        now: NowFn,
+        expires_in_secs: i64,
+        latency_secs: Option<u64>,
+        // Uuid -> email
+        refresh_tokens: Arc<Mutex<BTreeMap<String, String>>>,
+        refreshes: Arc<Mutex<u64>>,
+        enable_refresh: Arc<AtomicBool>,
+        auth_requests: Arc<Mutex<u64>>,
+    }
+    let context = Context {
+        encoding_key,
+        tenant_id,
+        users,
+        roles,
+        role_updates_rx: Arc::new(Mutex::new(role_updates_rx)),
+        now,
+        expires_in_secs,
+        latency_secs,
+        refresh_tokens: Arc::new(Mutex::new(BTreeMap::new())),
+        refreshes: Arc::clone(&refreshes),
+        enable_refresh: Arc::clone(&enable_refresh),
+        auth_requests: Arc::clone(&auth_requests),
+    };
+    async fn handle(context: Context, req: Request<Body>) -> Result<Response<Body>, Infallible> {
+        // In some cases we want to add latency to test de-duplicating results.
+        if let Some(latency) = context.latency_secs {
+            tokio::time::sleep(Duration::from_secs(latency)).await;
+        }
+
+        let (parts, body) = req.into_parts();
+        let body = body::to_bytes(body).await.unwrap();
+        let email: String = if parts.uri.path().ends_with(REFRESH_SUFFIX) {
+            // Always count refresh attempts, even if enable_refresh is false.
+            *context.refreshes.lock().unwrap() += 1;
+            let args: RefreshToken = serde_json::from_slice(&body).unwrap();
+            match (
+                context
+                    .refresh_tokens
+                    .lock()
+                    .unwrap()
+                    .remove(args.refresh_token),
+                context.enable_refresh.load(Ordering::Relaxed),
+            ) {
+                (Some(email), true) => email.to_string(),
+                _ => {
+                    return Ok(Response::builder()
+                        .status(400)
+                        .body(Body::from("unknown refresh token"))
+                        .unwrap())
+                }
+            }
+        } else {
+            *context.auth_requests.lock().unwrap() += 1;
+            let args: ApiTokenArgs = serde_json::from_slice(&body).unwrap();
+            match context
+                .users
+                .get(&(args.client_id.to_string(), args.secret.to_string()))
+            {
+                Some(email) => email.to_string(),
+                None => {
+                    return Ok(Response::builder()
+                        .status(400)
+                        .body(Body::from("unknown user"))
+                        .unwrap())
+                }
+            }
+        };
+        let roles = context.roles.get(&email).cloned().unwrap_or_default();
+        let refresh_token = Uuid::new_v4().to_string();
+        context
+            .refresh_tokens
+            .lock()
+            .unwrap()
+            .insert(refresh_token.clone(), email.clone());
+        let access_token = jsonwebtoken::encode(
+            &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
+            &Claims {
+                exp: context.now.as_secs() + context.expires_in_secs,
+                email,
+                sub: Uuid::new_v4(),
+                user_id: None,
+                tenant_id: context.tenant_id,
+                roles,
+                permissions: Vec::new(),
+            },
+            &context.encoding_key,
+        )
+        .unwrap();
+        let resp = ApiTokenResponse {
+            expires: "".to_string(),
+            expires_in: context.expires_in_secs,
+            access_token,
+            refresh_token,
+        };
+        Ok(Response::new(Body::from(
+            serde_json::to_vec(&resp).unwrap(),
+        )))
+    }
+
+    let runtime = Arc::new(Runtime::new()?);
+    let _guard = runtime.enter();
+    let service = make_service_fn(move |_conn| {
+        let mut context = context.clone();
+        let service = service_fn(move |req| {
+            while let Ok((email, roles)) = context.role_updates_rx.lock().unwrap().try_recv() {
+                context.roles.insert(email, roles);
+            }
+            handle(context.clone(), req)
+        });
+        async move { Ok::<_, Infallible>(service) }
+    });
+    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+    let server = HyperServer::bind(&addr).serve(service);
+    let url = format!("http://{}/", server.local_addr());
+    let _handle = runtime.spawn_named(|| "mzcloud-mock-server", server);
+    Ok(MzCloudServer {
+        url,
+        refreshes,
+        enable_refresh,
+        auth_requests,
+        _runtime: runtime,
+    })
+}
+
+pub struct MzCloudServer {
+    pub url: String,
+    pub refreshes: Arc<Mutex<u64>>,
+    pub enable_refresh: Arc<AtomicBool>,
+    pub auth_requests: Arc<Mutex<u64>>,
+    _runtime: Arc<Runtime>,
+}
+
+pub fn make_header<H: Header>(h: H) -> HeaderMap {
+    let mut map = HeaderMap::new();
+    map.typed_insert(h);
+    map
+}
+
+pub fn wait_for_refresh(frontegg_server: &MzCloudServer, expires_in_secs: u64) {
+    let expected = *frontegg_server.refreshes.lock().unwrap() + 1;
+    Retry::default()
+        .factor(1.0)
+        .max_duration(Duration::from_secs(expires_in_secs + 20))
+        .retry(|_| {
+            let refreshes = *frontegg_server.refreshes.lock().unwrap();
+            if refreshes >= expected {
+                Ok(())
+            } else {
+                Err(format!(
+                    "expected refresh count {}, got {}",
+                    expected, refreshes
+                ))
+            }
+        })
+        .unwrap();
+}
+
+pub fn make_pg_tls<F>(configure: F) -> MakeTlsConnector
+where
+    F: Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack>,
+{
+    let mut connector_builder = SslConnector::builder(SslMethod::tls()).unwrap();
+    // Disable TLS v1.3 because `postgres` and `hyper` produce stabler error
+    // messages with TLS v1.2.
+    //
+    // Briefly, in TLS v1.3, failing to present a client certificate does not
+    // error during the TLS handshake, as it does in TLS v1.2, but on the first
+    // attempt to read from the stream. But both `postgres` and `hyper` write a
+    // bunch of data before attempting to read from the stream. With a failed
+    // TLS v1.3 connection, sometimes `postgres` and `hyper` succeed in writing
+    // out this data, and then return a nice error message on the call to read.
+    // But sometimes the connection is closed before they write out the data,
+    // and so they report "connection closed" before they ever call read, never
+    // noticing the underlying SSL error.
+    //
+    // It's unclear who's bug this is. Is it on `hyper`/`postgres` to call read
+    // if writing to the stream fails to see if a TLS error occured? Is it on
+    // OpenSSL to provide a better API [1]? Is it a protocol issue that ought to
+    // be corrected in TLS v1.4? We don't want to answer these questions, so we
+    // just avoid TLS v1.3 for now.
+    //
+    // [1]: https://github.com/openssl/openssl/issues/11118
+    let options = connector_builder.options() | SslOptions::NO_TLSV1_3;
+    connector_builder.set_options(options);
+    configure(&mut connector_builder).unwrap();
+    MakeTlsConnector::new(connector_builder.build())
+}
+
+/// A certificate authority for use in tests.
+pub struct Ca {
+    pub dir: TempDir,
+    pub name: X509Name,
+    pub cert: X509,
+    pub pkey: PKey<Private>,
+}
+
+impl Ca {
+    fn make_ca(name: &str, parent: Option<&Ca>) -> Result<Ca, Box<dyn Error>> {
+        let dir = tempfile::tempdir()?;
+        let rsa = Rsa::generate(2048)?;
+        let pkey = PKey::from_rsa(rsa)?;
+        let name = {
+            let mut builder = X509NameBuilder::new()?;
+            builder.append_entry_by_nid(Nid::COMMONNAME, name)?;
+            builder.build()
+        };
+        let cert = {
+            let mut builder = X509::builder()?;
+            builder.set_version(2)?;
+            builder.set_pubkey(&pkey)?;
+            builder.set_issuer_name(parent.map(|ca| &ca.name).unwrap_or(&name))?;
+            builder.set_subject_name(&name)?;
+            builder.set_not_before(&*Asn1Time::days_from_now(0)?)?;
+            builder.set_not_after(&*Asn1Time::days_from_now(365)?)?;
+            builder.append_extension(BasicConstraints::new().critical().ca().build()?)?;
+            builder.sign(
+                parent.map(|ca| &ca.pkey).unwrap_or(&pkey),
+                MessageDigest::sha256(),
+            )?;
+            builder.build()
+        };
+        fs::write(dir.path().join("ca.crt"), cert.to_pem()?)?;
+        Ok(Ca {
+            dir,
+            name,
+            cert,
+            pkey,
+        })
+    }
+
+    /// Creates a new root certificate authority.
+    pub fn new_root(name: &str) -> Result<Ca, Box<dyn Error>> {
+        Ca::make_ca(name, None)
+    }
+
+    /// Returns the path to the CA's certificate.
+    pub fn ca_cert_path(&self) -> PathBuf {
+        self.dir.path().join("ca.crt")
+    }
+
+    /// Requests a new intermediate certificate authority.
+    pub fn request_ca(&self, name: &str) -> Result<Ca, Box<dyn Error>> {
+        Ca::make_ca(name, Some(self))
+    }
+
+    /// Generates a certificate with the specified Common Name (CN) that is
+    /// signed by the CA.
+    ///
+    /// Returns the paths to the certificate and key.
+    pub fn request_client_cert(&self, name: &str) -> Result<(PathBuf, PathBuf), Box<dyn Error>> {
+        self.request_cert(name, iter::empty())
+    }
+
+    /// Like `request_client_cert`, but permits specifying additional IP
+    /// addresses to attach as Subject Alternate Names.
+    pub fn request_cert<I>(&self, name: &str, ips: I) -> Result<(PathBuf, PathBuf), Box<dyn Error>>
+    where
+        I: IntoIterator<Item = IpAddr>,
+    {
+        let rsa = Rsa::generate(2048)?;
+        let pkey = PKey::from_rsa(rsa)?;
+        let subject_name = {
+            let mut builder = X509NameBuilder::new()?;
+            builder.append_entry_by_nid(Nid::COMMONNAME, name)?;
+            builder.build()
+        };
+        let cert = {
+            let mut builder = X509::builder()?;
+            builder.set_version(2)?;
+            builder.set_pubkey(&pkey)?;
+            builder.set_issuer_name(self.cert.subject_name())?;
+            builder.set_subject_name(&subject_name)?;
+            builder.set_not_before(&*Asn1Time::days_from_now(0)?)?;
+            builder.set_not_after(&*Asn1Time::days_from_now(365)?)?;
+            for ip in ips {
+                builder.append_extension(
+                    SubjectAlternativeName::new()
+                        .ip(&ip.to_string())
+                        .build(&builder.x509v3_context(None, None))?,
+                )?;
+            }
+            builder.sign(&self.pkey, MessageDigest::sha256())?;
+            builder.build()
+        };
+        let cert_path = self.dir.path().join(Path::new(name).with_extension("crt"));
+        let key_path = self.dir.path().join(Path::new(name).with_extension("key"));
+        fs::write(&cert_path, cert.to_pem()?)?;
+        fs::write(&key_path, pkey.private_key_to_pem_pkcs8()?)?;
+        Ok((cert_path, key_path))
+    }
 }

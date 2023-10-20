@@ -95,6 +95,7 @@ use itertools::Itertools;
 use mz_environmentd::http::{
     BecomeLeaderResponse, BecomeLeaderResult, LeaderStatus, LeaderStatusResponse,
 };
+use mz_environmentd::test_util::{self, Listeners, PostgresErrorExt, KAFKA_ADDRS};
 use mz_environmentd::{WebSocketAuth, WebSocketResponse};
 use mz_ore::cast::CastFrom;
 use mz_ore::cast::CastLossy;
@@ -121,19 +122,15 @@ use tracing::info;
 use tungstenite::error::ProtocolError;
 use tungstenite::{Error, Message};
 
-use crate::util::{Listeners, PostgresErrorExt, KAFKA_ADDRS};
-
-pub mod util;
-
 #[mz_ore::test]
 fn test_persistence() {
     let data_dir = tempfile::tempdir().unwrap();
-    let config = util::Config::default()
+    let config = test_util::Config::default()
         .data_directory(data_dir.path())
         .unsafe_mode();
 
     {
-        let server = util::start_server(config.clone()).unwrap();
+        let server = test_util::start_server(config.clone()).unwrap();
         let mut client = server.connect(postgres::NoTls).unwrap();
         client
             .batch_execute(&format!(
@@ -160,7 +157,7 @@ fn test_persistence() {
             .unwrap();
     }
 
-    let server = util::start_server(config).unwrap();
+    let server = test_util::start_server(config).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
     assert_eq!(
         client
@@ -206,9 +203,9 @@ fn test_persistence() {
 fn setup_statement_logging_core(
     max_sample_rate: f64,
     sample_rate: f64,
-    extra_config: util::Config,
-) -> (util::Server, postgres::Client) {
-    let server = util::start_server(
+    extra_config: test_util::Config,
+) -> (test_util::Server, postgres::Client) {
+    let server = test_util::start_server(
         extra_config
             .with_system_parameter_default(
                 "statement_logging_max_sample_rate".to_string(),
@@ -233,8 +230,8 @@ fn setup_statement_logging_core(
 fn setup_statement_logging(
     max_sample_rate: f64,
     sample_rate: f64,
-) -> (util::Server, postgres::Client) {
-    setup_statement_logging_core(max_sample_rate, sample_rate, util::Config::default())
+) -> (test_util::Server, postgres::Client) {
+    setup_statement_logging_core(max_sample_rate, sample_rate, test_util::Config::default())
 }
 
 // Test that we log various kinds of statement whose execution terminates in the coordinator.
@@ -624,7 +621,7 @@ fn test_statement_logging_sampling_constrained() {
 
 #[mz_ore::test]
 fn test_statement_logging_unsampled_metrics() {
-    let server = util::start_server(util::Config::default()).unwrap();
+    let server = test_util::start_server(test_util::Config::default()).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     // TODO[btv]
@@ -700,7 +697,7 @@ fn test_statement_logging_unsampled_metrics() {
 fn test_statement_logging_persistence() {
     let data_dir = tempfile::tempdir().unwrap();
 
-    let cfg = util::Config::default()
+    let cfg = test_util::Config::default()
         .data_directory(data_dir.path())
         .with_system_parameter_default(
             "statement_logging_retention".to_string(),
@@ -760,7 +757,7 @@ WHERE
 // unsafe mode.
 #[mz_ore::test]
 fn test_source_sink_size_required() {
-    let server = util::start_server(util::Config::default()).unwrap();
+    let server = test_util::start_server(test_util::Config::default()).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     // Sources bail without an explicit size.
@@ -826,7 +823,7 @@ fn test_http_sql() {
     let fixtimestamp_replace = "<TIMESTAMP>";
 
     datadriven::walk("tests/testdata/http", |f| {
-        let server = util::start_server(util::Config::default()).unwrap();
+        let server = test_util::start_server(test_util::Config::default()).unwrap();
 
         // Grant all privileges to default http user.
         // TODO(jkosh44) The HTTP endpoint has a special default user while the WS endpoint just
@@ -875,7 +872,7 @@ fn test_http_sql() {
         ))
         .unwrap();
         let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
-        let ws_init = util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
+        let ws_init = test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
 
         // Verify ws_init contains roughly what we expect. This varies (rng secret and version
         // numbers), so easier to test here instead of in the ws file.
@@ -950,8 +947,8 @@ fn test_http_sql() {
 // Test that the server properly handles cancellation requests.
 #[mz_ore::test]
 fn test_cancel_long_running_query() {
-    let config = util::Config::default().unsafe_mode();
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default().unsafe_mode();
+    let server = test_util::start_server(config).unwrap();
 
     let mut client = server.connect(postgres::NoTls).unwrap();
     let cancel_token = client.cancel_token();
@@ -990,8 +987,8 @@ fn test_cancel_long_running_query() {
 }
 
 fn test_cancellation_cancels_dataflows(query: &str) {
-    let config = util::Config::default().unsafe_mode();
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default().unsafe_mode();
+    let server = test_util::start_server(config).unwrap();
 
     let mut client1 = server.connect(postgres::NoTls).unwrap();
     let mut client2 = server.connect(postgres::NoTls).unwrap();
@@ -1074,8 +1071,8 @@ fn test_cancel_insert_select() {
 }
 
 fn test_closing_connection_cancels_dataflows(query: String) {
-    let config = util::Config::default().unsafe_mode();
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default().unsafe_mode();
+    let server = test_util::start_server(config).unwrap();
 
     let mut cmd = Command::new("psql");
     let cmd = cmd
@@ -1237,8 +1234,8 @@ fn test_storage_usage_collection_interval() {
     }
 
     let config =
-        util::Config::default().with_storage_usage_collection_interval(Duration::from_secs(1));
-    let server = util::start_server(config).unwrap();
+        test_util::Config::default().with_storage_usage_collection_interval(Duration::from_secs(1));
+    let server = test_util::start_server(config).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     // Wait for the initial storage usage collection to occur.
@@ -1296,13 +1293,13 @@ fn test_storage_usage_collection_interval() {
 fn test_storage_usage_updates_between_restarts() {
     let data_dir = tempfile::tempdir().unwrap();
     let storage_usage_collection_interval = Duration::from_secs(3);
-    let config = util::Config::default()
+    let config = test_util::Config::default()
         .with_storage_usage_collection_interval(storage_usage_collection_interval)
         .data_directory(data_dir.path());
 
     // Wait for initial storage usage collection.
     let initial_timestamp: f64 = {
-        let server = util::start_server(config.clone()).unwrap();
+        let server = test_util::start_server(config.clone()).unwrap();
         let mut client = server.connect(postgres::NoTls).unwrap();
         // Retry because it may take some time for the initial snapshot to be taken.
         Retry::default().max_duration(Duration::from_secs(60)).retry(|_| {
@@ -1321,7 +1318,7 @@ fn test_storage_usage_updates_between_restarts() {
 
     // Another storage usage collection should be scheduled immediately.
     {
-        let server = util::start_server(config).unwrap();
+        let server = test_util::start_server(config).unwrap();
         let mut client = server.connect(postgres::NoTls).unwrap();
 
         // Retry until storage usage is updated.
@@ -1346,13 +1343,13 @@ fn test_storage_usage_updates_between_restarts() {
 fn test_storage_usage_doesnt_update_between_restarts() {
     let data_dir = tempfile::tempdir().unwrap();
     let storage_usage_collection_interval = Duration::from_secs(10);
-    let config = util::Config::default()
+    let config = test_util::Config::default()
         .with_storage_usage_collection_interval(storage_usage_collection_interval)
         .data_directory(data_dir.path());
 
     // Wait for initial storage usage collection.
     let initial_timestamp = {
-        let server = util::start_server(config.clone()).unwrap();
+        let server = test_util::start_server(config.clone()).unwrap();
         let mut client = server.connect(postgres::NoTls).unwrap();
         // Retry because it may take some time for the initial snapshot to be taken.
         Retry::default().max_duration(Duration::from_secs(60)).retry(|_| {
@@ -1371,7 +1368,7 @@ fn test_storage_usage_doesnt_update_between_restarts() {
     {
         // Give plenty of time so we don't accidentally do another collection if this test is slow.
         let config = config.with_storage_usage_collection_interval(Duration::from_secs(60 * 1000));
-        let server = util::start_server(config).unwrap();
+        let server = test_util::start_server(config).unwrap();
         let mut client = server.connect(postgres::NoTls).unwrap();
 
         let collection_timestamps = client
@@ -1404,9 +1401,9 @@ fn test_storage_usage_doesnt_update_between_restarts() {
 #[mz_ore::test]
 fn test_storage_usage_collection_interval_timestamps() {
     let storage_interval_s = 2;
-    let config = util::Config::default()
+    let config = test_util::Config::default()
         .with_storage_usage_collection_interval(Duration::from_secs(storage_interval_s));
-    let server = util::start_server(config).unwrap();
+    let server = test_util::start_server(config).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     // Retry because it may take some time for the initial snapshot to be taken.
@@ -1467,14 +1464,14 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
     let data_dir = tempfile::tempdir().unwrap();
     let collection_interval = Duration::from_secs(1);
     let retention_period = Duration::from_millis(1100);
-    let config = util::Config::default()
+    let config = test_util::Config::default()
         .with_now(now_fn)
         .with_storage_usage_collection_interval(collection_interval)
         .with_storage_usage_retention_period(retention_period)
         .data_directory(data_dir.path());
 
     let initial_timestamp = {
-        let server = util::start_server(config.clone()).unwrap();
+        let server = test_util::start_server(config.clone()).unwrap();
         let mut client = server.connect(postgres::NoTls).unwrap();
         // Create a table with no data, which should have some overhead and therefore some storage usage
         client
@@ -1522,7 +1519,7 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
         + 1;
 
     {
-        let server = util::start_server(config).unwrap();
+        let server = test_util::start_server(config).unwrap();
         let mut client = server.connect(postgres::NoTls).unwrap();
 
         *now.lock().expect("lock poisoned") +=
@@ -1549,10 +1546,10 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
 
 #[mz_ore::test]
 fn test_default_cluster_sizes() {
-    let config = util::Config::default()
+    let config = test_util::Config::default()
         .with_builtin_cluster_replica_size("1".to_string())
         .with_default_cluster_replica_size("2".to_string());
-    let server = util::start_server(config).unwrap();
+    let server = test_util::start_server(config).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     let builtin_size: String = client
@@ -1582,7 +1579,7 @@ fn test_default_cluster_sizes() {
 fn test_max_request_size() {
     let statement = "SELECT $1::text";
     let statement_size = statement.bytes().count();
-    let server = util::start_server(util::Config::default()).unwrap();
+    let server = test_util::start_server(test_util::Config::default()).unwrap();
 
     // pgwire
     {
@@ -1616,7 +1613,7 @@ fn test_max_request_size() {
         let param = std::iter::repeat("1").take(param_size).join("");
         let ws_url = server.ws_addr();
         let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
-        util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
+        test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
         let json =
             format!("{{\"queries\":[{{\"query\":\"{statement}\",\"params\":[\"{param}\"]}}]}}");
         let json: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -1639,7 +1636,7 @@ fn test_max_statement_batch_size() {
     let max_statement_size = mz_sql_parser::parser::MAX_STATEMENT_BATCH_SIZE;
     let max_statement_count = max_statement_size / statement_size + 1;
     let statements = iter::repeat(statement).take(max_statement_count).join("");
-    let server = util::start_server(util::Config::default()).unwrap();
+    let server = test_util::start_server(test_util::Config::default()).unwrap();
 
     // pgwire
     {
@@ -1684,7 +1681,7 @@ fn test_max_statement_batch_size() {
     {
         let ws_url = server.ws_addr();
         let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
-        util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
+        test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
         let json = format!("{{\"query\":\"{statements}\"}}");
         let json: serde_json::Value = serde_json::from_str(&json).unwrap();
         ws.send(Message::Text(json.to_string())).unwrap();
@@ -1707,8 +1704,8 @@ fn test_max_statement_batch_size() {
 
 #[mz_ore::test]
 fn test_mz_system_user_admin() {
-    let config = util::Config::default();
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default();
+    let server = test_util::start_server(config).unwrap();
     let mut client = server
         .pg_config_internal()
         .user(&SYSTEM_USER.name)
@@ -1726,7 +1723,7 @@ fn test_mz_system_user_admin() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_ws_passes_options() {
-    let server = util::start_server(util::Config::default()).unwrap();
+    let server = test_util::start_server(test_util::Config::default()).unwrap();
 
     // Create our WebSocket.
     let ws_url = server.ws_addr();
@@ -1735,7 +1732,7 @@ fn test_ws_passes_options() {
         "application_name".to_string(),
         "billion_dollar_idea".to_string(),
     )]);
-    util::auth_with_ws(&mut ws, options).unwrap();
+    test_util::auth_with_ws(&mut ws, options).unwrap();
 
     // Query to make sure we get back the correct session var, which should be
     // set from the options map we passed with the auth.
@@ -1774,13 +1771,13 @@ fn test_ws_passes_options() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_ws_notifies_for_bad_options() {
-    let server = util::start_server(util::Config::default()).unwrap();
+    let server = test_util::start_server(test_util::Config::default()).unwrap();
 
     // Create our WebSocket.
     let ws_url = server.ws_addr();
     let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
     let options = BTreeMap::from([("bad_var_name".to_string(), "i_do_not_exist".to_string())]);
-    util::auth_with_ws(&mut ws, options).unwrap();
+    test_util::auth_with_ws(&mut ws, options).unwrap();
 
     let mut read_msg = || -> WebSocketResponse {
         let msg = ws.read().unwrap();
@@ -1830,7 +1827,7 @@ struct Notice {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_http_options_param() {
-    let server = util::start_server(util::Config::default()).unwrap();
+    let server = test_util::start_server(test_util::Config::default()).unwrap();
 
     #[derive(Debug, Serialize)]
     struct Params {
@@ -1903,7 +1900,7 @@ fn test_http_options_param() {
 #[cfg_attr(miri, ignore)] // too slow
 fn test_max_connections_on_all_interfaces() {
     let query = "SELECT 1";
-    let server = util::start_server(util::Config::default().unsafe_mode()).unwrap();
+    let server = test_util::start_server(test_util::Config::default().unsafe_mode()).unwrap();
 
     let mut mz_client = server
         .pg_config_internal()
@@ -1941,7 +1938,7 @@ fn test_max_connections_on_all_interfaces() {
     {
         // while postgres client is connected, websockets can't auth
         let (mut ws, _resp) = tungstenite::connect(ws_url.clone()).unwrap();
-        let err = util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap_err();
+        let err = test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap_err();
         assert!(err.to_string().contains("creating connection would violate max_connections limit (desired: 2, limit: 1, current: 1)"), "{err}");
     }
 
@@ -1966,7 +1963,7 @@ fn test_max_connections_on_all_interfaces() {
 
     tracing::info!("http query succeeded");
     let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
-    util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
+    test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
     let json = format!("{{\"query\":\"{query}\"}}");
     let json: serde_json::Value = serde_json::from_str(&json).unwrap();
     ws.send(Message::Text(json.to_string())).unwrap();
@@ -2004,7 +2001,7 @@ fn test_max_connections_on_all_interfaces() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_concurrent_id_reuse() {
-    let server = util::start_server(util::Config::default()).unwrap();
+    let server = test_util::start_server(test_util::Config::default()).unwrap();
 
     server.runtime.block_on(async {
         {
@@ -2065,8 +2062,8 @@ fn test_concurrent_id_reuse() {
 
 #[mz_ore::test]
 fn test_internal_console_proxy() {
-    let config = util::Config::default();
-    let server = util::start_server(config.clone()).unwrap();
+    let config = test_util::Config::default();
+    let server = test_util::start_server(config.clone()).unwrap();
 
     let res = Client::builder()
         .build()
@@ -2091,7 +2088,7 @@ fn test_internal_console_proxy() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_internal_http_auth() {
-    let server = util::start_server(util::Config::default()).unwrap();
+    let server = test_util::start_server(test_util::Config::default()).unwrap();
     let json = serde_json::json!({"query": "SELECT current_user;"});
     let url = Url::parse(&format!(
         "http://{}/api/sql",
@@ -2161,7 +2158,7 @@ fn test_internal_http_auth() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_internal_ws_auth() {
-    let server = util::start_server(util::Config::default()).unwrap();
+    let server = test_util::start_server(test_util::Config::default()).unwrap();
 
     // Create our WebSocket.
     let ws_url = server.internal_ws_addr();
@@ -2187,12 +2184,15 @@ fn test_internal_ws_auth() {
     )]);
     // We should receive error if sending the standard bearer auth, since that is unexpected
     // for the Internal HTTP API
-    assert_eq!(util::auth_with_ws(&mut ws, options.clone()).is_err(), true);
+    assert_eq!(
+        test_util::auth_with_ws(&mut ws, options.clone()).is_err(),
+        true
+    );
 
     // Recreate the websocket
     let (mut ws, _resp) = tungstenite::connect(make_req()).unwrap();
     // Auth with OptionsOnly
-    util::auth_with_ws_impl(
+    test_util::auth_with_ws_impl(
         &mut ws,
         Message::Text(serde_json::to_string(&WebSocketAuth::OptionsOnly { options }).unwrap()),
     )
@@ -2236,18 +2236,18 @@ fn test_internal_ws_auth() {
 #[cfg_attr(miri, ignore)] // too slow
 fn test_leader_promotion() {
     let tmpdir = TempDir::new().unwrap();
-    let config = util::Config::default()
+    let config = test_util::Config::default()
         .unsafe_mode()
         .data_directory(tmpdir.path());
     {
         // start with a stash with no deploy generation to match current production
-        let server = util::start_server(config.clone()).unwrap();
+        let server = test_util::start_server(config.clone()).unwrap();
         let mut client = server.connect(postgres::NoTls).unwrap();
         client.simple_query("SELECT 1").unwrap();
     }
     {
         // propose a deploy generation for the first time
-        let server = util::start_server(config.clone()).unwrap();
+        let server = test_util::start_server(config.clone()).unwrap();
         let mut client = server.connect(postgres::NoTls).unwrap();
         client.simple_query("SELECT 1").unwrap();
 
@@ -2355,13 +2355,13 @@ fn test_leader_promotion() {
 #[cfg_attr(miri, ignore)] // too slow
 fn test_leader_promotion_always_using_deploy_generation() {
     let tmpdir = TempDir::new().unwrap();
-    let config = util::Config::default()
+    let config = test_util::Config::default()
         .unsafe_mode()
         .data_directory(tmpdir.path())
         .with_deploy_generation(Some(2));
     {
         // propose a deploy generation for the first time
-        let server = util::start_server(config.clone()).unwrap();
+        let server = test_util::start_server(config.clone()).unwrap();
         let mut client = server.connect(postgres::NoTls).unwrap();
         client.simple_query("SELECT 1").unwrap();
     }
@@ -2399,7 +2399,7 @@ fn test_leader_promotion_always_using_deploy_generation() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_cancel_ws() {
-    let server = util::start_server(util::Config::default()).unwrap();
+    let server = test_util::start_server(test_util::Config::default()).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
     client.batch_execute("CREATE TABLE t (i INT);").unwrap();
 
@@ -2424,7 +2424,7 @@ fn test_cancel_ws() {
     });
 
     let (mut ws, _resp) = tungstenite::connect(server.ws_addr()).unwrap();
-    util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
+    test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
     let json = r#"{"queries":[{"query":"SUBSCRIBE t"}]}"#;
     let json: serde_json::Value = serde_json::from_str(json).unwrap();
     ws.send(Message::Text(json.to_string())).unwrap();
@@ -2443,7 +2443,7 @@ fn test_cancel_ws() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn smoketest_webhook_source() {
-    let server = util::start_server(util::Config::default()).unwrap();
+    let server = test_util::start_server(test_util::Config::default()).unwrap();
     server.enable_feature_flags(&["enable_webhook_sources"]);
 
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -2546,7 +2546,7 @@ fn smoketest_webhook_source() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_invalid_webhook_body() {
-    let server = util::start_server(util::Config::default()).unwrap();
+    let server = test_util::start_server(test_util::Config::default()).unwrap();
     server.enable_feature_flags(&["enable_webhook_sources"]);
 
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -2630,7 +2630,7 @@ fn test_invalid_webhook_body() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_webhook_duplicate_headers() {
-    let server = util::start_server(util::Config::default()).unwrap();
+    let server = test_util::start_server(test_util::Config::default()).unwrap();
     server.enable_feature_flags(&["enable_webhook_sources"]);
 
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -2671,7 +2671,7 @@ fn test_webhook_duplicate_headers() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_github_20262() {
-    let server = util::start_server(util::Config::default()).unwrap();
+    let server = test_util::start_server(test_util::Config::default()).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
     client.batch_execute("CREATE TABLE t (i INT);").unwrap();
 
@@ -2704,7 +2704,7 @@ fn test_github_20262() {
     let select = select.to_string();
 
     let (mut ws, _resp) = tungstenite::connect(server.ws_addr()).unwrap();
-    util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
+    test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
     ws.send(Message::Text(subscribe)).unwrap();
     cancel();
     ws.send(Message::Text(commit)).unwrap();
@@ -2738,8 +2738,8 @@ fn test_github_20262() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_cancel_read_then_write() {
-    let config = util::Config::default().unsafe_mode();
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default().unsafe_mode();
+    let server = test_util::start_server(config).unwrap();
     server.enable_feature_flags(&["enable_dangerous_functions"]);
 
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -2794,7 +2794,7 @@ fn test_cancel_read_then_write() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_http_metrics() {
-    let server = util::start_server(util::Config::default()).unwrap();
+    let server = test_util::start_server(test_util::Config::default()).unwrap();
 
     let http_url = Url::parse(&format!(
         "http://{}/api/sql",
@@ -2857,7 +2857,7 @@ fn test_http_metrics() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn webhook_concurrent_actions() {
-    let server = util::start_server(util::Config::default()).unwrap();
+    let server = test_util::start_server(test_util::Config::default()).unwrap();
     server.enable_feature_flags(&["enable_webhook_sources"]);
 
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -3014,8 +3014,8 @@ fn webhook_concurrent_actions() {
 #[cfg_attr(miri, ignore)] // too slow
 fn webhook_concurrency_limit() {
     let concurrency_limit = 15;
-    let config = util::Config::default();
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default();
+    let server = test_util::start_server(config).unwrap();
 
     // Note: we need enable_unstable_dependencies to use mz_sleep.
     server.enable_feature_flags(&[
@@ -3104,7 +3104,7 @@ fn webhook_concurrency_limit() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn webhook_too_large_request() {
-    let server = util::start_server(util::Config::default()).unwrap();
+    let server = test_util::start_server(test_util::Config::default()).unwrap();
     server.enable_feature_flags(&["enable_webhook_sources"]);
 
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -3154,7 +3154,7 @@ fn webhook_too_large_request() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn test_webhook_url_notice() {
-    let server = util::start_server(util::Config::default()).unwrap();
+    let server = test_util::start_server(test_util::Config::default()).unwrap();
     server.enable_feature_flags(&["enable_webhook_sources"]);
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
 
@@ -3218,7 +3218,7 @@ fn test_webhook_url_notice() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn copy_from() {
-    let server = util::start_server(util::Config::default()).unwrap();
+    let server = test_util::start_server(test_util::Config::default()).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     let mut system_client = server
@@ -3268,7 +3268,7 @@ fn copy_from() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 fn concurrent_cluster_drop() {
-    let server = util::start_server(util::Config::default()).unwrap();
+    let server = test_util::start_server(test_util::Config::default()).unwrap();
     let mut txn_client = server.connect(postgres::NoTls).unwrap();
     let mut drop_client = server.connect(postgres::NoTls).unwrap();
 
