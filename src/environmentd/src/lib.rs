@@ -120,6 +120,8 @@ use crate::http::{HttpConfig, HttpServer, InternalHttpConfig, InternalHttpServer
 
 pub mod http;
 mod telemetry;
+#[cfg(feature = "test")]
+pub mod test_util;
 
 pub use crate::http::{SqlResponse, WebSocketAuth, WebSocketResponse};
 
@@ -287,12 +289,12 @@ impl Listeners {
             internal_http_listen_addr,
         }: ListenersConfig,
     ) -> Result<Listeners, anyhow::Error> {
-        let sql = mz_server_core::listen(sql_listen_addr).await?;
-        let http = mz_server_core::listen(http_listen_addr).await?;
-        let balancer_sql = mz_server_core::listen(balancer_sql_listen_addr).await?;
-        let balancer_http = mz_server_core::listen(balancer_http_listen_addr).await?;
-        let internal_sql = mz_server_core::listen(internal_sql_listen_addr).await?;
-        let internal_http = mz_server_core::listen(internal_http_listen_addr).await?;
+        let sql = mz_server_core::listen(&sql_listen_addr).await?;
+        let http = mz_server_core::listen(&http_listen_addr).await?;
+        let balancer_sql = mz_server_core::listen(&balancer_sql_listen_addr).await?;
+        let balancer_http = mz_server_core::listen(&balancer_http_listen_addr).await?;
+        let internal_sql = mz_server_core::listen(&internal_sql_listen_addr).await?;
+        let internal_http = mz_server_core::listen(&internal_http_listen_addr).await?;
         Ok(Listeners {
             sql,
             http,

@@ -190,8 +190,8 @@ impl BalancerService {
     }
 
     pub async fn serve(self) -> Result<(), anyhow::Error> {
-        let (_pgwire_listen_handle, pgwire_stream) = listen(self.cfg.pgwire_listen_addr).await?;
-        let (_https_listen_handle, https_stream) = listen(self.cfg.https_listen_addr).await?;
+        let (_pgwire_listen_handle, pgwire_stream) = listen(&self.cfg.pgwire_listen_addr).await?;
+        let (_https_listen_handle, https_stream) = listen(&self.cfg.https_listen_addr).await?;
 
         let (pgwire_tls, https_tls) = match &self.cfg.tls {
             Some(tls) => {
