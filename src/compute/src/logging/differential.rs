@@ -24,7 +24,7 @@ use mz_repr::{Datum, Diff, Timestamp};
 use mz_timely_util::buffer::ConsolidateBuffer;
 use mz_timely_util::replay::MzReplay;
 use timely::communication::Allocate;
-use timely::dataflow::channels::pact::{Exchange, Pipeline};
+use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::{Filter, InputCapability};
@@ -117,10 +117,7 @@ pub(super) fn construct<A: Allocate>(
         let mut packer = PermutedRowPacker::new(DifferentialLog::ArrangementBatches);
         let arrangement_batches = batches
             .as_collection()
-            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
-                Exchange::new(move |_| u64::cast_from(worker_id)),
-                "PreArrange Differential batches",
-            )
+            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(Pipeline, "PreArrange Differential batches")
             .as_collection(move |op, ()| {
                 packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(*op)),
@@ -130,10 +127,7 @@ pub(super) fn construct<A: Allocate>(
         let mut packer = PermutedRowPacker::new(DifferentialLog::ArrangementRecords);
         let arrangement_records = records
             .as_collection()
-            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
-                Exchange::new(move |_| u64::cast_from(worker_id)),
-                "PreArrange Differential records",
-            )
+            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(Pipeline, "PreArrange Differential records")
             .as_collection(move |op, ()| {
                 packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(*op)),
@@ -144,10 +138,7 @@ pub(super) fn construct<A: Allocate>(
         let mut packer = PermutedRowPacker::new(DifferentialLog::Sharing);
         let sharing = sharing
             .as_collection()
-            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(
-                Exchange::new(move |_| u64::cast_from(worker_id)),
-                "PreArrange Differential sharing",
-            )
+            .mz_arrange_core::<_, RowSpine<_, _, _, _>>(Pipeline, "PreArrange Differential sharing")
             .as_collection(move |op, ()| {
                 packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(*op)),
