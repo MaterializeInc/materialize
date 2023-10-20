@@ -64,7 +64,7 @@ impl MzClientContext {
         let err = match MzKafkaError::from_str(msg) {
             Ok(err) => err,
             Err(()) => {
-                error!(message = msg, "failed to parse kafka error");
+                warn!(original_error = msg, "failed to parse kafka error");
                 MzKafkaError::Internal(msg.to_owned())
             }
         };
@@ -149,15 +149,26 @@ impl FromStr for MzKafkaError {
             Ok(Self::HostnameResolutionFailed)
         } else if s.contains("mechanism handshake failed:") {
             Ok(Self::UnsupportedSASLMechanism)
-        } else if s.contains("verify that security.protocol is correctly configured, broker might require SASL authentication") {
+        } else if s.contains(
+            "verify that security.protocol is correctly configured, \
+            broker might require SASL authentication",
+        ) {
             Ok(Self::SASLAuthenticationRequired)
-        } else if s.contains("incorrect security.protocol configuration (connecting to a SSL listener?)") {
+        } else if s
+            .contains("incorrect security.protocol configuration (connecting to a SSL listener?)")
+        {
             Ok(Self::SSLAuthenticationRequired)
         } else if s.contains("probably due to broker version < 0.10") {
             Ok(Self::UnsupportedBrokerVersion)
-        } else if s.contains("Disconnected while requesting ApiVersion") {
+        } else if s.contains("Disconnected while requesting ApiVersion")
+            || s.contains("Broker transport failure")
+        {
             Ok(Self::BrokerTransportFailure)
-        } else if Regex::new(r"(\d+)/\1 brokers are down").unwrap().is_match(s).unwrap_or_default() {
+        } else if Regex::new(r"(\d+)/\1 brokers are down")
+            .unwrap()
+            .is_match(s)
+            .unwrap_or_default()
+        {
             Ok(Self::AllBrokersDown)
         } else {
             Err(())
