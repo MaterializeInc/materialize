@@ -48,7 +48,7 @@ mzcompose --mz-quiet build
 
 # Clean up cores here so that just killed processes' core files are ignored
 cores="$HOME"/cores
-rm -rf "$cores"
+rm -rf "$cores" parallel-workload-queries.log parallel-workload-queries.log.zst
 mkdir -m 777 "$cores"
 # Max 128 characters, so don't use $PWD which will make it too long
 sudo sysctl -w kernel.core_pattern="|/usr/bin/env tee $cores/core.%E.%t"

@@ -91,7 +91,7 @@ find cores -name 'core.*' | while read -r core; do
     if grep -q "Program terminated with signal SIGABRT, Aborted." "$core".txt; then
       echo "SIGABRT found in \"$core.txt\", ignoring core file"
     else
-      zstd "$core"
+      bin/ci-builder run stable zstd --rm "$core"
       buildkite-agent artifact upload "$core".txt
       buildkite-agent artifact upload "$core".zst
     fi
@@ -99,7 +99,9 @@ done
 # can be huge, clean up
 rm -rf cores
 
+bin/ci-builder run stable zstd --rm parallel-workload-queries.log || true
+
 artifacts=(run.log services.log journalctl-merge.log netstat-ant.log netstat-panelot.log ps-aux.log docker-ps-a.log docker-inspect.log)
 artifacts_str=$(IFS=";"; echo "${artifacts[*]}")
-buildkite-agent artifact upload "$artifacts_str"
+buildkite-agent artifact upload "$artifacts_str;parallel-workload-queries.log.zst"
 bin/ci-builder run stable bin/ci-logged-errors-detect "${artifacts[@]}"

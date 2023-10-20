@@ -1006,7 +1006,7 @@ ddl_action_list = ActionList(
         (ReconnectAction, 1),
         (CreateSchemaAction, 1),
         (DropSchemaAction, 1),
-        # (RenameSchemaAction, 10),  # TODO(def-): Reenable when #22490 is fixed
+        (RenameSchemaAction, 10),
         (RenameTableAction, 10),
         # (TransactionIsolationAction, 1),
     ],

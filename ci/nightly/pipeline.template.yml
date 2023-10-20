@@ -752,7 +752,7 @@ steps:
     steps:
       - id: parallel-workload-dml
         label: "Parallel Workload (DML)"
-        artifact_paths: [junit_*.xml, parallel-workload-queries.log]
+        artifact_paths: junit_*.xml
         timeout_in_minutes: 40
         agents:
           queue: builder-linux-x86_64
@@ -763,7 +763,7 @@ steps:
 
       - id: parallel-workload-ddl
         label: "Parallel Workload (DDL)"
-        artifact_paths: [junit_*.xml, parallel-workload-queries.log]
+        artifact_paths: junit_*.xml
         timeout_in_minutes: 40
         agents:
           queue: builder-linux-x86_64
@@ -775,7 +775,7 @@ steps:
       # TODO: Reenable when #21954 is fixed
       # - id: parallel-workload-100-threads
       #   label: "Parallel Workload (100 threads)"
-      #   artifact_paths: [junit_*.xml, pw-*.log]
+      #   artifact_paths: junit_*.xml
       #   timeout_in_minutes: 40
       #   agents:
       #     queue: builder-linux-x86_64
@@ -786,7 +786,7 @@ steps:
 
       - id: parallel-workload-rename-naughty
         label: "Parallel Workload (rename + naughty identifiers)"
-        artifact_paths: [junit_*.xml, parallel-workload-queries.log]
+        artifact_paths: junit_*.xml
         timeout_in_minutes: 40
         agents:
           queue: builder-linux-x86_64
@@ -797,7 +797,7 @@ steps:
 
       - id: parallel-workload-rename
         label: "Parallel Workload (rename)"
-        artifact_paths: [junit_*.xml, parallel-workload-queries.log]
+        artifact_paths: junit_*.xml
         timeout_in_minutes: 40
         agents:
           queue: builder-linux-x86_64
@@ -808,7 +808,7 @@ steps:
 
       - id: parallel-workload-cancel
         label: "Parallel Workload (cancel)"
-        artifact_paths: [junit_*.xml, parallel-workload-queries.log]
+        artifact_paths: junit_*.xml
         timeout_in_minutes: 40
         agents:
           queue: builder-linux-x86_64
@@ -820,7 +820,7 @@ steps:
       # TODO(def-) Enable after figuring out restoring catalog
       # - id: parallel-workload-kill
       #   label: "Parallel Workload (kill)"
-      #   artifact_paths: [junit_*.xml, parallel-workload-queries.log]
+      #   artifact_paths: junit_*.xml
       #   timeout_in_minutes: 40
       #   agents:
       #     queue: builder-linux-x86_64
