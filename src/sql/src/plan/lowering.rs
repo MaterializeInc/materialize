@@ -582,9 +582,21 @@ impl HirRelationExpr {
                                     .chain((oa + la + oa)..(oa + la + oa + ra))
                                     .collect(),
                             );
-                            let old_arity = product.arity();
+
+                            // Decorrelate and lower the `on` clause.
                             let on =
                                 on.applied_to(id_gen, col_map, cte_map, &mut product, &None)?;
+                            // Collect the types of all subqueries appearing in
+                            // the `on` clause. The subquery results were
+                            // appended to `product` in the `on.applied_to(...)`
+                            // call above.
+                            let on_subquery_types = product
+                                .typ()
+                                .column_types
+                                .drain(oa + la + ra..)
+                                .collect_vec();
+                            // Remember if `on` had any subqueries.
+                            let on_has_subqueries = !on_subquery_types.is_empty();
 
                             // Attempt an efficient equijoin implementation, in which outer joins are
                             // more efficiently rendered than in general. This can return `None` if
@@ -595,6 +607,7 @@ impl HirRelationExpr {
                                     get_left.clone(),
                                     get_right.clone(),
                                     on.clone(),
+                                    on_subquery_types,
                                     kind.clone(),
                                     oa,
                                     id_gen,
@@ -605,10 +618,11 @@ impl HirRelationExpr {
 
                             // Otherwise, perform a more general join.
                             let mut join = product.filter(vec![on]);
-                            let new_arity = join.arity();
-                            if old_arity != new_arity {
-                                // this means we added some columns to handle subqueries, and now we need to get rid of them
-                                join = join.project((0..old_arity).collect());
+                            if on_has_subqueries {
+                                // This means that `on.applied_to(...)` appended
+                                // some columns to handle subqueries, and now we
+                                // need to get rid of them.
+                                join = join.project((0..oa + la + ra).collect());
                             }
                             join.let_in_fallible(id_gen, |id_gen, get_join| {
                                 let mut result = get_join.clone();
@@ -1764,31 +1778,60 @@ impl AggregateExpr {
 }
 
 /// Attempts an efficient outer join, if `on` has equijoin structure.
+///
+/// Both `left` and `right` are decorrelated inputs.
+///
+/// The first `oa` columns correspond to an outer context: we should do the
+/// outer join independently for each prefix. In the case that `on` contains
+/// just some equality tests between columns of `left` and `right` and some
+/// local predicates, we can employ a relatively simple plan.
+///
+/// The last `on_subquery_types.len()` columns correspond to results from
+/// subqueries defined in the `on` clause - we treat those as theta-join
+/// conditions that prohibit the use of the simple plan attempted here.
 fn attempt_outer_equijoin(
     left: MirRelationExpr,
     right: MirRelationExpr,
     on: MirScalarExpr,
+    on_subquery_types: Vec<ColumnType>,
     kind: JoinKind,
     oa: usize,
     id_gen: &mut mz_ore::id_gen::IdGen,
 ) -> Result<Option<MirRelationExpr>, PlanError> {
-    // Both `left` and `right` are decorrelated inputs, whose first `oa` columns
-    // correspond to an outer context: we should do the outer join independently
-    // for each prefix. In the case that `on` is just some equality tests between
-    // columns of `left` and `right`, we can employ a relatively simple plan.
+    // TODO(#22581): In theory, we can be smarter and also handle `on`
+    // predicates that reference subqueries as long as these subqueries don't
+    // reference `left` and `right` at the same time.
+    //
+    // TODO(#22582): This code can be improved as follows:
+    //
+    // 1. Move the `canonicalize_predicates(...)` call to `applied_to`.
+    // 2. Use the canonicalized `on` predicate in the non-equijoin based
+    //    lowering strategy.
+    // 3. Move the `OnPredicates::new(...)` call to `applied_to`.
+    // 4. Pass the classified `OnPredicates` as a parameter.
+    // 5. Guard calls of this function with `on_predicates.is_equijoin()`.
+    //
+    // Steps (1 + 2) require further investigation because we might change the
+    // error semantics in case the `on` predicate contains a literal error..
 
     let l_type = left.typ();
     let r_type = right.typ();
     let la = l_type.column_types.len() - oa;
     let ra = r_type.column_types.len() - oa;
+    let sa = on_subquery_types.len();
 
-    // The output type contains [outer, left, right] attributes.
-    let mut output_type = Vec::with_capacity(oa + la + ra);
+    // The output type contains [outer, left, right, sa] attributes.
+    let mut output_type = Vec::with_capacity(oa + la + ra + sa);
     output_type.extend(l_type.column_types);
     output_type.extend(r_type.column_types.into_iter().skip(oa));
+    output_type.extend(on_subquery_types);
 
     // Generally healthy to do, but specifically `USING` conditions sometimes
     // put an `AND true` at the end of the `ON` condition.
+    //
+    // TODO(aalexandrov): maybe we should already be doing this in `applied_to`.
+    // However, in that case it's not clear that we won't see regressions if
+    // `on` simplifies to a literal error.
     let mut on = vec![on];
     mz_expr::canonicalize::canonicalize_predicates(&mut on, &output_type);
 
@@ -1796,14 +1839,12 @@ fn attempt_outer_equijoin(
     output_type.drain(0..oa);
     let lt = output_type.drain(0..la).collect_vec();
     let rt = output_type.drain(0..ra).collect_vec();
-    assert!(output_type.is_empty());
+    assert!(output_type.len() == sa);
 
-    let equijoin_keys = derive_equijoin_cols(oa, la, ra, on.clone());
-    if equijoin_keys.is_none() {
+    let on_predicates = OnPredicates::new(oa, la, ra, sa, on.clone());
+    if !on_predicates.is_equijoin() {
         return Ok(None);
     }
-
-    let (l_keys, r_keys) = equijoin_keys.unwrap();
 
     // If we've gotten this far, we can do the clever thing.
     // We'll want to use left and right multiple times
@@ -1833,9 +1874,9 @@ fn attempt_outer_equijoin(
                 let mut result = get_join.clone();
 
                 // A collection of keys present in both left and right collections.
-                let both_keys = get_join
-                    .project((0..oa).chain(l_keys.clone()).collect::<Vec<_>>())
-                    .distinct();
+                let join_keys = on_predicates.join_keys();
+                let both_keys_arity = join_keys.len();
+                let both_keys = get_join.restrict(join_keys).distinct();
 
                 // The plan is now to determine the left and right rows matched in the
                 // inner join, subtract them from left and right respectively, pad what
@@ -1843,14 +1884,19 @@ fn attempt_outer_equijoin(
 
                 both_keys.let_in_fallible(id_gen, |_id_gen, get_both| {
                     if let JoinKind::LeftOuter { .. } | JoinKind::FullOuter = kind {
-                        // Rows in `left` that are matched in the inner equijoin.
-                        let left_present = MirRelationExpr::join(
-                            vec![get_left.clone(), get_both.clone()],
-                            (0..oa)
-                                .chain(l_keys.clone())
-                                .enumerate()
-                                .map(|(i, c)| vec![(0, c), (1, i)])
-                                .collect::<Vec<_>>(),
+                        // Rows in `left` matched in the inner equijoin. This is
+                        // a semi-join between `left` and `both_keys`.
+                        let left_present = MirRelationExpr::join_scalars(
+                            vec![
+                                get_left.clone(), // TODO(#22348): push local predicates to left.
+                                get_both.clone(),
+                            ],
+                            itertools::zip_eq(
+                                on_predicates.eq_lhs(),
+                                (0..both_keys_arity).map(|k| MirScalarExpr::column(oa + la + k)),
+                            )
+                            .map(|(l_key, b_key)| [l_key, b_key].to_vec())
+                            .collect(),
                         )
                         .project((0..(oa + la)).collect());
 
@@ -1869,14 +1915,19 @@ fn attempt_outer_equijoin(
                     }
 
                     if let JoinKind::RightOuter | JoinKind::FullOuter = kind {
-                        // Rows in `right` that are matched in the inner equijoin.
-                        let right_present = MirRelationExpr::join(
-                            vec![get_right.clone(), get_both],
-                            (0..oa)
-                                .chain(r_keys.clone())
-                                .enumerate()
-                                .map(|(i, c)| vec![(0, c), (1, i)])
-                                .collect::<Vec<_>>(),
+                        // Rows in `right` matched in the inner equijoin. This
+                        // is a semi-join between `right` and `both_keys`.
+                        let right_present = MirRelationExpr::join_scalars(
+                            vec![
+                                get_right.clone(), // TODO(#22348): push local predicates to right.
+                                get_both,
+                            ],
+                            itertools::zip_eq(
+                                on_predicates.eq_rhs(),
+                                (0..both_keys_arity).map(|k| MirScalarExpr::column(oa + ra + k)),
+                            )
+                            .map(|(r_key, b_key)| [r_key, b_key].to_vec())
+                            .collect(),
                         )
                         .project((0..(oa + ra)).collect());
 
@@ -1893,10 +1944,12 @@ fn attempt_outer_equijoin(
                             .map(left_fill)
                             // Permute left fill before right values.
                             .project(
-                                (0..oa)
-                                    .chain(oa + ra..oa + ra + la)
-                                    .chain(oa..oa + ra)
-                                    .collect(),
+                                itertools::chain!(
+                                    0..oa,                 // Preserve `outer`.
+                                    oa + ra..oa + la + ra, // Increment the next `la` cols by `ra`.
+                                    oa..oa + ra            // Decrement the next `ra` cols by `la`.
+                                )
+                                .collect(),
                             )
                             .union(result)
                     }
@@ -1964,5 +2017,291 @@ pub(crate) fn derive_equijoin_cols(
         None
     } else {
         Some((l_keys, r_keys))
+    }
+}
+
+/// A struct that represents the predicates in the `on` clause in a form
+/// suitable for efficient planning outer joins with equijoin predicates.
+struct OnPredicates {
+    /// A store for classified `ON` predicates.
+    ///
+    /// Predicates that reference a single side are adjusted to assume an
+    /// `outer × <side>` schema.
+    predicates: Vec<OnPredicate>,
+    /// Number of outer context columns.
+    oa: usize,
+}
+
+impl OnPredicates {
+    const I_OUT: usize = 0; // outer context input position
+    const I_LHS: usize = 1; // lhs input position
+    const I_RHS: usize = 2; // rhs input position
+    const I_SUB: usize = 3; // on subqueries input position
+
+    /// Classify the predicates in the `on` clause of an outer join.
+    ///
+    /// The other parameters are arities of the input parts:
+    ///
+    /// - `oa` is the arity of the `outer` context.
+    /// - `la` is the arity of the `left` input.
+    /// - `ra` is the arity of the `right` input.
+    /// - `sa` is the arity of the `on` subqueries.
+    ///
+    /// The constructor assumes that:
+    ///
+    /// 1. The `on` parameter will be applied on a result that has the following
+    ///    schema `outer × left × right × on_subqueries`.
+    /// 2. The `on` parameter is already adjusted to assume that schema.
+    /// 3. The `on` parameter is obtained by canonicalizing the original `on:
+    ///    MirScalarExpr` with `canonicalize_predicates`.
+    fn new(oa: usize, la: usize, ra: usize, sa: usize, on: Vec<MirScalarExpr>) -> Self {
+        use mz_expr::BinaryFunc::Eq;
+
+        // Re-bind those locally for more compact pattern matching.
+        const I_LHS: usize = OnPredicates::I_LHS;
+        const I_RHS: usize = OnPredicates::I_RHS;
+
+        // Self parameters.
+        let mut predicates = Vec::with_capacity(on.len());
+
+        // Helpers for populating `predicates`.
+        let inner_join_mapper = mz_expr::JoinInputMapper::new_from_input_arities([oa, la, ra, sa]);
+        let rhs_permutation = itertools::chain!(0..oa + la, oa..oa + ra).collect::<Vec<_>>();
+        let lookup_inputs = |expr: &MirScalarExpr| -> Vec<usize> {
+            inner_join_mapper
+                .lookup_inputs(expr)
+                .filter(|&i| i != Self::I_OUT)
+                .collect()
+        };
+        let has_subquery_refs = |expr: &MirScalarExpr| -> bool {
+            inner_join_mapper
+                .lookup_inputs(expr)
+                .any(|i| i == Self::I_SUB)
+        };
+
+        // Iterate over `on` elements and populate `predicates`.
+        for mut predicate in on {
+            if predicate.might_error() {
+                tracing::debug!(case = "thetajoin (error)", "OnPredicates::new");
+                // Treat predicates that can produce a literal error as Theta.
+                predicates.push(OnPredicate::Theta(predicate));
+            } else if has_subquery_refs(&predicate) {
+                tracing::debug!(case = "thetajoin (subquery)", "OnPredicates::new");
+                // Treat predicates referencing an `on` subquery as Theta.
+                predicates.push(OnPredicate::Theta(predicate));
+            } else if let MirScalarExpr::CallBinary {
+                func: Eq,
+                expr1,
+                expr2,
+            } = &mut predicate
+            {
+                // Obtain the non-outer inputs referenced by each side.
+                let inputs1 = lookup_inputs(expr1);
+                let inputs2 = lookup_inputs(expr2);
+
+                match (&inputs1[..], &inputs2[..]) {
+                    // Neither side references an input. This could be a
+                    // constant expression or an expression that depends only on
+                    // the outer context.
+                    ([], []) => {
+                        predicates.push(OnPredicate::Const(predicate));
+                    }
+                    // Both sides reference different inputs.
+                    ([I_LHS], [I_RHS]) => {
+                        let lhs = expr1.take();
+                        let mut rhs = expr2.take();
+                        rhs.permute(&rhs_permutation);
+                        predicates.push(OnPredicate::Eq(lhs, rhs));
+                    }
+                    // Both sides reference different inputs (swapped).
+                    ([I_RHS], [I_LHS]) => {
+                        let lhs = expr2.take();
+                        let mut rhs = expr1.take();
+                        rhs.permute(&rhs_permutation);
+                        predicates.push(OnPredicate::Eq(lhs, rhs));
+                    }
+                    // Both sides reference the left input or no input.
+                    ([I_LHS], [I_LHS]) | ([I_LHS], []) | ([], [I_LHS]) => {
+                        predicates.push(OnPredicate::Lhs(predicate));
+                    }
+                    // Both sides reference the right input or no input.
+                    ([I_RHS], [I_RHS]) | ([I_RHS], []) | ([], [I_RHS]) => {
+                        predicate.permute(&rhs_permutation);
+                        predicates.push(OnPredicate::Rhs(predicate));
+                    }
+                    // At least one side references more than one input.
+                    _ => {
+                        tracing::debug!(case = "thetajoin (eq)", "OnPredicates::new");
+                        predicates.push(OnPredicate::Theta(predicate));
+                    }
+                }
+            } else {
+                // Obtain the non-outer inputs referenced by this predicate.
+                let inputs = lookup_inputs(&predicate);
+
+                match &inputs[..] {
+                    // The predicate references no inputs. This could be a
+                    // constant expression or an expression that depends only on
+                    // the outer context.
+                    [] => {
+                        predicates.push(OnPredicate::Const(predicate));
+                    }
+                    // The predicate references only the left input.
+                    [I_LHS] => {
+                        predicates.push(OnPredicate::Lhs(predicate));
+                    }
+                    // The predicate references only the right input.
+                    [I_RHS] => {
+                        predicate.permute(&rhs_permutation);
+                        predicates.push(OnPredicate::Rhs(predicate));
+                    }
+                    // The predicate references both inputs.
+                    _ => {
+                        tracing::debug!(case = "thetajoin (non-eq)", "OnPredicates::new");
+                        predicates.push(OnPredicate::Theta(predicate));
+                    }
+                }
+            }
+        }
+
+        Self { predicates, oa }
+    }
+
+    /// Check if the predicates can be lowered with an equijoin-based strategy.
+    fn is_equijoin(&self) -> bool {
+        // Count each `OnPredicate` variant in `self.predicates`.
+        let (const_cnt, lhs_cnt, rhs_cnt, eq_cnt, theta_cnt) =
+            self.predicates
+                .iter()
+                .fold((0, 0, 0, 0, 0), |(c, l, r, e, t), p| {
+                    (
+                        c + usize::from(matches!(p, OnPredicate::Const(..))),
+                        l + usize::from(matches!(p, OnPredicate::Lhs(..))),
+                        r + usize::from(matches!(p, OnPredicate::Rhs(..))),
+                        e + usize::from(matches!(p, OnPredicate::Eq(..))),
+                        t + usize::from(matches!(p, OnPredicate::Theta(..))),
+                    )
+                });
+
+        // TODO(#22348): support non-zero local predicates.
+        if eq_cnt > 0 && theta_cnt + const_cnt + lhs_cnt + rhs_cnt == 0 {
+            tracing::debug!(
+                const_cnt,
+                lhs_cnt,
+                rhs_cnt,
+                eq_cnt,
+                theta_cnt,
+                "OnPredicates::is_equijoin"
+            );
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Return an [`MirRelationExpr`] list that represents the keys for the
+    /// equijoin. The list will contain the outer columns as a prefix.
+    fn join_keys(&self) -> JoinKeys {
+        // We could return either the `lhs` or the `rhs` of the keys used to
+        // form the inner join as they are equated by the join condition.
+        let join_keys = self.eq_lhs().collect::<Vec<_>>();
+
+        if join_keys.iter().all(|k| k.is_column()) {
+            tracing::debug!(case = "outputs", "OnPredicates::join_keys");
+            JoinKeys::Outputs(join_keys.iter().flat_map(|k| k.as_column()).collect())
+        } else {
+            tracing::debug!(case = "scalars", "OnPredicates::join_keys");
+            JoinKeys::Scalars(join_keys)
+        }
+    }
+
+    /// Return an iterator over the left-hand sides of all [`OnPredicate::Eq`]
+    /// conditions in the predicates list.
+    ///
+    /// The iterator will start with column references to the outer columns as a
+    /// prefix.
+    fn eq_lhs(&self) -> impl Iterator<Item = MirScalarExpr> + '_ {
+        itertools::chain(
+            (0..self.oa).map(MirScalarExpr::column),
+            self.predicates.iter().filter_map(|e| match e {
+                OnPredicate::Eq(lhs, _) => Some(lhs.clone()),
+                _ => None,
+            }),
+        )
+    }
+
+    /// Return an iterator over the right-hand sides of all [`OnPredicate::Eq`]
+    /// conditions in the predicates list.
+    ///
+    /// The iterator will start with column references to the outer columns as a
+    /// prefix.
+    fn eq_rhs(&self) -> impl Iterator<Item = MirScalarExpr> + '_ {
+        itertools::chain(
+            (0..self.oa).map(MirScalarExpr::column),
+            self.predicates.iter().filter_map(|e| match e {
+                OnPredicate::Eq(_, rhs) => Some(rhs.clone()),
+                _ => None,
+            }),
+        )
+    }
+}
+
+enum OnPredicate {
+    // A predicate that is either constant or references only outer columns.
+    Const(MirScalarExpr),
+    // A local predicate on the left-hand side of the join.
+    Lhs(MirScalarExpr),
+    // A local predicate on the right-hand side of the join.
+    Rhs(MirScalarExpr),
+    // An equality predicate between the two sides.
+    Eq(MirScalarExpr, MirScalarExpr),
+    // a non-equality predicate between the two sides.
+    Theta(MirScalarExpr),
+}
+
+/// A set of join keys referencing an input.
+///
+/// This is used in the [`MirRelationExpr::Join`] lowering code in order to
+/// avoid changes (and thereby possible regressions) in plans that have equijoin
+/// predicates consisting only of column refs.
+///
+/// If we were running `CanonicalizeMfp` as part of `NormalizeOps` we might be
+/// able to get rid of this code, but as it stands `Map` simplification seems
+/// more cumbersome than `Project` simplification, so do this just to be sure.
+enum JoinKeys {
+    // A predicate that is either constant or references only outer columns.
+    Outputs(Vec<usize>),
+    // A local predicate on the left-hand side of the join.
+    Scalars(Vec<MirScalarExpr>),
+}
+
+impl JoinKeys {
+    fn len(&self) -> usize {
+        match self {
+            JoinKeys::Outputs(outputs) => outputs.len(),
+            JoinKeys::Scalars(scalars) => scalars.len(),
+        }
+    }
+}
+
+/// Extension methods for [`MirRelationExpr`] required in the HIR ⇒ MIR lowering
+/// code.
+trait LoweringExt {
+    /// See [`MirRelationExpr::restrict`].
+    fn restrict(self, join_keys: JoinKeys) -> Self;
+}
+
+impl LoweringExt for MirRelationExpr {
+    /// Restrict the set of columns of an input to the sequence of [`JoinKeys`].
+    fn restrict(self, join_keys: JoinKeys) -> Self {
+        let num_keys = join_keys.len();
+        match join_keys {
+            JoinKeys::Outputs(outputs) => self.project(outputs),
+            JoinKeys::Scalars(scalars) => {
+                let input_arity = self.arity();
+                let outputs = (input_arity..input_arity + num_keys).collect();
+                self.map(scalars).project(outputs)
+            }
+        }
     }
 }
