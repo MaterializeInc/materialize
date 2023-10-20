@@ -645,15 +645,14 @@ class Composition:
 
     def try_pull_service_image(self, service: Service, max_tries: int = 2) -> bool:
         """Tries to pull the specified image and returns if this was successful."""
-
-        with self.override(service):
-            try:
+        try:
+            with self.override(service):
                 self.pull_single_image_by_service_name(
                     service.name, max_tries=max_tries
                 )
                 return True
-            except UIError:
-                return False
+        except UIError:
+            return False
 
     def up(
         self,
