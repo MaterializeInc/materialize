@@ -19,7 +19,7 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use mz_catalog::builtin::{
-    Builtin, Fingerprint, BUILTINS, BUILTIN_CLUSTERS, BUILTIN_PREFIXES, BUILTIN_ROLES,
+    Builtin, Fingerprint, Sensitivity, BUILTINS, BUILTIN_CLUSTERS, BUILTIN_PREFIXES, BUILTIN_ROLES,
 };
 use mz_catalog::objects::{
     IntrospectionSourceIndex, SystemObjectDescription, SystemObjectUniqueIdentifier,
@@ -478,6 +478,23 @@ impl Catalog {
                 match builtin {
                     Builtin::Log(log) => {
                         let oid = catalog.allocate_oid()?;
+                        let mut acl_items = vec![rbac::owner_privilege(
+                            mz_sql::catalog::ObjectType::Source,
+                            MZ_SYSTEM_ROLE_ID,
+                        )];
+                        match log.sensitivity {
+                            Sensitivity::Public => {
+                                acl_items.push(rbac::default_builtin_object_privilege(
+                                    mz_sql::catalog::ObjectType::Source,
+                                ));
+                            }
+                            Sensitivity::SuperuserAndSupport => {
+                                acl_items.push(rbac::support_builtin_object_privilege(
+                                    mz_sql::catalog::ObjectType::Source,
+                                ));
+                            }
+                            Sensitivity::Superuser => {}
+                        }
                         catalog.state.insert_item(
                             id,
                             oid,
@@ -487,20 +504,30 @@ impl Catalog {
                                 has_storage_collection: false,
                             }),
                             MZ_SYSTEM_ROLE_ID,
-                            PrivilegeMap::from_mz_acl_items(vec![
-                                rbac::default_builtin_object_privilege(
-                                    mz_sql::catalog::ObjectType::Source,
-                                ),
-                                rbac::owner_privilege(
-                                    mz_sql::catalog::ObjectType::Source,
-                                    MZ_SYSTEM_ROLE_ID,
-                                ),
-                            ]),
+                            PrivilegeMap::from_mz_acl_items(acl_items),
                         );
                     }
 
                     Builtin::Table(table) => {
                         let oid = catalog.allocate_oid()?;
+                        let mut acl_items = vec![rbac::owner_privilege(
+                            mz_sql::catalog::ObjectType::Table,
+                            MZ_SYSTEM_ROLE_ID,
+                        )];
+                        match table.sensitivity {
+                            Sensitivity::Public => {
+                                acl_items.push(rbac::default_builtin_object_privilege(
+                                    mz_sql::catalog::ObjectType::Table,
+                                ));
+                            }
+                            Sensitivity::SuperuserAndSupport => {
+                                acl_items.push(rbac::support_builtin_object_privilege(
+                                    mz_sql::catalog::ObjectType::Table,
+                                ));
+                            }
+                            Sensitivity::Superuser => {}
+                        }
+
                         catalog.state.insert_item(
                             id,
                             oid,
@@ -517,15 +544,7 @@ impl Catalog {
                                 is_retained_metrics_object: table.is_retained_metrics_object,
                             }),
                             MZ_SYSTEM_ROLE_ID,
-                            PrivilegeMap::from_mz_acl_items(vec![
-                                rbac::default_builtin_object_privilege(
-                                    mz_sql::catalog::ObjectType::Table,
-                                ),
-                                rbac::owner_privilege(
-                                    mz_sql::catalog::ObjectType::Table,
-                                    MZ_SYSTEM_ROLE_ID,
-                                ),
-                            ]),
+                            PrivilegeMap::from_mz_acl_items(acl_items),
                         );
                     }
                     Builtin::Index(_) => {
@@ -551,21 +570,31 @@ impl Catalog {
                                 )
                             });
                         let oid = catalog.allocate_oid()?;
+                        let mut acl_items = vec![rbac::owner_privilege(
+                            mz_sql::catalog::ObjectType::View,
+                            MZ_SYSTEM_ROLE_ID,
+                        )];
+                        match view.sensitivity {
+                            Sensitivity::Public => {
+                                acl_items.push(rbac::default_builtin_object_privilege(
+                                    mz_sql::catalog::ObjectType::View,
+                                ));
+                            }
+                            Sensitivity::SuperuserAndSupport => {
+                                acl_items.push(rbac::support_builtin_object_privilege(
+                                    mz_sql::catalog::ObjectType::View,
+                                ));
+                            }
+                            Sensitivity::Superuser => {}
+                        }
+
                         catalog.state.insert_item(
                             id,
                             oid,
                             name,
                             item,
                             MZ_SYSTEM_ROLE_ID,
-                            PrivilegeMap::from_mz_acl_items(vec![
-                                rbac::default_builtin_object_privilege(
-                                    mz_sql::catalog::ObjectType::View,
-                                ),
-                                rbac::owner_privilege(
-                                    mz_sql::catalog::ObjectType::View,
-                                    MZ_SYSTEM_ROLE_ID,
-                                ),
-                            ]),
+                            PrivilegeMap::from_mz_acl_items(acl_items),
                         );
                     }
 
@@ -590,6 +619,24 @@ impl Catalog {
                         };
 
                         let oid = catalog.allocate_oid()?;
+                        let mut acl_items = vec![rbac::owner_privilege(
+                            mz_sql::catalog::ObjectType::Source,
+                            MZ_SYSTEM_ROLE_ID,
+                        )];
+                        match coll.sensitivity {
+                            Sensitivity::Public => {
+                                acl_items.push(rbac::default_builtin_object_privilege(
+                                    mz_sql::catalog::ObjectType::Source,
+                                ));
+                            }
+                            Sensitivity::SuperuserAndSupport => {
+                                acl_items.push(rbac::support_builtin_object_privilege(
+                                    mz_sql::catalog::ObjectType::Source,
+                                ));
+                            }
+                            Sensitivity::Superuser => {}
+                        }
+
                         catalog.state.insert_item(
                             id,
                             oid,
@@ -606,15 +653,7 @@ impl Catalog {
                                 is_retained_metrics_object: coll.is_retained_metrics_object,
                             }),
                             MZ_SYSTEM_ROLE_ID,
-                            PrivilegeMap::from_mz_acl_items(vec![
-                                rbac::default_builtin_object_privilege(
-                                    mz_sql::catalog::ObjectType::Source,
-                                ),
-                                rbac::owner_privilege(
-                                    mz_sql::catalog::ObjectType::Source,
-                                    MZ_SYSTEM_ROLE_ID,
-                                ),
-                            ]),
+                            PrivilegeMap::from_mz_acl_items(acl_items),
                         );
                     }
                 }

@@ -80,6 +80,8 @@ pub static MZ_SINK_STATUS_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {
         .with_column("details", ScalarType::Jsonb.nullable(true))
 });
 
+// NOTE: Update the view `mz_statement_execution_history_redacted` whenever this is updated,
+// to include the new columns if and only if they're allowed to be queried by mz_support.
 pub static MZ_PREPARED_STATEMENT_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {
     RelationDesc::empty()
         .with_column("id", ScalarType::Uuid.nullable(false))
@@ -107,6 +109,8 @@ pub static MZ_SESSION_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {
         .with_column("authenticated_user", ScalarType::String.nullable(false))
 });
 
+// NOTE: Update the view `mz_statement_execution_history_redacted` whenever this is updated,
+// to include the new columns if and only if they're allowed to be queried by mz_support.
 pub static MZ_STATEMENT_EXECUTION_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {
     RelationDesc::empty()
         .with_column("id", ScalarType::Uuid.nullable(false))
