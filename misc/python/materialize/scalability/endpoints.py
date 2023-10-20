@@ -164,5 +164,5 @@ def endpoint_name_to_description(endpoint_name: str) -> str:
     commit_sha = endpoint_name.split(" ")[1].strip("()")
 
     # empty when mz_version() reports a Git SHA that is not available in the current repository
-    commit_message = git.get_commit_message(commit_sha)
+    commit_message = git.get_commit_message(commit_sha) or "unknown"
     return f"{endpoint_name} - {commit_message}"
