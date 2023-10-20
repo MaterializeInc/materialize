@@ -3598,55 +3598,6 @@ impl Catalog {
     pub fn ensure_not_system_role(&self, role_id: &RoleId) -> Result<(), Error> {
         self.state.ensure_not_system_role(role_id)
     }
-
-    pub fn ensure_not_reserved_object(
-        &self,
-        object_id: &ObjectId,
-        conn_id: &ConnectionId,
-    ) -> Result<(), Error> {
-        match object_id {
-            ObjectId::Cluster(cluster_id) | ObjectId::ClusterReplica((cluster_id, _)) => {
-                if cluster_id.is_system() {
-                    let cluster = self.get_cluster(*cluster_id);
-                    Err(Error::new(ErrorKind::ReadOnlyCluster(
-                        cluster.name().to_string(),
-                    )))
-                } else {
-                    Ok(())
-                }
-            }
-            ObjectId::Database(database_id) => {
-                if database_id.is_system() {
-                    let database = self.get_database(database_id);
-                    Err(Error::new(ErrorKind::ReadOnlyDatabase(
-                        database.name().to_string(),
-                    )))
-                } else {
-                    Ok(())
-                }
-            }
-            ObjectId::Schema((database_spec, schema_spec)) => {
-                if schema_spec.is_system() {
-                    let schema = self.get_schema(database_spec, schema_spec, conn_id);
-                    Err(Error::new(ErrorKind::ReadOnlySystemSchema(
-                        schema.name().schema.clone(),
-                    )))
-                } else {
-                    Ok(())
-                }
-            }
-            ObjectId::Role(role_id) => self.ensure_not_reserved_role(role_id),
-            ObjectId::Item(item_id) => {
-                if item_id.is_system() {
-                    let item = self.get_entry(item_id);
-                    let name = self.resolve_full_name(item.name(), Some(conn_id));
-                    Err(Error::new(ErrorKind::ReadOnlyItem(name.to_string())))
-                } else {
-                    Ok(())
-                }
-            }
-        }
-    }
 }
 
 pub fn is_reserved_name(name: &str) -> bool {

@@ -3386,6 +3386,38 @@ DROP ROLE r1, r2, r3;
 ----
 COMPLETE 0
 
+# Test that superusers can alter privileges of builtin objects
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE r1;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+GRANT INSERT ON mz_views TO r1
+----
+db error: ERROR: must be owner of TABLE mz_catalog.mz_views
+
+simple conn=child,user=child
+GRANT INSERT ON mz_views TO r1
+----
+db error: ERROR: must be owner of TABLE mz_catalog.mz_views
+
+simple conn=mz_system,user=mz_system
+GRANT INSERT ON mz_views TO r1
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE INSERT ON mz_views FROM r1
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP ROLE r1
+----
+COMPLETE 0
+
 # Disable rbac checks.
 
 simple conn=mz_system,user=mz_system

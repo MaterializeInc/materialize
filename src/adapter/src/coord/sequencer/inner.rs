@@ -5791,11 +5791,6 @@ impl Coordinator {
                 }
             }
 
-            if let SystemObjectId::Object(object_id) = &target_id {
-                self.catalog()
-                    .ensure_not_reserved_object(object_id, session.conn_id())?;
-            }
-
             let privileges = self
                 .catalog()
                 .get_privileges(&target_id, session.conn_id())
@@ -5884,19 +5879,6 @@ impl Coordinator {
         for privilege_object in &privilege_objects {
             self.catalog()
                 .ensure_not_system_role(&privilege_object.role_id)?;
-            if let Some(database_id) = privilege_object.database_id {
-                self.catalog()
-                    .ensure_not_reserved_object(&database_id.into(), session.conn_id())?;
-            }
-            if let Some(schema_id) = privilege_object.schema_id {
-                let database_spec: ResolvedDatabaseSpecifier = privilege_object.database_id.into();
-                let schema_spec: SchemaSpecifier = schema_id.into();
-
-                self.catalog().ensure_not_reserved_object(
-                    &(database_spec, schema_spec).into(),
-                    session.conn_id(),
-                )?;
-            }
             for privilege_acl_item in &privilege_acl_items {
                 self.catalog()
                     .ensure_not_system_role(&privilege_acl_item.grantee)?;

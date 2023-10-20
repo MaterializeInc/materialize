@@ -5144,9 +5144,6 @@ ALTER DEFAULT PRIVILEGES FOR ROLE mz_support GRANT SELECT ON TABLES TO PUBLIC
 db error: ERROR: role name "mz_support" is reserved
 DETAIL: The role prefixes "mz_" and "pg_" are reserved for system roles.
 
-statement error system schema 'mz_catalog' cannot be modified
-ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN SCHEMA mz_catalog GRANT INSERT ON TABLES TO PUBLIC
-
 statement error role name "mz_system" is reserved
 ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT INSERT ON TABLES TO mz_system
 
@@ -5195,6 +5192,23 @@ SELECT * FROM default_privileges
 ----
 PUBLIC  NULL  NULL  type  PUBLIC  U
 
+# Test that superusers can alter default privileges of builtin objects
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN SCHEMA mz_catalog GRANT INSERT ON TABLES TO materialize
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN SCHEMA mz_catalog REVOKE INSERT ON TABLES FROM materialize
+
+simple conn=mz_system,user=mz_system
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN SCHEMA mz_catalog GRANT INSERT ON TABLES TO materialize
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN SCHEMA mz_catalog REVOKE INSERT ON TABLES FROM materialize
+----
+COMPLETE 0
 
 # Disable rbac checks.
 simple conn=mz_system,user=mz_system
