@@ -5,9 +5,9 @@
 
 //! Report rusage metrics.
 
-use std::ops::Add;
 use std::time::Duration;
 
+use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use prometheus::{Gauge, IntGauge};
 
@@ -63,9 +63,10 @@ impl Unit for Timeval {
     type To = f64;
     fn from(Self::From { tv_sec, tv_usec }: Self::From) -> Self::To {
         // timeval can capture negative values; it'd be surprising to see a negative values here.
-        Duration::from_secs(tv_sec.abs_diff(0))
-            .add(Duration::from_micros(tv_usec.abs_diff(0)))
-            .as_secs_f64()
+
+        (Duration::from_secs(u64::cast_from(tv_sec.abs_diff(0)))
+            + Duration::from_micros(u64::cast_from(tv_usec.abs_diff(0))))
+        .as_secs_f64()
     }
 }
 
