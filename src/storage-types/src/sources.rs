@@ -128,14 +128,11 @@ impl<S: Debug + Eq + PartialEq + crate::AlterCompatible> AlterCompatible
             remap_collection_id,
         } = self;
 
-        self.desc.alter_compatible(id, desc)?;
-
         let compatibility_checks = [
+            (self.desc.alter_compatible(id, desc).is_ok(), "desc"),
             (source_imports == &other.source_imports, "source_imports"),
             (
-                ingestion_metadata
-                    .alter_compatible(id, &other.ingestion_metadata)
-                    .is_ok(),
+                ingestion_metadata == &other.ingestion_metadata,
                 "ingestion_metadata",
             ),
             (
@@ -1512,7 +1509,55 @@ impl<C: ConnectionAccess> SourceConnection for KafkaSourceConnection<C> {
     }
 }
 
-impl<C: ConnectionAccess> crate::AlterCompatible for KafkaSourceConnection<C> {}
+impl<C: ConnectionAccess> crate::AlterCompatible for KafkaSourceConnection<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), StorageError> {
+        if self == other {
+            return Ok(());
+        }
+
+        let KafkaSourceConnection {
+            // Connection details may change
+            connection: _,
+            connection_id,
+            topic,
+            start_offsets,
+            group_id_prefix,
+            environment_id,
+            metadata_columns,
+            connection_options,
+        } = self;
+
+        let compatibility_checks = [
+            (connection_id == &other.connection_id, "connection_id"),
+            (topic == &other.topic, "topic"),
+            (start_offsets == &other.start_offsets, "start_offsets"),
+            (group_id_prefix == &other.group_id_prefix, "group_id_prefix"),
+            (environment_id == &other.environment_id, "environment_id"),
+            (
+                metadata_columns == &other.metadata_columns,
+                "metadata_columns",
+            ),
+            (
+                connection_options == &other.connection_options,
+                "connection_options",
+            ),
+        ];
+
+        for (compatible, field) in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "KafkaSourceConnection incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(StorageError::InvalidAlter { id });
+            }
+        }
+
+        Ok(())
+    }
+}
 
 impl<C: ConnectionAccess> Arbitrary for KafkaSourceConnection<C>
 where
@@ -1783,10 +1828,12 @@ impl<C: ConnectionAccess> crate::AlterCompatible for SourceDesc<C> {
             envelope,
             timestamp_interval,
         } = &self;
-        connection.alter_compatible(id, &other.connection)?;
 
         let compatibility_checks = [
-            (connection == &other.connection, "connection"),
+            (
+                connection.alter_compatible(id, &other.connection).is_ok(),
+                "connection",
+            ),
             (encoding == &other.encoding, "encoding"),
             (envelope == &other.envelope, "envelope"),
             (
@@ -2066,7 +2113,8 @@ impl<C: ConnectionAccess> crate::AlterCompatible for PostgresSourceConnection<C>
 
         let PostgresSourceConnection {
             connection_id,
-            connection,
+            // Connection details may change
+            connection: _,
             table_casts,
             publication,
             publication_details,
@@ -2074,7 +2122,6 @@ impl<C: ConnectionAccess> crate::AlterCompatible for PostgresSourceConnection<C>
 
         let compatibility_checks = [
             (connection_id == &other.connection_id, "connection_id"),
-            (connection == &other.connection, "connection"),
             (
                 table_casts
                     .iter()
