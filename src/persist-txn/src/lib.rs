@@ -282,7 +282,6 @@ use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tracing::{debug, instrument};
 
-pub mod error;
 pub mod operator;
 pub mod txn_read;
 pub mod txn_write;
