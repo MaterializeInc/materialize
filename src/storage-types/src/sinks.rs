@@ -76,7 +76,10 @@ impl<S: Debug + StorageSinkDescFillState + PartialEq, T: Debug + PartialEq + Par
         let compatibility_checks = [
             (from == &other.from, "from"),
             (from_desc == &other.from_desc, "from_desc"),
-            (connection == &other.connection, "connection"),
+            (
+                connection.alter_compatible(id, &other.connection).is_ok(),
+                "connection",
+            ),
             (envelope == &other.envelope, "envelope"),
             (status_id == &other.status_id, "status_id"),
             (
@@ -283,6 +286,29 @@ pub enum StorageSinkConnection<C: ConnectionAccess = InlinedConnection> {
     Kafka(KafkaSinkConnection<C>),
 }
 
+impl<C: ConnectionAccess> StorageSinkConnection<C> {
+    /// Determines if `self` is compatible with another `StorageSinkConnection`,
+    /// in such a way that it is possible to turn `self` into `other` through a
+    /// valid series of transformations (e.g. no transformation or `ALTER
+    /// CONNECTION`).
+    pub fn alter_compatible(
+        &self,
+        id: GlobalId,
+        other: &StorageSinkConnection<C>,
+    ) -> Result<(), StorageError> {
+        if self == other {
+            return Ok(());
+        }
+        match (self, other) {
+            (StorageSinkConnection::Kafka(s), StorageSinkConnection::Kafka(o)) => {
+                s.alter_compatible(id, o)?
+            }
+        }
+
+        Ok(())
+    }
+}
+
 impl<R: ConnectionResolver> IntoInlineConnection<StorageSinkConnection, R>
     for StorageSinkConnection<ReferencedConnection>
 {
@@ -420,6 +446,81 @@ pub struct KafkaSinkConnection<C: ConnectionAccess = InlinedConnection> {
     /// Additional options that need to be set on the connection whenever it's
     /// inlined.
     pub connection_options: BTreeMap<String, StringOrSecret>,
+}
+
+impl<C: ConnectionAccess> KafkaSinkConnection<C> {
+    /// Determines if `self` is compatible with another `StorageSinkConnection`,
+    /// in such a way that it is possible to turn `self` into `other` through a
+    /// valid series of transformations (e.g. no transformation or `ALTER
+    /// CONNECTION`).
+    pub fn alter_compatible(
+        &self,
+        id: GlobalId,
+        other: &KafkaSinkConnection<C>,
+    ) -> Result<(), StorageError> {
+        if self == other {
+            return Ok(());
+        }
+        let KafkaSinkConnection {
+            connection_id,
+            // The details of the Kafka connection itself may change
+            connection: _,
+            format,
+            relation_key_indices,
+            key_desc_and_indices,
+            value_desc,
+            topic,
+            consistency_config,
+            partition_count,
+            replication_factor,
+            fuel,
+            retention,
+            connection_options,
+        } = self;
+
+        let compatibility_checks = [
+            (connection_id == &other.connection_id, "connection_id"),
+            (format.alter_compatible(id, &other.format).is_ok(), "format"),
+            (
+                relation_key_indices == &other.relation_key_indices,
+                "relation_key_indices",
+            ),
+            (
+                key_desc_and_indices == &other.key_desc_and_indices,
+                "key_desc_and_indices",
+            ),
+            (value_desc == &other.value_desc, "value_desc"),
+            (topic == &other.topic, "topic"),
+            (
+                consistency_config == &other.consistency_config,
+                "consistency_config",
+            ),
+            (partition_count == &other.partition_count, "partition_count"),
+            (
+                replication_factor == &other.replication_factor,
+                "replication_factor",
+            ),
+            (fuel == &other.fuel, "fuel"),
+            (retention == &other.retention, "retention"),
+            (
+                connection_options == &other.connection_options,
+                "connection_options",
+            ),
+        ];
+        for (compatible, field) in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "KafkaSinkConnection incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(StorageError::InvalidAlter { id });
+            }
+        }
+
+        Ok(())
+    }
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
@@ -561,6 +662,85 @@ pub enum KafkaSinkAvroFormatState<C: ConnectionAccess = InlinedConnection> {
     },
 }
 
+impl<C: ConnectionAccess> KafkaSinkAvroFormatState<C> {
+    /// Determines if `self` is compatible with another `KafkaSinkAvroFormatState`,
+    /// in such a way that it is possible to turn `self` into `other` through a
+    /// valid series of transformations (e.g. no transformation or `ALTER
+    /// CONNECTION`).
+    pub fn alter_compatible(
+        &self,
+        id: GlobalId,
+        other: &KafkaSinkAvroFormatState<C>,
+    ) -> Result<(), StorageError> {
+        if self == other {
+            return Ok(());
+        }
+
+        match (self, other) {
+            (
+                Self::UnpublishedMaybe {
+                    key_schema,
+                    value_schema,
+                    // Connections may change
+                    csr_connection: _,
+                },
+                Self::UnpublishedMaybe {
+                    key_schema: other_key_schema,
+                    value_schema: other_value_schema,
+                    csr_connection: _,
+                },
+            ) => {
+                let compatibility_checks = [
+                    (key_schema == other_key_schema, "key_schema"),
+                    (value_schema == other_value_schema, "value_schema"),
+                ];
+                for (compatible, field) in compatibility_checks {
+                    if !compatible {
+                        tracing::warn!(
+                    "KafkaSinkAvroFormatState::UnpublishedMaybe incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                        return Err(StorageError::InvalidAlter { id });
+                    }
+                }
+            }
+            (
+                Self::Published {
+                    key_schema_id,
+                    value_schema_id,
+                },
+                Self::Published {
+                    key_schema_id: other_key_schema_id,
+                    value_schema_id: other_value_schema_id,
+                },
+            ) => {
+                let compatibility_checks = [
+                    (key_schema_id == other_key_schema_id, "key_schema_id"),
+                    (value_schema_id == other_value_schema_id, "value_schema_id"),
+                ];
+                for (compatible, field) in compatibility_checks {
+                    if !compatible {
+                        tracing::warn!(
+                    "KafkaSinkAvroFormatState::Published incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                        return Err(StorageError::InvalidAlter { id });
+                    }
+                }
+            }
+            // Cannot determine if there is a problem here
+            (Self::UnpublishedMaybe { .. }, Self::Published { .. })
+            | (Self::Published { .. }, Self::UnpublishedMaybe { .. }) => {}
+        }
+
+        Ok(())
+    }
+}
+
 impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkAvroFormatState, R>
     for KafkaSinkAvroFormatState<ReferencedConnection>
 {
@@ -646,12 +826,36 @@ pub enum KafkaSinkFormat<C: ConnectionAccess = InlinedConnection> {
     Json,
 }
 
-impl KafkaSinkFormat {
+impl<C: ConnectionAccess> KafkaSinkFormat<C> {
     pub fn get_format_name(&self) -> &str {
         match self {
             Self::Avro(_) => "avro",
             Self::Json => "json",
         }
+    }
+
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), StorageError> {
+        if self == other {
+            return Ok(());
+        }
+
+        match (self, other) {
+            (Self::Avro(self_avro), Self::Avro(other_avro)) => {
+                self_avro.alter_compatible(id, other_avro)?
+            }
+            (s, o) => {
+                if s != o {
+                    tracing::warn!(
+                        "KafkaSinkFormat incompatible\nself:\n{:#?}\n\nother:{:#?}",
+                        s,
+                        o
+                    );
+                    return Err(StorageError::InvalidAlter { id });
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
