@@ -1888,7 +1888,7 @@ fn attempt_outer_equijoin(
                         // a semi-join between `left` and `both_keys`.
                         let left_present = MirRelationExpr::join_scalars(
                             vec![
-                                get_left.clone(), // TODO(#22348): push local predicates to left.
+                                get_left.clone().filter(on_predicates.lhs()), // Push local predicates.
                                 get_both.clone(),
                             ],
                             itertools::zip_eq(
@@ -1919,7 +1919,7 @@ fn attempt_outer_equijoin(
                         // is a semi-join between `right` and `both_keys`.
                         let right_present = MirRelationExpr::join_scalars(
                             vec![
-                                get_right.clone(), // TODO(#22348): push local predicates to right.
+                                get_right.clone().filter(on_predicates.rhs()), // Push local predicates.
                                 get_both,
                             ],
                             itertools::zip_eq(
@@ -2183,8 +2183,7 @@ impl OnPredicates {
                     )
                 });
 
-        // TODO(#22348): support non-zero local predicates.
-        if eq_cnt > 0 && theta_cnt + const_cnt + lhs_cnt + rhs_cnt == 0 {
+        if eq_cnt > 0 && theta_cnt == 0 {
             tracing::debug!(
                 const_cnt,
                 lhs_cnt,
@@ -2243,6 +2242,28 @@ impl OnPredicates {
                 _ => None,
             }),
         )
+    }
+
+    /// Return an iterator over the [`OnPredicate::Lhs`] and
+    /// [`OnPredicate::Const`] conditions in the predicates list.
+    fn lhs(&self) -> impl Iterator<Item = MirScalarExpr> + '_ {
+        self.predicates.iter().filter_map(|p| match p {
+            // We treat Const predicates local to both inputs.
+            OnPredicate::Const(p) => Some(p.clone()),
+            OnPredicate::Lhs(p) => Some(p.clone()),
+            _ => None,
+        })
+    }
+
+    /// Return an iterator over the [`OnPredicate::Rhs`] and
+    /// [`OnPredicate::Const`] conditions in the predicates list.
+    fn rhs(&self) -> impl Iterator<Item = MirScalarExpr> + '_ {
+        self.predicates.iter().filter_map(|p| match p {
+            // We treat Const predicates local to both inputs.
+            OnPredicate::Const(p) => Some(p.clone()),
+            OnPredicate::Rhs(p) => Some(p.clone()),
+            _ => None,
+        })
     }
 }
 
