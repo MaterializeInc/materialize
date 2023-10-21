@@ -32,6 +32,15 @@ use security_framework::passwords::{get_generic_password, set_generic_password};
 
 use crate::error::Error;
 
+/// Service name displayed to the user when using the keychain.
+/// If you ever have to change this value, make sure to update,
+/// the keychain service name in the VS Code extension.
+static KEYCHAIN_SERVICE_NAME: &str = "Materialize";
+
+/// Old keychain name keeped for compatibility.
+/// TODO: Should be removed after > 0.2.6
+static OLD_KEYCHAIN_SERVICE_NAME: &str = "Materialize mz CLI";
+
 #[cfg(target_os = "macos")]
 static DEFAULT_VAULT_VALUE: Lazy<Option<&str>> = Lazy::new(|| Some(Vault::Keychain.as_str()));
 
@@ -160,8 +169,8 @@ impl ConfigFile {
     ) -> Result<(), Error> {
         if Vault::Keychain == self.vault() {
             let app_password = profile.app_password.ok_or(Error::AppPasswordMissing)?;
-            set_generic_password("Materialize mz CLI", name, app_password.as_bytes())
-                .map_err(|e| Error::MacOsSecurityError(e.message().unwrap_or("".to_owned())))?;
+            set_generic_password(KEYCHAIN_SERVICE_NAME, name, app_password.as_bytes())
+                .map_err(|e| Error::MacOsSecurityError(e.to_string()))?;
         } else {
             new_profile["app-password"] =
                 value(profile.app_password.ok_or(Error::AppPasswordMissing)?);
@@ -353,7 +362,7 @@ impl Profile<'_> {
     pub fn app_password(&self, global_vault: &str) -> Result<String, Error> {
         if let Some(vault) = self.vault().or(Some(global_vault)) {
             if vault == Vault::Keychain {
-                let password = get_generic_password("Materialize mz CLI", self.name);
+                let password = get_generic_password(KEYCHAIN_SERVICE_NAME, self.name);
 
                 match password {
                     Ok(generic_password) => {
@@ -364,9 +373,32 @@ impl Profile<'_> {
                         }
                     }
                     Err(err) => {
-                        return Err(Error::MacOsSecurityError(
-                            err.message().unwrap_or("".to_owned()),
-                        ));
+                        // Not found error code. Check if it belongs to the old service.
+                        if err.code() == -25300 {
+                            let password =
+                                get_generic_password(OLD_KEYCHAIN_SERVICE_NAME, self.name);
+                            if let Ok(generic_password) = password {
+                                let parsed_password = String::from_utf8(generic_password.to_vec());
+
+                                // If there is a match, migrate the password from the old service name to the one one.
+                                match parsed_password {
+                                    Ok(app_password) => {
+                                        set_generic_password(
+                                            KEYCHAIN_SERVICE_NAME,
+                                            self.name,
+                                            app_password.as_bytes(),
+                                        )
+                                        .map_err(|e| Error::MacOsSecurityError(e.to_string()))?;
+                                        return Ok(app_password);
+                                    }
+                                    Err(err) => {
+                                        return Err(Error::MacOsSecurityError(err.to_string()))
+                                    }
+                                }
+                            }
+                        }
+
+                        return Err(Error::MacOsSecurityError(err.to_string()));
                     }
                 }
             }
