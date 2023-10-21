@@ -522,6 +522,7 @@ mz_arrangement_sharing_raw                   log   <null>   <null>
 mz_arrangement_heap_size_raw                 log   <null>   <null>
 mz_arrangement_heap_capacity_raw             log   <null>   <null>
 mz_arrangement_heap_allocations_raw          log   <null>   <null>
+mz_cluster_replica_frontiers                 source <null>  <null>
 mz_cluster_replica_heartbeats                source <null>  <null>
 mz_compute_delays_histogram_raw              log   <null>   <null>
 mz_compute_dependencies                      source <null>  <null>

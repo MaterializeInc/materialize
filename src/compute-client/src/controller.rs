@@ -248,6 +248,18 @@ impl<T> ComputeController<T>
 where
     T: Clone,
 {
+    /// Returns the read and write frontiers for each collection.
+    pub fn collection_frontiers(&self) -> BTreeMap<GlobalId, (Antichain<T>, Antichain<T>)> {
+        let collections = self.instances.values().flat_map(|i| i.collections_iter());
+        collections
+            .map(|(id, collection)| {
+                let since = collection.read_frontier().to_owned();
+                let upper = collection.write_frontier().to_owned();
+                (*id, (since, upper))
+            })
+            .collect()
+    }
+
     /// Returns the write frontier for each collection installed on each replica.
     pub fn replica_write_frontiers(&self) -> BTreeMap<(GlobalId, ReplicaId), Antichain<T>> {
         let mut result = BTreeMap::new();
