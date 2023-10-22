@@ -30,6 +30,13 @@ statement ok
 CREATE INDEX objects_idx ON objects(schema, object)
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_frontiers' ORDER BY position
+----
+1  object_id  text
+2  replica_id  text
+3  write_frontier  mz_timestamp
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_metrics' ORDER BY position
 ----
 1  replica_id  text
@@ -113,14 +120,8 @@ query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_frontiers' ORDER BY position
 ----
 1  object_id  text
-2  replica_id  text
-3  time  mz_timestamp
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_global_frontiers' ORDER BY position
-----
-1  object_id  text
-2  time  mz_timestamp
+2  read_frontier  mz_timestamp
+3  write_frontier  mz_timestamp
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_kafka_sources' ORDER BY position
@@ -602,6 +603,7 @@ mz_arrangement_sharing_raw
 mz_arrangement_sizes
 mz_arrangement_sizes_per_worker
 mz_cluster_links
+mz_cluster_replica_frontiers
 mz_cluster_replica_heartbeats
 mz_cluster_replica_history
 mz_cluster_replica_metrics
