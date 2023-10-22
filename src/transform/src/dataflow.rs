@@ -714,7 +714,7 @@ id: {}, key: {:?}",
         .retain(|id, _index_import| dataflow_metainfo.index_usage_types.contains_key(id));
 
     // A sanity check that all Get annotations indicate indexes that are present in `index_imports`.
-    for build_desc in dataflow.objects_to_build.iter_mut() {
+    for build_desc in dataflow.objects_to_build.iter() {
         build_desc
             .plan
             .as_inner()
@@ -722,17 +722,14 @@ id: {}, key: {:?}",
                 MirRelationExpr::Get {
                     id: Id::Global(_),
                     typ: _,
-                    access_strategy,
-                } => match access_strategy {
-                    AccessStrategy::Index(accesses) => {
-                        for (idx_id, _) in accesses {
-                            soft_assert!(
-                                dataflow.index_imports.contains_key(idx_id),
-                                "Dangling Get index annotation"
-                            );
-                        }
+                    access_strategy: AccessStrategy::Index(accesses),
+                } => {
+                    for (idx_id, _) in accesses {
+                        soft_assert!(
+                            dataflow.index_imports.contains_key(idx_id),
+                            "Dangling Get index annotation"
+                        );
                     }
-                    _ => {}
                 },
                 _ => {}
             })?;
