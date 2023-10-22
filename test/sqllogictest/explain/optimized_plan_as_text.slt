@@ -454,7 +454,7 @@ INDEX iv_a_idx;
 ----
 materialize.public.iv_a_idx:
   ArrangeBy keys=[[#0]]
-    ReadStorage materialize.public.iv
+    ReadGlobalFromSameDataflow materialize.public.iv
 
 materialize.public.iv:
   Filter (#0) IS NOT NULL
