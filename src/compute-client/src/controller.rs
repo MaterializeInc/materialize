@@ -134,6 +134,8 @@ pub struct ComputeController<T> {
     initialized: bool,
     /// Compute configuration to apply to new instances.
     config: ComputeParameters,
+    /// Default value for `idle_arrangement_merge_effort`.
+    default_idle_arrangement_merge_effort: u32,
     /// A replica response to be handled by the corresponding `Instance` on a subsequent call to
     /// `ActiveComputeController::process`.
     stashed_replica_response: Option<(ComputeInstanceId, ReplicaId, ComputeResponse<T>)>,
@@ -169,6 +171,7 @@ impl<T> ComputeController<T> {
             build_info,
             initialized: false,
             config: Default::default(),
+            default_idle_arrangement_merge_effort: 1000,
             stashed_replica_response: None,
             envd_epoch,
             metrics: ComputeControllerMetrics::new(metrics_registry),
@@ -234,6 +237,10 @@ impl<T> ComputeController<T> {
         Ok(self
             .instance(instance_id)?
             .collection_reverse_dependencies(id))
+    }
+
+    pub fn set_default_idle_arrangement_merge_effort(&mut self, value: u32) {
+        self.default_idle_arrangement_merge_effort = value;
     }
 }
 
@@ -421,10 +428,6 @@ impl<T> ActiveComputeController<'_, T> {
     }
 }
 
-/// Default value for `idle_arrangement_merge_effort` if none is supplied.
-// TODO(#16906): Test if 1000 is a good default.
-const DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT: u32 = 1000;
-
 impl<T> ActiveComputeController<'_, T>
 where
     T: Timestamp + Lattice,
@@ -445,7 +448,7 @@ where
 
         let idle_arrangement_merge_effort = config
             .idle_arrangement_merge_effort
-            .unwrap_or(DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT);
+            .unwrap_or(self.compute.default_idle_arrangement_merge_effort);
 
         let replica_config = ReplicaConfig {
             location,
