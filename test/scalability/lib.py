@@ -24,14 +24,23 @@ def plotit(csv_file_name: str) -> None:
     plt.rcParams["figure.figsize"] = (16, 10)
     fig, (summary_subplot, details_subplot) = plt.subplots(2, 1)
     for i, endpoint in enumerate(endpoints):
+        aggregated_data_path = RESULTS_DIR / endpoint / f"{csv_file_name}.csv"
+        details_data_path = RESULTS_DIR / endpoint / f"{csv_file_name}_details.csv"
+
+        if not os.path.exists(aggregated_data_path):
+            print(
+                f"Skipping {csv_file_name} for endpoint {endpoint} (data not present)"
+            )
+            continue
+
+        assert os.path.exists(details_data_path)
+
         legend.append(endpoint_name_to_description(endpoint))
 
-        df = pd.read_csv(RESULTS_DIR / endpoint / f"{csv_file_name}.csv")
+        df = pd.read_csv(aggregated_data_path)
         summary_subplot.scatter(df["concurrency"], df["tps"], label="tps")
 
-        df_details = pd.read_csv(
-            RESULTS_DIR / endpoint / f"{csv_file_name}_details.csv"
-        )
+        df_details = pd.read_csv(details_data_path)
         details_subplot.scatter(
             df_details["concurrency"] + i, df_details["wallclock"], alpha=0.25
         )
