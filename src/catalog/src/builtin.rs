@@ -105,7 +105,7 @@ impl<T: TypeReference> Builtin<T> {
 /// access to it restricted.
 #[derive(Clone, Debug, Hash, Serialize)]
 pub enum Sensitivity {
-    /// Any user may query the object
+    /// Any user may query the object.
     Public,
     /// Superusers or Materialize staff may query the object
     SuperuserAndSupport,
