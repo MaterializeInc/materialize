@@ -1409,16 +1409,6 @@ GRANT USAGE ON SCHEMA materialize.public TO joe;
 ----
 COMPLETE 0
 
-simple conn=joe,user=joe
-SELECT a::ty FROM t;
-----
-db error: ERROR: permission denied for TYPE "materialize.public.ty"
-
-simple conn=child,user=child
-SELECT a::ty FROM t;
-----
-db error: ERROR: permission denied for TYPE "materialize.public.ty"
-
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON TYPE ty TO joe;
 ----
@@ -1686,16 +1676,6 @@ simple conn=mz_system,user=mz_system
 GRANT USAGE ON SCHEMA materialize.public TO joe;
 ----
 COMPLETE 0
-
-simple conn=joe,user=joe
-EXPLAIN SELECT a::ty FROM t;
-----
-db error: ERROR: permission denied for TYPE "materialize.public.ty"
-
-simple conn=child,user=child
-EXPLAIN SELECT a::ty FROM t;
-----
-db error: ERROR: permission denied for TYPE "materialize.public.ty"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON TYPE ty TO joe;
