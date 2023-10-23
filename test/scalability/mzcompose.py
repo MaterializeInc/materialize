@@ -24,6 +24,7 @@ from materialize import MZ_ROOT, benchmark_utils, buildkite, spawn
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
+from materialize.scalability.df import df_details_cols, df_totals_cols
 from materialize.scalability.endpoint import Endpoint
 from materialize.scalability.endpoints import (
     MaterializeContainer,
@@ -73,10 +74,10 @@ def execute_operation(
     wallclock = time.time() - start
 
     return {
-        "concurrency": concurrency,
-        "wallclock": wallclock,
-        "operation": type(operation).__name__,
-        "workload": type(workload).__name__,
+        df_details_cols.CONCURRENCY: concurrency,
+        df_details_cols.WALLCLOCK: wallclock,
+        df_details_cols.OPERATION: type(operation).__name__,
+        df_details_cols.WORKLOAD: type(workload).__name__,
     }
 
 
@@ -145,7 +146,7 @@ def run_with_concurrency(
 
     df_detail = pd.DataFrame(measurements)
     print("Best and worst individual measurements:")
-    print(df_detail.sort_values(by=["wallclock"]))
+    print(df_detail.sort_values(by=[df_details_cols.WALLCLOCK]))
 
     print(
         f"concurrency: {concurrency}; wallclock_total: {wallclock_total}; tps = {count/wallclock_total}"
@@ -154,11 +155,11 @@ def run_with_concurrency(
     df_total = pd.DataFrame(
         [
             {
-                "concurrency": concurrency,
-                "wallclock": wallclock_total,
-                "workload": type(workload).__name__,
-                "count": count,
-                "tps": count / wallclock_total,
+                df_totals_cols.CONCURRENCY: concurrency,
+                df_totals_cols.WALLCLOCK: wallclock_total,
+                df_totals_cols.WORKLOAD: type(workload).__name__,
+                df_totals_cols.COUNT: count,
+                df_totals_cols.TPS: count / wallclock_total,
                 "mean_t_dur": df_detail["wallclock"].mean(),
                 "median_t_dur": df_detail["wallclock"].median(),
                 "min_t_dur": df_detail["wallclock"].min(),
