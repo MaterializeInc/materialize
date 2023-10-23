@@ -20,11 +20,11 @@ import pandas as pd
 from jupyter_core.command import main as jupyter_core_command_main
 from psycopg import Cursor
 
-from materialize import MZ_ROOT, benchmark_utils, buildkite, spawn
+from materialize import benchmark_utils, buildkite, spawn
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
-from materialize.scalability.df import df_details_cols, df_totals_cols
+from materialize.scalability.df import df_details_cols, df_totals_cols, paths
 from materialize.scalability.endpoint import Endpoint
 from materialize.scalability.endpoints import (
     MaterializeContainer,
@@ -44,7 +44,6 @@ from materialize.scalability.workloads import *  # noqa: F401 F403
 from materialize.scalability.workloads_test import *  # noqa: F401 F403
 from materialize.util import all_subclasses
 
-RESULTS_DIR = MZ_ROOT / "test" / "scalability" / "results"
 SERVICES = [
     Materialized(image="materialize/materialized:latest", sanity_restart=False),
     Postgres(),
@@ -203,12 +202,12 @@ def run_workload(
         df_details = pd.concat([df_details, df_detail], ignore_index=True)
 
         endpoint_name = endpoint.name()
-        pathlib.Path(RESULTS_DIR / endpoint_name).mkdir(parents=True, exist_ok=True)
-
-        df_totals.to_csv(RESULTS_DIR / endpoint_name / f"{type(workload).__name__}.csv")
-        df_details.to_csv(
-            RESULTS_DIR / endpoint_name / f"{type(workload).__name__}_details.csv"
+        pathlib.Path(paths.endpoint_dir(endpoint_name)).mkdir(
+            parents=True, exist_ok=True
         )
+
+        df_totals.to_csv(paths.df_totals_csv(endpoint_name, workload))
+        df_details.to_csv(paths.df_details_csv(endpoint_name, workload))
 
     return WorkloadResult(workload, df_totals, df_details)
 
@@ -358,7 +357,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     workload_names = [workload.__name__ for workload in workloads]
     df_workloads = pd.DataFrame(data={"workload": workload_names})
-    df_workloads.to_csv(RESULTS_DIR / "workloads.csv")
+    df_workloads.to_csv(paths.workloads_csv())
 
     overall_regression_outcome = RegressionOutcome()
 
@@ -422,10 +421,11 @@ def upload_regressions_to_buildkite(outcome: RegressionOutcome) -> None:
     if not outcome.has_regressions():
         return
 
-    file_name = "regressions.csv"
-    file_path = RESULTS_DIR / file_name
-    outcome.raw_regression_data.to_csv(file_path)
-    spawn.runv(["buildkite-agent", "artifact", "upload", file_name], cwd=RESULTS_DIR)
+    outcome.raw_regression_data.to_csv(paths.regressions_csv())
+    spawn.runv(
+        ["buildkite-agent", "artifact", "upload", paths.regressions_csv_name()],
+        cwd=paths.RESULTS_DIR,
+    )
 
 
 def workflow_lab(c: Composition) -> None:
