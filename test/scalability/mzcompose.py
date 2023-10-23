@@ -20,10 +20,11 @@ import pandas as pd
 from jupyter_core.command import main as jupyter_core_command_main
 from psycopg import Cursor
 
-from materialize import MZ_ROOT, benchmark_utils, buildkite, spawn
+from materialize import benchmark_utils, buildkite, spawn
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
+from materialize.scalability.df import df_details_cols, df_totals_cols, paths
 from materialize.scalability.endpoint import Endpoint
 from materialize.scalability.endpoints import (
     MaterializeContainer,
@@ -43,7 +44,6 @@ from materialize.scalability.workloads import *  # noqa: F401 F403
 from materialize.scalability.workloads_test import *  # noqa: F401 F403
 from materialize.util import all_subclasses
 
-RESULTS_DIR = MZ_ROOT / "test" / "scalability" / "results"
 SERVICES = [
     Materialized(image="materialize/materialized:latest", sanity_restart=False),
     Postgres(),
@@ -73,10 +73,10 @@ def execute_operation(
     wallclock = time.time() - start
 
     return {
-        "concurrency": concurrency,
-        "wallclock": wallclock,
-        "operation": type(operation).__name__,
-        "workload": type(workload).__name__,
+        df_details_cols.CONCURRENCY: concurrency,
+        df_details_cols.WALLCLOCK: wallclock,
+        df_details_cols.OPERATION: type(operation).__name__,
+        df_details_cols.WORKLOAD: type(workload).__name__,
     }
 
 
@@ -145,7 +145,7 @@ def run_with_concurrency(
 
     df_detail = pd.DataFrame(measurements)
     print("Best and worst individual measurements:")
-    print(df_detail.sort_values(by=["wallclock"]))
+    print(df_detail.sort_values(by=[df_details_cols.WALLCLOCK]))
 
     print(
         f"concurrency: {concurrency}; wallclock_total: {wallclock_total}; tps = {count/wallclock_total}"
@@ -154,11 +154,11 @@ def run_with_concurrency(
     df_total = pd.DataFrame(
         [
             {
-                "concurrency": concurrency,
-                "wallclock": wallclock_total,
-                "workload": type(workload).__name__,
-                "count": count,
-                "tps": count / wallclock_total,
+                df_totals_cols.CONCURRENCY: concurrency,
+                df_totals_cols.WALLCLOCK: wallclock_total,
+                df_totals_cols.WORKLOAD: type(workload).__name__,
+                df_totals_cols.COUNT: count,
+                df_totals_cols.TPS: count / wallclock_total,
                 "mean_t_dur": df_detail["wallclock"].mean(),
                 "median_t_dur": df_detail["wallclock"].median(),
                 "min_t_dur": df_detail["wallclock"].min(),
@@ -202,12 +202,12 @@ def run_workload(
         df_details = pd.concat([df_details, df_detail], ignore_index=True)
 
         endpoint_name = endpoint.name()
-        pathlib.Path(RESULTS_DIR / endpoint_name).mkdir(parents=True, exist_ok=True)
-
-        df_totals.to_csv(RESULTS_DIR / endpoint_name / f"{type(workload).__name__}.csv")
-        df_details.to_csv(
-            RESULTS_DIR / endpoint_name / f"{type(workload).__name__}_details.csv"
+        pathlib.Path(paths.endpoint_dir(endpoint_name)).mkdir(
+            parents=True, exist_ok=True
         )
+
+        df_totals.to_csv(paths.df_totals_csv(endpoint_name, workload))
+        df_details.to_csv(paths.df_details_csv(endpoint_name, workload))
 
     return WorkloadResult(workload, df_totals, df_details)
 
@@ -357,7 +357,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     workload_names = [workload.__name__ for workload in workloads]
     df_workloads = pd.DataFrame(data={"workload": workload_names})
-    df_workloads.to_csv(RESULTS_DIR / "workloads.csv")
+    df_workloads.to_csv(paths.workloads_csv())
 
     overall_regression_outcome = RegressionOutcome()
 
@@ -421,10 +421,11 @@ def upload_regressions_to_buildkite(outcome: RegressionOutcome) -> None:
     if not outcome.has_regressions():
         return
 
-    file_name = "regressions.csv"
-    file_path = RESULTS_DIR / file_name
-    outcome.raw_regression_data.to_csv(file_path)
-    spawn.runv(["buildkite-agent", "artifact", "upload", file_name], cwd=RESULTS_DIR)
+    outcome.raw_regression_data.to_csv(paths.regressions_csv())
+    spawn.runv(
+        ["buildkite-agent", "artifact", "upload", paths.regressions_csv_name()],
+        cwd=paths.RESULTS_DIR,
+    )
 
 
 def workflow_lab(c: Composition) -> None:
