@@ -17,7 +17,7 @@ Change Data Capture (CDC) allows you to track and propagate changes in a SQL Ser
 
 ## Kafka + Debezium
 
-Utilize [Debezium](https://debezium.io/) and the [Kafka source](#using-debezium) to propagate CDC data from SQL Server to Materialize. Debezium captures row-level changes resulting from `INSERT`, `UPDATE`, and `DELETE` operations in the upstream database and publishes them as events to Kafka using Kafka Connect-compatible connectors.
+Utilize [Debezium](https://debezium.io/) and the [Kafka source](/sql/create-source/kafka/#using-debezium) to propagate CDC data from SQL Server to Materialize. Debezium captures row-level changes resulting from `INSERT`, `UPDATE`, and `DELETE` operations in the upstream database and publishes them as events to Kafka using Kafka Connect-compatible connectors.
 
 ### Database Setup
 
