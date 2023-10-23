@@ -6,6 +6,8 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+from __future__ import annotations
+
 import pandas as pd
 
 from materialize.scalability.endpoint import Endpoint
@@ -58,6 +60,10 @@ class RegressionOutcome:
             return "No regressions"
 
         return "\n".join(f"* {x}" for x in self.regressions)
+
+    def merge(self, other: RegressionOutcome) -> None:
+        self.regressions.extend(other.regressions)
+        self.append_raw_data(other.raw_regression_data)
 
     def append_raw_data(self, regressions_frame: pd.DataFrame) -> None:
         self.raw_regression_data = pd.concat(

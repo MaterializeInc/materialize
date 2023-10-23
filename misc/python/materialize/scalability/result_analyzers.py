@@ -33,42 +33,14 @@ class DefaultResultAnalyzer(ResultAnalyzer):
     def __init__(self, max_deviation_in_percent: float):
         self.max_deviation_in_percent = max_deviation_in_percent
 
-    def determine_regressions_in_workload(
-        self,
-        regression_outcome: RegressionOutcome,
-        baseline_endpoint: Endpoint,
-        workload_name: str,
-        results_by_endpoint: dict[Endpoint, WorkloadResult],
-    ) -> None:
-        count_endpoints = len(results_by_endpoint)
-
-        if count_endpoints <= 1:
-            raise RuntimeError("Cannot compute regressions with a single target")
-
-        if baseline_endpoint not in results_by_endpoint.keys():
-            raise RuntimeError("Regression baseline endpoint not in results!")
-
-        other_endpoints = list(results_by_endpoint.keys() - {baseline_endpoint})
-
-        for other_endpoint in other_endpoints:
-            self.determine_regression_in_workload(
-                regression_outcome,
-                workload_name,
-                baseline_endpoint,
-                other_endpoint,
-                results_by_endpoint[baseline_endpoint],
-                results_by_endpoint[other_endpoint],
-            )
-
     def determine_regression_in_workload(
         self,
-        regression_outcome: RegressionOutcome,
         workload_name: str,
         baseline_endpoint: Endpoint,
         other_endpoint: Endpoint,
         regression_baseline_result: WorkloadResult,
         other_result: WorkloadResult,
-    ) -> None:
+    ) -> RegressionOutcome:
         # tps = transactions per seconds (higher is better)
 
         tps_per_endpoint = self._merge_endpoint_result_frames(
@@ -79,8 +51,7 @@ class DefaultResultAnalyzer(ResultAnalyzer):
             tps_per_endpoint
         )
 
-        self.collect_regressions(
-            regression_outcome,
+        return self.collect_regressions(
             workload_name,
             baseline_endpoint,
             other_endpoint,
@@ -128,12 +99,12 @@ class DefaultResultAnalyzer(ResultAnalyzer):
 
     def collect_regressions(
         self,
-        regression_outcome: RegressionOutcome,
         workload_name: str,
         baseline_endpoint: Endpoint,
         other_endpoint: Endpoint,
         entries_exceeding_threshold: pd.DataFrame,
-    ) -> None:
+    ) -> RegressionOutcome:
+        regression_outcome = RegressionOutcome()
         for index, row in entries_exceeding_threshold.iterrows():
             regression = Regression(
                 row,
@@ -149,3 +120,4 @@ class DefaultResultAnalyzer(ResultAnalyzer):
             regression_outcome.regressions.append(regression)
 
         regression_outcome.append_raw_data(entries_exceeding_threshold)
+        return regression_outcome

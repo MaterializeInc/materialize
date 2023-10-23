@@ -311,8 +311,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     print(f"Targets: {args.target}")
     print(f"Checking regression against: {regression_against_target}")
 
-    endpoints: list[Endpoint] = []
     baseline_endpoint: Endpoint | None = None
+    other_endpoints: list[Endpoint] = []
     for i, target in enumerate(args.target):
         original_target = target
         endpoint: Endpoint | None = None
@@ -337,8 +337,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         if original_target == regression_against_target:
             baseline_endpoint = endpoint
-
-        endpoints.append(endpoint)
+        else:
+            other_endpoints.append(endpoint)
 
     workloads = (
         [globals()[workload] for workload in args.workload]
@@ -353,49 +353,64 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         object_count=args.object_count,
     )
 
+    result_analyzer = create_result_analyzer(args)
+
     workload_names = [workload.__name__ for workload in workloads]
     df_workloads = pd.DataFrame(data={"workload": workload_names})
     df_workloads.to_csv(RESULTS_DIR / "workloads.csv")
 
-    results_by_workload_name: dict[str, dict[Endpoint, WorkloadResult]] = dict()
+    overall_regression_outcome = RegressionOutcome()
 
     for workload in workloads:
         assert issubclass(workload, Workload), f"{workload} is not a Workload"
-        results_of_current_workload = dict()
-        results_by_workload_name[workload.__name__] = results_of_current_workload
+        workload_name = workload.__name__
 
-        for endpoint in endpoints:
-            result = run_workload(c, args, endpoint, schema, workload())
-            results_of_current_workload[endpoint] = result
+        if baseline_endpoint is not None:
+            baseline_result = run_workload(
+                c, args, baseline_endpoint, schema, workload()
+            )
+        else:
+            baseline_result = None
 
-    handle_regression_detection(args, baseline_endpoint, results_by_workload_name)
+        for other_endpoint in other_endpoints:
+            other_endpoint_result = run_workload(
+                c, args, other_endpoint, schema, workload()
+            )
+
+            if baseline_endpoint is not None and baseline_result is not None:
+                regression_outcome = result_analyzer.determine_regression_in_workload(
+                    workload_name,
+                    baseline_endpoint,
+                    other_endpoint,
+                    baseline_result,
+                    other_endpoint_result,
+                )
+                overall_regression_outcome.merge(regression_outcome)
+
+    report_regression_result(baseline_endpoint, overall_regression_outcome)
 
 
-def handle_regression_detection(
-    args: argparse.Namespace,
+def report_regression_result(
     baseline_endpoint: Endpoint | None,
-    results_by_workload_name: dict[str, dict[Endpoint, WorkloadResult]],
+    outcome: RegressionOutcome,
 ) -> None:
     if baseline_endpoint is None:
         print("No regression detection because '--regression-against' param is not set")
-    else:
-        outcome = create_result_analyzer(args).determine_regression(
-            baseline_endpoint, results_by_workload_name
+        return
+
+    baseline_desc = endpoint_name_to_description(baseline_endpoint.name())
+
+    if outcome.has_regressions():
+        print(
+            f"ERROR: The following regressions were detected (baseline: {baseline_desc}):\n{outcome}"
         )
 
-        baseline_desc = endpoint_name_to_description(baseline_endpoint.name())
+        if buildkite.is_in_buildkite():
+            upload_regressions_to_buildkite(outcome)
 
-        if outcome.has_regressions():
-            print(
-                f"ERROR: The following regressions were detected (baseline: {baseline_desc}):\n{outcome}"
-            )
-
-            if buildkite.is_in_buildkite():
-                upload_regressions_to_buildkite(outcome)
-
-            sys.exit(1)
-        else:
-            print("No regressions were detected.")
+        sys.exit(1)
+    else:
+        print("No regressions were detected.")
 
 
 def create_result_analyzer(_args: argparse.Namespace) -> ResultAnalyzer:
