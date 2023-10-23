@@ -83,7 +83,7 @@ SELECT value from numbers LIMIT 20;
 10
 
 query T
-SELECT value from numbers LIMIT 20 OFFSET 6;
+SELECT value from numbers LIMIT 10 OFFSET 6;
 ----
 4
 5
