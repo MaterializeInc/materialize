@@ -96,7 +96,7 @@ pub static CREATE_ITEM_USAGE: Lazy<BTreeSet<CatalogItemType>> = Lazy::new(|| {
     items.insert(CatalogItemType::Type);
     items
 });
-pub static EMPTY_ITEM_USAGE: Lazy<BTreeSet<CatalogItemType>> = Lazy::new(|| BTreeSet::new());
+pub static EMPTY_ITEM_USAGE: Lazy<BTreeSet<CatalogItemType>> = Lazy::new(BTreeSet::new);
 
 /// Errors that can occur due to an unauthorized action.
 #[derive(Debug, thiserror::Error)]
