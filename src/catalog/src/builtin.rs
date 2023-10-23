@@ -104,7 +104,7 @@ impl<T: TypeReference> Builtin<T> {
 /// should be considered "sensitive" and therefore
 /// access to it restricted.
 #[derive(Clone, Debug, Hash, Serialize)]
-pub enum Sensitivity {
+pub enum DataSensitivity {
     /// Any user may query the object.
     Public,
     /// Superusers or Materialize staff may query the object.
@@ -120,7 +120,7 @@ pub struct BuiltinLog {
     pub schema: &'static str,
     /// Whether the object should only be queryable by superusers,
     /// only by superusers and support, or by anyone.
-    pub sensitivity: Sensitivity,
+    pub sensitivity: DataSensitivity,
 }
 
 #[derive(Hash, Debug)]
@@ -133,7 +133,7 @@ pub struct BuiltinTable {
     pub is_retained_metrics_object: bool,
     /// Whether the object should only be queryable by superusers,
     /// only by superusers and support, or by anyone.
-    pub sensitivity: Sensitivity,
+    pub sensitivity: DataSensitivity,
 }
 
 #[derive(Clone, Debug, Hash, Serialize)]
@@ -147,7 +147,7 @@ pub struct BuiltinSource {
     pub is_retained_metrics_object: bool,
     /// Whether the object should only be queryable by superusers,
     /// only by superusers and support, or by anyone.
-    pub sensitivity: Sensitivity,
+    pub sensitivity: DataSensitivity,
 }
 
 #[derive(Hash, Debug)]
@@ -157,7 +157,7 @@ pub struct BuiltinView {
     pub sql: &'static str,
     /// Whether the object should only be queryable by superusers,
     /// only by superusers and support, or by anyone.
-    pub sensitivity: Sensitivity,
+    pub sensitivity: DataSensitivity,
 }
 
 #[derive(Debug)]
@@ -1389,175 +1389,175 @@ pub const MZ_DATAFLOW_OPERATORS_PER_WORKER: BuiltinLog = BuiltinLog {
     name: "mz_dataflow_operators_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Operates),
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_DATAFLOW_ADDRESSES_PER_WORKER: BuiltinLog = BuiltinLog {
     name: "mz_dataflow_addresses_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Addresses),
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_DATAFLOW_CHANNELS_PER_WORKER: BuiltinLog = BuiltinLog {
     name: "mz_dataflow_channels_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Channels),
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_SCHEDULING_ELAPSED_RAW: BuiltinLog = BuiltinLog {
     name: "mz_scheduling_elapsed_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Elapsed),
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_RAW: BuiltinLog = BuiltinLog {
     name: "mz_compute_operator_durations_histogram_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Histogram),
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_SCHEDULING_PARKS_HISTOGRAM_RAW: BuiltinLog = BuiltinLog {
     name: "mz_scheduling_parks_histogram_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Parks),
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_ARRANGEMENT_RECORDS_RAW: BuiltinLog = BuiltinLog {
     name: "mz_arrangement_records_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Differential(DifferentialLog::ArrangementRecords),
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_ARRANGEMENT_BATCHES_RAW: BuiltinLog = BuiltinLog {
     name: "mz_arrangement_batches_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Differential(DifferentialLog::ArrangementBatches),
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_ARRANGEMENT_SHARING_RAW: BuiltinLog = BuiltinLog {
     name: "mz_arrangement_sharing_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Differential(DifferentialLog::Sharing),
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_COMPUTE_EXPORTS_PER_WORKER: BuiltinLog = BuiltinLog {
     name: "mz_compute_exports_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::DataflowCurrent),
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_COMPUTE_FRONTIERS_PER_WORKER: BuiltinLog = BuiltinLog {
     name: "mz_compute_frontiers_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::FrontierCurrent),
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_COMPUTE_IMPORT_FRONTIERS_PER_WORKER: BuiltinLog = BuiltinLog {
     name: "mz_compute_import_frontiers_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::ImportFrontierCurrent),
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_COMPUTE_DELAYS_HISTOGRAM_RAW: BuiltinLog = BuiltinLog {
     name: "mz_compute_delays_histogram_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::FrontierDelay),
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_COMPUTE_ERROR_COUNTS_RAW: BuiltinLog = BuiltinLog {
     name: "mz_compute_error_counts_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::ErrorCount),
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_ACTIVE_PEEKS_PER_WORKER: BuiltinLog = BuiltinLog {
     name: "mz_active_peeks_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::PeekCurrent),
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_PEEK_DURATIONS_HISTOGRAM_RAW: BuiltinLog = BuiltinLog {
     name: "mz_peek_durations_histogram_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::PeekDuration),
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_RAW: BuiltinLog = BuiltinLog {
     name: "mz_dataflow_shutdown_durations_histogram_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::ShutdownDuration),
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_ARRANGEMENT_HEAP_SIZE_RAW: BuiltinLog = BuiltinLog {
     name: "mz_arrangement_heap_size_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::ArrangementHeapSize),
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_ARRANGEMENT_HEAP_CAPACITY_RAW: BuiltinLog = BuiltinLog {
     name: "mz_arrangement_heap_capacity_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::ArrangementHeapCapacity),
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_ARRANGEMENT_HEAP_ALLOCATIONS_RAW: BuiltinLog = BuiltinLog {
     name: "mz_arrangement_heap_allocations_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Compute(ComputeLog::ArrangementHeapAllocations),
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_MESSAGE_BATCH_COUNTS_RECEIVED_RAW: BuiltinLog = BuiltinLog {
     name: "mz_message_batch_counts_received_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::BatchesReceived),
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_MESSAGE_BATCH_COUNTS_SENT_RAW: BuiltinLog = BuiltinLog {
     name: "mz_message_batch_counts_sent_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::BatchesSent),
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_MESSAGE_COUNTS_RECEIVED_RAW: BuiltinLog = BuiltinLog {
     name: "mz_message_counts_received_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::MessagesReceived),
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_MESSAGE_COUNTS_SENT_RAW: BuiltinLog = BuiltinLog {
     name: "mz_message_counts_sent_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::MessagesSent),
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_DATAFLOW_OPERATOR_REACHABILITY_RAW: BuiltinLog = BuiltinLog {
     name: "mz_dataflow_operator_reachability_raw",
     schema: MZ_INTERNAL_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Reachability),
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub static MZ_KAFKA_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1568,7 +1568,7 @@ pub static MZ_KAFKA_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("topic", ScalarType::String.nullable(false))
         .with_key(vec![0]),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 pub static MZ_KAFKA_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_kafka_connections",
@@ -1581,7 +1581,7 @@ pub static MZ_KAFKA_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable 
         )
         .with_column("sink_progress_topic", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 pub static MZ_KAFKA_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_kafka_sources",
@@ -1591,7 +1591,7 @@ pub static MZ_KAFKA_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("group_id_base", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 pub static MZ_POSTGRES_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_postgres_sources",
@@ -1600,7 +1600,7 @@ pub static MZ_POSTGRES_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("replication_slot", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 pub static MZ_OBJECT_DEPENDENCIES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_object_dependencies",
@@ -1609,7 +1609,7 @@ pub static MZ_OBJECT_DEPENDENCIES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTabl
         .with_column("object_id", ScalarType::String.nullable(false))
         .with_column("referenced_object_id", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 pub static MZ_COMPUTE_DEPENDENCIES: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_compute_dependencies",
@@ -1619,7 +1619,7 @@ pub static MZ_COMPUTE_DEPENDENCIES: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSo
         .with_column("object_id", ScalarType::String.nullable(false))
         .with_column("dependency_id", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 pub static MZ_DATABASES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_databases",
@@ -1634,7 +1634,7 @@ pub static MZ_DATABASES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
         ),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 pub static MZ_SCHEMAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_schemas",
@@ -1650,7 +1650,7 @@ pub static MZ_SCHEMAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
         ),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 pub static MZ_COLUMNS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_columns",
@@ -1665,7 +1665,7 @@ pub static MZ_COLUMNS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("type_oid", ScalarType::Oid.nullable(false))
         .with_column("type_mod", ScalarType::Int32.nullable(false)),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 pub static MZ_INDEXES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_indexes",
@@ -1678,7 +1678,7 @@ pub static MZ_INDEXES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("cluster_id", ScalarType::String.nullable(false))
         .with_column("owner_id", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 pub static MZ_INDEX_COLUMNS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_index_columns",
@@ -1690,7 +1690,7 @@ pub static MZ_INDEX_COLUMNS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("on_expression", ScalarType::String.nullable(true))
         .with_column("nullable", ScalarType::Bool.nullable(false)),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 pub static MZ_TABLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_tables",
@@ -1706,7 +1706,7 @@ pub static MZ_TABLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
         ),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 pub static MZ_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_connections",
@@ -1723,7 +1723,7 @@ pub static MZ_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
         ),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 pub static MZ_SSH_TUNNEL_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_ssh_tunnel_connections",
@@ -1733,7 +1733,7 @@ pub static MZ_SSH_TUNNEL_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinT
         .with_column("public_key_1", ScalarType::String.nullable(false))
         .with_column("public_key_2", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 pub static MZ_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_sources",
@@ -1754,7 +1754,7 @@ pub static MZ_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
         ),
     is_retained_metrics_object: true,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 pub static MZ_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_sinks",
@@ -1771,7 +1771,7 @@ pub static MZ_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("cluster_id", ScalarType::String.nullable(false))
         .with_column("owner_id", ScalarType::String.nullable(false)),
     is_retained_metrics_object: true,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 pub static MZ_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_views",
@@ -1788,7 +1788,7 @@ pub static MZ_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
         ),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 pub static MZ_MATERIALIZED_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_materialized_views",
@@ -1806,7 +1806,7 @@ pub static MZ_MATERIALIZED_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
         ),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 pub static MZ_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_types",
@@ -1823,7 +1823,7 @@ pub static MZ_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
         ),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 /// PostgreSQL-specific metadata about types that doesn't make sense to expose
 /// in the `mz_types` table as part of our public, stable API.
@@ -1834,7 +1834,7 @@ pub static MZ_TYPE_PG_METADATA: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("typreceive", ScalarType::Oid.nullable(false)),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 pub static MZ_ARRAY_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_array_types",
@@ -1843,14 +1843,14 @@ pub static MZ_ARRAY_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("element_id", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 pub static MZ_BASE_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_base_types",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty().with_column("id", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 pub static MZ_LIST_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_list_types",
@@ -1867,7 +1867,7 @@ pub static MZ_LIST_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
             .nullable(true),
         ),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 pub static MZ_MAP_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_map_types",
@@ -1893,7 +1893,7 @@ pub static MZ_MAP_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
             .nullable(true),
         ),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 pub static MZ_ROLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_roles",
@@ -1904,7 +1904,7 @@ pub static MZ_ROLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("inherit", ScalarType::Bool.nullable(false)),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 pub static MZ_ROLE_MEMBERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_role_members",
@@ -1914,14 +1914,14 @@ pub static MZ_ROLE_MEMBERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("member", ScalarType::String.nullable(false))
         .with_column("grantor", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 pub static MZ_PSEUDO_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_pseudo_types",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty().with_column("id", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 pub static MZ_FUNCTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_functions",
@@ -1943,7 +1943,7 @@ pub static MZ_FUNCTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("returns_set", ScalarType::Bool.nullable(false))
         .with_column("owner_id", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 pub static MZ_OPERATORS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_operators",
@@ -1957,7 +1957,7 @@ pub static MZ_OPERATORS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         )
         .with_column("return_type_id", ScalarType::String.nullable(true)),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 pub static MZ_AGGREGATES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_aggregates",
@@ -1967,7 +1967,7 @@ pub static MZ_AGGREGATES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("agg_kind", ScalarType::String.nullable(false))
         .with_column("agg_num_direct_args", ScalarType::Int16.nullable(false)),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 
 pub static MZ_CLUSTERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1994,7 +1994,7 @@ pub static MZ_CLUSTERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
             .nullable(true),
         ),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 
 pub static MZ_CLUSTER_LINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -2004,7 +2004,7 @@ pub static MZ_CLUSTER_LINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("cluster_id", ScalarType::String.nullable(false))
         .with_column("object_id", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 
 pub static MZ_SECRETS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -2021,7 +2021,7 @@ pub static MZ_SECRETS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
             ScalarType::Array(Box::new(ScalarType::MzAclItem)).nullable(false),
         ),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 
 pub static MZ_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -2038,7 +2038,7 @@ pub static MZ_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("owner_id", ScalarType::String.nullable(false))
         .with_column("disk", ScalarType::Bool.nullable(true)),
     is_retained_metrics_object: true,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 
 pub static MZ_INTERNAL_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -2046,7 +2046,7 @@ pub static MZ_INTERNAL_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| Built
     schema: MZ_INTERNAL_SCHEMA,
     desc: RelationDesc::empty().with_column("id", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 
 pub static MZ_CLUSTER_REPLICA_STATUSES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -2062,7 +2062,7 @@ pub static MZ_CLUSTER_REPLICA_STATUSES: Lazy<BuiltinTable> = Lazy::new(|| Builti
             ScalarType::TimestampTz { precision: None }.nullable(false),
         ),
     is_retained_metrics_object: true,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 
 pub static MZ_CLUSTER_REPLICA_SIZES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -2080,7 +2080,7 @@ pub static MZ_CLUSTER_REPLICA_SIZES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTa
             ScalarType::Numeric { max_scale: None }.nullable(false),
         ),
     is_retained_metrics_object: true,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 
 pub static MZ_CLUSTER_REPLICA_HEARTBEATS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
@@ -2094,7 +2094,7 @@ pub static MZ_CLUSTER_REPLICA_HEARTBEATS: Lazy<BuiltinSource> = Lazy::new(|| Bui
             ScalarType::TimestampTz { precision: None }.nullable(false),
         ),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 
 pub static MZ_AUDIT_EVENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -2111,7 +2111,7 @@ pub static MZ_AUDIT_EVENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
             ScalarType::TimestampTz { precision: None }.nullable(false),
         ),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 
 pub static MZ_SOURCE_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
@@ -2120,7 +2120,7 @@ pub static MZ_SOURCE_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinS
     data_source: Some(IntrospectionType::SourceStatusHistory),
     desc: MZ_SOURCE_STATUS_HISTORY_DESC.clone(),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 
 pub static MZ_STATEMENT_EXECUTION_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
@@ -2129,7 +2129,7 @@ pub static MZ_STATEMENT_EXECUTION_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| Bu
     data_source: Some(IntrospectionType::StatementExecutionHistory),
     desc: MZ_STATEMENT_EXECUTION_HISTORY_DESC.clone(),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Superuser,
+    sensitivity: DataSensitivity::Superuser,
 });
 
 pub static MZ_STATEMENT_EXECUTION_HISTORY_REDACTED: BuiltinView = BuiltinView {
@@ -2141,7 +2141,7 @@ SELECT id, prepared_statement_id, sample_rate, cluster_id, application_name,
 cluster_name, transaction_isolation, execution_timestamp, began_at, finished_at, finished_status,
 error_message, rows_returned, execution_strategy
 FROM mz_internal.mz_statement_execution_history",
-    sensitivity: Sensitivity::SuperuserAndSupport,
+    sensitivity: DataSensitivity::SuperuserAndSupport,
 };
 
 pub static MZ_PREPARED_STATEMENT_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
@@ -2150,7 +2150,7 @@ pub static MZ_PREPARED_STATEMENT_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| Bui
     data_source: Some(IntrospectionType::PreparedStatementHistory),
     desc: MZ_PREPARED_STATEMENT_HISTORY_DESC.clone(),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Superuser,
+    sensitivity: DataSensitivity::Superuser,
 });
 
 pub static MZ_PREPARED_STATEMENT_HISTORY_REDACTED: BuiltinView = BuiltinView {
@@ -2160,7 +2160,7 @@ pub static MZ_PREPARED_STATEMENT_HISTORY_REDACTED: BuiltinView = BuiltinView {
     sql: "CREATE VIEW mz_internal.mz_prepared_statement_history_redacted AS
 SELECT id, session_id, name, redacted_sql, prepared_at
 FROM mz_internal.mz_prepared_statement_history",
-    sensitivity: Sensitivity::SuperuserAndSupport,
+    sensitivity: DataSensitivity::SuperuserAndSupport,
 };
 
 pub static MZ_SESSION_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
@@ -2169,7 +2169,7 @@ pub static MZ_SESSION_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource 
     data_source: Some(IntrospectionType::SessionHistory),
     desc: MZ_SESSION_HISTORY_DESC.clone(),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::SuperuserAndSupport,
+    sensitivity: DataSensitivity::SuperuserAndSupport,
 });
 
 pub const MZ_SOURCE_STATUSES: BuiltinView = BuiltinView {
@@ -2198,7 +2198,7 @@ LEFT JOIN latest_events ON mz_sources.id = latest_events.source_id
 WHERE
     -- This is a convenient way to filter out system sources, like the status_history table itself.
     mz_sources.id NOT LIKE 's%'",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub static MZ_SINK_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
@@ -2207,7 +2207,7 @@ pub static MZ_SINK_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSou
     data_source: Some(IntrospectionType::SinkStatusHistory),
     desc: MZ_SINK_STATUS_HISTORY_DESC.clone(),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 
 pub const MZ_SINK_STATUSES: BuiltinView = BuiltinView {
@@ -2232,7 +2232,7 @@ LEFT JOIN latest_events ON mz_sinks.id = latest_events.sink_id
 WHERE
     -- This is a convenient way to filter out system sinks, like the status_history table itself.
     mz_sinks.id NOT LIKE 's%'",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub static MZ_STORAGE_USAGE_BY_SHARD: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -2247,7 +2247,7 @@ pub static MZ_STORAGE_USAGE_BY_SHARD: Lazy<BuiltinTable> = Lazy::new(|| BuiltinT
             ScalarType::TimestampTz { precision: None }.nullable(false),
         ),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 
 pub static MZ_EGRESS_IPS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -2255,7 +2255,7 @@ pub static MZ_EGRESS_IPS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty().with_column("egress_ip", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 
 pub static MZ_AWS_PRIVATELINK_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -2265,7 +2265,7 @@ pub static MZ_AWS_PRIVATELINK_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| Bui
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("principal", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 
 pub static MZ_CLUSTER_REPLICA_METRICS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -2280,7 +2280,7 @@ pub static MZ_CLUSTER_REPLICA_METRICS: Lazy<BuiltinTable> = Lazy::new(|| Builtin
         .with_column("memory_bytes", ScalarType::UInt64.nullable(true))
         .with_column("disk_bytes", ScalarType::UInt64.nullable(true)),
     is_retained_metrics_object: true,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 
 pub static MZ_FRONTIERS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
@@ -2292,7 +2292,7 @@ pub static MZ_FRONTIERS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
         .with_column("replica_id", ScalarType::String.nullable(true))
         .with_column("time", ScalarType::MzTimestamp.nullable(true)),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 
 pub const MZ_GLOBAL_FRONTIERS: BuiltinView = BuiltinView {
@@ -2326,7 +2326,7 @@ WITH
 SELECT object_id, time
 FROM frontiers_with_replicas
 JOIN replica_lists USING (replicas)",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub static MZ_SUBSCRIPTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -2349,7 +2349,7 @@ pub static MZ_SUBSCRIPTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
             .nullable(false),
         ),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 
 pub static MZ_SESSIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -2363,7 +2363,7 @@ pub static MZ_SESSIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
             ScalarType::TimestampTz { precision: None }.nullable(false),
         ),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 
 pub static MZ_DEFAULT_PRIVILEGES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -2377,7 +2377,7 @@ pub static MZ_DEFAULT_PRIVILEGES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable
         .with_column("grantee", ScalarType::String.nullable(false))
         .with_column("privileges", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 
 pub static MZ_SYSTEM_PRIVILEGES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -2385,7 +2385,7 @@ pub static MZ_SYSTEM_PRIVILEGES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable 
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty().with_column("privileges", ScalarType::MzAclItem.nullable(false)),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 
 pub static MZ_COMMENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -2397,7 +2397,7 @@ pub static MZ_COMMENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("object_sub_id", ScalarType::Int32.nullable(true))
         .with_column("comment", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 
 pub static MZ_WEBHOOKS_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -2408,7 +2408,7 @@ pub static MZ_WEBHOOKS_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("url", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 
 // These will be replaced with per-replica tables once source/sink multiplexing on
@@ -2429,7 +2429,7 @@ pub static MZ_SOURCE_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSourc
         .with_column("envelope_state_count", ScalarType::UInt64.nullable(false))
         .with_column("rehydration_latency_ms", ScalarType::UInt64.nullable(true)),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 pub static MZ_SINK_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_sink_statistics",
@@ -2443,7 +2443,7 @@ pub static MZ_SINK_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource 
         .with_column("bytes_staged", ScalarType::UInt64.nullable(false))
         .with_column("bytes_committed", ScalarType::UInt64.nullable(false)),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 
 pub static MZ_STORAGE_SHARDS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
@@ -2454,7 +2454,7 @@ pub static MZ_STORAGE_SHARDS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
         .with_column("object_id", ScalarType::String.nullable(false))
         .with_column("shard_id", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 
 pub static MZ_STORAGE_USAGE: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
@@ -2469,7 +2469,7 @@ FROM
     mz_internal.mz_storage_shards
     JOIN mz_internal.mz_storage_usage_by_shard USING (shard_id)
 GROUP BY object_id, collection_timestamp",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 });
 
 pub const MZ_RELATIONS: BuiltinView = BuiltinView {
@@ -2480,7 +2480,7 @@ pub const MZ_RELATIONS: BuiltinView = BuiltinView {
 UNION ALL SELECT id, oid, schema_id, name, 'source', owner_id, privileges FROM mz_catalog.mz_sources
 UNION ALL SELECT id, oid, schema_id, name, 'view', owner_id, privileges FROM mz_catalog.mz_views
 UNION ALL SELECT id, oid, schema_id, name, 'materialized-view', owner_id, privileges FROM mz_catalog.mz_materialized_views",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_OBJECTS: BuiltinView = BuiltinView {
@@ -2503,7 +2503,7 @@ UNION ALL
     SELECT id, oid, schema_id, name, 'function', owner_id, NULL::mz_aclitem[] FROM mz_catalog.mz_functions
 UNION ALL
     SELECT id, oid, schema_id, name, 'secret', owner_id, privileges FROM mz_catalog.mz_secrets",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_OBJECT_FULLY_QUALIFIED_NAMES: BuiltinView = BuiltinView {
@@ -2515,7 +2515,7 @@ pub const MZ_OBJECT_FULLY_QUALIFIED_NAMES: BuiltinView = BuiltinView {
     INNER JOIN mz_catalog.mz_schemas sc ON sc.id = o.schema_id
     -- LEFT JOIN accounts for objects in the ambient database.
     LEFT JOIN mz_catalog.mz_databases db ON db.id = sc.database_id",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_OBJECT_LIFETIMES: BuiltinView = BuiltinView {
@@ -2532,7 +2532,7 @@ pub const MZ_OBJECT_LIFETIMES: BuiltinView = BuiltinView {
         a.occurred_at
     FROM mz_catalog.mz_audit_events a
     WHERE a.event_type = 'create' OR a.event_type = 'drop'",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_DATAFLOWS_PER_WORKER: BuiltinView = BuiltinView {
@@ -2549,7 +2549,7 @@ WHERE
     addrs.id = ops.id AND
     addrs.worker_id = ops.worker_id AND
     mz_catalog.list_length(addrs.address) = 1",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_DATAFLOWS: BuiltinView = BuiltinView {
@@ -2559,7 +2559,7 @@ pub const MZ_DATAFLOWS: BuiltinView = BuiltinView {
 SELECT id, name
 FROM mz_internal.mz_dataflows_per_worker
 WHERE worker_id = 0",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_DATAFLOW_ADDRESSES: BuiltinView = BuiltinView {
@@ -2569,7 +2569,7 @@ pub const MZ_DATAFLOW_ADDRESSES: BuiltinView = BuiltinView {
 SELECT id, address
 FROM mz_internal.mz_dataflow_addresses_per_worker
 WHERE worker_id = 0",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_DATAFLOW_CHANNELS: BuiltinView = BuiltinView {
@@ -2579,7 +2579,7 @@ pub const MZ_DATAFLOW_CHANNELS: BuiltinView = BuiltinView {
 SELECT id, from_index, from_port, to_index, to_port
 FROM mz_internal.mz_dataflow_channels_per_worker
 WHERE worker_id = 0",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_DATAFLOW_OPERATORS: BuiltinView = BuiltinView {
@@ -2589,7 +2589,7 @@ pub const MZ_DATAFLOW_OPERATORS: BuiltinView = BuiltinView {
 SELECT id, name
 FROM mz_internal.mz_dataflow_operators_per_worker
 WHERE worker_id = 0",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_DATAFLOW_OPERATOR_DATAFLOWS_PER_WORKER: BuiltinView = BuiltinView {
@@ -2610,7 +2610,7 @@ WHERE
     ops.worker_id = addrs.worker_id AND
     dfs.id = addrs.address[1] AND
     dfs.worker_id = addrs.worker_id",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_DATAFLOW_OPERATOR_DATAFLOWS: BuiltinView = BuiltinView {
@@ -2620,7 +2620,7 @@ pub const MZ_DATAFLOW_OPERATOR_DATAFLOWS: BuiltinView = BuiltinView {
 SELECT id, name, dataflow_id, dataflow_name
 FROM mz_internal.mz_dataflow_operator_dataflows_per_worker
 WHERE worker_id = 0",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_OBJECT_TRANSITIVE_DEPENDENCIES: BuiltinView = BuiltinView {
@@ -2634,7 +2634,7 @@ WITH MUTUALLY RECURSIVE
     SELECT x, z FROM reach r1(x, y) JOIN reach r2(y, z) USING(y)
   )
 SELECT object_id, referenced_object_id FROM reach;",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_COMPUTE_EXPORTS: BuiltinView = BuiltinView {
@@ -2644,7 +2644,7 @@ pub const MZ_COMPUTE_EXPORTS: BuiltinView = BuiltinView {
 SELECT export_id, dataflow_id
 FROM mz_internal.mz_compute_exports_per_worker
 WHERE worker_id = 0",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_COMPUTE_FRONTIERS: BuiltinView = BuiltinView {
@@ -2654,7 +2654,7 @@ pub const MZ_COMPUTE_FRONTIERS: BuiltinView = BuiltinView {
     export_id, pg_catalog.min(time) AS time
 FROM mz_internal.mz_compute_frontiers_per_worker
 GROUP BY export_id",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_DATAFLOW_CHANNEL_OPERATORS_PER_WORKER: BuiltinView = BuiltinView {
@@ -2694,7 +2694,7 @@ FROM channel_operator_addresses coa
           ON coa.to_address = to_ops.address AND
              coa.worker_id = to_ops.worker_id
 ",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_DATAFLOW_CHANNEL_OPERATORS: BuiltinView = BuiltinView {
@@ -2704,7 +2704,7 @@ pub const MZ_DATAFLOW_CHANNEL_OPERATORS: BuiltinView = BuiltinView {
 SELECT id, from_operator_id, from_operator_address, to_operator_id, to_operator_address
 FROM mz_internal.mz_dataflow_channel_operators_per_worker
 WHERE worker_id = 0",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_COMPUTE_IMPORT_FRONTIERS: BuiltinView = BuiltinView {
@@ -2714,7 +2714,7 @@ pub const MZ_COMPUTE_IMPORT_FRONTIERS: BuiltinView = BuiltinView {
     export_id, import_id, pg_catalog.min(time) AS time
 FROM mz_internal.mz_compute_import_frontiers_per_worker
 GROUP BY export_id, import_id",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_RECORDS_PER_DATAFLOW_OPERATOR_PER_WORKER: BuiltinView = BuiltinView {
@@ -2736,7 +2736,7 @@ FROM
     LEFT OUTER JOIN mz_internal.mz_arrangement_sizes_per_worker ar_size ON
         dod.id = ar_size.operator_id AND
         dod.worker_id = ar_size.worker_id",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_RECORDS_PER_DATAFLOW_OPERATOR: BuiltinView = BuiltinView {
@@ -2754,7 +2754,7 @@ SELECT
     pg_catalog.sum(allocations) AS allocations
 FROM mz_internal.mz_records_per_dataflow_operator_per_worker
 GROUP BY id, name, dataflow_id",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_RECORDS_PER_DATAFLOW_PER_WORKER: BuiltinView = BuiltinView {
@@ -2780,7 +2780,7 @@ GROUP BY
     rdo.dataflow_id,
     dfs.name,
     rdo.worker_id",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_RECORDS_PER_DATAFLOW: BuiltinView = BuiltinView {
@@ -2800,7 +2800,7 @@ FROM
 GROUP BY
     id,
     name",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const PG_NAMESPACE: BuiltinView = BuiltinView {
@@ -2815,7 +2815,7 @@ FROM mz_catalog.mz_schemas s
 LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
 JOIN mz_catalog.mz_roles role_owner ON role_owner.id = s.owner_id
 WHERE s.database_id IS NULL OR d.name = pg_catalog.current_database()",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const PG_CLASS: BuiltinView = BuiltinView {
@@ -2876,7 +2876,7 @@ JOIN mz_catalog.mz_schemas ON mz_schemas.id = class_objects.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
 JOIN mz_catalog.mz_roles role_owner ON role_owner.id = class_objects.owner_id
 WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const PG_DEPEND: BuiltinView = BuiltinView {
@@ -2929,7 +2929,7 @@ SELECT
 FROM mz_internal.mz_object_dependencies
 JOIN current_objects objects ON object_id = objects.id
 JOIN current_objects dependents ON referenced_object_id = dependents.id",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const PG_DATABASE: BuiltinView = BuiltinView {
@@ -2948,7 +2948,7 @@ pub const PG_DATABASE: BuiltinView = BuiltinView {
     NULL::pg_catalog.text[] as datacl
 FROM mz_catalog.mz_databases d
 JOIN mz_catalog.mz_roles role_owner ON role_owner.id = d.owner_id",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const PG_INDEX: BuiltinView = BuiltinView {
@@ -2986,7 +2986,7 @@ JOIN mz_catalog.mz_schemas ON mz_schemas.id = mz_relations.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
 WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()
 GROUP BY mz_indexes.oid, mz_relations.oid",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const PG_INDEXES: BuiltinView = BuiltinView {
@@ -3005,7 +3005,7 @@ JOIN mz_catalog.mz_relations r ON i.on_id = r.id
 JOIN mz_catalog.mz_schemas s ON s.id = r.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
 WHERE s.database_id IS NULL OR d.name = current_database()",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 /// Note: Databases, Roles, Clusters, Cluster Replicas, Secrets, and Connections are excluded from
@@ -3045,7 +3045,7 @@ pub const PG_DESCRIPTION: BuiltinView = BuiltinView {
         JOIN
             mz_internal.mz_comments AS cmt ON mz_objects.id = cmt.id AND lower(mz_objects.type) = lower(cmt.object_type)
     )",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const PG_TYPE: BuiltinView = BuiltinView {
@@ -3125,7 +3125,7 @@ FROM
     LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
     JOIN mz_catalog.mz_roles role_owner ON role_owner.id = mz_types.owner_id
     WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const PG_ATTRIBUTE: BuiltinView = BuiltinView {
@@ -3161,7 +3161,7 @@ LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
 WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
     // Since this depends on pg_type, its id must be higher due to initialization
     // ordering.
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const PG_PROC: BuiltinView = BuiltinView {
@@ -3180,7 +3180,7 @@ LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
 JOIN mz_catalog.mz_types AS ret_type ON mz_functions.return_type_id = ret_type.id
 JOIN mz_catalog.mz_roles role_owner ON role_owner.id = mz_functions.owner_id
 WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const PG_OPERATOR: BuiltinView = BuiltinView {
@@ -3207,7 +3207,7 @@ FROM mz_catalog.mz_operators
 JOIN mz_catalog.mz_types AS ret_type ON mz_operators.return_type_id = ret_type.id
 JOIN mz_catalog.mz_types AS right_type ON mz_operators.argument_type_ids[1] = right_type.id
 WHERE array_length(mz_operators.argument_type_ids, 1) = 1",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const PG_RANGE: BuiltinView = BuiltinView {
@@ -3217,7 +3217,7 @@ pub const PG_RANGE: BuiltinView = BuiltinView {
     NULL::pg_catalog.oid AS rngtypid,
     NULL::pg_catalog.oid AS rngsubtype
 WHERE false",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const PG_ENUM: BuiltinView = BuiltinView {
@@ -3229,7 +3229,7 @@ pub const PG_ENUM: BuiltinView = BuiltinView {
     NULL::pg_catalog.float4 AS enumsortorder,
     NULL::pg_catalog.text AS enumlabel
 WHERE false",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const PG_ATTRDEF: BuiltinView = BuiltinView {
@@ -3245,7 +3245,7 @@ FROM mz_catalog.mz_columns
     JOIN mz_catalog.mz_databases d ON (d.id IS NULL OR d.name = pg_catalog.current_database())
     JOIN mz_catalog.mz_objects ON mz_columns.id = mz_objects.id
 WHERE default IS NOT NULL",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const PG_SETTINGS: BuiltinView = BuiltinView {
@@ -3256,7 +3256,7 @@ pub const PG_SETTINGS: BuiltinView = BuiltinView {
 FROM (VALUES
     ('max_index_keys'::pg_catalog.text, '1000'::pg_catalog.text)
 ) AS _ (name, setting)",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const PG_AUTH_MEMBERS: BuiltinView = BuiltinView {
@@ -3272,7 +3272,7 @@ FROM mz_role_members membership
 JOIN mz_roles role ON membership.role_id = role.id
 JOIN mz_roles member ON membership.member = member.id
 JOIN mz_roles grantor ON membership.grantor = grantor.id",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const PG_EVENT_TRIGGER: BuiltinView = BuiltinView {
@@ -3287,7 +3287,7 @@ pub const PG_EVENT_TRIGGER: BuiltinView = BuiltinView {
         NULL::pg_catalog.char AS evtenabled,
         NULL::pg_catalog.text[] AS evttags
     WHERE false",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const PG_LANGUAGE: BuiltinView = BuiltinView {
@@ -3304,7 +3304,7 @@ pub const PG_LANGUAGE: BuiltinView = BuiltinView {
         NULL::pg_catalog.oid  AS lanvalidator,
         NULL::pg_catalog.text[] AS lanacl
     WHERE false",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const PG_SHDESCRIPTION: BuiltinView = BuiltinView {
@@ -3315,7 +3315,7 @@ pub const PG_SHDESCRIPTION: BuiltinView = BuiltinView {
         NULL::pg_catalog.oid AS classoid,
         NULL::pg_catalog.text AS description
     WHERE false",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_PEEK_DURATIONS_HISTOGRAM_PER_WORKER: BuiltinView = BuiltinView {
@@ -3327,7 +3327,7 @@ FROM
     mz_internal.mz_peek_durations_histogram_raw
 GROUP BY
     worker_id, duration_ns",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_PEEK_DURATIONS_HISTOGRAM: BuiltinView = BuiltinView {
@@ -3339,7 +3339,7 @@ SELECT
     pg_catalog.sum(count) AS count
 FROM mz_internal.mz_peek_durations_histogram_per_worker
 GROUP BY duration_ns",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_PER_WORKER: BuiltinView = BuiltinView {
@@ -3351,7 +3351,7 @@ FROM
     mz_internal.mz_dataflow_shutdown_durations_histogram_raw
 GROUP BY
     worker_id, duration_ns",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM: BuiltinView = BuiltinView {
@@ -3363,7 +3363,7 @@ SELECT
     pg_catalog.sum(count) AS count
 FROM mz_internal.mz_dataflow_shutdown_durations_histogram_per_worker
 GROUP BY duration_ns",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_SCHEDULING_ELAPSED_PER_WORKER: BuiltinView = BuiltinView {
@@ -3375,7 +3375,7 @@ FROM
     mz_internal.mz_scheduling_elapsed_raw
 GROUP BY
     id, worker_id",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_SCHEDULING_ELAPSED: BuiltinView = BuiltinView {
@@ -3387,7 +3387,7 @@ SELECT
     pg_catalog.sum(elapsed_ns) AS elapsed_ns
 FROM mz_internal.mz_scheduling_elapsed_per_worker
 GROUP BY id",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_PER_WORKER: BuiltinView = BuiltinView {
@@ -3399,7 +3399,7 @@ FROM
     mz_internal.mz_compute_operator_durations_histogram_raw
 GROUP BY
     id, worker_id, duration_ns",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM: BuiltinView = BuiltinView {
@@ -3412,7 +3412,7 @@ SELECT
     pg_catalog.sum(count) AS count
 FROM mz_internal.mz_compute_operator_durations_histogram_per_worker
 GROUP BY id, duration_ns",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_SCHEDULING_PARKS_HISTOGRAM_PER_WORKER: BuiltinView = BuiltinView {
@@ -3424,7 +3424,7 @@ FROM
     mz_internal.mz_scheduling_parks_histogram_raw
 GROUP BY
     worker_id, slept_for_ns, requested_ns",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_SCHEDULING_PARKS_HISTOGRAM: BuiltinView = BuiltinView {
@@ -3437,7 +3437,7 @@ SELECT
     pg_catalog.sum(count) AS count
 FROM mz_internal.mz_scheduling_parks_histogram_per_worker
 GROUP BY slept_for_ns, requested_ns",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_COMPUTE_DELAYS_HISTOGRAM_PER_WORKER: BuiltinView = BuiltinView {
@@ -3449,7 +3449,7 @@ FROM
     mz_internal.mz_compute_delays_histogram_raw
 GROUP BY
     export_id, import_id, worker_id, delay_ns",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_COMPUTE_DELAYS_HISTOGRAM: BuiltinView = BuiltinView {
@@ -3463,7 +3463,7 @@ SELECT
     pg_catalog.sum(count) AS count
 FROM mz_internal.mz_compute_delays_histogram_per_worker
 GROUP BY export_id, import_id, delay_ns",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_COMPUTE_ERROR_COUNTS_PER_WORKER: BuiltinView = BuiltinView {
@@ -3497,7 +3497,7 @@ WITH MUTUALLY RECURSIVE
         JOIN index_reuses r ON (r.index_id = e.export_id)
     )
 SELECT * FROM all_errors",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_COMPUTE_ERROR_COUNTS: BuiltinView = BuiltinView {
@@ -3510,7 +3510,7 @@ SELECT
 FROM mz_internal.mz_compute_error_counts_per_worker
 GROUP BY export_id
 HAVING pg_catalog.sum(count) != 0",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_MESSAGE_COUNTS_PER_WORKER: BuiltinView = BuiltinView {
@@ -3573,7 +3573,7 @@ FROM sent_cte
 JOIN received_cte USING (channel_id, from_worker_id, to_worker_id)
 JOIN batch_sent_cte USING (channel_id, from_worker_id, to_worker_id)
 JOIN batch_received_cte USING (channel_id, from_worker_id, to_worker_id)",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_MESSAGE_COUNTS: BuiltinView = BuiltinView {
@@ -3588,7 +3588,7 @@ SELECT
     pg_catalog.sum(batch_received) AS batch_received
 FROM mz_internal.mz_message_counts_per_worker
 GROUP BY channel_id",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_ACTIVE_PEEKS: BuiltinView = BuiltinView {
@@ -3598,7 +3598,7 @@ pub const MZ_ACTIVE_PEEKS: BuiltinView = BuiltinView {
 SELECT id, index_id, time
 FROM mz_internal.mz_active_peeks_per_worker
 WHERE worker_id = 0",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_DATAFLOW_OPERATOR_REACHABILITY_PER_WORKER: BuiltinView = BuiltinView {
@@ -3614,7 +3614,7 @@ pub const MZ_DATAFLOW_OPERATOR_REACHABILITY_PER_WORKER: BuiltinView = BuiltinVie
 FROM
     mz_internal.mz_dataflow_operator_reachability_raw
 GROUP BY address, port, worker_id, update_type, time",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_DATAFLOW_OPERATOR_REACHABILITY: BuiltinView = BuiltinView {
@@ -3629,7 +3629,7 @@ SELECT
     pg_catalog.sum(count) as count
 FROM mz_internal.mz_dataflow_operator_reachability_per_worker
 GROUP BY address, port, update_type, time",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_ARRANGEMENT_SIZES_PER_WORKER: BuiltinView = BuiltinView {
@@ -3699,7 +3699,7 @@ LEFT OUTER JOIN records_cte USING (operator_id, worker_id)
 LEFT OUTER JOIN heap_size_cte USING (operator_id, worker_id)
 LEFT OUTER JOIN heap_capacity_cte USING (operator_id, worker_id)
 LEFT OUTER JOIN heap_allocations_cte USING (operator_id, worker_id)",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_ARRANGEMENT_SIZES: BuiltinView = BuiltinView {
@@ -3715,7 +3715,7 @@ SELECT
     pg_catalog.sum(allocations) AS allocations
 FROM mz_internal.mz_arrangement_sizes_per_worker
 GROUP BY operator_id",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_ARRANGEMENT_SHARING_PER_WORKER: BuiltinView = BuiltinView {
@@ -3728,7 +3728,7 @@ SELECT
     pg_catalog.count(*) AS count
 FROM mz_internal.mz_arrangement_sharing_raw
 GROUP BY operator_id, worker_id",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_ARRANGEMENT_SHARING: BuiltinView = BuiltinView {
@@ -3738,7 +3738,7 @@ pub const MZ_ARRANGEMENT_SHARING: BuiltinView = BuiltinView {
 SELECT operator_id, count
 FROM mz_internal.mz_arrangement_sharing_per_worker
 WHERE worker_id = 0",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_CLUSTER_REPLICA_UTILIZATION: BuiltinView = BuiltinView {
@@ -3755,7 +3755,7 @@ FROM
     mz_cluster_replicas AS r
         JOIN mz_internal.mz_cluster_replica_sizes AS s ON r.size = s.size
         JOIN mz_internal.mz_cluster_replica_metrics AS m ON m.replica_id = r.id",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_DATAFLOW_OPERATOR_PARENTS_PER_WORKER: BuiltinView = BuiltinView {
@@ -3781,7 +3781,7 @@ FROM parent_addrs AS pa
     INNER JOIN operator_addrs AS oa
         ON pa.parent_address = oa.address
         AND pa.worker_id = oa.worker_id",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_DATAFLOW_OPERATOR_PARENTS: BuiltinView = BuiltinView {
@@ -3791,7 +3791,7 @@ pub const MZ_DATAFLOW_OPERATOR_PARENTS: BuiltinView = BuiltinView {
 SELECT id, parent_id
 FROM mz_internal.mz_dataflow_operator_parents_per_worker
 WHERE worker_id = 0",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_DATAFLOW_ARRANGEMENT_SIZES: BuiltinView = BuiltinView {
@@ -3810,7 +3810,7 @@ FROM mz_internal.mz_dataflow_operator_dataflows AS mdod
 LEFT JOIN mz_internal.mz_arrangement_sizes AS mas
     ON mdod.id = mas.operator_id
 GROUP BY mdod.dataflow_id, mdod.dataflow_name",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_EXPECTED_GROUP_SIZE_ADVICE: BuiltinView = BuiltinView {
@@ -3946,7 +3946,7 @@ pub const MZ_EXPECTED_GROUP_SIZE_ADVICE: BuiltinView = BuiltinView {
                 ON c.dataflow_id = l.dataflow_id AND c.region_id = l.region_id
             JOIN mz_internal.mz_dataflow_operator_dataflows dod
                 ON dod.dataflow_id = c.dataflow_id AND dod.id = c.region_id",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 // NOTE: If you add real data to this implementation, then please update
@@ -3981,7 +3981,7 @@ pub const PG_CONSTRAINT: BuiltinView = BuiltinView {
     NULL::pg_catalog.oid[] as conexclop,
     NULL::pg_catalog.text as conbin
 WHERE false",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const PG_TABLES: BuiltinView = BuiltinView {
@@ -3994,7 +3994,7 @@ SELECT n.nspname AS schemaname,
 FROM pg_catalog.pg_class c
 LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
 WHERE c.relkind IN ('r', 'p')",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const PG_TABLESPACE: BuiltinView = BuiltinView {
@@ -4013,7 +4013,7 @@ pub const PG_TABLESPACE: BuiltinView = BuiltinView {
         )
     ) AS _ (oid, spcname, spcowner, spcacl, spcoptions)
 ",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const PG_ACCESS_METHODS: BuiltinView = BuiltinView {
@@ -4025,7 +4025,7 @@ SELECT NULL::pg_catalog.oid AS oid,
     NULL::pg_catalog.regproc AS amhandler,
     NULL::pg_catalog.\"char\" AS amtype
 WHERE false",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const PG_ROLES: BuiltinView = BuiltinView {
@@ -4047,7 +4047,7 @@ pub const PG_ROLES: BuiltinView = BuiltinView {
     NULL::pg_catalog.text[] as rolconfig,
     r.oid AS oid
 FROM pg_catalog.pg_authid r",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const PG_VIEWS: BuiltinView = BuiltinView {
@@ -4063,7 +4063,7 @@ LEFT JOIN mz_catalog.mz_schemas s ON s.id = v.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
 JOIN mz_catalog.mz_roles role_owner ON role_owner.id = v.owner_id
 WHERE s.database_id IS NULL OR d.name = current_database()",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const PG_MATVIEWS: BuiltinView = BuiltinView {
@@ -4079,7 +4079,7 @@ LEFT JOIN mz_catalog.mz_schemas s ON s.id = m.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
 JOIN mz_catalog.mz_roles role_owner ON role_owner.id = m.owner_id
 WHERE s.database_id IS NULL OR d.name = current_database()",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const INFORMATION_SCHEMA_APPLICABLE_ROLES: BuiltinView = BuiltinView {
@@ -4095,7 +4095,7 @@ FROM mz_role_members membership
 JOIN mz_roles role ON membership.role_id = role.id
 JOIN mz_roles member ON membership.member = member.id
 WHERE mz_catalog.mz_is_superuser() OR pg_has_role(current_role, member.oid, 'USAGE')",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const INFORMATION_SCHEMA_COLUMNS: BuiltinView = BuiltinView {
@@ -4118,7 +4118,7 @@ JOIN mz_catalog.mz_objects o ON o.id = c.id
 JOIN mz_catalog.mz_schemas s ON s.id = o.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
 WHERE s.database_id IS NULL OR d.name = current_database()",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const INFORMATION_SCHEMA_ENABLED_ROLES: BuiltinView = BuiltinView {
@@ -4128,7 +4128,7 @@ pub const INFORMATION_SCHEMA_ENABLED_ROLES: BuiltinView = BuiltinView {
 SELECT name AS role_name
 FROM mz_roles
 WHERE mz_catalog.mz_is_superuser() OR pg_has_role(current_role, oid, 'USAGE')",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const INFORMATION_SCHEMA_ROLE_TABLE_GRANTS: BuiltinView = BuiltinView {
@@ -4140,7 +4140,7 @@ FROM information_schema.table_privileges
 WHERE
     grantor IN (SELECT role_name FROM information_schema.enabled_roles)
     OR grantee IN (SELECT role_name FROM information_schema.enabled_roles)",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const INFORMATION_SCHEMA_KEY_COLUMN_USAGE: BuiltinView = BuiltinView {
@@ -4157,7 +4157,7 @@ pub const INFORMATION_SCHEMA_KEY_COLUMN_USAGE: BuiltinView = BuiltinView {
     NULL::integer AS ordinal_position,
     NULL::integer AS position_in_unique_constraint
 WHERE false",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const INFORMATION_SCHEMA_REFERENTIAL_CONSTRAINTS: BuiltinView = BuiltinView {
@@ -4174,7 +4174,7 @@ pub const INFORMATION_SCHEMA_REFERENTIAL_CONSTRAINTS: BuiltinView = BuiltinView 
     NULL::text AS update_rule,
     NULL::text AS delete_rule
 WHERE false",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const INFORMATION_SCHEMA_ROUTINES: BuiltinView = BuiltinView {
@@ -4190,7 +4190,7 @@ FROM mz_catalog.mz_functions f
 JOIN mz_catalog.mz_schemas s ON s.id = f.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
 WHERE s.database_id IS NULL OR d.name = current_database()",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const INFORMATION_SCHEMA_SCHEMATA: BuiltinView = BuiltinView {
@@ -4203,7 +4203,7 @@ SELECT
 FROM mz_catalog.mz_schemas s
 LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
 WHERE s.database_id IS NULL OR d.name = current_database()",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const INFORMATION_SCHEMA_TABLES: BuiltinView = BuiltinView {
@@ -4222,7 +4222,7 @@ FROM mz_catalog.mz_relations r
 JOIN mz_catalog.mz_schemas s ON s.id = r.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
 WHERE s.database_id IS NULL OR d.name = current_database()",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const INFORMATION_SCHEMA_TABLE_CONSTRAINTS: BuiltinView = BuiltinView {
@@ -4241,7 +4241,7 @@ pub const INFORMATION_SCHEMA_TABLE_CONSTRAINTS: BuiltinView = BuiltinView {
     NULL::text AS enforced,
     NULL::text AS nulls_distinct
 WHERE false",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const INFORMATION_SCHEMA_TABLE_PRIVILEGES: BuiltinView = BuiltinView {
@@ -4297,7 +4297,7 @@ WHERE
             OR pg_has_role(current_role, grantee, 'USAGE')
             OR pg_has_role(current_role, grantor, 'USAGE')
     END",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const INFORMATION_SCHEMA_TRIGGERS: BuiltinView = BuiltinView {
@@ -4319,7 +4319,7 @@ pub const INFORMATION_SCHEMA_TRIGGERS: BuiltinView = BuiltinView {
     NULL::text AS action_reference_old_table,
     NULL::text AS action_reference_new_table
 WHERE FALSE",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const INFORMATION_SCHEMA_VIEWS: BuiltinView = BuiltinView {
@@ -4334,7 +4334,7 @@ FROM mz_catalog.mz_views v
 JOIN mz_catalog.mz_schemas s ON s.id = v.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = s.database_id
 WHERE s.database_id IS NULL OR d.name = current_database()",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const INFORMATION_SCHEMA_CHARACTER_SETS: BuiltinView = BuiltinView {
@@ -4349,7 +4349,7 @@ pub const INFORMATION_SCHEMA_CHARACTER_SETS: BuiltinView = BuiltinView {
     current_database() as default_collate_catalog,
     'pg_catalog' as default_collate_schema,
     'en_US.utf8' as default_collate_name",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 // MZ doesn't support COLLATE so the table is filled with NULLs and made empty. pg_database hard
@@ -4370,7 +4370,7 @@ AS SELECT
     NULL::pg_catalog.text AS collctype,
     NULL::pg_catalog.text AS collversion
 WHERE false",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 // MZ doesn't support row level security policies so the table is filled in with NULLs and made empty.
@@ -4388,7 +4388,7 @@ AS SELECT
     NULL::pg_catalog.text AS polqual,
     NULL::pg_catalog.text AS polwithcheck
 WHERE false",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 // MZ doesn't support table inheritance so the table is filled in with NULLs and made empty.
@@ -4402,7 +4402,7 @@ AS SELECT
     NULL::pg_catalog.int4 AS inhseqno,
     NULL::pg_catalog.bool AS inhdetachpending
 WHERE false",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const PG_LOCKS: BuiltinView = BuiltinView {
@@ -4428,7 +4428,7 @@ AS SELECT
     NULL::pg_catalog.bool AS fastpath,
     NULL::pg_catalog.timestamptz AS waitstart
 WHERE false",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const PG_AUTHID: BuiltinView = BuiltinView {
@@ -4462,7 +4462,7 @@ AS SELECT
     -- MZ doesn't have role passwords
     NULL::pg_catalog.timestamptz AS rolvaliduntil
 FROM mz_catalog.mz_roles r",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const PG_AGGREGATE: BuiltinView = BuiltinView {
@@ -4495,7 +4495,7 @@ AS SELECT
     NULL::pg_catalog.text as agginitval,
     NULL::pg_catalog.text as aggminitval
 FROM mz_internal.mz_aggregates a",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const PG_TRIGGER: BuiltinView = BuiltinView {
@@ -4527,7 +4527,7 @@ AS SELECT
     NULL::pg_catalog.text AS tgnewtable
 WHERE false
     ",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const PG_REWRITE: BuiltinView = BuiltinView {
@@ -4548,7 +4548,7 @@ AS SELECT
     NULL::pg_catalog.text AS ev_action
 WHERE false
     ",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const PG_EXTENSION: BuiltinView = BuiltinView {
@@ -4567,7 +4567,7 @@ AS SELECT
     NULL::pg_catalog.text[] AS extcondition
 WHERE false
     ",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_SHOW_SOURCES: BuiltinView = BuiltinView {
@@ -4577,7 +4577,7 @@ pub const MZ_SHOW_SOURCES: BuiltinView = BuiltinView {
 AS SELECT sources.name, sources.type, sources.size, clusters.name as cluster, schema_id, cluster_id
 FROM mz_catalog.mz_sources AS sources
 LEFT JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = sources.cluster_id",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_SHOW_SINKS: BuiltinView = BuiltinView {
@@ -4587,7 +4587,7 @@ pub const MZ_SHOW_SINKS: BuiltinView = BuiltinView {
 AS SELECT sinks.name, sinks.type, sinks.size, clusters.name as cluster, schema_id, cluster_id
 FROM mz_catalog.mz_sinks AS sinks
 JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = sinks.cluster_id",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_SHOW_MATERIALIZED_VIEWS: BuiltinView = BuiltinView {
@@ -4597,7 +4597,7 @@ pub const MZ_SHOW_MATERIALIZED_VIEWS: BuiltinView = BuiltinView {
 AS SELECT mviews.name, clusters.name AS cluster, schema_id, cluster_id
 FROM mz_materialized_views AS mviews
 JOIN mz_clusters AS clusters ON clusters.id = mviews.cluster_id",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_SHOW_INDEXES: BuiltinView = BuiltinView {
@@ -4633,7 +4633,7 @@ FROM
                 idxs.on_id = obj_cols.id AND idx_cols.on_position = obj_cols.position
         GROUP BY idxs.id) AS keys
     ON idxs.id = keys.id",
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_SHOW_CLUSTER_REPLICAS: BuiltinView = BuiltinView {
@@ -4659,7 +4659,7 @@ FROM
             ) AS statuses
             ON mz_catalog.mz_cluster_replicas.id = statuses.replica_id
 ORDER BY 1, 2"#,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_SHOW_ROLE_MEMBERS: BuiltinView = BuiltinView {
@@ -4675,7 +4675,7 @@ JOIN mz_roles r1 ON r1.id = rm.role_id
 JOIN mz_roles r2 ON r2.id = rm.member
 JOIN mz_roles r3 ON r3.id = rm.grantor
 ORDER BY role"#,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_SHOW_MY_ROLE_MEMBERS: BuiltinView = BuiltinView {
@@ -4685,7 +4685,7 @@ pub const MZ_SHOW_MY_ROLE_MEMBERS: BuiltinView = BuiltinView {
 AS SELECT role, member, grantor
 FROM mz_internal.mz_show_role_members
 WHERE pg_has_role(member, 'USAGE')"#,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_SHOW_SYSTEM_PRIVILEGES: BuiltinView = BuiltinView {
@@ -4705,7 +4705,7 @@ FROM
 LEFT JOIN mz_roles grantor ON privileges.grantor = grantor.id
 LEFT JOIN mz_roles grantee ON privileges.grantee = grantee.id
 WHERE privileges.grantee NOT LIKE 's%'"#,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_SHOW_MY_SYSTEM_PRIVILEGES: BuiltinView = BuiltinView {
@@ -4719,7 +4719,7 @@ WHERE
         WHEN grantee = 'PUBLIC' THEN true
         ELSE pg_has_role(grantee, 'USAGE')
     END"#,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_SHOW_CLUSTER_PRIVILEGES: BuiltinView = BuiltinView {
@@ -4741,7 +4741,7 @@ FROM
 LEFT JOIN mz_roles grantor ON privileges.grantor = grantor.id
 LEFT JOIN mz_roles grantee ON privileges.grantee = grantee.id
 WHERE privileges.grantee NOT LIKE 's%'"#,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_SHOW_MY_CLUSTER_PRIVILEGES: BuiltinView = BuiltinView {
@@ -4755,7 +4755,7 @@ WHERE
         WHEN grantee = 'PUBLIC' THEN true
         ELSE pg_has_role(grantee, 'USAGE')
     END"#,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_SHOW_DATABASE_PRIVILEGES: BuiltinView = BuiltinView {
@@ -4777,7 +4777,7 @@ FROM
 LEFT JOIN mz_roles grantor ON privileges.grantor = grantor.id
 LEFT JOIN mz_roles grantee ON privileges.grantee = grantee.id
 WHERE privileges.grantee NOT LIKE 's%'"#,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_SHOW_MY_DATABASE_PRIVILEGES: BuiltinView = BuiltinView {
@@ -4791,7 +4791,7 @@ WHERE
         WHEN grantee = 'PUBLIC' THEN true
         ELSE pg_has_role(grantee, 'USAGE')
     END"#,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_SHOW_SCHEMA_PRIVILEGES: BuiltinView = BuiltinView {
@@ -4815,7 +4815,7 @@ LEFT JOIN mz_roles grantor ON privileges.grantor = grantor.id
 LEFT JOIN mz_roles grantee ON privileges.grantee = grantee.id
 LEFT JOIN mz_databases databases ON privileges.database_id = databases.id
 WHERE privileges.grantee NOT LIKE 's%'"#,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_SHOW_MY_SCHEMA_PRIVILEGES: BuiltinView = BuiltinView {
@@ -4829,7 +4829,7 @@ WHERE
         WHEN grantee = 'PUBLIC' THEN true
         ELSE pg_has_role(grantee, 'USAGE')
     END"#,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_SHOW_OBJECT_PRIVILEGES: BuiltinView = BuiltinView {
@@ -4856,7 +4856,7 @@ LEFT JOIN mz_roles grantee ON privileges.grantee = grantee.id
 LEFT JOIN mz_schemas schemas ON privileges.schema_id = schemas.id
 LEFT JOIN mz_databases databases ON schemas.database_id = databases.id
 WHERE privileges.grantee NOT LIKE 's%'"#,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_SHOW_MY_OBJECT_PRIVILEGES: BuiltinView = BuiltinView {
@@ -4870,7 +4870,7 @@ WHERE
         WHEN grantee = 'PUBLIC' THEN true
         ELSE pg_has_role(grantee, 'USAGE')
     END"#,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_SHOW_ALL_PRIVILEGES: BuiltinView = BuiltinView {
@@ -4891,7 +4891,7 @@ FROM mz_internal.mz_show_schema_privileges
 UNION ALL
 SELECT grantor, grantee, database, schema, name, object_type, privilege_type
 FROM mz_internal.mz_show_object_privileges"#,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_SHOW_ALL_MY_PRIVILEGES: BuiltinView = BuiltinView {
@@ -4905,7 +4905,7 @@ WHERE
         WHEN grantee = 'PUBLIC' THEN true
         ELSE pg_has_role(grantee, 'USAGE')
     END"#,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_SHOW_DEFAULT_PRIVILEGES: BuiltinView = BuiltinView {
@@ -4933,7 +4933,7 @@ LEFT JOIN mz_schemas AS schemas ON defaults.schema_id = schemas.id
 WHERE defaults.grantee NOT LIKE 's%'
     AND defaults.database_id IS NULL OR defaults.database_id NOT LIKE 's%'
     AND defaults.schema_id IS NULL OR defaults.schema_id NOT LIKE 's%'"#,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_SHOW_MY_DEFAULT_PRIVILEGES: BuiltinView = BuiltinView {
@@ -4947,7 +4947,7 @@ WHERE
         WHEN grantee = 'PUBLIC' THEN true
         ELSE pg_has_role(grantee, 'USAGE')
     END"#,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_CLUSTER_REPLICA_HISTORY: BuiltinView = BuiltinView {
@@ -4996,7 +4996,7 @@ pub const MZ_CLUSTER_REPLICA_HISTORY: BuiltinView = BuiltinView {
                 LEFT JOIN
                     mz_internal.mz_cluster_replica_sizes
                     ON mz_cluster_replica_sizes.size = creates.size"#,
-    sensitivity: Sensitivity::Public,
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_SHOW_DATABASES_IND: BuiltinIndex = BuiltinIndex {

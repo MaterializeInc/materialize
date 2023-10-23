@@ -241,7 +241,7 @@ fn setup_statement_logging(
 #[mz_ore::test]
 #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/materialize/issues/21598
 fn test_statement_logging_immediate() {
-    let (_server, mut client) = setup_statement_logging(1.0, 1.0);
+    let (server, mut client) = setup_statement_logging(1.0, 1.0);
     let successful_immediates: &[&str] = &[
         "CREATE VIEW v AS SELECT 1;",
         "CREATE DEFAULT INDEX i ON v;",
@@ -274,6 +274,7 @@ fn test_statement_logging_immediate() {
     // Statement logging happens async, give it a chance to catch up
     thread::sleep(Duration::from_secs(5));
 
+    let mut client = server.connect_internal(postgres::NoTls).unwrap();
     let sl = client
         .query(
             "
@@ -344,7 +345,7 @@ ORDER BY mseh.began_at;",
 
 #[mz_ore::test]
 fn test_statement_logging_basic() {
-    let (_server, mut client) = setup_statement_logging(1.0, 1.0);
+    let (server, mut client) = setup_statement_logging(1.0, 1.0);
     client.execute("SELECT 1", &[]).unwrap();
     // We test that queries of this view execute on a cluster.
     // If we ever change the threshold for constant folding such that
@@ -374,6 +375,8 @@ fn test_statement_logging_basic() {
         rows_returned: Option<i64>,
         execution_timestamp: Option<u64>,
     }
+
+    let mut client = server.connect_internal(postgres::NoTls).unwrap();
 
     let result = Retry::default()
         .max_duration(Duration::from_secs(30))
@@ -516,7 +519,7 @@ fn test_statement_logging_subscribes() {
 
     // Statement logging happens async, give it a chance to catch up
     thread::sleep(Duration::from_secs(5));
-    let mut client = server.connect(postgres::NoTls).unwrap();
+    let mut client = server.connect_internal(postgres::NoTls).unwrap();
 
     struct Record {
         sample_rate: f64,
@@ -573,16 +576,14 @@ ORDER BY mseh.began_at",
 /// Relies on two assumptions:
 /// (1) that the effective sampling rate for the session is 50%,
 /// (2) that we are using the deterministic testing RNG.
-fn test_statement_logging_sampling_inner(mut client: postgres::Client) {
+fn test_statement_logging_sampling_inner(server: util::Server, mut client: postgres::Client) {
     for i in 0..50 {
         client.execute(&format!("SELECT {i}"), &[]).unwrap();
     }
     // Statement logging happens async, give it a chance to catch up
     thread::sleep(Duration::from_secs(5));
-    client
-        .execute("SET statement_logging_sample_rate=0", &[])
-        .unwrap();
-    let sqls: Vec<String> = client
+    let mut internal_client = server.connect_internal(postgres::NoTls).unwrap();
+    let sqls: Vec<String> = internal_client
         .query(
             "SELECT mpsh.sql
 FROM
@@ -610,16 +611,16 @@ ORDER BY mseh.began_at ASC;",
 
 #[mz_ore::test]
 fn test_statement_logging_sampling() {
-    let (_server, client) = setup_statement_logging(1.0, 0.5);
-    test_statement_logging_sampling_inner(client);
+    let (server, client) = setup_statement_logging(1.0, 0.5);
+    test_statement_logging_sampling_inner(server, client);
 }
 
 /// Test that we are not allowed to set `statement_logging_sample_rate`
 /// arbitrarily high, but that it is constrained by `statement_logging_max_sample_rate`.
 #[mz_ore::test]
 fn test_statement_logging_sampling_constrained() {
-    let (_server, client) = setup_statement_logging(0.5, 1.0);
-    test_statement_logging_sampling_inner(client);
+    let (server, client) = setup_statement_logging(0.5, 1.0);
+    test_statement_logging_sampling_inner(server, client);
 }
 
 #[mz_ore::test]
@@ -718,7 +719,8 @@ fn test_statement_logging_persistence() {
     std::mem::drop(client);
     std::mem::drop(server);
 
-    let (_server, mut client) = setup_statement_logging_core(0.0, 0.0, cfg);
+    let server = util::start_server(cfg).unwrap();
+    let mut client = server.connect_internal(postgres::NoTls).unwrap();
     // Check that we only retained the second query.
     let result = client
         .simple_query(

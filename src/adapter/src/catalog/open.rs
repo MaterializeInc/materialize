@@ -19,7 +19,7 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use mz_catalog::builtin::{
-    Builtin, Fingerprint, Sensitivity, BUILTINS, BUILTIN_CLUSTERS, BUILTIN_PREFIXES, BUILTIN_ROLES,
+    Builtin, Fingerprint, DataSensitivity, BUILTINS, BUILTIN_CLUSTERS, BUILTIN_PREFIXES, BUILTIN_ROLES,
 };
 use mz_catalog::objects::{
     IntrospectionSourceIndex, SystemObjectDescription, SystemObjectUniqueIdentifier,
@@ -483,17 +483,17 @@ impl Catalog {
                             MZ_SYSTEM_ROLE_ID,
                         )];
                         match log.sensitivity {
-                            Sensitivity::Public => {
+                            DataSensitivity::Public => {
                                 acl_items.push(rbac::default_builtin_object_privilege(
                                     mz_sql::catalog::ObjectType::Source,
                                 ));
                             }
-                            Sensitivity::SuperuserAndSupport => {
+                            DataSensitivity::SuperuserAndSupport => {
                                 acl_items.push(rbac::support_builtin_object_privilege(
                                     mz_sql::catalog::ObjectType::Source,
                                 ));
                             }
-                            Sensitivity::Superuser => {}
+                            DataSensitivity::Superuser => {}
                         }
                         catalog.state.insert_item(
                             id,
@@ -515,17 +515,17 @@ impl Catalog {
                             MZ_SYSTEM_ROLE_ID,
                         )];
                         match table.sensitivity {
-                            Sensitivity::Public => {
+                            DataSensitivity::Public => {
                                 acl_items.push(rbac::default_builtin_object_privilege(
                                     mz_sql::catalog::ObjectType::Table,
                                 ));
                             }
-                            Sensitivity::SuperuserAndSupport => {
+                            DataSensitivity::SuperuserAndSupport => {
                                 acl_items.push(rbac::support_builtin_object_privilege(
                                     mz_sql::catalog::ObjectType::Table,
                                 ));
                             }
-                            Sensitivity::Superuser => {}
+                            DataSensitivity::Superuser => {}
                         }
 
                         catalog.state.insert_item(
@@ -575,17 +575,17 @@ impl Catalog {
                             MZ_SYSTEM_ROLE_ID,
                         )];
                         match view.sensitivity {
-                            Sensitivity::Public => {
+                            DataSensitivity::Public => {
                                 acl_items.push(rbac::default_builtin_object_privilege(
                                     mz_sql::catalog::ObjectType::View,
                                 ));
                             }
-                            Sensitivity::SuperuserAndSupport => {
+                            DataSensitivity::SuperuserAndSupport => {
                                 acl_items.push(rbac::support_builtin_object_privilege(
                                     mz_sql::catalog::ObjectType::View,
                                 ));
                             }
-                            Sensitivity::Superuser => {}
+                            DataSensitivity::Superuser => {}
                         }
 
                         catalog.state.insert_item(
@@ -624,17 +624,17 @@ impl Catalog {
                             MZ_SYSTEM_ROLE_ID,
                         )];
                         match coll.sensitivity {
-                            Sensitivity::Public => {
+                            DataSensitivity::Public => {
                                 acl_items.push(rbac::default_builtin_object_privilege(
                                     mz_sql::catalog::ObjectType::Source,
                                 ));
                             }
-                            Sensitivity::SuperuserAndSupport => {
+                            DataSensitivity::SuperuserAndSupport => {
                                 acl_items.push(rbac::support_builtin_object_privilege(
                                     mz_sql::catalog::ObjectType::Source,
                                 ));
                             }
-                            Sensitivity::Superuser => {}
+                            DataSensitivity::Superuser => {}
                         }
 
                         catalog.state.insert_item(
