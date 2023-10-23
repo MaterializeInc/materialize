@@ -107,7 +107,7 @@ impl<T: TypeReference> Builtin<T> {
 pub enum Sensitivity {
     /// Any user may query the object.
     Public,
-    /// Superusers or Materialize staff may query the object
+    /// Superusers or Materialize staff may query the object.
     SuperuserAndSupport,
     /// Only superusers may query the object
     Superuser,
