@@ -34,7 +34,9 @@ use crate::plan::{
     DataSourceDesc, Explainee, MutationKind, Plan, SideEffectingFunc, SourceSinkClusterConfig,
     UpdatePrivilege,
 };
-use crate::session::user::{RoleMetadata, MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER, MZ_SUPPORT_ROLE_ID};
+use crate::session::user::{
+    RoleMetadata, MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER,
+};
 use crate::session::vars::{SessionVars, SystemVars};
 
 /// Common checks that need to be performed before we can start checking a role's privileges.
@@ -1555,7 +1557,6 @@ pub const fn owner_privilege(object_type: ObjectType, owner_id: RoleId) -> MzAcl
     }
 }
 
-
 const fn default_builtin_object_acl_mode(object_type: ObjectType) -> AclMode {
     match object_type {
         ObjectType::Table
@@ -1576,7 +1577,7 @@ const fn default_builtin_object_acl_mode(object_type: ObjectType) -> AclMode {
 }
 
 pub const fn support_builtin_object_privilege(object_type: ObjectType) -> MzAclItem {
-    let acl_mode = default_object_acl_mode(object_type);
+    let acl_mode = default_builtin_object_acl_mode(object_type);
     MzAclItem {
         grantee: MZ_SUPPORT_ROLE_ID,
         grantor: MZ_SYSTEM_ROLE_ID,
@@ -1585,7 +1586,7 @@ pub const fn support_builtin_object_privilege(object_type: ObjectType) -> MzAclI
 }
 
 pub const fn default_builtin_object_privilege(object_type: ObjectType) -> MzAclItem {
-    let acl_mode = default_object_acl_mode(object_type);
+    let acl_mode = default_builtin_object_acl_mode(object_type);
     MzAclItem {
         grantee: RoleId::Public,
         grantor: MZ_SYSTEM_ROLE_ID,

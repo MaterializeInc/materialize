@@ -2141,7 +2141,7 @@ SELECT id, prepared_statement_id, sample_rate, cluster_id, application_name,
 cluster_name, transaction_isolation, execution_timestamp, began_at, finished_at, finished_status,
 error_message, rows_returned, execution_strategy
 FROM mz_internal.mz_statement_execution_history",
-    sensitivity: Sensitivity::SuperuserAndSupport
+    sensitivity: Sensitivity::SuperuserAndSupport,
 };
 
 pub static MZ_PREPARED_STATEMENT_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
@@ -2876,7 +2876,8 @@ JOIN mz_catalog.mz_schemas ON mz_schemas.id = class_objects.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
 JOIN mz_catalog.mz_roles role_owner ON role_owner.id = class_objects.owner_id
 WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
-sensitivity: Sensitivity::Public,};
+    sensitivity: Sensitivity::Public,
+};
 
 pub const PG_DEPEND: BuiltinView = BuiltinView {
     name: "pg_depend",
@@ -2985,7 +2986,8 @@ JOIN mz_catalog.mz_schemas ON mz_schemas.id = mz_relations.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
 WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()
 GROUP BY mz_indexes.oid, mz_relations.oid",
-sensitivity: Sensitivity::Public,};
+    sensitivity: Sensitivity::Public,
+};
 
 pub const PG_INDEXES: BuiltinView = BuiltinView {
     name: "pg_indexes",
@@ -3043,7 +3045,8 @@ pub const PG_DESCRIPTION: BuiltinView = BuiltinView {
         JOIN
             mz_internal.mz_comments AS cmt ON mz_objects.id = cmt.id AND lower(mz_objects.type) = lower(cmt.object_type)
     )",
-sensitivity: Sensitivity::Public,};
+    sensitivity: Sensitivity::Public,
+};
 
 pub const PG_TYPE: BuiltinView = BuiltinView {
     name: "pg_type",
@@ -3122,7 +3125,8 @@ FROM
     LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
     JOIN mz_catalog.mz_roles role_owner ON role_owner.id = mz_types.owner_id
     WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
-sensitivity: Sensitivity::Public,};
+    sensitivity: Sensitivity::Public,
+};
 
 pub const PG_ATTRIBUTE: BuiltinView = BuiltinView {
     name: "pg_attribute",
@@ -3157,7 +3161,8 @@ LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
 WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
     // Since this depends on pg_type, its id must be higher due to initialization
     // ordering.
-sensitivity: Sensitivity::Public,};
+    sensitivity: Sensitivity::Public,
+};
 
 pub const PG_PROC: BuiltinView = BuiltinView {
     name: "pg_proc",
@@ -4135,7 +4140,8 @@ FROM information_schema.table_privileges
 WHERE
     grantor IN (SELECT role_name FROM information_schema.enabled_roles)
     OR grantee IN (SELECT role_name FROM information_schema.enabled_roles)",
-sensitivity: Sensitivity::Public,};
+    sensitivity: Sensitivity::Public,
+};
 
 pub const INFORMATION_SCHEMA_KEY_COLUMN_USAGE: BuiltinView = BuiltinView {
     name: "key_column_usage",
@@ -4291,7 +4297,8 @@ WHERE
             OR pg_has_role(current_role, grantee, 'USAGE')
             OR pg_has_role(current_role, grantor, 'USAGE')
     END",
-sensitivity: Sensitivity::Public,};
+    sensitivity: Sensitivity::Public,
+};
 
 pub const INFORMATION_SCHEMA_TRIGGERS: BuiltinView = BuiltinView {
     name: "triggers",
