@@ -18,7 +18,7 @@ the system.
 Field               | Use
 --------------------|-------------------------------------------------------------------------
 _role_name_         | A name for the role.
-**INHERIT**         | Grants the role the ability to inheritance of privileges of other roles.
+**INHERIT**         | Grants the role the ability to inherit privileges of other roles.
 
 ## Details
 
@@ -33,7 +33,7 @@ Unlike PostgreSQL, Materialize does not currently support `NOINHERIT`.
 You may not specify redundant or conflicting sets of options. For example,
 Materialize will reject the statement `CREATE ROLE ... INHERIT INHERIT`.
 
-Unlike PostgreSQL, Materialize does not use role attributes to determine a roles ability to create
+Unlike PostgreSQL, Materialize does not use role attributes to determine a role's ability to create
 top level objects such as databases and other roles. Instead, Materialize uses system level
 privileges. See [GRANT PRIVILEGE](../grant-privilege) for more details.
 
