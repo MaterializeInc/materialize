@@ -309,8 +309,9 @@ impl PersistHandle {
 
         // Grab the current catalog contents from persist.
         let mut initial_snapshot: Vec<_> = self.snapshot(upper).await.collect();
+
         // Sniff out the most recent epoch.
-        let mut epoch = if is_initialized {
+        let prev_epoch = if is_initialized {
             let epoch_idx = initial_snapshot
                 .iter()
                 .rposition(|update| {
@@ -330,26 +331,28 @@ impl PersistHandle {
                     ..
                 } => {
                     soft_assert_eq!(diff, 1);
-                    epoch
+                    Some(epoch)
                 }
                 _ => unreachable!("checked above"),
             }
         } else {
-            Epoch::new(1).expect("known to be non-zero")
+            None
         };
+        let mut current_epoch = prev_epoch.map(|epoch| epoch.get()).unwrap_or(1);
         // Note only writable catalogs attempt to increment the epoch.
         if matches!(mode, Mode::Writable) {
-            epoch = Epoch::new(epoch.get() + 1).expect("known to be non-zero");
+            current_epoch = current_epoch + 1;
         }
+        let current_epoch = Epoch::new(current_epoch).expect("known to be non-zero");
 
         let mut catalog = PersistCatalogState {
             mode,
             persist_handle: self,
             upper,
-            epoch,
+            epoch: current_epoch,
             // Initialize empty in-memory state.
             snapshot: Snapshot::empty(),
-            fenced: false,
+            fence: Some(Fence { prev_epoch }),
         };
 
         let mut txn = if is_initialized {
@@ -542,8 +545,9 @@ pub struct PersistCatalogState {
     epoch: Epoch,
     /// A cache of the entire catalogs state.
     snapshot: Snapshot,
-    /// True if this catalog has fenced out older catalogs, false otherwise.
-    fenced: bool,
+    /// `Some` indicates that we need to fence the previous catalog, None indicates that we've
+    /// already fenced the previous catalog.
+    fence: Option<Fence>,
 }
 
 impl PersistCatalogState {
@@ -939,11 +943,23 @@ impl DurableCatalogState for PersistCatalogState {
                     .expect("invalid usage");
             }
             // If we haven't fenced the previous catalog state, do that now.
-            if !self.fenced {
+            if let Some(Fence { prev_epoch }) = self.fence {
+                if let Some(prev_epoch) = prev_epoch {
+                    batch_builder
+                        .add(
+                            &StateUpdateKind::Epoch(prev_epoch),
+                            &(),
+                            &current_upper,
+                            &-1,
+                        )
+                        .await
+                        .expect("invalid usage");
+                }
                 batch_builder
                     .add(&StateUpdateKind::Epoch(self.epoch), &(), &current_upper, &1)
                     .await
                     .expect("invalid usage");
+                self.fence = None;
             }
             let mut batch = batch_builder
                 .finish(Antichain::from_elem(next_upper))
@@ -977,7 +993,6 @@ impl DurableCatalogState for PersistCatalogState {
             }
         }
 
-        self.fenced = true;
         Ok(())
     }
 
@@ -1128,4 +1143,11 @@ impl DurableCatalogState for PersistCatalogState {
         txn.commit().await?;
         Ok(ids)
     }
+}
+
+/// Extra metadata needed to fence previous catalog.
+#[derive(Debug)]
+pub struct Fence {
+    /// Previous epoch, if one existed.
+    prev_epoch: Option<Epoch>,
 }
