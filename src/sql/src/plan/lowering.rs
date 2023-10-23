@@ -42,7 +42,6 @@ use std::iter::repeat;
 use itertools::Itertools;
 use mz_expr::{AccessStrategy, AggregateFunc, MirRelationExpr, MirScalarExpr};
 use mz_ore::collections::CollectionExt;
-use mz_ore::soft_panic_or_log;
 use mz_ore::stack::maybe_grow;
 use mz_repr::*;
 
@@ -1960,64 +1959,6 @@ fn attempt_outer_equijoin(
         })
     })?;
     Ok(Some(result))
-}
-
-/// If the on clause of an outer join is an equijoin, figure out the join keys.
-///
-/// `oa`, `la`, and `ra` are the arities of `outer`, the lhs, and the rhs
-/// respectively.
-pub(crate) fn derive_equijoin_cols(
-    oa: usize,
-    la: usize,
-    ra: usize,
-    on: Vec<MirScalarExpr>,
-) -> Option<(Vec<usize>, Vec<usize>)> {
-    use mz_expr::{BinaryFunc::Eq, VariadicFunc::And};
-
-    // Deconstruct predicates that may be ands of multiple conditions.
-    //
-    // Because the on predicate has been canonicalized by the caller with a
-    // `canonicalize_predicates` call, we should never have to do any work here.
-    let mut predicates = Vec::new();
-    let mut todo = on;
-    while let Some(next) = todo.pop() {
-        if let MirScalarExpr::CallVariadic { func: And, exprs } = next {
-            soft_panic_or_log!("Unexpected nested AND call in canonicalized predicate");
-            exprs.into_iter().for_each(|e| todo.push(e));
-        } else {
-            predicates.push(next)
-        }
-    }
-
-    // We restrict ourselves to predicates that test column equality between left and right.
-    let mut l_keys = Vec::new();
-    let mut r_keys = Vec::new();
-    for predicate in predicates.iter_mut() {
-        if let MirScalarExpr::CallBinary {
-            func: Eq,
-            expr1,
-            expr2,
-        } = predicate
-        {
-            if let (MirScalarExpr::Column(c1), MirScalarExpr::Column(c2)) =
-                (&mut **expr1, &mut **expr2)
-            {
-                if *c1 > *c2 {
-                    std::mem::swap(c1, c2);
-                }
-                if (oa <= *c1 && *c1 < oa + la) && (oa + la <= *c2 && *c2 < oa + la + ra) {
-                    l_keys.push(*c1);
-                    r_keys.push(*c2 - la);
-                }
-            }
-        }
-    }
-    // If any predicates were not column equivs, give up.
-    if l_keys.len() < predicates.len() {
-        None
-    } else {
-        Some((l_keys, r_keys))
-    }
 }
 
 /// A struct that represents the predicates in the `on` clause in a form
