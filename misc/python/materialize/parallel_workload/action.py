@@ -99,11 +99,7 @@ class Action:
                 ]
             )
         if self.db.scenario == Scenario.Rename:
-            result.extend(
-                [
-                    "unknown schema",
-                ]
-            )
+            result.extend(["unknown schema", "ambiguous reference to schema name"])
         if NAUGHTY_IDENTIFIERS:
             result.extend(["identifier length exceeds 255 bytes"])
         return result

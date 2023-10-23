@@ -262,7 +262,7 @@ statement ok
 CREATE VIEW c1.keys (aux_key) AS VALUES ('apple'), ('orange'), ('banana');
 
 statement ok
-CREATE VIEW c1.v1 AS (SELECT y FROM friend_again.v2 JOIN grand_friend.t1 ON friend_again.v2.y = grand_friend.t1.keys UNION ALL SELECT aux_key FROM c1.keys, b4.t);
+CREATE VIEW c1.v1 AS (SELECT y FROM friend_again.v2 JOIN grand_friend.t1 ON materialize.friend_again.v2.y = materialize.grand_friend.t1.keys UNION ALL SELECT aux_key FROM c1.keys, b4.t);
 
 query T
 SELECT * FROM c1.v1;
@@ -284,7 +284,7 @@ query TT
 SHOW CREATE VIEW c1.v1;
 ----
 materialize.c1.v1
-CREATE VIEW "materialize"."c1"."v1" AS SELECT "y" FROM "materialize"."friend_again"."v2" JOIN "materialize"."grand_friend"."t1" ON "friend_again"."v2"."y" = "grand_friend"."t1"."keys" UNION ALL SELECT "aux_key" FROM "materialize"."c1"."keys", "materialize"."b4"."t"
+CREATE VIEW "materialize"."c1"."v1" AS SELECT "y" FROM "materialize"."friend_again"."v2" JOIN "materialize"."grand_friend"."t1" ON "materialize"."friend_again"."v2"."y" = "materialize"."grand_friend"."t1"."keys" UNION ALL SELECT "aux_key" FROM "materialize"."c1"."keys", "materialize"."b4"."t"
 
 statement ok
 ALTER SCHEMA c1 RENAME TO c2;
@@ -296,7 +296,7 @@ query TT
 SHOW CREATE VIEW c2.v1;
 ----
 materialize.c2.v1
-CREATE VIEW "materialize"."c2"."v1" AS SELECT "y" FROM "materialize"."friend_again"."v2" JOIN "materialize"."grand_acquaintance"."t1" ON "friend_again"."v2"."y" = "grand_acquaintance"."t1"."keys" UNION ALL SELECT "aux_key" FROM "materialize"."c2"."keys", "materialize"."b4"."t"
+CREATE VIEW "materialize"."c2"."v1" AS SELECT "y" FROM "materialize"."friend_again"."v2" JOIN "materialize"."grand_acquaintance"."t1" ON "materialize"."friend_again"."v2"."y" = "materialize"."grand_acquaintance"."t1"."keys" UNION ALL SELECT "aux_key" FROM "materialize"."c2"."keys", "materialize"."b4"."t"
 
 statement ok
 CREATE TABLE c2.c2 (ts int);
@@ -339,13 +339,13 @@ statement ok
 CREATE VIEW d.values (x, y, z) AS VALUES (1, 'foo', 100), (2, 'bar', 200), (3, 'baz', 300);
 
 statement ok
-CREATE VIEW d.qualified_columns AS ( SELECT materialize.d.values.x, d.values.y, z FROM d.values );
+CREATE VIEW d.qualified_columns AS ( SELECT materialize.d.values.x, materialize.d.values.y, z FROM d.values );
 
 query TT
 SHOW CREATE VIEW d.qualified_columns;
 ----
 materialize.d.qualified_columns
-CREATE VIEW "materialize"."d"."qualified_columns" AS SELECT "materialize"."d"."values"."x", "d"."values"."y", "z" FROM "materialize"."d"."values"
+CREATE VIEW "materialize"."d"."qualified_columns" AS SELECT "materialize"."d"."values"."x", "materialize"."d"."values"."y", "z" FROM "materialize"."d"."values"
 
 query ITI
 SELECT * FROM d.qualified_columns;
@@ -367,7 +367,7 @@ query TT
 SHOW CREATE VIEW d_renamed.qualified_columns;
 ----
 materialize.d_renamed.qualified_columns
-CREATE VIEW "materialize"."d_renamed"."qualified_columns" AS SELECT "materialize"."d_renamed"."values"."x", "d_renamed"."values"."y", "z" FROM "materialize"."d_renamed"."values"
+CREATE VIEW "materialize"."d_renamed"."qualified_columns" AS SELECT "materialize"."d_renamed"."values"."x", "materialize"."d_renamed"."values"."y", "z" FROM "materialize"."d_renamed"."values"
 
 query ITI
 SELECT * FROM d_renamed.qualified_columns LIMIT 1;
@@ -471,13 +471,13 @@ SELECT * FROM j_other.l;
 
 # Temporary schemas.
 
-statement error db error: ERROR: system schema 'mz_temp' cannot be modified
+statement error db error: ERROR: cannot rename schemas in the ambient database: "mz_temp"
 ALTER SCHEMA mz_temp RENAME TO mz_temp_renamed;
 
 simple conn=mz_system,user=mz_system
 ALTER SCHEMA mz_temp RENAME TO mz_temp_renamed;
 ----
-db error: ERROR: system schema 'mz_temp' cannot be modified
+db error: ERROR: cannot rename schemas in the ambient database: "mz_temp"
 
 # Schemas that do not exist.
 
@@ -518,3 +518,91 @@ SELECT bar FROM t1;
 100
 200
 300
+
+# Renaming schemas across databases.
+
+statement ok
+CREATE DATABASE a;
+
+statement ok
+CREATE SCHEMA a.foo;
+
+statement ok
+CREATE TABLE a.foo.t1 (x int);
+
+statement ok
+INSERT INTO a.foo.t1 VALUES (4), (5), (6);
+
+statement ok
+CREATE DATABASE b;
+
+statement ok
+CREATE SCHEMA b.foo;
+
+statement ok
+CREATE TABLE b.foo.t1 (y int);
+
+statement ok
+INSERT INTO b.foo.t1 VALUES (1), (2), (3);
+
+statement ok
+CREATE DATABASE c;
+
+statement ok
+CREATE SCHEMA c.foo;
+
+statement ok
+CREATE VIEW c.foo.v1 AS ( SELECT x, y FROM a.foo.t1, b.foo.t1 );
+
+query TT
+SHOW CREATE VIEW c.foo.v1;
+----
+c.foo.v1
+CREATE VIEW "c"."foo"."v1" AS SELECT "x", "y" FROM "a"."foo"."t1", "b"."foo"."t1"
+
+statement ok
+ALTER SCHEMA b.foo RENAME TO bbb;
+
+query TT
+SHOW CREATE VIEW c.foo.v1;
+----
+c.foo.v1
+CREATE VIEW "c"."foo"."v1" AS SELECT "x", "y" FROM "a"."foo"."t1", "b"."bbb"."t1"
+
+statement ok
+ALTER SCHEMA c.foo RENAME TO ccc;
+
+query TT
+SHOW CREATE VIEW c.ccc.v1;
+----
+c.ccc.v1
+CREATE VIEW "c"."ccc"."v1" AS SELECT "x", "y" FROM "a"."foo"."t1", "b"."bbb"."t1"
+
+# Ambiguously refer to a schema.
+
+statement ok
+CREATE SCHEMA amb;
+
+statement ok
+CREATE TABLE amb.t1 (x int);
+
+statement ok
+CREATE DATABASE d;
+
+statement ok
+CREATE SCHEMA d.amb;
+
+statement ok
+CREATE TABLE d.amb.t1 (y int);
+
+statement ok
+CREATE VIEW d.amb.v1 AS SELECT amb.t1.x FROM amb.t1, d.amb.t1;
+
+query TT
+SHOW CREATE VIEW d.amb.v1;
+----
+d.amb.v1
+CREATE VIEW "d"."amb"."v1" AS SELECT "amb"."t1"."x" FROM "materialize"."amb"."t1", "d"."amb"."t1"
+
+statement error db error: ERROR: renaming conflict: in d\.amb\.v1, which uses d\.amb, ambiguous reference to schema named amb
+ALTER SCHEMA d.amb RENAME TO this_rename_will_fail;

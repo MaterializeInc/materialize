@@ -2851,8 +2851,17 @@ impl Catalog {
                     let conn_id = session
                         .map(|session| session.conn_id())
                         .unwrap_or(&SYSTEM_CONN_ID);
+
                     let schema = state.get_schema(&database_spec, &schema_spec, conn_id);
                     let cur_name = schema.name().schema.clone();
+
+                    let ResolvedDatabaseSpecifier::Id(database_id) = database_spec else {
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::AmbientSchemaRename(cur_name),
+                        )));
+                    };
+                    let database = state.get_database(&database_id);
+                    let database_name = &database.name;
 
                     let mut updates = Vec::new();
                     let mut already_updated = HashSet::new();
@@ -2868,8 +2877,16 @@ impl Catalog {
                         let mut new_entry = entry.clone();
                         new_entry.item = entry
                             .item
-                            .rename_schema_refs(&cur_name, new_name.clone())
-                            .expect("no failures");
+                            .rename_schema_refs(database_name, &cur_name, &new_name)
+                            .map_err(|(s, _i)| {
+                                Error::new(ErrorKind::from(AmbiguousRename {
+                                    depender: state
+                                        .resolve_full_name(entry.name(), entry.conn_id())
+                                        .to_string(),
+                                    dependee: format!("{database_name}.{cur_name}"),
+                                    message: format!("ambiguous reference to schema named {s}"),
+                                }))
+                            })?;
 
                         // Update the Stash and Builtin Tables.
                         if !new_entry.item().is_temporary() {
