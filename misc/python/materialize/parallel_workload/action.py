@@ -676,7 +676,8 @@ class ReconnectAction(Action):
         except:
             pass
 
-        while True:
+        NUM_ATTEMPTS = 20
+        for i in range(NUM_ATTEMPTS):
             try:
                 conn = pg8000.connect(
                     host=host, port=port, user=user, database=self.db.name()
@@ -688,7 +689,7 @@ class ReconnectAction(Action):
                 cur.execute("SELECT pg_backend_pid()")
                 exe.pg_pid = cur.fetchall()[0][0]
             except Exception as e:
-                if (
+                if i < NUM_ATTEMPTS - 1 and (
                     "network error" in str(e)
                     or "Can't create a connection to host" in str(e)
                     or "Connection refused" in str(e)
