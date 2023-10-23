@@ -159,6 +159,10 @@ def run_with_concurrency(
                 "workload": type(workload).__name__,
                 "count": count,
                 "tps": count / wallclock_total,
+                "mean_t_dur": df_detail["wallclock"].mean(),
+                "median_t_dur": df_detail["wallclock"].median(),
+                "min_t_dur": df_detail["wallclock"].min(),
+                "max_t_dur": df_detail["wallclock"].max(),
             }
         ]
     )
