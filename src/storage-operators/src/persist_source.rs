@@ -611,7 +611,6 @@ impl Backpressureable for (usize, SerdeLeasedBatchPart) {
 }
 
 /// Flow control configuration.
-/// TODO(guswynn): move to `persist_source`
 #[derive(Debug)]
 pub struct FlowControl<G: Scope> {
     /// Stream providing in-flight frontier updates.

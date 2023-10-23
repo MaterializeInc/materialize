@@ -11,7 +11,6 @@
 
 use std::any::Any;
 use std::collections::hash_map::DefaultHasher;
-use std::convert::Infallible;
 use std::fmt::Debug;
 use std::future::Future;
 use std::hash::{Hash, Hasher};
@@ -152,22 +151,6 @@ where
         parts,
         Rc::new((descs_token, fetch_token, backpressure_token)),
     )
-}
-
-/// Flow control configuration.
-/// TODO(guswynn): move to `persist_source`
-#[derive(Debug)]
-pub struct FlowControl<G: Scope> {
-    /// Stream providing in-flight frontier updates.
-    ///
-    /// As implied by its type, this stream never emits data, only progress updates.
-    ///
-    /// TODO: Replace `Infallible` with `!` once the latter is stabilized.
-    pub progress_stream: Stream<G, Infallible>,
-    /// Maximum number of in-flight bytes.
-    pub max_inflight_bytes: usize,
-    /// TODO(guswynn): explain
-    pub summary: <G::Timestamp as Timestamp>::Summary,
 }
 
 #[derive(Debug)]
