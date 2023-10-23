@@ -501,7 +501,8 @@ impl crate::coord::Coordinator {
             let metrics = self.metrics.clone();
             let handle: JoinHandle<Result<PeekResponseUnary, String>> =
                 mz_ore::task::spawn(|| "persist::peek", async move {
-                    let mut limit_remaining = finishing.limit.unwrap_or(usize::MAX);
+                    let mut limit_remaining =
+                        finishing.limit.unwrap_or(usize::MAX) + finishing.offset;
 
                     // Re-used state for processing and building rows.
                     let mut accum = vec![];
