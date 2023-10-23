@@ -63,6 +63,7 @@ class Action:
         result = [
             "permission denied for",
             "must be owner of",
+            "network error",  # #21954, remove when fixed when fixed
         ]
         if exe.db.complexity == Complexity.DDL:
             result.extend(
@@ -859,6 +860,24 @@ class KillAction(Action):
         time.sleep(1)
         self.composition.up("materialized", detach=True)
         time.sleep(self.rng.uniform(20, 180))
+
+
+class BackupRestoreAction(Action):
+    composition: Composition
+    exes: list[Executor]
+
+    def __init__(
+        self,
+        rng: random.Random,
+        composition: Composition,
+        exes: list[Executor]) -> None:
+        super().__init__(rng)
+        self.composition = composition
+        self.exes = exes
+
+    def run(self, exe: Executor) -> None:
+        time.sleep(self.rng.uniform(10, 120))
+        # TODO: Backup & restore here
 
 
 class CreateWebhookSourceAction(Action):

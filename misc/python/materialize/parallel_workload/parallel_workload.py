@@ -89,29 +89,29 @@ def run(
         system_exe = Executor(rng, system_cur, databases[0])
         system_exe.execute("ALTER SYSTEM SET enable_webhook_sources TO true")
         system_exe.execute(
-            f"ALTER SYSTEM SET max_schemas_per_database = {MAX_SCHEMAS + 5}"
+            f"ALTER SYSTEM SET max_schemas_per_database = {MAX_SCHEMAS * 2}"
         )
         # The presence of ALTER TABLE RENAME can cause the total number of tables to exceed MAX_TABLES
         system_exe.execute(
             f"ALTER SYSTEM SET max_tables = {len(databases) * MAX_TABLES * 2}"
         )
         system_exe.execute(
-            f"ALTER SYSTEM SET max_materialized_views = {len(databases) * MAX_VIEWS + 5}"
+            f"ALTER SYSTEM SET max_materialized_views = {len(databases) * MAX_VIEWS * 2}"
         )
         system_exe.execute(
             f"ALTER SYSTEM SET max_sources = {len(databases) * (MAX_WEBHOOK_SOURCES + MAX_KAFKA_SOURCES + MAX_POSTGRES_SOURCES) * 2}"
         )
         system_exe.execute(
-            f"ALTER SYSTEM SET max_sinks = {len(databases) * MAX_KAFKA_SINKS + 5}"
+            f"ALTER SYSTEM SET max_sinks = {len(databases) * MAX_KAFKA_SINKS * 2}"
         )
         system_exe.execute(
-            f"ALTER SYSTEM SET max_roles = {len(databases) * MAX_ROLES + 5}"
+            f"ALTER SYSTEM SET max_roles = {len(databases) * MAX_ROLES * 2}"
         )
         system_exe.execute(
-            f"ALTER SYSTEM SET max_clusters = {len(databases) * MAX_CLUSTERS + 5}"
+            f"ALTER SYSTEM SET max_clusters = {len(databases) * MAX_CLUSTERS * 2}"
         )
         system_exe.execute(
-            f"ALTER SYSTEM SET max_replicas_per_cluster = {MAX_CLUSTER_REPLICAS + 5}"
+            f"ALTER SYSTEM SET max_replicas_per_cluster = {MAX_CLUSTER_REPLICAS * 2}"
         )
         # Most queries should not fail because of privileges
         system_exe.execute(
@@ -220,6 +220,24 @@ def run(
         worker = Worker(
             worker_rng,
             [KillAction(worker_rng, composition)],
+            [1],
+            end_time,
+            autocommit=False,
+            system=False,
+        )
+        workers.append(worker)
+        thread = threading.Thread(
+            name="kill",
+            target=worker.run,
+            args=(host, ports["materialized"], "materialize", databases),
+        )
+        thread.start()
+        threads.append(thread)
+    elif scenario == Scenario.BackupRestore:
+        assert composition, "Backup & Restore scenario only works in mzcompose"
+        worker = Worker(
+            worker_rng,
+            [BackupRestoreAction(worker_rng, composition, exes)],
             [1],
             end_time,
             autocommit=False,
