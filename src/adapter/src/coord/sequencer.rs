@@ -365,10 +365,9 @@ impl Coordinator {
                     .await;
                 ctx.retire(result);
             }
-            Plan::AlterClusterSwap(_plan) => {
-                // Note: we should never reach this point because we return an unsupported error in
-                // planning.
-                ctx.retire(Err(AdapterError::Unsupported("ALTER ... SWAP ...")));
+            Plan::AlterClusterSwap(plan) => {
+                let result = self.sequence_alter_cluster_swap(ctx.session(), plan).await;
+                ctx.retire(result);
             }
             Plan::AlterClusterReplicaRename(plan) => {
                 let result = self
@@ -391,6 +390,10 @@ impl Coordinator {
             }
             Plan::AlterSchemaRename(plan) => {
                 let result = self.sequence_alter_schema_rename(ctx.session(), plan).await;
+                ctx.retire(result);
+            }
+            Plan::AlterSchemaSwap(plan) => {
+                let result = self.sequence_alter_schema_swap(ctx.session(), plan).await;
                 ctx.retire(result);
             }
             Plan::AlterIndexSetOptions(plan) => {

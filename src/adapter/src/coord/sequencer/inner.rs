@@ -4343,6 +4343,44 @@ impl Coordinator {
         }
     }
 
+    pub(super) async fn sequence_alter_schema_swap(
+        &mut self,
+        session: &Session,
+        plan: plan::AlterSchemaSwapPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let plan::AlterSchemaSwapPlan {
+            schema_a_spec: (schema_a_db, schema_a),
+            schema_a_name,
+            schema_b_spec: (schema_b_db, schema_b),
+            schema_b_name,
+            name_temp,
+        } = plan;
+
+        let op_a = catalog::Op::RenameSchema {
+            database_spec: schema_a_db,
+            schema_spec: schema_a,
+            new_name: name_temp,
+        };
+        let op_b = catalog::Op::RenameSchema {
+            database_spec: schema_b_db,
+            schema_spec: schema_b,
+            new_name: schema_a_name,
+        };
+        let op_c = catalog::Op::RenameSchema {
+            database_spec: schema_a_db,
+            schema_spec: schema_a,
+            new_name: schema_b_name,
+        };
+
+        match self
+            .catalog_transact(Some(session), vec![op_a, op_b, op_c])
+            .await
+        {
+            Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::Schema)),
+            Err(err) => Err(err),
+        }
+    }
+
     pub(super) fn sequence_alter_index_set_options(
         &mut self,
         plan: plan::AlterIndexSetOptionsPlan,

@@ -926,6 +926,7 @@ fn generate_rbac_requirements(
             id_b,
             name_a: _,
             name_b: _,
+            name_temp: _,
         }) => RbacRequirements {
             ownership: vec![ObjectId::Cluster(*id_a), ObjectId::Cluster(*id_b)],
             ..Default::default()
@@ -973,6 +974,38 @@ fn generate_rbac_requirements(
 
             RbacRequirements {
                 ownership: vec![ObjectId::Schema(*cur_schema_spec)],
+                privileges,
+                ..Default::default()
+            }
+        }
+        Plan::AlterSchemaSwap(plan::AlterSchemaSwapPlan {
+            schema_a_spec,
+            schema_a_name: _,
+            schema_b_spec,
+            schema_b_name: _,
+            name_temp: _,
+        }) => {
+            let mut privileges = vec![];
+            if let ResolvedDatabaseSpecifier::Id(id_a) = schema_a_spec.0 {
+                privileges.push((
+                    SystemObjectId::Object(ObjectId::Database(id_a)),
+                    AclMode::CREATE,
+                    role_id,
+                ));
+            }
+            if let ResolvedDatabaseSpecifier::Id(id_b) = schema_b_spec.0 {
+                privileges.push((
+                    SystemObjectId::Object(ObjectId::Database(id_b)),
+                    AclMode::CREATE,
+                    role_id,
+                ));
+            }
+
+            RbacRequirements {
+                ownership: vec![
+                    ObjectId::Schema(*schema_a_spec),
+                    ObjectId::Schema(*schema_b_spec),
+                ],
                 privileges,
                 ..Default::default()
             }
