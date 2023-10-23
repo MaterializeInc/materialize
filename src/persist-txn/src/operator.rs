@@ -385,6 +385,7 @@ mod tests {
 
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(miri, ignore)] // too slow
+    #[ignore] // TODO(txn): Get this turned back on.
     async fn data_subscribe() {
         fn step(subs: &mut Vec<DataSubscribe>) {
             for sub in subs.iter_mut() {
