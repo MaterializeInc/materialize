@@ -85,6 +85,7 @@ pub enum Statement<T: AstInfo> {
     Subscribe(SubscribeStatement<T>),
     ExplainPlan(ExplainPlanStatement<T>),
     ExplainTimestamp(ExplainTimestampStatement<T>),
+    ExplainSchema(ExplainSchemaStatement<T>),
     Declare(DeclareStatement<T>),
     Fetch(FetchStatement<T>),
     Close(CloseStatement),
@@ -153,6 +154,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::Subscribe(stmt) => f.write_node(stmt),
             Statement::ExplainPlan(stmt) => f.write_node(stmt),
             Statement::ExplainTimestamp(stmt) => f.write_node(stmt),
+            Statement::ExplainSchema(stmt) => f.write_node(stmt),
             Statement::Declare(stmt) => f.write_node(stmt),
             Statement::Close(stmt) => f.write_node(stmt),
             Statement::Fetch(stmt) => f.write_node(stmt),
@@ -224,6 +226,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::Subscribe => "subscribe",
         StatementKind::ExplainPlan => "explain_plan",
         StatementKind::ExplainTimestamp => "explain_timestamp",
+        StatementKind::ExplainSchema => "explain_schema",
         StatementKind::Declare => "declare",
         StatementKind::Fetch => "fetch",
         StatementKind::Close => "close",
@@ -2877,6 +2880,21 @@ impl<T: AstInfo> AstDisplay for ExplainPlanStatement<T> {
     }
 }
 impl_display_t!(ExplainPlanStatement);
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ExplainSchemaStatement<T: AstInfo> {
+    pub format: ExplainFormat,
+    pub statement: CreateSinkStatement<T>,
+}
+
+impl<T: AstInfo> AstDisplay for ExplainSchemaStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("EXPLAIN SCHEMA AS ");
+        f.write_node(&self.format);
+        f.write_str(" FOR ");
+        f.write_node(&self.statement);
+    }
+}
+impl_display_t!(ExplainSchemaStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ExplainTimestampStatement<T: AstInfo> {

@@ -338,6 +338,9 @@ impl Coordinator {
             Plan::ExplainPlan(plan) => {
                 self.sequence_explain_plan(ctx, plan, target_cluster).await;
             }
+            Plan::ExplainSchema => {
+                todo!()
+            }
             Plan::ExplainTimestamp(plan) => {
                 self.sequence_explain_timestamp(ctx, plan, target_cluster)
                     .await;

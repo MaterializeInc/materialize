@@ -6993,6 +6993,9 @@ impl<'a> Parser<'a> {
         if self.parse_keyword(TIMESTAMP) {
             self.parse_explain_timestamp()
                 .map_parser_err(StatementKind::ExplainTimestamp)
+        } else if self.parse_keyword(SCHEMA) {
+            self.parse_explain_schema()
+                .map_parser_err(StatementKind::ExplainSchema)
         } else {
             self.parse_explain_plan()
                 .map_parser_err(StatementKind::ExplainPlan)
@@ -7138,6 +7141,30 @@ impl<'a> Parser<'a> {
             format,
             query,
         }))
+    }
+    /// Parse an `EXPLAIN SCHEMA` statement assuming that the `EXPLAIN SCHEMA` tokens
+    /// have already been consumed
+    fn parse_explain_schema(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let format = if self.parse_keyword(AS) {
+            match self.parse_one_of_keywords(&[JSON]) {
+                Some(JSON) => ExplainFormat::Json,
+                None => return Err(ParserError::new(self.index, "expected a format")),
+                _ => unreachable!(),
+            }
+        } else {
+            ExplainFormat::Json
+        };
+
+        self.expect_keywords(&[FOR, CREATE])?;
+
+        if let Statement::CreateSink(statement) = self.parse_create_sink()? {
+            Ok(Statement::ExplainSchema(ExplainSchemaStatement {
+                format,
+                statement,
+            }))
+        } else {
+            unreachable!("only create sink can be returned here");
+        }
     }
 
     /// Parse a `DECLARE` statement, assuming that the `DECLARE` token

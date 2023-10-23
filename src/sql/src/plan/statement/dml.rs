@@ -22,7 +22,8 @@ use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::{RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
-    ExplainTimestampStatement, Expr, IfExistsBehavior, OrderByExpr, SubscribeOutput,
+    ExplainSchemaStatement, ExplainTimestampStatement, Expr, IfExistsBehavior, OrderByExpr,
+    SubscribeOutput,
 };
 
 use crate::ast::display::AstDisplay;
@@ -37,6 +38,7 @@ use crate::names::{Aug, ResolvedItemName};
 use crate::normalize;
 use crate::plan::query::{plan_up_to, ExprContext, QueryLifetime};
 use crate::plan::scope::Scope;
+use crate::plan::statement::ddl::describe_create_sink;
 use crate::plan::statement::{ddl, StatementContext, StatementDesc};
 use crate::plan::with_options::TryFromValue;
 use crate::plan::{self, side_effecting_func, ExplainTimestampPlan};
@@ -256,6 +258,15 @@ pub fn describe_explain_timestamp(
         .with_params(describe_select(scx, SelectStatement { query, as_of: None })?.param_types))
 }
 
+pub fn describe_explain_schema(
+    scx: &StatementContext,
+    ExplainSchemaStatement { .. }: ExplainSchemaStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    let mut relation_desc = RelationDesc::empty();
+    relation_desc = relation_desc.with_column("Schema", ScalarType::Jsonb.nullable(false));
+    Ok(StatementDesc::new(Some(relation_desc)))
+}
+
 pub fn plan_explain_plan(
     scx: &StatementContext,
     ExplainPlanStatement {
@@ -411,6 +422,14 @@ pub fn plan_explain_plan(
         config,
         explainee,
     }))
+}
+
+pub fn plan_explain_schema(
+    scx: &StatementContext,
+    explain_schema: ExplainSchemaStatement<Aug>,
+    params: &Params,
+) -> Result<Plan, PlanError> {
+    todo!()
 }
 
 pub fn plan_explain_timestamp(
