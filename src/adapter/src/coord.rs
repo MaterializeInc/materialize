@@ -1999,8 +1999,25 @@ impl Coordinator {
                 }
                 // See [`appends::GroupCommitWaiter`] for notes on why this is cancel safe.
                 permit = group_commit_rx.ready() => {
-                    let span = info_span!(parent: None, "group_commit_notify");
-                    span.follows_from(Span::current());
+                    // If we happen to have batched exactly one user write, use
+                    // that span so the `emit_trace_id_notice` hooks up.
+                    // Otherwise, the best we can do is invent a new root span
+                    // and make it follow from all the Spans in the pending
+                    // writes.
+                    let user_write_spans = self.pending_writes.iter().flat_map(|x| match x {
+                        PendingWriteTxn::User{span, ..} => Some(span),
+                        PendingWriteTxn::System{..} => None,
+                    });
+                    let span = match user_write_spans.exactly_one() {
+                        Ok(span) => span.clone(),
+                        Err(user_write_spans) => {
+                            let span = info_span!(parent: None, "group_commit_notify");
+                            for s in user_write_spans {
+                                span.follows_from(s);
+                            }
+                            span
+                        }
+                    };
                     Message::GroupCommitInitiate(span, Some(permit))
                 },
                 // `recv()` on `UnboundedReceiver` is cancellation safe:
