@@ -105,8 +105,8 @@ query plan changes, which do not serve customers' production workflows, if they 
 
 ### Roadmap
 **Now**
-* @antiguru to complete `ALTER...SET CLUSTER` [#20841](https://github.com/MaterializeInc/materialize/issues/20841), without graceful rehydration.
-* @antiguru to continue in-flight work on multipurpose clusters [#17413](https://github.com/MaterializeInc/materialize/issues/17413) - TODO(@antiguru): fill in details.
+* @antiguru to work on `ALTER...SET CLUSTER` [#17417](https://github.com/MaterializeInc/materialize/issues/17417), without graceful rehydration.
+* @antiguru to continue in-flight work on multipurpose clusters [#17413](https://github.com/MaterializeInc/materialize/issues/17413), which is co-locating compute and storage objects [PR #21846](https://github.com/MaterializeInc/materialize/pull/21846).
 * @ggnall to do discovery on the prescriptive data model as part of Blue/Green deployments project [#19748](https://github.com/MaterializeInc/materialize/issues/19748)
 * Expose rehydration status [#22166](https://github.com/MaterializeInc/materialize/issues/22166)
 
