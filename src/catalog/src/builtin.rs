@@ -109,7 +109,7 @@ pub enum Sensitivity {
     Public,
     /// Superusers or Materialize staff may query the object.
     SuperuserAndSupport,
-    /// Only superusers may query the object
+    /// Only superusers may query the object.
     Superuser,
 }
 
