@@ -49,11 +49,6 @@ from materialize.parallel_workload.settings import Complexity, Scenario
 if TYPE_CHECKING:
     from materialize.parallel_workload.worker import Worker
 
-# TODO: In kill scenario drops can be successful, but we might never know, see
-# https://github.com/MaterializeInc/materialize/issues/20465 We should handle
-# this by rescanning objects we expect to be there and removing the ones that
-# were dropped. This also has the risk that objects get lost as a bug though.
-
 # TODO: CASCADE in DROPs, keep track of what will be deleted
 class Action:
     rng: random.Random
@@ -335,7 +330,12 @@ class DropIndexAction(Action):
                 return
             index_name = self.rng.choice(list(self.db.indexes))
             query = f"DROP INDEX {identifier(index_name)}"
-            exe.execute(query)
+            try:
+                exe.execute(query)
+            except QueryError as e:
+                # expected, see #20465
+                if self.db.scenario != Scenario.Kill or "unknown catalog item" not in e.msg:
+                    raise e
             self.db.indexes.remove(index_name)
 
 
@@ -362,7 +362,12 @@ class DropTableAction(Action):
                 return
             table = self.rng.choice(self.db.tables)
             query = f"DROP TABLE {table}"
-            exe.execute(query)
+            try:
+                exe.execute(query)
+            except QueryError as e:
+                # expected, see #20465
+                if self.db.scenario != Scenario.Kill or "unknown catalog item" not in e.msg:
+                    raise e
             self.db.tables.remove(table)
 
 
@@ -444,11 +449,21 @@ class DropSchemaAction(Action):
             schema_id = self.rng.randrange(len(self.db.schemas))
             schema = self.db.schemas[schema_id]
             query = f"DROP SCHEMA {schema}"
-            exe.execute(query)
+            try:
+                exe.execute(query)
+            except QueryError as e:
+                # expected, see #20465
+                if self.db.scenario != Scenario.Kill or "unknown schema" not in e.msg:
+                    raise e
             del self.db.schemas[schema_id]
 
 
 class RenameSchemaAction(Action):
+    def errors_to_ignore(self) -> list[str]:
+        return [
+            "ambiguous reference to schema named"  # see https://github.com/MaterializeInc/materialize/pull/22551#pullrequestreview-1691876923
+        ] + super().errors_to_ignore()
+
     def run(self, exe: Executor) -> None:
         if self.db.scenario != Scenario.Rename:
             return
@@ -541,7 +556,12 @@ class DropViewAction(Action):
                 query = f"DROP MATERIALIZED VIEW {view}"
             else:
                 query = f"DROP VIEW {view}"
-            exe.execute(query)
+            try:
+                exe.execute(query)
+            except QueryError as e:
+                # expected, see #20465
+                if self.db.scenario != Scenario.Kill or "unknown catalog item" not in e.msg:
+                    raise e
             del self.db.views[view_id]
 
 
@@ -571,7 +591,12 @@ class DropRoleAction(Action):
             role_id = self.rng.randrange(len(self.db.roles))
             role = self.db.roles[role_id]
             query = f"DROP ROLE {role}"
-            exe.execute(query)
+            try:
+                exe.execute(query)
+            except QueryError as e:
+                # expected, see #20465
+                if self.db.scenario != Scenario.Kill or "unknown role" not in e.msg:
+                    raise e
             del self.db.roles[role_id]
 
 
@@ -608,7 +633,12 @@ class DropClusterAction(Action):
             cluster_id = self.rng.randrange(1, len(self.db.clusters))
             cluster = self.db.clusters[cluster_id]
             query = f"DROP CLUSTER {cluster}"
-            exe.execute(query)
+            try:
+                exe.execute(query)
+            except QueryError as e:
+                # expected, see #20465
+                if self.db.scenario != Scenario.Kill or "unknown cluster" not in e.msg:
+                    raise e
             del self.db.clusters[cluster_id]
 
 
@@ -673,9 +703,13 @@ class DropClusterReplicaAction(Action):
                 return
             replica = self.rng.choice(cluster.replicas)
             query = f"DROP CLUSTER REPLICA {cluster}.{replica}"
-            exe.execute(query)
+            try:
+                exe.execute(query)
+            except QueryError as e:
+                # expected, see #20465
+                if self.db.scenario != Scenario.Kill or "has no CLUSTER REPLICA named" not in e.msg:
+                    raise e
             cluster.replicas.remove(replica)
-
 
 class GrantPrivilegesAction(Action):
     def run(self, exe: Executor) -> None:
@@ -844,7 +878,12 @@ class DropWebhookSourceAction(Action):
             source_id = self.rng.randrange(len(self.db.webhook_sources))
             source = self.db.webhook_sources[source_id]
             query = f"DROP SOURCE {source}"
-            exe.execute(query)
+            try:
+                exe.execute(query)
+            except QueryError as e:
+                # expected, see #20465
+                if self.db.scenario != Scenario.Kill or "unknown catalog item" not in e.msg:
+                    raise e
             del self.db.webhook_sources[source_id]
 
 
@@ -882,7 +921,12 @@ class DropKafkaSourceAction(Action):
             source_id = self.rng.randrange(len(self.db.kafka_sources))
             source = self.db.kafka_sources[source_id]
             query = f"DROP SOURCE {source}"
-            exe.execute(query)
+            try:
+                exe.execute(query)
+            except QueryError as e:
+                # expected, see #20465
+                if self.db.scenario != Scenario.Kill or "unknown catalog item" not in e.msg:
+                    raise e
             del self.db.kafka_sources[source_id]
 
 
@@ -920,7 +964,12 @@ class DropPostgresSourceAction(Action):
             source_id = self.rng.randrange(len(self.db.postgres_sources))
             source = self.db.postgres_sources[source_id]
             query = f"DROP SOURCE {source.executor.source}"
-            exe.execute(query)
+            try:
+                exe.execute(query)
+            except QueryError as e:
+                # expected, see #20465
+                if self.db.scenario != Scenario.Kill or "unknown catalog item" not in e.msg:
+                    raise e
             del self.db.postgres_sources[source_id]
 
 
@@ -964,7 +1013,12 @@ class DropKafkaSinkAction(Action):
             sink_id = self.rng.randrange(len(self.db.kafka_sinks))
             sink = self.db.kafka_sinks[sink_id]
             query = f"DROP SINK {sink}"
-            exe.execute(query)
+            try:
+                exe.execute(query)
+            except QueryError as e:
+                # expected, see #20465
+                if self.db.scenario != Scenario.Kill or "unknown catalog item" not in e.msg:
+                    raise e
             del self.db.kafka_sinks[sink_id]
 
 
