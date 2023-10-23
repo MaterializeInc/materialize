@@ -45,6 +45,7 @@ class StartMz(MzcomposeAction):
         mz = Materialized(
             image=image,
             external_cockroach=True,
+            external_minio=True,
             environment_extra=self.environment_extra,
             system_parameter_defaults=self.system_parameter_defaults,
             sanity_restart=False,
