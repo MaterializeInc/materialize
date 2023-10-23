@@ -29,7 +29,7 @@ data freshness**.
 {{</ callout >}}
 
 {{< multilinkbox >}}
-{{< linkbox icon="bulb" title="Key Concepts" >}}
+{{< linkbox title="Key Concepts" >}}
 
 -   [Materialize overview](/overview/what-is-materialize/)
 -   [Clusters](/concepts/clusters/)
@@ -39,14 +39,14 @@ data freshness**.
 -   [Sinks](/concepts/sinks/)
 
     {{</ linkbox >}}
-    {{< linkbox icon="doc" title="Guides" >}}
+    {{< linkbox title="Guides" >}}
 -   [Materialize &amp; Postgres CDC](/integrations/cdc-postgres/)
 -   [dbt &amp; Materialize](/integrations/dbt/)
 -   [Materialize &amp; Node.js](/integrations/node-js/)
 
 -   [Time-windowed computation](/sql/patterns/temporal-filters/)
     {{</ linkbox >}}
-    {{< linkbox icon="book" title="Reference" >}}
+    {{< linkbox title="Reference" >}}
 -   [`CREATE VIEW`](/sql/create-view/)
 -   [`CREATE INDEX`](/sql/create-index/)
 -   [`CREATE SOURCE`](/sql/create-source/)
