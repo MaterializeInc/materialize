@@ -33,6 +33,7 @@ from materialize.parallel_workload.settings import Complexity, Scenario
 from materialize.util import naughty_strings
 
 MAX_COLUMNS = 100
+MAX_INCLUDE_HEADERS = 5
 MAX_ROWS = 1000
 MAX_CLUSTERS = 10
 MAX_CLUSTER_REPLICAS = 4
@@ -44,7 +45,6 @@ MAX_WEBHOOK_SOURCES = 20
 MAX_KAFKA_SOURCES = 20
 MAX_POSTGRES_SOURCES = 20
 MAX_KAFKA_SINKS = 20
-MAX_INCLUDE_HEADERS = 5
 
 MAX_INITIAL_SCHEMAS = 1
 MAX_INITIAL_CLUSTERS = 2
@@ -56,7 +56,7 @@ MAX_INITIAL_KAFKA_SOURCES = 3
 MAX_INITIAL_POSTGRES_SOURCES = 3
 MAX_INITIAL_KAFKA_SINKS = 3
 
-MAX_IDENTIFIER_LENGTH = 255
+DB_OFFSET = 1_000_000
 
 NAUGHTY_IDENTIFIERS = False
 
@@ -654,6 +654,7 @@ class Cluster:
 
 
 class Database:
+    db_id: int
     seed: str
     complexity: Complexity
     scenario: Scenario
@@ -682,6 +683,7 @@ class Database:
 
     def __init__(
         self,
+        db_id: int,
         rng: random.Random,
         seed: str,
         host: str,
@@ -691,6 +693,7 @@ class Database:
         naughty_identifiers: bool,
     ):
         global NAUGHTY_IDENTIFIERS
+        self.db_id = db_id
         self.seed = seed
         self.host = host
         self.ports = ports
@@ -718,12 +721,15 @@ class Database:
             view = View(rng, i, base_object, base_object2, rng.choice(self.schemas))
             self.views.append(view)
         self.view_id = len(self.views)
-        self.roles = [Role(i) for i in range(rng.randint(0, MAX_INITIAL_ROLES))]
+        self.roles = [
+            Role(db_id * DB_OFFSET + i)
+            for i in range(rng.randint(0, MAX_INITIAL_ROLES))
+        ]
         self.role_id = len(self.roles)
         # At least one storage cluster required for WebhookSources
         self.clusters = [
             Cluster(
-                i,
+                self.db_id * DB_OFFSET + i,
                 managed=rng.choice([True, False]),
                 size=rng.choice(["1", "2", "4"]),
                 replication_factor=1,
@@ -741,7 +747,7 @@ class Database:
         self.kafka_sources = [
             KafkaSource(
                 self.name(),
-                i,
+                self.db_id * DB_OFFSET + i,
                 rng.choice(self.clusters),
                 rng.choice(self.schemas),
                 ports,
@@ -753,7 +759,7 @@ class Database:
         self.postgres_sources = [
             PostgresSource(
                 self.name(),
-                i,
+                self.db_id * DB_OFFSET + i,
                 rng.choice(self.clusters),
                 rng.choice(self.schemas),
                 ports,
@@ -776,7 +782,7 @@ class Database:
         self.lock = threading.Lock()
 
     def name(self) -> str:
-        return naughtify(f"db-pw-{self.seed}")
+        return naughtify(f"db-pw-{self.seed}-{self.db_id}")
 
     def __str__(self) -> str:
         return identifier(self.name())
@@ -810,48 +816,19 @@ class Database:
 
     def create(self, exe: Executor) -> None:
         self.drop(exe)
-        exe.execute("ALTER SYSTEM SET enable_webhook_sources TO true")
-        exe.execute("ALTER SYSTEM SET max_schemas_per_database = 105")
-        # The presence of ALTER TABLE RENAME can cause the total number of tables to exceed MAX_TABLES
-        exe.execute("ALTER SYSTEM SET max_tables = 200")
-        exe.execute("ALTER SYSTEM SET max_materialized_views = 105")
-        exe.execute("ALTER SYSTEM SET max_sources = 105")
-        exe.execute("ALTER SYSTEM SET max_roles = 105")
-        exe.execute("ALTER SYSTEM SET max_clusters = 105")
-        exe.execute("ALTER SYSTEM SET max_replicas_per_cluster = 105")
-        # Most queries should not fail because of privileges
-        exe.execute(
-            "ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL PRIVILEGES ON TABLES TO PUBLIC"
-        )
-        exe.execute(
-            "ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL PRIVILEGES ON TYPES TO PUBLIC"
-        )
-        exe.execute(
-            "ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL PRIVILEGES ON SECRETS TO PUBLIC"
-        )
-        exe.execute(
-            "ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL PRIVILEGES ON CONNECTIONS TO PUBLIC"
-        )
-        exe.execute(
-            "ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL PRIVILEGES ON DATABASES TO PUBLIC"
-        )
-        exe.execute(
-            "ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL PRIVILEGES ON SCHEMAS TO PUBLIC"
-        )
-        exe.execute(
-            "ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL PRIVILEGES ON CLUSTERS TO PUBLIC"
-        )
         exe.execute(f"CREATE DATABASE {self}")
         exe.execute(f"ALTER DATABASE {self} OWNER TO materialize")
 
     def create_relations(self, exe: Executor) -> None:
-        exe.execute("SELECT name FROM mz_clusters WHERE name LIKE 'c%'")
-        for row in exe.cur.fetchall():
-            exe.execute(f"DROP CLUSTER {row[0]} CASCADE")
+        # Roles and clusters are system wide, not per DB
+        if self.db_id == 0:
+            exe.execute("SELECT name FROM mz_clusters WHERE name LIKE 'c%'")
+            for row in exe.cur.fetchall():
+                exe.execute(f"DROP CLUSTER {identifier(row[0])} CASCADE")
 
-        exe.execute("SELECT name FROM mz_roles WHERE name LIKE 'r%'")
-        for row in exe.cur.fetchall():
-            exe.execute(f"DROP ROLE {row[0]}")
+            exe.execute("SELECT name FROM mz_roles WHERE name LIKE 'r%'")
+            for row in exe.cur.fetchall():
+                exe.execute(f"DROP ROLE {identifier(row[0])}")
 
         exe.execute("CREATE CONNECTION kafka_conn FOR KAFKA BROKER 'kafka:9092'")
         exe.execute(

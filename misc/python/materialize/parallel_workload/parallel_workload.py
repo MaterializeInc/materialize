@@ -30,7 +30,19 @@ from materialize.parallel_workload.action import (
     read_action_list,
     write_action_list,
 )
-from materialize.parallel_workload.database import Database
+from materialize.parallel_workload.database import (
+    MAX_CLUSTER_REPLICAS,
+    MAX_CLUSTERS,
+    MAX_KAFKA_SINKS,
+    MAX_KAFKA_SOURCES,
+    MAX_POSTGRES_SOURCES,
+    MAX_ROLES,
+    MAX_SCHEMAS,
+    MAX_TABLES,
+    MAX_VIEWS,
+    MAX_WEBHOOK_SOURCES,
+    Database,
+)
 from materialize.parallel_workload.executor import Executor, initialize_logging
 from materialize.parallel_workload.settings import Complexity, Scenario
 from materialize.parallel_workload.worker import Worker
@@ -48,13 +60,14 @@ def run(
     scenario: Scenario,
     num_threads: int | None,
     naughty_identifiers: bool,
+    num_databases: int,
     composition: Composition | None,
 ) -> None:
     num_threads = num_threads or os.cpu_count() or 10
     random.seed(seed)
 
     print(
-        f"--- Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity.value} --scenario={scenario.value} --naughty_identifiers={naughty_identifiers} (--host={host})"
+        f"--- Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity.value} --scenario={scenario.value} --naughty_identifiers={naughty_identifiers} --databases={num_databases} (--host={host})"
     )
     initialize_logging()
 
@@ -63,28 +76,79 @@ def run(
     ).timestamp()
 
     rng = random.Random(random.randrange(SEED_RANGE))
-    database = Database(
-        rng, seed, host, ports, complexity, scenario, naughty_identifiers
-    )
+    databases = [
+        Database(i, rng, seed, host, ports, complexity, scenario, naughty_identifiers)
+        for i in range(num_databases)
+    ]
 
     system_conn = pg8000.connect(
         host=host, port=ports["mz_system"], user="mz_system", database="materialize"
     )
     system_conn.autocommit = True
-    with system_conn.cursor() as cur:
-        database.create(Executor(rng, cur))
-    system_conn.close()
+    with system_conn.cursor() as system_cur:
+        system_exe = Executor(rng, system_cur, databases[0])
+        system_exe.execute("ALTER SYSTEM SET enable_webhook_sources TO true")
+        system_exe.execute(
+            f"ALTER SYSTEM SET max_schemas_per_database = {MAX_SCHEMAS + 5}"
+        )
+        # The presence of ALTER TABLE RENAME can cause the total number of tables to exceed MAX_TABLES
+        system_exe.execute(
+            f"ALTER SYSTEM SET max_tables = {len(databases) * MAX_TABLES * 2}"
+        )
+        system_exe.execute(
+            f"ALTER SYSTEM SET max_materialized_views = {len(databases) * MAX_VIEWS + 5}"
+        )
+        system_exe.execute(
+            f"ALTER SYSTEM SET max_sources = {len(databases) * (MAX_WEBHOOK_SOURCES + MAX_KAFKA_SOURCES + MAX_POSTGRES_SOURCES) * 2}"
+        )
+        system_exe.execute(
+            f"ALTER SYSTEM SET max_sinks = {len(databases) * MAX_KAFKA_SINKS + 5}"
+        )
+        system_exe.execute(
+            f"ALTER SYSTEM SET max_roles = {len(databases) * MAX_ROLES + 5}"
+        )
+        system_exe.execute(
+            f"ALTER SYSTEM SET max_clusters = {len(databases) * MAX_CLUSTERS + 5}"
+        )
+        system_exe.execute(
+            f"ALTER SYSTEM SET max_replicas_per_cluster = {MAX_CLUSTER_REPLICAS + 5}"
+        )
+        # Most queries should not fail because of privileges
+        system_exe.execute(
+            "ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL PRIVILEGES ON TABLES TO PUBLIC"
+        )
+        system_exe.execute(
+            "ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL PRIVILEGES ON TYPES TO PUBLIC"
+        )
+        system_exe.execute(
+            "ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL PRIVILEGES ON SECRETS TO PUBLIC"
+        )
+        system_exe.execute(
+            "ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL PRIVILEGES ON CONNECTIONS TO PUBLIC"
+        )
+        system_exe.execute(
+            "ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL PRIVILEGES ON DATABASES TO PUBLIC"
+        )
+        system_exe.execute(
+            "ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL PRIVILEGES ON SCHEMAS TO PUBLIC"
+        )
+        system_exe.execute(
+            "ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL PRIVILEGES ON CLUSTERS TO PUBLIC"
+        )
+        for database in databases:
+            database.create(system_exe)
 
-    conn = pg8000.connect(
-        host=host,
-        port=ports["materialized"],
-        user="materialize",
-        database=database.name(),
-    )
-    conn.autocommit = True
-    with conn.cursor() as cur:
-        database.create_relations(Executor(rng, cur))
-    conn.close()
+            conn = pg8000.connect(
+                host=host,
+                port=ports["materialized"],
+                user="materialize",
+                database=database.name(),
+            )
+            conn.autocommit = True
+            with conn.cursor() as cur:
+                database.create_relations(Executor(rng, cur, database))
+            conn.close()
+    system_conn.close()
 
     workers = []
     threads = []
@@ -110,8 +174,7 @@ def run(
             weights,
         )[0]
         actions = [
-            action_class(worker_rng, database)
-            for action_class in action_list.action_classes
+            action_class(worker_rng) for action_class in action_list.action_classes
         ]
         worker = Worker(
             worker_rng,
@@ -130,7 +193,7 @@ def run(
         thread = threading.Thread(
             name=thread_name,
             target=worker.run,
-            args=(host, ports["materialized"], "materialize", database.name()),
+            args=(host, ports["materialized"], "materialize", databases),
         )
         thread.start()
         threads.append(thread)
@@ -138,7 +201,7 @@ def run(
     if scenario == Scenario.Cancel:
         worker = Worker(
             worker_rng,
-            [CancelAction(worker_rng, database, workers)],
+            [CancelAction(worker_rng, workers)],
             [1],
             end_time,
             autocommit=False,
@@ -148,7 +211,7 @@ def run(
         thread = threading.Thread(
             name="cancel",
             target=worker.run,
-            args=(host, ports["mz_system"], "mz_system", str(database)),
+            args=(host, ports["mz_system"], "mz_system", databases),
         )
         thread.start()
         threads.append(thread)
@@ -156,7 +219,7 @@ def run(
         assert composition, "Kill scenario only works in mzcompose"
         worker = Worker(
             worker_rng,
-            [KillAction(worker_rng, database, composition)],
+            [KillAction(worker_rng, composition)],
             [1],
             end_time,
             autocommit=False,
@@ -166,7 +229,7 @@ def run(
         thread = threading.Thread(
             name="kill",
             target=worker.run,
-            args=(host, ports["materialized"], "materialize", str(database)),
+            args=(host, ports["materialized"], "materialize", databases),
         )
         thread.start()
         threads.append(thread)
@@ -204,8 +267,9 @@ def run(
     conn = pg8000.connect(host=host, port=ports["materialized"], user="materialize")
     conn.autocommit = True
     with conn.cursor() as cur:
-        print(f"Dropping database {database}")
-        database.drop(Executor(rng, cur))
+        for database in databases:
+            print(f"Dropping database {database}")
+            database.drop(Executor(rng, cur, database))
     conn.close()
 
     ignored_errors: defaultdict[str, Counter[type[Action]]] = defaultdict(Counter)
@@ -252,6 +316,12 @@ def parse_common_args(parser: argparse.ArgumentParser) -> None:
         "--naughty-identifiers",
         action="store_true",
         help="Whether to use naughty strings as identifiers, makes the queries unreadable",
+    )
+    parser.add_argument(
+        "--databases",
+        default=2,
+        type=int,
+        help="Number of databases to create and run against, 2 by default",
     )
 
 
@@ -301,6 +371,7 @@ def main() -> int:
         Scenario(args.scenario),
         args.threads,
         args.naughty_identifiers,
+        args.databases,
         composition=None,  # only works in mzcompose
     )
     return 0

@@ -19,6 +19,7 @@ import materialize.parallel_workload.database
 from materialize.data_ingest.data_type import NUMBER_TYPES, Text, TextTextMap
 from materialize.mzcompose.composition import Composition
 from materialize.parallel_workload.database import (
+    DB_OFFSET,
     MAX_CLUSTER_REPLICAS,
     MAX_CLUSTERS,
     MAX_KAFKA_SINKS,
@@ -32,7 +33,6 @@ from materialize.parallel_workload.database import (
     MAX_WEBHOOK_SOURCES,
     Cluster,
     ClusterReplica,
-    Database,
     DBObject,
     KafkaSink,
     KafkaSource,
@@ -52,21 +52,19 @@ if TYPE_CHECKING:
 # TODO: CASCADE in DROPs, keep track of what will be deleted
 class Action:
     rng: random.Random
-    db: Database
 
-    def __init__(self, rng: random.Random, db: Database):
+    def __init__(self, rng: random.Random):
         self.rng = rng
-        self.db = db
 
     def run(self, exe: Executor) -> None:
         raise NotImplementedError
 
-    def errors_to_ignore(self) -> list[str]:
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = [
             "permission denied for",
             "must be owner of",
         ]
-        if self.db.complexity == Complexity.DDL:
+        if exe.db.complexity == Complexity.DDL:
             result.extend(
                 [
                     "query could not complete",
@@ -79,13 +77,13 @@ class Action:
                     "the transaction's active cluster has been dropped",  # cluster was dropped
                 ]
             )
-        if self.db.scenario == Scenario.Cancel:
+        if exe.db.scenario == Scenario.Cancel:
             result.extend(
                 [
                     "canceling statement due to user request",
                 ]
             )
-        if self.db.scenario == Scenario.Kill:
+        if exe.db.scenario == Scenario.Kill:
             result.extend(
                 [
                     "network error",
@@ -101,9 +99,9 @@ class Action:
 
 
 class FetchAction(Action):
-    def errors_to_ignore(self) -> list[str]:
-        result = super().errors_to_ignore()
-        if self.db.complexity == Complexity.DDL:
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        result = super().errors_to_ignore(exe)
+        if exe.db.complexity == Complexity.DDL:
             result.extend(
                 [
                     "does not exist",
@@ -112,7 +110,7 @@ class FetchAction(Action):
         return result
 
     def run(self, exe: Executor) -> None:
-        obj = self.rng.choice(self.db.db_objects())
+        obj = self.rng.choice(exe.db.db_objects())
         # See https://github.com/MaterializeInc/materialize/issues/20474
         exe.rollback() if self.rng.choice([True, False]) else exe.commit()
         query = f"DECLARE c CURSOR FOR SUBSCRIBE {obj}"
@@ -129,15 +127,15 @@ class FetchAction(Action):
 
 
 class SelectAction(Action):
-    def errors_to_ignore(self) -> list[str]:
-        result = super().errors_to_ignore()
-        if self.db.complexity in (Complexity.DML, Complexity.DDL):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        result = super().errors_to_ignore(exe)
+        if exe.db.complexity in (Complexity.DML, Complexity.DDL):
             result.extend(
                 [
                     "in the same timedomain",
                 ]
             )
-        if self.db.complexity == Complexity.DDL:
+        if exe.db.complexity == Complexity.DDL:
             result.extend(
                 [
                     "does not exist",
@@ -146,9 +144,9 @@ class SelectAction(Action):
         return result
 
     def run(self, exe: Executor) -> None:
-        obj = self.rng.choice(self.db.db_objects())
+        obj = self.rng.choice(exe.db.db_objects())
         column = self.rng.choice(obj.columns)
-        obj2 = self.rng.choice(self.db.db_objects())
+        obj2 = self.rng.choice(exe.db.db_objects())
         obj_name = str(obj)
         obj2_name = str(obj2)
         columns = [c for c in obj2.columns if c.data_type == column.data_type]
@@ -197,14 +195,14 @@ class InsertAction(Action):
     def run(self, exe: Executor) -> None:
         table = None
         if exe.insert_table != None:
-            for t in self.db.tables:
+            for t in exe.db.tables:
                 if t.table_id == exe.insert_table:
                     table = t
                     break
             else:
                 exe.commit() if self.rng.choice([True, False]) else exe.rollback()
         if not table:
-            table = self.rng.choice(self.db.tables)
+            table = self.rng.choice(exe.db.tables)
 
         column_names = ", ".join(column.name(True) for column in table.columns)
         column_values = ", ".join(
@@ -215,14 +213,14 @@ class InsertAction(Action):
             return
         exe.execute(query)
         exe.insert_table = table.table_id
-        with self.db.lock:
+        with exe.db.lock:
             table.num_rows += 1
 
 
 class SourceInsertAction(Action):
     def run(self, exe: Executor) -> None:
-        with self.db.lock:
-            sources = self.db.kafka_sources + self.db.postgres_sources
+        with exe.db.lock:
+            sources = exe.db.kafka_sources + exe.db.postgres_sources
             if not sources:
                 return
             source = self.rng.choice(sources)
@@ -232,20 +230,20 @@ class SourceInsertAction(Action):
 
 
 class UpdateAction(Action):
-    def errors_to_ignore(self) -> list[str]:
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
             "canceling statement due to statement timeout",
-        ] + super().errors_to_ignore()
+        ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> None:
         table = None
         if exe.insert_table != None:
-            for t in self.db.tables:
+            for t in exe.db.tables:
                 if t.table_id == exe.insert_table:
                     table = t
                     break
         if not table:
-            table = self.rng.choice(self.db.tables)
+            table = self.rng.choice(exe.db.tables)
 
         column1 = table.columns[0]
         column2 = self.rng.choice(table.columns)
@@ -259,13 +257,13 @@ class UpdateAction(Action):
 
 
 class DeleteAction(Action):
-    def errors_to_ignore(self) -> list[str]:
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
             "canceling statement due to statement timeout",
-        ] + super().errors_to_ignore()
+        ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> None:
-        table = self.rng.choice(self.db.tables)
+        table = self.rng.choice(exe.db.tables)
         query = f"DELETE FROM {table}"
         if self.rng.random() < 0.95:
             column = self.rng.choice(table.columns)
@@ -282,13 +280,13 @@ class DeleteAction(Action):
             # so for now have to trigger them manually here.
             if self.rng.choice([True, False]):
                 exe.commit()
-                with self.db.lock:
+                with exe.db.lock:
                     table.num_rows = 0
 
 
 class CommentAction(Action):
     def run(self, exe: Executor) -> None:
-        table = self.rng.choice(self.db.tables)
+        table = self.rng.choice(exe.db.tables)
 
         if self.rng.choice([True, False]):
             column = self.rng.choice(table.columns)
@@ -300,13 +298,13 @@ class CommentAction(Action):
 
 
 class CreateIndexAction(Action):
-    def errors_to_ignore(self) -> list[str]:
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
             "already exists",  # TODO: Investigate
-        ] + super().errors_to_ignore()
+        ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> None:
-        tables_views: list[DBObject] = [*self.db.tables, *self.db.views]
+        tables_views: list[DBObject] = [*exe.db.tables, *exe.db.views]
         table = self.rng.choice(tables_views)
         columns = self.rng.sample(table.columns, len(table.columns))
         columns_str = "_".join(column.name() for column in columns)
@@ -319,83 +317,91 @@ class CreateIndexAction(Action):
         index_str = ", ".join(index_elems)
         query = f"CREATE INDEX {identifier(index_name)} ON {table} ({index_str})"
         exe.execute(query)
-        with self.db.lock:
-            self.db.indexes.add(index_name)
+        with exe.db.lock:
+            exe.db.indexes.add(index_name)
 
 
 class DropIndexAction(Action):
     def run(self, exe: Executor) -> None:
-        with self.db.lock:
-            if not self.db.indexes:
+        with exe.db.lock:
+            if not exe.db.indexes:
                 return
-            index_name = self.rng.choice(list(self.db.indexes))
+            index_name = self.rng.choice(list(exe.db.indexes))
             query = f"DROP INDEX {identifier(index_name)}"
             try:
                 exe.execute(query)
             except QueryError as e:
                 # expected, see #20465
-                if self.db.scenario != Scenario.Kill or "unknown catalog item" not in e.msg:
+                if (
+                    exe.db.scenario != Scenario.Kill
+                    or "unknown catalog item" not in e.msg
+                ):
                     raise e
-            self.db.indexes.remove(index_name)
+            exe.db.indexes.remove(index_name)
 
 
 class CreateTableAction(Action):
     def run(self, exe: Executor) -> None:
-        if len(self.db.tables) > MAX_TABLES:
+        if len(exe.db.tables) > MAX_TABLES:
             return
-        table_id = self.db.table_id
-        self.db.table_id += 1
-        table = Table(self.rng, table_id, self.rng.choice(self.db.schemas))
+        table_id = exe.db.table_id
+        exe.db.table_id += 1
+        table = Table(self.rng, table_id, self.rng.choice(exe.db.schemas))
         table.create(exe)
-        self.db.tables.append(table)
+        exe.db.tables.append(table)
 
 
 class DropTableAction(Action):
-    def errors_to_ignore(self) -> list[str]:
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
             "still depended upon by",
-        ] + super().errors_to_ignore()
+        ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> None:
-        with self.db.lock:
-            if len(self.db.tables) <= 2:
+        with exe.db.lock:
+            if len(exe.db.tables) <= 2:
                 return
-            table = self.rng.choice(self.db.tables)
+            table = self.rng.choice(exe.db.tables)
             query = f"DROP TABLE {table}"
             try:
                 exe.execute(query)
             except QueryError as e:
                 # expected, see #20465
-                if self.db.scenario != Scenario.Kill or "unknown catalog item" not in e.msg:
+                if (
+                    exe.db.scenario != Scenario.Kill
+                    or "unknown catalog item" not in e.msg
+                ):
                     raise e
-            self.db.tables.remove(table)
+            exe.db.tables.remove(table)
 
 
 class RenameTableAction(Action):
     def run(self, exe: Executor) -> None:
-        if self.db.scenario != Scenario.Rename:
+        if exe.db.scenario != Scenario.Rename:
             return
-        with self.db.lock:
-            if not self.db.tables:
+        with exe.db.lock:
+            if not exe.db.tables:
                 return
-            table = self.rng.choice(self.db.tables)
-        old_name = str(table)
-        table.rename += 1
-        try:
-            exe.execute(f"ALTER TABLE {old_name} RENAME TO {identifier(table.name())}")
-        except:
-            table.rename -= 1
-            raise
+            table = self.rng.choice(exe.db.tables)
+            old_name = str(table)
+            table.rename += 1
+            try:
+                exe.execute(
+                    f"ALTER TABLE {old_name} RENAME TO {identifier(table.name())}"
+                )
+            except:
+                table.rename -= 1
+                raise
 
 
 class RenameViewAction(Action):
     def run(self, exe: Executor) -> None:
-        if self.db.scenario != Scenario.Rename:
+        if exe.db.scenario != Scenario.Rename:
             return
-        with self.db.lock:
-            if not self.db.views:
+        with exe.db.lock:
+            if not exe.db.views:
                 return
-            view = self.rng.choice(self.db.views)
+            view = self.rng.choice(exe.db.views)
             old_name = str(view)
             view.rename += 1
             try:
@@ -409,73 +415,75 @@ class RenameViewAction(Action):
 
 class RenameSinkAction(Action):
     def run(self, exe: Executor) -> None:
-        if self.db.scenario != Scenario.Rename:
+        if exe.db.scenario != Scenario.Rename:
             return
-        with self.db.lock:
-            if not self.db.kafka_sinks:
+        with exe.db.lock:
+            if not exe.db.kafka_sinks:
                 return
-            sink = self.rng.choice(self.db.kafka_sinks)
-        old_name = str(sink)
-        sink.rename += 1
-        try:
-            exe.execute(f"ALTER SINK {old_name} RENAME TO {identifier(sink.name())}")
-        except:
-            sink.rename -= 1
-            raise
+            sink = self.rng.choice(exe.db.kafka_sinks)
+            old_name = str(sink)
+            sink.rename += 1
+            try:
+                exe.execute(
+                    f"ALTER SINK {old_name} RENAME TO {identifier(sink.name())}"
+                )
+            except:
+                sink.rename -= 1
+                raise
 
 
 class CreateSchemaAction(Action):
     def run(self, exe: Executor) -> None:
-        with self.db.lock:
-            if len(self.db.schemas) > MAX_SCHEMAS:
+        with exe.db.lock:
+            if len(exe.db.schemas) > MAX_SCHEMAS:
                 return
-            schema_id = self.db.schema_id
-            self.db.schema_id += 1
+            schema_id = exe.db.schema_id
+            exe.db.schema_id += 1
         schema = Schema(self.rng, schema_id)
         schema.create(exe)
-        self.db.schemas.append(schema)
+        exe.db.schemas.append(schema)
 
 
 class DropSchemaAction(Action):
-    def errors_to_ignore(self) -> list[str]:
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
             "cannot be dropped without CASCADE while it contains objects",
-        ] + super().errors_to_ignore()
+        ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> None:
-        with self.db.lock:
-            if len(self.db.schemas) <= 1:
+        with exe.db.lock:
+            if len(exe.db.schemas) <= 1:
                 return
-            schema_id = self.rng.randrange(len(self.db.schemas))
-            schema = self.db.schemas[schema_id]
+            schema_id = self.rng.randrange(len(exe.db.schemas))
+            schema = exe.db.schemas[schema_id]
             query = f"DROP SCHEMA {schema}"
             try:
                 exe.execute(query)
             except QueryError as e:
                 # expected, see #20465
-                if self.db.scenario != Scenario.Kill or "unknown schema" not in e.msg:
+                if exe.db.scenario != Scenario.Kill or "unknown schema" not in e.msg:
                     raise e
-            del self.db.schemas[schema_id]
+            del exe.db.schemas[schema_id]
 
 
 class RenameSchemaAction(Action):
-    def errors_to_ignore(self) -> list[str]:
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
             "ambiguous reference to schema named"  # see https://github.com/MaterializeInc/materialize/pull/22551#pullrequestreview-1691876923
-        ] + super().errors_to_ignore()
+        ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> None:
-        if self.db.scenario != Scenario.Rename:
+        if exe.db.scenario != Scenario.Rename:
             return
-        with self.db.lock:
-            schema = self.rng.choice(self.db.schemas)
-        old_name = str(schema)
-        schema.rename += 1
-        try:
-            exe.execute(f"ALTER SCHEMA {old_name} RENAME TO {schema}")
-        except:
-            schema.rename -= 1
-            raise
+        with exe.db.lock:
+            schema = self.rng.choice(exe.db.schemas)
+            old_name = str(schema)
+            schema.rename += 1
+            try:
+                exe.execute(f"ALTER SCHEMA {old_name} RENAME TO {schema}")
+            except:
+                schema.rename -= 1
+                raise
 
 
 class SwapSchemaAction(Action):
@@ -518,15 +526,15 @@ class CommitRollbackAction(Action):
 
 class CreateViewAction(Action):
     def run(self, exe: Executor) -> None:
-        with self.db.lock:
-            if len(self.db.views) > MAX_VIEWS:
+        with exe.db.lock:
+            if len(exe.db.views) > MAX_VIEWS:
                 return
-            view_id = self.db.view_id
-            self.db.view_id += 1
+            view_id = exe.db.view_id
+            exe.db.view_id += 1
         # Don't use views for now since LIMIT 1 and statement_timeout are
         # not effective yet at preventing long-running queries and OoMs.
-        base_object = self.rng.choice(self.db.db_objects())
-        base_object2: DBObject | None = self.rng.choice(self.db.db_objects())
+        base_object = self.rng.choice(exe.db.db_objects())
+        base_object2: DBObject | None = self.rng.choice(exe.db.db_objects())
         if self.rng.choice([True, False]) or base_object2 == base_object:
             base_object2 = None
         view = View(
@@ -534,24 +542,24 @@ class CreateViewAction(Action):
             view_id,
             base_object,
             base_object2,
-            self.rng.choice(self.db.schemas),
+            self.rng.choice(exe.db.schemas),
         )
         view.create(exe)
-        self.db.views.append(view)
+        exe.db.views.append(view)
 
 
 class DropViewAction(Action):
-    def errors_to_ignore(self) -> list[str]:
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
             "still depended upon by",
-        ] + super().errors_to_ignore()
+        ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> None:
-        with self.db.lock:
-            if not self.db.views:
+        with exe.db.lock:
+            if not exe.db.views:
                 return
-            view_id = self.rng.randrange(len(self.db.views))
-            view = self.db.views[view_id]
+            view_id = self.rng.randrange(len(exe.db.views))
+            view = exe.db.views[view_id]
             if view.materialized:
                 query = f"DROP MATERIALIZED VIEW {view}"
             else:
@@ -560,117 +568,119 @@ class DropViewAction(Action):
                 exe.execute(query)
             except QueryError as e:
                 # expected, see #20465
-                if self.db.scenario != Scenario.Kill or "unknown catalog item" not in e.msg:
+                if (
+                    exe.db.scenario != Scenario.Kill
+                    or "unknown catalog item" not in e.msg
+                ):
                     raise e
-            del self.db.views[view_id]
+            del exe.db.views[view_id]
 
 
 class CreateRoleAction(Action):
     def run(self, exe: Executor) -> None:
-        with self.db.lock:
-            if len(self.db.roles) > MAX_ROLES:
+        with exe.db.lock:
+            if len(exe.db.roles) > MAX_ROLES:
                 return
-            role_id = self.db.role_id
-            self.db.role_id += 1
-        role = Role(role_id)
+            role_id = exe.db.role_id
+            exe.db.role_id += 1
+        role = Role(exe.db.db_id * DB_OFFSET + role_id)
         role.create(exe)
-        self.db.roles.append(role)
+        exe.db.roles.append(role)
 
 
 class DropRoleAction(Action):
-    def errors_to_ignore(self) -> list[str]:
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
             "cannot be dropped because some objects depend on it",
             "current role cannot be dropped",
-        ] + super().errors_to_ignore()
+        ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> None:
-        with self.db.lock:
-            if not self.db.roles:
+        with exe.db.lock:
+            if not exe.db.roles:
                 return
-            role_id = self.rng.randrange(len(self.db.roles))
-            role = self.db.roles[role_id]
+            role = self.rng.choice(exe.db.roles)
             query = f"DROP ROLE {role}"
             try:
                 exe.execute(query)
             except QueryError as e:
                 # expected, see #20465
-                if self.db.scenario != Scenario.Kill or "unknown role" not in e.msg:
+                if exe.db.scenario != Scenario.Kill or "unknown role" not in e.msg:
                     raise e
-            del self.db.roles[role_id]
+            exe.db.roles.remove(role)
 
 
 class CreateClusterAction(Action):
     def run(self, exe: Executor) -> None:
-        with self.db.lock:
-            if len(self.db.clusters) > MAX_CLUSTERS:
+        with exe.db.lock:
+            if len(exe.db.clusters) > MAX_CLUSTERS:
                 return
-            cluster_id = self.db.cluster_id
-            self.db.cluster_id += 1
+            cluster_id = exe.db.cluster_id
+            exe.db.cluster_id += 1
         cluster = Cluster(
-            cluster_id,
+            exe.db.db_id * DB_OFFSET + cluster_id,
             managed=self.rng.choice([True, False]),
             size=self.rng.choice(["1", "2", "4"]),
             replication_factor=self.rng.choice([1, 2, 4, 5]),
             introspection_interval=self.rng.choice(["0", "1s", "10s"]),
         )
         cluster.create(exe)
-        self.db.clusters.append(cluster)
+        exe.db.clusters.append(cluster)
 
 
 class DropClusterAction(Action):
-    def errors_to_ignore(self) -> list[str]:
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
             # cannot drop cluster "..." because other objects depend on it
             "because other objects depend on it",
-        ] + super().errors_to_ignore()
+        ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> None:
-        with self.db.lock:
-            if len(self.db.clusters) <= 1:
+        with exe.db.lock:
+            if len(exe.db.clusters) <= 1:
                 return
             # Keep cluster 0 with 1 replica for sources/sinks
-            cluster_id = self.rng.randrange(1, len(self.db.clusters))
-            cluster = self.db.clusters[cluster_id]
+            cluster_id = self.rng.randrange(1, len(exe.db.clusters))
+            cluster = exe.db.clusters[cluster_id]
             query = f"DROP CLUSTER {cluster}"
             try:
                 exe.execute(query)
             except QueryError as e:
                 # expected, see #20465
-                if self.db.scenario != Scenario.Kill or "unknown cluster" not in e.msg:
+                if exe.db.scenario != Scenario.Kill or "unknown cluster" not in e.msg:
                     raise e
-            del self.db.clusters[cluster_id]
+            del exe.db.clusters[cluster_id]
 
 
 class SetClusterAction(Action):
-    def errors_to_ignore(self) -> list[str]:
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
             "SET cluster cannot be called in an active transaction",
-        ] + super().errors_to_ignore()
+        ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> None:
-        with self.db.lock:
-            if not self.db.clusters:
+        with exe.db.lock:
+            if not exe.db.clusters:
                 return
-            cluster = self.rng.choice(self.db.clusters)
+            cluster = self.rng.choice(exe.db.clusters)
         query = f"SET CLUSTER = {cluster}"
         exe.execute(query)
 
 
 class CreateClusterReplicaAction(Action):
-    def errors_to_ignore(self) -> list[str]:
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = [
             "cannot create more than one replica of a cluster containing sources or sinks",
             # Can happen with reduced locking
             "cannot create multiple replicas named",
-        ] + super().errors_to_ignore()
+        ] + super().errors_to_ignore(exe)
 
         return result
 
     def run(self, exe: Executor) -> None:
-        with self.db.lock:
+        with exe.db.lock:
             # Keep cluster 0 with 1 replica for sources/sinks
-            unmanaged_clusters = [c for c in self.db.clusters[1:] if not c.managed]
+            unmanaged_clusters = [c for c in exe.db.clusters[1:] if not c.managed]
             if not unmanaged_clusters:
                 return
             cluster = self.rng.choice(unmanaged_clusters)
@@ -692,9 +702,9 @@ class CreateClusterReplicaAction(Action):
 
 class DropClusterReplicaAction(Action):
     def run(self, exe: Executor) -> None:
-        with self.db.lock:
+        with exe.db.lock:
             # Keep cluster 0 with 1 replica for sources/sinks
-            unmanaged_clusters = [c for c in self.db.clusters[1:] if not c.managed]
+            unmanaged_clusters = [c for c in exe.db.clusters[1:] if not c.managed]
             if not unmanaged_clusters:
                 return
             cluster = self.rng.choice(unmanaged_clusters)
@@ -707,18 +717,22 @@ class DropClusterReplicaAction(Action):
                 exe.execute(query)
             except QueryError as e:
                 # expected, see #20465
-                if self.db.scenario != Scenario.Kill or "has no CLUSTER REPLICA named" not in e.msg:
+                if (
+                    exe.db.scenario != Scenario.Kill
+                    or "has no CLUSTER REPLICA named" not in e.msg
+                ):
                     raise e
             cluster.replicas.remove(replica)
 
+
 class GrantPrivilegesAction(Action):
     def run(self, exe: Executor) -> None:
-        with self.db.lock:
-            if not self.db.roles:
+        with exe.db.lock:
+            if not exe.db.roles:
                 return
-            role = self.rng.choice(self.db.roles)
+            role = self.rng.choice(exe.db.roles)
         privilege = self.rng.choice(["SELECT", "INSERT", "UPDATE", "ALL"])
-        tables_views: list[DBObject] = [*self.db.tables, *self.db.views]
+        tables_views: list[DBObject] = [*exe.db.tables, *exe.db.views]
         table = self.rng.choice(tables_views)
         query = f"GRANT {privilege} ON {table} TO {role}"
         exe.execute(query)
@@ -726,12 +740,12 @@ class GrantPrivilegesAction(Action):
 
 class RevokePrivilegesAction(Action):
     def run(self, exe: Executor) -> None:
-        with self.db.lock:
-            if not self.db.roles:
+        with exe.db.lock:
+            if not exe.db.roles:
                 return
-            role = self.rng.choice(self.db.roles)
+            role = self.rng.choice(exe.db.roles)
         privilege = self.rng.choice(["SELECT", "INSERT", "UPDATE", "ALL"])
-        tables_views: list[DBObject] = [*self.db.tables, *self.db.views]
+        tables_views: list[DBObject] = [*exe.db.tables, *exe.db.views]
         table = self.rng.choice(tables_views)
         query = f"REVOKE {privilege} ON {table} FROM {role}"
         exe.execute(query)
@@ -742,20 +756,19 @@ class ReconnectAction(Action):
     def __init__(
         self,
         rng: random.Random,
-        db: Database,
         random_role: bool = True,
     ):
-        super().__init__(rng, db)
+        super().__init__(rng)
         self.random_role = random_role
 
     def run(self, exe: Executor) -> None:
         autocommit = exe.cur._c.autocommit
-        host = self.db.host
-        port = self.db.ports["materialized"]
-        with self.db.lock:
-            if self.random_role and self.db.roles:
+        host = exe.db.host
+        port = exe.db.ports["materialized"]
+        with exe.db.lock:
+            if self.random_role and exe.db.roles:
                 user = self.rng.choice(
-                    ["materialize", str(self.rng.choice(self.db.roles))]
+                    ["materialize", str(self.rng.choice(exe.db.roles))]
                 )
             else:
                 user = "materialize"
@@ -774,7 +787,7 @@ class ReconnectAction(Action):
         for i in range(NUM_ATTEMPTS):
             try:
                 conn = pg8000.connect(
-                    host=host, port=port, user=user, database=self.db.name()
+                    host=host, port=port, user=user, database=exe.db.name()
                 )
                 conn.autocommit = autocommit
                 cur = conn.cursor()
@@ -798,30 +811,29 @@ class ReconnectAction(Action):
 class CancelAction(Action):
     workers: list["Worker"]
 
-    def errors_to_ignore(self) -> list[str]:
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
             "must be a member of",
-        ] + super().errors_to_ignore()
+        ] + super().errors_to_ignore(exe)
 
     def __init__(
         self,
         rng: random.Random,
-        db: Database,
         workers: list["Worker"],
     ):
-        super().__init__(rng, db)
+        super().__init__(rng)
         self.workers = workers
 
     def run(self, exe: Executor) -> None:
         pid = self.rng.choice(
-            [worker.exe.pg_pid for worker in self.workers if worker.exe and worker.exe.pg_pid != -1]  # type: ignore
+            [exe.pg_pid for worker in self.workers for exe in worker.exes if exe and exe.pg_pid != -1]  # type: ignore
         )
         worker = None
         for i in range(len(self.workers)):
-            worker_exe = self.workers[i].exe
-            if worker_exe and worker_exe.pg_pid == pid:
-                worker = f"worker_{i}"
-                break
+            for worker_exe in self.workers[i].exes:
+                if worker_exe and worker_exe.pg_pid == pid:
+                    worker = f"worker_{i}"
+                    break
         assert worker
         exe.execute(
             f"SELECT pg_cancel_backend({pid})", extra_info=f"Canceling {worker}"
@@ -836,10 +848,9 @@ class KillAction(Action):
     def __init__(
         self,
         rng: random.Random,
-        db: Database,
         composition: Composition,
     ):
-        super().__init__(rng, db)
+        super().__init__(rng)
         self.composition = composition
 
     def run(self, exe: Executor) -> None:
@@ -852,184 +863,206 @@ class KillAction(Action):
 
 class CreateWebhookSourceAction(Action):
     def run(self, exe: Executor) -> None:
-        with self.db.lock:
-            if len(self.db.webhook_sources) > MAX_WEBHOOK_SOURCES:
+        with exe.db.lock:
+            if len(exe.db.webhook_sources) > MAX_WEBHOOK_SOURCES:
                 return
-            webhook_source_id = self.db.webhook_source_id
-            self.db.webhook_source_id += 1
-        potential_clusters = [c for c in self.db.clusters if len(c.replicas) == 1]
+            webhook_source_id = exe.db.webhook_source_id
+            exe.db.webhook_source_id += 1
+        potential_clusters = [c for c in exe.db.clusters if len(c.replicas) == 1]
         cluster = self.rng.choice(potential_clusters)
-        schema = self.rng.choice(self.db.schemas)
+        schema = self.rng.choice(exe.db.schemas)
         source = WebhookSource(webhook_source_id, cluster, schema, self.rng)
         source.create(exe)
-        self.db.webhook_sources.append(source)
+        exe.db.webhook_sources.append(source)
 
 
 class DropWebhookSourceAction(Action):
-    def errors_to_ignore(self) -> list[str]:
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
             "still depended upon by",
-        ] + super().errors_to_ignore()
+        ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> None:
-        with self.db.lock:
-            if not self.db.webhook_sources:
+        with exe.db.lock:
+            if not exe.db.webhook_sources:
                 return
-            source_id = self.rng.randrange(len(self.db.webhook_sources))
-            source = self.db.webhook_sources[source_id]
+            source_id = self.rng.randrange(len(exe.db.webhook_sources))
+            source = exe.db.webhook_sources[source_id]
             query = f"DROP SOURCE {source}"
             try:
                 exe.execute(query)
             except QueryError as e:
                 # expected, see #20465
-                if self.db.scenario != Scenario.Kill or "unknown catalog item" not in e.msg:
+                if (
+                    exe.db.scenario != Scenario.Kill
+                    or "unknown catalog item" not in e.msg
+                ):
                     raise e
-            del self.db.webhook_sources[source_id]
+            del exe.db.webhook_sources[source_id]
 
 
 class CreateKafkaSourceAction(Action):
     def run(self, exe: Executor) -> None:
-        with self.db.lock:
-            if len(self.db.kafka_sources) > MAX_KAFKA_SOURCES:
+        with exe.db.lock:
+            if len(exe.db.kafka_sources) > MAX_KAFKA_SOURCES:
                 return
-            source_id = self.db.kafka_source_id
-            self.db.kafka_source_id += 1
-        potential_clusters = [c for c in self.db.clusters if len(c.replicas) == 1]
+            source_id = exe.db.kafka_source_id
+            exe.db.kafka_source_id += 1
+        potential_clusters = [c for c in exe.db.clusters if len(c.replicas) == 1]
         cluster = self.rng.choice(potential_clusters)
-        schema = self.rng.choice(self.db.schemas)
+        schema = self.rng.choice(exe.db.schemas)
         try:
             source = KafkaSource(
-                self.db.name(), source_id, cluster, schema, self.db.ports, self.rng
+                exe.db.name(),
+                exe.db.db_id * DB_OFFSET + source_id,
+                cluster,
+                schema,
+                exe.db.ports,
+                self.rng,
             )
             source.create(exe)
-            self.db.kafka_sources.append(source)
+            exe.db.kafka_sources.append(source)
         except:
-            if self.db.scenario != Scenario.Kill:
+            if exe.db.scenario != Scenario.Kill:
                 raise
 
 
 class DropKafkaSourceAction(Action):
-    def errors_to_ignore(self) -> list[str]:
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
             "still depended upon by",
-        ] + super().errors_to_ignore()
+        ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> None:
-        with self.db.lock:
-            if not self.db.kafka_sources:
+        with exe.db.lock:
+            if not exe.db.kafka_sources:
                 return
-            source_id = self.rng.randrange(len(self.db.kafka_sources))
-            source = self.db.kafka_sources[source_id]
+            source_id = self.rng.randrange(len(exe.db.kafka_sources))
+            source = exe.db.kafka_sources[source_id]
             query = f"DROP SOURCE {source}"
             try:
                 exe.execute(query)
             except QueryError as e:
                 # expected, see #20465
-                if self.db.scenario != Scenario.Kill or "unknown catalog item" not in e.msg:
+                if (
+                    exe.db.scenario != Scenario.Kill
+                    or "unknown catalog item" not in e.msg
+                ):
                     raise e
-            del self.db.kafka_sources[source_id]
+            del exe.db.kafka_sources[source_id]
 
 
 class CreatePostgresSourceAction(Action):
     def run(self, exe: Executor) -> None:
-        with self.db.lock:
-            if len(self.db.postgres_sources) > MAX_POSTGRES_SOURCES:
+        with exe.db.lock:
+            if len(exe.db.postgres_sources) > MAX_POSTGRES_SOURCES:
                 return
-            source_id = self.db.postgres_source_id
-            self.db.postgres_source_id += 1
-            potential_clusters = [c for c in self.db.clusters if len(c.replicas) == 1]
-            schema = self.rng.choice(self.db.schemas)
+            source_id = exe.db.postgres_source_id
+            exe.db.postgres_source_id += 1
+            potential_clusters = [c for c in exe.db.clusters if len(c.replicas) == 1]
+            schema = self.rng.choice(exe.db.schemas)
             cluster = self.rng.choice(potential_clusters)
         try:
             source = PostgresSource(
-                self.db.name(), source_id, cluster, schema, self.db.ports, self.rng
+                exe.db.name(),
+                exe.db.db_id * DB_OFFSET + source_id,
+                cluster,
+                schema,
+                exe.db.ports,
+                self.rng,
             )
             source.create(exe)
-            self.db.postgres_sources.append(source)
+            exe.db.postgres_sources.append(source)
         except:
-            if self.db.scenario != Scenario.Kill:
+            if exe.db.scenario != Scenario.Kill:
                 raise
 
 
 class DropPostgresSourceAction(Action):
-    def errors_to_ignore(self) -> list[str]:
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
             "still depended upon by",
-        ] + super().errors_to_ignore()
+        ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> None:
-        with self.db.lock:
-            if not self.db.postgres_sources:
+        with exe.db.lock:
+            if not exe.db.postgres_sources:
                 return
-            source_id = self.rng.randrange(len(self.db.postgres_sources))
-            source = self.db.postgres_sources[source_id]
+            source_id = self.rng.randrange(len(exe.db.postgres_sources))
+            source = exe.db.postgres_sources[source_id]
             query = f"DROP SOURCE {source.executor.source}"
             try:
                 exe.execute(query)
             except QueryError as e:
                 # expected, see #20465
-                if self.db.scenario != Scenario.Kill or "unknown catalog item" not in e.msg:
+                if (
+                    exe.db.scenario != Scenario.Kill
+                    or "unknown catalog item" not in e.msg
+                ):
                     raise e
-            del self.db.postgres_sources[source_id]
+            del exe.db.postgres_sources[source_id]
 
 
 class CreateKafkaSinkAction(Action):
-    def errors_to_ignore(self) -> list[str]:
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
             # Another replica can be created in parallel
             "cannot create sink in cluster with more than one replica",
-        ] + super().errors_to_ignore()
+        ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> None:
-        with self.db.lock:
-            if len(self.db.kafka_sinks) > MAX_KAFKA_SINKS:
+        with exe.db.lock:
+            if len(exe.db.kafka_sinks) > MAX_KAFKA_SINKS:
                 return
-            sink_id = self.db.kafka_sink_id
-            self.db.kafka_sink_id += 1
-            potential_clusters = [c for c in self.db.clusters if len(c.replicas) == 1]
+            sink_id = exe.db.kafka_sink_id
+            exe.db.kafka_sink_id += 1
+            potential_clusters = [c for c in exe.db.clusters if len(c.replicas) == 1]
             cluster = self.rng.choice(potential_clusters)
-            schema = self.rng.choice(self.db.schemas)
+            schema = self.rng.choice(exe.db.schemas)
         sink = KafkaSink(
-            sink_id,
+            exe.db.db_id * DB_OFFSET + sink_id,
             cluster,
             schema,
-            self.rng.choice(self.db.db_objects_without_views()),
+            self.rng.choice(exe.db.db_objects_without_views()),
             self.rng,
         )
         sink.create(exe)
-        self.db.kafka_sinks.append(sink)
+        exe.db.kafka_sinks.append(sink)
 
 
 class DropKafkaSinkAction(Action):
-    def errors_to_ignore(self) -> list[str]:
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
             "still depended upon by",
-        ] + super().errors_to_ignore()
+        ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> None:
-        with self.db.lock:
-            if not self.db.kafka_sinks:
+        with exe.db.lock:
+            if not exe.db.kafka_sinks:
                 return
-            sink_id = self.rng.randrange(len(self.db.kafka_sinks))
-            sink = self.db.kafka_sinks[sink_id]
+            sink_id = self.rng.randrange(len(exe.db.kafka_sinks))
+            sink = exe.db.kafka_sinks[sink_id]
             query = f"DROP SINK {sink}"
             try:
                 exe.execute(query)
             except QueryError as e:
                 # expected, see #20465
-                if self.db.scenario != Scenario.Kill or "unknown catalog item" not in e.msg:
+                if (
+                    exe.db.scenario != Scenario.Kill
+                    or "unknown catalog item" not in e.msg
+                ):
                     raise e
-            del self.db.kafka_sinks[sink_id]
+            del exe.db.kafka_sinks[sink_id]
 
 
 class HttpPostAction(Action):
     def run(self, exe: Executor) -> None:
-        with self.db.lock:
-            if not self.db.webhook_sources:
+        with exe.db.lock:
+            if not exe.db.webhook_sources:
                 return
 
-            source = self.rng.choice(self.db.webhook_sources)
-        url = f"http://{self.db.host}:{self.db.ports['http']}/api/webhook/{self.db}/public/{source}"
+            source = self.rng.choice(exe.db.webhook_sources)
+        url = f"http://{exe.db.host}:{exe.db.ports['http']}/api/webhook/{exe.db}/public/{source}"
 
         payload = source.body_format.to_data_type().random_value(self.rng)
 
@@ -1052,7 +1085,7 @@ class HttpPostAction(Action):
             requests.post(url, data=payload.encode("utf-8"), headers=headers)
         except requests.exceptions.ConnectionError:
             # Expeceted when Mz is killed
-            if self.db.scenario != Scenario.Kill:
+            if exe.db.scenario != Scenario.Kill:
                 raise
 
 

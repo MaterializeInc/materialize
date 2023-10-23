@@ -15,6 +15,7 @@ from collections import Counter, defaultdict
 import pg8000
 
 from materialize.parallel_workload.action import Action, ReconnectAction
+from materialize.parallel_workload.database import Database
 from materialize.parallel_workload.executor import Executor, QueryError
 
 
@@ -26,7 +27,7 @@ class Worker:
     num_queries: int
     autocommit: bool
     system: bool
-    exe: Executor | None
+    exes: list[Executor]
     ignored_errors: defaultdict[str, Counter[type[Action]]]
 
     def __init__(
@@ -46,25 +47,30 @@ class Worker:
         self.autocommit = autocommit
         self.system = system
         self.ignored_errors = defaultdict(Counter)
-        self.exe = None
+        self.exes = []
 
-    def run(self, host: str, port: int, user: str, database: str) -> None:
-        self.conn = pg8000.connect(host=host, port=port, user=user, database=database)
-        self.conn.autocommit = self.autocommit
-        cur = self.conn.cursor()
-        self.exe = Executor(self.rng, cur)
-        self.exe.set_isolation("SERIALIZABLE")
-        cur.execute("SELECT pg_backend_pid()")
-        self.exe.pg_pid = cur.fetchall()[0][0]
-        rollback_next = True
-        reconnect_next = True
+    def run(self, host: str, port: int, user: str, databases: list[Database]) -> None:
+        self.conns = [
+            pg8000.connect(host=host, port=port, user=user, database=database.name())
+            for database in databases
+        ]
+        for database, conn in zip(databases, self.conns):
+            conn.autocommit = self.autocommit
+            cur = conn.cursor()
+            exe = Executor(self.rng, cur, database)
+            exe.set_isolation("SERIALIZABLE")
+            cur.execute("SELECT pg_backend_pid()")
+            exe.pg_pid = cur.fetchall()[0][0]
+            self.exes.append(exe)
+
         while time.time() < self.end_time:
+            exe = self.rng.choice(self.exes)
             action = self.rng.choices(self.actions, self.weights)[0]
             self.num_queries += 1
             try:
-                if rollback_next:
+                if exe.rollback_next:
                     try:
-                        self.exe.rollback()
+                        exe.rollback()
                     except QueryError as e:
                         if (
                             "Please disconnect and re-connect" in e.msg
@@ -72,18 +78,16 @@ class Worker:
                             or "Can't create a connection to host" in e.msg
                             or "Connection refused" in e.msg
                         ):
-                            reconnect_next = True
-                            rollback_next = False
+                            exe.reconnect_next = True
+                            exe.rollback_next = False
                             continue
-                    rollback_next = False
-                if reconnect_next:
-                    ReconnectAction(self.rng, action.db, random_role=False).run(
-                        self.exe
-                    )
-                    reconnect_next = False
-                action.run(self.exe)
+                    exe.rollback_next = False
+                if exe.reconnect_next:
+                    ReconnectAction(self.rng, random_role=False).run(exe)
+                    exe.reconnect_next = False
+                action.run(exe)
             except QueryError as e:
-                for error in action.errors_to_ignore():
+                for error in action.errors_to_ignore(exe):
                     if error in e.msg:
                         self.ignored_errors[error][type(action)] += 1
                         if (
@@ -92,11 +96,13 @@ class Worker:
                             or "Can't create a connection to host" in e.msg
                             or "Connection refused" in e.msg
                         ):
-                            reconnect_next = True
+                            exe.reconnect_next = True
                         else:
-                            rollback_next = True
+                            exe.rollback_next = True
                         break
                 else:
                     thread_name = threading.current_thread().getName()
-                    print(f"{thread_name} Query failed: {e.query} {e.msg}")
+                    print(
+                        f"[{thread_name}][{exe.db.name()}] Query failed: {e.query} {e.msg}"
+                    )
                     raise

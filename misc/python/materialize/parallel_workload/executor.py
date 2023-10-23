@@ -9,9 +9,12 @@
 
 import random
 import threading
-from typing import TextIO
+from typing import TYPE_CHECKING, TextIO
 
 import pg8000
+
+if TYPE_CHECKING:
+    from materialize.parallel_workload.database import Database
 
 logging: TextIO | None
 lock: threading.Lock
@@ -38,12 +41,18 @@ class Executor:
     pg_pid: int
     # Used by INSERT action to prevent writing into different tables in the same transaction
     insert_table: int | None
+    db: "Database"
+    reconnect_next: bool
+    rollback_next: bool
 
-    def __init__(self, rng: random.Random, cur: pg8000.Cursor):
+    def __init__(self, rng: random.Random, cur: pg8000.Cursor, db: "Database"):
         self.rng = rng
         self.cur = cur
+        self.db = db
         self.pg_pid = -1
         self.insert_table = None
+        self.reconnect_next = True
+        self.rollback_next = True
 
     def set_isolation(self, level: str) -> None:
         self.execute(f"SET TRANSACTION_ISOLATION TO '{level}'")
@@ -71,7 +80,7 @@ class Executor:
         thread_name = threading.current_thread().getName()
 
         with lock:
-            print(f"[{thread_name}] {msg}", file=logging)
+            print(f"[{thread_name}][{self.db.name()}] {msg}", file=logging)
             logging.flush()
 
     def execute(
