@@ -1953,11 +1953,12 @@ pub struct AlterObjectSwapStatement {
 impl AstDisplay for AlterObjectSwapStatement {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("ALTER ");
-        f.write_node(&self.object_type);
-        f.write_str(" SWAP ");
 
-        f.write_node(&self.name_a);
+        f.write_node(&self.object_type);
         f.write_str(" ");
+        f.write_node(&self.name_a);
+
+        f.write_str(" SWAP WITH ");
         f.write_node(&self.name_b);
     }
 }

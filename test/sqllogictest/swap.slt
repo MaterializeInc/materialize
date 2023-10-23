@@ -18,4 +18,4 @@ statement ok
 CREATE SCHEMA green;
 
 statement error ERROR: ALTER ... SWAP ... not yet supported, see https://github.com/MaterializeInc/materialize/issues/12972 for more details
-ALTER SCHEMA SWAP blue green;
+ALTER SCHEMA blue SWAP WITH green;
