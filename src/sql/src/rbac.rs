@@ -1556,7 +1556,7 @@ pub const fn owner_privilege(object_type: ObjectType, owner_id: RoleId) -> MzAcl
 }
 
 
-const fn default_object_acl_mode(object_type: ObjectType) -> AclMode {
+const fn default_builtin_object_acl_mode(object_type: ObjectType) -> AclMode {
     match object_type {
         ObjectType::Table
         | ObjectType::View
