@@ -343,7 +343,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     workloads = (
         [globals()[workload] for workload in args.workload]
         if args.workload
-        else [w for w in all_subclasses(Workload) if not w == WorkloadSelfTest]
+        else [
+            workload_cls
+            for workload_cls in all_subclasses(Workload)
+            if not issubclass(workload_cls, WorkloadSelfTest)
+        ]
     )
 
     schema = Schema(
