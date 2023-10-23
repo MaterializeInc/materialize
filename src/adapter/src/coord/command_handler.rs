@@ -636,7 +636,7 @@ impl Coordinator {
                         ctx.session().role_metadata(),
                         ctx.session().vars(),
                         &resolved_ids,
-                        CREATE_ITEM_USAGE.clone(),
+                        &CREATE_ITEM_USAGE,
                     ) {
                         return ctx.retire(Err(e.into()));
                     }
