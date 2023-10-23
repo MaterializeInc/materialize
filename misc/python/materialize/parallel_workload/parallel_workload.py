@@ -47,13 +47,14 @@ def run(
     complexity: Complexity,
     scenario: Scenario,
     num_threads: int | None,
+    naughty_identifiers: bool,
     composition: Composition | None,
 ) -> None:
     num_threads = num_threads or os.cpu_count() or 10
     random.seed(seed)
 
     print(
-        f"--- Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity.value} --scenario={scenario.value} (--host={host})"
+        f"--- Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity.value} --scenario={scenario.value} --naughty_identifiers={naughty_identifiers} (--host={host})"
     )
     initialize_logging()
 
@@ -78,7 +79,9 @@ def run(
     ).timestamp()
 
     rng = random.Random(random.randrange(SEED_RANGE))
-    database = Database(rng, seed, host, ports, complexity, scenario)
+    database = Database(
+        rng, seed, host, ports, complexity, scenario, naughty_identifiers
+    )
     conn = pg8000.connect(host=host, port=ports["materialized"], user="materialize")
     conn.autocommit = True
     with conn.cursor() as cur:
@@ -89,7 +92,7 @@ def run(
         host=host,
         port=ports["materialized"],
         user="materialize",
-        database=str(database),
+        database=database.name(),
     )
     conn.autocommit = True
     with conn.cursor() as cur:
@@ -140,7 +143,7 @@ def run(
         thread = threading.Thread(
             name=thread_name,
             target=worker.run,
-            args=(host, ports["materialized"], "materialize", str(database)),
+            args=(host, ports["materialized"], "materialize", database.name()),
         )
         thread.start()
         threads.append(thread)
@@ -258,6 +261,11 @@ def parse_common_args(parser: argparse.ArgumentParser) -> None:
         type=int,
         help="Number of threads to run, by default number of SMT threads",
     )
+    parser.add_argument(
+        "--naughty-identifiers",
+        action="store_true",
+        help="Whether to use naughty strings as identifiers, makes the queries unreadable",
+    )
 
 
 def main() -> int:
@@ -305,6 +313,7 @@ def main() -> int:
         Complexity(args.complexity),
         Scenario(args.scenario),
         args.threads,
+        args.naughty_identifiers,
         composition=None,  # only works in mzcompose
     )
     return 0

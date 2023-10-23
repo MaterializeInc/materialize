@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 import pg8000
 import requests
+from pg8000.native import identifier
 
 from materialize.data_ingest.data_type import NUMBER_TYPES, Text, TextTextMap
 from materialize.mzcompose.composition import Composition
@@ -28,6 +29,7 @@ from materialize.parallel_workload.database import (
     MAX_TABLES,
     MAX_VIEWS,
     MAX_WEBHOOK_SOURCES,
+    NAUGHTY_IDENTIFIERS,
     Cluster,
     ClusterReplica,
     Database,
@@ -102,6 +104,8 @@ class Action:
                     "unknown schema",
                 ]
             )
+        if NAUGHTY_IDENTIFIERS:
+            result.extend(["identifier length exceeds 255 bytes"])
         return result
 
 
@@ -322,7 +326,7 @@ class CreateIndexAction(Action):
             order = self.rng.choice(["ASC", "DESC"])
             index_elems.append(f"{column.name(True)} {order}")
         index_str = ", ".join(index_elems)
-        query = f"CREATE INDEX {index_name} ON {table} ({index_str})"
+        query = f"CREATE INDEX {identifier(index_name)} ON {table} ({index_str})"
         exe.execute(query)
         with self.db.lock:
             self.db.indexes.add(index_name)
@@ -334,7 +338,7 @@ class DropIndexAction(Action):
             if not self.db.indexes:
                 return
             index_name = self.rng.choice(list(self.db.indexes))
-            query = f"DROP INDEX {index_name}"
+            query = f"DROP INDEX {identifier(index_name)}"
             exe.execute(query)
             self.db.indexes.remove(index_name)
 
@@ -379,7 +383,9 @@ class RenameTableAction(Action):
             old_name = str(table)
             table.rename += 1
             try:
-                exe.execute(f"ALTER TABLE {old_name} RENAME TO {table.name()}")
+                exe.execute(
+                    f"ALTER TABLE {old_name} RENAME TO {identifier(table.name())}"
+                )
             except:
                 table.rename -= 1
                 raise
@@ -673,7 +679,7 @@ class ReconnectAction(Action):
         while True:
             try:
                 conn = pg8000.connect(
-                    host=host, port=port, user=user, database=str(self.db)
+                    host=host, port=port, user=user, database=self.db.name()
                 )
                 conn.autocommit = autocommit
                 cur = conn.cursor()
@@ -792,7 +798,7 @@ class CreateKafkaSourceAction(Action):
             cluster = self.rng.choice(potential_clusters)
             schema = self.rng.choice(self.db.schemas)
             source = KafkaSource(
-                str(self.db), source_id, cluster, schema, self.db.ports, self.rng
+                self.db.name(), source_id, cluster, schema, self.db.ports, self.rng
             )
             source.create(exe)
             self.db.kafka_sources.append(source)
@@ -826,7 +832,7 @@ class CreatePostgresSourceAction(Action):
             schema = self.rng.choice(self.db.schemas)
             cluster = self.rng.choice(potential_clusters)
             source = PostgresSource(
-                str(self.db), source_id, cluster, schema, self.db.ports, self.rng
+                self.db.name(), source_id, cluster, schema, self.db.ports, self.rng
             )
             source.create(exe)
             self.db.postgres_sources.append(source)
