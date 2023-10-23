@@ -773,8 +773,6 @@ impl PendingPeek {
                 }
             }
 
-            let mut key_buf = Row::default();
-            let mut val_buf = Row::default();
             while cursor.val_valid(&storage) {
                 // TODO: This arena could be maintained and reused for longer,
                 // but it wasn't clear at what interval we should flush
@@ -782,16 +780,13 @@ impl PendingPeek {
                 // This choice is conservative, and not the end of the world
                 // from a performance perspective.
                 let arena = RowArena::new();
-                // TODO(vmarcos): We could think of not transiting through `Row` below,
-                // but rather create another type-sensitive dispatch to obtain the borrow
-                // on the key and value datums. The complexity does not seem worth the payoff
-                // if all we are doing here is returning a naturally limited number of results.
-                let key = cursor.key(&storage).into_row(&mut key_buf, key_types);
-                let row = cursor.val(&storage).into_row(&mut val_buf, val_types);
-                // TODO: We could unpack into a re-used allocation, except
-                // for the arena above (the allocation would not be allowed
-                // to outlive the arena above, from which it might borrow).
-                let mut borrow = datum_vec.borrow_with_many(&[key, row]);
+
+                let key = cursor.key(&storage).into_datum_iter(key_types);
+                let row = cursor.val(&storage).into_datum_iter(val_types);
+
+                let mut borrow = datum_vec.borrow();
+                borrow.extend(key);
+                borrow.extend(row);
 
                 if has_literal_constraints {
                     // The peek was created from an IndexedFilter join. We have to add those columns
