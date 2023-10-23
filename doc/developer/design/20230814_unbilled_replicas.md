@@ -61,10 +61,10 @@ ERROR: BILLED AS and INTERNAL not permitted for non-system users.
 HINT: Contact support for billing-related inquiries.
 ```
 
-We introduce an internal `mz_managed_cluster_replicas` table that lists replicas managed by managed clusters.
+We introduce an internal `mz_internal_cluster_replicas` table that lists replicas with the `INTERNAL` flag.
 Joining this table with all replicas allows users to determine which replicas are part of their configuration and which ones are managed by Materialize.
 ```sql
-SELECT id FROM mz_internal.mz_managed_cluster_replicas;
+SELECT id FROM mz_internal.mz_internal_cluster_replicas;
 id
 u123
 u234
