@@ -88,6 +88,9 @@ def run_with_concurrency(
     concurrency: int,
     count: int,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    print(
+        f"Preparing benchmark for workload '{workload.name()}' at concurrency {concurrency} ..."
+    )
     endpoint.up()
 
     init_sqls = schema.init_sqls()
@@ -113,9 +116,7 @@ def run_with_concurrency(
             cursor.execute(connect_sql.encode("utf8"))
         cursor_pool.append(cursor)
 
-    print(
-        f"Benchmarking workload '{workload.__class__.__name__}' at concurrency {concurrency} ..."
-    )
+    print(f"Benchmarking workload '{workload.name()}' at concurrency {concurrency} ...")
     operations = workload.operations()
 
     global next_worker_id
@@ -309,7 +310,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     endpoints: list[Endpoint] = []
     baseline_endpoint: Endpoint | None = None
     for i, target in enumerate(args.target):
+        original_target = target
         endpoint: Endpoint | None = None
+
         if target == "local":
             endpoint = MaterializeLocal()
         elif target == "remote":
@@ -328,7 +331,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             )
         assert endpoint is not None
 
-        if target == regression_against_target:
+        if original_target == regression_against_target:
             baseline_endpoint = endpoint
 
         endpoints.append(endpoint)
