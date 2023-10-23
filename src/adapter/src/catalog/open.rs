@@ -19,7 +19,8 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use mz_catalog::builtin::{
-    Builtin, Fingerprint, DataSensitivity, BUILTINS, BUILTIN_CLUSTERS, BUILTIN_PREFIXES, BUILTIN_ROLES,
+    Builtin, DataSensitivity, Fingerprint, BUILTINS, BUILTIN_CLUSTERS, BUILTIN_PREFIXES,
+    BUILTIN_ROLES,
 };
 use mz_catalog::objects::{
     IntrospectionSourceIndex, SystemObjectDescription, SystemObjectUniqueIdentifier,
