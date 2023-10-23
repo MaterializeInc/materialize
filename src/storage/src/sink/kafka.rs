@@ -435,6 +435,10 @@ impl KafkaSinkState {
             &healthchecker,
             #[allow(clippy::redundant_closure_call)]
             (|| async {
+                fail::fail_point!("kafka_sink_creation_error", |_| Err(anyhow::anyhow!(
+                    "synthetic error"
+                )));
+
                 connection
                     .connection
                     .create_with_context(
