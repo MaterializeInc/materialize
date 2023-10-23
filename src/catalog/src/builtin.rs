@@ -102,7 +102,7 @@ impl<T: TypeReference> Builtin<T> {
 
 /// The extent to which data in a builtin object
 /// should be considered "sensitive" and therefore
-/// access to it restricted
+/// access to it restricted.
 #[derive(Clone, Debug, Hash, Serialize)]
 pub enum Sensitivity {
     /// Any user may query the object
