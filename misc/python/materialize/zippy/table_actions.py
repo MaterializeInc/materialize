@@ -88,17 +88,33 @@ class ValidateTable(Action):
 
     def __init__(self, capabilities: Capabilities) -> None:
         self.table = random.choice(capabilities.get(TableExists))
+        self.select_limit = random.choices([True, False], weights=[0.2, 0.8], k=1)[0]
         super().__init__(capabilities)
 
     def run(self, c: Composition) -> None:
-        c.testdrive(
-            dedent(
-                f"""
-                > SELECT MIN(f1), MAX(f1), COUNT(f1), COUNT(DISTINCT f1) FROM {self.table.name};
-                {self.table.watermarks.min} {self.table.watermarks.max} {(self.table.watermarks.max-self.table.watermarks.min)+1} {(self.table.watermarks.max-self.table.watermarks.min)+1}
-                """
+        # Validating via SELECT ... LIMIT is expensive as it requires creating a temporary table
+        # Therefore, only use it in 20% of validations.
+        if self.select_limit:
+            c.testdrive(
+                dedent(
+                    f"""
+                    > CREATE TEMPORARY TABLE {self.table.name}_select_limit (f1 INTEGER);
+                    > INSERT INTO {self.table.name}_select_limit SELECT * FROM {self.table.name} LIMIT 999999999;
+                    > SELECT MIN(f1), MAX(f1), COUNT(f1), COUNT(DISTINCT f1) FROM {self.table.name}_select_limit;
+                    {self.table.watermarks.min} {self.table.watermarks.max} {(self.table.watermarks.max-self.table.watermarks.min)+1} {(self.table.watermarks.max-self.table.watermarks.min)+1}
+                    > DROP TABLE {self.table.name}_select_limit
+                    """
+                )
             )
-        )
+        else:
+            c.testdrive(
+                dedent(
+                    f"""
+                    > SELECT MIN(f1), MAX(f1), COUNT(f1), COUNT(DISTINCT f1) FROM {self.table.name};
+                    {self.table.watermarks.min} {self.table.watermarks.max} {(self.table.watermarks.max-self.table.watermarks.min)+1} {(self.table.watermarks.max-self.table.watermarks.min)+1}
+                    """
+                )
+            )
 
 
 class DML(Action):
