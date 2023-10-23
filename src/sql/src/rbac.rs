@@ -89,7 +89,6 @@ macro_rules! rbac_preamble {
 static DEFAULT_ITEM_USAGE: Lazy<BTreeSet<CatalogItemType>> = Lazy::new(|| {
     btreeset! {CatalogItemType::Secret, CatalogItemType::Connection}
 });
-
 // CREATE statements require USAGE privileges on the default item types and USAGE privileges on
 // Types.
 pub static CREATE_ITEM_USAGE: Lazy<BTreeSet<CatalogItemType>> = Lazy::new(|| {
@@ -97,6 +96,7 @@ pub static CREATE_ITEM_USAGE: Lazy<BTreeSet<CatalogItemType>> = Lazy::new(|| {
     items.insert(CatalogItemType::Type);
     items
 });
+pub static EMPTY_ITEM_USAGE: Lazy<BTreeSet<CatalogItemType>> = Lazy::new(|| BTreeSet::new());
 
 /// Errors that can occur due to an unauthorized action.
 #[derive(Debug, thiserror::Error)]
@@ -165,7 +165,7 @@ struct RbacRequirements {
     ///
     /// Most plans will require USAGE on secrets and connections but some plans, like SHOW CREATE,
     /// can reference an item without requiring any privileges on that item.
-    item_usage: BTreeSet<CatalogItemType>,
+    item_usage: &'static BTreeSet<CatalogItemType>,
     /// Some action if superuser is required to perform that action, None otherwise.
     superuser_action: Option<String>,
 }
@@ -236,7 +236,7 @@ impl Default for RbacRequirements {
             role_membership: BTreeSet::new(),
             ownership: Vec::new(),
             privileges: Vec::new(),
-            item_usage: DEFAULT_ITEM_USAGE.clone(),
+            item_usage: &DEFAULT_ITEM_USAGE,
             superuser_action: None,
         }
     }
@@ -248,7 +248,7 @@ pub fn check_usage(
     role_metadata: &RoleMetadata,
     session_vars: &SessionVars,
     resolved_ids: &ResolvedIds,
-    item_types: BTreeSet<CatalogItemType>,
+    item_types: &BTreeSet<CatalogItemType>,
 ) -> Result<(), UnauthorizedError> {
     rbac_preamble!(catalog, role_metadata, session_vars);
 
@@ -340,7 +340,7 @@ fn generate_rbac_requirements(
                 AclMode::CREATE,
                 role_id,
             )],
-            item_usage: CREATE_ITEM_USAGE.clone(),
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::CreateDatabase(plan::CreateDatabasePlan {
@@ -348,7 +348,7 @@ fn generate_rbac_requirements(
             if_not_exists: _,
         }) => RbacRequirements {
             privileges: vec![(SystemObjectId::System, AclMode::CREATE_DB, role_id)],
-            item_usage: CREATE_ITEM_USAGE.clone(),
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::CreateSchema(plan::CreateSchemaPlan {
@@ -368,7 +368,7 @@ fn generate_rbac_requirements(
             };
             RbacRequirements {
                 privileges,
-                item_usage: CREATE_ITEM_USAGE.clone(),
+                item_usage: &CREATE_ITEM_USAGE,
                 ..Default::default()
             }
         }
@@ -377,7 +377,7 @@ fn generate_rbac_requirements(
             attributes: _,
         }) => RbacRequirements {
             privileges: vec![(SystemObjectId::System, AclMode::CREATE_ROLE, role_id)],
-            item_usage: CREATE_ITEM_USAGE.clone(),
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::CreateCluster(plan::CreateClusterPlan {
@@ -385,7 +385,7 @@ fn generate_rbac_requirements(
             variant: _,
         }) => RbacRequirements {
             privileges: vec![(SystemObjectId::System, AclMode::CREATE_CLUSTER, role_id)],
-            item_usage: CREATE_ITEM_USAGE.clone(),
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::CreateClusterReplica(plan::CreateClusterReplicaPlan {
@@ -394,7 +394,7 @@ fn generate_rbac_requirements(
             config: _,
         }) => RbacRequirements {
             ownership: vec![ObjectId::Cluster(*cluster_id)],
-            item_usage: CREATE_ITEM_USAGE.clone(),
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::CreateSource(plan::CreateSourcePlan {
@@ -410,7 +410,7 @@ fn generate_rbac_requirements(
                 cluster_config,
                 role_id,
             ),
-            item_usage: CREATE_ITEM_USAGE.clone(),
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::CreateSources(plans) => RbacRequirements {
@@ -439,7 +439,7 @@ fn generate_rbac_requirements(
                     },
                 )
                 .collect(),
-            item_usage: CREATE_ITEM_USAGE.clone(),
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::CreateSecret(plan::CreateSecretPlan {
@@ -452,7 +452,7 @@ fn generate_rbac_requirements(
                 AclMode::CREATE,
                 role_id,
             )],
-            item_usage: CREATE_ITEM_USAGE.clone(),
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::CreateSink(plan::CreateSinkPlan {
@@ -480,7 +480,7 @@ fn generate_rbac_requirements(
             }
             RbacRequirements {
                 privileges,
-                item_usage: CREATE_ITEM_USAGE.clone(),
+                item_usage: &CREATE_ITEM_USAGE,
                 ..Default::default()
             }
         }
@@ -494,7 +494,7 @@ fn generate_rbac_requirements(
                 AclMode::CREATE,
                 role_id,
             )],
-            item_usage: CREATE_ITEM_USAGE.clone(),
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::CreateView(plan::CreateViewPlan {
@@ -513,7 +513,7 @@ fn generate_rbac_requirements(
                 AclMode::CREATE,
                 role_id,
             )],
-            item_usage: CREATE_ITEM_USAGE.clone(),
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::CreateMaterializedView(plan::CreateMaterializedViewPlan {
@@ -539,7 +539,7 @@ fn generate_rbac_requirements(
                     role_id,
                 ),
             ],
-            item_usage: CREATE_ITEM_USAGE.clone(),
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::CreateIndex(plan::CreateIndexPlan {
@@ -561,7 +561,7 @@ fn generate_rbac_requirements(
                     role_id,
                 ),
             ],
-            item_usage: CREATE_ITEM_USAGE.clone(),
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::CreateType(plan::CreateTypePlan { name, typ: _ }) => RbacRequirements {
@@ -570,7 +570,7 @@ fn generate_rbac_requirements(
                 AclMode::CREATE,
                 role_id,
             )],
-            item_usage: CREATE_ITEM_USAGE.clone(),
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::Comment(plan::CommentPlan {
@@ -651,7 +651,7 @@ fn generate_rbac_requirements(
                 AclMode::USAGE,
                 role_id,
             )],
-            item_usage: BTreeSet::new(),
+            item_usage: &EMPTY_ITEM_USAGE,
             ..Default::default()
         },
         Plan::ShowColumns(plan::ShowColumnsPlan {
@@ -760,8 +760,8 @@ fn generate_rbac_requirements(
                     .collect(),
             },
             item_usage: match explainee {
-                Explainee::MaterializedView(_) | Explainee::Index(_) => BTreeSet::new(),
-                Explainee::Statement(_) => DEFAULT_ITEM_USAGE.clone(),
+                Explainee::MaterializedView(_) | Explainee::Index(_) => &EMPTY_ITEM_USAGE,
+                Explainee::Statement(_) => &DEFAULT_ITEM_USAGE,
             },
             ..Default::default()
         },
@@ -839,20 +839,20 @@ fn generate_rbac_requirements(
             options: _,
         }) => RbacRequirements {
             ownership: vec![ObjectId::Cluster(*id)],
-            item_usage: CREATE_ITEM_USAGE.clone(),
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::AlterIndexSetOptions(plan::AlterIndexSetOptionsPlan { id, options: _ }) => {
             RbacRequirements {
                 ownership: vec![ObjectId::Item(*id)],
-                item_usage: CREATE_ITEM_USAGE.clone(),
+                item_usage: &CREATE_ITEM_USAGE,
                 ..Default::default()
             }
         }
         Plan::AlterIndexResetOptions(plan::AlterIndexResetOptionsPlan { id, options: _ }) => {
             RbacRequirements {
                 ownership: vec![ObjectId::Item(*id)],
-                item_usage: CREATE_ITEM_USAGE.clone(),
+                item_usage: &CREATE_ITEM_USAGE,
                 ..Default::default()
             }
         }
@@ -863,17 +863,17 @@ fn generate_rbac_requirements(
                 AclMode::CREATE,
                 role_id,
             )],
-            item_usage: CREATE_ITEM_USAGE.clone(),
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::AlterSink(plan::AlterSinkPlan { id, size: _ }) => RbacRequirements {
             ownership: vec![ObjectId::Item(*id)],
-            item_usage: CREATE_ITEM_USAGE.clone(),
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::AlterSource(plan::AlterSourcePlan { id, action: _ }) => RbacRequirements {
             ownership: vec![ObjectId::Item(*id)],
-            item_usage: CREATE_ITEM_USAGE.clone(),
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::PurifiedAlterSource {
@@ -908,7 +908,7 @@ fn generate_rbac_requirements(
                     },
                 )
                 .collect(),
-            item_usage: CREATE_ITEM_USAGE.clone(),
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::AlterClusterRename(plan::AlterClusterRenamePlan {
@@ -977,7 +977,7 @@ fn generate_rbac_requirements(
         }
         Plan::AlterSecret(plan::AlterSecretPlan { id, secret_as: _ }) => RbacRequirements {
             ownership: vec![ObjectId::Item(*id)],
-            item_usage: CREATE_ITEM_USAGE.clone(),
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::AlterRole(plan::AlterRolePlan {
@@ -992,7 +992,7 @@ fn generate_rbac_requirements(
             // Otherwise to ALTER a role, you need to have the CREATE_ROLE privilege.
             _ => RbacRequirements {
                 privileges: vec![(SystemObjectId::System, AclMode::CREATE_ROLE, role_id)],
-                item_usage: CREATE_ITEM_USAGE.clone(),
+                item_usage: &CREATE_ITEM_USAGE,
                 ..Default::default()
             },
         },
@@ -1446,7 +1446,7 @@ fn generate_usage_privileges(
     catalog: &impl SessionCatalog,
     ids: &ResolvedIds,
     role_id: RoleId,
-    item_types: BTreeSet<CatalogItemType>,
+    item_types: &BTreeSet<CatalogItemType>,
 ) -> BTreeSet<(SystemObjectId, AclMode, RoleId)> {
     // Use a `BTreeSet` to remove duplicate privileges.
     ids.0
