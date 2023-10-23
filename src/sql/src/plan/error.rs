@@ -138,7 +138,8 @@ pub enum PlanError {
     DependentObjectsStillExist {
         object_type: String,
         object_name: String,
-        dependents: Vec<String>,
+        // (dependent type, name)
+        dependents: Vec<(String, String)>,
     },
     AlterViewOnMaterializedView(String),
     ShowCreateViewOnMaterializedView(String),
@@ -483,8 +484,12 @@ impl fmt::Display for PlanError {
             Self::DependentObjectsStillExist {object_type, object_name, dependents} => {
                 let reason = match &dependents[..] {
                     [] => " because other objects depend on it".to_string(),
-                    dependents => format!(": still depended upon by {}", dependents.join(", ")),
+                    dependents => {
+                        let dependents = dependents.iter().map(|(dependent_type, dependent_name)| format!("{} {}", dependent_type, dependent_name.quoted())).join(", ");
+                        format!(": still depended upon by {dependents}")
+                    },
                 };
+                let object_name = object_name.quoted();
                 write!(f, "cannot drop {object_type} {object_name}{reason}")
             }
             Self::InvalidOptionValue { option_name, err } => write!(f, "invalid {} option value: {}", option_name, err),

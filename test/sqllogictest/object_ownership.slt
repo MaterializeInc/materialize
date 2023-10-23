@@ -2706,14 +2706,25 @@ DROP OWNED BY materialize;
 db error: ERROR: schema "materialize.s" cannot be dropped without CASCADE while it contains non-owned objects
 
 simple conn=mz_system,user=mz_system
-CREATE VIEW v AS SELECT * FROM t;
+CREATE VIEW v1 AS SELECT * FROM t;
 ----
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
 DROP OWNED BY materialize;
 ----
-db error: ERROR: cannot drop table "materialize.public.t": still depended upon by "materialize.public.v"
+db error: ERROR: cannot drop table "materialize.public.t": still depended upon by view "materialize.public.v1"
+HINT: Use DROP ... CASCADE to drop the dependent objects too.
+
+simple conn=mz_system,user=mz_system
+CREATE VIEW v2 AS SELECT * FROM t;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP OWNED BY materialize;
+----
+db error: ERROR: cannot drop table "materialize.public.t": still depended upon by view "materialize.public.v1", view "materialize.public.v2"
 HINT: Use DROP ... CASCADE to drop the dependent objects too.
 
 simple conn=mz_system,user=mz_system
@@ -2724,7 +2735,7 @@ COMPLETE 0
 simple conn=mz_system,user=mz_system
 DROP OWNED BY materialize;
 ----
-db error: ERROR: cannot drop cluster "c": still depended upon by "materialize.public.mv"
+db error: ERROR: cannot drop cluster "c": still depended upon by materialized view "materialize.public.mv"
 HINT: Use DROP ... CASCADE to drop the dependent objects too.
 
 simple conn=mz_system,user=mz_system
@@ -2840,7 +2851,7 @@ SELECT name FROM mz_materialized_views WHERE name = 'mv'
 ----
 mv
 
-statement error cannot drop cluster "c": still depended upon by "materialize.public.mv"
+statement error cannot drop cluster "c": still depended upon by materialized view "materialize.public.mv"
 DROP OWNED BY materialize
 
 query T

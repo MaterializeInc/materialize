@@ -4136,15 +4136,10 @@ fn plan_drop_role(
                 for (member_id, grantor_id) in role.membership() {
                     if &id == grantor_id {
                         let member_role = scx.catalog.get_role(member_id);
-                        return Err(PlanError::DependentObjectsStillExist {
-                            object_type: "role".to_string(),
-                            object_name: name.as_str().to_string(),
-                            dependents: vec![format!(
-                                "membership of role {} in role {}",
-                                role.name(),
-                                member_role.name()
-                            )],
-                        });
+                        sql_bail!(
+                            "cannot drop role {}: still depended up by membership of role {} in role {}",
+                            name.as_str(), role.name(), member_role.name()
+                        );
                     }
                 }
             }
@@ -4348,10 +4343,9 @@ fn plan_drop_item_inner(
                                     .catalog
                                     .minimal_qualification(catalog_item.name())
                                     .to_string(),
-                                dependents: vec![format!(
-                                    "{} {}",
-                                    dep.item_type(),
-                                    scx.catalog.minimal_qualification(dep.name())
+                                dependents: vec![(
+                                    dep.item_type().to_string(),
+                                    scx.catalog.minimal_qualification(dep.name()).to_string(),
                                 )],
                             });
                         }
@@ -4452,12 +4446,16 @@ pub fn plan_drop_owned(
                 if !non_owned_bound_objects.is_empty() {
                     let names: Vec<_> = non_owned_bound_objects
                         .into_iter()
-                        .map(|item| scx.catalog.resolve_full_name(item.name()))
-                        .map(|name| name.to_string().quoted().to_string())
+                        .map(|item| {
+                            (
+                                item.item_type().to_string(),
+                                scx.catalog.resolve_full_name(item.name()).to_string(),
+                            )
+                        })
                         .collect();
                     return Err(PlanError::DependentObjectsStillExist {
                         object_type: "cluster".to_string(),
-                        object_name: cluster.name().quoted().to_string(),
+                        object_name: cluster.name().to_string(),
                         dependents: names,
                     });
                 }
@@ -4494,8 +4492,12 @@ pub fn plan_drop_owned(
                     if !non_owned_dependencies.is_empty() {
                         let names: Vec<_> = non_owned_dependencies
                             .into_iter()
-                            .map(|item| scx.catalog.resolve_full_name(item.name()))
-                            .map(|name| name.to_string().quoted().to_string())
+                            .map(|item| {
+                                (
+                                    item.item_type().to_string(),
+                                    scx.catalog.resolve_full_name(item.name()).to_string(),
+                                )
+                            })
                             .collect();
                         return Err(PlanError::DependentObjectsStillExist {
                             object_type: item.item_type().to_string(),
@@ -4503,7 +4505,6 @@ pub fn plan_drop_owned(
                                 .catalog
                                 .resolve_full_name(item.name())
                                 .to_string()
-                                .quoted()
                                 .to_string(),
                             dependents: names,
                         });
