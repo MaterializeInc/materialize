@@ -96,10 +96,9 @@ use mz_catalog::objects::{SystemObjectDescription, SystemObjectUniqueIdentifier}
 use mz_catalog::{
     debug_bootstrap_args, debug_stash_backed_catalog_state, persist_backed_catalog_state,
     CatalogError, Cluster, ClusterConfig, ClusterReplica, ClusterVariant, Comment, Database,
-    DefaultPrivilege, DurableCatalogError, DurableCatalogState, Item, OpenableDurableCatalogState,
-    ReplicaConfig, ReplicaLocation, Role, Schema, SystemConfiguration, SystemObjectMapping,
-    TimelineTimestamp, DATABASE_ID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY, USER_ITEM_ALLOC_KEY,
-    USER_ROLE_ID_ALLOC_KEY,
+    DefaultPrivilege, DurableCatalogError, Item, OpenableDurableCatalogState, ReplicaConfig,
+    ReplicaLocation, Role, Schema, SystemConfiguration, SystemObjectMapping, TimelineTimestamp,
+    DATABASE_ID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY, USER_ITEM_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
 use mz_controller::clusters::ReplicaLogging;
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -135,24 +134,24 @@ async fn test_stash_confirm_leadership() {
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_confirm_leadership() {
     let persist_client = PersistClient::new_for_tests().await;
-    let environment_id = Uuid::new_v4();
+    let organization_id = Uuid::new_v4();
     let openable_state1 =
-        persist_backed_catalog_state(persist_client.clone(), environment_id).await;
-    let openable_state2 = persist_backed_catalog_state(persist_client, environment_id).await;
+        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
+    let openable_state2 = persist_backed_catalog_state(persist_client, organization_id).await;
     test_confirm_leadership(openable_state1, openable_state2).await;
 }
 
-async fn test_confirm_leadership<D: DurableCatalogState>(
-    openable_state1: impl OpenableDurableCatalogState<D>,
-    openable_state2: impl OpenableDurableCatalogState<D>,
+async fn test_confirm_leadership(
+    openable_state1: impl OpenableDurableCatalogState,
+    openable_state2: impl OpenableDurableCatalogState,
 ) {
-    let mut state1 = openable_state1
+    let mut state1 = Box::new(openable_state1)
         .open(SYSTEM_TIME.clone(), &debug_bootstrap_args(), None)
         .await
         .unwrap();
     assert!(state1.confirm_leadership().await.is_ok());
 
-    let mut state2 = openable_state2
+    let mut state2 = Box::new(openable_state2)
         .open(SYSTEM_TIME.clone(), &debug_bootstrap_args(), None)
         .await
         .unwrap();
@@ -190,15 +189,14 @@ async fn test_stash_catalog_content_version() {
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_catalog_content_version() {
     let persist_client = PersistClient::new_for_tests().await;
-    let environment_id = Uuid::new_v4();
-    let openable_state = persist_backed_catalog_state(persist_client.clone(), environment_id).await;
+    let organization_id = Uuid::new_v4();
+    let openable_state =
+        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     test_catalog_content_version(openable_state).await;
 }
 
-async fn test_catalog_content_version<D: DurableCatalogState>(
-    openable_state: impl OpenableDurableCatalogState<D>,
-) {
-    let mut state = openable_state
+async fn test_catalog_content_version(openable_state: impl OpenableDurableCatalogState) {
+    let mut state = Box::new(openable_state)
         .open(SYSTEM_TIME.clone(), &debug_bootstrap_args(), None)
         .await
         .unwrap();
@@ -237,14 +235,13 @@ async fn test_stash_get_and_prune_storage_usage() {
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_get_and_prune_storage_usage() {
     let persist_client = PersistClient::new_for_tests().await;
-    let environment_id = Uuid::new_v4();
-    let openable_state = persist_backed_catalog_state(persist_client.clone(), environment_id).await;
+    let organization_id = Uuid::new_v4();
+    let openable_state =
+        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     test_get_and_prune_storage_usage(openable_state).await;
 }
 
-async fn test_get_and_prune_storage_usage<D: DurableCatalogState>(
-    openable_state: impl OpenableDurableCatalogState<D>,
-) {
+async fn test_get_and_prune_storage_usage(openable_state: impl OpenableDurableCatalogState) {
     let old_event = VersionedStorageUsage::V1(StorageUsageV1 {
         id: 1,
         shard_id: Some("recent".to_string()),
@@ -259,7 +256,7 @@ async fn test_get_and_prune_storage_usage<D: DurableCatalogState>(
     });
     let boot_ts = mz_repr::Timestamp::new(23);
 
-    let mut state = openable_state
+    let mut state = Box::new(openable_state)
         .open(SYSTEM_TIME.clone(), &debug_bootstrap_args(), None)
         .await
         .unwrap();
@@ -300,14 +297,13 @@ async fn test_stash_system_items() {
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_system_items() {
     let persist_client = PersistClient::new_for_tests().await;
-    let environment_id = Uuid::new_v4();
-    let openable_state = persist_backed_catalog_state(persist_client.clone(), environment_id).await;
+    let organization_id = Uuid::new_v4();
+    let openable_state =
+        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     test_system_items(openable_state).await;
 }
 
-async fn test_system_items<D: DurableCatalogState>(
-    openable_state: impl OpenableDurableCatalogState<D>,
-) {
+async fn test_system_items(openable_state: impl OpenableDurableCatalogState) {
     let mappings = [
         SystemObjectMapping {
             description: SystemObjectDescription {
@@ -332,7 +328,7 @@ async fn test_system_items<D: DurableCatalogState>(
             },
         },
     ];
-    let mut state = openable_state
+    let mut state = Box::new(openable_state)
         .open(SYSTEM_TIME.clone(), &debug_bootstrap_args(), None)
         .await
         .unwrap();
@@ -367,14 +363,13 @@ async fn test_stash_introspection_source_indexes() {
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_introspection_source_indexes() {
     let persist_client = PersistClient::new_for_tests().await;
-    let environment_id = Uuid::new_v4();
-    let openable_state = persist_backed_catalog_state(persist_client.clone(), environment_id).await;
+    let organization_id = Uuid::new_v4();
+    let openable_state =
+        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     test_introspection_source_indexes(openable_state).await;
 }
 
-async fn test_introspection_source_indexes<D: DurableCatalogState>(
-    openable_state: impl OpenableDurableCatalogState<D>,
-) {
+async fn test_introspection_source_indexes(openable_state: impl OpenableDurableCatalogState) {
     let mappings = [
         IntrospectionSourceIndex {
             cluster_id: ClusterId::User(1),
@@ -387,7 +382,7 @@ async fn test_introspection_source_indexes<D: DurableCatalogState>(
             index_id: GlobalId::System(2),
         },
     ];
-    let mut state = openable_state
+    let mut state = Box::new(openable_state)
         .open(SYSTEM_TIME.clone(), &debug_bootstrap_args(), None)
         .await
         .unwrap();
@@ -442,14 +437,13 @@ async fn test_stash_replicas() {
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_replicas() {
     let persist_client = PersistClient::new_for_tests().await;
-    let environment_id = Uuid::new_v4();
-    let openable_state = persist_backed_catalog_state(persist_client.clone(), environment_id).await;
+    let organization_id = Uuid::new_v4();
+    let openable_state =
+        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     test_replicas(openable_state).await;
 }
 
-async fn test_replicas<D: DurableCatalogState>(
-    openable_state: impl OpenableDurableCatalogState<D>,
-) {
+async fn test_replicas(openable_state: impl OpenableDurableCatalogState) {
     let replica = ClusterReplica {
         cluster_id: ClusterId::User(1),
         replica_id: ReplicaId::User(1),
@@ -467,7 +461,7 @@ async fn test_replicas<D: DurableCatalogState>(
         },
         owner_id: RoleId::User(1),
     };
-    let mut state = openable_state
+    let mut state = Box::new(openable_state)
         .open(SYSTEM_TIME.clone(), &debug_bootstrap_args(), None)
         .await
         .unwrap();
@@ -512,19 +506,18 @@ async fn test_stash_timestamps() {
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_timestamps() {
     let persist_client = PersistClient::new_for_tests().await;
-    let environment_id = Uuid::new_v4();
-    let openable_state = persist_backed_catalog_state(persist_client.clone(), environment_id).await;
+    let organization_id = Uuid::new_v4();
+    let openable_state =
+        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     test_timestamps(openable_state).await;
 }
 
-async fn test_timestamps<D: DurableCatalogState>(
-    openable_state: impl OpenableDurableCatalogState<D>,
-) {
+async fn test_timestamps(openable_state: impl OpenableDurableCatalogState) {
     let timeline_timestamp = TimelineTimestamp {
         timeline: Timeline::User("Mars".to_string()),
         ts: mz_repr::Timestamp::new(42),
     };
-    let mut state = openable_state
+    let mut state = Box::new(openable_state)
         .open(SYSTEM_TIME.clone(), &debug_bootstrap_args(), None)
         .await
         .unwrap();
@@ -571,16 +564,15 @@ async fn test_stash_deploy_generation() {
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_deploy_generation() {
     let persist_client = PersistClient::new_for_tests().await;
-    let environment_id = Uuid::new_v4();
-    let openable_state = persist_backed_catalog_state(persist_client.clone(), environment_id).await;
+    let organization_id = Uuid::new_v4();
+    let openable_state =
+        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     test_deploy_generation(openable_state).await;
 }
 
-async fn test_deploy_generation<D: DurableCatalogState>(
-    openable_state: impl OpenableDurableCatalogState<D>,
-) {
+async fn test_deploy_generation(openable_state: impl OpenableDurableCatalogState) {
     let deploy_generation = 42;
-    let mut state = openable_state
+    let mut state = Box::new(openable_state)
         .open(SYSTEM_TIME.clone(), &debug_bootstrap_args(), None)
         .await
         .unwrap();
@@ -620,16 +612,15 @@ async fn test_stash_allocate_id() {
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_allocate_id() {
     let persist_client = PersistClient::new_for_tests().await;
-    let environment_id = Uuid::new_v4();
-    let openable_state = persist_backed_catalog_state(persist_client.clone(), environment_id).await;
+    let organization_id = Uuid::new_v4();
+    let openable_state =
+        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     test_allocate_id(openable_state).await;
 }
 
-async fn test_allocate_id<D: DurableCatalogState>(
-    openable_state: impl OpenableDurableCatalogState<D>,
-) {
+async fn test_allocate_id(openable_state: impl OpenableDurableCatalogState) {
     let id_type = USER_ITEM_ALLOC_KEY;
-    let mut state = openable_state
+    let mut state = Box::new(openable_state)
         .open(SYSTEM_TIME.clone(), &debug_bootstrap_args(), None)
         .await
         .unwrap();
@@ -668,14 +659,13 @@ async fn test_stash_clusters() {
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_clusters() {
     let persist_client = PersistClient::new_for_tests().await;
-    let environment_id = Uuid::new_v4();
-    let openable_state = persist_backed_catalog_state(persist_client.clone(), environment_id).await;
+    let organization_id = Uuid::new_v4();
+    let openable_state =
+        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     test_clusters(openable_state).await;
 }
 
-async fn test_clusters<D: DurableCatalogState>(
-    openable_state: impl OpenableDurableCatalogState<D>,
-) {
+async fn test_clusters(openable_state: impl OpenableDurableCatalogState) {
     let clusters = [
         Cluster {
             id: ClusterId::User(10),
@@ -698,7 +688,7 @@ async fn test_clusters<D: DurableCatalogState>(
             },
         },
     ];
-    let mut state = openable_state
+    let mut state = Box::new(openable_state)
         .open(SYSTEM_TIME.clone(), &debug_bootstrap_args(), None)
         .await
         .unwrap();
@@ -752,15 +742,14 @@ async fn test_stash_databases() {
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_databases() {
     let persist_client = PersistClient::new_for_tests().await;
-    let environment_id = Uuid::new_v4();
-    let openable_state = persist_backed_catalog_state(persist_client.clone(), environment_id).await;
+    let organization_id = Uuid::new_v4();
+    let openable_state =
+        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     test_databases(openable_state).await;
 }
 
-async fn test_databases<D: DurableCatalogState>(
-    openable_state: impl OpenableDurableCatalogState<D>,
-) {
-    let mut state = openable_state
+async fn test_databases(openable_state: impl OpenableDurableCatalogState) {
+    let mut state = Box::new(openable_state)
         .open(SYSTEM_TIME.clone(), &debug_bootstrap_args(), None)
         .await
         .unwrap();
@@ -825,13 +814,14 @@ async fn test_stash_schemas() {
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_schemas() {
     let persist_client = PersistClient::new_for_tests().await;
-    let environment_id = Uuid::new_v4();
-    let openable_state = persist_backed_catalog_state(persist_client.clone(), environment_id).await;
+    let organization_id = Uuid::new_v4();
+    let openable_state =
+        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     test_schemas(openable_state).await;
 }
 
-async fn test_schemas<D: DurableCatalogState>(openable_state: impl OpenableDurableCatalogState<D>) {
-    let mut state = openable_state
+async fn test_schemas(openable_state: impl OpenableDurableCatalogState) {
+    let mut state = Box::new(openable_state)
         .open(SYSTEM_TIME.clone(), &debug_bootstrap_args(), None)
         .await
         .unwrap();
@@ -899,13 +889,14 @@ async fn test_stash_roles() {
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_roles() {
     let persist_client = PersistClient::new_for_tests().await;
-    let environment_id = Uuid::new_v4();
-    let openable_state = persist_backed_catalog_state(persist_client.clone(), environment_id).await;
+    let organization_id = Uuid::new_v4();
+    let openable_state =
+        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     test_roles(openable_state).await;
 }
 
-async fn test_roles<D: DurableCatalogState>(openable_state: impl OpenableDurableCatalogState<D>) {
-    let mut state = openable_state
+async fn test_roles(openable_state: impl OpenableDurableCatalogState) {
+    let mut state = Box::new(openable_state)
         .open(SYSTEM_TIME.clone(), &debug_bootstrap_args(), None)
         .await
         .unwrap();
@@ -977,14 +968,13 @@ async fn test_stash_default_privileges() {
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_default_privileges() {
     let persist_client = PersistClient::new_for_tests().await;
-    let environment_id = Uuid::new_v4();
-    let openable_state = persist_backed_catalog_state(persist_client.clone(), environment_id).await;
+    let organization_id = Uuid::new_v4();
+    let openable_state =
+        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     test_default_privileges(openable_state).await;
 }
 
-async fn test_default_privileges<D: DurableCatalogState>(
-    openable_state: impl OpenableDurableCatalogState<D>,
-) {
+async fn test_default_privileges(openable_state: impl OpenableDurableCatalogState) {
     let default_privileges = [
         DefaultPrivilege {
             object: DefaultPrivilegeObject {
@@ -1012,7 +1002,7 @@ async fn test_default_privileges<D: DurableCatalogState>(
         },
     ];
 
-    let mut state = openable_state
+    let mut state = Box::new(openable_state)
         .open(SYSTEM_TIME.clone(), &debug_bootstrap_args(), None)
         .await
         .unwrap();
@@ -1064,14 +1054,13 @@ async fn test_stash_system_privileges() {
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_system_privileges() {
     let persist_client = PersistClient::new_for_tests().await;
-    let environment_id = Uuid::new_v4();
-    let openable_state = persist_backed_catalog_state(persist_client.clone(), environment_id).await;
+    let organization_id = Uuid::new_v4();
+    let openable_state =
+        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     test_system_privileges(openable_state).await;
 }
 
-async fn test_system_privileges<D: DurableCatalogState>(
-    openable_state: impl OpenableDurableCatalogState<D>,
-) {
+async fn test_system_privileges(openable_state: impl OpenableDurableCatalogState) {
     let system_privileges = [
         MzAclItem {
             grantee: RoleId::User(1),
@@ -1085,7 +1074,7 @@ async fn test_system_privileges<D: DurableCatalogState>(
         },
     ];
 
-    let mut state = openable_state
+    let mut state = Box::new(openable_state)
         .open(SYSTEM_TIME.clone(), &debug_bootstrap_args(), None)
         .await
         .unwrap();
@@ -1134,14 +1123,13 @@ async fn test_stash_system_configurations() {
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_system_configurations() {
     let persist_client = PersistClient::new_for_tests().await;
-    let environment_id = Uuid::new_v4();
-    let openable_state = persist_backed_catalog_state(persist_client.clone(), environment_id).await;
+    let organization_id = Uuid::new_v4();
+    let openable_state =
+        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     test_system_configurations(openable_state).await;
 }
 
-async fn test_system_configurations<D: DurableCatalogState>(
-    openable_state: impl OpenableDurableCatalogState<D>,
-) {
+async fn test_system_configurations(openable_state: impl OpenableDurableCatalogState) {
     let system_configurations = [
         SystemConfiguration {
             name: "foo".to_string(),
@@ -1153,7 +1141,7 @@ async fn test_system_configurations<D: DurableCatalogState>(
         },
     ];
 
-    let mut state = openable_state
+    let mut state = Box::new(openable_state)
         .open(SYSTEM_TIME.clone(), &debug_bootstrap_args(), None)
         .await
         .unwrap();
@@ -1201,14 +1189,13 @@ async fn test_stash_comments() {
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_comments() {
     let persist_client = PersistClient::new_for_tests().await;
-    let environment_id = Uuid::new_v4();
-    let openable_state = persist_backed_catalog_state(persist_client.clone(), environment_id).await;
+    let organization_id = Uuid::new_v4();
+    let openable_state =
+        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     test_comments(openable_state).await;
 }
 
-async fn test_comments<D: DurableCatalogState>(
-    openable_state: impl OpenableDurableCatalogState<D>,
-) {
+async fn test_comments(openable_state: impl OpenableDurableCatalogState) {
     let comments = [
         Comment {
             object_id: CommentObjectId::Database(DatabaseId::User(1)),
@@ -1222,7 +1209,7 @@ async fn test_comments<D: DurableCatalogState>(
         },
     ];
 
-    let mut state = openable_state
+    let mut state = Box::new(openable_state)
         .open(SYSTEM_TIME.clone(), &debug_bootstrap_args(), None)
         .await
         .unwrap();
@@ -1271,14 +1258,13 @@ async fn test_stash_audit_logs() {
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_audit_logs() {
     let persist_client = PersistClient::new_for_tests().await;
-    let environment_id = Uuid::new_v4();
-    let openable_state = persist_backed_catalog_state(persist_client.clone(), environment_id).await;
+    let organization_id = Uuid::new_v4();
+    let openable_state =
+        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     test_audit_logs(openable_state).await;
 }
 
-async fn test_audit_logs<D: DurableCatalogState>(
-    openable_state: impl OpenableDurableCatalogState<D>,
-) {
+async fn test_audit_logs(openable_state: impl OpenableDurableCatalogState) {
     let audit_logs = [
         VersionedEvent::V1(EventV1 {
             id: 100,
@@ -1310,7 +1296,7 @@ async fn test_audit_logs<D: DurableCatalogState>(
         }),
     ];
 
-    let mut state = openable_state
+    let mut state = Box::new(openable_state)
         .open(SYSTEM_TIME.clone(), &debug_bootstrap_args(), None)
         .await
         .unwrap();
@@ -1340,12 +1326,13 @@ async fn test_stash_items() {
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_items() {
     let persist_client = PersistClient::new_for_tests().await;
-    let environment_id = Uuid::new_v4();
-    let openable_state = persist_backed_catalog_state(persist_client.clone(), environment_id).await;
+    let organization_id = Uuid::new_v4();
+    let openable_state =
+        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     test_items(openable_state).await;
 }
 
-async fn test_items<D: DurableCatalogState>(openable_state: impl OpenableDurableCatalogState<D>) {
+async fn test_items(openable_state: impl OpenableDurableCatalogState) {
     let items = [
         Item {
             id: GlobalId::User(100),
@@ -1365,7 +1352,7 @@ async fn test_items<D: DurableCatalogState>(openable_state: impl OpenableDurable
         },
     ];
 
-    let mut state = openable_state
+    let mut state = Box::new(openable_state)
         .open(SYSTEM_TIME.clone(), &debug_bootstrap_args(), None)
         .await
         .unwrap();

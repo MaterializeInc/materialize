@@ -85,7 +85,7 @@ use std::{env, thread};
 
 use anyhow::anyhow;
 use mz_controller::ControllerConfig;
-use mz_environmentd::{WebSocketAuth, WebSocketResponse};
+use mz_environmentd::{CatalogConfig, WebSocketAuth, WebSocketResponse};
 use mz_frontegg_auth::Authentication as FronteggAuthentication;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_ore::metrics::MetricsRegistry;
@@ -410,11 +410,14 @@ impl Listeners {
             (TracingHandle::disabled(), None)
         };
         let host_name = format!("localhost:{}", self.inner.http_local_addr().port());
+        let catalog_config = CatalogConfig::Stash {
+            url: adapter_stash_url,
+        };
 
         let inner = self.runtime.block_on(async {
             self.inner
                 .serve(mz_environmentd::Config {
-                    adapter_stash_url,
+                    catalog_config,
                     controller: ControllerConfig {
                         build_info: &mz_environmentd::BUILD_INFO,
                         orchestrator,

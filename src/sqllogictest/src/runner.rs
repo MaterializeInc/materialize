@@ -42,6 +42,7 @@ use fallible_iterator::FallibleIterator;
 use futures::sink::SinkExt;
 use md5::{Digest, Md5};
 use mz_controller::ControllerConfig;
+use mz_environmentd::CatalogConfig;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
 use mz_ore::cast::{CastFrom, ReinterpretCast};
@@ -969,8 +970,11 @@ impl<'a> RunnerInner<'a> {
         ));
         let listeners = mz_environmentd::Listeners::bind_any_local().await?;
         let host_name = format!("localhost:{}", listeners.http_local_addr().port());
+        let catalog_config = CatalogConfig::Stash {
+            url: adapter_stash_url,
+        };
         let server_config = mz_environmentd::Config {
-            adapter_stash_url,
+            catalog_config,
             controller: ControllerConfig {
                 build_info: &mz_environmentd::BUILD_INFO,
                 orchestrator,

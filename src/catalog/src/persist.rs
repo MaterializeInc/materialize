@@ -259,18 +259,18 @@ pub struct PersistHandle {
 }
 
 impl PersistHandle {
-    /// Deterministically generate the a ID for the given `environment_id` and `seed`.
-    fn shard_id(environment_id: Uuid, seed: usize) -> ShardId {
-        let hash = sha2::Sha256::digest(format!("{environment_id}{seed}")).to_vec();
+    /// Deterministically generate the a ID for the given `organization_id` and `seed`.
+    fn shard_id(organization_id: Uuid, seed: usize) -> ShardId {
+        let hash = sha2::Sha256::digest(format!("{organization_id}{seed}")).to_vec();
         soft_assert_eq!(hash.len(), 32, "SHA256 returns 32 bytes (256 bits)");
         let uuid = Uuid::from_slice(&hash[0..16]).expect("from_slice accepts exactly 16 bytes");
         ShardId::from_str(&format!("s{uuid}")).expect("known to be valid")
     }
 
-    /// Create a new [`PersistHandle`] to the catalog state associated with `environment_id`.
-    pub(crate) async fn new(persist_client: PersistClient, environment_id: Uuid) -> PersistHandle {
+    /// Create a new [`PersistHandle`] to the catalog state associated with `organization_id`.
+    pub(crate) async fn new(persist_client: PersistClient, organization_id: Uuid) -> PersistHandle {
         const SEED: usize = 1;
-        let shard_id = Self::shard_id(environment_id, SEED);
+        let shard_id = Self::shard_id(organization_id, SEED);
         let (write_handle, read_handle) = persist_client
             .open(
                 shard_id,
@@ -295,7 +295,7 @@ impl PersistHandle {
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
-    ) -> Result<PersistCatalogState, CatalogError> {
+    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         let (is_initialized, upper) = self.is_initialized_inner().await;
 
         if !matches!(mode, Mode::Writable) && !is_initialized {
@@ -395,7 +395,7 @@ impl PersistHandle {
             txn.commit().await?;
         }
 
-        Ok(catalog)
+        Ok(Box::new(catalog))
     }
 
     /// Fetch the current upper of the catalog state.
@@ -484,32 +484,32 @@ impl PersistHandle {
 }
 
 #[async_trait]
-impl OpenableDurableCatalogState<PersistCatalogState> for PersistHandle {
+impl OpenableDurableCatalogState for PersistHandle {
     async fn open_savepoint(
-        mut self,
+        mut self: Box<Self>,
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
-    ) -> Result<PersistCatalogState, CatalogError> {
+    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.open_inner(Mode::Savepoint, now, bootstrap_args, deploy_generation)
             .await
     }
 
     async fn open_read_only(
-        mut self,
+        mut self: Box<Self>,
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
-    ) -> Result<PersistCatalogState, CatalogError> {
+    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.open_inner(Mode::Readonly, now, bootstrap_args, None)
             .await
     }
 
     async fn open(
-        mut self,
+        mut self: Box<Self>,
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
-    ) -> Result<PersistCatalogState, CatalogError> {
+    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.open_inner(Mode::Writable, now, bootstrap_args, deploy_generation)
             .await
     }
