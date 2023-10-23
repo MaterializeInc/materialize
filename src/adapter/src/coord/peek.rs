@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 use std::{fmt, mem};
 
 use futures::TryFutureExt;
+use mz_adapter_types::connection::ConnectionId;
 use mz_cluster_client::ReplicaId;
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_compute_types::dataflows::{DataflowDescription, IndexImport};
@@ -39,8 +40,6 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 use uuid::Uuid;
-
-use crate::client::ConnectionId;
 
 use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::coord::Message;

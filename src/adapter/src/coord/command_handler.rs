@@ -13,6 +13,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -37,7 +38,6 @@ use tracing::Instrument;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::catalog::{CatalogItem, DataSourceDesc, Source};
-use crate::client::{ConnectionId, ConnectionIdType};
 use crate::command::{
     Canceled, CatalogSnapshot, Command, ExecuteResponse, GetVariablesResponse, StartupResponse,
 };

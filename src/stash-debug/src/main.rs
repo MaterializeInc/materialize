@@ -89,7 +89,9 @@ use anyhow::Context;
 use clap::Parser;
 use mz_adapter::catalog::{Catalog, ClusterReplicaSizeMap, Config};
 use mz_build_info::{build_info, BuildInfo};
-use mz_catalog::{self as catalog, BootstrapArgs, OpenableDurableCatalogState, StashConfig};
+use mz_catalog::durable::{
+    self as catalog, BootstrapArgs, OpenableDurableCatalogState, StashConfig,
+};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
@@ -369,7 +371,7 @@ impl Usage {
     fn names(&self) -> BTreeSet<String> {
         BTreeSet::from_iter(
             match self {
-                Self::Catalog => mz_catalog::ALL_COLLECTIONS,
+                Self::Catalog => mz_catalog::durable::ALL_COLLECTIONS,
                 Self::Storage => storage::ALL_COLLECTIONS,
             }
             .iter()
@@ -479,7 +481,9 @@ impl Usage {
 
         let metrics_registry = &MetricsRegistry::new();
         let now = SYSTEM_TIME.clone();
-        let openable_storage = Box::new(mz_catalog::stash_backed_catalog_state(stash_config));
+        let openable_storage = Box::new(mz_catalog::durable::stash_backed_catalog_state(
+            stash_config,
+        ));
         let storage = openable_storage
             .open_savepoint(
                 now.clone(),

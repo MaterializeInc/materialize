@@ -21,10 +21,14 @@ use uuid::Uuid;
 use mz_catalog::builtin::{
     Builtin, Fingerprint, BUILTINS, BUILTIN_CLUSTERS, BUILTIN_PREFIXES, BUILTIN_ROLES,
 };
-use mz_catalog::objects::{
-    IntrospectionSourceIndex, SystemObjectDescription, SystemObjectUniqueIdentifier,
+use mz_catalog::durable::objects::{
+    IntrospectionSourceIndex, SystemObjectDescription, SystemObjectMapping,
+    SystemObjectUniqueIdentifier,
 };
-use mz_catalog::SystemObjectMapping;
+use mz_catalog::memory::objects::{
+    CatalogEntry, CatalogItem, CommentsMap, DataSourceDesc, Database, DefaultPrivileges, Func, Log,
+    Role, Schema, Source, Table, Type,
+};
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_compute_client::logging::LogVariant;
 use mz_controller::clusters::{ReplicaConfig, ReplicaLogging};
@@ -55,10 +59,6 @@ use mz_sql_parser::ast::Expr;
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_types::sources::Timeline;
 
-use crate::catalog::objects::{
-    CatalogEntry, CatalogItem, CommentsMap, DataSourceDesc, Database, DefaultPrivileges, Func, Log,
-    Role, Schema, Source, Table, Type,
-};
 use crate::catalog::{
     is_reserved_name, migrate, BuiltinTableUpdate, Catalog, CatalogPlans, CatalogState, Config,
     Error, ErrorKind, Op, CREATE_SQL_TODO, SYSTEM_CONN_ID,
@@ -284,7 +284,7 @@ impl Catalog {
         catalog.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
 
         let databases = catalog.storage().await.get_databases().await?;
-        for mz_catalog::Database {
+        for mz_catalog::durable::Database {
             id,
             name,
             owner_id,
@@ -311,7 +311,7 @@ impl Catalog {
         }
 
         let schemas = catalog.storage().await.get_schemas().await?;
-        for mz_catalog::Schema {
+        for mz_catalog::durable::Schema {
             id,
             name,
             database_id,
@@ -358,7 +358,7 @@ impl Catalog {
         }
 
         let roles = catalog.storage().await.get_roles().await?;
-        for mz_catalog::Role {
+        for mz_catalog::durable::Role {
             id,
             name,
             attributes,
@@ -382,7 +382,7 @@ impl Catalog {
         }
 
         let default_privileges = catalog.storage().await.get_default_privileges().await?;
-        for mz_catalog::DefaultPrivilege { object, acl_item } in default_privileges {
+        for mz_catalog::durable::DefaultPrivilege { object, acl_item } in default_privileges {
             catalog.state.default_privileges.grant(object, acl_item);
         }
 
@@ -404,7 +404,7 @@ impl Catalog {
             .store(variable_length_row_encoding, atomic::Ordering::SeqCst);
 
         let comments = catalog.storage().await.get_comments().await?;
-        for mz_catalog::Comment {
+        for mz_catalog::durable::Comment {
             object_id,
             sub_component,
             comment,
@@ -623,7 +623,7 @@ impl Catalog {
 
         let clusters = catalog.storage().await.get_clusters().await?;
         let mut cluster_azs = BTreeMap::new();
-        for mz_catalog::Cluster {
+        for mz_catalog::durable::Cluster {
             id,
             name,
             linked_object_id,
@@ -670,7 +670,7 @@ impl Catalog {
                 )
                 .await?;
 
-            if let mz_catalog::ClusterVariant::Managed(managed) = &config.variant {
+            if let mz_catalog::durable::ClusterVariant::Managed(managed) = &config.variant {
                 cluster_azs.insert(id, managed.availability_zones.clone());
             }
 
@@ -686,7 +686,7 @@ impl Catalog {
         }
 
         let replicas = catalog.storage().await.get_cluster_replicas().await?;
-        for mz_catalog::ClusterReplica {
+        for mz_catalog::durable::ClusterReplica {
             cluster_id,
             replica_id,
             name,
@@ -1030,7 +1030,7 @@ impl Catalog {
                 Err(e) => return Err(e),
             };
         }
-        for mz_catalog::SystemConfiguration { name, value } in system_config {
+        for mz_catalog::durable::SystemConfiguration { name, value } in system_config {
             match self
                 .state
                 .insert_system_configuration(&name, VarInput::Flat(&value))
@@ -1503,7 +1503,7 @@ impl Catalog {
     /// TODO(justin): it might be nice if these were two different types.
     #[tracing::instrument(level = "info", skip_all)]
     pub fn load_catalog_items<'a>(
-        tx: &mut mz_catalog::Transaction<'a>,
+        tx: &mut mz_catalog::durable::Transaction<'a>,
         c: &Catalog,
     ) -> Result<Catalog, Error> {
         let mut c = c.clone();
@@ -1600,7 +1600,7 @@ impl Catalog {
 
         // Error on any unsatisfied dependencies.
         if let Some((missing_dep, mut dependents)) = awaiting_id_dependencies.into_iter().next() {
-            let mz_catalog::Item {
+            let mz_catalog::durable::Item {
                 id,
                 schema_id,
                 name,
@@ -1628,7 +1628,7 @@ impl Catalog {
         }
 
         if let Some((missing_dep, mut dependents)) = awaiting_name_dependencies.into_iter().next() {
-            let mz_catalog::Item {
+            let mz_catalog::durable::Item {
                 id,
                 schema_id,
                 name,

@@ -9,6 +9,7 @@
 
 //! Coordinator functionality to sequence cluster-related plans
 
+use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW_TS;
 use std::collections::BTreeSet;
 use std::time::Duration;
 
@@ -30,7 +31,7 @@ use mz_sql::plan::{
 use mz_sql::session::vars::{SystemVars, Var, MAX_REPLICAS_PER_CLUSTER};
 
 use crate::catalog::{ClusterConfig, ClusterVariant, ClusterVariantManaged, Op};
-use crate::coord::{Coordinator, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS};
+use crate::coord::Coordinator;
 use crate::session::Session;
 use crate::{catalog, AdapterError, ExecuteResponse};
 
@@ -169,7 +170,7 @@ impl Coordinator {
         disk: bool,
         owner_id: RoleId,
     ) -> Result<(), AdapterError> {
-        let location = mz_catalog::ReplicaLocation::Managed {
+        let location = mz_catalog::durable::ReplicaLocation::Managed {
             availability_zone: None,
             billed_as: None,
             disk,
@@ -273,7 +274,7 @@ impl Coordinator {
                     workers,
                     compute,
                 } => {
-                    let location = mz_catalog::ReplicaLocation::Unmanaged {
+                    let location = mz_catalog::durable::ReplicaLocation::Unmanaged {
                         storagectl_addrs,
                         storage_addrs,
                         computectl_addrs,
@@ -290,7 +291,7 @@ impl Coordinator {
                     internal,
                     size,
                 } => {
-                    let location = mz_catalog::ReplicaLocation::Managed {
+                    let location = mz_catalog::durable::ReplicaLocation::Managed {
                         availability_zone,
                         billed_as,
                         disk,
@@ -398,7 +399,7 @@ impl Coordinator {
                 workers,
                 compute,
             } => {
-                let location = mz_catalog::ReplicaLocation::Unmanaged {
+                let location = mz_catalog::durable::ReplicaLocation::Unmanaged {
                     storagectl_addrs,
                     storage_addrs,
                     computectl_addrs,
@@ -422,7 +423,7 @@ impl Coordinator {
                     }
                     None => None,
                 };
-                let location = mz_catalog::ReplicaLocation::Managed {
+                let location = mz_catalog::durable::ReplicaLocation::Managed {
                     availability_zone,
                     billed_as,
                     disk,

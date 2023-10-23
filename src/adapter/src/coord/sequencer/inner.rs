@@ -51,6 +51,8 @@ use mz_sql::names::{
     SchemaSpecifier, SystemObjectId,
 };
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
+use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW_TS;
+use mz_adapter_types::connection::ConnectionId;
 use mz_sql::plan::{
     AlterOptionParameter, Explainee, Index, IndexOption, MaterializedView, MutationKind, Params,
     Plan, PlannedAlterRoleOption, PlannedRoleVariable, QueryWhen, SideEffectingFunc,
@@ -87,7 +89,6 @@ use crate::catalog::{
     self, Catalog, CatalogItem, CatalogState, Cluster, ConnCatalog, Connection, DataSourceDesc,
     StorageSinkConnectionState, UpdatePrivilegeVariant,
 };
-use crate::client::ConnectionId;
 use crate::command::{ExecuteResponse, Response};
 use crate::coord::appends::{Deferred, DeferredPlan, PendingWriteTxn};
 use crate::coord::dataflows::{
@@ -105,7 +106,7 @@ use crate::coord::{
     peek, Coordinator, CreateConnectionValidationReady, ExecuteContext, Message, PeekStage,
     PeekStageFinish, PeekStageOptimize, PeekStageTimestamp, PeekStageValidate, PendingRead,
     PendingReadTxn, PendingTxn, PendingTxnResponse, PlanValidity, RealTimeRecencyContext,
-    SinkConnectionReady, TargetCluster, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
+    SinkConnectionReady, TargetCluster,
 };
 use crate::error::AdapterError;
 use crate::explain::explain_dataflow;

@@ -21,6 +21,7 @@
 /doc/developer/reference/storage    @MaterializeInc/storage
 /misc/dbt-materialize               @MaterializeInc/devex
 /src/adapter                        @MaterializeInc/adapter
+/src/adapter-types                  @MaterializeInc/adapter
 /src/adapter/src/optimizer          @MaterializeInc/compute
 /src/adapter/src/flags.rs
 /src/alloc                          @benesch

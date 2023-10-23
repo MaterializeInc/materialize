@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use futures::Future;
 use itertools::Itertools;
+use mz_adapter_types::connection::ConnectionId;
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::sync::MutexGuard;
 use tracing::{info, trace};
@@ -26,7 +27,7 @@ use mz_catalog::builtin::{
     BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BuiltinType, BUILTINS,
     BUILTIN_PREFIXES, MZ_INTROSPECTION_CLUSTER,
 };
-use mz_catalog::{
+use mz_catalog::durable::{
     debug_bootstrap_args, DurableCatalogState, OpenableDurableCatalogState, StashConfig,
     Transaction,
 };
@@ -84,20 +85,19 @@ use mz_transform::Optimizer;
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap, Config};
 pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
-pub use crate::catalog::objects::{
-    CatalogEntry, CatalogItem, Cluster, ClusterConfig, ClusterReplica, ClusterReplicaProcessStatus,
-    ClusterVariant, ClusterVariantManaged, CommentsMap, Connection, DataSourceDesc, Database,
-    DefaultPrivileges, Func, Index, Log, MaterializedView, Role, Schema, Secret, Sink, Source,
-    StorageSinkConnectionState, Table, Type, View,
-};
 pub use crate::catalog::open::BuiltinMigrationMetadata;
 pub use crate::catalog::state::CatalogState;
-use crate::client::ConnectionId;
 use crate::command::CatalogDump;
 use crate::coord::{ConnMeta, TargetCluster};
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
 use crate::util::ResultExt;
 use crate::{AdapterError, AdapterNotice, ExecuteResponse};
+pub use mz_catalog::memory::objects::{
+    CatalogEntry, CatalogItem, Cluster, ClusterConfig, ClusterReplica, ClusterReplicaProcessStatus,
+    ClusterVariant, ClusterVariantManaged, CommentsMap, Connection, DataSourceDesc, Database,
+    DefaultPrivileges, Func, Index, Log, MaterializedView, Role, Schema, Secret, Sink, Source,
+    StorageSinkConnectionState, Table, Type, View,
+};
 
 mod builtin_table_updates;
 mod config;
@@ -106,7 +106,6 @@ mod error;
 mod migrate;
 
 mod inner;
-mod objects;
 mod open;
 mod state;
 
@@ -142,7 +141,7 @@ pub const LINKED_CLUSTER_REPLICA_NAME: &str = "linked";
 pub struct Catalog {
     state: CatalogState,
     plans: CatalogPlans,
-    storage: Arc<tokio::sync::Mutex<Box<dyn mz_catalog::DurableCatalogState>>>,
+    storage: Arc<tokio::sync::Mutex<Box<dyn mz_catalog::durable::DurableCatalogState>>>,
     transient_revision: u64,
 }
 
@@ -455,7 +454,7 @@ impl Catalog {
         debug_stash_factory: &DebugStashFactory,
         now: NowFn,
     ) -> Result<Catalog, anyhow::Error> {
-        let openable_storage = Box::new(mz_catalog::debug_stash_backed_catalog_state(
+        let openable_storage = Box::new(mz_catalog::durable::debug_stash_backed_catalog_state(
             debug_stash_factory,
         ));
         let storage = openable_storage
@@ -481,7 +480,9 @@ impl Catalog {
             schema: Some(schema),
             tls,
         };
-        let openable_storage = Box::new(mz_catalog::stash_backed_catalog_state(stash_config));
+        let openable_storage = Box::new(mz_catalog::durable::stash_backed_catalog_state(
+            stash_config,
+        ));
         let storage = openable_storage
             .open(now.clone(), &debug_bootstrap_args(), None)
             .await?;
@@ -495,7 +496,9 @@ impl Catalog {
         stash_config: StashConfig,
         now: NowFn,
     ) -> Result<Catalog, anyhow::Error> {
-        let openable_storage = Box::new(mz_catalog::stash_backed_catalog_state(stash_config));
+        let openable_storage = Box::new(mz_catalog::durable::stash_backed_catalog_state(
+            stash_config,
+        ));
         let storage = openable_storage
             .open_read_only(now.clone(), &debug_bootstrap_args())
             .await?;
@@ -603,7 +606,9 @@ impl Catalog {
         Self::for_sessionless_user_state(state, MZ_SYSTEM_ROLE_ID)
     }
 
-    async fn storage<'a>(&'a self) -> MutexGuard<'a, Box<dyn mz_catalog::DurableCatalogState>> {
+    async fn storage<'a>(
+        &'a self,
+    ) -> MutexGuard<'a, Box<dyn mz_catalog::durable::DurableCatalogState>> {
         self.storage.lock().await
     }
 
@@ -651,7 +656,7 @@ impl Catalog {
             .get_timestamps()
             .await?
             .into_iter()
-            .map(|mz_catalog::TimelineTimestamp { timeline, ts }| (timeline, ts))
+            .map(|mz_catalog::durable::TimelineTimestamp { timeline, ts }| (timeline, ts))
             .collect())
     }
 
@@ -1067,12 +1072,12 @@ impl Catalog {
 
     pub fn concretize_replica_location(
         &self,
-        location: mz_catalog::ReplicaLocation,
+        location: mz_catalog::durable::ReplicaLocation,
         allowed_sizes: &Vec<String>,
         allowed_availability_zones: Option<&[String]>,
     ) -> Result<ReplicaLocation, AdapterError> {
         let location = match location {
-            mz_catalog::ReplicaLocation::Unmanaged {
+            mz_catalog::durable::ReplicaLocation::Unmanaged {
                 storagectl_addrs,
                 storage_addrs,
                 computectl_addrs,
@@ -1093,7 +1098,7 @@ impl Catalog {
                     workers,
                 })
             }
-            mz_catalog::ReplicaLocation::Managed {
+            mz_catalog::durable::ReplicaLocation::Managed {
                 size,
                 availability_zone,
                 disk,

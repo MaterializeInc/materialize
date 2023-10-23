@@ -23,7 +23,7 @@ use itertools::Itertools;
 use mz_adapter::catalog::{Catalog, ConnCatalog};
 use mz_adapter::session::Session;
 use mz_build_info::BuildInfo;
-use mz_catalog::StashConfig;
+use mz_catalog::durable::StashConfig;
 use mz_kafka_util::client::{create_new_client_config_simple, MzClientContext};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;

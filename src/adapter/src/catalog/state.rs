@@ -15,12 +15,17 @@ use std::time::Instant;
 
 use anyhow::bail;
 use itertools::Itertools;
+use mz_adapter_types::connection::ConnectionId;
 use serde::Serialize;
 use tracing::info;
 
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_catalog::builtin::{Builtin, BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable};
+use mz_catalog::memory::objects::{
+    CatalogEntry, CatalogItem, Cluster, ClusterConfig, ClusterReplica, ClusterReplicaProcessStatus,
+    CommentsMap, Database, DefaultPrivileges, Index, Role, Schema, View,
+};
 use mz_controller::clusters::{
     ClusterStatus, ManagedReplicaLocation, ProcessId, ReplicaConfig, ReplicaLocation,
 };
@@ -56,19 +61,17 @@ use mz_storage_types::connections::inline::{
 use mz_transform::Optimizer;
 
 use crate::catalog::{
-    AwsPrincipalContext, BuiltinTableUpdate, Catalog, CatalogEntry, CatalogItem, Cluster,
-    ClusterConfig, ClusterReplica, ClusterReplicaProcessStatus, ClusterReplicaSizeMap, CommentsMap,
-    Database, DefaultPrivileges, Error, ErrorKind, Index, Role, Schema, View,
+    AwsPrincipalContext, BuiltinTableUpdate, Catalog, ClusterReplicaSizeMap, Error, ErrorKind,
     LINKED_CLUSTER_REPLICA_NAME, SYSTEM_CONN_ID,
 };
-use crate::client::ConnectionId;
 use crate::coord::ConnMeta;
 use crate::session::Session;
 use crate::util::{index_sql, ResultExt};
 use crate::AdapterError;
 
 /// The in-memory representation of the Catalog. This struct is not directly used to persist
-/// metadata to persistent storage. For persistent metadata see [`mz_catalog::DurableCatalogState`].
+/// metadata to persistent storage. For persistent metadata see
+/// [`mz_catalog::durable::DurableCatalogState`].
 ///
 /// [`Serialize`] is implemented to create human readable dumps of the in-memory state, not for
 /// storing the contents of this struct on disk.
@@ -1614,7 +1617,7 @@ impl CatalogState {
         &self,
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
-        tx: &mut mz_catalog::Transaction,
+        tx: &mut mz_catalog::durable::Transaction,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         audit_events: &mut Vec<VersionedEvent>,
         event_type: EventType,
@@ -1632,7 +1635,8 @@ impl CatalogState {
             Some(ts) => ts.into(),
             _ => oracle_write_ts.into(),
         };
-        let id = tx.get_and_increment_id(mz_catalog::AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
+        let id =
+            tx.get_and_increment_id(mz_catalog::durable::AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
         let event = VersionedEvent::new(id, event_type, object_type, details, user, occurred_at);
         builtin_table_updates.push(self.pack_audit_log_update(&event)?);
         audit_events.push(event.clone());
@@ -1642,13 +1646,14 @@ impl CatalogState {
 
     pub(super) fn add_to_storage_usage(
         &self,
-        tx: &mut mz_catalog::Transaction,
+        tx: &mut mz_catalog::durable::Transaction,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         shard_id: Option<String>,
         size_bytes: u64,
         collection_timestamp: EpochMillis,
     ) -> Result<(), Error> {
-        let id = tx.get_and_increment_id(mz_catalog::STORAGE_USAGE_ID_ALLOC_KEY.to_string())?;
+        let id =
+            tx.get_and_increment_id(mz_catalog::durable::STORAGE_USAGE_ID_ALLOC_KEY.to_string())?;
 
         let details = VersionedStorageUsage::new(id, shard_id, size_bytes, collection_timestamp);
         builtin_table_updates.push(self.pack_storage_usage_update(&details)?);

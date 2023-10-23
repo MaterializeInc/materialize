@@ -40,6 +40,7 @@ mz-alloc = { path = "../alloc" }
 mz-aws-secrets-controller = { path = "../aws-secrets-controller" }
 mz-build-info = { path = "../build-info" }
 mz-adapter = { path = "../adapter" }
+mz-adapter-types = { path = "../adapter-types" }
 mz-catalog = { path = "../catalog" }
 mz-cloud-resources = { path = "../cloud-resources" }
 mz-controller = { path = "../controller" }

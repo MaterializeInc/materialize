@@ -35,19 +35,19 @@ use mz_stash_types::objects::proto;
 use mz_stash_types::StashError;
 use mz_storage_types::sources::Timeline;
 
-use crate::initialize::DEPLOY_GENERATION;
-use crate::objects::{
+use crate::durable::initialize::DEPLOY_GENERATION;
+use crate::durable::objects::{
     AuditLogKey, Cluster, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
     ClusterReplica, ClusterReplicaKey, ClusterReplicaValue, Comment, Database, DefaultPrivilege,
     DurableType, IdAllocKey, IdAllocValue, IntrospectionSourceIndex, ReplicaConfig, Role, Schema,
     Snapshot, StorageUsageKey, SystemConfiguration, SystemObjectMapping, TimelineTimestamp,
     TimestampValue,
 };
-use crate::transaction::{
+use crate::durable::transaction::{
     add_new_builtin_cluster_replicas_migration, add_new_builtin_clusters_migration, Transaction,
     TransactionBatch,
 };
-use crate::{
+use crate::durable::{
     initialize, BootstrapArgs, CatalogError, DurableCatalogState, Epoch,
     OpenableDurableCatalogState, ReadOnlyDurableCatalogState,
 };

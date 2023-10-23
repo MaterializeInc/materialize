@@ -41,16 +41,16 @@ use timely::progress::Antichain;
 use tracing::debug;
 use uuid::Uuid;
 
-use crate::initialize::DEPLOY_GENERATION;
-use crate::objects::{
+use crate::durable::initialize::DEPLOY_GENERATION;
+use crate::durable::objects::{
     AuditLogKey, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
     DurableType, IntrospectionSourceIndex, Snapshot, StorageUsageKey, TimestampValue,
 };
-use crate::transaction::{
+use crate::durable::transaction::{
     add_new_builtin_cluster_replicas_migration, add_new_builtin_clusters_migration,
     TransactionBatch,
 };
-use crate::{
+use crate::durable::{
     initialize, BootstrapArgs, CatalogError, Cluster, ClusterReplica, Comment, Database,
     DefaultPrivilege, DurableCatalogError, DurableCatalogState, Epoch, OpenableDurableCatalogState,
     ReadOnlyDurableCatalogState, ReplicaConfig, Role, Schema, SystemConfiguration,

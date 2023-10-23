@@ -13,6 +13,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
+use mz_adapter_types::connection::ConnectionId;
 use mz_controller::clusters::ClusterEvent;
 use mz_controller::ControllerResponse;
 use mz_ore::now::EpochMillis;
@@ -25,7 +26,6 @@ use mz_storage_types::controller::CollectionMetadata;
 use rand::{rngs, Rng, SeedableRng};
 use tracing::{event, warn, Instrument, Level};
 
-use crate::client::ConnectionId;
 use crate::command::{Command, ExecuteResponse};
 use crate::coord::appends::Deferred;
 use crate::coord::{

@@ -78,6 +78,8 @@ use differential_dataflow::lattice::Lattice;
 use fail::fail_point;
 use futures::StreamExt;
 use itertools::Itertools;
+use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW_TS;
+use mz_adapter_types::connection::ConnectionId;
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig};
 use mz_compute_types::dataflows::DataflowDescription;
@@ -127,7 +129,7 @@ use crate::catalog::{
     self, AwsPrincipalContext, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog, CatalogItem,
     ClusterReplicaSizeMap, DataSourceDesc, Source, StorageSinkConnectionState,
 };
-use crate::client::{Client, ConnectionId, Handle};
+use crate::client::{Client, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
 use crate::config::SystemParameterSyncConfig;
 use crate::coord::appends::{Deferred, GroupCommitPermit, PendingWriteTxn};
@@ -169,26 +171,6 @@ mod message_handler;
 mod read_policy;
 mod sequencer;
 mod sql;
-
-// TODO: We can have only two consts here, instead of three, once there exists a `const` way to
-// convert between a `Timestamp` and a `Duration`, and unwrap a result in const contexts. Currently
-// unstable compiler features that would allow this are:
-// * `const_option`: https://github.com/rust-lang/rust/issues/67441
-// * `const_result`: https://github.com/rust-lang/rust/issues/82814
-// * `const_num_from_num`: https://github.com/rust-lang/rust/issues/87852
-// * `const_precise_live_drops`: https://github.com/rust-lang/rust/issues/73255
-
-/// `DEFAULT_LOGICAL_COMPACTION_WINDOW`, in milliseconds.
-/// The default is set to a second to track the default timestamp frequency for sources.
-const DEFAULT_LOGICAL_COMPACTION_WINDOW_MILLIS: u64 = 1000;
-
-/// The default logical compaction window for new objects
-pub const DEFAULT_LOGICAL_COMPACTION_WINDOW: Duration =
-    Duration::from_millis(DEFAULT_LOGICAL_COMPACTION_WINDOW_MILLIS);
-
-/// `DEFAULT_LOGICAL_COMPACTION_WINDOW` as an `EpochMillis` timestamp
-pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_TS: mz_repr::Timestamp =
-    Timestamp::new(DEFAULT_LOGICAL_COMPACTION_WINDOW_MILLIS);
 
 #[derive(Debug)]
 pub enum Message<T = mz_repr::Timestamp> {
@@ -539,7 +521,7 @@ impl PlanValidity {
 /// Configures a coordinator.
 pub struct Config {
     pub dataflow_client: mz_controller::Controller,
-    pub storage: Box<dyn mz_catalog::DurableCatalogState>,
+    pub storage: Box<dyn mz_catalog::durable::DurableCatalogState>,
     pub unsafe_mode: bool,
     pub all_features: bool,
     pub build_info: &'static BuildInfo,
