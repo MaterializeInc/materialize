@@ -831,7 +831,7 @@ steps:
       - id: parallel-workload-rename-naughty
         label: "Parallel Workload (rename + naughty identifiers)"
         artifact_paths: junit_*.xml
-        timeout_in_minutes: 40
+        timeout_in_minutes: 50
         agents:
           queue: builder-linux-x86_64
         plugins:
@@ -842,7 +842,7 @@ steps:
       - id: parallel-workload-rename
         label: "Parallel Workload (rename)"
         artifact_paths: junit_*.xml
-        timeout_in_minutes: 40
+        timeout_in_minutes: 50
         agents:
           queue: builder-linux-x86_64
         plugins:
