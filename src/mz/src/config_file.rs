@@ -35,10 +35,12 @@ use crate::error::Error;
 /// Service name displayed to the user when using the keychain.
 /// If you ever have to change this value, make sure to update,
 /// the keychain service name in the VS Code extension.
+#[cfg(target_os = "macos")]
 static KEYCHAIN_SERVICE_NAME: &str = "Materialize";
 
 /// Old keychain name keeped for compatibility.
 /// TODO: Should be removed after > 0.2.6
+#[cfg(target_os = "macos")]
 static OLD_KEYCHAIN_SERVICE_NAME: &str = "Materialize mz CLI";
 
 #[cfg(target_os = "macos")]
