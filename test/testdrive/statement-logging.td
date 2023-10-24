@@ -33,7 +33,7 @@ statement_logging_sample_rate
 
 # Make it so we can query the tables later
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_rbac_tests = false
+ALTER SYSTEM SET enable_rbac_checks = false
 
 # Now the real test begins
 
