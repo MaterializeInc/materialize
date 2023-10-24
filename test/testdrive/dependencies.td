@@ -50,23 +50,23 @@ contains:source "materialize.public.s" already exists
 > CREATE VIEW test3b AS SELECT * FROM test2;
 
 ! DROP VIEW test1;
-contains:cannot drop view test1: still depended upon by view test2
+contains:cannot drop view "test1": still depended upon by view "test2"
 
 ! DROP VIEW test2;
-contains:cannot drop view test2: still depended upon by view test3a
+contains:cannot drop view "test2": still depended upon by view "test3a"
 
 > DROP VIEW test3a;
 
 ! DROP VIEW test1;
-contains:cannot drop view test1: still depended upon by view test2
+contains:cannot drop view "test1": still depended upon by view "test2"
 
 ! DROP VIEW test2;
-contains:cannot drop view test2: still depended upon by view test3b
+contains:cannot drop view "test2": still depended upon by view "test3b"
 
 > DROP VIEW test3b;
 
 ! DROP VIEW test1;
-contains:cannot drop view test1: still depended upon by view test2
+contains:cannot drop view "test1": still depended upon by view "test2"
 
 > DROP VIEW test2;
 

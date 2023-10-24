@@ -93,7 +93,7 @@ contains:cannot create source in cluster with more than one replica
 
 # Test that `DROP CLUSTER` only succeeds with `CASCADE`.
 ! DROP CLUSTER storage
-contains:cannot drop cluster storage because other objects depend on it
+contains:cannot drop cluster "storage" because other objects depend on it
 > DROP CLUSTER storage CASCADE
 
 > SET cluster = default
