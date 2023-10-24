@@ -142,3 +142,27 @@ default default my_app 1 {} success <null> <null> <null> true "SET cluster TO c"
 mz_introspection mz_introspection my_app 1 {} success <null> 1 constant true "SELECT 'beginning real test!'" "strict serializable"
 mz_introspection mz_introspection my_app 1 {} success <null> 1 constant true "SELECT 'serializable'" serializable
 mz_introspection mz_introspection my_app 1 {} success <null> 1 standard true "SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" "strict serializable"
+
+# Test that everything in a transaction has the same transaction ID
+
+> BEGIN --hello
+
+> SELECT 'transaction statement 1'
+"transaction statement 1"
+
+> SELECT 'transaction statement 2'
+"transaction statement 2"
+
+> ROLLBACK
+
+> WITH begin_tid AS
+  (SELECT transaction_id FROM mz_internal.mz_statement_execution_history mseh, mz_internal.mz_prepared_statement_history mpsh
+   WHERE mseh.prepared_statement_id = mpsh.id
+   AND mpsh.sql = 'BEGIN --hello')
+  SELECT sql FROM mz_internal.mz_statement_execution_history mseh, mz_internal.mz_prepared_statement_history mpsh, begin_tid
+  WHERE mseh.prepared_statement_id = mpsh.id
+  AND mseh.transaction_id = begin_tid.transaction_id
+"BEGIN --hello"
+"SELECT 'transaction statement 1'"
+"SELECT 'transaction statement 2'"
+ROLLBACK
