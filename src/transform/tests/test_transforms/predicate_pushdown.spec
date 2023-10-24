@@ -35,7 +35,7 @@ Return
     Get l1
 With
   cte l1 =
-    Distinct group_by=[#0, #1, #2]
+    Distinct project=[#0, #1, #2]
       Union
         Project (#0, #1, #5)
           Join on=(#0 = #3 AND #2 = #4)
@@ -52,7 +52,7 @@ Return
     Get l1
 With
   cte l1 =
-    Distinct group_by=[#0..=#2]
+    Distinct project=[#0..=#2]
       Union
         Project (#0, #1, #5)
           Join on=(#0 = #3 AND #2 = #4)
@@ -79,7 +79,7 @@ Return
     Get l0
 With Mutually Recursive
   cte l0 = // { types: "(bigint, bigint)" }
-    Distinct group_by=[#0, #1]
+    Distinct project=[#0, #1]
       Union
         Get t0
         Get l0
@@ -93,7 +93,7 @@ Return
     Get l0
 With Mutually Recursive
   cte l0 =
-    Distinct group_by=[#0, #1]
+    Distinct project=[#0, #1]
       Union
         Get t0
         Get l0

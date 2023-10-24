@@ -197,7 +197,7 @@ impl Default for ExplainConfig {
             non_negative: false,
             no_fast_path: true,
             raw_plans: true,
-            raw_syntax: true,
+            raw_syntax: false,
             subtree_size: false,
             timing: false,
             types: false,

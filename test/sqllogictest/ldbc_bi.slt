@@ -620,7 +620,7 @@ Explained Query:
             ArrangeBy keys=[[id]] // { arity: 4 }
               ReadIndex on=country country_id=[differential join] // { arity: 4 }
             ArrangeBy keys=[[messageid]] // { arity: 1 }
-              Distinct group_by=[messageid] // { arity: 1 }
+              Distinct project=[messageid] // { arity: 1 }
                 Project (#10) // { arity: 1 }
                   Filter (id) IS NOT NULL AND (id) IS NOT NULL // { arity: 12 }
                     Join on=(id = typetagclassid AND id = tagid) type=delta // { arity: 12 }
@@ -731,7 +731,7 @@ Explained Query:
                       %1[#0]UKA » %0:l2[#1]K
                     Get l2 // { arity: 4 }
                     ArrangeBy keys=[[id]] // { arity: 1 }
-                      Distinct group_by=[id] // { arity: 1 }
+                      Distinct project=[id] // { arity: 1 }
                         Project (#1) // { arity: 1 }
                           Get l3 // { arity: 5 }
               Get l1 // { arity: 4 }
@@ -746,12 +746,12 @@ Explained Query:
             ArrangeBy keys=[[creatorpersonid]] // { arity: 13 }
               ReadIndex on=message message_creatorpersonid=[differential join] // { arity: 13 }
             ArrangeBy keys=[[containerforumid]] // { arity: 1 }
-              Distinct group_by=[containerforumid] // { arity: 1 }
+              Distinct project=[containerforumid] // { arity: 1 }
                 Project (#10) // { arity: 1 }
                   Filter (containerforumid) IS NOT NULL // { arity: 13 }
                     ReadIndex on=message message_creatorpersonid=[*** full scan ***] // { arity: 13 }
             ArrangeBy keys=[[id]] // { arity: 1 }
-              Distinct group_by=[id] // { arity: 1 }
+              Distinct project=[id] // { arity: 1 }
                 Get l0 // { arity: 1 }
       cte l2 =
         ArrangeBy keys=[[id]] // { arity: 4 }
@@ -766,12 +766,12 @@ Explained Query:
             ArrangeBy keys=[[id]] // { arity: 11 }
               ReadIndex on=person person_id=[delta join 1st input (full scan)] // { arity: 11 }
             ArrangeBy keys=[[id]] // { arity: 1 }
-              Distinct group_by=[id] // { arity: 1 }
+              Distinct project=[id] // { arity: 1 }
                 Project (#1) // { arity: 1 }
                   Filter (id) IS NOT NULL // { arity: 11 }
                     ReadIndex on=person person_id=[*** full scan ***] // { arity: 11 }
             ArrangeBy keys=[[personid]] // { arity: 1 }
-              Distinct group_by=[personid] // { arity: 1 }
+              Distinct project=[personid] // { arity: 1 }
                 Project (#3) // { arity: 1 }
                   Join on=(id = forumid) type=differential // { arity: 4 }
                     implementation
@@ -974,7 +974,7 @@ Explained Query:
             ArrangeBy keys=[[person2id]] // { arity: 2 }
               ReadIndex on=popularityscoreq06 popularityscoreq06_person2id=[differential join] // { arity: 2 }
       cte l3 =
-        Distinct group_by=[creatorpersonid, personid] // { arity: 2 }
+        Distinct project=[creatorpersonid, personid] // { arity: 2 }
           Union // { arity: 2 }
             Map (null) // { arity: 2 }
               Union // { arity: 1 }
@@ -985,7 +985,7 @@ Explained Query:
                         %1[#0]UKA » %0:l1[#0]K
                       Get l1 // { arity: 2 }
                       ArrangeBy keys=[[messageid]] // { arity: 1 }
-                        Distinct group_by=[messageid] // { arity: 1 }
+                        Distinct project=[messageid] // { arity: 1 }
                           Project (#0) // { arity: 1 }
                             Get l2 // { arity: 3 }
                 Project (#1) // { arity: 1 }
@@ -1079,7 +1079,7 @@ Explained Query:
             ArrangeBy keys=[[person2id]] // { arity: 2 }
               ReadIndex on=popularityscoreq06 popularityscoreq06_person2id=[differential join] // { arity: 2 }
       cte l3 =
-        Distinct group_by=[creatorpersonid, personid] // { arity: 2 }
+        Distinct project=[creatorpersonid, personid] // { arity: 2 }
           Union // { arity: 2 }
             Map (null) // { arity: 2 }
               Union // { arity: 1 }
@@ -1090,7 +1090,7 @@ Explained Query:
                         %1[#0]UKA » %0:l1[#0]K
                       Get l1 // { arity: 2 }
                       ArrangeBy keys=[[messageid]] // { arity: 1 }
-                        Distinct group_by=[messageid] // { arity: 1 }
+                        Distinct project=[messageid] // { arity: 1 }
                           Project (#0) // { arity: 1 }
                             Get l2 // { arity: 3 }
                 Project (#1) // { arity: 1 }
@@ -1185,7 +1185,7 @@ Explained Query:
             ArrangeBy keys=[[person2id]] // { arity: 2 }
               ReadIndex on=popularityscoreq06 popularityscoreq06_person2id=[differential join] // { arity: 2 }
       cte l3 =
-        Distinct group_by=[creatorpersonid, personid] // { arity: 2 }
+        Distinct project=[creatorpersonid, personid] // { arity: 2 }
           Union // { arity: 2 }
             Map (null) // { arity: 2 }
               Union // { arity: 1 }
@@ -1198,7 +1198,7 @@ Explained Query:
                         Project (#1, #2) // { arity: 2 }
                           Get l2 // { arity: 3 }
                       ArrangeBy keys=[[messageid]] // { arity: 1 }
-                        Distinct group_by=[messageid] // { arity: 1 }
+                        Distinct project=[messageid] // { arity: 1 }
                           Project (#1) // { arity: 1 }
                             Get l1 // { arity: 4 }
                 Project (#2) // { arity: 1 }
@@ -1296,12 +1296,12 @@ Explained Query:
                       ArrangeBy keys=[[messageid]] // { arity: 1 }
                         Get l2 // { arity: 1 }
                       ArrangeBy keys=[[messageid]] // { arity: 1 }
-                        Distinct group_by=[messageid] // { arity: 1 }
+                        Distinct project=[messageid] // { arity: 1 }
                           Get l0 // { arity: 1 }
                 Get l2 // { arity: 1 }
     With
       cte l2 =
-        Distinct group_by=[messageid] // { arity: 1 }
+        Distinct project=[messageid] // { arity: 1 }
           Project (#0) // { arity: 1 }
             Get l1 // { arity: 2 }
       cte l1 =
@@ -1411,7 +1411,7 @@ Explained Query:
                       ArrangeBy keys=[[person2id]] // { arity: 3 }
                         Get l10 // { arity: 3 }
                       ArrangeBy keys=[[person2id]] // { arity: 1 }
-                        Distinct group_by=[person2id] // { arity: 1 }
+                        Distinct project=[person2id] // { arity: 1 }
                           Project (#2) // { arity: 1 }
                             Get l11 // { arity: 4 }
                 Project (#0, #1) // { arity: 2 }
@@ -1440,7 +1440,7 @@ Explained Query:
                     ArrangeBy keys=[[#0]] // { arity: 2 }
                       Get l7 // { arity: 2 }
                     ArrangeBy keys=[[#0]] // { arity: 1 }
-                      Distinct group_by=[#0] // { arity: 1 }
+                      Distinct project=[#0] // { arity: 1 }
                         Project (#0) // { arity: 1 }
                           Get l9 // { arity: 3 }
               Get l7 // { arity: 2 }
@@ -1471,7 +1471,7 @@ Explained Query:
                             %0:l4[#0]UKA » %1[#0]UKA
                           Get l4 // { arity: 2 }
                           ArrangeBy keys=[[id]] // { arity: 1 }
-                            Distinct group_by=[id] // { arity: 1 }
+                            Distinct project=[id] // { arity: 1 }
                               Get l6 // { arity: 1 }
                     Get l3 // { arity: 2 }
               Map (null, null) // { arity: 3 }
@@ -1683,10 +1683,10 @@ Explained Query:
               implementation
                 %0[#0]UKA » %1[#0]UKA » %2[#0]K » %3[#0]UKA » %4:message_hastag_tag[#1]KA » %5:tag[#0]KA
               ArrangeBy keys=[[person2id]] // { arity: 1 }
-                Distinct group_by=[person2id] // { arity: 1 }
+                Distinct project=[person2id] // { arity: 1 }
                   Threshold // { arity: 1 }
                     Union // { arity: 1 }
-                      Distinct group_by=[person2id] // { arity: 1 }
+                      Distinct project=[person2id] // { arity: 1 }
                         Project (#6) // { arity: 1 }
                           Join on=(person2id = person1id AND person2id = person1id) type=differential // { arity: 7 }
                             implementation
@@ -1698,7 +1698,7 @@ Explained Query:
                       Negate // { arity: 1 }
                         Get l2 // { arity: 1 }
               ArrangeBy keys=[[id]] // { arity: 1 }
-                Distinct group_by=[id] // { arity: 1 }
+                Distinct project=[id] // { arity: 1 }
                   Project (#1) // { arity: 1 }
                     Filter (name = "Italy") AND (id) IS NOT NULL AND (locationcityid) IS NOT NULL AND (partofcountryid) IS NOT NULL // { arity: 19 }
                       Join on=(locationcityid = id AND partofcountryid = id) type=delta // { arity: 19 }
@@ -1713,11 +1713,11 @@ Explained Query:
                         ArrangeBy keys=[[id]] // { arity: 4 }
                           ReadIndex on=country country_id=[delta join lookup] // { arity: 4 }
               ArrangeBy keys=[[creatorpersonid]] // { arity: 2 }
-                Distinct group_by=[creatorpersonid, messageid] // { arity: 2 }
+                Distinct project=[creatorpersonid, messageid] // { arity: 2 }
                   Project (#1, #9) // { arity: 2 }
                     ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }
               ArrangeBy keys=[[messageid]] // { arity: 1 }
-                Distinct group_by=[messageid] // { arity: 1 }
+                Distinct project=[messageid] // { arity: 1 }
                   Project (#1) // { arity: 1 }
                     Filter (tagid) IS NOT NULL AND (typetagclassid) IS NOT NULL // { arity: 12 }
                       Join on=(tagid = id AND typetagclassid = id) type=delta // { arity: 12 }
@@ -1737,7 +1737,7 @@ Explained Query:
                 ReadIndex on=tag tag_id=[differential join] // { arity: 4 }
     With
       cte l2 =
-        Distinct group_by=[person2id] // { arity: 1 }
+        Distinct project=[person2id] // { arity: 1 }
           Union // { arity: 1 }
             Get l1 // { arity: 1 }
             Project (#3) // { arity: 1 }
@@ -1914,7 +1914,7 @@ Explained Query:
                           %1[#0]UKA » %0:l0[#1]KA
                         Get l0 // { arity: 11 }
                         ArrangeBy keys=[[id]] // { arity: 1 }
-                          Distinct group_by=[id] // { arity: 1 }
+                          Distinct project=[id] // { arity: 1 }
                             Project (#0) // { arity: 1 }
                               Get l1 // { arity: 2 }
                   Project (#1) // { arity: 1 }
@@ -1981,10 +1981,10 @@ Explained Query:
                     ArrangeBy keys=[[creationdate, id, firstname, lastname, gender, birthday, locationip, browserused, locationcityid, speaks, email]] // { arity: 11 }
                       Union // { arity: 11 }
                         Negate // { arity: 11 }
-                          Distinct group_by=[creationdate, id, firstname, lastname, gender, birthday, locationip, browserused, locationcityid, speaks, email] // { arity: 11 }
+                          Distinct project=[creationdate, id, firstname, lastname, gender, birthday, locationip, browserused, locationcityid, speaks, email] // { arity: 11 }
                             Project (#0..=#10) // { arity: 11 }
                               Get l1 // { arity: 12 }
-                        Distinct group_by=[creationdate, id, firstname, lastname, gender, birthday, locationip, browserused, locationcityid, speaks, email] // { arity: 11 }
+                        Distinct project=[creationdate, id, firstname, lastname, gender, birthday, locationip, browserused, locationcityid, speaks, email] // { arity: 11 }
                           ReadIndex on=person person_id=[*** full scan ***] // { arity: 11 }
                     ArrangeBy keys=[[creationdate, id, firstname, lastname, gender, birthday, locationip, browserused, locationcityid, speaks, email]] // { arity: 11 }
                       ReadIndex on=person person_id=[*** full scan ***] // { arity: 11 }
@@ -1999,11 +1999,11 @@ Explained Query:
                 Filter (length < 120) AND (creationdate > 2012-06-03 00:00:00 UTC) AND (content) IS NOT NULL AND (id = creatorpersonid) // { arity: 17 }
                   Get l0 // { arity: 17 }
             ArrangeBy keys=[[rootpostlanguage]] // { arity: 1 }
-              Distinct group_by=[rootpostlanguage] // { arity: 1 }
+              Distinct project=[rootpostlanguage] // { arity: 1 }
                 Project (#0) // { arity: 1 }
                   Filter (rootpostlanguage = varchar_to_text(#1)) // { arity: 2 }
                     FlatMap unnest_array({"es", "ta", "pt"}) // { arity: 2 }
-                      Distinct group_by=[rootpostlanguage] // { arity: 1 }
+                      Distinct project=[rootpostlanguage] // { arity: 1 }
                         Project (#13) // { arity: 1 }
                           Get l0 // { arity: 17 }
       cte l0 =
@@ -2107,10 +2107,10 @@ Explained Query:
             ArrangeBy keys=[[id]] // { arity: 1 }
               Get l6 // { arity: 1 }
             ArrangeBy keys=[[id]] // { arity: 1 }
-              Distinct group_by=[id] // { arity: 1 }
+              Distinct project=[id] // { arity: 1 }
                 Get l3 // { arity: 1 }
       cte l6 =
-        Distinct group_by=[id] // { arity: 1 }
+        Distinct project=[id] // { arity: 1 }
           Project (#0) // { arity: 1 }
             Get l5 // { arity: 2 }
       cte l5 =
@@ -2150,11 +2150,11 @@ Explained Query:
                       ArrangeBy keys=[[id, url, partofcontinentid, id, name, url, creationdate, id, firstname, lastname, gender, birthday, locationip, browserused, speaks, email]] // { arity: 16 }
                         Union // { arity: 16 }
                           Negate // { arity: 16 }
-                            Distinct group_by=[id, url, partofcontinentid, id, name, url, creationdate, id, firstname, lastname, gender, birthday, locationip, browserused, speaks, email] // { arity: 16 }
+                            Distinct project=[id, url, partofcontinentid, id, name, url, creationdate, id, firstname, lastname, gender, birthday, locationip, browserused, speaks, email] // { arity: 16 }
                               Project (#0..=#15) // { arity: 16 }
                                 Filter (id = id) AND (id = id) // { arity: 17 }
                                   Get l1 // { arity: 17 }
-                          Distinct group_by=[id, url, partofcontinentid, id, name, url, creationdate, id, firstname, lastname, gender, birthday, locationip, browserused, speaks, email] // { arity: 16 }
+                          Distinct project=[id, url, partofcontinentid, id, name, url, creationdate, id, firstname, lastname, gender, birthday, locationip, browserused, speaks, email] // { arity: 16 }
                             Filter (id = id) AND (id = id) // { arity: 16 }
                               Get l0 // { arity: 16 }
                       ArrangeBy keys=[[id, url, partofcontinentid, id, name, url, creationdate, id, firstname, lastname, gender, birthday, locationip, browserused, speaks, email]] // { arity: 16 }
@@ -2312,7 +2312,7 @@ Explained Query:
             ArrangeBy keys=[[id, person2id]] // { arity: 2 }
               Get l7 // { arity: 2 }
             ArrangeBy keys=[[personid, creatorpersonid]] // { arity: 2 }
-              Distinct group_by=[personid, creatorpersonid] // { arity: 2 }
+              Distinct project=[personid, creatorpersonid] // { arity: 2 }
                 Project (#9, #14) // { arity: 2 }
                   Join on=(messageid = messageid) type=differential // { arity: 16 }
                     implementation
@@ -2321,7 +2321,7 @@ Explained Query:
                     ArrangeBy keys=[[messageid]] // { arity: 3 }
                       ReadIndex on=person_likes_message person_likes_message_messageid=[differential join] // { arity: 3 }
       cte l7 =
-        Distinct group_by=[id, person2id] // { arity: 2 }
+        Distinct project=[id, person2id] // { arity: 2 }
           Project (#0, #1) // { arity: 2 }
             Get l6 // { arity: 6 }
       cte l6 =
@@ -2348,7 +2348,7 @@ Explained Query:
             ArrangeBy keys=[[id, person2id]] // { arity: 2 }
               Get l3 // { arity: 2 }
             ArrangeBy keys=[[creatorpersonid, creatorpersonid]] // { arity: 2 }
-              Distinct group_by=[creatorpersonid, creatorpersonid] // { arity: 2 }
+              Distinct project=[creatorpersonid, creatorpersonid] // { arity: 2 }
                 Project (#9, #22) // { arity: 2 }
                   Filter (messageid) IS NOT NULL // { arity: 26 }
                     Join on=(messageid = parentmessageid) type=differential // { arity: 26 }
@@ -2361,7 +2361,7 @@ Explained Query:
         ArrangeBy keys=[[messageid]] // { arity: 13 }
           ReadIndex on=message message_messageid=[differential join] // { arity: 13 }
       cte l3 =
-        Distinct group_by=[id, person2id] // { arity: 2 }
+        Distinct project=[id, person2id] // { arity: 2 }
           Project (#0, #1) // { arity: 2 }
             Get l2 // { arity: 5 }
       cte l2 =
@@ -2483,7 +2483,7 @@ Explained Query:
         Project (#2, #0, #1) // { arity: 3 }
           Map (1450) // { arity: 3 }
             Reduce group_by=[person2id] aggregates=[min(#1)] // { arity: 2 }
-              Distinct group_by=[person2id, #1] // { arity: 2 }
+              Distinct project=[person2id, #1] // { arity: 2 }
                 Union // { arity: 2 }
                   Project (#3, #5) // { arity: 2 }
                     Map ((#1 + #4)) // { arity: 6 }
@@ -2507,10 +2507,10 @@ Explained Query:
                                       ArrangeBy keys=[[creationdate, person1id, person2id]] // { arity: 3 }
                                         Union // { arity: 3 }
                                           Negate // { arity: 3 }
-                                            Distinct group_by=[creationdate, person1id, person2id] // { arity: 3 }
+                                            Distinct project=[creationdate, person1id, person2id] // { arity: 3 }
                                               Project (#0..=#2) // { arity: 3 }
                                                 Get l2 // { arity: 4 }
-                                          Distinct group_by=[creationdate, person1id, person2id] // { arity: 3 }
+                                          Distinct project=[creationdate, person1id, person2id] // { arity: 3 }
                                             ReadIndex on=person_knows_person person_knows_person_person1id=[*** full scan ***] // { arity: 3 }
                                       ArrangeBy keys=[[creationdate, person1id, person2id]] // { arity: 3 }
                                         ReadIndex on=person_knows_person person_knows_person_person1id=[*** full scan ***] // { arity: 3 }
@@ -2534,12 +2534,12 @@ Explained Query:
                     ArrangeBy keys=[[containerforumid]] // { arity: 4 }
                       Get l1 // { arity: 4 }
                     ArrangeBy keys=[[containerforumid]] // { arity: 1 }
-                      Distinct group_by=[containerforumid] // { arity: 1 }
+                      Distinct project=[containerforumid] // { arity: 1 }
                         Project (#3) // { arity: 1 }
                           Filter (containerforumid) IS NOT NULL // { arity: 4 }
                             Get l1 // { arity: 4 }
                     ArrangeBy keys=[[id]] // { arity: 1 }
-                      Distinct group_by=[id] // { arity: 1 }
+                      Distinct project=[id] // { arity: 1 }
                         Project (#1) // { arity: 1 }
                           Filter (creationdate <= 2012-11-10 00:00:00 UTC) AND (creationdate >= 2012-11-06 00:00:00 UTC) AND (id) IS NOT NULL // { arity: 4 }
                             ReadIndex on=forum forum_id=[*** full scan ***] // { arity: 4 }
@@ -2553,12 +2553,12 @@ Explained Query:
             ArrangeBy keys=[[containerforumid]] // { arity: 5 }
               Get l0 // { arity: 5 }
             ArrangeBy keys=[[containerforumid]] // { arity: 1 }
-              Distinct group_by=[containerforumid] // { arity: 1 }
+              Distinct project=[containerforumid] // { arity: 1 }
                 Project (#2) // { arity: 1 }
                   Filter (containerforumid) IS NOT NULL // { arity: 5 }
                     Get l0 // { arity: 5 }
             ArrangeBy keys=[[id]] // { arity: 1 }
-              Distinct group_by=[id] // { arity: 1 }
+              Distinct project=[id] // { arity: 1 }
                 Project (#1) // { arity: 1 }
                   Filter (creationdate <= 2012-11-10 00:00:00 UTC) AND (creationdate >= 2012-11-06 00:00:00 UTC) AND (id) IS NOT NULL // { arity: 4 }
                     ReadIndex on=forum forum_id=[*** full scan ***] // { arity: 4 }
@@ -2740,7 +2740,7 @@ Explained Query:
                     Get l16 // { arity: 6 }
   With Mutually Recursive
     cte l16 =
-      Distinct group_by=[#0, #1, person2id, #3, #4, #5] // { arity: 6 }
+      Distinct project=[#0, #1, person2id, #3, #4, #5] // { arity: 6 }
         Union // { arity: 6 }
           Map (0) // { arity: 6 }
             Union // { arity: 5 }
@@ -2774,7 +2774,7 @@ Explained Query:
                         Constant // { arity: 0 }
                           - ()
     cte l15 =
-      Distinct // { arity: 0 }
+      Distinct project=[] // { arity: 0 }
         Project () // { arity: 0 }
           Filter #1 AND (person2id = -1) // { arity: 2 }
             Get l7 // { arity: 2 }
@@ -2850,15 +2850,15 @@ Explained Query:
           ArrangeBy keys=[[#0, #1, #2]] // { arity: 3 }
             Get l10 // { arity: 3 }
           ArrangeBy keys=[[#0, #1, #2]] // { arity: 3 }
-            Distinct group_by=[#0, #1, #2] // { arity: 3 }
+            Distinct project=[#0, #1, #2] // { arity: 3 }
               Project (#0..=#2) // { arity: 3 }
                 Get l8 // { arity: 5 }
     cte l10 =
-      Distinct group_by=[#0, #1, #2] // { arity: 3 }
+      Distinct project=[#0, #1, #2] // { arity: 3 }
         Project (#0..=#2) // { arity: 3 }
           Get l9 // { arity: 6 }
     cte l9 =
-      Distinct group_by=[#0, #1, #2, #3, #4, #5] // { arity: 6 }
+      Distinct project=[#0, #1, #2, #3, #4, #5] // { arity: 6 }
         Get l16 // { arity: 6 }
     cte l8 =
       TopK order_by=[#3 asc nulls_last] limit=1000 // { arity: 5 }
@@ -2866,9 +2866,9 @@ Explained Query:
           Filter (#4 = false) // { arity: 6 }
             Get l16 // { arity: 6 }
     cte l7 =
-      Distinct group_by=[person2id, #1] // { arity: 2 }
+      Distinct project=[person2id, #1] // { arity: 2 }
         Union // { arity: 2 }
-          Distinct group_by=[person2id, #1] // { arity: 2 }
+          Distinct project=[person2id, #1] // { arity: 2 }
             Union // { arity: 2 }
               Project (#1, #0) // { arity: 2 }
                 CrossJoin type=differential // { arity: 2 }
@@ -2889,7 +2889,7 @@ Explained Query:
             - (1450, true)
             - (15393162796819, false)
     cte l6 =
-      Distinct // { arity: 0 }
+      Distinct project=[] // { arity: 0 }
         Project () // { arity: 0 }
           Join on=(person2id = person2id) type=differential // { arity: 2 }
             implementation
@@ -2931,10 +2931,10 @@ Explained Query:
                   ArrangeBy keys=[[creationdate, person1id, person2id]] // { arity: 3 }
                     Union // { arity: 3 }
                       Negate // { arity: 3 }
-                        Distinct group_by=[creationdate, person1id, person2id] // { arity: 3 }
+                        Distinct project=[creationdate, person1id, person2id] // { arity: 3 }
                           Project (#0..=#2) // { arity: 3 }
                             Get l2 // { arity: 4 }
-                      Distinct group_by=[creationdate, person1id, person2id] // { arity: 3 }
+                      Distinct project=[creationdate, person1id, person2id] // { arity: 3 }
                         ReadIndex on=person_knows_person person_knows_person_person1id=[*** full scan ***] // { arity: 3 }
                   ArrangeBy keys=[[creationdate, person1id, person2id]] // { arity: 3 }
                     ReadIndex on=person_knows_person person_knows_person_person1id=[*** full scan ***] // { arity: 3 }
@@ -2956,12 +2956,12 @@ Explained Query:
                   ArrangeBy keys=[[containerforumid]] // { arity: 4 }
                     Get l1 // { arity: 4 }
                   ArrangeBy keys=[[containerforumid]] // { arity: 1 }
-                    Distinct group_by=[containerforumid] // { arity: 1 }
+                    Distinct project=[containerforumid] // { arity: 1 }
                       Project (#3) // { arity: 1 }
                         Filter (containerforumid) IS NOT NULL // { arity: 4 }
                           Get l1 // { arity: 4 }
                   ArrangeBy keys=[[id]] // { arity: 1 }
-                    Distinct group_by=[id] // { arity: 1 }
+                    Distinct project=[id] // { arity: 1 }
                       Project (#1) // { arity: 1 }
                         Filter (creationdate <= 2012-11-10 00:00:00 UTC) AND (creationdate >= 2012-11-06 00:00:00 UTC) AND (id) IS NOT NULL // { arity: 4 }
                           ReadIndex on=forum forum_id=[*** full scan ***] // { arity: 4 }
@@ -2975,12 +2975,12 @@ Explained Query:
           ArrangeBy keys=[[containerforumid]] // { arity: 5 }
             Get l0 // { arity: 5 }
           ArrangeBy keys=[[containerforumid]] // { arity: 1 }
-            Distinct group_by=[containerforumid] // { arity: 1 }
+            Distinct project=[containerforumid] // { arity: 1 }
               Project (#2) // { arity: 1 }
                 Filter (containerforumid) IS NOT NULL // { arity: 5 }
                   Get l0 // { arity: 5 }
           ArrangeBy keys=[[id]] // { arity: 1 }
-            Distinct group_by=[id] // { arity: 1 }
+            Distinct project=[id] // { arity: 1 }
               Project (#1) // { arity: 1 }
                 Filter (creationdate <= 2012-11-10 00:00:00 UTC) AND (creationdate >= 2012-11-06 00:00:00 UTC) AND (id) IS NOT NULL // { arity: 4 }
                   ReadIndex on=forum forum_id=[*** full scan ***] // { arity: 4 }
@@ -3099,7 +3099,7 @@ Explained Query:
                     Map (null) // { arity: 3 }
                       Union // { arity: 2 }
                         Negate // { arity: 2 }
-                          Distinct group_by=[id, messageid] // { arity: 2 }
+                          Distinct project=[id, messageid] // { arity: 2 }
                             Project (#0, #1) // { arity: 2 }
                               Get l5 // { arity: 3 }
                         Get l3 // { arity: 2 }
@@ -3110,7 +3110,7 @@ Explained Query:
                     Map (null) // { arity: 3 }
                       Union // { arity: 2 }
                         Negate // { arity: 2 }
-                          Distinct group_by=[id, messageid] // { arity: 2 }
+                          Distinct project=[id, messageid] // { arity: 2 }
                             Project (#0, #1) // { arity: 2 }
                               Get l7 // { arity: 3 }
                         Get l6 // { arity: 2 }
@@ -3124,7 +3124,7 @@ Explained Query:
               Get l6 // { arity: 2 }
             Get l4 // { arity: 3 }
             ArrangeBy keys=[[id]] // { arity: 1 }
-              Distinct group_by=[id] // { arity: 1 }
+              Distinct project=[id] // { arity: 1 }
                 Project (#0) // { arity: 1 }
                   Get l6 // { arity: 2 }
       cte l6 =
@@ -3134,12 +3134,12 @@ Explained Query:
               %0:l0[#0]UKA » %1[#0]K » %2[#0]UKA
             Get l0 // { arity: 1 }
             ArrangeBy keys=[[creatorpersonid]] // { arity: 2 }
-              Distinct group_by=[creatorpersonid, messageid] // { arity: 2 }
+              Distinct project=[creatorpersonid, messageid] // { arity: 2 }
                 Project (#1, #9) // { arity: 2 }
                   Filter (2012-12-14 00:00:00 = date_to_timestamp(timestamp_with_time_zone_to_date(creationdate))) // { arity: 13 }
                     ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }
             ArrangeBy keys=[[messageid]] // { arity: 1 }
-              Distinct group_by=[messageid] // { arity: 1 }
+              Distinct project=[messageid] // { arity: 1 }
                 Project (#1) // { arity: 1 }
                   Filter (tagid) IS NOT NULL // { arity: 8 }
                     Join on=(tagid = id) type=differential // { arity: 8 }
@@ -3157,7 +3157,7 @@ Explained Query:
               Get l3 // { arity: 2 }
             Get l4 // { arity: 3 }
             ArrangeBy keys=[[id]] // { arity: 1 }
-              Distinct group_by=[id] // { arity: 1 }
+              Distinct project=[id] // { arity: 1 }
                 Project (#0) // { arity: 1 }
                   Get l3 // { arity: 2 }
       cte l4 =
@@ -3170,12 +3170,12 @@ Explained Query:
               %0:l0[#0]UKA » %1[#0]K » %2[#0]UKA
             Get l0 // { arity: 1 }
             ArrangeBy keys=[[creatorpersonid]] // { arity: 2 }
-              Distinct group_by=[creatorpersonid, messageid] // { arity: 2 }
+              Distinct project=[creatorpersonid, messageid] // { arity: 2 }
                 Project (#1, #9) // { arity: 2 }
                   Filter (2012-10-07 00:00:00 = date_to_timestamp(timestamp_with_time_zone_to_date(creationdate))) // { arity: 13 }
                     ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }
             ArrangeBy keys=[[messageid]] // { arity: 1 }
-              Distinct group_by=[messageid] // { arity: 1 }
+              Distinct project=[messageid] // { arity: 1 }
                 Project (#1) // { arity: 1 }
                   Filter (tagid) IS NOT NULL // { arity: 8 }
                     Join on=(tagid = id) type=differential // { arity: 8 }
@@ -3192,7 +3192,7 @@ Explained Query:
           ReadIndex on=message_hastag_tag message_hastag_tag_tagid=[differential join] // { arity: 3 }
       cte l0 =
         ArrangeBy keys=[[id]] // { arity: 1 }
-          Distinct group_by=[id] // { arity: 1 }
+          Distinct project=[id] // { arity: 1 }
             Project (#1) // { arity: 1 }
               Filter (id) IS NOT NULL // { arity: 11 }
                 ReadIndex on=person person_id=[*** full scan ***] // { arity: 11 }
@@ -3269,13 +3269,13 @@ Explained Query:
                       ArrangeBy keys=[[creatorpersonid, containerforumid]] // { arity: 2 }
                         Get l3 // { arity: 2 }
                       ArrangeBy keys=[[personid, forumid]] // { arity: 2 }
-                        Distinct group_by=[personid, forumid] // { arity: 2 }
+                        Distinct project=[personid, forumid] // { arity: 2 }
                           Project (#1, #2) // { arity: 2 }
                             ReadIndex on=forum_hasmember_person forum_hasmember_person_forumid=[*** full scan ***] // { arity: 3 }
                 Get l3 // { arity: 2 }
     With
       cte l3 =
-        Distinct group_by=[creatorpersonid, containerforumid] // { arity: 2 }
+        Distinct project=[creatorpersonid, containerforumid] // { arity: 2 }
           Project (#0, #2) // { arity: 2 }
             Get l2 // { arity: 3 }
       cte l2 =
@@ -3308,7 +3308,7 @@ Explained Query:
             ArrangeBy keys=[[messageid]] // { arity: 13 }
               ReadIndex on=message message_messageid=[differential join] // { arity: 13 }
             ArrangeBy keys=[[messageid]] // { arity: 1 }
-              Distinct group_by=[messageid] // { arity: 1 }
+              Distinct project=[messageid] // { arity: 1 }
                 Project (#1) // { arity: 1 }
                   Join on=(tagid = id) type=differential // { arity: 4 }
                     implementation
@@ -3316,7 +3316,7 @@ Explained Query:
                     ArrangeBy keys=[[tagid]] // { arity: 3 }
                       ReadIndex on=message_hastag_tag message_hastag_tag_tagid=[differential join] // { arity: 3 }
                     ArrangeBy keys=[[id]] // { arity: 1 }
-                      Distinct group_by=[id] // { arity: 1 }
+                      Distinct project=[id] // { arity: 1 }
                         Project (#0) // { arity: 1 }
                           Filter (id) IS NOT NULL // { arity: 5 }
                             ReadIndex on=materialize.public.tag tag_name=[lookup value=("Cosmic_Egg")] // { arity: 5 }
@@ -3382,13 +3382,13 @@ Explained Query:
                       ArrangeBy keys=[[personid, personid]] // { arity: 2 }
                         Get l2 // { arity: 2 }
                       ArrangeBy keys=[[person2id, person1id]] // { arity: 2 }
-                        Distinct group_by=[person2id, person1id] // { arity: 2 }
+                        Distinct project=[person2id, person1id] // { arity: 2 }
                           Project (#1, #2) // { arity: 2 }
                             ReadIndex on=person_knows_person person_knows_person_person1id=[*** full scan ***] // { arity: 3 }
                 Get l2 // { arity: 2 }
     With
       cte l2 =
-        Distinct group_by=[personid, personid] // { arity: 2 }
+        Distinct project=[personid, personid] // { arity: 2 }
           Get l1 // { arity: 2 }
       cte l1 =
         Project (#0, #2) // { arity: 2 }
@@ -3516,19 +3516,19 @@ Explained Query:
             ArrangeBy keys=[[id]] // { arity: 3 }
               Get l0 // { arity: 3 }
             ArrangeBy keys=[[id]] // { arity: 1 }
-              Distinct group_by=[id] // { arity: 1 }
+              Distinct project=[id] // { arity: 1 }
                 Project (#1) // { arity: 1 }
                   Filter (id) IS NOT NULL // { arity: 3 }
                     Get l0 // { arity: 3 }
             ArrangeBy keys=[[id]] // { arity: 1 }
-              Distinct group_by=[id] // { arity: 1 }
+              Distinct project=[id] // { arity: 1 }
                 Project (#1) // { arity: 1 }
                   Filter (id) IS NOT NULL // { arity: 12 }
                     ReadIndex on=materialize.public.person person_locationcityid=[lookup value=(1138)] // { arity: 12 }
   With Mutually Recursive
     cte l0 =
       Reduce group_by=[id, id] aggregates=[min(#2)] // { arity: 3 }
-        Distinct group_by=[id, id, #2] // { arity: 3 }
+        Distinct project=[id, id, #2] // { arity: 3 }
           Union // { arity: 3 }
             Project (#1, #1, #12) // { arity: 3 }
               Map (0) // { arity: 13 }
@@ -3667,7 +3667,7 @@ Explained Query:
                       Map (null) // { arity: 1 }
                         Union // { arity: 0 }
                           Negate // { arity: 0 }
-                            Distinct // { arity: 0 }
+                            Distinct project=[] // { arity: 0 }
                               Project () // { arity: 0 }
                                 Get l2 // { arity: 1 }
                           Constant // { arity: 0 }
@@ -3706,7 +3706,7 @@ Explained Query:
                       Map (null) // { arity: 1 }
                         Union // { arity: 0 }
                           Negate // { arity: 0 }
-                            Distinct // { arity: 0 }
+                            Distinct project=[] // { arity: 0 }
                               Project () // { arity: 0 }
                                 Get l0 // { arity: 1 }
                           Constant // { arity: 0 }
@@ -3831,7 +3831,7 @@ Explained Query:
                       Get l8 // { arity: 6 }
     With Mutually Recursive
       cte l8 =
-        Distinct group_by=[#0, id, id, #3, #4, #5] // { arity: 6 }
+        Distinct project=[#0, id, id, #3, #4, #5] // { arity: 6 }
           Union // { arity: 6 }
             Map (0) // { arity: 6 }
               Union // { arity: 5 }
@@ -3895,7 +3895,7 @@ Explained Query:
                     Get l4 // { arity: 5 }
       cte l4 =
         TopK group_by=[#0, #1, dst] order_by=[#3 asc nulls_last, #4 desc nulls_first] limit=1 // { arity: 5 }
-          Distinct group_by=[#0, #1, dst, #3, #4] // { arity: 5 }
+          Distinct project=[#0, #1, dst, #3, #4] // { arity: 5 }
             Union // { arity: 5 }
               Project (#3, #4, #1, #7, #8) // { arity: 5 }
                 Map ((#6 + bigint_to_double(w)), false) // { arity: 9 }
@@ -3942,16 +3942,16 @@ Explained Query:
               Filter (#1) IS NOT NULL AND (#2) IS NOT NULL // { arity: 3 }
                 Get l2 // { arity: 3 }
             ArrangeBy keys=[[#0, #1, #2]] // { arity: 3 }
-              Distinct group_by=[#0, #1, #2] // { arity: 3 }
+              Distinct project=[#0, #1, #2] // { arity: 3 }
                 Project (#0..=#2) // { arity: 3 }
                   Filter (#1) IS NOT NULL AND (#2) IS NOT NULL // { arity: 5 }
                     Get l0 // { arity: 5 }
       cte l2 =
-        Distinct group_by=[#0, #1, #2] // { arity: 3 }
+        Distinct project=[#0, #1, #2] // { arity: 3 }
           Project (#0..=#2) // { arity: 3 }
             Get l1 // { arity: 6 }
       cte l1 =
-        Distinct group_by=[#0, #1, #2, #3, #4, #5] // { arity: 6 }
+        Distinct project=[#0, #1, #2, #3, #4, #5] // { arity: 6 }
           Get l8 // { arity: 6 }
       cte l0 =
         TopK order_by=[#3 asc nulls_last] limit=1000 // { arity: 5 }
@@ -4035,7 +4035,7 @@ Explained Query:
                     implementation
                       %0[×] » %1:l2[×]
                     ArrangeBy keys=[[]] // { arity: 1 }
-                      Distinct group_by=[#0] // { arity: 1 }
+                      Distinct project=[#0] // { arity: 1 }
                         Get l2 // { arity: 1 }
                     ArrangeBy keys=[[]] // { arity: 1 }
                       Get l2 // { arity: 1 }
@@ -4052,7 +4052,7 @@ Explained Query:
                 Project (#1, #2) // { arity: 2 }
                   Get l0 // { arity: 3 }
               ArrangeBy keys=[[personid]] // { arity: 1 }
-                Distinct group_by=[personid] // { arity: 1 }
+                Distinct project=[personid] // { arity: 1 }
                   Project (#1) // { arity: 1 }
                     Filter (name = "Balkh_Airlines") AND (companyid) IS NOT NULL // { arity: 8 }
                       Join on=(companyid = id) type=differential // { arity: 8 }
@@ -4067,7 +4067,7 @@ Explained Query:
         Project (#2, #0, #1) // { arity: 3 }
           Map (10995116285979) // { arity: 3 }
             Reduce group_by=[dst] aggregates=[min(#1)] // { arity: 2 }
-              Distinct group_by=[dst, #1] // { arity: 2 }
+              Distinct project=[dst, #1] // { arity: 2 }
                 Union // { arity: 2 }
                   Project (#3, #5) // { arity: 2 }
                     Map ((#1 + integer_to_bigint(w))) // { arity: 6 }
@@ -4141,7 +4141,7 @@ Explained Query:
                     implementation
                       %0[×] » %1:l2[×]
                     ArrangeBy keys=[[]] // { arity: 1 }
-                      Distinct group_by=[#0] // { arity: 1 }
+                      Distinct project=[#0] // { arity: 1 }
                         Get l2 // { arity: 1 }
                     ArrangeBy keys=[[]] // { arity: 1 }
                       Get l2 // { arity: 1 }
@@ -4157,7 +4157,7 @@ Explained Query:
               ArrangeBy keys=[[dst]] // { arity: 2 }
                 Get l0 // { arity: 2 }
               ArrangeBy keys=[[personid]] // { arity: 1 }
-                Distinct group_by=[personid] // { arity: 1 }
+                Distinct project=[personid] // { arity: 1 }
                   Project (#1) // { arity: 1 }
                     Filter (name = "Balkh_Airlines") AND (companyid) IS NOT NULL // { arity: 8 }
                       Join on=(companyid = id) type=differential // { arity: 8 }
@@ -4170,7 +4170,7 @@ Explained Query:
     With Mutually Recursive
       cte l0 =
         Reduce group_by=[dst] aggregates=[min(#1)] // { arity: 2 }
-          Distinct group_by=[dst, #1] // { arity: 2 }
+          Distinct project=[dst, #1] // { arity: 2 }
             Union // { arity: 2 }
               Project (#3, #5) // { arity: 2 }
                 Map ((#1 + integer_to_bigint(w))) // { arity: 6 }
@@ -4248,7 +4248,7 @@ Explained Query:
                     implementation
                       %0[×] » %1:l2[×]
                     ArrangeBy keys=[[]] // { arity: 1 }
-                      Distinct group_by=[#0] // { arity: 1 }
+                      Distinct project=[#0] // { arity: 1 }
                         Get l2 // { arity: 1 }
                     ArrangeBy keys=[[]] // { arity: 1 }
                       Get l2 // { arity: 1 }
@@ -4265,7 +4265,7 @@ Explained Query:
                 Project (#1..=#3) // { arity: 3 }
                   Get l0 // { arity: 4 }
               ArrangeBy keys=[[personid]] // { arity: 1 }
-                Distinct group_by=[personid] // { arity: 1 }
+                Distinct project=[personid] // { arity: 1 }
                   Project (#1) // { arity: 1 }
                     Filter (name = "Balkh_Airlines") AND (companyid) IS NOT NULL // { arity: 8 }
                       Join on=(companyid = id) type=differential // { arity: 8 }
@@ -4281,7 +4281,7 @@ Explained Query:
           Map (10995116285979) // { arity: 4 }
             Reduce group_by=[dst, #2] aggregates=[min(#1)] // { arity: 3 }
               Reduce group_by=[dst, #2] aggregates=[min(#1)] // { arity: 3 }
-                Distinct group_by=[dst, #1, #2] // { arity: 3 }
+                Distinct project=[dst, #1, #2] // { arity: 3 }
                   Union // { arity: 3 }
                     Project (#4, #6, #7) // { arity: 3 }
                       Map ((#1 + integer_to_bigint(w)), (#2 + 1)) // { arity: 8 }
@@ -4428,11 +4428,11 @@ Explained Query:
                       Get l11 // { arity: 6 }
     With Mutually Recursive
       cte l11 =
-        Distinct group_by=[#0, personid, personid, #3, #4, #5] // { arity: 6 }
+        Distinct project=[#0, personid, personid, #3, #4, #5] // { arity: 6 }
           Union // { arity: 6 }
             Project (#0..=#2, #4, #3, #5) // { arity: 6 }
               Map (false, 0, 0) // { arity: 6 }
-                Distinct group_by=[#0, personid, personid] // { arity: 3 }
+                Distinct project=[#0, personid, personid] // { arity: 3 }
                   Union // { arity: 3 }
                     Project (#1, #0, #0) // { arity: 3 }
                       Map (10995116285979, false) // { arity: 2 }
@@ -4470,7 +4470,7 @@ Explained Query:
                           Constant // { arity: 0 }
                             - ()
       cte l10 =
-        Distinct // { arity: 0 }
+        Distinct project=[] // { arity: 0 }
           Project () // { arity: 0 }
             Join on=(dst = personid) type=differential // { arity: 2 }
               implementation
@@ -4551,15 +4551,15 @@ Explained Query:
             ArrangeBy keys=[[#0, #1, #2]] // { arity: 3 }
               Get l5 // { arity: 3 }
             ArrangeBy keys=[[#0, #1, #2]] // { arity: 3 }
-              Distinct group_by=[#0, #1, #2] // { arity: 3 }
+              Distinct project=[#0, #1, #2] // { arity: 3 }
                 Project (#0..=#2) // { arity: 3 }
                   Get l3 // { arity: 5 }
       cte l5 =
-        Distinct group_by=[#0, #1, #2] // { arity: 3 }
+        Distinct project=[#0, #1, #2] // { arity: 3 }
           Project (#0..=#2) // { arity: 3 }
             Get l4 // { arity: 6 }
       cte l4 =
-        Distinct group_by=[#0, #1, #2, #3, #4, #5] // { arity: 6 }
+        Distinct project=[#0, #1, #2, #3, #4, #5] // { arity: 6 }
           Get l11 // { arity: 6 }
       cte l3 =
         TopK order_by=[#3 asc nulls_last] limit=1000 // { arity: 5 }
@@ -4567,7 +4567,7 @@ Explained Query:
             Filter (#4 = false) // { arity: 6 }
               Get l11 // { arity: 6 }
       cte l2 =
-        Distinct group_by=[dst] // { arity: 1 }
+        Distinct project=[dst] // { arity: 1 }
           Union // { arity: 1 }
             Project (#2) // { arity: 1 }
               Join on=(#0 = src) type=differential // { arity: 4 }
@@ -4579,7 +4579,7 @@ Explained Query:
                 ArrangeBy keys=[[]] // { arity: 0 }
                   Union // { arity: 0 }
                     Negate // { arity: 0 }
-                      Distinct // { arity: 0 }
+                      Distinct project=[] // { arity: 0 }
                         Project () // { arity: 0 }
                           Join on=(#0 = personid) type=differential // { arity: 2 }
                             implementation

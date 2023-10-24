@@ -728,18 +728,27 @@ impl MirRelationExpr {
             } => {
                 FmtNode {
                     fmt_root: |f, ctx: &mut PlanRenderingContext<'_, MirRelationExpr>| {
-                        if aggregates.len() > 0 {
-                            write!(f, "{}Reduce", ctx.indent)?;
-                        } else {
+                        if aggregates.len() == 0 && !ctx.config.raw_syntax {
                             write!(f, "{}Distinct", ctx.indent)?;
-                        }
-                        if group_key.len() > 0 {
+
                             if let Some(cols) = input.column_names(ctx) {
                                 let group_key = HumanizedExpr::seq(group_key, Some(cols));
-                                write!(f, " group_by=[{}]", separated(", ", group_key))?;
+                                write!(f, " project=[{}]", separated(", ", group_key))?;
                             } else {
                                 let group_key = CompactScalarSeq(group_key);
-                                write!(f, " group_by=[{}]", group_key)?;
+                                write!(f, " project=[{}]", group_key)?;
+                            }
+                        } else {
+                            write!(f, "{}Reduce", ctx.indent)?;
+
+                            if group_key.len() > 0 {
+                                if let Some(cols) = input.column_names(ctx) {
+                                    let group_key = HumanizedExpr::seq(group_key, Some(cols));
+                                    write!(f, " group_by=[{}]", separated(", ", group_key))?;
+                                } else {
+                                    let group_key = CompactScalarSeq(group_key);
+                                    write!(f, " group_by=[{}]", group_key)?;
+                                }
                             }
                         }
                         if aggregates.len() > 0 {

@@ -1232,7 +1232,7 @@ Explained Query:
     Get l0
   With Mutually Recursive [recursion_limit=3, return_at_limit]
     cte l0 =
-      Distinct group_by=[#0]
+      Distinct project=[#0]
         Union
           ReadIndex on=t5 idx_t5_f1=[*** full scan ***]
           Project (#2)

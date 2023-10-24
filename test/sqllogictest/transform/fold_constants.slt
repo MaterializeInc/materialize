@@ -96,11 +96,11 @@ Explained Query:
     Get l0 // { arity: 2 }
   With Mutually Recursive
     cte l0 =
-      Distinct group_by=[#0, #1] monotonic // { arity: 2 }
+      Distinct project=[#0, #1] monotonic // { arity: 2 }
         Union // { arity: 2 }
-          Distinct group_by=[#0, #1] monotonic // { arity: 2 }
+          Distinct project=[#0, #1] monotonic // { arity: 2 }
             Union // { arity: 2 }
-              Distinct group_by=[#0, #1] monotonic // { arity: 2 }
+              Distinct project=[#0, #1] monotonic // { arity: 2 }
                 Union // { arity: 2 }
                   Get l0 // { arity: 2 }
                   Constant // { arity: 2 }
@@ -136,7 +136,7 @@ Explained Query:
     Get l0 // { arity: 1 }
   With Mutually Recursive
     cte l0 =
-      Distinct group_by=[#0] // { arity: 1 }
+      Distinct project=[#0] // { arity: 1 }
         Union // { arity: 1 }
           Project (#1) // { arity: 1 }
             ReadStorage materialize.public.edges // { arity: 2 }

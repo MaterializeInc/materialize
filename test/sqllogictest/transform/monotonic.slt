@@ -82,14 +82,14 @@ SELECT x, MAX(y) FROM (SELECT * FROM c1 UNION SELECT * FROM c2) GROUP BY x
 Explained Query:
   Return
     Reduce group_by=[#0] aggregates=[max(#1)] monotonic
-      Distinct group_by=[#0, #1] monotonic
+      Distinct project=[#0, #1] monotonic
         Union
           Get l0
           Get l1
   With Mutually Recursive
     cte l1 =
       Union
-        Distinct group_by=[#0, (#0 + 1)] monotonic
+        Distinct project=[#0, (#0 + 1)] monotonic
           Project (#0)
             Filter (#0 >= 1)
               Get l0
@@ -99,7 +99,7 @@ Explained Query:
           - (5, 6)
     cte l0 =
       Union
-        Distinct group_by=[#0, (#0 - 1)] monotonic
+        Distinct project=[#0, (#0 - 1)] monotonic
           Project (#1)
             Filter (#0 < 1)
               Get l1
@@ -133,7 +133,7 @@ SELECT x, MAX(y) FROM (SELECT * FROM c1 UNION SELECT * FROM c2) GROUP BY x
 Explained Query:
   Return
     Reduce group_by=[#0] aggregates=[max(#1)]
-      Distinct group_by=[#0, #1]
+      Distinct project=[#0, #1]
         Union
           Get l0
           Get l1
@@ -141,7 +141,7 @@ Explained Query:
     cte l1 =
       TopK limit=2
         Union
-          Distinct group_by=[#0, (#0 + 1)]
+          Distinct project=[#0, (#0 + 1)]
             Project (#0)
               Filter (#0 >= 1)
                 Get l0
@@ -151,7 +151,7 @@ Explained Query:
             - (5, 6)
     cte l0 =
       Union
-        Distinct group_by=[#0, (#0 - 1)]
+        Distinct project=[#0, (#0 - 1)]
           Project (#1)
             Filter (#0 < 1)
               Get l1

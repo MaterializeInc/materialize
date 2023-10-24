@@ -24,9 +24,9 @@ build apply=ReductionPushdown
 ----
 Project (#0)
   Join on=(#0 = #1)
-    Distinct group_by=[#1]
+    Distinct project=[#1]
       Get x
-    Distinct group_by=[#1]
+    Distinct project=[#1]
       Get y
 
 ## distinct(<multiple columns from same input>)
@@ -36,9 +36,9 @@ build apply=ReductionPushdown
 ----
 Project (#0, #1)
   Join on=(#1 = #2)
-    Distinct group_by=[#0, #1]
+    Distinct project=[#0, #1]
       Get x
-    Distinct group_by=[#1]
+    Distinct project=[#1]
       Get y
 
 ## distinct(<multiple columns from differing inputs>)
@@ -48,9 +48,9 @@ build apply=ReductionPushdown
 ----
 Project (#0, #1, #3)
   Join on=(#1 = #2)
-    Distinct group_by=[#0, #1]
+    Distinct project=[#0, #1]
       Get x
-    Distinct group_by=[#1, #0]
+    Distinct project=[#1, #0]
       Get y
 
 ## Expressions in join equivalence classes
@@ -60,9 +60,9 @@ build apply=ReductionPushdown
 ----
 Project (#1)
   Join on=(#0 = #1)
-    Distinct group_by=[substr(#1, 5)]
+    Distinct project=[substr(#1, 5)]
       Get x
-    Distinct group_by=[#1]
+    Distinct project=[#1]
       Get y
 
 build apply=ReductionPushdown
@@ -74,9 +74,9 @@ build apply=ReductionPushdown
 ----
 Project (#0)
   Join on=(#0 = #1)
-    Distinct group_by=[substr(#1, 5)]
+    Distinct project=[substr(#1, 5)]
       Get x
-    Distinct group_by=[#1]
+    Distinct project=[#1]
       Get y
 
 ### Negative test: Do not do reduction pushdown
@@ -89,7 +89,7 @@ build apply=ReductionPushdown
     [(call_variadic substr [#1 5])]
     [])
 ----
-Distinct group_by=[substr(#1, 5)]
+Distinct project=[substr(#1, 5)]
   Join on=(substr(#1, 5) = (#1 || #3))
     Get x
     Get y
@@ -102,7 +102,7 @@ build apply=ReductionPushdown
     [(call_variadic substr [#1 5])]
     [])
 ----
-Distinct group_by=[substr(#1, 5)]
+Distinct project=[substr(#1, 5)]
   Join on=(substr(#1, 5) = #3 AND (#1 || #3) = "hello")
     Get x
     Get y
@@ -116,7 +116,7 @@ build apply=ReductionPushdown
     [(call_binary text_concat #1 #3)]
     [])
 ----
-Distinct group_by=[(#1 || #3)]
+Distinct project=[(#1 || #3)]
   Join on=((#1 || #3) = "hello")
     Get x
     Get y
@@ -129,11 +129,11 @@ build apply=ReductionPushdown
 ----
 Project (#0)
   Join on=(eq(#0, #1, #2))
-    Distinct group_by=[#1]
+    Distinct project=[#1]
       Get x
-    Distinct group_by=[#1]
+    Distinct project=[#1]
       Get y
-    Distinct group_by=[#1]
+    Distinct project=[#1]
       Get y
 
 build apply=ReductionPushdown
@@ -141,9 +141,9 @@ build apply=ReductionPushdown
 ----
 Project (#0, #2)
   Join on=(#0 = #1)
-    Distinct group_by=[#1]
+    Distinct project=[#1]
       Get x
-    Distinct group_by=[#1, #3]
+    Distinct project=[#1, #3]
       Join on=(#0 = #2)
         Get y
         Get z
@@ -155,11 +155,11 @@ build apply=ReductionPushdown
 ----
 Project (#0, #2)
   Join on=(#1 = #2)
-    Distinct group_by=[#3, #1]
+    Distinct project=[#3, #1]
       Join on=(#0 = #2)
         Get x
         Get y
-    Distinct group_by=[#1]
+    Distinct project=[#1]
       Get z
 
 ### Push down reductions on join(x, y) and join(z, w)
@@ -169,11 +169,11 @@ build apply=ReductionPushdown
 ----
 Project (#0, #3)
   Join on=(#0 = #2 AND #1 = #3)
-    Distinct group_by=[#3, #3]
+    Distinct project=[#3, #3]
       Join on=(#0 = #2)
         Get x
         Get y
-    Distinct group_by=[#1, #1]
+    Distinct project=[#1, #1]
       Join on=(#0 = #2)
         Get z
         Get w
@@ -187,7 +187,7 @@ Project (#0, #0)
     implementation
       %0[#0]UKA » %1[#0]UKA
     ArrangeBy keys=[[#0]]
-      Distinct group_by=[#0]
+      Distinct project=[#0]
         Project (#2)
           Join on=(#0 = #1) type=differential
             implementation
@@ -198,7 +198,7 @@ Project (#0, #0)
             ArrangeBy keys=[[#0]]
               Get y
     ArrangeBy keys=[[#0]]
-      Distinct group_by=[#0]
+      Distinct project=[#0]
         Project (#1)
           Join on=(#0 = #2) type=differential
             implementation
@@ -219,7 +219,7 @@ build apply=ReductionPushdown
     [(call_binary text_concat #1 #3)]
     [])
 ----
-Distinct group_by=[(#1 || #3)]
+Distinct project=[(#1 || #3)]
   Join on=((#1 || #3) = "hello" AND #1 = #5)
     Get x
     Get y
@@ -232,11 +232,11 @@ build apply=ReductionPushdown
 ----
 Project (#1)
   Join on=(#0 = #1)
-    Distinct
+    Distinct project=[]
       Get x
-    Distinct group_by=[#1]
+    Distinct project=[#1]
       Get y
-    Distinct group_by=[#1]
+    Distinct project=[#1]
       Get z
 
 build apply=ReductionPushdown
@@ -244,9 +244,9 @@ build apply=ReductionPushdown
 ----
 Project (#0)
   CrossJoin
-    Distinct group_by=[#0]
+    Distinct project=[#0]
       Get x
-    Distinct
+    Distinct project=[]
       Join on=(#1 = #3)
         Get y
         Get z
@@ -260,7 +260,7 @@ Project (#0, #1)
   Join on=(#0 = #2)
     Reduce group_by=[#1] aggregates=[sum(distinct #0)]
       Get x
-    Distinct group_by=[#1]
+    Distinct project=[#1]
       Get y
 
 build apply=ReductionPushdown
@@ -268,11 +268,11 @@ build apply=ReductionPushdown
 ----
 Project (#1, #2)
   Join on=(#0 = #1)
-    Distinct group_by=[#1]
+    Distinct project=[#1]
       Get x
     Reduce group_by=[#1] aggregates=[sum(distinct #0)]
       Get y
-    Distinct
+    Distinct project=[]
       Get z
 
 build apply=ReductionPushdown
@@ -287,7 +287,7 @@ Project (#2, #1, #3)
       Get x
     Reduce group_by=[#1] aggregates=[sum(distinct #0)]
       Get y
-    Distinct group_by=[#1]
+    Distinct project=[#1]
       Get z
 
 # Pushdown agg(distinct <single-component multi-input expression>)
@@ -306,7 +306,7 @@ Project (#3, #1, #2)
         Get x
         Get y
         Get z
-    Distinct group_by=[#0]
+    Distinct project=[#0]
       Get w
 
 # Empty group by key tests
@@ -318,7 +318,7 @@ Project (#0)
   CrossJoin
     Reduce aggregates=[sum(distinct #0)]
       Get x
-    Distinct
+    Distinct project=[]
       Get y
 
 build apply=ReductionPushdown

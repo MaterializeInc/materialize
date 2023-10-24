@@ -115,7 +115,7 @@ Return
     Get l0
 With Mutually Recursive
   cte l0 = // { types: "(bigint, bigint)" }
-    Distinct group_by=[#0, #1]
+    Distinct project=[#0, #1]
       Union
         Map (42)
           Project (#0)
@@ -130,7 +130,7 @@ Return
       Get l0
 With Mutually Recursive
   cte l0 =
-    Distinct group_by=[#0]
+    Distinct project=[#0]
       Union
         Project (#0)
           Get t0
@@ -147,7 +147,7 @@ Return
   Get l1
 With Mutually Recursive
   cte l1 = // { types: "(bigint, bigint, bigint)" }
-    Distinct group_by=[#0, #1, #2]
+    Distinct project=[#0, #1, #2]
       Union
         CrossJoin
           Get t0
@@ -156,7 +156,7 @@ With Mutually Recursive
           Project (#0, #1)
             Get l1
   cte l0 = // { types: "(bigint)" }
-    Distinct group_by=[#0]
+    Distinct project=[#0]
       Union
         Constant // { types: "(bigint)" }
           - (17)
@@ -168,7 +168,7 @@ Return
 With Mutually Recursive
   cte l1 =
     Map (17)
-      Distinct group_by=[#0, #1]
+      Distinct project=[#0, #1]
         Union
           CrossJoin
             Get t0
@@ -176,7 +176,7 @@ With Mutually Recursive
           Project (#0, #1)
             Get l1
   cte l0 =
-    Distinct
+    Distinct project=[]
       Union
         Constant
           - ()

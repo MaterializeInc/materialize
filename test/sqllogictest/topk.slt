@@ -105,10 +105,10 @@ Explained Query:
       Map (null) // { arity: 2 }
         Union // { arity: 1 }
           Negate // { arity: 1 }
-            Distinct group_by=[#0] // { arity: 1 }
+            Distinct project=[#0] // { arity: 1 }
               Project (#1) // { arity: 1 }
                 Get l0 // { arity: 2 }
-          Distinct group_by=[#0] // { arity: 1 }
+          Distinct project=[#0] // { arity: 1 }
             Project (#1) // { arity: 1 }
               ReadStorage materialize.public.cities // { arity: 3 }
   With
