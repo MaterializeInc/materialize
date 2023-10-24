@@ -162,6 +162,7 @@ mz_introspection mz_introspection my_app 1 {} success <null> 1 standard true "SE
   SELECT sql FROM mz_internal.mz_statement_execution_history mseh, mz_internal.mz_prepared_statement_history mpsh, begin_tid
   WHERE mseh.prepared_statement_id = mpsh.id
   AND mseh.transaction_id = begin_tid.transaction_id
+  AND mseh.application_name = 'my_app'
 "BEGIN --hello"
 "SELECT 'transaction statement 1'"
 "SELECT 'transaction statement 2'"
