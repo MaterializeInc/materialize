@@ -495,6 +495,7 @@ impl SessionClient {
         outer_ctx_extra: Option<ExecuteContextExtra>,
     ) -> Result<(ExecuteResponse, Instant), AdapterError> {
         let execute_started = Instant::now();
+        let tid = self.session().transaction().inner().map(|t| t.id);
         let response = self
             .send_with_cancel(
                 |tx, session| Command::Execute {

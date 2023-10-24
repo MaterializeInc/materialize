@@ -249,6 +249,7 @@ impl Coordinator {
             application_name,
             transaction_isolation,
             execution_timestamp,
+            transaction_id,
         } = record;
 
         let cluster = cluster_id.map(|id| id.to_string());
@@ -264,6 +265,7 @@ impl Coordinator {
             cluster_name.as_ref().map(String::as_str).into(),
             Datum::String(&*transaction_isolation),
             (*execution_timestamp).into(),
+            Datum::UInt64(*transaction_id),
         ]);
         packer
             .push_array(
@@ -506,6 +508,7 @@ impl Coordinator {
             execution_timestamp: None,
             application_name: session.application_name().to_string(),
             transaction_isolation: session.vars().transaction_isolation().to_string(),
+            transaction_id: session.transaction().inner().expect("Every statement runs in an explicit or implicit transaction").id,
         };
         let mseh_update = Self::pack_statement_began_execution_update(&record);
         self.statement_logging
