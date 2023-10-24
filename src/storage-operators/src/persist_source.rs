@@ -106,59 +106,56 @@ where
 {
     let shard_metrics = persist_clients.shard_metrics(&metadata.data_shard, &source_id.to_string());
 
-    let (stream, token) = scope.scoped(
-        &format!("skip_granular_backpressure({})", source_id),
-        |scope| {
-            let (flow_control, feedback_handle) = match max_inflight_bytes {
-                Some(max_inflight_bytes) => {
-                    let backpressure_metrics = BackpressureMetrics {
-                        emitted_bytes: Arc::clone(&shard_metrics.backpressure_emitted_bytes),
-                        last_backpressured_bytes: Arc::clone(
-                            &shard_metrics.backpressure_last_backpressured_bytes,
-                        ),
-                        retired_bytes: Arc::clone(&shard_metrics.backpressure_retired_bytes),
-                    };
+    let (stream, token) = scope.scoped(&format!("granular_backpressure({})", source_id), |scope| {
+        let (flow_control, feedback_handle) = match max_inflight_bytes {
+            Some(max_inflight_bytes) => {
+                let backpressure_metrics = BackpressureMetrics {
+                    emitted_bytes: Arc::clone(&shard_metrics.backpressure_emitted_bytes),
+                    last_backpressured_bytes: Arc::clone(
+                        &shard_metrics.backpressure_last_backpressured_bytes,
+                    ),
+                    retired_bytes: Arc::clone(&shard_metrics.backpressure_retired_bytes),
+                };
 
-                    let (feedback_handle, feedback_data) = scope.feedback(Default::default());
-                    let flow_control = FlowControl {
-                        progress_stream: feedback_data,
-                        max_inflight_bytes,
-                        summary: (Default::default(), 1),
-                        metrics: Some(backpressure_metrics),
-                    };
-                    (Some(flow_control), Some(feedback_handle))
-                }
-                None => (None, None),
-            };
+                let (feedback_handle, feedback_data) = scope.feedback(Default::default());
+                let flow_control = FlowControl {
+                    progress_stream: feedback_data,
+                    max_inflight_bytes,
+                    summary: (Default::default(), 1),
+                    metrics: Some(backpressure_metrics),
+                };
+                (Some(flow_control), Some(feedback_handle))
+            }
+            None => (None, None),
+        };
 
-            let (stream, token) = persist_source_core(
-                scope,
-                source_id,
-                persist_clients,
-                metadata,
-                as_of,
-                until,
-                map_filter_project,
-                flow_control,
-            );
+        let (stream, token) = persist_source_core(
+            scope,
+            source_id,
+            persist_clients,
+            metadata,
+            as_of,
+            until,
+            map_filter_project,
+            flow_control,
+        );
 
-            let stream = match feedback_handle {
-                Some(feedback_handle) => {
-                    let handle = mz_timely_util::probe::Handle::default();
-                    let probe = mz_timely_util::probe::source(
-                        scope.clone(),
-                        format!("upsert_probe({source_id})"),
-                        handle.clone(),
-                    );
-                    probe.connect_loop(feedback_handle);
-                    stream.probe_notify_with(vec![handle])
-                }
-                None => stream,
-            };
+        let stream = match feedback_handle {
+            Some(feedback_handle) => {
+                let handle = mz_timely_util::probe::Handle::default();
+                let probe = mz_timely_util::probe::source(
+                    scope.clone(),
+                    format!("upsert_probe({source_id})"),
+                    handle.clone(),
+                );
+                probe.connect_loop(feedback_handle);
+                stream.probe_notify_with(vec![handle])
+            }
+            None => stream,
+        };
 
-            (stream.leave(), token)
-        },
-    );
+        (stream.leave(), token)
+    });
     let (ok_stream, err_stream) = stream.ok_err(|(d, t, r)| match d {
         Ok(row) => Ok((row, t.0, r)),
         Err(err) => Err((err, t.0, r)),

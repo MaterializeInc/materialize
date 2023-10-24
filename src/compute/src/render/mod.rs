@@ -216,7 +216,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                         dataflow.as_of.clone(),
                         dataflow.until.clone(),
                         mfp.as_mut(),
-                        Some(compute_state.dataflow_max_inflight_bytes),
+                        compute_state.dataflow_max_inflight_bytes,
                     );
 
                     // If `mfp` is non-identity, we need to apply what remains.

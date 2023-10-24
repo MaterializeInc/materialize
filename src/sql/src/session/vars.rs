@@ -998,9 +998,9 @@ const CRDB_TCP_USER_TIMEOUT: ServerVar<Duration> = ServerVar {
 };
 
 /// The maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
-const DATAFLOW_MAX_INFLIGHT_BYTES: ServerVar<usize> = ServerVar {
+const DATAFLOW_MAX_INFLIGHT_BYTES: ServerVar<Option<usize>> = ServerVar {
     name: UncasedStr::new("dataflow_max_inflight_bytes"),
-    value: &usize::MAX,
+    value: &None,
     description: "The maximum number of in-flight bytes emitted by persist_sources feeding \
                   dataflows (Materialize).",
     internal: true,
@@ -3036,7 +3036,7 @@ impl SystemVars {
     }
 
     /// Returns the `dataflow_max_inflight_bytes` configuration parameter.
-    pub fn dataflow_max_inflight_bytes(&self) -> usize {
+    pub fn dataflow_max_inflight_bytes(&self) -> Option<usize> {
         *self.expect_value(&DATAFLOW_MAX_INFLIGHT_BYTES)
     }
 

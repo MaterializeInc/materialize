@@ -83,7 +83,7 @@ pub struct ComputeState {
     /// Max size in bytes of any result.
     max_result_size: u32,
     /// Maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
-    pub dataflow_max_inflight_bytes: usize,
+    pub dataflow_max_inflight_bytes: Option<usize>,
     /// Specification for rendering linear joins.
     pub linear_join_spec: LinearJoinSpec,
     /// Metrics for this replica.
@@ -115,7 +115,7 @@ impl ComputeState {
             persist_clients,
             command_history,
             max_result_size: u32::MAX,
-            dataflow_max_inflight_bytes: usize::MAX,
+            dataflow_max_inflight_bytes: None,
             linear_join_spec: Default::default(),
             metrics,
             tracing_handle,
