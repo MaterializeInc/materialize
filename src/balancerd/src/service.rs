@@ -101,7 +101,7 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
         args.tls.into_config()?,
     );
     let metrics = Metrics::new(&config, &metrics_registry);
-    let service = BalancerService::new(config, metrics);
+    let service = BalancerService::new(config, metrics).await?;
     service.serve().await?;
     info!("balancer service safely exited");
     Ok(())
