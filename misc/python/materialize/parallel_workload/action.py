@@ -540,7 +540,8 @@ class CreateClusterAction(Action):
 class DropClusterAction(Action):
     def errors_to_ignore(self) -> list[str]:
         return [
-            "cannot drop cluster with active objects",
+            # cannot drop cluster "..." because other objects depend on it
+            "because other objects depend on it",
         ] + super().errors_to_ignore()
 
     def run(self, exe: Executor) -> None:
