@@ -909,6 +909,19 @@ submit a PR to fix it!
 * Accept PRs that improve the overall health of the codebase, even if they
   are not perfect.
 
+## Common Issues
+
+### Stuck CLA check
+
+Taken from the [cla-assistant `README.md`](https://github.com/cla-assistant/cla-assistant/blob/main/COMMON_ISSUES.md#cla-assistant-status-or-comment-not-updated-1).
+
+Sometimes it happens that while you signed the CLA the status doesn't get updated.
+Might be a technical issue or some other problem. Most temporary issues can be solved by manually triggering a new check with navigating to
+```
+https://cla-assistant.io/check/<orgname>/<reponame>?pullRequest=<pr_number>
+```
+replacing `<orgname>`, `<reponame>` and `<pr_number>` with your respective values.
+
 [`29f8f46b9`]: https://github.com/MaterializeInc/materialize/commit/29f8f46b92280071c96b294d414675aa626f9403
 [#3808]: https://github.com/MaterializeInc/materialize/pull/3808
 [#3982]: https://github.com/MaterializeInc/materialize/pull/3982
