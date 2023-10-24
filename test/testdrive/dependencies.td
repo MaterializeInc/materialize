@@ -407,7 +407,7 @@ contains:cannot drop type "int4_list": still depended upon by type "int4_list_li
 2
 
 ! CREATE OR REPLACE VIEW v3 AS SELECT 3
-contains:cannot drop view v3: still depended upon by view v4
+contains:cannot drop view "v3": still depended upon by view "v4"
 
 > CREATE OR REPLACE VIEW v4 AS SELECT 3
 > SELECT * FROM v4
@@ -427,7 +427,7 @@ contains:cannot drop view v3: still depended upon by view v4
 > CREATE VIEW test2 AS SELECT * FROM test1;
 
 ! DROP VIEW test1;
-contains:cannot drop view test1: still depended upon by view test2
+contains:cannot drop view "test1": still depended upon by view "test2"
 
 # Succeeds even though it's dependent on.
 > CREATE VIEW IF NOT EXISTS test1 AS SELECT 2 as b;
