@@ -63,7 +63,7 @@ class Environment:
             environment_assignment,
         )
 
-    def wait_for_environmentd(self, max_attempts: int = 300) -> dict[str, Any]:
+    def wait_for_environmentd(self, max_attempts: int = 600) -> dict[str, Any]:
         def get_environment() -> Response:
             response = self.region_api_requests.get(
                 "/api/region",
