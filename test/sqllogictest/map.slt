@@ -175,6 +175,11 @@ SELECT '{""=>1}'::map[text=>int] ? ''
 true
 
 query T
+SELECT '{"1" => NULL}'::map[text=>text] ? ''
+----
+false
+
+query T
 SELECT '{hello=>{world=>false}}'::map[text=>map[text=>bool]] -> 'hello'::text ? 'world'::text
 ----
 true
