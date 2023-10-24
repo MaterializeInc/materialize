@@ -508,7 +508,11 @@ impl Coordinator {
             execution_timestamp: None,
             application_name: session.application_name().to_string(),
             transaction_isolation: session.vars().transaction_isolation().to_string(),
-            transaction_id: session.transaction().inner().expect("Every statement runs in an explicit or implicit transaction").id,
+            transaction_id: session
+                .transaction()
+                .inner()
+                .expect("Every statement runs in an explicit or implicit transaction")
+                .id,
         };
         let mseh_update = Self::pack_statement_began_execution_update(&record);
         self.statement_logging
