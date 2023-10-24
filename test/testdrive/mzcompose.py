@@ -79,17 +79,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if args.aws_region is None:
         dependencies += ["localstack"]
 
-    if args.default_timeout is None:
-        timeout_arg = {}
-    else:
-        timeout_arg = {"default_timeout": f"{args.default_timeout}s"}
-
     testdrive = Testdrive(
         forward_buildkite_shard=True,
         kafka_default_partitions=args.kafka_default_partitions,
         aws_region=args.aws_region,
         validate_postgres_stash="materialized",
-        **timeout_arg,
+        default_timeout=args.default_timeout,
     )
 
     materialized = Materialized(
