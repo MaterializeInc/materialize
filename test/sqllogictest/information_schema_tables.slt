@@ -545,6 +545,10 @@ mz_prepared_statement_history
 SOURCE
 materialize
 mz_internal
+mz_prepared_statement_history_redacted
+VIEW
+materialize
+mz_internal
 mz_records_per_dataflow
 VIEW
 materialize
@@ -703,6 +707,10 @@ materialize
 mz_internal
 mz_statement_execution_history
 SOURCE
+materialize
+mz_internal
+mz_statement_execution_history_redacted
+VIEW
 materialize
 mz_internal
 mz_storage_shards

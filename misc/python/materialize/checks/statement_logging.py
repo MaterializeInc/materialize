@@ -24,6 +24,8 @@ class StatementLogging(Check):
                 """
                 $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
                 ALTER SYSTEM SET statement_logging_max_sample_rate TO 1.0
+                $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                ALTER SYSTEM SET enable_rbac_checks TO false
                 """
             )
         )
