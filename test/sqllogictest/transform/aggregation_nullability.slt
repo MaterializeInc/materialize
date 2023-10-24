@@ -37,7 +37,7 @@ Explained Query:
                     ArrangeBy keys=[[#0]] // { arity: 1 }
                       Get l1 // { arity: 1 }
                     ArrangeBy keys=[[#0]] // { arity: 1 }
-                      Distinct group_by=[#0] // { arity: 1 }
+                      Distinct project=[#0] // { arity: 1 }
                         Get l0 // { arity: 1 }
               Get l1 // { arity: 1 }
           Project (#0, #0) // { arity: 2 }
@@ -120,7 +120,7 @@ Explained Query:
                   ArrangeBy keys=[[#0]] // { arity: 2 }
                     ReadStorage materialize.public.t1 // { arity: 2 }
                   ArrangeBy keys=[[#0]] // { arity: 1 }
-                    Distinct group_by=[#0] // { arity: 1 }
+                    Distinct project=[#0] // { arity: 1 }
                       Project (#0) // { arity: 1 }
                         Get l0 // { arity: 2 }
             ReadStorage materialize.public.t1 // { arity: 2 }
@@ -163,7 +163,7 @@ Explained Query:
                     ArrangeBy keys=[[#0]] // { arity: 2 }
                       ReadStorage materialize.public.t1 // { arity: 2 }
                     ArrangeBy keys=[[#0]] // { arity: 1 }
-                      Distinct group_by=[#0] // { arity: 1 }
+                      Distinct project=[#0] // { arity: 1 }
                         Project (#0) // { arity: 1 }
                           Get l0 // { arity: 2 }
               ReadStorage materialize.public.t1 // { arity: 2 }
@@ -206,7 +206,7 @@ Explained Query:
                     ArrangeBy keys=[[#0]] // { arity: 2 }
                       ReadStorage materialize.public.t1 // { arity: 2 }
                     ArrangeBy keys=[[#0]] // { arity: 1 }
-                      Distinct group_by=[#0] // { arity: 1 }
+                      Distinct project=[#0] // { arity: 1 }
                         Project (#0) // { arity: 1 }
                           Get l0 // { arity: 2 }
               ReadStorage materialize.public.t1 // { arity: 2 }
@@ -324,7 +324,7 @@ Explained Query:
                     ArrangeBy keys=[[#0]] // { arity: 1 }
                       Get l1 // { arity: 1 }
                     ArrangeBy keys=[[#0]] // { arity: 1 }
-                      Distinct group_by=[#0] // { arity: 1 }
+                      Distinct project=[#0] // { arity: 1 }
                         Project (#0) // { arity: 1 }
                           Get l0 // { arity: 2 }
               Get l1 // { arity: 1 }
@@ -424,7 +424,7 @@ Explained Query:
                     ArrangeBy keys=[[#0]] // { arity: 1 }
                       Get l1 // { arity: 1 }
                     ArrangeBy keys=[[#0]] // { arity: 1 }
-                      Distinct group_by=[#0] // { arity: 1 }
+                      Distinct project=[#0] // { arity: 1 }
                         Get l0 // { arity: 1 }
               Get l1 // { arity: 1 }
           Project (#0, #0) // { arity: 2 }
@@ -470,7 +470,7 @@ Explained Query:
                   ArrangeBy keys=[[#0]] // { arity: 1 }
                     Get l1 // { arity: 1 }
                   ArrangeBy keys=[[#0]] // { arity: 1 }
-                    Distinct group_by=[#0] // { arity: 1 }
+                    Distinct project=[#0] // { arity: 1 }
                       Project (#0) // { arity: 1 }
                         Get l0 // { arity: 2 }
             Get l1 // { arity: 1 }
@@ -515,7 +515,7 @@ Explained Query:
                   ArrangeBy keys=[[#0]] // { arity: 1 }
                     Get l1 // { arity: 1 }
                   ArrangeBy keys=[[#0]] // { arity: 1 }
-                    Distinct group_by=[#0] // { arity: 1 }
+                    Distinct project=[#0] // { arity: 1 }
                       Project (#0) // { arity: 1 }
                         Get l0 // { arity: 2 }
             Get l1 // { arity: 1 }
@@ -639,7 +639,7 @@ Explained Query:
                   ArrangeBy keys=[[#1]] // { arity: 2 }
                     ReadStorage materialize.public.t1 // { arity: 2 }
                   ArrangeBy keys=[[#0]] // { arity: 1 }
-                    Distinct group_by=[#0] // { arity: 1 }
+                    Distinct project=[#0] // { arity: 1 }
                       Project (#1) // { arity: 1 }
                         Get l0 // { arity: 3 }
             ReadStorage materialize.public.t1 // { arity: 2 }
@@ -680,7 +680,7 @@ Explained Query:
                     ArrangeBy keys=[[#1]] // { arity: 2 }
                       ReadStorage materialize.public.t1 // { arity: 2 }
                     ArrangeBy keys=[[#0]] // { arity: 1 }
-                      Distinct group_by=[#0] // { arity: 1 }
+                      Distinct project=[#0] // { arity: 1 }
                         Project (#1) // { arity: 1 }
                           Get l0 // { arity: 3 }
               ReadStorage materialize.public.t1 // { arity: 2 }
@@ -829,10 +829,10 @@ Explained Query:
                         Union // { arity: 2 }
                           Map (6) // { arity: 2 }
                             Negate // { arity: 1 }
-                              Distinct group_by=[#0] // { arity: 1 }
+                              Distinct project=[#0] // { arity: 1 }
                                 Project (#1) // { arity: 1 }
                                   Get l0 // { arity: 2 }
-                          Distinct group_by=[#0, #1] // { arity: 2 }
+                          Distinct project=[#0, #1] // { arity: 2 }
                             ReadStorage materialize.public.t3 // { arity: 2 }
                       ArrangeBy keys=[[#0, #1]] // { arity: 2 }
                         ReadStorage materialize.public.t3 // { arity: 2 }
@@ -894,10 +894,10 @@ Explained Query:
                 ArrangeBy keys=[[#0]] // { arity: 1 }
                   Union // { arity: 1 }
                     Negate // { arity: 1 }
-                      Distinct group_by=[#0] // { arity: 1 }
+                      Distinct project=[#0] // { arity: 1 }
                         Project (#0) // { arity: 1 }
                           Get l0 // { arity: 2 }
-                    Distinct group_by=[#0] // { arity: 1 }
+                    Distinct project=[#0] // { arity: 1 }
                       ReadStorage materialize.public.t2 // { arity: 1 }
                 ArrangeBy keys=[[#0]] // { arity: 1 }
                   ReadStorage materialize.public.t2 // { arity: 1 }

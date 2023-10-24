@@ -27,7 +27,7 @@ roundtrip OK
 
 # Distinct without key
 roundtrip
-Distinct monotonic
+Distinct project=[] monotonic
   Constant // { types: "(text, bigint)" }
     - ("a", 2)
     - ("a", 4)
@@ -36,7 +36,7 @@ roundtrip OK
 
 # Distinct with key
 roundtrip
-Distinct group_by=[#0, #1] exp_group_size=4
+Distinct project=[#0, #1] exp_group_size=4
   Constant // { types: "(text, bigint)" }
     - ("a", 2)
     - ("a", 4)

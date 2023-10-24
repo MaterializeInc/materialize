@@ -259,7 +259,7 @@ build apply=ProjectionPushdown
     [])
 ----
 Project ()
-  Distinct group_by=[(#0 + #1)]
+  Distinct project=[(#0 + #1)]
     Project (#0, #2)
       Get x
 

@@ -84,22 +84,22 @@ $ kafka-ingest format=avro topic=t1 key-format=avro key-schema=${keyschema-2keys
 # Optimization not possible - explicit distinct is present in planFor certain types of tests the 
 
 > EXPLAIN SELECT DISTINCT key1 FROM t1;
-"Explained Query:  Distinct group_by=[#0]    Project (#0)      ReadIndex on=t1 t1_primary_idx=[*** full scan ***]Used Indexes:  - t1_primary_idx (*** full scan ***)"
+"Explained Query:  Distinct project=[#0]    Project (#0)      ReadIndex on=t1 t1_primary_idx=[*** full scan ***]Used Indexes:  - t1_primary_idx (*** full scan ***)"
 
 > EXPLAIN SELECT DISTINCT key2 FROM t1;
-"Explained Query:  Distinct group_by=[#0]    Project (#1)      ReadIndex on=t1 t1_primary_idx=[*** full scan ***]Used Indexes:  - t1_primary_idx (*** full scan ***)"
+"Explained Query:  Distinct project=[#0]    Project (#1)      ReadIndex on=t1 t1_primary_idx=[*** full scan ***]Used Indexes:  - t1_primary_idx (*** full scan ***)"
 
 > EXPLAIN SELECT DISTINCT key1, upper(key2) FROM t1;
-"Explained Query:  Distinct group_by=[#0, upper(#1)]    Project (#0, #1)      ReadIndex on=t1 t1_primary_idx=[*** full scan ***]Used Indexes:  - t1_primary_idx (*** full scan ***)"
+"Explained Query:  Distinct project=[#0, upper(#1)]    Project (#0, #1)      ReadIndex on=t1 t1_primary_idx=[*** full scan ***]Used Indexes:  - t1_primary_idx (*** full scan ***)"
 
 > EXPLAIN SELECT DISTINCT key1, key2 || 'a' FROM t1;
-"Explained Query:  Distinct group_by=[#0, (#1 || \"a\")]    Project (#0, #1)      ReadIndex on=t1 t1_primary_idx=[*** full scan ***]Used Indexes:  - t1_primary_idx (*** full scan ***)"
+"Explained Query:  Distinct project=[#0, (#1 || \"a\")]    Project (#0, #1)      ReadIndex on=t1 t1_primary_idx=[*** full scan ***]Used Indexes:  - t1_primary_idx (*** full scan ***)"
 
 > EXPLAIN SELECT key1 FROM t1 GROUP BY key1;
-"Explained Query:  Distinct group_by=[#0]    Project (#0)      ReadIndex on=t1 t1_primary_idx=[*** full scan ***]Used Indexes:  - t1_primary_idx (*** full scan ***)"
+"Explained Query:  Distinct project=[#0]    Project (#0)      ReadIndex on=t1 t1_primary_idx=[*** full scan ***]Used Indexes:  - t1_primary_idx (*** full scan ***)"
 
 > EXPLAIN SELECT key2 FROM t1 GROUP BY key2;
-"Explained Query:  Distinct group_by=[#0]    Project (#1)      ReadIndex on=t1 t1_primary_idx=[*** full scan ***]Used Indexes:  - t1_primary_idx (*** full scan ***)"
+"Explained Query:  Distinct project=[#0]    Project (#1)      ReadIndex on=t1 t1_primary_idx=[*** full scan ***]Used Indexes:  - t1_primary_idx (*** full scan ***)"
 
 > EXPLAIN SELECT COUNT(DISTINCT key1) FROM t1;
 "Explained Query:  Return    Union      Get l0      Map (0)        Union          Negate            Project ()              Get l0          Constant            - ()  With    cte l0 =      Reduce aggregates=[count(distinct #0)]        Project (#0)          ReadIndex on=t1 t1_primary_idx=[*** full scan ***]Used Indexes:  - t1_primary_idx (*** full scan ***)"
@@ -195,22 +195,22 @@ $ kafka-ingest format=avro topic=t1-pkne schema=${schema}
 # Optimization not possible - explicit distinct is present in plan
 
 > EXPLAIN SELECT DISTINCT key1 FROM t1_pkne;
-"Explained Query:  Distinct group_by=[#0] monotonic    Project (#0)      ReadIndex on=t1_pkne t1_pkne_primary_idx=[*** full scan ***]Used Indexes:  - t1_pkne_primary_idx (*** full scan ***)"
+"Explained Query:  Distinct project=[#0] monotonic    Project (#0)      ReadIndex on=t1_pkne t1_pkne_primary_idx=[*** full scan ***]Used Indexes:  - t1_pkne_primary_idx (*** full scan ***)"
 
 > EXPLAIN SELECT DISTINCT key2 FROM t1_pkne;
-"Explained Query:  Distinct group_by=[#0] monotonic    Project (#1)      ReadIndex on=t1_pkne t1_pkne_primary_idx=[*** full scan ***]Used Indexes:  - t1_pkne_primary_idx (*** full scan ***)"
+"Explained Query:  Distinct project=[#0] monotonic    Project (#1)      ReadIndex on=t1_pkne t1_pkne_primary_idx=[*** full scan ***]Used Indexes:  - t1_pkne_primary_idx (*** full scan ***)"
 
 > EXPLAIN SELECT DISTINCT key1, upper(key2) FROM t1_pkne;
-"Explained Query:  Distinct group_by=[#0, upper(#1)] monotonic    Project (#0, #1)      ReadIndex on=t1_pkne t1_pkne_primary_idx=[*** full scan ***]Used Indexes:  - t1_pkne_primary_idx (*** full scan ***)"
+"Explained Query:  Distinct project=[#0, upper(#1)] monotonic    Project (#0, #1)      ReadIndex on=t1_pkne t1_pkne_primary_idx=[*** full scan ***]Used Indexes:  - t1_pkne_primary_idx (*** full scan ***)"
 
 > EXPLAIN SELECT DISTINCT key1, key2 || 'a' FROM t1_pkne;
-"Explained Query:  Distinct group_by=[#0, (#1 || \"a\")] monotonic    Project (#0, #1)      ReadIndex on=t1_pkne t1_pkne_primary_idx=[*** full scan ***]Used Indexes:  - t1_pkne_primary_idx (*** full scan ***)"
+"Explained Query:  Distinct project=[#0, (#1 || \"a\")] monotonic    Project (#0, #1)      ReadIndex on=t1_pkne t1_pkne_primary_idx=[*** full scan ***]Used Indexes:  - t1_pkne_primary_idx (*** full scan ***)"
 
 > EXPLAIN SELECT key1 FROM t1_pkne GROUP BY key1;
-"Explained Query:  Distinct group_by=[#0] monotonic    Project (#0)      ReadIndex on=t1_pkne t1_pkne_primary_idx=[*** full scan ***]Used Indexes:  - t1_pkne_primary_idx (*** full scan ***)"
+"Explained Query:  Distinct project=[#0] monotonic    Project (#0)      ReadIndex on=t1_pkne t1_pkne_primary_idx=[*** full scan ***]Used Indexes:  - t1_pkne_primary_idx (*** full scan ***)"
 
 > EXPLAIN SELECT key2 FROM t1_pkne GROUP BY key2;
-"Explained Query:  Distinct group_by=[#0] monotonic    Project (#1)      ReadIndex on=t1_pkne t1_pkne_primary_idx=[*** full scan ***]Used Indexes:  - t1_pkne_primary_idx (*** full scan ***)"
+"Explained Query:  Distinct project=[#0] monotonic    Project (#1)      ReadIndex on=t1_pkne t1_pkne_primary_idx=[*** full scan ***]Used Indexes:  - t1_pkne_primary_idx (*** full scan ***)"
 
 > EXPLAIN SELECT COUNT(DISTINCT key1) FROM t1_pkne;
 "Explained Query:  Return    Union      Get l0      Map (0)        Union          Negate            Project ()              Get l0          Constant            - ()  With    cte l0 =      Reduce aggregates=[count(distinct #0)] monotonic        Project (#0)          ReadIndex on=t1_pkne t1_pkne_primary_idx=[*** full scan ***]Used Indexes:  - t1_pkne_primary_idx (*** full scan ***)"

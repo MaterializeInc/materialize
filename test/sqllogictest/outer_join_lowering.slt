@@ -114,9 +114,9 @@ Return // { arity: 4 }
           Join on=(facts_k01 = facts_k01 AND dim01_k01 = dim01_k01 AND dim02_k01 = dim02_k01 AND dim03_k01 = dim03_k01 AND facts_d01 = facts_d01 AND facts_d02 = facts_d02 AND facts_d03 = facts_d03 AND facts_d04 = facts_d04 AND facts_d05 = facts_d05) // { arity: 18 }
             Union // { arity: 9 }
               Negate // { arity: 9 }
-                Distinct group_by=[facts_k01, dim01_k01, dim02_k01, dim03_k01, facts_d01, facts_d02, facts_d03, facts_d04, facts_d05] // { arity: 9 }
+                Distinct project=[facts_k01, dim01_k01, dim02_k01, dim03_k01, facts_d01, facts_d02, facts_d03, facts_d04, facts_d05] // { arity: 9 }
                   Get l1 // { arity: 15 }
-              Distinct group_by=[facts_k01, dim01_k01, dim02_k01, dim03_k01, facts_d01, facts_d02, facts_d03, facts_d04, facts_d05] // { arity: 9 }
+              Distinct project=[facts_k01, dim01_k01, dim02_k01, dim03_k01, facts_d01, facts_d02, facts_d03, facts_d04, facts_d05] // { arity: 9 }
                 Get l0 // { arity: 9 }
             Get l0 // { arity: 9 }
         Constant // { arity: 6 }
@@ -171,7 +171,7 @@ Return // { arity: 4 }
             Project (#0..=#8) // { arity: 9 }
               Join on=(dim01_k01 = dim01_k01) // { arity: 10 }
                 Get l0 // { arity: 9 }
-                Distinct group_by=[dim01_k01] // { arity: 1 }
+                Distinct project=[dim01_k01] // { arity: 1 }
                   Project (#1) // { arity: 1 }
                     Get l1 // { arity: 15 }
           Get l0 // { arity: 9 }
@@ -222,7 +222,7 @@ Return // { arity: 6 }
                   Project (#0..=#10) // { arity: 11 }
                     Join on=(x = x AND y = y AND (dim01_k01 + x) = #13) // { arity: 14 }
                       Get l2 // { arity: 11 }
-                      Distinct group_by=[x, y, #2] // { arity: 3 }
+                      Distinct project=[x, y, #2] // { arity: 3 }
                         Project (#17..=#19) // { arity: 3 }
                           Map (x, y, (dim01_k01 + x)) // { arity: 20 }
                             Get l3 // { arity: 17 }
@@ -242,7 +242,7 @@ With
       Get l1 // { arity: 2 }
       Get materialize.left_joins_raw.facts // { arity: 9 }
   cte l1 =
-    Distinct group_by=[x, y] // { arity: 2 }
+    Distinct project=[x, y] // { arity: 2 }
       Get l0 // { arity: 2 }
   cte l0 =
     CrossJoin // { arity: 2 }
@@ -281,7 +281,7 @@ Return // { arity: 6 }
                     Project (#0..=#10) // { arity: 11 }
                       Join on=(x = x AND y = y AND (dim01_k01 + x) = #13) // { arity: 14 }
                         Get l2 // { arity: 11 }
-                        Distinct group_by=[x, y, #2] // { arity: 3 }
+                        Distinct project=[x, y, #2] // { arity: 3 }
                           Project (#17..=#19) // { arity: 3 }
                             Map (x, y, (dim01_k01 + y)) // { arity: 20 }
                               Get l3 // { arity: 17 }
@@ -301,7 +301,7 @@ With
       Get l1 // { arity: 2 }
       Get materialize.left_joins_raw.facts // { arity: 9 }
   cte l1 =
-    Distinct group_by=[x, y] // { arity: 2 }
+    Distinct project=[x, y] // { arity: 2 }
       Get l0 // { arity: 2 }
   cte l0 =
     CrossJoin // { arity: 2 }
@@ -344,7 +344,7 @@ Return // { arity: 6 }
                     Join on=(x = x AND y = y AND (dim01_k01 + x) = #13) // { arity: 14 }
                       Filter (facts_d02 = 42) // { arity: 11 }
                         Get l2 // { arity: 11 }
-                      Distinct group_by=[x, y, #2] // { arity: 3 }
+                      Distinct project=[x, y, #2] // { arity: 3 }
                         Project (#17..=#19) // { arity: 3 }
                           Map (x, y, (dim01_k01 + x)) // { arity: 20 }
                             Get l3 // { arity: 17 }
@@ -364,7 +364,7 @@ With
       Get l1 // { arity: 2 }
       Get materialize.left_joins_raw.facts // { arity: 9 }
   cte l1 =
-    Distinct group_by=[x, y] // { arity: 2 }
+    Distinct project=[x, y] // { arity: 2 }
       Get l0 // { arity: 2 }
   cte l0 =
     CrossJoin // { arity: 2 }
@@ -408,7 +408,7 @@ Return // { arity: 6 }
                       Join on=(x = x AND y = y AND (dim01_k01 + x) = #13) // { arity: 14 }
                         Filter (facts_d02 = 42) // { arity: 11 }
                           Get l2 // { arity: 11 }
-                        Distinct group_by=[x, y, #2] // { arity: 3 }
+                        Distinct project=[x, y, #2] // { arity: 3 }
                           Project (#17..=#19) // { arity: 3 }
                             Map (x, y, (dim01_k01 + y)) // { arity: 20 }
                               Get l3 // { arity: 17 }
@@ -428,7 +428,7 @@ With
       Get l1 // { arity: 2 }
       Get materialize.left_joins_raw.facts // { arity: 9 }
   cte l1 =
-    Distinct group_by=[x, y] // { arity: 2 }
+    Distinct project=[x, y] // { arity: 2 }
       Get l0 // { arity: 2 }
   cte l0 =
     CrossJoin // { arity: 2 }
@@ -485,7 +485,7 @@ Return // { arity: 6 }
             Get l4 // { arity: 14 }
 With
   cte l5 =
-    Distinct group_by=[x, y, #2] // { arity: 3 }
+    Distinct project=[x, y, #2] // { arity: 3 }
       Project (#14..=#16) // { arity: 3 }
         Map (x, y, coalesce(dim01_k01, x)) // { arity: 17 }
           Get l4 // { arity: 14 }
@@ -504,7 +504,7 @@ With
       Get l1 // { arity: 2 }
       Get materialize.left_joins_raw.dim01 // { arity: 6 }
   cte l1 =
-    Distinct group_by=[x, y] // { arity: 2 }
+    Distinct project=[x, y] // { arity: 2 }
       Get l0 // { arity: 2 }
   cte l0 =
     CrossJoin // { arity: 2 }
@@ -546,9 +546,9 @@ Return // { arity: 6 }
                 Join on=(x = x AND y = y AND facts_k01 = facts_k01 AND dim01_k01 = dim01_k01 AND dim02_k01 = dim02_k01 AND dim03_k01 = dim03_k01 AND facts_d01 = facts_d01 AND facts_d02 = facts_d02 AND facts_d03 = facts_d03 AND facts_d04 = facts_d04 AND facts_d05 = facts_d05) // { arity: 22 }
                   Union // { arity: 11 }
                     Negate // { arity: 11 }
-                      Distinct group_by=[x, y, facts_k01, dim01_k01, dim02_k01, dim03_k01, facts_d01, facts_d02, facts_d03, facts_d04, facts_d05] // { arity: 11 }
+                      Distinct project=[x, y, facts_k01, dim01_k01, dim02_k01, dim03_k01, facts_d01, facts_d02, facts_d03, facts_d04, facts_d05] // { arity: 11 }
                         Get l8 // { arity: 17 }
-                    Distinct group_by=[x, y, facts_k01, dim01_k01, dim02_k01, dim03_k01, facts_d01, facts_d02, facts_d03, facts_d04, facts_d05] // { arity: 11 }
+                    Distinct project=[x, y, facts_k01, dim01_k01, dim02_k01, dim03_k01, facts_d01, facts_d02, facts_d03, facts_d04, facts_d05] // { arity: 11 }
                       Get l2 // { arity: 11 }
                   Get l2 // { arity: 11 }
               Constant // { arity: 6 }
@@ -567,9 +567,9 @@ With
                   Join on=(dim01_d01 = dim01_d01) // { arity: 2 }
                     Union // { arity: 1 }
                       Negate // { arity: 1 }
-                        Distinct group_by=[dim01_d01] // { arity: 1 }
+                        Distinct project=[dim01_d01] // { arity: 1 }
                           Get l7 // { arity: 2 }
-                      Distinct group_by=[dim01_d01] // { arity: 1 }
+                      Distinct project=[dim01_d01] // { arity: 1 }
                         Get l4 // { arity: 1 }
                     Get l4 // { arity: 1 }
                 Constant // { arity: 1 }
@@ -590,9 +590,9 @@ With
           Join on=(dim01_d01 = dim01_d01) // { arity: 2 }
             Union // { arity: 1 }
               Negate // { arity: 1 }
-                Distinct group_by=[dim01_d01] // { arity: 1 }
+                Distinct project=[dim01_d01] // { arity: 1 }
                   Get l5 // { arity: 2 }
-              Distinct group_by=[dim01_d01] // { arity: 1 }
+              Distinct project=[dim01_d01] // { arity: 1 }
                 Get l4 // { arity: 1 }
             Get l4 // { arity: 1 }
         Constant // { arity: 1 }
@@ -602,7 +602,7 @@ With
       FlatMap unnest_array(strtoarray("{24, 42}")) // { arity: 2 }
         Get l4 // { arity: 1 }
   cte l4 =
-    Distinct group_by=[dim01_d01] // { arity: 1 }
+    Distinct project=[dim01_d01] // { arity: 1 }
       Get l3 // { arity: 17 }
   cte l3 =
     Project (#0..=#10, #13..=#18) // { arity: 17 }
@@ -616,7 +616,7 @@ With
       Get l1 // { arity: 2 }
       Get materialize.left_joins_raw.facts // { arity: 9 }
   cte l1 =
-    Distinct group_by=[x, y] // { arity: 2 }
+    Distinct project=[x, y] // { arity: 2 }
       Get l0 // { arity: 2 }
   cte l0 =
     CrossJoin // { arity: 2 }
@@ -660,7 +660,7 @@ Explained Query:
               Join on=(#4 = coalesce(dim01_k01, 5)) type=differential // { arity: 5 }
                 Get l0 // { arity: 4 }
                 ArrangeBy keys=[[#0]] // { arity: 1 }
-                  Distinct group_by=[coalesce(dim01_k01, 5)] // { arity: 1 }
+                  Distinct project=[coalesce(dim01_k01, 5)] // { arity: 1 }
                     Project (#1) // { arity: 1 }
                       Get l1 // { arity: 7 }
           Project (#0, #4, #5) // { arity: 3 }
@@ -718,7 +718,7 @@ Explained Query:
               Join on=(#4 = coalesce(dim01_k01, 5)) type=differential // { arity: 5 }
                 Get l0 // { arity: 4 }
                 ArrangeBy keys=[[#0]] // { arity: 1 }
-                  Distinct group_by=[coalesce(dim01_k01, 5)] // { arity: 1 }
+                  Distinct project=[coalesce(dim01_k01, 5)] // { arity: 1 }
                     Project (#1) // { arity: 1 }
                       Get l1 // { arity: 7 }
           Project (#0, #4, #5) // { arity: 3 }
@@ -763,7 +763,7 @@ materialize.public.v:
               Join on=(#4 = coalesce(dim01_k01, 5)) type=differential // { arity: 5 }
                 Get l0 // { arity: 4 }
                 ArrangeBy keys=[[#0]] // { arity: 1 }
-                  Distinct group_by=[coalesce(dim01_k01, 5)] // { arity: 1 }
+                  Distinct project=[coalesce(dim01_k01, 5)] // { arity: 1 }
                     Project (#1) // { arity: 1 }
                       Get l1 // { arity: 7 }
           Project (#0, #4, #5) // { arity: 3 }
@@ -817,7 +817,7 @@ materialize.public.mv:
               Join on=(#4 = coalesce(dim01_k01, 5)) type=differential // { arity: 5 }
                 Get l0 // { arity: 4 }
                 ArrangeBy keys=[[#0]] // { arity: 1 }
-                  Distinct group_by=[coalesce(dim01_k01, 5)] // { arity: 1 }
+                  Distinct project=[coalesce(dim01_k01, 5)] // { arity: 1 }
                     Project (#1) // { arity: 1 }
                       Get l1 // { arity: 7 }
           Project (#0, #4, #5) // { arity: 3 }

@@ -75,7 +75,7 @@ build format=types
 (filter (reduce (get x) [#0 #2] []) [(call_binary eq #0 #1)])
 ----
 Filter (#0 = #1) // { types: "(Int32, Int32)", keys: "([0], [1])" }
-  Distinct group_by=[#0, #2] // { types: "(Int32?, Int32?)", keys: "([0, 1])" }
+  Distinct project=[#0, #2] // { types: "(Int32?, Int32?)", keys: "([0, 1])" }
     Get x // { types: "(Int32?, Int64?, Int32?)", keys: "()" }
 
 cat

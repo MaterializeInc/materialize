@@ -275,11 +275,11 @@ Project (#1, #0)
 # Project around a Reduce (1)
 apply pipeline=projection_pushdown
 Project ()
-  Distinct group_by=[(#0 + #2)]
+  Distinct project=[(#0 + #2)]
     Get x
 ----
 Project ()
-  Distinct group_by=[(#0 + #1)]
+  Distinct project=[(#0 + #1)]
     Project (#0, #2)
       Get x
 
@@ -528,7 +528,7 @@ With Mutually Recursive
     Get l0
   cte l1 = // { types: "(bigint, bigint, bigint)" }
     Project (#0, #0, #0)
-      Distinct group_by=[#0]
+      Distinct project=[#0]
         Union
           Project (#0)
             Get l1
@@ -547,7 +547,7 @@ With Mutually Recursive
     Get l0
   cte l1 =
     Project (#0, #0, #0)
-      Distinct group_by=[#0]
+      Distinct project=[#0]
         Union
           Project (#0)
             Get l1

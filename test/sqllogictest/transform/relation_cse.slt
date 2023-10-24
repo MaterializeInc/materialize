@@ -270,7 +270,7 @@ Explained Query:
           Map (null) // { arity: 1 }
             Union // { arity: 0 }
               Negate // { arity: 0 }
-                Distinct // { arity: 0 }
+                Distinct project=[] // { arity: 0 }
                   Project () // { arity: 0 }
                     Get l0 // { arity: 1 }
               Constant // { arity: 0 }
@@ -405,7 +405,7 @@ Explained Query:
   Return // { arity: 2 }
     Project (#1, #0) // { arity: 2 }
       Map (1) // { arity: 2 }
-        Distinct group_by=[#0] // { arity: 1 }
+        Distinct project=[#0] // { arity: 1 }
           Union // { arity: 1 }
             Get l0 // { arity: 1 }
             Get l0 // { arity: 1 }
@@ -442,7 +442,7 @@ Explained Query:
             Map (null) // { arity: 1 }
               Union // { arity: 0 }
                 Negate // { arity: 0 }
-                  Distinct // { arity: 0 }
+                  Distinct project=[] // { arity: 0 }
                     Project () // { arity: 0 }
                       Get l1 // { arity: 1 }
                 Constant // { arity: 0 }
@@ -500,7 +500,7 @@ Explained Query:
           Map (null) // { arity: 1 }
             Union // { arity: 0 }
               Negate // { arity: 0 }
-                Distinct // { arity: 0 }
+                Distinct project=[] // { arity: 0 }
                   Project () // { arity: 0 }
                     Get l1 // { arity: 1 }
               Constant // { arity: 0 }
@@ -541,7 +541,7 @@ Explained Query:
         Project () // { arity: 0 }
           ReadIndex on=t1 i1=[*** full scan ***] // { arity: 2 }
       ArrangeBy keys=[[]] // { arity: 0 }
-        Distinct // { arity: 0 }
+        Distinct project=[] // { arity: 0 }
           Get l1 // { arity: 0 }
       ArrangeBy keys=[[]] // { arity: 1 }
         Union // { arity: 1 }
@@ -549,7 +549,7 @@ Explained Query:
           Map (null) // { arity: 1 }
             Union // { arity: 0 }
               Negate // { arity: 0 }
-                Distinct // { arity: 0 }
+                Distinct project=[] // { arity: 0 }
                   Project () // { arity: 0 }
                     Get l2 // { arity: 1 }
               Constant // { arity: 0 }
@@ -595,7 +595,7 @@ Explained Query:
             Map (null) // { arity: 1 }
               Union // { arity: 0 }
                 Negate // { arity: 0 }
-                  Distinct // { arity: 0 }
+                  Distinct project=[] // { arity: 0 }
                     Project () // { arity: 0 }
                       Get l2 // { arity: 1 }
                 Constant // { arity: 0 }
@@ -681,7 +681,7 @@ Explained Query:
                   %1[#0]UKA » %0:l0[#0]KA
                 Get l0 // { arity: 2 }
                 ArrangeBy keys=[[#0]] // { arity: 1 }
-                  Distinct group_by=[#0] // { arity: 1 }
+                  Distinct project=[#0] // { arity: 1 }
                     Project (#0) // { arity: 1 }
                       Get l1 // { arity: 3 }
           ReadIndex on=t1 i1=[*** full scan ***] // { arity: 2 }
@@ -894,7 +894,7 @@ Explained Query:
         ArrangeBy keys=[[]] // { arity: 2 }
           ReadIndex on=t1 i1=[*** full scan ***] // { arity: 2 }
         ArrangeBy keys=[[]] // { arity: 0 }
-          Distinct // { arity: 0 }
+          Distinct project=[] // { arity: 0 }
             Project () // { arity: 0 }
               ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
 
@@ -1018,7 +1018,7 @@ Explained Query:
       Get l0 // { arity: 1 }
   With
     cte l0 =
-      Distinct group_by=[#0] // { arity: 1 }
+      Distinct project=[#0] // { arity: 1 }
         Project (#0) // { arity: 1 }
           ReadIndex on=t1 i1=[*** full scan ***] // { arity: 2 }
 
@@ -1142,7 +1142,7 @@ Explained Query:
         ArrangeBy keys=[[]] // { arity: 2 }
           ReadIndex on=t1 i1=[*** full scan ***] // { arity: 2 }
         ArrangeBy keys=[[]] // { arity: 0 }
-          Distinct // { arity: 0 }
+          Distinct project=[] // { arity: 0 }
             Project () // { arity: 0 }
               ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
 
@@ -1176,7 +1176,7 @@ Explained Query:
         ArrangeBy keys=[[]] // { arity: 2 }
           ReadIndex on=t1 i1=[*** full scan ***] // { arity: 2 }
         ArrangeBy keys=[[]] // { arity: 0 }
-          Distinct // { arity: 0 }
+          Distinct project=[] // { arity: 0 }
             Project () // { arity: 0 }
               ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
 
@@ -1209,7 +1209,7 @@ Explained Query:
   With
     cte l0 =
       ArrangeBy keys=[[]] // { arity: 0 }
-        Distinct // { arity: 0 }
+        Distinct project=[] // { arity: 0 }
           Project () // { arity: 0 }
             ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
 
@@ -1593,7 +1593,7 @@ Explained Query:
                     ArrangeBy keys=[[#0]] // { arity: 1 }
                       Union // { arity: 1 }
                         Negate // { arity: 1 }
-                          Distinct group_by=[#0] // { arity: 1 }
+                          Distinct project=[#0] // { arity: 1 }
                             Project (#0) // { arity: 1 }
                               Get l5 // { arity: 2 }
                         Constant // { arity: 1 }
@@ -1663,7 +1663,7 @@ Explained Query:
   With Mutually Recursive
     cte l1 =
       Union // { arity: 2 }
-        Distinct group_by=[#0, (#1 + #2)] monotonic // { arity: 2 }
+        Distinct project=[#0, (#1 + #2)] monotonic // { arity: 2 }
           Project (#0, #1, #3) // { arity: 3 }
             Join on=(#0 = #2) type=differential // { arity: 4 }
               implementation

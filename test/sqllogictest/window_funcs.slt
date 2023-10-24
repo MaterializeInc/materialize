@@ -184,9 +184,9 @@ Return // { arity: 1 }
                 Join on=(#0 = #1) // { arity: 2 }
                   Union // { arity: 1 }
                     Negate // { arity: 1 }
-                      Distinct group_by=[#0] // { arity: 1 }
+                      Distinct project=[#0] // { arity: 1 }
                         Get l2 // { arity: 2 }
-                    Distinct group_by=[#0] // { arity: 1 }
+                    Distinct project=[#0] // { arity: 1 }
                       Get l1 // { arity: 1 }
                   Get l1 // { arity: 1 }
               Constant // { arity: 1 }
@@ -194,7 +194,7 @@ Return // { arity: 1 }
 With
   cte l2 =
     Map (true) // { arity: 2 }
-      Distinct group_by=[#0] // { arity: 1 }
+      Distinct project=[#0] // { arity: 1 }
         Filter (integer_to_bigint(#0) = #1) // { arity: 2 }
           Project (#0, #4) // { arity: 2 }
             Map (#3) // { arity: 5 }
@@ -206,7 +206,7 @@ With
                         Get l1 // { arity: 1 }
                         Get materialize.public.t2 // { arity: 2 }
   cte l1 =
-    Distinct group_by=[#0] // { arity: 1 }
+    Distinct project=[#0] // { arity: 1 }
       Get l0 // { arity: 2 }
   cte l0 =
     Filter true // { arity: 2 }
@@ -230,7 +230,7 @@ Explained Query:
         ArrangeBy keys=[[#0]] // { arity: 1 }
           Get l0 // { arity: 1 }
         ArrangeBy keys=[[#0]] // { arity: 1 }
-          Distinct group_by=[record_get[0](record_get[1](#0))] // { arity: 1 }
+          Distinct project=[record_get[0](record_get[1](#0))] // { arity: 1 }
             Project (#1) // { arity: 1 }
               Filter (integer_to_bigint(record_get[0](record_get[1](#1))) = record_get[0](#1)) // { arity: 2 }
                 FlatMap unnest_list(#0) // { arity: 2 }
@@ -240,7 +240,7 @@ Explained Query:
                         implementation
                           %0[×] » %1:t2[×]
                         ArrangeBy keys=[[]] // { arity: 1 }
-                          Distinct group_by=[#0] // { arity: 1 }
+                          Distinct project=[#0] // { arity: 1 }
                             Get l0 // { arity: 1 }
                         ArrangeBy keys=[[]] // { arity: 2 }
                           ReadStorage materialize.public.t2 // { arity: 2 }
@@ -309,7 +309,7 @@ Return // { arity: 5 }
                   Reduce group_by=[#0] aggregates=[row_number[order_by=[]](row(list[row(#0, #1, #2)]))] // { arity: 2 }
                     Filter (#2 = #0) // { arity: 3 }
                       CrossJoin // { arity: 3 }
-                        Distinct group_by=[#1] // { arity: 1 }
+                        Distinct project=[#1] // { arity: 1 }
                           Get l0 // { arity: 2 }
                         Get materialize.public.t1 // { arity: 2 }
 With
@@ -337,7 +337,7 @@ Return // { arity: 5 }
                   Reduce group_by=[#0, #1] aggregates=[row_number[order_by=[]](row(list[row(#0, #1, #2)]))] // { arity: 3 }
                     Filter (#2 = #0) // { arity: 3 }
                       CrossJoin // { arity: 3 }
-                        Distinct group_by=[#1] // { arity: 1 }
+                        Distinct project=[#1] // { arity: 1 }
                           Get l0 // { arity: 2 }
                         Get materialize.public.t1 // { arity: 2 }
 With
