@@ -32,5 +32,9 @@ tracing = "0.1.37"
 uuid = "1.2.2"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
+[dev-dependencies]
+mz-environmentd = { path = "../environmentd", features = ["test"] }
+postgres = "0.19.5"
+
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

@@ -428,8 +428,9 @@ async fn test_open_read_only(
 async fn test_stash_open() {
     let (debug_factory, stash_config) = stash_config().await;
     let openable_state1 = stash_backed_catalog_state(stash_config.clone());
-    let openable_state2 = stash_backed_catalog_state(stash_config);
-    test_open(openable_state1, openable_state2).await;
+    let openable_state2 = stash_backed_catalog_state(stash_config.clone());
+    let openable_state3 = stash_backed_catalog_state(stash_config);
+    test_open(openable_state1, openable_state2, openable_state3).await;
     debug_factory.drop().await;
 }
 
@@ -439,7 +440,13 @@ async fn test_debug_stash_open() {
     let debug_factory = DebugStashFactory::new().await;
     let debug_openable_state1 = debug_stash_backed_catalog_state(&debug_factory);
     let debug_openable_state2 = debug_stash_backed_catalog_state(&debug_factory);
-    test_open(debug_openable_state1, debug_openable_state2).await;
+    let debug_openable_state3 = debug_stash_backed_catalog_state(&debug_factory);
+    test_open(
+        debug_openable_state1,
+        debug_openable_state2,
+        debug_openable_state3,
+    )
+    .await;
     debug_factory.drop().await;
 }
 
@@ -451,13 +458,21 @@ async fn test_persist_open() {
     let persist_openable_state1 =
         persist_backed_catalog_state(persist_client.clone(), organization_id).await;
     let persist_openable_state2 =
+        persist_backed_catalog_state(persist_client.clone(), organization_id).await;
+    let persist_openable_state3 =
         persist_backed_catalog_state(persist_client, organization_id).await;
-    test_open(persist_openable_state1, persist_openable_state2).await;
+    test_open(
+        persist_openable_state1,
+        persist_openable_state2,
+        persist_openable_state3,
+    )
+    .await;
 }
 
 async fn test_open(
     openable_state1: impl OpenableDurableCatalogState,
     openable_state2: impl OpenableDurableCatalogState,
+    openable_state3: impl OpenableDurableCatalogState,
 ) {
     let (snapshot, audit_log) = {
         let mut state = Box::new(openable_state1)
@@ -483,6 +498,18 @@ async fn test_open(
             .unwrap();
 
         assert_eq!(state.epoch(), Epoch::new(3).expect("known to be non-zero"));
+        assert_eq!(state.snapshot().await.unwrap(), snapshot);
+        assert_eq!(state.get_audit_logs().await.unwrap(), audit_log);
+        Box::new(state).expire().await;
+    }
+    // Reopen the catalog a third time for good measure.
+    {
+        let mut state = Box::new(openable_state3)
+            .open(SYSTEM_TIME.clone(), &debug_bootstrap_args(), None)
+            .await
+            .unwrap();
+
+        assert_eq!(state.epoch(), Epoch::new(4).expect("known to be non-zero"));
         assert_eq!(state.snapshot().await.unwrap(), snapshot);
         assert_eq!(state.get_audit_logs().await.unwrap(), audit_log);
         Box::new(state).expire().await;

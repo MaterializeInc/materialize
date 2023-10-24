@@ -31,6 +31,10 @@ statement_logging_sample_rate
 > SELECT mz_internal.mz_sleep(1)
 <null>
 
+# Make it so we can query the tables later
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_rbac_checks = false
+
 # Now the real test begins
 
 # This will be executed on `mz_introspection`, due to auto-routing of "simple" queries.

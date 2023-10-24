@@ -240,10 +240,10 @@ mv_f default
 
 # RESTRICT works
 ! ALTER SOURCE mz_source DROP SUBSOURCE IF EXISTS table_e;
-contains:cannot drop source table_e: still depended upon by materialized view mv_e
+contains:cannot drop source "table_e": still depended upon by materialized view "mv_e"
 
 ! ALTER SOURCE mz_source DROP SUBSOURCE IF EXISTS table_e RESTRICT;
-contains:cannot drop source table_e: still depended upon by materialized view mv_e
+contains:cannot drop source "table_e": still depended upon by materialized view "mv_e"
 
 # CASCADE works
 > ALTER SOURCE mz_source DROP SUBSOURCE table_e CASCADE;

@@ -104,9 +104,10 @@ pub enum MirRelationExpr {
         /// Schema of the collection.
         typ: RelationType,
         /// If this is a global Get, this will indicate whether we are going to read from Persist or
-        /// from an index. If it's an index, then how downstream dataflow operations will use this
-        /// index is also recorded. This is filled by `prune_and_annotate_dataflow_index_imports`.
-        /// Note that this is not used by the lowering to LIR, but is used only by EXPLAIN.
+        /// from an index, or from a different object in `objects_to_build`. If it's an index, then
+        /// how downstream dataflow operations will use this index is also recorded. This is filled
+        /// by `prune_and_annotate_dataflow_index_imports`. Note that this is not used by the
+        /// lowering to LIR, but is used only by EXPLAIN.
         #[mzreflect(ignore)]
         access_strategy: AccessStrategy,
     },
@@ -3405,6 +3406,9 @@ pub enum AccessStrategy {
     Persist,
     /// The Get will read from an index or indexes: (index id, how the index will be used).
     Index(Vec<(GlobalId, IndexUsageType)>),
+    /// The Get will read a collection that is computed by the same dataflow, but in a different
+    /// `BuildDesc` in `objects_to_build`.
+    SameDataflow,
 }
 
 #[cfg(test)]

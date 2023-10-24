@@ -56,6 +56,8 @@ MAX_INITIAL_KAFKA_SOURCES = 3
 MAX_INITIAL_POSTGRES_SOURCES = 3
 MAX_INITIAL_KAFKA_SINKS = 3
 
+MAX_IDENTIFIER_LENGTH = 255
+
 NAUGHTY_IDENTIFIERS = False
 
 
@@ -71,7 +73,13 @@ def naughtify(name: str) -> str:
     # This rng is just to get a more interesting integer for the name
     index = abs(hash(name)) % len(strings)
     # Keep them short so we can combine later with other identifiers, 255 char limit
-    return f"{name}_{strings[index].encode('utf-8')[:8].decode('utf-8', 'ignore')}"
+    naughty_suffix = strings[index].encode("utf-8")[:8].decode("utf-8", "ignore")
+
+    naughty_identifier = f"{name}_{naughty_suffix}"
+    assert (
+        len(naughty_identifier.encode("utf-8")) <= MAX_IDENTIFIER_LENGTH
+    ), f"Naughty identifier exceeds length limit of {MAX_IDENTIFIER_LENGTH} chars (name={name}, naughty_suffix={naughty_suffix})"
+    return naughty_identifier
 
 
 class BodyFormat(Enum):

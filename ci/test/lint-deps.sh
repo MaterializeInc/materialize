@@ -55,6 +55,7 @@ function deps() {
         # Gather data for the current target, reverse lines, find the dependency hierarchy to the root, reverse lines.
         output=$(cargo tree --format ':{lib}:{f}' \
             --prefix depth \
+            --edges normal,build \
             --locked \
             --target "$target" \
             "$@" \

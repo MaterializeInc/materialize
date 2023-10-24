@@ -70,12 +70,15 @@ mz-stash-types = { path = "../stash-types" }
 mz-storage-client = { path = "../storage-client" }
 mz-storage-types = { path = "../storage-types" }
 mz-tls-util = { path = "../tls-util" }
+mz-tracing = { path = "../tracing", optional = true }
 nix = "0.26.1"
 num_cpus = "1.14.0"
 openssl = { version = "0.10.48", features = ["vendored"] }
 openssl-sys = { version = "0.9.80", features = ["vendored"] }
 opentelemetry = { version = "0.20.0", features = ["rt-tokio", "trace"] }
 pin-project = "1.0.12"
+postgres = { version = "0.19.5", optional = true }
+postgres-openssl = { version = "0.5.0", optional = true }
 prometheus = { version = "0.13.3", default-features = false }
 rdkafka-sys = { version = "4.3.0", features = [
   "cmake-build",
@@ -84,6 +87,7 @@ rdkafka-sys = { version = "4.3.0", features = [
   "zstd",
 ] }
 rand = "0.8.5"
+regex = { version = "1.7.0", optional = true }
 reqwest = { version = "0.11.13", features = ["json"] }
 rlimit = "0.8.3"
 sentry = { version = "0.29.1", optional = true }
@@ -116,17 +120,16 @@ datadriven = "0.6.0"
 fallible-iterator = "0.2.0"
 itertools = "0.10.5"
 jsonwebtoken = "8.2.0"
+mz-environmentd = { path = "../environmentd", features = ["test"] }
 mz-pgrepr = { path = "../pgrepr" }
 mz-pgtest = { path = "../pgtest" }
 mz-repr = { path = "../repr" }
 mz-sql-parser = { path = "../sql-parser" }
 postgres = { version = "0.19.5", features = ["with-chrono-0_4"] }
-postgres-openssl = { version = "0.5.0" }
 postgres-protocol = { version = "0.6.5" }
 postgres_array = { version = "0.11.0" }
 predicates = "2.1.4"
 proptest = { version = "1.0.0", default-features = false, features = ["std"] }
-regex = "1.7.0"
 reqwest = { version = "0.11.13", features = ["blocking"] }
 serde_json = "1.0.89"
 serde_urlencoded = "0.7.1"
@@ -151,6 +154,7 @@ default = ["tokio-console", "jemalloc"]
 # access to the file system.
 dev-web = []
 jemalloc = ["mz-alloc/jemalloc"]
+test = ["postgres", "regex", "postgres-openssl", "mz-tracing"]
 tokio-console = [
   "mz-ore/tokio-console",
   "mz-orchestrator-tracing/tokio-console",

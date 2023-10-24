@@ -10,23 +10,13 @@
 
 import pandas as pd
 
+from materialize.scalability.df import df_totals_cols, df_totals_ext_cols
 from materialize.scalability.endpoint import Endpoint
 from materialize.scalability.regression import Regression, RegressionOutcome
 from materialize.scalability.result_analyzer import (
     ResultAnalyzer,
 )
 from materialize.scalability.workload_result import WorkloadResult
-
-COL_CONCURRENCY = "concurrency"
-COL_WORKLOAD = "workload"
-COL_COUNT = "count"
-COL_TPS = "tps"
-COL_TPS_DIFF = "tps_diff"
-COL_TPS_DIFF_PERC = "tps_diff_perc"
-COL_TPS_BASELINE = "baseline_tps"
-COL_TPS_OTHER = "other_tps"
-COL_INFO_BASELINE = "baseline_info"
-COL_INFO_OTHER = "other_info"
 
 
 class DefaultResultAnalyzer(ResultAnalyzer):
@@ -61,14 +51,21 @@ class DefaultResultAnalyzer(ResultAnalyzer):
     def _merge_endpoint_result_frames(
         self, regression_baseline_data: pd.DataFrame, other_data: pd.DataFrame
     ) -> pd.DataFrame:
-        merge_columns = [COL_COUNT, COL_CONCURRENCY, COL_WORKLOAD]
-        columns_to_keep = merge_columns + [COL_TPS]
+        merge_columns = [
+            df_totals_cols.COUNT,
+            df_totals_cols.CONCURRENCY,
+            df_totals_cols.WORKLOAD,
+        ]
+        columns_to_keep = merge_columns + [df_totals_cols.TPS]
         tps_per_endpoint = regression_baseline_data[columns_to_keep].merge(
             other_data[columns_to_keep], on=merge_columns
         )
 
         tps_per_endpoint.rename(
-            columns={f"{COL_TPS}_x": COL_TPS_BASELINE, f"{COL_TPS}_y": COL_TPS_OTHER},
+            columns={
+                f"{df_totals_cols.TPS}_x": df_totals_ext_cols.TPS_BASELINE,
+                f"{df_totals_cols.TPS}_y": df_totals_ext_cols.TPS_OTHER,
+            },
             inplace=True,
         )
         return tps_per_endpoint
@@ -79,21 +76,23 @@ class DefaultResultAnalyzer(ResultAnalyzer):
         baseline_endpoint: Endpoint,
         other_endpoint: Endpoint,
     ) -> None:
-        tps_per_endpoint[COL_TPS_DIFF] = (
-            tps_per_endpoint[COL_TPS_OTHER] - tps_per_endpoint[COL_TPS_BASELINE]
+        tps_per_endpoint[df_totals_ext_cols.TPS_DIFF] = (
+            tps_per_endpoint[df_totals_ext_cols.TPS_OTHER]
+            - tps_per_endpoint[df_totals_ext_cols.TPS_BASELINE]
         )
-        tps_per_endpoint[COL_TPS_DIFF_PERC] = (
-            tps_per_endpoint[COL_TPS_DIFF] / tps_per_endpoint[COL_TPS_BASELINE]
+        tps_per_endpoint[df_totals_ext_cols.TPS_DIFF_PERC] = (
+            tps_per_endpoint[df_totals_ext_cols.TPS_DIFF]
+            / tps_per_endpoint[df_totals_ext_cols.TPS_BASELINE]
         )
-        tps_per_endpoint[COL_INFO_BASELINE] = baseline_endpoint.name()
-        tps_per_endpoint[COL_INFO_OTHER] = other_endpoint.name()
+        tps_per_endpoint[df_totals_ext_cols.INFO_BASELINE] = baseline_endpoint.name()
+        tps_per_endpoint[df_totals_ext_cols.INFO_OTHER] = other_endpoint.name()
 
     def _filter_entries_above_threshold(
         self, tps_per_endpoint: pd.DataFrame
     ) -> pd.DataFrame:
         return tps_per_endpoint.loc[
             # keep entries x% worse than the baseline
-            tps_per_endpoint[COL_TPS_DIFF_PERC] * (-1)
+            tps_per_endpoint[df_totals_ext_cols.TPS_DIFF_PERC] * (-1)
             > self.max_deviation_in_percent
         ]
 
@@ -109,12 +108,12 @@ class DefaultResultAnalyzer(ResultAnalyzer):
             regression = Regression(
                 row,
                 workload_name,
-                concurrency=int(row[COL_CONCURRENCY]),
-                count=int(row[COL_COUNT]),
-                tps=row[COL_TPS_OTHER],
-                tps_baseline=row[COL_TPS_BASELINE],
-                tps_diff=row[COL_TPS_DIFF],
-                tps_diff_percent=row[COL_TPS_DIFF_PERC],
+                concurrency=int(row[df_totals_cols.CONCURRENCY]),
+                count=int(row[df_totals_cols.COUNT]),
+                tps=row[df_totals_ext_cols.TPS_OTHER],
+                tps_baseline=row[df_totals_ext_cols.TPS_BASELINE],
+                tps_diff=row[df_totals_ext_cols.TPS_DIFF],
+                tps_diff_percent=row[df_totals_ext_cols.TPS_DIFF_PERC],
                 endpoint=other_endpoint,
             )
             regression_outcome.regressions.append(regression)

@@ -4052,7 +4052,11 @@ fn plan_drop_cluster(
     Ok(match resolve_cluster(scx, name, if_exists)? {
         Some(cluster) => {
             if !cascade && !cluster.bound_objects().is_empty() {
-                sql_bail!("cannot drop cluster with active objects");
+                return Err(PlanError::DependentObjectsStillExist {
+                    object_type: "cluster".to_string(),
+                    object_name: cluster.name().to_string(),
+                    dependents: Vec::new(),
+                });
             }
             ensure_cluster_is_not_linked(scx, cluster.id())?;
             Some(cluster.id())
@@ -4226,14 +4230,17 @@ fn plan_drop_item_inner(
 
                         let dep = scx.catalog.get_item(id);
                         if dependency_prevents_drop(object_type, dep) {
-                            // TODO: Add a hint to add cascade.
-                            sql_bail!(
-                                "cannot drop {} {}: still depended upon by {} {}",
-                                catalog_item.item_type(),
-                                scx.catalog.minimal_qualification(catalog_item.name()),
-                                dep.item_type(),
-                                scx.catalog.minimal_qualification(dep.name())
-                            );
+                            return Err(PlanError::DependentObjectsStillExist {
+                                object_type: catalog_item.item_type().to_string(),
+                                object_name: scx
+                                    .catalog
+                                    .minimal_qualification(catalog_item.name())
+                                    .to_string(),
+                                dependents: vec![(
+                                    dep.item_type().to_string(),
+                                    scx.catalog.minimal_qualification(dep.name()).to_string(),
+                                )],
+                            });
                         }
                     }
                     // TODO(jkosh44) It would be nice to also check if any active subscribe or pending peek
@@ -4332,14 +4339,18 @@ pub fn plan_drop_owned(
                 if !non_owned_bound_objects.is_empty() {
                     let names: Vec<_> = non_owned_bound_objects
                         .into_iter()
-                        .map(|item| scx.catalog.resolve_full_name(item.name()))
-                        .map(|name| name.to_string().quoted().to_string())
+                        .map(|item| {
+                            (
+                                item.item_type().to_string(),
+                                scx.catalog.resolve_full_name(item.name()).to_string(),
+                            )
+                        })
                         .collect();
-                    sql_bail!(
-                        "cannot drop cluster {} without CASCADE: still depended upon by non-owned catalog items {}",
-                        cluster.name().quoted(),
-                        names.join(", ")
-                    );
+                    return Err(PlanError::DependentObjectsStillExist {
+                        object_type: "cluster".to_string(),
+                        object_name: cluster.name().to_string(),
+                        dependents: names,
+                    });
                 }
             }
             drop_ids.push(cluster.id().into());
@@ -4374,14 +4385,22 @@ pub fn plan_drop_owned(
                     if !non_owned_dependencies.is_empty() {
                         let names: Vec<_> = non_owned_dependencies
                             .into_iter()
-                            .map(|item| scx.catalog.resolve_full_name(item.name()))
-                            .map(|name| name.to_string().quoted().to_string())
+                            .map(|item| {
+                                (
+                                    item.item_type().to_string(),
+                                    scx.catalog.resolve_full_name(item.name()).to_string(),
+                                )
+                            })
                             .collect();
-                        sql_bail!(
-                            "cannot drop {} without CASCADE: still depended upon by non-owned catalog items {}",
-                            scx.catalog.resolve_full_name(item.name()).to_string().quoted(),
-                            names.join(", ")
-                        );
+                        return Err(PlanError::DependentObjectsStillExist {
+                            object_type: item.item_type().to_string(),
+                            object_name: scx
+                                .catalog
+                                .resolve_full_name(item.name())
+                                .to_string()
+                                .to_string(),
+                            dependents: names,
+                        });
                     }
                 }
             }

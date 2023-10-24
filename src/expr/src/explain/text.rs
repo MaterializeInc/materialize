@@ -425,6 +425,14 @@ impl MirRelationExpr {
                             AccessStrategy::Persist => {
                                 write!(f, "{}ReadStorage {}", ctx.indent, humanize(id))?;
                             }
+                            AccessStrategy::SameDataflow => {
+                                write!(
+                                    f,
+                                    "{}ReadGlobalFromSameDataflow {}",
+                                    ctx.indent,
+                                    humanize(id)
+                                )?;
+                            }
                             AccessStrategy::Index(index_accesses) => {
                                 let mut grouped_index_accesses = BTreeMap::new();
                                 for (idx_id, usage_type) in index_accesses {

@@ -170,10 +170,6 @@ postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array"
 # Waiting on https://github.com/MaterializeInc/serde-value/pull/35.
 serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
 
-# Waiting for a new release of strip-ansi-escapes that avoids the indirect
-# dependency on arrayvec v0.5.2 via a dependency on vte v0.10.1.
-vte = { git = "https://github.com/MaterializeInc/vte", rev = "45670c47cebd7af050def2f80a307bdeec7caba3" }
-
 # Waiting on https://github.com/hyperium/tonic/pull/1398.
 tonic-build = { git = "https://github.com/MaterializeInc/tonic", rev = "0d86e360ab45779770ca150c8487fe7940c299a9" }
 
