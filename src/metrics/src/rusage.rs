@@ -63,7 +63,6 @@ impl Unit for Timeval {
     type To = f64;
     fn from(Self::From { tv_sec, tv_usec }: Self::From) -> Self::To {
         // timeval can capture negative values; it'd be surprising to see a negative values here.
-
         (Duration::from_secs(u64::cast_from(tv_sec.abs_diff(0)))
             + Duration::from_micros(u64::cast_from(tv_usec.abs_diff(0))))
         .as_secs_f64()
@@ -81,24 +80,35 @@ impl Unit for Unitless {
     }
 }
 
+/// Unit for converting KiB values to bytes expressed i64.
+struct KilobytesToBytes;
+impl Unit for KilobytesToBytes {
+    type Gauge = IntGauge;
+    type From = libc::c_long;
+    type To = i64;
+    fn from(value: Self::From) -> Self::To {
+        value.saturating_mul(1024)
+    }
+}
+
 metrics! {
     mz_metrics_libc
-    (ru_utime, "user CPU time used", "_s", Timeval),
-    (ru_stime, "system CPU time used", "_s", Timeval),
-    (ru_maxrss, "maximum resident set size", "", Unitless),
-    (ru_ixrss, "integral shared memory size", "", Unitless),
-    (ru_idrss, "integral unshared data size", "", Unitless),
-    (ru_isrss, "integral unshared stack size", "", Unitless),
-    (ru_minflt, "page reclaims (soft page faults)", "", Unitless),
-    (ru_majflt, "page faults (hard page faults)", "", Unitless),
-    (ru_nswap, "swaps", "", Unitless),
-    (ru_inblock, "block input operations", "", Unitless),
-    (ru_oublock, "block output operations", "", Unitless),
-    (ru_msgsnd, "IPC messages sent", "", Unitless),
-    (ru_msgrcv, "IPC messages received", "", Unitless),
-    (ru_nsignals, "signals received", "", Unitless),
-    (ru_nvcsw, "voluntary context switches", "", Unitless),
-    (ru_nivcsw, "involuntary context switches", "", Unitless)
+    (ru_utime, "user CPU time used", "_seconds_total", Timeval),
+    (ru_stime, "system CPU time used", "_seconds_total", Timeval),
+    (ru_maxrss, "maximum resident set size", "_bytes", KilobytesToBytes),
+    (ru_ixrss, "integral shared memory size (unmaintained)", "", Unitless),
+    (ru_idrss, "integral unshared data size (unmaintained)", "", Unitless),
+    (ru_isrss, "integral unshared stack size (unmaintained)", "", Unitless),
+    (ru_minflt, "page reclaims (soft page faults)", "_total", Unitless),
+    (ru_majflt, "page faults (hard page faults)", "_total", Unitless),
+    (ru_nswap, "swaps (unmaintained)", "", Unitless),
+    (ru_inblock, "block input operations", "_total", Unitless),
+    (ru_oublock, "block output operations", "_total", Unitless),
+    (ru_msgsnd, "IPC messages sent (unmaintained)", "", Unitless),
+    (ru_msgrcv, "IPC messages received (unmaintained)", "", Unitless),
+    (ru_nsignals, "signals received (unmaintained)", "", Unitless),
+    (ru_nvcsw, "voluntary context switches", "_total", Unitless),
+    (ru_nivcsw, "involuntary context switches", "_total", Unitless)
 }
 
 /// Register a task to read rusage stats.
