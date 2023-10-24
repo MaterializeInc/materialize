@@ -315,7 +315,7 @@ default
 statement error unknown cluster 'baz'
 DROP CLUSTER baz
 
-statement error cannot drop cluster with active objects
+statement error cannot drop cluster "bar" because other objects depend on it
 DROP CLUSTER bar
 
 query TTTT
@@ -344,7 +344,7 @@ CREATE CLUSTER baz REPLICAS (r1 (SIZE '1'))
 statement ok
 CREATE DEFAULT INDEX IN CLUSTER baz ON v
 
-statement error cannot drop cluster with active objects
+statement error cannot drop cluster "baz" because other objects depend on it
 DROP CLUSTER baz
 
 statement ok
