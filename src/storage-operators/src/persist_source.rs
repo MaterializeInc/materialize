@@ -145,7 +145,7 @@ where
                 let handle = mz_timely_util::probe::Handle::default();
                 let probe = mz_timely_util::probe::source(
                     scope.clone(),
-                    format!("upsert_probe({source_id})"),
+                    format!("decode_backpressure_probe({source_id})"),
                     handle.clone(),
                 );
                 probe.connect_loop(feedback_handle);
