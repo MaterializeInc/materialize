@@ -11,6 +11,12 @@ mode standard
 
 reset-server
 
+# Enable the feature.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_alter_swap TO true;
+----
+COMPLETE 0
+
 statement ok
 CREATE SCHEMA blue;
 
@@ -76,6 +82,15 @@ query T
 SELECT name FROM mz_clusters JOIN ( SELECT cluster_id FROM mz_indexes WHERE name = 'green_idx' ) my_index ON mz_clusters.id = my_index.cluster_id;
 ----
 bar
+
+# Disable the feature.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_alter_swap TO false;
+----
+COMPLETE 0
+
+statement error db error: ERROR: the ALTER SWAP feature for objects is not supported
+ALTER CLUSTER bar SWAP WITH foo;
 
 # Cleanup.
 

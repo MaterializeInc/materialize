@@ -1992,6 +1992,13 @@ feature_flags!(
         internal: true,
         enable_for_item_parsing: true,
     },
+    {
+        name: enable_alter_swap,
+        desc: "the ALTER SWAP feature for objects",
+        default: false,
+        internal: false,
+        enable_for_item_parsing: true,
+    },
 );
 
 /// Represents the input to a variable.

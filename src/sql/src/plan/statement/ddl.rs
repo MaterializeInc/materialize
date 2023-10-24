@@ -5096,6 +5096,8 @@ pub fn plan_alter_object_swap(
     scx: &mut StatementContext,
     stmt: AlterObjectSwapStatement,
 ) -> Result<Plan, PlanError> {
+    scx.require_feature_flag(&vars::ENABLE_ALTER_SWAP)?;
+
     let AlterObjectSwapStatement {
         object_type,
         name_a,
