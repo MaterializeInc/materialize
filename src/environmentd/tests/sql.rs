@@ -663,11 +663,12 @@ fn test_subscribe_basic() {
 fn test_subscribe_progress() {
     mz_ore::test::init_logging();
 
+    let config = test_util::Config::default().workers(2);
+    let server = test_util::start_server(config).unwrap();
+
     for has_initial_data in [false, true] {
         for has_index in [false, true] {
             for has_snapshot in [false, true] {
-                let config = test_util::Config::default().workers(2);
-                let server = test_util::start_server(config).unwrap();
                 let mut client_writes = server.connect(postgres::NoTls).unwrap();
                 let mut client_reads = server.connect(postgres::NoTls).unwrap();
 
@@ -767,6 +768,10 @@ fn test_subscribe_progress() {
                     let data_ts = await_data(&mut client_reads, &mut last_seen_ts, &data);
                     await_progress(&mut client_reads, &mut last_seen_ts, data_ts + 1);
                 }
+
+                client_writes
+                    .batch_execute("DROP TABLE t1 CASCADE")
+                    .unwrap();
             }
         }
     }
