@@ -666,6 +666,7 @@ mz_peek_durations_histogram_per_worker
 mz_peek_durations_histogram_raw
 mz_postgres_sources
 mz_prepared_statement_history
+mz_prepared_statement_history_redacted
 mz_records_per_dataflow
 mz_records_per_dataflow_operator
 mz_records_per_dataflow_operator_per_worker
@@ -706,6 +707,7 @@ mz_source_statistics
 mz_source_status_history
 mz_source_statuses
 mz_statement_execution_history
+mz_statement_execution_history_redacted
 mz_storage_shards
 mz_storage_usage_by_shard
 mz_subscriptions

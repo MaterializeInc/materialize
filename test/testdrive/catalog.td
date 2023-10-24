@@ -615,6 +615,7 @@ mz_object_lifetimes
 mz_object_transitive_dependencies
 mz_peek_durations_histogram
 mz_peek_durations_histogram_per_worker
+mz_prepared_statement_history_redacted
 mz_records_per_dataflow
 mz_records_per_dataflow_operator
 mz_records_per_dataflow_operator_per_worker
@@ -646,6 +647,7 @@ mz_show_schema_privileges
 mz_show_system_privileges
 mz_sink_statuses
 mz_source_statuses
+mz_statement_execution_history_redacted
 
 > SET database = materialize
 
