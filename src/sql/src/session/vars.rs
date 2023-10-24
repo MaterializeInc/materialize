@@ -997,12 +997,12 @@ const CRDB_TCP_USER_TIMEOUT: ServerVar<Duration> = ServerVar {
     internal: true,
 };
 
-/// The maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
-const DATAFLOW_MAX_INFLIGHT_BYTES: ServerVar<Option<usize>> = ServerVar {
-    name: UncasedStr::new("dataflow_max_inflight_bytes"),
+/// The maximum number of in-flight bytes emitted by persist_sources feeding compute dataflows.
+const COMPUTE_DATAFLOW_MAX_INFLIGHT_BYTES: ServerVar<Option<usize>> = ServerVar {
+    name: UncasedStr::new("compute_dataflow_max_inflight_bytes"),
     value: &None,
     description: "The maximum number of in-flight bytes emitted by persist_sources feeding \
-                  dataflows (Materialize).",
+                  compute dataflows (Materialize).",
     internal: true,
 };
 
@@ -2469,7 +2469,7 @@ impl SystemVars {
             .with_var(&PERSIST_READER_LEASE_DURATION)
             .with_var(&CRDB_CONNECT_TIMEOUT)
             .with_var(&CRDB_TCP_USER_TIMEOUT)
-            .with_var(&DATAFLOW_MAX_INFLIGHT_BYTES)
+            .with_var(&COMPUTE_DATAFLOW_MAX_INFLIGHT_BYTES)
             .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES)
             .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION)
             .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY)
@@ -3036,8 +3036,8 @@ impl SystemVars {
     }
 
     /// Returns the `dataflow_max_inflight_bytes` configuration parameter.
-    pub fn dataflow_max_inflight_bytes(&self) -> Option<usize> {
-        *self.expect_value(&DATAFLOW_MAX_INFLIGHT_BYTES)
+    pub fn compute_dataflow_max_inflight_bytes(&self) -> Option<usize> {
+        *self.expect_value(&COMPUTE_DATAFLOW_MAX_INFLIGHT_BYTES)
     }
 
     /// Returns the `storage_dataflow_max_inflight_bytes` configuration parameter.
@@ -4859,7 +4859,7 @@ pub fn is_tracing_var(name: &str) -> bool {
 /// Returns whether the named variable is a compute configuration parameter.
 pub fn is_compute_config_var(name: &str) -> bool {
     name == MAX_RESULT_SIZE.name()
-        || name == DATAFLOW_MAX_INFLIGHT_BYTES.name()
+        || name == COMPUTE_DATAFLOW_MAX_INFLIGHT_BYTES.name()
         || name == LINEAR_JOIN_YIELDING.name()
         || name == ENABLE_MZ_JOIN_CORE.name()
         || name == ENABLE_JEMALLOC_PROFILING.name()
