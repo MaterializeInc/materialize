@@ -24,8 +24,6 @@ class StatementLogging(Check):
                 """
                 $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
                 ALTER SYSTEM SET statement_logging_max_sample_rate TO 1.0
-                $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
-                ALTER SYSTEM SET enable_rbac_checks TO false
                 """
             )
         )
@@ -55,9 +53,13 @@ class StatementLogging(Check):
         return Testdrive(
             dedent(
                 """
+                $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                ALTER SYSTEM SET enable_rbac_checks TO false
                 > SELECT sql, finished_status FROM mz_internal.mz_statement_execution_history mseh, mz_internal.mz_prepared_statement_history mpsh WHERE mseh.prepared_statement_id = mpsh.id AND sql LIKE '%/* Btv was here */' ORDER BY mseh.began_at;
                 "SELECT 'hello' /* Btv was here */" success
                 "SELECT 'goodbye' /* Btv was here */" success
+                $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                ALTER SYSTEM SET enable_rbac_checks TO true
                 """
             )
         )
