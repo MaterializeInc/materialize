@@ -44,19 +44,30 @@ pub fn compute_config(config: &SystemVars) -> ComputeParameters {
 }
 
 fn parse_yield_spec(s: &str) -> Option<YieldSpec> {
-    let parts: Vec<_> = s.split(':').collect();
-    match &parts[..] {
-        ["work", amount] => {
-            let amount = amount.parse().ok()?;
-            Some(YieldSpec::ByWork(amount))
+    let mut after_work = None;
+    let mut after_time = None;
+
+    let options = s.split(',').map(|o| o.trim());
+    for option in options {
+        let parts: Vec<_> = option.split(':').map(|p| p.trim()).collect();
+        match &parts[..] {
+            ["work", amount] => {
+                let amount = amount.parse().ok()?;
+                after_work = Some(amount);
+            }
+            ["time", millis] => {
+                let millis = millis.parse().ok()?;
+                let duration = Duration::from_millis(millis);
+                after_time = Some(duration);
+            }
+            _ => return None,
         }
-        ["time", millis] => {
-            let millis = millis.parse().ok()?;
-            let duration = Duration::from_millis(millis);
-            Some(YieldSpec::ByTime(duration))
-        }
-        _ => None,
     }
+
+    Some(YieldSpec {
+        after_work,
+        after_time,
+    })
 }
 
 /// Return the current storage configuration, derived from the system configuration.

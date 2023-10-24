@@ -61,7 +61,10 @@ impl Default for LinearJoinSpec {
     fn default() -> Self {
         Self {
             implementation: LinearJoinImpl::Materialize,
-            yielding: YieldSpec::ByWork(1_000_000),
+            yielding: YieldSpec {
+                after_work: Some(1_000_000),
+                after_time: None,
+            },
         }
     }
 }
@@ -88,18 +91,30 @@ impl LinearJoinSpec {
         V2: Data,
     {
         use LinearJoinImpl::*;
-        use YieldSpec::*;
 
-        match (self.implementation, self.yielding) {
-            (DifferentialDataflow, _) => {
+        match (
+            self.implementation,
+            self.yielding.after_work,
+            self.yielding.after_time,
+        ) {
+            (DifferentialDataflow, _, _) => {
                 differential_dataflow::operators::JoinCore::join_core(arranged1, arranged2, result)
             }
-            (Materialize, ByWork(limit)) => {
-                let yield_fn = move |_start, work| work >= limit;
+            (Materialize, Some(work_limit), Some(time_limit)) => {
+                let yield_fn =
+                    move |start: Instant, work| work >= work_limit || start.elapsed() >= time_limit;
                 mz_join_core(arranged1, arranged2, shutdown_token, result, yield_fn)
             }
-            (Materialize, ByTime(limit)) => {
-                let yield_fn = move |start: Instant, _work| start.elapsed() >= limit;
+            (Materialize, Some(work_limit), None) => {
+                let yield_fn = move |_start, work| work >= work_limit;
+                mz_join_core(arranged1, arranged2, shutdown_token, result, yield_fn)
+            }
+            (Materialize, None, Some(time_limit)) => {
+                let yield_fn = move |start: Instant, _work| start.elapsed() >= time_limit;
+                mz_join_core(arranged1, arranged2, shutdown_token, result, yield_fn)
+            }
+            (Materialize, None, None) => {
+                let yield_fn = |_start, _work| false;
                 mz_join_core(arranged1, arranged2, shutdown_token, result, yield_fn)
             }
         }
