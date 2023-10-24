@@ -573,7 +573,7 @@ ORDER BY mseh.began_at",
 /// Relies on two assumptions:
 /// (1) that the effective sampling rate for the session is 50%,
 /// (2) that we are using the deterministic testing RNG.
-fn test_statement_logging_sampling_inner(server: util::Server, mut client: postgres::Client) {
+fn test_statement_logging_sampling_inner(server: test_util::Server, mut client: postgres::Client) {
     for i in 0..50 {
         client.execute(&format!("SELECT {i}"), &[]).unwrap();
     }
@@ -716,7 +716,7 @@ fn test_statement_logging_persistence() {
     std::mem::drop(client);
     std::mem::drop(server);
 
-    let server = util::start_server(cfg).unwrap();
+    let server = test_util::start_server(cfg).unwrap();
     let mut client = server.connect_internal(postgres::NoTls).unwrap();
     // Check that we only retained the second query.
     let result = client
