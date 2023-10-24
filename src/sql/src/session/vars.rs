@@ -1311,7 +1311,9 @@ static LINEAR_JOIN_YIELDING: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
     value: &DEFAULT_LINEAR_JOIN_YIELDING,
     description:
         "The yielding behavior compute rendering should apply for linear join operators. Either \
-         'work:<amount>' or 'time:<milliseconds>'.",
+         'work:<amount>' or 'time:<milliseconds>' or 'work:<amount>,time:<milliseconds>'. Note \
+         that omitting one of 'work' or 'time' will entirely disable join yielding by time or \
+         work, respectively, rather than falling back to some default.",
     internal: true,
 });
 
