@@ -959,7 +959,6 @@ impl DurableCatalogState for PersistCatalogState {
                     .add(&StateUpdateKind::Epoch(self.epoch), &(), &current_upper, &1)
                     .await
                     .expect("invalid usage");
-                self.fence = None;
             }
             let mut batch = batch_builder
                 .finish(Antichain::from_elem(next_upper))
