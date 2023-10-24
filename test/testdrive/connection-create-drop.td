@@ -166,7 +166,7 @@ id creature
 1  lizard
 
 ! DROP CONNECTION csr_conn
-contains:depended upon by source csr_source
+contains:depended upon by source "csr_source"
 
 > DROP CONNECTION csr_conn CASCADE
 
