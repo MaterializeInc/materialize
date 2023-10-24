@@ -53,6 +53,7 @@ class RegressionOutcome:
         self.raw_regression_data = pd.DataFrame()
 
     def has_regressions(self) -> bool:
+        assert len(self.regressions) == len(self.raw_regression_data.index)
         return len(self.regressions) > 0
 
     def __str__(self) -> str:
