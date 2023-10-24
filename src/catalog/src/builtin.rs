@@ -2138,7 +2138,8 @@ pub static MZ_STATEMENT_EXECUTION_HISTORY_REDACTED: BuiltinView = BuiltinView {
     // everything but `params`
     sql: "CREATE VIEW mz_internal.mz_statement_execution_history_redacted AS
 SELECT id, prepared_statement_id, sample_rate, cluster_id, application_name,
-cluster_name, transaction_isolation, execution_timestamp, began_at, finished_at, finished_status,
+cluster_name, transaction_isolation, execution_timestamp, transaction_id,
+began_at, finished_at, finished_status,
 error_message, rows_returned, execution_strategy
 FROM mz_internal.mz_statement_execution_history",
     sensitivity: DataSensitivity::SuperuserAndSupport,
