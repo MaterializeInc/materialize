@@ -943,7 +943,7 @@ impl DurableCatalogState for PersistCatalogState {
                     .expect("invalid usage");
             }
             // If we haven't fenced the previous catalog state, do that now.
-            if let Some(Fence { prev_epoch }) = self.fence {
+            if let Some(Fence { prev_epoch }) = self.fence.take() {
                 if let Some(prev_epoch) = prev_epoch {
                     batch_builder
                         .add(
