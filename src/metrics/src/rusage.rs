@@ -96,17 +96,10 @@ metrics! {
     (ru_utime, "user CPU time used", "_seconds_total", Timeval),
     (ru_stime, "system CPU time used", "_seconds_total", Timeval),
     (ru_maxrss, "maximum resident set size", "_bytes", KilobytesToBytes),
-    (ru_ixrss, "integral shared memory size (unmaintained)", "", Unitless),
-    (ru_idrss, "integral unshared data size (unmaintained)", "", Unitless),
-    (ru_isrss, "integral unshared stack size (unmaintained)", "", Unitless),
     (ru_minflt, "page reclaims (soft page faults)", "_total", Unitless),
     (ru_majflt, "page faults (hard page faults)", "_total", Unitless),
-    (ru_nswap, "swaps (unmaintained)", "", Unitless),
     (ru_inblock, "block input operations", "_total", Unitless),
     (ru_oublock, "block output operations", "_total", Unitless),
-    (ru_msgsnd, "IPC messages sent (unmaintained)", "", Unitless),
-    (ru_msgrcv, "IPC messages received (unmaintained)", "", Unitless),
-    (ru_nsignals, "signals received (unmaintained)", "", Unitless),
     (ru_nvcsw, "voluntary context switches", "_total", Unitless),
     (ru_nivcsw, "involuntary context switches", "_total", Unitless)
 }
