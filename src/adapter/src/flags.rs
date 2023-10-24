@@ -32,7 +32,7 @@ pub fn compute_config(config: &SystemVars) -> ComputeParameters {
 
     ComputeParameters {
         max_result_size: Some(config.max_result_size()),
-        dataflow_max_inflight_bytes: Some(config.dataflow_max_inflight_bytes()),
+        dataflow_max_inflight_bytes: Some(config.compute_dataflow_max_inflight_bytes()),
         linear_join_yielding: Some(linear_join_yielding),
         enable_mz_join_core: Some(config.enable_mz_join_core()),
         enable_jemalloc_profiling: Some(config.enable_jemalloc_profiling()),

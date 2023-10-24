@@ -357,8 +357,12 @@ pub struct ComputeParameters {
     /// [`PeekResponse::Error`]: super::response::PeekResponse::Error
     /// [`SubscribeBatch::updates`]: super::response::SubscribeBatch::updates
     pub max_result_size: Option<u32>,
-    /// The maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
-    pub dataflow_max_inflight_bytes: Option<usize>,
+    /// The maximum number of in-flight bytes emitted by persist_sources feeding
+    /// dataflows.
+    ///
+    /// NB: This value is optional, so the outer option indicates if this update
+    /// includes an override and the inner option is part of the config value.
+    pub dataflow_max_inflight_bytes: Option<Option<usize>>,
     /// The yielding behavior with which linear joins should be rendered.
     pub linear_join_yielding: Option<YieldSpec>,
     /// Whether rendering should use `mz_join_core` rather than DD's `JoinCore::join_core`.
@@ -425,7 +429,11 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
     fn into_proto(&self) -> ProtoComputeParameters {
         ProtoComputeParameters {
             max_result_size: self.max_result_size.into_proto(),
-            dataflow_max_inflight_bytes: self.dataflow_max_inflight_bytes.into_proto(),
+            dataflow_max_inflight_bytes: self.dataflow_max_inflight_bytes.map(|x| {
+                ProtoComputeMaxInflightBytesConfig {
+                    dataflow_max_inflight_bytes: x.into_proto(),
+                }
+            }),
             linear_join_yielding: self.linear_join_yielding.into_proto(),
             enable_mz_join_core: self.enable_mz_join_core.into_proto(),
             enable_jemalloc_profiling: self.enable_jemalloc_profiling.into_proto(),
@@ -439,7 +447,10 @@ impl RustType<ProtoComputeParameters> for ComputeParameters {
     fn from_proto(proto: ProtoComputeParameters) -> Result<Self, TryFromProtoError> {
         Ok(Self {
             max_result_size: proto.max_result_size.into_rust()?,
-            dataflow_max_inflight_bytes: proto.dataflow_max_inflight_bytes.into_rust()?,
+            dataflow_max_inflight_bytes: proto
+                .dataflow_max_inflight_bytes
+                .map(|x| x.dataflow_max_inflight_bytes.into_rust())
+                .transpose()?,
             linear_join_yielding: proto.linear_join_yielding.into_rust()?,
             enable_mz_join_core: proto.enable_mz_join_core.into_rust()?,
             enable_jemalloc_profiling: proto.enable_jemalloc_profiling.into_rust()?,
