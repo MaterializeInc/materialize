@@ -317,14 +317,14 @@ contains:unknown catalog item 'j2'
 > CREATE VIEW v1 AS SELECT CAST('{2}' AS int4_list)
 
 ! DROP TYPE int4_list
-contains:cannot drop type int4_list: still depended upon by view v1
+contains:cannot drop type "int4_list": still depended upon by view "v1"
 
 > DROP VIEW v1
 
 > CREATE TABLE t1 (custom int4_list)
 
 ! DROP TYPE int4_list
-contains:cannot drop type int4_list: still depended upon by table t1
+contains:cannot drop type "int4_list": still depended upon by table "t1"
 
 > DROP TABLE t1
 
@@ -333,28 +333,28 @@ contains:cannot drop type int4_list: still depended upon by table t1
 > CREATE VIEW v1 AS SELECT * FROM ( SELECT CAST('{2}' AS int4_list) )
 
 ! DROP TYPE int4_list
-contains:cannot drop type int4_list: still depended upon by view v1
+contains:cannot drop type "int4_list": still depended upon by view "v1"
 
 > DROP VIEW v1
 
 > CREATE VIEW v1 AS SELECT CAST(CAST('{2}' AS int4_list) AS text)
 
 ! DROP TYPE int4_list
-contains:cannot drop type int4_list: still depended upon by view v1
+contains:cannot drop type "int4_list": still depended upon by view "v1"
 
 > DROP VIEW v1
 
 > CREATE VIEW v1 AS VALUES (CAST('{2}' AS int4_list))
 
 ! DROP TYPE int4_list
-contains:cannot drop type int4_list: still depended upon by view v1
+contains:cannot drop type "int4_list": still depended upon by view "v1"
 
 > DROP VIEW v1
 
 > CREATE VIEW v1 AS SELECT MIN(CAST(CAST('{1}' AS int4_list) AS string))
 
 ! DROP TYPE int4_list
-contains:cannot drop type int4_list: still depended upon by view v1
+contains:cannot drop type "int4_list": still depended upon by view "v1"
 
 > DROP VIEW v1
 
@@ -365,7 +365,7 @@ contains:cannot drop type int4_list: still depended upon by view v1
 > CREATE TEMPORARY TABLE t1 (f1 int4_list)
 
 ! DROP TYPE int4_list
-contains:cannot drop type int4_list: still depended upon by table t1
+contains:cannot drop type "int4_list": still depended upon by table "t1"
 
 > DROP TABLE t1
 
@@ -374,14 +374,14 @@ contains:cannot drop type int4_list: still depended upon by table t1
 > CREATE INDEX i1 ON t1 (CAST(f1 AS int4_list))
 
 ! DROP TYPE int4_list
-contains:cannot drop type int4_list: still depended upon by index i1
+contains:cannot drop type "int4_list": still depended upon by index "i1"
 
 > DROP TABLE t1
 
 > CREATE TYPE int4_list_list AS LIST (ELEMENT TYPE = int4_list)
 
 ! DROP TYPE int4_list
-contains:cannot drop type int4_list: still depended upon by type int4_list_list
+contains:cannot drop type "int4_list": still depended upon by type "int4_list_list"
 
 > DROP TYPE int4_list_list
 

@@ -91,7 +91,7 @@ class UnifiedCluster(Check):
             > SET cluster = default
 
             ! DROP CLUSTER shared_cluster_compute_first;
-            contains: cannot drop "cluster shared_cluster_compute_first" because other objects depend on it
+            contains: cannot drop cluster "shared_cluster_compute_first" because other objects depend on it
 
             ! DROP CLUSTER shared_cluster_storage_first;
             contains: cannot drop cluster "shared_cluster_storage_first" because other objects depend on it
