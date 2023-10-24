@@ -65,7 +65,9 @@ from materialize.checks.rollback import *  # noqa: F401 F403
 from materialize.checks.schemas import *  # noqa: F401 F403
 from materialize.checks.sink import *  # noqa: F401 F403
 from materialize.checks.source_errors import *  # noqa: F401 F403
-from materialize.checks.statement_logging import *  # noqa: F401 F403
+
+# Disabled due to #22448
+# from materialize.checks.statement_logging import *  # noqa: F401 F403
 from materialize.checks.string import *  # noqa: F401 F403
 from materialize.checks.subsource import *  # noqa: F401 F403
 from materialize.checks.temporal_types import *  # noqa: F401 F403
