@@ -2173,6 +2173,31 @@ pub static MZ_SESSION_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource 
     sensitivity: DataSensitivity::SuperuserAndSupport,
 });
 
+pub static MZ_ACTIVITY_LOG: BuiltinView = BuiltinView {
+    name: "mz_activity_log",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_activity_log AS
+SELECT mseh.id AS execution_id, sample_rate, cluster_id, application_name, cluster_name,
+transaction_isolation, execution_timestamp, params, began_at, finished_at, finished_status,
+error_message, rows_returned, execution_strategy,
+sql, session_id, redacted_sql, prepared_at
+FROM mz_internal.mz_statement_execution_history mseh, mz_internal.mz_prepared_statement_history mpsh
+WHERE mseh.prepared_statement_id = mpsh.id",
+    sensitivity: DataSensitivity::Superuser,
+};
+
+pub static MZ_ACTIVITY_LOG_REDACTED: BuiltinView = BuiltinView {
+    name: "mz_activity_log_redacted",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_activity_log_redacted AS
+SELECT execution_id, sample_rate, cluster_id, application_name, cluster_name,
+transaction_isolation, execution_timestamp, began_at, finished_at, finished_status,
+error_message, rows_returned, execution_strategy,
+session_id, redacted_sql, prepared_at
+FROM mz_internal.mz_activity_log",
+    sensitivity: DataSensitivity::SuperuserAndSupport,
+};
+
 pub const MZ_SOURCE_STATUSES: BuiltinView = BuiltinView {
     name: "mz_source_statuses",
     schema: MZ_INTERNAL_SCHEMA,
@@ -5694,6 +5719,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Source(&MZ_PREPARED_STATEMENT_HISTORY),
         Builtin::View(&MZ_PREPARED_STATEMENT_HISTORY_REDACTED),
         Builtin::Source(&MZ_SESSION_HISTORY),
+        Builtin::View(&MZ_ACTIVITY_LOG),
+        Builtin::View(&MZ_ACTIVITY_LOG_REDACTED),
         Builtin::View(&MZ_SOURCE_STATUSES),
         Builtin::Source(&MZ_STORAGE_SHARDS),
         Builtin::Source(&MZ_SOURCE_STATISTICS),
