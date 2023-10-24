@@ -213,6 +213,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             reported_frontiers: BTreeMap::new(),
             ingestions: BTreeMap::new(),
             exports: BTreeMap::new(),
+            reconciled_ids: BTreeSet::new(),
             now,
             source_metrics,
             sink_metrics,
@@ -269,6 +270,13 @@ pub struct StorageState {
     pub ingestions: BTreeMap<GlobalId, IngestionDescription<CollectionMetadata>>,
     /// Descriptions of each installed export.
     pub exports: BTreeMap<GlobalId, StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>>,
+    /// GlobalIDs of sources or sinks that were running on this cluster, but
+    /// were _not_ running on the last environmentd that reconciled itself with
+    /// this cluster.
+    ///
+    /// We do not emit updates for these IDs because the environmentd has no
+    /// record of these collections having existed and will panic.
+    pub reconciled_ids: BTreeSet<GlobalId>,
     /// Undocumented
     pub now: NowFn,
     /// Metrics for the source-specific side of dataflows.
@@ -829,7 +837,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 );
             }
             InternalStorageCommand::DropDataflow(id) => {
-                let ids: BTreeSet<GlobalId> = match self.storage_state.ingestions.get(&id) {
+                let mut ids: BTreeSet<GlobalId> = match self.storage_state.ingestions.get(&id) {
                     // Without the source dataflow running, all source exports
                     // should also be considered dropped. n.b. `source_exports`
                     // includes `id`
@@ -853,6 +861,12 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
                     self.storage_state.sink_tokens.remove(id);
                 }
+
+                // When dataflows are dropped, remove them from reconciled_ids
+                // if they're present, and if they are, prevent them from being
+                // propagated to the envd client by ensuring they do not end up
+                // in the `dropped_ids` set.
+                ids.retain(|id| self.storage_state.reconciled_ids.remove(id));
 
                 // The actual prometheus metrics and other state will be dropped
                 // when the dataflow shuts down and drop's its `Rc`'s to the stats
@@ -919,12 +933,24 @@ impl<'w, A: Allocate> Worker<'w, A> {
             // Only do a thing if it *advances* the frontier, not just *changes* the frontier.
             // This is protection against `frontier` lagging behind what we have conditionally reported.
             if PartialOrder::less_than(reported_frontier, &observed_frontier) {
-                new_uppers.push((*id, observed_frontier.clone()));
+                // Do not propagate changes for reconciled collections outside
+                // of worker; these will panic the envd client.
+                if !self.storage_state.reconciled_ids.contains(id) {
+                    new_uppers.push((*id, observed_frontier.clone()));
+                }
+
                 reported_frontier.clone_from(&observed_frontier);
             }
         }
 
         if !new_uppers.is_empty() {
+            mz_ore::soft_assert!(
+                new_uppers
+                    .iter()
+                    .all(|(id, _)| !self.storage_state.reconciled_ids.contains(id)),
+                "cannot send reconciled ID updates to envd client"
+            );
+
             self.send_storage_response(response_tx, StorageResponse::FrontierUppers(new_uppers));
         }
     }
@@ -1137,12 +1163,27 @@ impl<'w, A: Allocate> Worker<'w, A> {
             stale_ingestions
         );
 
+        // These IDs are running locally, but not on the envd we're reconciled
+        // with. We need to drop them, but also ensure that we don't notify the
+        // new envd client of updates to them because it has no record of this
+        // source/sink.
+        let reconciled_ids: Vec<_> = stale_ingestions
+            .into_iter()
+            .chain(stale_exports)
+            .cloned()
+            .collect();
+
+        // Track that this ID has been reconciled away so that we know to not
+        // emit updates for it to the envd client.
+        self.storage_state
+            .reconciled_ids
+            .extend(reconciled_ids.iter().cloned());
+
         // Synthesize a drop command to remove stale ingestions and exports
         commands.push(StorageCommand::AllowCompaction(
-            stale_ingestions
+            reconciled_ids
                 .into_iter()
-                .chain(stale_exports)
-                .map(|id| (*id, Antichain::new()))
+                .map(|id| (id, Antichain::new()))
                 .collect(),
         ));
 
