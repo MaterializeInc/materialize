@@ -11,9 +11,6 @@ multiple-versions = "deny"
 skip = [
     # One-time exception for base64 due to its prevalence in the crate graph.
     { name = "base64", version = "0.13.1" },
-    # `ring` depends on an older version of this crate. The dependency will be
-    #  upgraded to 0.9 when they publish 0.17.
-    { name = "spin", version = "0.9.8" },
     # `syn` is a core crate that a huge part of the ecosystem either directly, or
     # transitively depends on. They just released v2.0 which not all crates have
     # migrated to yet.
@@ -58,9 +55,6 @@ skip = [
     # our crates use `bitflags 1.3.2`
     # TODO: fork `tower-http` and swap to use older bitflags
     { name = "bitflags", version = "1.3.2" },
-
-    # `pretty` explicitly chose to use this older version.
-    { name = "arrayvec", version = "0.5.2" },
 ]
 
 # Use `tracing` instead.
