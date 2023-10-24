@@ -53,9 +53,9 @@ use mz_sql::names::{
 use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW_TS;
 use mz_adapter_types::connection::ConnectionId;
 use mz_sql::plan::{
-    AlterOptionParameter, Explainee, Index, IndexOption, MaterializedView, MutationKind, Params,
-    Plan, PlannedAlterRoleOption, PlannedRoleVariable, QueryWhen, SideEffectingFunc,
-    SourceSinkClusterConfig, UpdatePrivilege, VariableValue,
+    AlterOptionParameter, ExplainSchemaPlan, Explainee, Index, IndexOption, MaterializedView,
+    MutationKind, Params, Plan, PlannedAlterRoleOption, PlannedRoleVariable, QueryWhen,
+    SideEffectingFunc, SourceSinkClusterConfig, UpdatePrivilege, VariableValue,
 };
 use mz_sql::session::vars::{
     IsolationLevel, OwnedVarInput, SessionVars, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
@@ -74,6 +74,9 @@ use mz_storage_client::controller::{
 };
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
+use mz_storage_types::sinks::{
+    KafkaSinkAvroFormatState, KafkaSinkConnection, KafkaSinkFormat, StorageSinkConnection,
+};
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::optimizer_notices::OptimizerNotice;
 use mz_transform::{EmptyStatisticsOracle, Optimizer, StatisticsOracle};
@@ -1716,6 +1719,28 @@ impl Coordinator {
             dropped_active_cluster,
             dropped_in_use_indexes,
         })
+    }
+
+    pub(super) fn sequence_explain_schema(
+        &mut self,
+        ExplainSchemaPlan {
+            create_sink_plan, ..
+        }: ExplainSchemaPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        if let StorageSinkConnection::Kafka(KafkaSinkConnection {
+            format:
+                KafkaSinkFormat::Avro(KafkaSinkAvroFormatState::UnpublishedMaybe {
+                    value_schema, ..
+                }),
+            ..
+        }) = create_sink_plan.sink.connection
+        {
+            use std::str::FromStr;
+            let jsonb = Jsonb::from_str(&value_schema)?;
+            Ok(Self::send_immediate_rows(vec![jsonb.into_row()]))
+        } else {
+            unreachable!();
+        }
     }
 
     pub(super) fn sequence_show_all_variables(

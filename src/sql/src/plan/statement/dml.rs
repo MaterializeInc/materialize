@@ -38,10 +38,9 @@ use crate::names::{Aug, ResolvedItemName};
 use crate::normalize;
 use crate::plan::query::{plan_up_to, ExprContext, QueryLifetime};
 use crate::plan::scope::Scope;
-use crate::plan::statement::ddl::describe_create_sink;
 use crate::plan::statement::{ddl, StatementContext, StatementDesc};
 use crate::plan::with_options::TryFromValue;
-use crate::plan::{self, side_effecting_func, ExplainTimestampPlan};
+use crate::plan::{self, side_effecting_func, ExplainSchemaPlan, ExplainTimestampPlan};
 use crate::plan::{
     query, CopyFormat, CopyFromPlan, ExplainPlanPlan, InsertPlan, MutationKind, Params, Plan,
     PlanError, QueryContext, ReadThenWritePlan, SelectPlan, SubscribeFrom, SubscribePlan,
@@ -259,7 +258,7 @@ pub fn describe_explain_timestamp(
 }
 
 pub fn describe_explain_schema(
-    scx: &StatementContext,
+    _: &StatementContext,
     ExplainSchemaStatement { .. }: ExplainSchemaStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     let mut relation_desc = RelationDesc::empty();
@@ -427,9 +426,25 @@ pub fn plan_explain_plan(
 pub fn plan_explain_schema(
     scx: &StatementContext,
     explain_schema: ExplainSchemaStatement<Aug>,
-    params: &Params,
 ) -> Result<Plan, PlanError> {
-    todo!()
+    let ExplainSchemaStatement {
+        format,
+        mut statement,
+    } = explain_schema;
+    let format = match format {
+        mz_sql_parser::ast::ExplainFormat::Text => ExplainFormat::Text,
+        mz_sql_parser::ast::ExplainFormat::Json => ExplainFormat::Json,
+        mz_sql_parser::ast::ExplainFormat::Dot => ExplainFormat::Dot,
+    };
+    crate::pure::update_avro_comments(scx.catalog, &mut statement)?;
+    if let Plan::CreateSink(create_sink_plan) = ddl::plan_create_sink(scx, statement)? {
+        Ok(Plan::ExplainSchema(ExplainSchemaPlan {
+            format,
+            create_sink_plan,
+        }))
+    } else {
+        unreachable!()
+    }
 }
 
 pub fn plan_explain_timestamp(

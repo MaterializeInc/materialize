@@ -27,6 +27,7 @@ use mz_sql::plan::{
 use mz_sql::rbac;
 use mz_sql_parser::ast::{Raw, Statement};
 use mz_storage_types::connections::inline::IntoInlineConnection;
+
 use tokio::sync::oneshot;
 use tracing::{event, Instrument, Level, Span};
 
@@ -338,8 +339,9 @@ impl Coordinator {
             Plan::ExplainPlan(plan) => {
                 self.sequence_explain_plan(ctx, plan, target_cluster).await;
             }
-            Plan::ExplainSchema => {
-                todo!()
+            Plan::ExplainSchema(plan) => {
+                let result = self.sequence_explain_schema(plan);
+                ctx.retire(result);
             }
             Plan::ExplainTimestamp(plan) => {
                 self.sequence_explain_timestamp(ctx, plan, target_cluster)

@@ -769,7 +769,7 @@ fn generate_rbac_requirements(
             },
             ..Default::default()
         },
-        Plan::ExplainSchema => Default::default(),
+        Plan::ExplainSchema(_) => Default::default(),
         Plan::ExplainTimestamp(plan::ExplainTimestampPlan {
             format: _,
             raw_plan,

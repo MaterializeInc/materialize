@@ -134,7 +134,7 @@ pub enum Plan {
     CopyFrom(CopyFromPlan),
     ExplainPlan(ExplainPlanPlan),
     ExplainTimestamp(ExplainTimestampPlan),
-    ExplainSchema,
+    ExplainSchema(ExplainSchemaPlan),
     Insert(InsertPlan),
     AlterCluster(AlterClusterPlan),
     AlterClusterSwap(AlterClusterSwapPlan),
@@ -345,7 +345,7 @@ impl Plan {
             Plan::CopyFrom(_) => "copy from",
             Plan::ExplainPlan(_) => "explain plan",
             Plan::ExplainTimestamp(_) => "explain timestamp",
-            Plan::ExplainSchema => "explain schema",
+            Plan::ExplainSchema(_) => "explain schema",
             Plan::Insert(_) => "insert",
             Plan::AlterNoop(plan) => match plan.object_type {
                 ObjectType::Table => "alter table",
@@ -942,6 +942,12 @@ impl std::fmt::Display for ExplaineeStatementKind {
 pub struct ExplainTimestampPlan {
     pub format: ExplainFormat,
     pub raw_plan: HirRelationExpr,
+}
+
+#[derive(Debug)]
+pub struct ExplainSchemaPlan {
+    pub format: ExplainFormat,
+    pub create_sink_plan: CreateSinkPlan,
 }
 
 #[derive(Debug)]

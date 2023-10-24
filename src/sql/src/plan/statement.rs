@@ -342,7 +342,7 @@ pub fn plan(
         Statement::Delete(stmt) => dml::plan_delete(scx, stmt, params),
         Statement::ExplainPlan(stmt) => dml::plan_explain_plan(scx, stmt, params),
         Statement::ExplainTimestamp(stmt) => dml::plan_explain_timestamp(scx, stmt, params),
-        Statement::ExplainSchema(stmt) => dml::plan_explain_schema(scx, stmt, params),
+        Statement::ExplainSchema(stmt) => dml::plan_explain_schema(scx, stmt),
         Statement::Insert(stmt) => dml::plan_insert(scx, stmt, params),
         Statement::Select(stmt) => dml::plan_select(scx, stmt, params, None),
         Statement::Subscribe(stmt) => dml::plan_subscribe(scx, stmt, params, None),
