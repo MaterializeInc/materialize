@@ -111,6 +111,7 @@ pub mod target64 {
 pub use target64::*;
 
 // TODO(petrosagg): remove these once the std From impls become const
+cast_from!(u8, u8);
 cast_from!(u8, u16);
 cast_from!(u8, i16);
 cast_from!(u8, u32);
@@ -119,27 +120,34 @@ cast_from!(u8, u64);
 cast_from!(u8, i64);
 cast_from!(u8, u128);
 cast_from!(u8, i128);
+cast_from!(u16, u16);
 cast_from!(u16, u32);
 cast_from!(u16, i32);
 cast_from!(u16, u64);
 cast_from!(u16, i64);
 cast_from!(u16, u128);
 cast_from!(u16, i128);
+cast_from!(u32, u32);
 cast_from!(u32, u64);
 cast_from!(u32, i64);
 cast_from!(u32, u128);
 cast_from!(u32, i128);
+cast_from!(u64, u64);
 cast_from!(u64, u128);
 cast_from!(u64, i128);
+cast_from!(i8, i8);
 cast_from!(i8, i16);
 cast_from!(i8, i32);
 cast_from!(i8, i64);
 cast_from!(i8, i128);
+cast_from!(i16, i16);
 cast_from!(i16, i32);
 cast_from!(i16, i64);
 cast_from!(i16, i128);
+cast_from!(i32, i32);
 cast_from!(i32, i64);
 cast_from!(i32, i128);
+cast_from!(i64, i64);
 cast_from!(i64, i128);
 
 /// A trait for reinterpreting casts.
