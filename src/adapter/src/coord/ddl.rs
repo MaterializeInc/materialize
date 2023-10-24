@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fail::fail_point;
+use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::VersionedEvent;
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_controller::clusters::ReplicaLocation;
@@ -46,7 +47,6 @@ use crate::catalog::{
     CatalogItem, CatalogState, DataSourceDesc, Op, Sink, StorageSinkConnectionState,
     TransactionResult, SYSTEM_CONN_ID,
 };
-use crate::client::ConnectionId;
 use crate::coord::read_policy::SINCE_GRANULARITY;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::{Coordinator, ReplicaMetadata};

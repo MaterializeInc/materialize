@@ -80,9 +80,11 @@ use mz_audit_log::{
     CreateClusterReplicaV1, EventDetails, EventType, EventV1, IdNameV1, StorageUsageV1,
     VersionedEvent, VersionedStorageUsage,
 };
-use mz_catalog::objects::{Config, DurableType, IdAlloc, IntrospectionSourceIndex};
-use mz_catalog::objects::{SystemObjectDescription, SystemObjectUniqueIdentifier};
-use mz_catalog::{
+use mz_catalog::durable::objects::{
+    Config, DurableType, IdAlloc, IntrospectionSourceIndex, SystemObjectDescription,
+    SystemObjectUniqueIdentifier,
+};
+use mz_catalog::durable::{
     debug_bootstrap_args, debug_stash_backed_catalog_state, persist_backed_catalog_state,
     CatalogError, Cluster, ClusterConfig, ClusterReplica, ClusterVariant, Comment, Database,
     DefaultPrivilege, DurableCatalogError, Item, OpenableDurableCatalogState, ReplicaConfig,

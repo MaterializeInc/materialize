@@ -3471,6 +3471,7 @@ dependencies = [
  "itertools",
  "launchdarkly-server-sdk",
  "maplit",
+ "mz-adapter-types",
  "mz-audit-log",
  "mz-build-info",
  "mz-catalog",
@@ -3537,6 +3538,15 @@ dependencies = [
  "uncased",
  "url",
  "uuid",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-adapter-types"
+version = "0.0.0"
+dependencies = [
+ "mz-ore",
+ "mz-repr",
  "workspace-hack",
 ]
 
@@ -3673,15 +3683,18 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "bytes",
+ "chrono",
  "derivative",
  "differential-dataflow",
  "futures",
  "insta",
  "itertools",
+ "mz-adapter-types",
  "mz-audit-log",
  "mz-compute-client",
  "mz-controller",
  "mz-controller-types",
+ "mz-expr",
  "mz-ore",
  "mz-persist-client",
  "mz-persist-types",
@@ -4063,6 +4076,7 @@ dependencies = [
  "libc",
  "mime",
  "mz-adapter",
+ "mz-adapter-types",
  "mz-alloc",
  "mz-aws-secrets-controller",
  "mz-build-info",
@@ -4789,6 +4803,7 @@ dependencies = [
  "futures",
  "itertools",
  "mz-adapter",
+ "mz-adapter-types",
  "mz-expr",
  "mz-frontegg-auth",
  "mz-ore",

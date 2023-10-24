@@ -10,6 +10,7 @@
 //! Various utility methods used by the [`Coordinator`]. Ideally these are all
 //! put in more meaningfully named modules.
 
+use mz_adapter_types::connection::ConnectionId;
 use mz_ore::now::EpochMillis;
 use mz_repr::{GlobalId, ScalarType};
 use mz_sql::names::{Aug, ResolvedIds};
@@ -18,7 +19,6 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{Raw, Statement};
 
 use crate::catalog::Catalog;
-use crate::client::ConnectionId;
 use crate::coord::Coordinator;
 use crate::session::{Session, TransactionStatus};
 use crate::subscribe::ActiveSubscribe;

@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 
 use futures::future::BoxFuture;
-use mz_catalog::{self, Transaction};
+use mz_catalog::durable::Transaction;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::EpochMillis;
 use mz_sql::ast::display::AstDisplay;
@@ -121,7 +121,7 @@ fn _add_to_audit_log(
     details: mz_audit_log::EventDetails,
     occurred_at: EpochMillis,
 ) -> Result<(), anyhow::Error> {
-    let id = tx.get_and_increment_id(mz_catalog::AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
+    let id = tx.get_and_increment_id(mz_catalog::durable::AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
     let event =
         mz_audit_log::VersionedEvent::new(id, event_type, object_type, details, None, occurred_at);
     tx.insert_audit_log_event(event);

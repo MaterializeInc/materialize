@@ -27,8 +27,8 @@ use mz_stash_types::STASH_VERSION;
 use mz_storage_types::sources::Timeline;
 
 use crate::builtin::BUILTIN_ROLES;
-use crate::objects::{DefaultPrivilegesKey, DefaultPrivilegesValue};
-use crate::{
+use crate::durable::objects::{DefaultPrivilegesKey, DefaultPrivilegesValue};
+use crate::durable::{
     BootstrapArgs, CatalogError, ClusterConfig, ClusterVariant, ClusterVariantManaged,
     ReplicaConfig, ReplicaLocation, Role, Schema, Transaction, AUDIT_LOG_ID_ALLOC_KEY,
     DATABASE_ID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY,

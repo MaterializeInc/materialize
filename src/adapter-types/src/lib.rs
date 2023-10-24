@@ -74,11 +74,8 @@
 #![warn(clippy::disallowed_types)]
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
-// Disallow usage of `unwrap()`.
-#![warn(clippy::unwrap_used)]
 
-//! Persistent metadata storage for the coordinator.
+//! Types for the adapter.
 
-pub mod builtin;
-pub mod durable;
-pub mod memory;
+pub mod compaction;
+pub mod connection;

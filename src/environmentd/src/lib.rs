@@ -95,7 +95,7 @@ use mz_adapter::catalog::ClusterReplicaSizeMap;
 use mz_adapter::config::{system_parameter_sync, SystemParameterSyncConfig};
 use mz_adapter::webhook::WebhookConcurrencyLimiter;
 use mz_build_info::{build_info, BuildInfo};
-use mz_catalog::{BootstrapArgs, OpenableDurableCatalogState, StashConfig};
+use mz_catalog::durable::{BootstrapArgs, OpenableDurableCatalogState, StashConfig};
 use mz_cloud_resources::CloudResourceController;
 use mz_controller::ControllerConfig;
 use mz_frontegg_auth::Authentication as FronteggAuthentication;
@@ -676,12 +676,14 @@ async fn catalog_opener(
             let stash_factory =
                 mz_stash::StashFactory::from_metrics(Arc::clone(&controller_config.stash_metrics));
             let tls = mz_tls_util::make_tls(&tokio_postgres::config::Config::from_str(url)?)?;
-            Box::new(mz_catalog::stash_backed_catalog_state(StashConfig {
-                stash_factory,
-                stash_url: url.clone(),
-                schema: None,
-                tls,
-            }))
+            Box::new(mz_catalog::durable::stash_backed_catalog_state(
+                StashConfig {
+                    stash_factory,
+                    stash_url: url.clone(),
+                    schema: None,
+                    tls,
+                },
+            ))
         }
         CatalogConfig::Persist { persist_clients } => {
             info!("Using persist backed catalog");
@@ -690,7 +692,7 @@ async fn catalog_opener(
                 .await?;
 
             Box::new(
-                mz_catalog::persist_backed_catalog_state(
+                mz_catalog::durable::persist_backed_catalog_state(
                     persist_client,
                     environment_id.organization_id(),
                 )

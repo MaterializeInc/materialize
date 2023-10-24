@@ -75,7 +75,7 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use mz_catalog::{
+use mz_catalog::durable::{
     debug_bootstrap_args, debug_stash_backed_catalog_state, persist_backed_catalog_state,
     stash_backed_catalog_state, CatalogError, Epoch, OpenableDurableCatalogState, StashConfig,
 };

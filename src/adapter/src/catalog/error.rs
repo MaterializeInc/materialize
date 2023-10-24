@@ -71,7 +71,7 @@ pub enum ErrorKind {
     #[error("{0}")]
     Unstructured(String),
     #[error(transparent)]
-    Durable(#[from] mz_catalog::DurableCatalogError),
+    Durable(#[from] mz_catalog::durable::DurableCatalogError),
     #[error(transparent)]
     Uuid(#[from] uuid::Error),
     #[error("role \"{role_name}\" is a member of role \"{member_name}\"")]
@@ -121,7 +121,7 @@ impl From<SqlCatalogError> for Error {
 
 impl From<TryFromProtoError> for Error {
     fn from(e: TryFromProtoError) -> Error {
-        Error::from(mz_catalog::CatalogError::from(e))
+        Error::from(mz_catalog::durable::CatalogError::from(e))
     }
 }
 
@@ -131,11 +131,11 @@ impl From<uuid::Error> for Error {
     }
 }
 
-impl From<mz_catalog::CatalogError> for Error {
-    fn from(e: mz_catalog::CatalogError) -> Self {
+impl From<mz_catalog::durable::CatalogError> for Error {
+    fn from(e: mz_catalog::durable::CatalogError) -> Self {
         match e {
-            mz_catalog::CatalogError::Catalog(e) => Error::new(ErrorKind::from(e)),
-            mz_catalog::CatalogError::Durable(e) => Error::new(ErrorKind::from(e)),
+            mz_catalog::durable::CatalogError::Catalog(e) => Error::new(ErrorKind::from(e)),
+            mz_catalog::durable::CatalogError::Durable(e) => Error::new(ErrorKind::from(e)),
         }
     }
 }

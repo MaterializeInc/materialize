@@ -25,6 +25,7 @@ launchdarkly-server-sdk = { version = "1.0.0", default_features = false, feature
   "hypertls",
 ] }
 maplit = "1.0.2"
+mz-adapter-types = { path = "../adapter-types" }
 mz-audit-log = { path = "../audit-log" }
 mz-build-info = { path = "../build-info" }
 mz-catalog = { path = "../catalog" }
