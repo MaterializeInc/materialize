@@ -22,6 +22,7 @@ from materialize.mzcompose import DEFAULT_SYSTEM_PARAMETERS
 from materialize.mzcompose.composition import Composition
 from materialize.parallel_workload.action import (
     Action,
+    BackupRestoreAction,
     CancelAction,
     KillAction,
     ddl_action_list,
@@ -237,7 +238,7 @@ def run(
         assert composition, "Backup & Restore scenario only works in mzcompose"
         worker = Worker(
             worker_rng,
-            [BackupRestoreAction(worker_rng, composition, exes)],
+            [BackupRestoreAction(worker_rng, composition, databases)],
             [1],
             end_time,
             autocommit=False,

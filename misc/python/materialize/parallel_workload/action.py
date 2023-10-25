@@ -18,6 +18,7 @@ from pg8000.native import identifier
 import materialize.parallel_workload.database
 from materialize.data_ingest.data_type import NUMBER_TYPES, Text, TextTextMap
 from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.minio import MINIO_BLOB_URI
 from materialize.parallel_workload.database import (
     DB_OFFSET,
     MAX_CLUSTER_REPLICAS,
@@ -33,6 +34,7 @@ from materialize.parallel_workload.database import (
     MAX_WEBHOOK_SOURCES,
     Cluster,
     ClusterReplica,
+    Database,
     DBObject,
     KafkaSink,
     KafkaSource,
@@ -859,25 +861,72 @@ class KillAction(Action):
         # Otherwise getting failure on "up" locally
         time.sleep(1)
         self.composition.up("materialized", detach=True)
-        time.sleep(self.rng.uniform(20, 180))
+        time.sleep(self.rng.uniform(120, 240))
 
 
+# TODO: Don't restore immediately, keep copy Database objects
 class BackupRestoreAction(Action):
     composition: Composition
-    exes: list[Executor]
+    databases: list[Database]
+    num: int
 
     def __init__(
-        self,
-        rng: random.Random,
-        composition: Composition,
-        exes: list[Executor]) -> None:
+        self, rng: random.Random, composition: Composition, databases: list[Database]
+    ) -> None:
         super().__init__(rng)
         self.composition = composition
-        self.exes = exes
+        self.databases = databases
+        self.num = 0
 
     def run(self, exe: Executor) -> None:
-        time.sleep(self.rng.uniform(10, 120))
-        # TODO: Backup & restore here
+        self.num += 1
+        time.sleep(self.rng.uniform(10, 240))
+        for db in self.databases:
+            db.lock.acquire()
+
+        try:
+            # Backup
+            self.composition.exec("mc", "mc", "mb", f"persist/crdb-backup{self.num}")
+            self.composition.exec(
+                "cockroach",
+                "cockroach",
+                "sql",
+                "--insecure",
+                "-e",
+                f"""
+               CREATE EXTERNAL CONNECTION backup_bucket{self.num} AS 's3://persist/crdb-backup{self.num}?AWS_ENDPOINT=http://minio:9000/&AWS_REGION=minio&AWS_ACCESS_KEY_ID=minioadmin&AWS_SECRET_ACCESS_KEY=minioadmin';
+               BACKUP INTO 'external://backup_bucket{self.num}';
+            """,
+            )
+            self.composition.kill("materialized")
+
+            # Restore
+            self.composition.exec(
+                "cockroach",
+                "cockroach",
+                "sql",
+                "--insecure",
+                "-e",
+                f"""
+                DROP DATABASE defaultdb;
+                RESTORE DATABASE defaultdb FROM LATEST IN 'external://backup_bucket{self.num}';
+                SELECT shard, min(sequence_number), max(sequence_number)
+                FROM consensus.consensus GROUP BY 1 ORDER BY 2 DESC, 3 DESC, 1 ASC LIMIT 32;
+            """,
+            )
+            self.composition.run(
+                "persistcli",
+                "admin",
+                "--commit",
+                "restore-blob",
+                f"--blob-uri={MINIO_BLOB_URI}",
+                "--consensus-uri=postgres://root@cockroach:26257?options=--search_path=consensus",
+            )
+            self.composition.up("materialized")
+
+        finally:
+            for db in self.databases:
+                db.lock.release()
 
 
 class CreateWebhookSourceAction(Action):

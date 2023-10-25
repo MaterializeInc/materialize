@@ -881,7 +881,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --scenario=backup-restore]
+              args: [--runtime=1500, --scenario=backup-restore, --naughty-identifiers]
 
   - id: incident-70
     label: "Test for incident 70"
