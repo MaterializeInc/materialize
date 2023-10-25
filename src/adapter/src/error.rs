@@ -706,7 +706,7 @@ impl fmt::Display for AdapterError {
                 )
             }
             AdapterError::InvalidAlter(t, e) => {
-                write!(f, "invalid ALTER {t}: resulting plan is invalid: {e}")
+                write!(f, "invalid ALTER {t}: {e}")
             }
         }
     }
