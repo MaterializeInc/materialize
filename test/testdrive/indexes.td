@@ -320,6 +320,7 @@ mz_message_counts_received_raw_s2_primary_idx               mz_message_counts_re
 mz_message_counts_sent_raw_s2_primary_idx                   mz_message_counts_sent_raw                   mz_introspection    {channel_id,from_worker_id,to_worker_id}
 mz_object_dependencies_ind                                  mz_object_dependencies                       mz_introspection    {object_id}
 mz_object_lifetimes_ind                                     mz_object_lifetimes                          mz_introspection    {id}
+mz_object_transitive_dependencies_ind                       mz_object_transitive_dependencies            mz_introspection    {object_id}
 mz_peek_durations_histogram_raw_s2_primary_idx              mz_peek_durations_histogram_raw              mz_introspection    {worker_id,duration_ns}
 mz_roles_ind                                                mz_roles                                     mz_introspection    {id}
 mz_scheduling_elapsed_raw_s2_primary_idx                    mz_scheduling_elapsed_raw                    mz_introspection    {id,worker_id}
