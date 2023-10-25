@@ -2880,15 +2880,27 @@ impl<T: AstInfo> AstDisplay for ExplainPlanStatement<T> {
     }
 }
 impl_display_t!(ExplainPlanStatement);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ExplainSchemaFor {
+    Key,
+    Value,
+}
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ExplainSchemaStatement<T: AstInfo> {
+    pub schema_for: ExplainSchemaFor,
     pub format: ExplainFormat,
     pub statement: CreateSinkStatement<T>,
 }
 
 impl<T: AstInfo> AstDisplay for ExplainSchemaStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("EXPLAIN SCHEMA AS ");
+        f.write_str("EXPLAIN ");
+        match &self.schema_for {
+            ExplainSchemaFor::Key => f.write_str("KEY"),
+            ExplainSchemaFor::Value => f.write_str("VALUE"),
+        }
+        f.write_str(" SCHEMA AS ");
         f.write_node(&self.format);
         f.write_str(" FOR ");
         f.write_node(&self.statement);

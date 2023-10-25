@@ -22,8 +22,8 @@ use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::{RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
-    ExplainSchemaStatement, ExplainTimestampStatement, Expr, IfExistsBehavior, OrderByExpr,
-    SubscribeOutput,
+    ExplainSchemaFor, ExplainSchemaStatement, ExplainTimestampStatement, Expr, IfExistsBehavior,
+    OrderByExpr, SubscribeOutput,
 };
 use mz_storage_types::sinks::{
     KafkaSinkAvroFormatState, KafkaSinkConnection, KafkaSinkFormat, StorageSinkConnection,
@@ -433,6 +433,7 @@ pub fn plan_explain_schema(
     explain_schema: ExplainSchemaStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     let ExplainSchemaStatement {
+        schema_for,
         format,
         mut statement,
     } = explain_schema;
@@ -447,14 +448,23 @@ pub fn plan_explain_schema(
         if let StorageSinkConnection::Kafka(KafkaSinkConnection {
             format:
                 KafkaSinkFormat::Avro(KafkaSinkAvroFormatState::UnpublishedMaybe {
-                    value_schema, ..
+                    key_schema,
+                    value_schema,
+                    ..
                 }),
             ..
         }) = sink.connection
         {
+            let schema = match schema_for {
+                ExplainSchemaFor::Key => {
+                    key_schema.ok_or_else(|| sql_err!("CREATE SINK does not have a key"))?
+                }
+                ExplainSchemaFor::Value => value_schema,
+            };
+
             Ok(Plan::ExplainSchema(ExplainSchemaPlan {
                 format,
-                json_schema: value_schema,
+                json_schema: schema,
             }))
         } else {
             bail_unsupported!("EXPLAIN SCHEMA is only available for Kafka sinks with Avro schemas");

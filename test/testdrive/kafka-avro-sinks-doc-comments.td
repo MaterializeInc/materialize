@@ -82,22 +82,37 @@ $ schema-registry-verify schema-type=avro subject=testdrive-sink3-${testdrive.se
 $ schema-registry-verify schema-type=avro subject=testdrive-sink3-${testdrive.seed}-key
 {"type":"record","name":"row","doc":"comment on table t with a \\\\ \\","fields":[{"name":"c2","type":"string","doc":"doc on t.c2"}]}
 
-> EXPLAIN SCHEMA FOR CREATE SINK sink FROM t
+# Explain schema
+> EXPLAIN VALUE SCHEMA FOR CREATE SINK sink FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink3-${testdrive.seed}')
   KEY (c2) NOT ENFORCED
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
- "{\"fields\":[{\"name\":\"before\",\"type\":[\"null\",{\"doc\":\"comment on table t with a \\\\\\\\ \\\\\",\"fields\":[{\"name\":\"c1\",\"type\":[\"null\",{\"doc\":\"comment on type point\",\"fields\":[{\"doc\":\"comment on column point.x\",\"name\":\"x\",\"type\":[\"null\",\"int\"]},{\"name\":\"y\",\"type\":[\"null\",\"int\"]}],\"name\":\"record0\",\"namespace\":\"com.materialize.sink\",\"type\":\"record\"}]},{\"name\":\"c2\",\"type\":\"string\"},{\"name\":\"c3_map_text__text_\",\"type\":[\"null\",{\"type\":\"map\",\"values\":[\"null\",\"boolean\"]}]},{\"doc\":\"comment on column t.c4 with an äöü\",\"name\":\"c4\",\"type\":[\"null\",{\"items\":[\"null\",{\"doc\":\"comment on type point\",\"fields\":[{\"doc\":\"comment on column point.x\",\"name\":\"x\",\"type\":[\"null\",\"int\"]},{\"name\":\"y\",\"type\":[\"null\",\"int\"]}],\"name\":\"record1\",\"namespace\":\"com.materialize.sink\",\"type\":\"record\"}],\"type\":\"array\"}]}],\"name\":\"row\",\"type\":\"record\"}]},{\"name\":\"after\",\"type\":[\"null\",\"row\"]}],\"name\":\"envelope\",\"type\":\"record\"}"
+"{\"fields\":[{\"name\":\"before\",\"type\":[\"null\",{\"doc\":\"comment on table t with a \\\\\\\\ \\\\\",\"fields\":[{\"name\":\"c1\",\"type\":[\"null\",{\"doc\":\"comment on type point\",\"fields\":[{\"doc\":\"comment on column point.x\",\"name\":\"x\",\"type\":[\"null\",\"int\"]},{\"name\":\"y\",\"type\":[\"null\",\"int\"]}],\"name\":\"record0\",\"namespace\":\"com.materialize.sink\",\"type\":\"record\"}]},{\"name\":\"c2\",\"type\":\"string\"},{\"name\":\"c3_map_text__text_\",\"type\":[\"null\",{\"type\":\"map\",\"values\":[\"null\",\"boolean\"]}]},{\"doc\":\"comment on column t.c4 with an äöü\",\"name\":\"c4\",\"type\":[\"null\",{\"items\":[\"null\",{\"doc\":\"comment on type point\",\"fields\":[{\"doc\":\"comment on column point.x\",\"name\":\"x\",\"type\":[\"null\",\"int\"]},{\"name\":\"y\",\"type\":[\"null\",\"int\"]}],\"name\":\"record1\",\"namespace\":\"com.materialize.sink\",\"type\":\"record\"}],\"type\":\"array\"}]}],\"name\":\"row\",\"type\":\"record\"}]},{\"name\":\"after\",\"type\":[\"null\",\"row\"]}],\"name\":\"envelope\",\"type\":\"record\"}"
+
+> EXPLAIN KEY SCHEMA FOR CREATE SINK sink FROM t
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink3-${testdrive.seed}')
+  KEY (c2) NOT ENFORCED
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM;
+"{\"doc\":\"comment on table t with a \\\\\\\\ \\\\\",\"fields\":[{\"name\":\"c2\",\"type\":\"string\"}],\"name\":\"row\",\"type\":\"record\"}"
 
 # Updated comment is reflected right away in explain schema
 > COMMENT ON COLUMN t.c2 IS 'comment on t.c2';
 
-> EXPLAIN SCHEMA FOR CREATE SINK sink FROM t
+> EXPLAIN VALUE SCHEMA FOR CREATE SINK sink FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink3-${testdrive.seed}')
   KEY (c2) NOT ENFORCED
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT;
 "{\"doc\":\"comment on table t with a \\\\\\\\ \\\\\",\"fields\":[{\"name\":\"c1\",\"type\":[\"null\",{\"doc\":\"comment on type point\",\"fields\":[{\"doc\":\"comment on column point.x\",\"name\":\"x\",\"type\":[\"null\",\"int\"]},{\"name\":\"y\",\"type\":[\"null\",\"int\"]}],\"name\":\"record0\",\"namespace\":\"com.materialize.sink\",\"type\":\"record\"}]},{\"doc\":\"comment on t.c2\",\"name\":\"c2\",\"type\":\"string\"},{\"name\":\"c3_map_text__text_\",\"type\":[\"null\",{\"type\":\"map\",\"values\":[\"null\",\"boolean\"]}]},{\"doc\":\"comment on column t.c4 with an äöü\",\"name\":\"c4\",\"type\":[\"null\",{\"items\":[\"null\",{\"doc\":\"comment on type point\",\"fields\":[{\"doc\":\"comment on column point.x\",\"name\":\"x\",\"type\":[\"null\",\"int\"]},{\"name\":\"y\",\"type\":[\"null\",\"int\"]}],\"name\":\"record1\",\"namespace\":\"com.materialize.sink\",\"type\":\"record\"}],\"type\":\"array\"}]}],\"name\":\"envelope\",\"type\":\"record\"}"
+
+> EXPLAIN KEY SCHEMA FOR CREATE SINK sink FROM t
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink3-${testdrive.seed}')
+  KEY (c2) NOT ENFORCED
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE UPSERT;
+"{\"doc\":\"comment on table t with a \\\\\\\\ \\\\\",\"fields\":[{\"doc\":\"comment on t.c2\",\"name\":\"c2\",\"type\":\"string\"}],\"name\":\"row\",\"type\":\"record\"}"
 
 # errors
 ! CREATE SINK bad_sink FROM t
@@ -174,6 +189,13 @@ ALTER SYSTEM SET enable_sink_doc_on_option = false;
 contains: DOC ON option for sinks is not supported
 
 # If feature flag is off, automatic doc on options from comments will not be added
+> EXPLAIN VALUE SCHEMA FOR CREATE SINK doc_on_disabled FROM t
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-doc_on_disabled-${testdrive.seed}')
+  KEY (c2) NOT ENFORCED
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE UPSERT;
+"{\"fields\":[{\"name\":\"c1\",\"type\":[\"null\",{\"fields\":[{\"name\":\"x\",\"type\":[\"null\",\"int\"]},{\"name\":\"y\",\"type\":[\"null\",\"int\"]}],\"name\":\"record0\",\"namespace\":\"com.materialize.sink\",\"type\":\"record\"}]},{\"name\":\"c2\",\"type\":\"string\"},{\"name\":\"c3_map_text__text_\",\"type\":[\"null\",{\"type\":\"map\",\"values\":[\"null\",\"boolean\"]}]},{\"name\":\"c4\",\"type\":[\"null\",{\"items\":[\"null\",{\"fields\":[{\"name\":\"x\",\"type\":[\"null\",\"int\"]},{\"name\":\"y\",\"type\":[\"null\",\"int\"]}],\"name\":\"record1\",\"namespace\":\"com.materialize.sink\",\"type\":\"record\"}],\"type\":\"array\"}]}],\"name\":\"envelope\",\"type\":\"record\"}"
+
 > CREATE SINK doc_on_disabled FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-doc_on_disabled-${testdrive.seed}')
   KEY (c2) NOT ENFORCED

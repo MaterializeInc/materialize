@@ -6993,7 +6993,7 @@ impl<'a> Parser<'a> {
         if self.parse_keyword(TIMESTAMP) {
             self.parse_explain_timestamp()
                 .map_parser_err(StatementKind::ExplainTimestamp)
-        } else if self.parse_keyword(SCHEMA) {
+        } else if self.parse_keyword(KEY) || self.parse_keyword(VALUE) {
             self.parse_explain_schema()
                 .map_parser_err(StatementKind::ExplainSchema)
         } else {
@@ -7142,9 +7142,18 @@ impl<'a> Parser<'a> {
             query,
         }))
     }
-    /// Parse an `EXPLAIN SCHEMA` statement assuming that the `EXPLAIN SCHEMA` tokens
+    /// Parse an `EXPLAIN [KEY|VALUE] SCHEMA` statement assuming that the `EXPLAIN [KEY|VALUE]` tokens
     /// have already been consumed
     fn parse_explain_schema(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.prev_token();
+        let schema_for = match self.expect_one_of_keywords(&[KEY, VALUE])? {
+            KEY => ExplainSchemaFor::Key,
+            VALUE => ExplainSchemaFor::Value,
+            _ => unreachable!(),
+        };
+
+        self.expect_keyword(SCHEMA)?;
+
         let format = if self.parse_keyword(AS) {
             match self.parse_one_of_keywords(&[JSON]) {
                 Some(JSON) => ExplainFormat::Json,
@@ -7164,6 +7173,7 @@ impl<'a> Parser<'a> {
 
         if let Statement::CreateSink(statement) = self.parse_create_sink()? {
             Ok(Statement::ExplainSchema(ExplainSchemaStatement {
+                schema_for,
                 format,
                 statement,
             }))
