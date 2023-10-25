@@ -109,6 +109,7 @@ class MaterializeContainer(MaterializeNonRemote):
     def __init__(
         self,
         composition: Composition,
+        specified_target: str,
         image: str | None = None,
         alternative_image: str | None = None,
     ) -> None:
@@ -118,6 +119,7 @@ class MaterializeContainer(MaterializeNonRemote):
             alternative_image if image != alternative_image else None
         )
         self._port: int | None = None
+        self.specified_target = specified_target
         super().__init__()
 
     def port(self) -> int:
@@ -155,7 +157,9 @@ class MaterializeContainer(MaterializeNonRemote):
             self._port = self.composition.default_port("materialized")
 
     def __str__(self) -> str:
-        return f"MaterializeContainer ({self.image})"
+        return (
+            f"MaterializeContainer ({self.image} specified as {self.specified_target})"
+        )
 
 
 def endpoint_name_to_description(endpoint_name: str) -> str:
