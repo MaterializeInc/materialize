@@ -542,10 +542,8 @@ where
 
     since: Antichain<T>,
     pub(crate) last_heartbeat: EpochMillis,
-    explicitly_expired: bool,
     lease_returner: SubscriptionLeaseReturner,
-
-    pub(crate) heartbeat_tasks: Option<Vec<JoinHandle<()>>>,
+    pub(crate) unexpired_state: Option<UnexpiredReadHandleState>,
 }
 
 impl<K, V, T, D> ReadHandle<K, V, T, D>
@@ -576,13 +574,14 @@ where
             schemas,
             since,
             last_heartbeat,
-            explicitly_expired: false,
             lease_returner: SubscriptionLeaseReturner {
                 leased_seqnos: Arc::new(Mutex::new(BTreeMap::new())),
                 reader_id: reader_id.clone(),
                 metrics,
             },
-            heartbeat_tasks: Some(machine.start_reader_heartbeat_tasks(reader_id, gc).await),
+            unexpired_state: Some(UnexpiredReadHandleState {
+                heartbeat_tasks: machine.start_reader_heartbeat_tasks(reader_id, gc).await,
+            }),
         }
     }
 
@@ -914,9 +913,14 @@ where
     /// happens.
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn expire(mut self) {
+        // We drop the unexpired state before expiring the reader to ensure the
+        // heartbeat tasks can never observe the expired state. This doesn't
+        // matter for correctness, but avoids confusing log output if the
+        // heartbeat task were to discover that its lease has been expired.
+        self.unexpired_state = None;
+
         let (_, maintenance) = self.machine.expire_leased_reader(&self.reader_id).await;
         maintenance.start_performing(&self.machine, &self.gc);
-        self.explicitly_expired = true;
     }
 
     /// Test helper for a [Self::listen] call that is expected to succeed.
@@ -926,6 +930,20 @@ where
         self.listen(Antichain::from_elem(as_of))
             .await
             .expect("cannot serve requested as_of")
+    }
+}
+
+/// State for a read handle that has not been explicitly expired.
+#[derive(Debug)]
+pub(crate) struct UnexpiredReadHandleState {
+    pub(crate) heartbeat_tasks: Vec<JoinHandle<()>>,
+}
+
+impl Drop for UnexpiredReadHandleState {
+    fn drop(&mut self) {
+        for heartbeat_task in &self.heartbeat_tasks {
+            heartbeat_task.abort();
+        }
     }
 }
 
@@ -1188,14 +1206,16 @@ where
     D: Semigroup + Codec64 + Send + Sync,
 {
     fn drop(&mut self) {
-        if let Some(heartbeat_tasks) = self.heartbeat_tasks.take() {
-            for heartbeat_task in heartbeat_tasks {
-                heartbeat_task.abort();
-            }
-        }
-        if self.explicitly_expired {
+        if self.unexpired_state.is_none() {
             return;
         }
+
+        // We drop the unexpired state before expiring the reader to ensure the
+        // heartbeat tasks can never observe the expired state. This doesn't
+        // matter for correctness, but avoids confusing log output if the
+        // heartbeat task were to discover that its lease has been expired.
+        self.unexpired_state = None;
+
         let handle = match Handle::try_current() {
             Ok(x) => x,
             Err(_) => {
