@@ -2450,7 +2450,7 @@ fn smoketest_webhook_source() {
 
     let mut client = server.connect(postgres::NoTls).unwrap();
 
-    #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
+    #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, Clone)]
     struct WebhookEvent {
         ts: u128,
         name: String,
@@ -2480,7 +2480,7 @@ fn smoketest_webhook_source() {
 
     // Generate some events.
     const NUM_EVENTS: i64 = 100;
-    let events: Vec<_> = (0..NUM_EVENTS)
+    let events: BTreeSet<_> = (0..NUM_EVENTS)
         .map(|i| WebhookEvent {
             ts: now(),
             name: format!("event_{i}"),
@@ -2488,20 +2488,30 @@ fn smoketest_webhook_source() {
         })
         .collect();
 
-    let http_client = Client::new();
-    let webhook_url = format!(
+    let webhook_url = Arc::new(format!(
         "http://{}/api/webhook/materialize/public/webhook_json",
         server.inner.http_local_addr()
-    );
+    ));
     // Send all of our events to our webhook source.
+    let mut handles = Vec::with_capacity(events.len());
     for event in &events {
-        let resp = http_client
-            .post(&webhook_url)
-            .json(event)
-            .send()
-            .expect("failed to POST event");
-        assert!(resp.status().is_success());
+        let webhook_url = Arc::clone(&webhook_url);
+        let event = event.clone();
+        let handle = thread::spawn(move || {
+            let http_client = Client::new();
+            let resp = http_client
+                .post(&*webhook_url)
+                .json(&event)
+                .send()
+                .expect("failed to POST event");
+            assert!(resp.status().is_success());
+        });
+        handles.push(handle);
     }
+    for handle in handles {
+        handle.join().unwrap();
+    }
+
     let total_requests_metric = server
         .metrics_registry
         .gather()
@@ -2535,7 +2545,7 @@ fn smoketest_webhook_source() {
         .expect("failed to read events!");
 
     // Read all of our events back.
-    let events_roundtrip: Vec<WebhookEvent> = client
+    let events_roundtrip: BTreeSet<WebhookEvent> = client
         .query("SELECT * FROM webhook_json", &[])
         .expect("failed to query source")
         .into_iter()
