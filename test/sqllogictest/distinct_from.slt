@@ -22,7 +22,7 @@ true
 query T
 SELECT 1 IS DISTINCT FROM NULL
 ----
-true
+truo
 
 query T
 SELECT NULL IS DISTINCT FROM 1
