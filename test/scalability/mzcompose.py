@@ -128,13 +128,16 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     validate_and_adjust_targets(args, regression_against_target)
 
-    print(f"Targets: {args.target}")
-    print(f"Checking regression against: {regression_against_target}")
-
     baseline_endpoint, other_endpoints = get_baseline_and_other_endpoints(
         c, args, regression_against_target
     )
     workload_classes = get_workload_classes(args)
+
+    print(f"Targets: {args.target}")
+    print(f"Checking regression against: {regression_against_target}")
+    print(f"Workloads: {workload_classes}")
+    print(f"Baseline: {baseline_endpoint}")
+    print(f"Other endpoints: {other_endpoints}")
 
     schema = Schema(
         create_index=args.create_index,
@@ -197,12 +200,15 @@ def get_baseline_and_other_endpoints(
         elif target == "postgres":
             endpoint = PostgresContainer(composition=c)
         elif target == "HEAD":
-            endpoint = MaterializeContainer(composition=c)
+            endpoint = MaterializeContainer(
+                composition=c, specified_target=original_target
+            )
         else:
             if target == "common-ancestor":
                 target = benchmark_utils.resolve_tag_of_common_ancestor()
             endpoint = MaterializeContainer(
                 composition=c,
+                specified_target=original_target,
                 image=f"materialize/materialized:{target}",
                 alternative_image="materialize/materialized:latest",
             )
