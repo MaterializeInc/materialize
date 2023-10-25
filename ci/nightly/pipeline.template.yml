@@ -56,7 +56,6 @@ steps:
                - common-ancestor
     - id: scalability-benchmark
       label: "Scalability benchmark against merge base or 'latest'"
-      skip: "Results not yet stable enough"
       timeout_in_minutes: 120
       agents:
         queue: linux-x86_64-large
