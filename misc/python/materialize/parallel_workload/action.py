@@ -92,7 +92,7 @@ class Action:
                     "Connection refused",
                 ]
             )
-        if self.db.scenario == Scenario.Rename:
+        if exe.db.scenario == Scenario.Rename:
             result.extend(["unknown schema", "ambiguous reference to schema name"])
         if materialize.parallel_workload.database.NAUGHTY_IDENTIFIERS:
             result.extend(["identifier length exceeds 255 bytes"])
@@ -1124,7 +1124,7 @@ class ActionList:
 read_action_list = ActionList(
     [
         (SelectAction, 100),
-        (SetClusterAction, 1),
+        # (SetClusterAction, 1),  # SET cluster cannot be called in an active transaction
         (CommitRollbackAction, 1),
         (ReconnectAction, 1),
     ],
@@ -1134,7 +1134,7 @@ read_action_list = ActionList(
 fetch_action_list = ActionList(
     [
         (FetchAction, 30),
-        (SetClusterAction, 1),
+        # (SetClusterAction, 1),  # SET cluster cannot be called in an active transaction
         (ReconnectAction, 1),
     ],
     autocommit=False,
@@ -1143,7 +1143,7 @@ fetch_action_list = ActionList(
 write_action_list = ActionList(
     [
         (InsertAction, 100),
-        (SetClusterAction, 1),
+        # (SetClusterAction, 1),  # SET cluster cannot be called in an active transaction
         (HttpPostAction, 50),
         (CommitRollbackAction, 1),
         (ReconnectAction, 1),
