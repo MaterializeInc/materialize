@@ -42,9 +42,7 @@ use timely::progress::Antichain;
 use timely::PartialOrder;
 use tracing::warn;
 
-use crate::catalog::{
-    Catalog, CatalogItem, CatalogState, DataSourceDesc, MaterializedView, Source, View,
-};
+use crate::catalog::{CatalogItem, CatalogState, DataSourceDesc, MaterializedView, Source, View};
 use crate::coord::ddl::CatalogTxn;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timestamp_selection::TimestampProvider;
@@ -773,7 +771,7 @@ fn eval_unmaterializable_func(
     match f {
         UnmaterializableFunc::CurrentDatabase => pack(Datum::from(session.vars().database())),
         UnmaterializableFunc::CurrentSchema => {
-            let catalog = Catalog::for_session_state(state, session);
+            let catalog = state.for_session(session);
             let schema = catalog
                 .search_path()
                 .first()
@@ -781,7 +779,7 @@ fn eval_unmaterializable_func(
             pack(Datum::from(schema))
         }
         UnmaterializableFunc::CurrentSchemasWithSystem => {
-            let catalog = Catalog::for_session_state(state, session);
+            let catalog = state.for_session(session);
             let search_path = catalog.effective_search_path(false);
             pack_1d_array(
                 search_path
@@ -794,7 +792,7 @@ fn eval_unmaterializable_func(
             )
         }
         UnmaterializableFunc::CurrentSchemasWithoutSystem => {
-            let catalog = Catalog::for_session_state(state, session);
+            let catalog = state.for_session(session);
             let search_path = catalog.search_path();
             pack_1d_array(
                 search_path

@@ -10,7 +10,6 @@
 use async_trait::async_trait;
 use derivative::Derivative;
 use std::collections::BTreeMap;
-use std::iter::once;
 use std::pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,15 +19,12 @@ use itertools::Itertools;
 use postgres_openssl::MakeTlsConnector;
 
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
-use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::now::NowFn;
 use mz_ore::result::ResultExt;
 use mz_ore::retry::Retry;
 use mz_ore::soft_assert_eq;
 use mz_proto::{ProtoType, RustType};
-use mz_repr::adt::mz_acl_item::MzAclItem;
-use mz_repr::role_id::RoleId;
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::Timestamp;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_stash::{AppendBatch, DebugStashFactory, Stash, StashFactory, TypedCollection};
 use mz_stash_types::objects::proto;
@@ -37,11 +33,8 @@ use mz_storage_types::sources::Timeline;
 
 use crate::durable::initialize::DEPLOY_GENERATION;
 use crate::durable::objects::{
-    AuditLogKey, Cluster, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
-    ClusterReplica, ClusterReplicaKey, ClusterReplicaValue, Comment, Database, DefaultPrivilege,
-    DurableType, IdAllocKey, IdAllocValue, IntrospectionSourceIndex, ReplicaConfig, Role, Schema,
-    Snapshot, StorageUsageKey, SystemConfiguration, SystemObjectMapping, TimelineTimestamp,
-    TimestampValue,
+    AuditLogKey, DurableType, IdAllocKey, IdAllocValue, Snapshot, StorageUsageKey,
+    TimelineTimestamp, TimestampValue,
 };
 use crate::durable::transaction::{Transaction, TransactionBatch};
 use crate::durable::{
@@ -363,29 +356,22 @@ pub struct Connection {
 }
 
 impl Connection {
-    async fn get_setting(&mut self, key: &str) -> Result<Option<String>, CatalogError> {
-        let v = SETTING_COLLECTION
-            .peek_key_one(
+    #[tracing::instrument(level = "debug", skip(self))]
+    async fn set_deploy_generation(&mut self, deploy_generation: u64) -> Result<(), CatalogError> {
+        CONFIG_COLLECTION
+            .upsert_key(
                 &mut self.stash,
-                proto::SettingKey {
-                    name: key.to_string(),
+                proto::ConfigKey {
+                    key: DEPLOY_GENERATION.into(),
+                },
+                move |_| {
+                    Ok::<_, CatalogError>(proto::ConfigValue {
+                        value: deploy_generation,
+                    })
                 },
             )
-            .await?;
-        Ok(v.map(|v| v.value))
-    }
-
-    async fn set_setting(&mut self, key: &str, value: &str) -> Result<(), CatalogError> {
-        let key = proto::SettingKey {
-            name: key.to_string(),
-        };
-        let value = proto::SettingValue {
-            value: value.into(),
-        };
-        SETTING_COLLECTION
-            .upsert(&mut self.stash, once((key, value)))
-            .await
-            .map_err(|e| e.into())
+            .await??;
+        Ok(())
     }
 }
 
@@ -401,159 +387,6 @@ impl ReadOnlyDurableCatalogState for Connection {
         // Nothing to release in the stash.
     }
 
-    async fn get_catalog_content_version(&mut self) -> Result<Option<String>, CatalogError> {
-        self.get_setting("catalog_content_version").await
-    }
-
-    #[tracing::instrument(level = "info", skip_all)]
-    async fn get_clusters(&mut self) -> Result<Vec<Cluster>, CatalogError> {
-        let entries = CLUSTER_COLLECTION.peek_one(&mut self.stash).await?;
-        let clusters = entries
-            .into_iter()
-            .map(RustType::from_proto)
-            .map_ok(|(k, v)| Cluster::from_key_value(k, v))
-            .collect::<Result<_, _>>()?;
-
-        Ok(clusters)
-    }
-
-    #[tracing::instrument(level = "info", skip_all)]
-    async fn get_cluster_replicas(&mut self) -> Result<Vec<ClusterReplica>, CatalogError> {
-        let entries = CLUSTER_REPLICA_COLLECTION.peek_one(&mut self.stash).await?;
-        let replicas = entries
-            .into_iter()
-            .map(RustType::from_proto)
-            .map_ok(|(k, v)| ClusterReplica::from_key_value(k, v))
-            .collect::<Result<_, _>>()?;
-
-        Ok(replicas)
-    }
-
-    #[tracing::instrument(level = "info", skip_all)]
-    async fn get_databases(&mut self) -> Result<Vec<Database>, CatalogError> {
-        let entries = DATABASES_COLLECTION.peek_one(&mut self.stash).await?;
-        let databases = entries
-            .into_iter()
-            .map(RustType::from_proto)
-            .map_ok(|(k, v)| Database::from_key_value(k, v))
-            .collect::<Result<_, _>>()?;
-
-        Ok(databases)
-    }
-
-    #[tracing::instrument(level = "info", skip_all)]
-    async fn get_schemas(&mut self) -> Result<Vec<Schema>, CatalogError> {
-        let entries = SCHEMAS_COLLECTION.peek_one(&mut self.stash).await?;
-        let schemas = entries
-            .into_iter()
-            .map(RustType::from_proto)
-            .map_ok(|(k, v)| Schema::from_key_value(k, v))
-            .collect::<Result<_, _>>()?;
-
-        Ok(schemas)
-    }
-
-    #[tracing::instrument(level = "info", skip_all)]
-    async fn get_system_items(&mut self) -> Result<Vec<SystemObjectMapping>, CatalogError> {
-        let entries = SYSTEM_GID_MAPPING_COLLECTION
-            .peek_one(&mut self.stash)
-            .await?;
-        let system_item = entries
-            .into_iter()
-            .map(RustType::from_proto)
-            .map_ok(|(k, v)| SystemObjectMapping::from_key_value(k, v))
-            .collect::<Result<_, _>>()?;
-        Ok(system_item)
-    }
-
-    #[tracing::instrument(level = "info", skip_all)]
-    async fn get_introspection_source_indexes(
-        &mut self,
-        cluster_id: ClusterId,
-    ) -> Result<BTreeMap<String, GlobalId>, CatalogError> {
-        let entries = CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION
-            .peek_one(&mut self.stash)
-            .await?;
-        let sources = entries
-            .into_iter()
-            .map(RustType::from_proto)
-            .filter_map_ok(
-                |(k, v): (
-                    ClusterIntrospectionSourceIndexKey,
-                    ClusterIntrospectionSourceIndexValue,
-                )| {
-                    if k.cluster_id == cluster_id {
-                        Some((k.name, GlobalId::System(v.index_id)))
-                    } else {
-                        None
-                    }
-                },
-            )
-            .collect::<Result<_, _>>()?;
-
-        Ok(sources)
-    }
-
-    #[tracing::instrument(level = "info", skip_all)]
-    async fn get_roles(&mut self) -> Result<Vec<Role>, CatalogError> {
-        let entries = ROLES_COLLECTION.peek_one(&mut self.stash).await?;
-        let roles = entries
-            .into_iter()
-            .map(RustType::from_proto)
-            .map_ok(|(k, v)| Role::from_key_value(k, v))
-            .collect::<Result<_, _>>()?;
-
-        Ok(roles)
-    }
-
-    #[tracing::instrument(level = "info", skip_all)]
-    async fn get_default_privileges(&mut self) -> Result<Vec<DefaultPrivilege>, CatalogError> {
-        Ok(DEFAULT_PRIVILEGES_COLLECTION
-            .peek_one(&mut self.stash)
-            .await?
-            .into_iter()
-            .map(RustType::from_proto)
-            .map_ok(|(k, v)| DefaultPrivilege::from_key_value(k, v))
-            .collect::<Result<_, _>>()?)
-    }
-
-    #[tracing::instrument(level = "info", skip_all)]
-    async fn get_system_privileges(&mut self) -> Result<Vec<MzAclItem>, CatalogError> {
-        Ok(SYSTEM_PRIVILEGES_COLLECTION
-            .peek_one(&mut self.stash)
-            .await?
-            .into_iter()
-            .map(RustType::from_proto)
-            .map_ok(|(k, v)| MzAclItem::from_key_value(k, v))
-            .collect::<Result<_, _>>()?)
-    }
-
-    #[tracing::instrument(level = "info", skip_all)]
-    async fn get_system_configurations(
-        &mut self,
-    ) -> Result<Vec<SystemConfiguration>, CatalogError> {
-        Ok(SYSTEM_CONFIGURATION_COLLECTION
-            .peek_one(&mut self.stash)
-            .await?
-            .into_iter()
-            .map(RustType::from_proto)
-            .map_ok(|(k, v)| SystemConfiguration::from_key_value(k, v))
-            .collect::<Result<_, _>>()?)
-    }
-
-    #[tracing::instrument(level = "info", skip_all)]
-    async fn get_comments(&mut self) -> Result<Vec<Comment>, CatalogError> {
-        let comments = COMMENTS_COLLECTION
-            .peek_one(&mut self.stash)
-            .await?
-            .into_iter()
-            .map(RustType::from_proto)
-            .map_ok(|(k, v)| Comment::from_key_value(k, v))
-            .collect::<Result<_, _>>()?;
-
-        Ok(comments)
-    }
-
     #[tracing::instrument(level = "info", skip_all)]
     async fn get_timestamps(&mut self) -> Result<Vec<TimelineTimestamp>, CatalogError> {
         let entries = TIMESTAMP_COLLECTION.peek_one(&mut self.stash).await?;
@@ -564,23 +397,6 @@ impl ReadOnlyDurableCatalogState for Connection {
             .collect::<Result<_, _>>()?;
 
         Ok(timestamps)
-    }
-
-    #[tracing::instrument(level = "info", skip_all)]
-    async fn get_timestamp(
-        &mut self,
-        timeline: &Timeline,
-    ) -> Result<Option<Timestamp>, CatalogError> {
-        let key = proto::TimestampKey {
-            id: timeline.to_string(),
-        };
-        let val: Option<TimestampValue> = TIMESTAMP_COLLECTION
-            .peek_key_one(&mut self.stash, key)
-            .await?
-            .map(RustType::from_proto)
-            .transpose()?;
-
-        Ok(val.map(|v| v.ts))
     }
 
     #[tracing::instrument(level = "info", skip_all)]
@@ -927,12 +743,6 @@ impl DurableCatalogState for Connection {
         self.stash.set_connect_timeout(connect_timeout).await;
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
-    async fn set_catalog_content_version(&mut self, new_version: &str) -> Result<(), CatalogError> {
-        self.set_setting("catalog_content_version", new_version)
-            .await
-    }
-
     #[tracing::instrument(level = "info", skip_all)]
     async fn get_and_prune_storage_usage(
         &mut self,
@@ -975,67 +785,6 @@ impl DurableCatalogState for Connection {
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn set_system_items(
-        &mut self,
-        mappings: Vec<SystemObjectMapping>,
-    ) -> Result<(), CatalogError> {
-        if mappings.is_empty() {
-            return Ok(());
-        }
-
-        let mappings = mappings
-            .into_iter()
-            .map(|mapping| mapping.into_key_value())
-            .map(|e| RustType::into_proto(&e));
-        SYSTEM_GID_MAPPING_COLLECTION
-            .upsert(&mut self.stash, mappings)
-            .await
-            .map_err(|e| e.into())
-    }
-
-    #[tracing::instrument(level = "debug", skip(self))]
-    async fn set_introspection_source_indexes(
-        &mut self,
-        mappings: Vec<IntrospectionSourceIndex>,
-    ) -> Result<(), CatalogError> {
-        if mappings.is_empty() {
-            return Ok(());
-        }
-
-        let mappings = mappings
-            .into_iter()
-            .map(DurableType::into_key_value)
-            .map(|e| RustType::into_proto(&e));
-        CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION
-            .upsert(&mut self.stash, mappings)
-            .await
-            .map_err(|e| e.into())
-    }
-
-    #[tracing::instrument(level = "debug", skip(self))]
-    async fn set_replica_config(
-        &mut self,
-        replica_id: ReplicaId,
-        cluster_id: ClusterId,
-        name: String,
-        config: ReplicaConfig,
-        owner_id: RoleId,
-    ) -> Result<(), CatalogError> {
-        let key = ClusterReplicaKey { id: replica_id }.into_proto();
-        let val = ClusterReplicaValue {
-            cluster_id,
-            name,
-            config,
-            owner_id,
-        }
-        .into_proto();
-        CLUSTER_REPLICA_COLLECTION
-            .upsert_key(&mut self.stash, key, |_| Ok::<_, CatalogError>(val))
-            .await??;
-        Ok(())
-    }
-
-    #[tracing::instrument(level = "debug", skip(self))]
     async fn set_timestamp(
         &mut self,
         timeline: &Timeline,
@@ -1052,24 +801,6 @@ impl DurableCatalogState for Connection {
         if let Some(prev) = prev {
             assert!(next >= prev, "global timestamp must always go up");
         }
-        Ok(())
-    }
-
-    #[tracing::instrument(level = "debug", skip(self))]
-    async fn set_deploy_generation(&mut self, deploy_generation: u64) -> Result<(), CatalogError> {
-        CONFIG_COLLECTION
-            .upsert_key(
-                &mut self.stash,
-                proto::ConfigKey {
-                    key: DEPLOY_GENERATION.into(),
-                },
-                move |_| {
-                    Ok::<_, CatalogError>(proto::ConfigValue {
-                        value: deploy_generation,
-                    })
-                },
-            )
-            .await??;
         Ok(())
     }
 

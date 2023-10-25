@@ -12,14 +12,14 @@ use std::collections::BTreeMap;
 use futures::future::BoxFuture;
 use mz_catalog::durable::Transaction;
 use mz_ore::collections::CollectionExt;
-use mz_ore::now::EpochMillis;
+use mz_ore::now::{EpochMillis, NowFn};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Raw;
 use mz_storage_types::connections::ConnectionContext;
 use semver::Version;
 use tracing::info;
 
-use crate::catalog::{Catalog, ConnCatalog};
+use crate::catalog::{Catalog, CatalogState, ConnCatalog};
 
 async fn rewrite_items<F>(
     tx: &mut Transaction<'_>,
@@ -49,11 +49,12 @@ where
 }
 
 pub(crate) async fn migrate(
-    catalog: &Catalog,
+    state: &mut CatalogState,
+    txn: &mut Transaction<'_>,
+    now: NowFn,
     _connection_context: Option<ConnectionContext>,
 ) -> Result<(), anyhow::Error> {
-    let mut storage = catalog.storage().await;
-    let catalog_version = storage.get_catalog_content_version().await?;
+    let catalog_version = txn.get_catalog_content_version();
     let catalog_version = match catalog_version {
         Some(v) => Version::parse(&v)?,
         None => Version::new(0, 0, 0),
@@ -61,8 +62,7 @@ pub(crate) async fn migrate(
 
     info!("migrating from catalog version {:?}", catalog_version);
 
-    let _now = (catalog.config().now)();
-    let mut tx = storage.transaction().await?;
+    let _now = now();
     // First, do basic AST -> AST transformations.
     // rewrite_items(&mut tx, None, |_tx, _cat, _stmt| Box::pin(async { Ok(()) })).await?;
 
@@ -71,9 +71,9 @@ pub(crate) async fn migrate(
     // migrations are *weird*: they're rewriting the catalog while looking at
     // it. You probably should be adding a basic AST migration above, unless
     // you are really certain you want one of these crazy migrations.
-    let cat = Catalog::load_catalog_items(&mut tx, catalog)?;
-    let conn_cat = cat.for_system_session();
-    rewrite_items(&mut tx, Some(&conn_cat), |_tx, cat, _item| {
+    let state = Catalog::load_catalog_items(txn, state)?;
+    let conn_cat = state.for_system_session();
+    rewrite_items(txn, Some(&conn_cat), |_tx, cat, _item| {
         Box::pin(async move {
             let _conn_cat = cat.expect("must provide access to conn catalog");
             Ok(())
@@ -81,7 +81,6 @@ pub(crate) async fn migrate(
     })
     .await?;
 
-    tx.commit().await?;
     info!(
         "migration from catalog version {:?} complete",
         catalog_version
