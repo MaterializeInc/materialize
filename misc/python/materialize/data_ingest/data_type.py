@@ -231,7 +231,7 @@ class Text(DataType):
         if rng.randrange(10) == 0:
             result = rng.choice(
                 [
-                    # "NULL", # TODO: Reenable after #21937 is fixed
+                    "NULL",
                     "0.0",
                     "True",
                     # "",
