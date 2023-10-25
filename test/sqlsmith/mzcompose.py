@@ -240,6 +240,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             f"--max-joins={args.max_joins}",
             f"--seed={seed + i}",
             "--log-json",
+            # we use mz_system to have access to all tables, including ones with restricted permissions
             f"--target=host={MZ_SERVERS[i % len(MZ_SERVERS)]} port=6877 dbname=materialize user=mz_system",
         ]
         if args.exclude_catalog:
