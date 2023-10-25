@@ -1555,9 +1555,9 @@ mod cluster_scheduling {
 /// - Belong to `SystemVars`, _not_ `SessionVars`
 /// - Default to false and must be explicitly enabled, or default to `true` and can be explicitly disabled.
 ///
-/// WARNING / CONTRACT: Feature flags must always *enable* behavior. In other words, setting a
-/// feature flag must make the system more permissive. For example, let's suppose we'd like to
-/// gate deprecated upsert syntax behind a feature flag. In this case, do not add a feature flag
+/// WARNING / CONTRACT: Syntax-related feature flags must always *enable* behavior. In other words,
+/// setting a feature flag must make the system more permissive. For example, let's suppose we'd like
+/// to gate deprecated upsert syntax behind a feature flag. In this case, do not add a feature flag
 /// like `disable_deprecated_upsert_syntax`, as `disable_deprecated_upsert_syntax = on` would
 /// _prevent_ the system from parsing the deprecated upsert syntax. Instead, use a feature flag
 /// like `enable_deprecated_upsert_syntax`.
@@ -1574,43 +1574,55 @@ mod cluster_scheduling {
 /// switched to `off`, we need to temporarily re-enable it during parsing and planning to be able
 /// to boot successfully.
 ///
-/// Ensuring that all feature flags *enable* behavior means that setting all feature flags to `on`
-/// during catalog boot has the desired effect.
-///
-/// The features enabled by a flag must not result in SQL plan differences that are not specified
-/// in the SQL itself. For example, a feature flag may enable new SQL syntax. Alternatively, a
-/// feature flag that enables a certain SQL-to-HIR optimization must only do so if the flag is
-/// enabled and the user specifies the optimization in some query hint or option. Otherwise, on
-/// restart, the plan may change because all feature flags are enabled then.
+/// Ensuring that all syntax-related feature flags *enable* behavior means that setting all such
+/// feature flags to `on` during catalog boot has the desired effect.
 macro_rules! feature_flags {
-    // Match `$name, $feature_desc`, default `$value` to false.
-    (@inner $name:expr, $feature_desc:literal) => {
-        feature_flags!(@inner $name, $feature_desc, false);
-    };
-    // Match `$name, $feature_desc, $value`, default `$internal` to true.
-    (@inner $name:expr, $feature_desc:literal, $value:expr) => {
-        feature_flags!(@inner $name, $feature_desc, $value, true);
-    };
     // Match `$name, $feature_desc, $value, $internal`.
-    (@inner $name:expr, $feature_desc:literal, $value:expr, $internal:expr) => {
+    (@inner
+        // The feature flag name.
+        name: $name:expr,
+        // The feature flag description.
+        desc: $desc:literal,
+        // The feature flag default value.
+        default: $value:expr,
+        // Should this feature be visible only internally.
+        internal: $internal:expr,
+    ) => {
         paste::paste!{
             // Note that the ServerVar is not directly exported; we expect these to be
             // accessible through their FeatureFlag variant.
             static [<$name:upper _VAR>]: ServerVar<bool> = ServerVar {
                 name: UncasedStr::new(stringify!($name)),
                 value: &$value,
-                description: concat!("Whether ", $feature_desc, " is allowed (Materialize)."),
+                description: concat!("Whether ", $desc, " is allowed (Materialize)."),
                 internal: $internal
             };
 
             pub static [<$name:upper >]: FeatureFlag = FeatureFlag {
                 flag: &[<$name:upper _VAR>],
-                feature_desc: $feature_desc,
+                feature_desc: $desc,
             };
         }
     };
-    ($(($name:expr, $feature_desc:literal $(, $($extra:expr),+)?)),+ $(,)?) => {
-        $(feature_flags!(@inner $name, $feature_desc $(, $($extra),+)?);)+
+    ($({
+        // The feature flag name.
+        name: $name:expr,
+        // The feature flag description.
+        desc: $desc:literal,
+        // The feature flag default value.
+        default: $value:expr,
+        // Should this feature be visible only internally.
+        internal: $internal:expr,
+        // Should the feature be turned on during catalog rehydration when
+        // parsing a catalog item.
+        enable_for_item_parsing: $enable_for_item_parsing:expr,
+    },)+) => {
+        $(feature_flags! { @inner
+            name: $name,
+            desc: $desc,
+            default: $value,
+            internal: $internal,
+        })+
 
         paste::paste!{
             impl SystemVars {
@@ -1629,10 +1641,12 @@ macro_rules! feature_flags {
                     )+
                 }
 
-                pub fn enable_all_feature_flags(&mut self) {
+                pub fn enable_for_item_parsing(&mut self) {
                     $(
-                        self.set(stringify!($name), VarInput::Flat("on"))
-                            .expect("setting default value must work");
+                        if $enable_for_item_parsing {
+                            self.set(stringify!($name), VarInput::Flat("on"))
+                                .expect("setting default value must work");
+                        }
                     )+
                 }
 
@@ -1648,161 +1662,336 @@ macro_rules! feature_flags {
 
 feature_flags!(
     // Gates for other feature flags
-    (allow_real_time_recency, "real time recency"),
+    {
+        name: allow_real_time_recency,
+        desc: "real time recency",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
     // Actual feature flags
-    (
-        enable_binary_date_bin,
-        "the binary version of date_bin function"
-    ),
-    (
-        enable_create_sink_denylist_with_options,
-        "CREATE SINK with unsafe options"
-    ),
-    (
-        enable_create_source_denylist_with_options,
-        "CREATE SOURCE with unsafe options"
-    ),
-    (
-        enable_create_source_from_testscript,
-        "CREATE SOURCE ... FROM TEST SCRIPT"
-    ),
-    (enable_date_bin_hopping, "the date_bin_hopping function"),
-    (
-        enable_envelope_debezium_in_subscribe,
-        "`ENVELOPE DEBEZIUM (KEY (..))`"
-    ),
-    (enable_envelope_materialize, "ENVELOPE MATERIALIZE"),
-    (enable_index_options, "INDEX OPTIONS"),
-    (
-        enable_kafka_config_denylist_options,
-        "Kafka sources with non-allowlisted options"
-    ),
-    (enable_list_length_max, "the list_length_max function"),
-    (enable_list_n_layers, "the list_n_layers function"),
-    (enable_list_remove, "the list_remove function"),
-    (
-        enable_logical_compaction_window,
-        "LOGICAL COMPACTION WINDOW"
-    ),
-    (
-        enable_monotonic_oneshot_selects,
-        "monotonic evaluation of one-shot SELECT queries"
-    ),
-    (enable_primary_key_not_enforced, "PRIMARY KEY NOT ENFORCED"),
-    (enable_mfp_pushdown_explain, "`filter_pushdown` explain"),
-    (
-        enable_multi_worker_storage_persist_sink,
-        "multi-worker storage persist sink"
-    ),
-    (
-        enable_persist_streaming_snapshot_and_fetch,
-        "use the new streaming consolidate for snapshot_and_fetch"
-    ),
-    (
-        enable_persist_streaming_compaction,
-        "use the new streaming consolidate for compaction"
-    ),
-    (enable_raise_statement, "RAISE statement"),
-    (enable_repeat_row, "the repeat_row function"),
-    (
-        enable_table_check_constraint,
-        "CREATE TABLE with a check constraint"
-    ),
-    (enable_table_foreign_key, "CREATE TABLE with a foreign key"),
-    (
-        enable_table_keys,
-        "CREATE TABLE with a primary key or unique constraint"
-    ),
-    (
-        enable_unmanaged_cluster_replicas,
-        "unmanaged cluster replicas"
-    ),
-    (
-        enable_unstable_dependencies,
-        "depending on unstable objects"
-    ),
-    (
-        enable_disk_cluster_replicas,
-        "`WITH (DISK)` for cluster replicas"
-    ),
-    (
-        enable_within_timestamp_order_by_in_subscribe,
-        "`WITHIN TIMESTAMP ORDER BY ..`"
-    ),
-    (
-        enable_cardinality_estimates,
-        "join planning with cardinality estimates"
-    ),
-    (
-        enable_connection_validation_syntax,
-        "CREATE CONNECTION .. WITH (VALIDATE) and VALIDATE CONNECTION syntax"
-    ),
-    (
-        enable_webhook_sources,
-        "creating or pushing data to webhook sources"
-    ),
-    (
-        enable_try_parse_monotonic_iso8601_timestamp,
-        "the try_parse_monotonic_iso8601_timestamp function"
-    ),
-    (enable_alter_set_cluster, "ALTER ... SET CLUSTER syntax"),
-    (
-        enable_dangerous_functions,
-        "executing potentially dangerous functions"
-    ),
-    (
-        enable_managed_cluster_availability_zones,
-        "MANAGED, AVAILABILITY ZONES syntax"
-    ),
-    (
-        statement_logging_use_reproducible_rng,
-        "statement logging with reproducible RNG"
-    ),
-    (
-        enable_notices_for_index_too_wide_for_literal_constraints,
-        "emitting notices for IndexTooWideForLiteralConstraints (doesn't affect EXPLAIN)",
-        false
-    ),
-    (
-        enable_notices_for_index_empty_key,
-        "emitting notices for indexes with an empty key (doesn't affect EXPLAIN)",
-        true
-    ),
-    (enable_explain_broken, "EXPLAIN ... BROKEN <query> syntax"),
-    (
-        enable_role_vars,
-        "setting default session variables for a role"
-    ),
-    (
-        enable_unified_clusters,
-        "unified compute and storage cluster"
-    ),
-    (
-        enable_jemalloc_profiling,
-        "jemalloc heap memory profiling",
-        false
-    ),
-    (
-        enable_comment,
-        "the COMMENT ON feature for objects",
-        false, // default false
-        false  // internal false
-    ),
-    (
-        enable_sink_doc_on_option,
-        "DOC ON option for sinks",
-        false, // default false
-        false  // internal false
-    ),
-    (
-        enable_unified_optimizer_api,
-        "use the new unified optimizer API in bootstrap() and coordinator methods",
-        true
-    ),
-    (
-        enable_assert_not_null,
-        "ASSERT NOT NULL for materialized views"
-    )
+    {
+        name: enable_binary_date_bin,
+        desc: "the binary version of date_bin function",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_create_sink_denylist_with_options,
+        desc: "CREATE SINK with unsafe options",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_create_source_denylist_with_options,
+        desc: "CREATE SOURCE with unsafe options",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_create_source_from_testscript,
+        desc: "CREATE SOURCE ... FROM TEST SCRIPT",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_date_bin_hopping,
+        desc: "the date_bin_hopping function",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_envelope_debezium_in_subscribe,
+        desc: "`ENVELOPE DEBEZIUM (KEY (..))`",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_envelope_materialize,
+        desc: "ENVELOPE MATERIALIZE",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_index_options,
+        desc: "INDEX OPTIONS",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_kafka_config_denylist_options,
+        desc: "Kafka sources with non-allowlisted options",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_list_length_max,
+        desc: "the list_length_max function",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_list_n_layers,
+        desc: "the list_n_layers function",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_list_remove,
+        desc: "the list_remove function",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_logical_compaction_window,
+        desc: "LOGICAL COMPACTION WINDOW",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_monotonic_oneshot_selects,
+        desc: "monotonic evaluation of one-shot SELECT queries",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_primary_key_not_enforced,
+        desc: "PRIMARY KEY NOT ENFORCED",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_mfp_pushdown_explain,
+        desc: "`filter_pushdown` explain",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_multi_worker_storage_persist_sink,
+        desc: "multi-worker storage persist sink",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_persist_streaming_snapshot_and_fetch,
+        desc: "use the new streaming consolidate for snapshot_and_fetch",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_persist_streaming_compaction,
+        desc: "use the new streaming consolidate for compaction",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_raise_statement,
+        desc: "RAISE statement",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_repeat_row,
+        desc: "the repeat_row function",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_table_check_constraint,
+        desc: "CREATE TABLE with a check constraint",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_table_foreign_key,
+        desc: "CREATE TABLE with a foreign key",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_table_keys,
+        desc: "CREATE TABLE with a primary key or unique constraint",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_unmanaged_cluster_replicas,
+        desc: "unmanaged cluster replicas",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_unstable_dependencies,
+        desc: "depending on unstable objects",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_disk_cluster_replicas,
+        desc: "`WITH (DISK)` for cluster replicas",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_within_timestamp_order_by_in_subscribe,
+        desc: "`WITHIN TIMESTAMP ORDER BY ..`",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_cardinality_estimates,
+        desc: "join planning with cardinality estimates",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_connection_validation_syntax,
+        desc: "CREATE CONNECTION .. WITH (VALIDATE) and VALIDATE CONNECTION syntax",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_webhook_sources,
+        desc: "creating or pushing data to webhook sources",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_try_parse_monotonic_iso8601_timestamp,
+        desc: "the try_parse_monotonic_iso8601_timestamp function",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_alter_set_cluster,
+        desc: "ALTER ... SET CLUSTER syntax",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_dangerous_functions,
+        desc: "executing potentially dangerous functions",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_managed_cluster_availability_zones,
+        desc: "MANAGED, AVAILABILITY ZONES syntax",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: statement_logging_use_reproducible_rng,
+        desc: "statement logging with reproducible RNG",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_notices_for_index_too_wide_for_literal_constraints,
+        desc: "emitting notices for IndexTooWideForLiteralConstraints (doesn't affect EXPLAIN)",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_notices_for_index_empty_key,
+        desc: "emitting notices for indexes with an empty key (doesn't affect EXPLAIN)",
+        default: true,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_explain_broken,
+        desc: "EXPLAIN ... BROKEN <query> syntax",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_role_vars,
+        desc: "setting default session variables for a role",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_unified_clusters,
+        desc: "unified compute and storage cluster",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_jemalloc_profiling,
+        desc: "jemalloc heap memory profiling",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_comment,
+        desc: "the COMMENT ON feature for objects",
+        default: false,
+        internal: false,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_sink_doc_on_option,
+        desc: "DOC ON option for sinks",
+        default: false,
+        internal: false,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_unified_optimizer_api,
+        desc: "use the new unified optimizer API in bootstrap() and coordinator methods",
+        default: true,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_assert_not_null,
+        desc: "ASSERT NOT NULL for materialized views",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
 );
 
 /// Represents the input to a variable.
