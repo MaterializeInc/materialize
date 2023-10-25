@@ -80,6 +80,7 @@ use std::convert::Infallible;
 use std::error::Error;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -97,6 +98,7 @@ use mz_frontegg_auth::{
     REFRESH_SUFFIX,
 };
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
+use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
 use mz_ore::retry::Retry;
@@ -114,6 +116,7 @@ use mz_server_core::TlsCertConfig;
 use mz_sql::catalog::EnvironmentId;
 use mz_stash_types::metrics::Metrics as StashMetrics;
 use mz_storage_types::connections::ConnectionContext;
+use mz_tracing::CloneableEnvFilter;
 use once_cell::sync::Lazy;
 use openssl::asn1::Asn1Time;
 use openssl::error::ErrorStack;
@@ -165,6 +168,9 @@ pub struct Config {
     builtin_cluster_replica_size: String,
     propagate_crashes: bool,
     enable_tracing: bool,
+    // This is currently unrelated to enable_tracing, and is used only to disable orchestrator
+    // tracing.
+    orchestrator_tracing_cli_args: TracingCliArgs,
     bootstrap_role: Option<String>,
     deploy_generation: Option<u64>,
     system_parameter_defaults: BTreeMap<String, String>,
@@ -190,9 +196,18 @@ impl Default for Config {
             enable_tracing: false,
             bootstrap_role: Some("materialize".into()),
             deploy_generation: None,
-            system_parameter_defaults: BTreeMap::new(),
+            // This and startup_log_filter below are both (?) needed to suppress clusterd messages.
+            // If we need those in the future, we might need to change both.
+            system_parameter_defaults: BTreeMap::from([(
+                "log_filter".to_string(),
+                "error".to_string(),
+            )]),
             internal_console_redirect_url: None,
             metrics_registry: None,
+            orchestrator_tracing_cli_args: TracingCliArgs {
+                startup_log_filter: CloneableEnvFilter::from_str("error").expect("must parse"),
+                ..Default::default()
+            },
         }
     }
 }
@@ -404,6 +419,10 @@ impl Listeners {
         let persist_clients = Arc::new(persist_clients);
         let secrets_controller = Arc::clone(&orchestrator);
         let connection_context = ConnectionContext::for_tests(orchestrator.reader());
+        let orchestrator = Arc::new(TracingOrchestrator::new(
+            orchestrator,
+            config.orchestrator_tracing_cli_args,
+        ));
         let (tracing_handle, tracing_guard) = if config.enable_tracing {
             let config = TracingConfig::<fn(&tracing::Metadata) -> sentry_tracing::EventFilter> {
                 service_name: "environmentd",
