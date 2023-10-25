@@ -1007,8 +1007,7 @@ const COMPUTE_DATAFLOW_MAX_INFLIGHT_BYTES: ServerVar<Option<usize>> = ServerVar 
 };
 
 /// The maximum number of in-flight bytes emitted by persist_sources feeding _storage
-/// dataflows_. This is distinct from `DATAFLOW_MAX_INFLIGHT_BYTES`, as this will
-/// supports more granular control (within a single timestamp).
+/// dataflows_.
 /// Currently defaults to 256MiB = 268435456 bytes
 /// Note: Backpressure will only be turned on if disk is enabled based on
 /// `storage_dataflow_max_inflight_bytes_disk_only` flag
@@ -3233,7 +3232,7 @@ impl SystemVars {
         *self.expect_value(&CRDB_TCP_USER_TIMEOUT)
     }
 
-    /// Returns the `dataflow_max_inflight_bytes` configuration parameter.
+    /// Returns the `compute_dataflow_max_inflight_bytes` configuration parameter.
     pub fn compute_dataflow_max_inflight_bytes(&self) -> Option<usize> {
         *self.expect_value(&COMPUTE_DATAFLOW_MAX_INFLIGHT_BYTES)
     }

@@ -31,7 +31,6 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_repr::fixed_length::{FromRowByTypes, IntoRowByTypes};
 use mz_repr::{ColumnType, Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
-use mz_timely_util::probe;
 use timely::communication::Allocate;
 use timely::container::columnation::Columnation;
 use timely::order::PartialOrder;
@@ -938,14 +937,6 @@ pub struct CollectionState {
     ///
     /// Only `Some` if the collection is a sink and *not* a subscribe.
     pub sink_write_frontier: Option<Rc<RefCell<Antichain<Timestamp>>>>,
-    /// Probe handles for regulating the output of dataflow sources that (transitively) feed this
-    /// collection.
-    ///
-    /// Only populated if the collection is an index.
-    ///
-    /// New dataflows that depend on this index are expected to report their output frontiers
-    /// through these probe handles.
-    pub index_flow_control_probes: Vec<probe::Handle<Timestamp>>,
 }
 
 impl CollectionState {
@@ -954,7 +945,6 @@ impl CollectionState {
             reported_frontier: ReportedFrontier::new(),
             sink_token: None,
             sink_write_frontier: None,
-            index_flow_control_probes: Default::default(),
         }
     }
 

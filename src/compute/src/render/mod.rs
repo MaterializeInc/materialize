@@ -117,7 +117,6 @@ use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
-use mz_timely_util::probe;
 use timely::communication::Allocate;
 use timely::container::columnation::Columnation;
 use timely::dataflow::channels::pact::Pipeline;
@@ -252,16 +251,6 @@ pub fn build_compute_dataflow<A: Allocate>(
             }
         });
 
-        // Collect flow control probes for this dataflow.
-        let index_ids = dataflow.index_imports.keys();
-        let output_probes: Vec<_> = index_ids
-            .flat_map(|id| {
-                let collection = compute_state.expect_collection(*id);
-                &collection.index_flow_control_probes
-            })
-            .cloned()
-            .collect();
-
         // If there exists a recursive expression, we'll need to use a non-region scope,
         // in order to support additional timestamp coordinates for iteration.
         if recursive {
@@ -310,20 +299,12 @@ pub fn build_compute_dataflow<A: Allocate>(
                         dependencies,
                         idx_id,
                         &idx,
-                        output_probes.clone(),
                     );
                 }
 
                 // Export declared sinks.
                 for (sink_id, dependencies, sink) in sinks {
-                    context.export_sink(
-                        compute_state,
-                        &tokens,
-                        dependencies,
-                        sink_id,
-                        &sink,
-                        output_probes.clone(),
-                    );
+                    context.export_sink(compute_state, &tokens, dependencies, sink_id, &sink);
                 }
             });
         } else {
@@ -365,26 +346,12 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                 // Export declared indexes.
                 for (idx_id, dependencies, idx) in indexes {
-                    context.export_index(
-                        compute_state,
-                        &tokens,
-                        dependencies,
-                        idx_id,
-                        &idx,
-                        output_probes.clone(),
-                    );
+                    context.export_index(compute_state, &tokens, dependencies, idx_id, &idx);
                 }
 
                 // Export declared sinks.
                 for (sink_id, dependencies, sink) in sinks {
-                    context.export_sink(
-                        compute_state,
-                        &tokens,
-                        dependencies,
-                        sink_id,
-                        &sink,
-                        output_probes.clone(),
-                    );
+                    context.export_sink(compute_state, &tokens, dependencies, sink_id, &sink);
                 }
             });
         }
@@ -483,7 +450,6 @@ where
         dependency_ids: BTreeSet<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,
-        probes: Vec<probe::Handle<mz_repr::Timestamp>>,
     ) {
         // put together tokens that belong to the export
         let mut needed_tokens = Vec::new();
@@ -499,14 +465,9 @@ where
             )
         });
 
-        let collection = compute_state.expect_collection_mut(idx_id);
-        collection.index_flow_control_probes = probes.clone();
-
         match bundle.arrangement(&idx.key) {
             Some(ArrangementFlavor::Local(oks, errs)) => {
-                // Set up probes to notify on index frontier advancement, and obtain
-                // a specialized handle matching the specialized arrangement.
-                oks.probe_notify_with(probes);
+                // Obtain a specialized handle matching the specialized arrangement.
                 let oks_trace = oks.trace_handle();
 
                 // Attach logging of dataflow errors.
@@ -555,7 +516,6 @@ where
         dependency_ids: BTreeSet<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,
-        probes: Vec<probe::Handle<mz_repr::Timestamp>>,
     ) {
         // put together tokens that belong to the export
         let mut needed_tokens = Vec::new();
@@ -571,13 +531,9 @@ where
             )
         });
 
-        let collection = compute_state.expect_collection_mut(idx_id);
-        collection.index_flow_control_probes = probes.clone();
-
         match bundle.arrangement(&idx.key) {
             Some(ArrangementFlavor::Local(oks, errs)) => {
                 let oks = self.dispatch_rearrange_iterative(oks, "Arrange export iterative");
-                oks.probe_notify_with(probes);
                 let oks_trace = oks.trace_handle();
 
                 let errs = errs
