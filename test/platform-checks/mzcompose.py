@@ -127,13 +127,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         scenarios = all_subclasses(Scenario)
 
     if args.check:
+        all_checks = {check.__name__: check for check in all_subclasses(Check)}
         for check in args.check:
-            assert check in globals(), f"check {check} does not exist"
-            assert issubclass(
-                globals()[check], Check
-            ), f"{check} is not a Check. Maybe you meant to specify a Scenario via --scenario ?"
-
-        checks = [globals()[check] for check in args.check]
+            assert check in all_checks, f"check {check} does not exist"
+        checks = [all_checks[check] for check in args.check]
     else:
         checks = list(all_subclasses(Check))
 
