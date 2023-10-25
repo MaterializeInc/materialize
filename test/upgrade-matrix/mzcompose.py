@@ -15,6 +15,8 @@ from collections.abc import Generator
 
 import networkx as nx
 
+from materialize.mzcompose.services.minio import Minio
+
 # mzcompose may start this script from the root of the Mz repository,
 # so we need to explicitly add this directory to the Python module search path
 sys.path.append(os.path.dirname(__file__))
@@ -52,7 +54,8 @@ SERVICES = [
     Postgres(),
     Redpanda(auto_create_topics=True),
     Debezium(redpanda=True),
-    Materialized(),  # Overriden inside Platform Checks
+    Minio(setup_materialize=True),
+    Materialized(external_minio=True),  # Overriden inside Platform Checks
     TestdriveService(
         default_timeout="300s",
         no_reset=True,
