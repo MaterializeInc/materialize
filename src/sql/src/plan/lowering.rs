@@ -129,13 +129,13 @@ struct CteDesc {
 #[derive(Debug)]
 pub struct Config {
     /// Enable outer join lowering implemented by #22343.
-    enable_new_outer_join_lowering: bool,
+    pub enable_new_outer_join_lowering: bool,
 }
 
-impl Default for Config {
-    fn default() -> Self {
+impl From<&crate::session::vars::SystemVars> for Config {
+    fn from(vars: &crate::session::vars::SystemVars) -> Self {
         Self {
-            enable_new_outer_join_lowering: false,
+            enable_new_outer_join_lowering: vars.enable_new_outer_join_lowering(),
         }
     }
 }
@@ -144,7 +144,7 @@ impl HirRelationExpr {
     /// Rewrite `self` into a `MirRelationExpr`.
     /// This requires rewriting all correlated subqueries (nested `HirRelationExpr`s) into flat queries
     #[tracing::instrument(target = "optimizer", level = "trace", name = "hir_to_mir", skip_all)]
-    pub fn lower(self) -> Result<MirRelationExpr, PlanError> {
+    pub fn lower<C: Into<Config>>(self, config: C) -> Result<MirRelationExpr, PlanError> {
         let result =
             match self {
                 // We directly rewrite a Constant into the corresponding `MirRelationExpr::Constant`
@@ -170,7 +170,7 @@ impl HirRelationExpr {
                                 get_outer,
                                 &ColumnMap::empty(),
                                 &mut CteMap::new(),
-                                &Config::default(),
+                                &config.into(),
                             )
                         })?
                 }

@@ -123,6 +123,8 @@ pub struct OptimizerConfig {
     /// An exclusive upper bound on the number of results we may return from a
     /// Persist fast-path peek.
     pub persist_fast_path_limit: usize,
+    /// Enable outer join lowering implemented in #22343.
+    pub enable_new_outer_join_lowering: bool,
 }
 
 impl From<&SystemVars> for OptimizerConfig {
@@ -132,6 +134,15 @@ impl From<&SystemVars> for OptimizerConfig {
             enable_monotonic_oneshot_selects: vars.enable_monotonic_oneshot_selects(),
             enable_specialized_arrangements: vars.enable_specialized_arrangements(),
             persist_fast_path_limit: vars.persist_fast_path_limit(),
+            enable_new_outer_join_lowering: vars.enable_new_outer_join_lowering(),
+        }
+    }
+}
+
+impl From<&OptimizerConfig> for mz_sql::plan::HirToMirConfig {
+    fn from(config: &OptimizerConfig) -> Self {
+        Self {
+            enable_new_outer_join_lowering: config.enable_new_outer_join_lowering,
         }
     }
 }

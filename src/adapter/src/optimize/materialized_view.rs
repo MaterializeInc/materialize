@@ -128,7 +128,7 @@ impl<'ctx> Optimize<'ctx, HirRelationExpr> for OptimizeMaterializedView {
 
     fn optimize<'s: 'ctx>(&'s mut self, expr: HirRelationExpr) -> Result<Self::To, OptimizerError> {
         // HIR ⇒ MIR lowering and decorrelation
-        let expr = expr.lower()?;
+        let expr = expr.lower(&self.config)?;
 
         // MIR ⇒ MIR optimization (local)
         let expr = span!(target: "optimizer", Level::TRACE, "local").in_scope(|| {

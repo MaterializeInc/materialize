@@ -3569,7 +3569,7 @@ impl Catalog {
                 let optimizer =
                     Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
                 let raw_expr = view.expr;
-                let decorrelated_expr = raw_expr.lower()?;
+                let decorrelated_expr = raw_expr.lower(session_catalog.system_vars())?;
                 let optimized_expr = optimizer.optimize(decorrelated_expr)?;
                 let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
                 CatalogItem::View(View {
@@ -3586,7 +3586,7 @@ impl Catalog {
                 let optimizer =
                     Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
                 let raw_expr = materialized_view.expr;
-                let decorrelated_expr = raw_expr.lower()?;
+                let decorrelated_expr = raw_expr.lower(session_catalog.system_vars())?;
                 let optimized_expr = optimizer.optimize(decorrelated_expr)?;
                 let mut typ = optimized_expr.typ();
                 for &i in &materialized_view.non_null_assertions {
