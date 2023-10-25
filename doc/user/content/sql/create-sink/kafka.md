@@ -147,6 +147,17 @@ SQL type                         | Avro type
 [`timestamptz (p)`][`timestamp`] | Same as `timestamp (p)`.
 [Arrays]                         | `{"type": "array", "items": ...}`
 
+If a SQL column is nullable, and its type converts to Avro type `t`
+according to the above table, the Avro type generated for that column
+will be `["null", t]`, since nullable fields are represented as unions
+in Avro.
+
+In the case of a sink on a materialized view, Materialize may not be
+able to infer the non-nullability of columns in all cases, and will
+conservatively assume the columns are nullable, thus producing a union
+type as described above. If this is not desired, the materialized view
+may be created using [non-null assertions](../../create-materialized-view#non-null-assertions).
+
 ### JSON
 
 <p style="font-size:14px"><b>Syntax:</b> <code>FORMAT JSON</code></p>
