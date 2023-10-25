@@ -73,13 +73,7 @@ def naughtify(name: str) -> str:
     # This rng is just to get a more interesting integer for the name
     index = abs(hash(name)) % len(strings)
     # Keep them short so we can combine later with other identifiers, 255 char limit
-    naughty_suffix = strings[index].encode("utf-8")[:8].decode("utf-8", "ignore")
-
-    naughty_identifier = f"{name}_{naughty_suffix}"
-    assert (
-        len(naughty_identifier.encode("utf-8")) <= MAX_IDENTIFIER_LENGTH
-    ), f"Naughty identifier exceeds length limit of {MAX_IDENTIFIER_LENGTH} chars (name={name}, naughty_suffix={naughty_suffix})"
-    return naughty_identifier
+    return f"{name}_{strings[index].encode('utf-8')[:16].decode('utf-8', 'ignore')}"
 
 
 class BodyFormat(Enum):
@@ -103,7 +97,7 @@ class Column:
     db_object: "DBObject"
     nullable: bool
     default: str | None
-    _name: str
+    raw_name: str
 
     def __init__(
         self,
@@ -119,16 +113,17 @@ class Column:
         self.default = rng.choice(
             [None, str(data_type.random_value(rng, in_query=True))]
         )
-        self._name = f"c-{self.column_id}-{self.data_type.name()}"
+        self.raw_name = f"c-{self.column_id}-{self.data_type.name()}"
+
+    def name(self, in_query: bool = False) -> str:
+        return (
+            identifier(naughtify(self.raw_name))
+            if in_query
+            else naughtify(self.raw_name)
+        )
 
     def __str__(self) -> str:
         return f"{self.db_object}.{self.name(True)}"
-
-    def name(self, in_query: bool = False) -> str:
-        return identifier(naughtify(self._name)) if in_query else naughtify(self._name)
-
-    def set_name(self, new_name: str) -> None:
-        self._name = new_name
 
     def value(self, rng: random.Random, in_query: bool = False) -> str:
         return str(self.data_type.random_value(rng, in_query=in_query))
@@ -238,7 +233,7 @@ class View(DBObject):
         ]
         self.columns = [copy(column) for column in self.source_columns]
         for column in self.columns:
-            column.set_name(f"{column.name()}-{column.db_object}")
+            column.raw_name = f"{column.raw_name}-{column.db_object}"
             column.db_object = self
 
         self.materialized = rng.choice([True, False])
@@ -312,13 +307,13 @@ class WebhookColumn(Column):
     def __init__(
         self, name: str, data_type: type[DataType], nullable: bool, db_object: DBObject
     ):
-        self._name = name
+        self.raw_name = name
         self.data_type = data_type
         self.nullable = nullable
         self.db_object = db_object
 
     def name(self, in_query: bool = False) -> str:
-        return identifier(self._name) if in_query else self._name
+        return identifier(self.raw_name) if in_query else self.raw_name
 
 
 class WebhookSource(DBObject):
@@ -393,13 +388,13 @@ class KafkaColumn(Column):
     def __init__(
         self, name: str, data_type: type[DataType], nullable: bool, db_object: DBObject
     ):
-        self._name = name
+        self.raw_name = name
         self.data_type = data_type
         self.nullable = nullable
         self.db_object = db_object
 
     def name(self, in_query: bool = False) -> str:
-        return identifier(self._name) if in_query else self._name
+        return identifier(self.raw_name) if in_query else self.raw_name
 
 
 class KafkaSource(DBObject):
@@ -509,13 +504,13 @@ class PostgresColumn(Column):
     def __init__(
         self, name: str, data_type: type[DataType], nullable: bool, db_object: DBObject
     ):
-        self._name = name
+        self.raw_name = name
         self.data_type = data_type
         self.nullable = nullable
         self.db_object = db_object
 
     def name(self, in_query: bool = False) -> str:
-        return identifier(self._name) if in_query else self._name
+        return identifier(self.raw_name) if in_query else self.raw_name
 
 
 class PostgresSource(DBObject):
