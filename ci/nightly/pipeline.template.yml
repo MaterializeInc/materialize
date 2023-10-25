@@ -107,18 +107,18 @@ steps:
               composition: testdrive
               args: [--redpanda, --aws-region=us-east-1]
 
-      # Disabled due to taking too long for the value provided
-      #  - id: redpanda-testdrive-aarch64
-      #    label: ":panda_face: :racing_car: testdrive aarch64"
-      #    timeout_in_minutes: 600
-      #    agents:
-      #      queue: linux-aarch64
-      #    artifact_paths: junit_*.xml
-      #    plugins:
-      #      - ./ci/plugins/scratch-aws-access: ~
-      #      - ./ci/plugins/mzcompose:
-      #          composition: testdrive
-      #          args: [--redpanda, --aws-region=us-east-1]
+      - id: redpanda-testdrive-aarch64
+        label: ":panda_face: :racing_car: testdrive aarch64"
+        timeout_in_minutes: 600
+        agents:
+          queue: linux-aarch64
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/scratch-aws-access: ~
+          - ./ci/plugins/mzcompose:
+              composition: testdrive
+              args: [--redpanda, --aws-region=us-east-1]
+        skip: "Disabled due to taking too long for the value provided"
 
       - id: testdrive-partitions-5
         label: ":racing_car: testdrive with --kafka-default-partitions 5"
@@ -190,7 +190,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: testdrive
               args: [--aws-region=us-east-1, --persistent-user-tables]
-        skip: Persistence tests disabled
+        skip: "Persistence tests disabled"
 
   - id: limits
     label: "Product limits"
@@ -577,17 +577,17 @@ steps:
               composition: persist
               args: [--node-count=4, --consensus=cockroach, --blob=maelstrom, --time-limit=300, --concurrency=4, --rate=500, --max-txn-length=16, --unreliability=0.1]
 
-      # TODO(txn): Get this turned back on before enabling the feature by default/in production.
-      # - id: persist-txn-maelstrom
-      #   label: Maelstrom coverage of persist-txn
-      #   timeout_in_minutes: 10
-      #   agents:
-      #     queue: linux-x86_64
-      #   artifact_paths: [test/persist/maelstrom/**/*.log, junit_*.xml]
-      #   plugins:
-      #     - ./ci/plugins/mzcompose:
-      #         composition: persist
-      #         args: [--consensus=mem, --blob=mem, --persist-txn]
+      - id: persist-txn-maelstrom
+        label: Maelstrom coverage of persist-txn
+        timeout_in_minutes: 10
+        agents:
+          queue: linux-x86_64
+        artifact_paths: [test/persist/maelstrom/**/*.log, junit_*.xml]
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: persist
+              args: [--consensus=mem, --blob=mem, --persist-txn]
+        skip: "TODO(txn): Turn on before enabling by default/in production."
 
   - id: persistence-failpoints
     label: Persistence failpoints
@@ -817,17 +817,17 @@ steps:
               composition: parallel-workload
               args: [--runtime=1500]
 
-      # TODO: Reenable when #21954 is fixed
-      # - id: parallel-workload-100-threads
-      #   label: "Parallel Workload (100 threads)"
-      #   artifact_paths: junit_*.xml
-      #   timeout_in_minutes: 40
-      #   agents:
-      #     queue: builder-linux-x86_64
-      #   plugins:
-      #     - ./ci/plugins/mzcompose:
-      #         composition: parallel-workload
-      #         args: [--runtime=1500, --threads=100]
+      - id: parallel-workload-100-threads
+        label: "Parallel Workload (100 threads)"
+        artifact_paths: junit_*.xml
+        timeout_in_minutes: 40
+        agents:
+          queue: builder-linux-x86_64
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: parallel-workload
+              args: [--runtime=1500, --threads=100]
+        skip: "TODO(def-): Reenable when #21954 is fixed"
 
       - id: parallel-workload-rename-naughty
         label: "Parallel Workload (rename + naughty identifiers)"
@@ -862,17 +862,17 @@ steps:
               composition: parallel-workload
               args: [--runtime=1500, --scenario=cancel]
 
-      # TODO(def-) Enable after figuring out restoring catalog
-      # - id: parallel-workload-kill
-      #   label: "Parallel Workload (kill)"
-      #   artifact_paths: junit_*.xml
-      #   timeout_in_minutes: 40
-      #   agents:
-      #     queue: builder-linux-x86_64
-      #   plugins:
-      #     - ./ci/plugins/mzcompose:
-      #         composition: parallel-workload
-      #         args: [--runtime=1500, --scenario=kill]
+  - id: parallel-workload-kill
+    label: "Parallel Workload (kill)"
+    artifact_paths: junit_*.xml
+    timeout_in_minutes: 40
+    agents:
+      queue: builder-linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: parallel-workload
+          args: [--runtime=1500, --scenario=kill]
+    skip: "TODO(def-) Enable after figuring out restoring catalog"
 
   - id: incident-70
     label: "Test for incident 70"
