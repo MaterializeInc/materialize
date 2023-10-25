@@ -1769,12 +1769,12 @@ impl Catalog {
     }
 }
 
-#[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-async fn test_builtin_migration() {
+#[cfg(test)]
+mod builtin_migration_tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use itertools::Itertools;
+    use mz_catalog::memory::objects::Table;
 
     use mz_controller_types::ClusterId;
     use mz_expr::MirRelationExpr;
@@ -1782,8 +1782,11 @@ async fn test_builtin_migration() {
 
     use mz_repr::{GlobalId, RelationType, ScalarType};
     use mz_sql::catalog::CatalogDatabase;
-    use mz_sql::names::{ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier};
+    use mz_sql::names::{
+        ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
+    };
     use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
+    use mz_sql_parser::ast::Expr;
 
     use crate::catalog::RelationDesc;
     use crate::catalog::{
@@ -1952,8 +1955,108 @@ async fn test_builtin_migration() {
             .collect()
     }
 
-    let test_cases = vec![
-        BuiltinMigrationTestCase {
+    async fn run_test_case(test_case: BuiltinMigrationTestCase) {
+        Catalog::with_debug(NOW_ZERO.clone(), |mut catalog| async move {
+            let mut id_mapping = BTreeMap::new();
+            let mut name_mapping = BTreeMap::new();
+            for entry in test_case.initial_state {
+                let (name, namespace, item) = entry.to_catalog_item(&id_mapping);
+                let id = add_item(&mut catalog, name.clone(), item, namespace).await;
+                id_mapping.insert(name.clone(), id);
+                name_mapping.insert(id, name);
+            }
+
+            let migrated_ids = test_case
+                .migrated_names
+                .into_iter()
+                .map(|name| id_mapping[&name])
+                .collect();
+            let id_fingerprint_map: BTreeMap<GlobalId, String> = id_mapping
+                .iter()
+                .filter(|(_name, id)| id.is_system())
+                // We don't use the new fingerprint in this test, so we can just hard code it
+                .map(|(_name, id)| (*id, "".to_string()))
+                .collect();
+            let migration_metadata = catalog
+                .generate_builtin_migration_metadata(migrated_ids, id_fingerprint_map)
+                .await
+                .expect("failed to generate builtin migration metadata");
+
+            assert_eq!(
+                convert_id_vec_to_name_vec(migration_metadata.previous_sink_ids, &name_mapping),
+                test_case.expected_previous_sink_names,
+                "{} test failed with wrong previous sink ids",
+                test_case.test_name
+            );
+            assert_eq!(
+                convert_id_vec_to_name_vec(
+                    migration_metadata.previous_materialized_view_ids,
+                    &name_mapping
+                ),
+                test_case.expected_previous_materialized_view_names,
+                "{} test failed with wrong previous materialized view ids",
+                test_case.test_name
+            );
+            assert_eq!(
+                convert_id_vec_to_name_vec(migration_metadata.previous_source_ids, &name_mapping),
+                test_case.expected_previous_source_names,
+                "{} test failed with wrong previous source ids",
+                test_case.test_name
+            );
+            assert_eq!(
+                convert_id_vec_to_name_vec(migration_metadata.all_drop_ops, &name_mapping),
+                test_case.expected_all_drop_ops,
+                "{} test failed with wrong all drop ops",
+                test_case.test_name
+            );
+            assert_eq!(
+                convert_id_vec_to_name_vec(migration_metadata.user_drop_ops, &name_mapping),
+                test_case.expected_user_drop_ops,
+                "{} test failed with wrong user drop ops",
+                test_case.test_name
+            );
+            assert_eq!(
+                migration_metadata
+                    .all_create_ops
+                    .into_iter()
+                    .map(|(_, _, name, _, _, _)| name.item)
+                    .collect::<Vec<_>>(),
+                test_case.expected_all_create_ops,
+                "{} test failed with wrong all create ops",
+                test_case.test_name
+            );
+            assert_eq!(
+                migration_metadata
+                    .user_create_ops
+                    .into_iter()
+                    .map(|(_, _, name)| name)
+                    .collect::<Vec<_>>(),
+                test_case.expected_user_create_ops,
+                "{} test failed with wrong user create ops",
+                test_case.test_name
+            );
+            assert_eq!(
+                migration_metadata
+                    .migrated_system_object_mappings
+                    .values()
+                    .map(|mapping| mapping.description.object_name.clone())
+                    .collect::<BTreeSet<_>>(),
+                test_case
+                    .expected_migrated_system_object_mappings
+                    .into_iter()
+                    .collect::<BTreeSet<_>>(),
+                "{} test failed with wrong migrated system object mappings",
+                test_case.test_name
+            );
+            catalog.expire().await;
+        })
+        .await
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn test_builtin_migration_no_migrations() {
+        let test_case = BuiltinMigrationTestCase {
             test_name: "no_migrations",
             initial_state: vec![SimplifiedCatalogEntry {
                 name: "s1".to_string(),
@@ -1969,8 +2072,14 @@ async fn test_builtin_migration() {
             expected_all_create_ops: vec![],
             expected_user_create_ops: vec![],
             expected_migrated_system_object_mappings: vec![],
-        },
-        BuiltinMigrationTestCase {
+        };
+        run_test_case(test_case).await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn test_builtin_migration_single_migrations() {
+        let test_case = BuiltinMigrationTestCase {
             test_name: "single_migrations",
             initial_state: vec![SimplifiedCatalogEntry {
                 name: "s1".to_string(),
@@ -1986,8 +2095,14 @@ async fn test_builtin_migration() {
             expected_all_create_ops: vec!["s1".to_string()],
             expected_user_create_ops: vec![],
             expected_migrated_system_object_mappings: vec!["s1".to_string()],
-        },
-        BuiltinMigrationTestCase {
+        };
+        run_test_case(test_case).await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn test_builtin_migration_child_migrations() {
+        let test_case = BuiltinMigrationTestCase {
             test_name: "child_migrations",
             initial_state: vec![
                 SimplifiedCatalogEntry {
@@ -2012,8 +2127,14 @@ async fn test_builtin_migration() {
             expected_all_create_ops: vec!["s1".to_string(), "u1".to_string()],
             expected_user_create_ops: vec!["u1".to_string()],
             expected_migrated_system_object_mappings: vec!["s1".to_string()],
-        },
-        BuiltinMigrationTestCase {
+        };
+        run_test_case(test_case).await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn test_builtin_migration_multi_child_migrations() {
+        let test_case = BuiltinMigrationTestCase {
             test_name: "multi_child_migrations",
             initial_state: vec![
                 SimplifiedCatalogEntry {
@@ -2045,8 +2166,14 @@ async fn test_builtin_migration() {
             expected_all_create_ops: vec!["s1".to_string(), "u2".to_string(), "u1".to_string()],
             expected_user_create_ops: vec!["u2".to_string(), "u1".to_string()],
             expected_migrated_system_object_mappings: vec!["s1".to_string()],
-        },
-        BuiltinMigrationTestCase {
+        };
+        run_test_case(test_case).await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn test_builtin_migration_topological_sort() {
+        let test_case = BuiltinMigrationTestCase {
             test_name: "topological_sort",
             initial_state: vec![
                 SimplifiedCatalogEntry {
@@ -2093,8 +2220,14 @@ async fn test_builtin_migration() {
             ],
             expected_user_create_ops: vec!["u1".to_string(), "u2".to_string()],
             expected_migrated_system_object_mappings: vec!["s1".to_string(), "s2".to_string()],
-        },
-        BuiltinMigrationTestCase {
+        };
+        run_test_case(test_case).await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn test_builtin_migration_topological_sort_complex() {
+        let test_case = BuiltinMigrationTestCase {
             test_name: "topological_sort_complex",
             initial_state: vec![
                 SimplifiedCatalogEntry {
@@ -2315,8 +2448,14 @@ async fn test_builtin_migration() {
                 "s421".to_string(),
                 "s349".to_string(),
             ],
-        },
-        BuiltinMigrationTestCase {
+        };
+        run_test_case(test_case).await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn test_builtin_migration_system_child_migrations() {
+        let test_case = BuiltinMigrationTestCase {
             test_name: "system_child_migrations",
             initial_state: vec![
                 SimplifiedCatalogEntry {
@@ -2341,104 +2480,7 @@ async fn test_builtin_migration() {
             expected_all_create_ops: vec!["s1".to_string(), "s2".to_string()],
             expected_user_create_ops: vec![],
             expected_migrated_system_object_mappings: vec!["s1".to_string(), "s2".to_string()],
-        },
-    ];
-
-    for test_case in test_cases {
-        Catalog::with_debug(NOW_ZERO.clone(), |mut catalog| async move {
-            let mut id_mapping = BTreeMap::new();
-            let mut name_mapping = BTreeMap::new();
-            for entry in test_case.initial_state {
-                let (name, namespace, item) = entry.to_catalog_item(&id_mapping);
-                let id = add_item(&mut catalog, name.clone(), item, namespace).await;
-                id_mapping.insert(name.clone(), id);
-                name_mapping.insert(id, name);
-            }
-
-            let migrated_ids = test_case
-                .migrated_names
-                .into_iter()
-                .map(|name| id_mapping[&name])
-                .collect();
-            let id_fingerprint_map: BTreeMap<GlobalId, String> = id_mapping
-                .iter()
-                .filter(|(_name, id)| id.is_system())
-                // We don't use the new fingerprint in this test, so we can just hard code it
-                .map(|(_name, id)| (*id, "".to_string()))
-                .collect();
-            let migration_metadata = catalog
-                .generate_builtin_migration_metadata(migrated_ids, id_fingerprint_map)
-                .await
-                .expect("failed to generate builtin migration metadata");
-
-            assert_eq!(
-                convert_id_vec_to_name_vec(migration_metadata.previous_sink_ids, &name_mapping),
-                test_case.expected_previous_sink_names,
-                "{} test failed with wrong previous sink ids",
-                test_case.test_name
-            );
-            assert_eq!(
-                convert_id_vec_to_name_vec(
-                    migration_metadata.previous_materialized_view_ids,
-                    &name_mapping
-                ),
-                test_case.expected_previous_materialized_view_names,
-                "{} test failed with wrong previous materialized view ids",
-                test_case.test_name
-            );
-            assert_eq!(
-                convert_id_vec_to_name_vec(migration_metadata.previous_source_ids, &name_mapping),
-                test_case.expected_previous_source_names,
-                "{} test failed with wrong previous source ids",
-                test_case.test_name
-            );
-            assert_eq!(
-                convert_id_vec_to_name_vec(migration_metadata.all_drop_ops, &name_mapping),
-                test_case.expected_all_drop_ops,
-                "{} test failed with wrong all drop ops",
-                test_case.test_name
-            );
-            assert_eq!(
-                convert_id_vec_to_name_vec(migration_metadata.user_drop_ops, &name_mapping),
-                test_case.expected_user_drop_ops,
-                "{} test failed with wrong user drop ops",
-                test_case.test_name
-            );
-            assert_eq!(
-                migration_metadata
-                    .all_create_ops
-                    .into_iter()
-                    .map(|(_, _, name, _, _, _)| name.item)
-                    .collect::<Vec<_>>(),
-                test_case.expected_all_create_ops,
-                "{} test failed with wrong all create ops",
-                test_case.test_name
-            );
-            assert_eq!(
-                migration_metadata
-                    .user_create_ops
-                    .into_iter()
-                    .map(|(_, _, name)| name)
-                    .collect::<Vec<_>>(),
-                test_case.expected_user_create_ops,
-                "{} test failed with wrong user create ops",
-                test_case.test_name
-            );
-            assert_eq!(
-                migration_metadata
-                    .migrated_system_object_mappings
-                    .values()
-                    .map(|mapping| mapping.description.object_name.clone())
-                    .collect::<BTreeSet<_>>(),
-                test_case
-                    .expected_migrated_system_object_mappings
-                    .into_iter()
-                    .collect::<BTreeSet<_>>(),
-                "{} test failed with wrong migrated system object mappings",
-                test_case.test_name
-            );
-            catalog.expire().await;
-        })
-        .await
+        };
+        run_test_case(test_case).await;
     }
 }
