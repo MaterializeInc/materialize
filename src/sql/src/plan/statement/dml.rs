@@ -83,7 +83,7 @@ pub fn plan_insert(
     let (id, mut expr, returning) =
         query::plan_insert_query(scx, table_name, columns, source, returning)?;
     expr.bind_parameters(params)?;
-    let expr = expr.optimize_and_lower(&crate::plan::OptimizerConfig {})?;
+    let expr = expr.lower()?;
     let returning = returning
         .expr
         .into_iter()
@@ -142,7 +142,7 @@ pub fn plan_read_then_write(
     }: query::ReadThenWritePlan,
 ) -> Result<Plan, PlanError> {
     selection.bind_parameters(params)?;
-    let selection = selection.optimize_and_lower(&crate::plan::OptimizerConfig {})?;
+    let selection = selection.lower()?;
     let mut assignments_outer = BTreeMap::new();
     for (idx, mut set) in assignments {
         set.bind_parameters(params)?;
@@ -458,7 +458,7 @@ pub fn plan_query(
     } = query::plan_root_query(scx, query, lifetime)?;
     expr.bind_parameters(params)?;
     Ok(query::PlannedQuery {
-        expr: expr.optimize_and_lower(&crate::plan::OptimizerConfig {})?,
+        expr: expr.lower()?,
         desc,
         finishing,
         scope,

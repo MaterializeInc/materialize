@@ -713,8 +713,7 @@ impl CatalogState {
                 let optimizer =
                     Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
                 let raw_expr = view.expr;
-                let decorrelated_expr =
-                    raw_expr.optimize_and_lower(&mz_sql::plan::OptimizerConfig {})?;
+                let decorrelated_expr = raw_expr.lower()?;
                 let optimized_expr = optimizer.optimize(decorrelated_expr)?;
                 let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
                 CatalogItem::View(View {
