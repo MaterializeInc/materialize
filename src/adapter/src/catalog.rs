@@ -3484,13 +3484,16 @@ impl Catalog {
     ) -> Result<CatalogItem, AdapterError> {
         let mut session_catalog = self.for_system_session();
         // Enable catalog features that might be required during planning in
-        // [Catalog::open]. Existing catalog items might have been created while a
-        // specific feature flag turned on, so we need to ensure that this is also the
-        // case during catalog rehydration in order to avoid panics.
-        // WARNING / CONTRACT: The session catalog with all features enabled should be used
-        // exclusively for parsing and obtaining an mz_sql::plan::Plan. After this step,
-        // feature flag configuration must not be overridden.
-        session_catalog.system_vars_mut().enable_all_feature_flags();
+        // [Catalog::open]. Existing catalog items might have been created while
+        // a specific feature flag was turned on, so we need to ensure that this
+        // is also the case during catalog rehydration in order to avoid panics.
+        //
+        // WARNING / CONTRACT:
+        // 1. Features used in this method that related to parsing / planning
+        //    should be `enable_for_item_parsing` set to `true`.
+        // 2. After this step, feature flag configuration must not be
+        //    overridden.
+        session_catalog.system_vars_mut().enable_for_item_parsing();
 
         let stmt = mz_sql::parse::parse(&create_sql)?.into_element().ast;
         let (stmt, resolved_ids) = mz_sql::names::resolve(&session_catalog, stmt)?;
