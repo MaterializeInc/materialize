@@ -110,10 +110,10 @@ use mz_orchestrator_process::{
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs, TracingOrchestrator};
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::error::ErrorExt;
+use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task::RuntimeExt;
-use mz_ore::{halt, metric};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::{
@@ -658,22 +658,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         },
         metrics_registry.clone(),
     ))?;
-
-    if args.tracing.log_filter.is_some() {
-        halt!(
-            "`MZ_LOG_FILTER` / `--log-filter` has been removed. The filter is now configured by the \
-             `log_filter` system variable. In the rare case the filter is needed before the \
-             process has access to the system variable, use `MZ_STARTUP_LOG_FILTER` / `--startup-log-filter`."
-        )
-    }
-    if args.tracing.opentelemetry_filter.is_some() {
-        halt!(
-            "`MZ_OPENTELEMETRY_FILTER` / `--opentelemetry-filter` has been removed. The filter is now \
-            configured by the `opentelemetry_filter` system variable. In the rare case the filter \
-            is needed before the process has access to the system variable, use \
-            `MZ_STARTUP_OPENTELEMETRY_FILTER` / `--startup-opentelemetry-filter`."
-        )
-    }
 
     let span = tracing::info_span!("environmentd::run").entered();
 
