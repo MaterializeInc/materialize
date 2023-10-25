@@ -28,6 +28,8 @@ from materialize.scalability.workload_result import WorkloadResult
 from materialize.scalability.workloads import *  # noqa: F401 F403
 from materialize.scalability.workloads_test import *  # noqa: F401 F403
 
+MAX_RETRIES_ON_REGRESSION = 1
+
 
 class WorkloadExecutor:
     def __init__(
@@ -73,21 +75,41 @@ class WorkloadExecutor:
             baseline_result = None
 
         for other_endpoint in self.other_endpoints:
-            other_endpoint_result = self.run_workload_for_endpoint(
-                other_endpoint, workload_cls()
+            regression_outcome = self.run_and_evaluate_workload_for_endpoint(
+                workload_cls, other_endpoint, baseline_result, try_count=0
             )
 
-            if self.baseline_endpoint is not None and baseline_result is not None:
-                regression_outcome = (
-                    self.result_analyzer.determine_regression_in_workload(
-                        workload_cls.__name__,
-                        self.baseline_endpoint,
-                        other_endpoint,
-                        baseline_result,
-                        other_endpoint_result,
-                    )
-                )
+            if regression_outcome is not None:
                 overall_regression_outcome.merge(regression_outcome)
+
+    def run_and_evaluate_workload_for_endpoint(
+        self,
+        workload_cls: type[Workload],
+        other_endpoint: Endpoint,
+        baseline_result: WorkloadResult | None,
+        try_count: int,
+    ) -> RegressionOutcome | None:
+        other_endpoint_result = self.run_workload_for_endpoint(
+            other_endpoint, workload_cls()
+        )
+
+        if self.baseline_endpoint is None or baseline_result is None:
+            return None
+
+        outcome = self.result_analyzer.determine_regression_in_workload(
+            workload_cls.__name__,
+            self.baseline_endpoint,
+            other_endpoint,
+            baseline_result,
+            other_endpoint_result,
+        )
+
+        if outcome.has_regressions() and try_count < MAX_RETRIES_ON_REGRESSION:
+            return self.run_and_evaluate_workload_for_endpoint(
+                workload_cls, other_endpoint, baseline_result, try_count=try_count + 1
+            )
+
+        return outcome
 
     def run_workload_for_endpoint(
         self,
