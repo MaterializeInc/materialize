@@ -69,7 +69,6 @@ pub const STORAGE_USAGE_ID_ALLOC_KEY: &str = "storage_usage";
 #[derive(Clone, Debug)]
 pub struct BootstrapArgs {
     pub default_cluster_replica_size: String,
-    pub builtin_cluster_replica_size: String,
     pub bootstrap_role: Option<String>,
 }
 
@@ -355,7 +354,6 @@ pub async fn persist_backed_catalog_state(
 pub fn debug_bootstrap_args() -> BootstrapArgs {
     BootstrapArgs {
         default_cluster_replica_size: "1".into(),
-        builtin_cluster_replica_size: "1".into(),
         bootstrap_role: None,
     }
 }

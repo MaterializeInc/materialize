@@ -529,6 +529,7 @@ impl Catalog {
             metrics_registry,
             cluster_replica_sizes: Default::default(),
             default_storage_cluster_size: None,
+            builtin_cluster_replica_size: "1".into(),
             system_parameter_defaults: [(
                 "variable_length_row_encoding".to_string(),
                 variable_length_row_encoding.to_string(),

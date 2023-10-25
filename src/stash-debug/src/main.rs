@@ -489,7 +489,6 @@ impl Usage {
                 now.clone(),
                 &BootstrapArgs {
                     default_cluster_replica_size: "1".into(),
-                    builtin_cluster_replica_size: "1".into(),
                     bootstrap_role: None,
                 },
                 None,
@@ -508,6 +507,7 @@ impl Usage {
             metrics_registry,
             cluster_replica_sizes,
             default_storage_cluster_size: None,
+            builtin_cluster_replica_size: "1".into(),
             system_parameter_defaults: Default::default(),
             availability_zones: vec![],
             secrets_reader,

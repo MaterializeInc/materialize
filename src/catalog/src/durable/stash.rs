@@ -43,10 +43,7 @@ use crate::durable::objects::{
     Snapshot, StorageUsageKey, SystemConfiguration, SystemObjectMapping, TimelineTimestamp,
     TimestampValue,
 };
-use crate::durable::transaction::{
-    add_new_builtin_cluster_replicas_migration, add_new_builtin_clusters_migration, Transaction,
-    TransactionBatch,
-};
+use crate::durable::transaction::{Transaction, TransactionBatch};
 use crate::durable::{
     initialize, BootstrapArgs, CatalogError, DurableCatalogState, Epoch,
     OpenableDurableCatalogState, ReadOnlyDurableCatalogState,
@@ -306,7 +303,7 @@ async fn open_inner(
             return Err((stash, e.into()));
         }
     };
-    let mut conn = if !is_init {
+    let conn = if !is_init {
         // Get the current timestamp so we can record when we booted. We don't have to worry
         // about `boot_ts` being less than a previously used timestamp because the stash is
         // uninitialized and there are no previous timestamps.
@@ -353,35 +350,6 @@ async fn open_inner(
 
         conn
     };
-
-    // Add any new builtin Clusters or Cluster Replicas that may be newly defined.
-    if !conn.stash.is_readonly() {
-        let mut txn = match conn.transaction().await {
-            Ok(txn) => txn,
-            Err(e) => {
-                return Err((conn.stash, e));
-            }
-        };
-
-        match add_new_builtin_clusters_migration(&mut txn) {
-            Ok(()) => {}
-            Err(e) => {
-                return Err((conn.stash, e));
-            }
-        }
-        match add_new_builtin_cluster_replicas_migration(&mut txn, bootstrap_args) {
-            Ok(()) => {}
-            Err(e) => {
-                return Err((conn.stash, e));
-            }
-        }
-        match txn.commit().await {
-            Ok(()) => {}
-            Err(e) => {
-                return Err((conn.stash, e));
-            }
-        }
-    }
 
     Ok(Box::new(conn))
 }
