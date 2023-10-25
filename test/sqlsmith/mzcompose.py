@@ -34,8 +34,6 @@ SERVICES = [
         restart="on-failure",
         memory=f"{TOTAL_MEMORY / len(MZ_SERVERS)}GB",
         use_default_volumes=False,
-        # TODO(def-): Remove this when #19496 is fixed
-        additional_system_parameter_defaults={"persist_stats_filter_enabled": "false"},
     )
     for mz_server in MZ_SERVERS
 ] + [
