@@ -240,7 +240,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             f"--max-joins={args.max_joins}",
             f"--seed={seed + i}",
             "--log-json",
-            f"--target=host={MZ_SERVERS[i % len(MZ_SERVERS)]} port=6875 dbname=materialize user=materialize",
+            f"--target=host={MZ_SERVERS[i % len(MZ_SERVERS)]} port=6877 dbname=materialize user=mz_system",
         ]
         if args.exclude_catalog:
             cmd.append("--exclude-catalog")
