@@ -93,7 +93,7 @@ $ schema-registry-verify schema-type=avro subject=testdrive-sink3-${testdrive.se
   ENVELOPE DEBEZIUM;
 "{\"fields\":[{\"default\":null,\"name\":\"before\",\"type\":[\"null\",{\"doc\":\"comment on table t with a \\\\\\\\ \\\\\",\"fields\":[{\"default\":null,\"name\":\"c1\",\"type\":[\"null\",{\"doc\":\"comment on type point\",\"fields\":[{\"default\":null,\"doc\":\"comment on column point.x\",\"name\":\"x\",\"type\":[\"null\",\"int\"]},{\"default\":null,\"name\":\"y\",\"type\":[\"null\",\"int\"]}],\"name\":\"record0\",\"namespace\":\"com.materialize.sink\",\"type\":\"record\"}]},{\"name\":\"c2\",\"type\":\"string\"},{\"default\":null,\"name\":\"c3_map_text__text_\",\"type\":[\"null\",{\"type\":\"map\",\"values\":[\"null\",\"boolean\"]}]},{\"default\":null,\"doc\":\"comment on column t.c4 with an äöü\",\"name\":\"c4\",\"type\":[\"null\",{\"items\":[\"null\",{\"doc\":\"comment on type point\",\"fields\":[{\"default\":null,\"doc\":\"comment on column point.x\",\"name\":\"x\",\"type\":[\"null\",\"int\"]},{\"default\":null,\"name\":\"y\",\"type\":[\"null\",\"int\"]}],\"name\":\"record1\",\"namespace\":\"com.materialize.sink\",\"type\":\"record\"}],\"type\":\"array\"}]}],\"name\":\"row\",\"type\":\"record\"}]},{\"default\":null,\"name\":\"after\",\"type\":[\"null\",\"row\"]}],\"name\":\"envelope\",\"type\":\"record\"}"
 
-> EXPLAIN KEY SCHEMA FOR CREATE SINK sink FROM t
+> EXPLAIN KEY SCHEMA AS JSON FOR CREATE SINK sink FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink3-${testdrive.seed}')
   KEY (c2) NOT ENFORCED
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
