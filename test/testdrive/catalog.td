@@ -575,6 +575,8 @@ mz_webhook_sources
 name
 -------------------------------------
 mz_active_peeks
+mz_activity_log
+mz_activity_log_redacted
 mz_arrangement_sharing
 mz_arrangement_sharing_per_worker
 mz_arrangement_sizes

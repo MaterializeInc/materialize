@@ -1121,6 +1121,8 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 [Top K]: /transform-data/patterns/top-k
 [query hints]: /sql/select/#query-hints
 
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_activity_log -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_activity_log_redacted -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_aggregates -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_batches_raw -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_records_raw -->

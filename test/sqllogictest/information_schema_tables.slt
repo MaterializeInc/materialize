@@ -240,6 +240,14 @@ mz_internal
 mz_active_peeks_per_worker
 SOURCE
 materialize
+mv_internal
+mz_activity_log
+VIEW
+materialize
+mz_internal
+mz_activity_log_redacted
+VIEW
+materialize
 mz_internal
 mz_aggregates
 BASE TABLE
