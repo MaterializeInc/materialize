@@ -16,14 +16,29 @@
 // The original source code is subject to the terms of the <APACHE|MIT> license, a copy
 // of which can be found in the LICENSE file at the root of this repository.
 
+use mz_ore::collections::HashMap;
+use mz_sql_parser::ast::{Raw, Statement};
 use regex::Regex;
 use ropey::Rope;
 use serde_json::Value;
-use tower_lsp::jsonrpc::Result;
+use std::borrow::Cow;
+use tokio::sync::Mutex;
+use tower_lsp::jsonrpc::{Error, ErrorCode, Result};
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
 
 use crate::{PKG_NAME, PKG_VERSION};
+
+/// This is a re-implemention of [mz_sql_parser::parser::StatementParseResult]
+/// but replacing the sql code with a rope.
+#[derive(Debug)]
+pub struct ParseResult {
+    /// Abstract Syntax Trees (AST) for each of the SQL statements
+    /// in a file.
+    pub asts: Vec<Statement<Raw>>,
+    /// Text handler for big files.
+    pub rope: Rope,
+}
 
 /// The [Backend] struct implements the [LanguageServer] trait, and thus must provide implementations for its methods.
 /// Most imporant methods includes:
@@ -43,6 +58,15 @@ pub struct Backend {
     /// Logs and results must be sent through
     /// the client at the end of each capability.
     pub client: Client,
+
+    /// Contains parsing results for each open file.
+    /// Instead of retrieving the last version from the file
+    /// each time a command, like formatting, is executed,
+    /// we use the most recent parsing results stored here.
+    /// Reading from the file would access old content.
+    /// E.g. The user formats or performs an action
+    /// prior to save the file.
+    pub parse_results: Mutex<HashMap<Url, ParseResult>>,
 }
 
 #[tower_lsp::async_trait]
@@ -55,6 +79,7 @@ impl LanguageServer for Backend {
             }),
             offset_encoding: None,
             capabilities: ServerCapabilities {
+                document_formatting_provider: Some(tower_lsp::lsp_types::OneOf::Left(true)),
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
                     TextDocumentSyncKind::FULL,
                 )),
@@ -177,6 +202,37 @@ impl LanguageServer for Backend {
         // Ok(Some(lenses))
         Ok(None)
     }
+
+    /// Formats the code using [mz_sql_pretty].
+    /// [`textDocument/formatting`]: https://microsoft.github.io/language-server-protocol/specification#textDocument_formatting
+    async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
+        self.client
+            .log_message(MessageType::INFO, format!("Formatting: {:?}", params))
+            .await;
+
+        let locked_map = self.parse_results.lock().await;
+
+        if let Some(parse_result) = locked_map.get(&params.text_document.uri) {
+            let pretty = parse_result
+                .asts
+                .iter()
+                .map(|ast| mz_sql_pretty::to_pretty(ast, 60))
+                .collect::<Vec<String>>()
+                .join("\n");
+            let rope = &parse_result.rope;
+
+            return Ok(Some(vec![TextEdit {
+                new_text: pretty,
+                range: Range {
+                    // TODO: Remove unwraps.
+                    start: offset_to_position(0, rope).unwrap(),
+                    end: offset_to_position(rope.len_chars(), rope).unwrap(),
+                },
+            }]));
+        }
+
+        return Ok(None);
+    }
 }
 
 struct TextDocumentItem {
@@ -198,11 +254,16 @@ impl Backend {
 
         match parse_result {
             // The parser will return Ok when everything is well written.
-            Ok(_results) => {
+            Ok(results) => {
                 // Clear the diagnostics in case there were issues before.
                 self.client
                     .publish_diagnostics(params.uri.clone(), vec![], Some(params.version))
                     .await;
+
+                let asts = results.iter().map(|x| x.ast.clone()).collect();
+                let parse_result: ParseResult = ParseResult { asts, rope };
+                let mut parse_results = self.parse_results.lock().await;
+                parse_results.insert(params.uri, parse_result);
             }
 
             // If there is at least one error the parser will return Err.
@@ -269,4 +330,17 @@ fn offset_to_position(offset: usize, rope: &Rope) -> Option<Position> {
     let column_u32 = column.try_into().ok()?;
 
     Some(Position::new(line_u32, column_u32))
+}
+
+/// Utility function to translate any error to a JSON RPC error
+/// understood by the extension and the Tower LSP parser.
+fn to_json_rpc_error<T>(error: T) -> Error
+where
+    T: ToString,
+{
+    Error {
+        code: ErrorCode::InternalError,
+        message: Cow::Owned(error.to_string()),
+        data: None,
+    }
 }

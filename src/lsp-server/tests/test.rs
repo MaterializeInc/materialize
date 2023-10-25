@@ -79,10 +79,12 @@
 mod tests {
 
     use mz_lsp_server::{PKG_NAME, PKG_VERSION};
+    use mz_ore::collections::HashMap;
     use serde::{Deserialize, Serialize};
     use serde_json::json;
     use std::fmt::Debug;
     use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
+    use tokio::sync::Mutex;
     use tower_lsp::lsp_types::*;
     use tower_lsp::{lsp_types::InitializeResult, LspService, Server};
 
@@ -120,7 +122,6 @@ mod tests {
     async fn test_lsp() {
         let (mut req_client, mut resp_client) = start_server();
         test_initialize(&mut req_client, &mut resp_client).await;
-
         // Test a simple query
         test_query(
             "SELECT 100;",
@@ -129,6 +130,8 @@ mod tests {
             &mut resp_client,
         )
         .await;
+        test_formatting(&mut req_client, &mut resp_client).await;
+        test_simple_query(&mut req_client, &mut resp_client).await;
         test_jinja_query(&mut req_client, &mut resp_client).await;
     }
 
@@ -161,9 +164,9 @@ mod tests {
     }
 
     /// Asserts that the server can parse a single SQL statement `SELECT 100;`.
-    // async fn test_simple_query(req_client: &mut DuplexStream, resp_client: &mut DuplexStream) {
-    //     test_query("SELECT 100;", Some(vec![]), req_client, resp_client);
-    // }
+    async fn test_simple_query(req_client: &mut DuplexStream, resp_client: &mut DuplexStream) {
+        test_query("SELECT 100;", Some(vec![]), req_client, resp_client).await;
+    }
 
     /// Asserts that the server initialize correctly.
     ///
@@ -171,7 +174,17 @@ mod tests {
     /// Every time a new capability to the server is added,
     /// the response for this test will change.
     async fn test_initialize(req_client: &mut DuplexStream, resp_client: &mut DuplexStream) {
-        let request = r#"{"jsonrpc":"2.0","method":"initialize","params":{"capabilities":{"textDocumentSync":1}},"id":1}"#;
+        let request = r#"{
+            "jsonrpc":"2.0",
+            "method":"initialize",
+            "params":{
+                "capabilities":{
+                    "textDocumentSync": 1,
+                    "documentFormattingProvider": 1
+                }
+            },
+            "id":1
+        }"#;
         let expected_response: Vec<LspMessage<bool, InitializeResult>> = vec![LspMessage {
             jsonrpc: "2.0".to_string(),
             method: None,
@@ -183,6 +196,7 @@ mod tests {
                 }),
                 offset_encoding: None,
                 capabilities: ServerCapabilities {
+                    document_formatting_provider: Some(tower_lsp::lsp_types::OneOf::Left(true)),
                     text_document_sync: Some(TextDocumentSyncCapability::Kind(
                         TextDocumentSyncKind::FULL,
                     )),
@@ -209,7 +223,7 @@ mod tests {
         .await;
     }
 
-    /// Writes a request to the server and asserts that the expected output
+    /// Writes a request to the LSP server and asserts that the expected output
     /// message is ok, otherwise it will fail.
     async fn write_and_assert<'de, T, R>(
         req_client: &mut DuplexStream,
@@ -221,15 +235,56 @@ mod tests {
         T: Debug + Deserialize<'de> + PartialEq + ToOwned + Clone,
         R: Debug + Deserialize<'de> + PartialEq + ToOwned + Clone,
     {
+        // println!("Writing message.");
         req_client
             .write_all(req(input_message).as_bytes())
             .await
             .unwrap();
+
+        // println!("Waiting read.");
         let n = resp_client.read(buf).await.unwrap();
         let buf_as = std::str::from_utf8(&buf[..n]).unwrap();
 
         let messages = parse_response::<T, R>(buf_as);
         assert_eq!(messages, expected_output_message)
+    }
+
+    async fn test_formatting(req_client: &mut DuplexStream, resp_client: &mut DuplexStream) {
+        println!("Testing formatting.");
+
+        let formatting_message = json!({
+            "jsonrpc":"2.0".to_string(),
+            "id": 2,
+            "method":"textDocument/formatting".to_string(),
+            "params": {
+                "options":  {
+                    "tabSize": 4,
+                    "insertSpaces": true,
+                },
+                "textDocument": {
+                    "uri": "/Users/joaquincolacci/Code/Javascript/cube.js-1/SELECT%2001%3B%3B.sql",
+                },
+            }
+        })
+        .to_string();
+
+        // TODO: This is not the correct response.
+        let formatting_response: Vec<LspMessage<serde_json::Value, String>> = vec![LspMessage {
+            id: Some(2),
+            method: None,
+            params: None,
+            result: None,
+            jsonrpc: "2.0".to_string(),
+        }];
+
+        write_and_assert(
+            req_client,
+            resp_client,
+            &mut [0; 1024],
+            &formatting_message,
+            formatting_response,
+        )
+        .await;
     }
 
     /// A utility function to test a query and assert
@@ -297,11 +352,14 @@ mod tests {
     /// Returns the two clients to send and read request to and from the
     /// server.
     fn start_server() -> (tokio::io::DuplexStream, tokio::io::DuplexStream) {
+        println!("Starting server");
         let (req_client, req_server) = tokio::io::duplex(1024);
         let (resp_server, resp_client) = tokio::io::duplex(1024);
 
-        let (service, socket) =
-            LspService::new(|client| mz_lsp_server::backend::Backend { client });
+        let (service, socket) = LspService::new(|client| mz_lsp_server::backend::Backend {
+            client,
+            parse_results: Mutex::new(HashMap::new()),
+        });
 
         mz_ore::task::spawn(
             || format!("taskname:{}", "lsp_server"),

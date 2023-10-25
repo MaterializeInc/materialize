@@ -19,6 +19,7 @@ mz-sql-parser = { path = "../sql-parser", default-features = false  }
 mz-sql-lexer = { path = "../sql-lexer", default-features = false }
 mz-ore = { path = "../ore", default-features = false, features = ["async", "test"] }
 regex = "1.7.0"
+mz-sql-pretty = { path = "../sql-pretty", default-features = false  }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [dev-dependencies]

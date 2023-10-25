@@ -85,12 +85,17 @@
 // END LINT CONFIG
 
 use mz_lsp_server::backend::Backend;
+use mz_ore::collections::HashMap;
+use tokio::sync::Mutex;
 use tower_lsp::{LspService, Server};
 
 #[tokio::main]
 async fn main() {
     let (stdin, stdout) = (tokio::io::stdin(), tokio::io::stdout());
 
-    let (service, socket) = LspService::new(|client| Backend { client });
+    let (service, socket) = LspService::new(|client| Backend {
+        client,
+        parse_results: Mutex::new(HashMap::new()),
+    });
     Server::new(stdin, stdout, socket).serve(service).await;
 }
