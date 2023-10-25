@@ -1998,6 +1998,13 @@ feature_flags!(
         internal: false,
         enable_for_item_parsing: true,
     },
+    {
+        name: enable_new_outer_join_lowering,
+        desc: "new outer join lowering",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: false,
+    },
 );
 
 /// Represents the input to a variable.
