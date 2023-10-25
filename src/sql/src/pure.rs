@@ -165,7 +165,9 @@ pub async fn purify_statement(
     }
 }
 
-pub(crate) fn update_avro_comments(
+/// Updates the CREATE SINK statement with materialize comments
+/// if `enable_sink_doc_on_option` feature flag is enabled
+pub(crate) fn add_materialize_comments(
     catalog: &dyn SessionCatalog,
     stmt: &mut CreateSinkStatement<Aug>,
 ) -> Result<(), PlanError> {
@@ -273,7 +275,7 @@ async fn purify_create_sink(
     mut stmt: CreateSinkStatement<Aug>,
     connection_context: ConnectionContext,
 ) -> Result<Statement<Aug>, PlanError> {
-    update_avro_comments(&catalog, &mut stmt)?;
+    add_materialize_comments(&catalog, &mut stmt)?;
     // General purification
     let CreateSinkStatement {
         connection, format, ..

@@ -947,7 +947,7 @@ pub struct ExplainTimestampPlan {
 #[derive(Debug)]
 pub struct ExplainSchemaPlan {
     pub format: ExplainFormat,
-    pub create_sink_plan: CreateSinkPlan,
+    pub json_schema: String,
 }
 
 #[derive(Debug)]

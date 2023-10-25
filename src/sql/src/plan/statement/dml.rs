@@ -25,6 +25,9 @@ use mz_sql_parser::ast::{
     ExplainSchemaStatement, ExplainTimestampStatement, Expr, IfExistsBehavior, OrderByExpr,
     SubscribeOutput,
 };
+use mz_storage_types::sinks::{
+    KafkaSinkAvroFormatState, KafkaSinkConnection, KafkaSinkFormat, StorageSinkConnection,
+};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
@@ -40,7 +43,9 @@ use crate::plan::query::{plan_up_to, ExprContext, QueryLifetime};
 use crate::plan::scope::Scope;
 use crate::plan::statement::{ddl, StatementContext, StatementDesc};
 use crate::plan::with_options::TryFromValue;
-use crate::plan::{self, side_effecting_func, ExplainSchemaPlan, ExplainTimestampPlan};
+use crate::plan::{
+    self, side_effecting_func, CreateSinkPlan, ExplainSchemaPlan, ExplainTimestampPlan,
+};
 use crate::plan::{
     query, CopyFormat, CopyFromPlan, ExplainPlanPlan, InsertPlan, MutationKind, Params, Plan,
     PlanError, QueryContext, ReadThenWritePlan, SelectPlan, SubscribeFrom, SubscribePlan,
@@ -436,14 +441,26 @@ pub fn plan_explain_schema(
         mz_sql_parser::ast::ExplainFormat::Json => ExplainFormat::Json,
         mz_sql_parser::ast::ExplainFormat::Dot => ExplainFormat::Dot,
     };
-    crate::pure::update_avro_comments(scx.catalog, &mut statement)?;
-    if let Plan::CreateSink(create_sink_plan) = ddl::plan_create_sink(scx, statement)? {
-        Ok(Plan::ExplainSchema(ExplainSchemaPlan {
-            format,
-            create_sink_plan,
-        }))
+    crate::pure::add_materialize_comments(scx.catalog, &mut statement)?;
+
+    if let Plan::CreateSink(CreateSinkPlan { sink, .. }) = ddl::plan_create_sink(scx, statement)? {
+        if let StorageSinkConnection::Kafka(KafkaSinkConnection {
+            format:
+                KafkaSinkFormat::Avro(KafkaSinkAvroFormatState::UnpublishedMaybe {
+                    value_schema, ..
+                }),
+            ..
+        }) = sink.connection
+        {
+            Ok(Plan::ExplainSchema(ExplainSchemaPlan {
+                format,
+                json_schema: value_schema,
+            }))
+        } else {
+            bail_unsupported!("EXPLAIN SCHEMA is only available for Kafka sinks with Avro schemas");
+        }
     } else {
-        unreachable!()
+        unreachable!("plan_create_sink returns a CreateSinkPlan");
     }
 }
 

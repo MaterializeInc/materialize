@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::iter;
 use std::num::{NonZeroI64, NonZeroUsize};
 use std::panic::AssertUnwindSafe;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -74,9 +75,6 @@ use mz_storage_client::controller::{
 };
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
-use mz_storage_types::sinks::{
-    KafkaSinkAvroFormatState, KafkaSinkConnection, KafkaSinkFormat, StorageSinkConnection,
-};
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::optimizer_notices::OptimizerNotice;
 use mz_transform::{EmptyStatisticsOracle, Optimizer, StatisticsOracle};
@@ -1723,24 +1721,10 @@ impl Coordinator {
 
     pub(super) fn sequence_explain_schema(
         &mut self,
-        ExplainSchemaPlan {
-            create_sink_plan, ..
-        }: ExplainSchemaPlan,
+        ExplainSchemaPlan { json_schema, .. }: ExplainSchemaPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        if let StorageSinkConnection::Kafka(KafkaSinkConnection {
-            format:
-                KafkaSinkFormat::Avro(KafkaSinkAvroFormatState::UnpublishedMaybe {
-                    value_schema, ..
-                }),
-            ..
-        }) = create_sink_plan.sink.connection
-        {
-            use std::str::FromStr;
-            let jsonb = Jsonb::from_str(&value_schema)?;
-            Ok(Self::send_immediate_rows(vec![jsonb.into_row()]))
-        } else {
-            unreachable!();
-        }
+        let jsonb = Jsonb::from_str(&json_schema)?;
+        Ok(Self::send_immediate_rows(vec![jsonb.into_row()]))
     }
 
     pub(super) fn sequence_show_all_variables(

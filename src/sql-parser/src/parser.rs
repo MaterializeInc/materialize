@@ -7148,7 +7148,12 @@ impl<'a> Parser<'a> {
         let format = if self.parse_keyword(AS) {
             match self.parse_one_of_keywords(&[JSON]) {
                 Some(JSON) => ExplainFormat::Json,
-                None => return Err(ParserError::new(self.index, "expected a format")),
+                None => {
+                    return Err(ParserError::new(
+                        self.index,
+                        "only json format is supported",
+                    ))
+                }
                 _ => unreachable!(),
             }
         } else {
