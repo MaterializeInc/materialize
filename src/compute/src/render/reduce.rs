@@ -18,18 +18,20 @@ use differential_dataflow::collection::AsCollection;
 use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::Collection;
+use differential_dataflow::{Collection, ExchangeData};
 use mz_compute_types::plan::reduce::{
     reduction_type, AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan,
     MonotonicPlan, ReducePlan, ReductionType,
 };
 use mz_expr::{AggregateExpr, AggregateFunc, EvalError, MirScalarExpr};
 use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
+use mz_repr::fixed_length::IntoRowByTypes;
 use mz_repr::{Datum, DatumList, DatumVec, Diff, Row, RowArena};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+use timely::container::columnation::Columnation;
 use timely::dataflow::Scope;
 use timely::progress::timestamp::Refines;
 use timely::progress::Timestamp;
@@ -188,9 +190,9 @@ where
             // If we have no aggregations or just a single type of reduction, we
             // can go ahead and render them directly.
             ReducePlan::Distinct => {
-                let (arranged_output, errs) = self.build_distinct(collection);
+                let (arranged_output, errs) = self.dispatch_build_distinct(collection);
                 errors.push(errs);
-                SpecializedArrangement::RowUnit(arranged_output)
+                arranged_output
             }
             ReducePlan::Accumulable(expr) => {
                 let (arranged_output, errs) = self.build_accumulable(collection, expr);
@@ -428,46 +430,73 @@ where
         (oks, errs.as_collection(|_, v| v.clone()))
     }
 
-    /// Build the dataflow to compute the set of distinct keys.
-    fn build_distinct<S>(
+    fn dispatch_build_distinct<S>(
         &self,
         collection: Collection<S, (Row, Row), Diff>,
     ) -> (
-        KeyValArrangement<S, Row, ()>,
+        SpecializedArrangement<S>,
         Collection<S, DataflowError, Diff>,
     )
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
-        let error_logger = self.error_logger();
-
-        let (output, errors) = collection
-            .map(|(k, v)| {
+        if self.enable_specialized_arrangements {
+            let collection = collection.map(|(k, v)| {
                 assert!(v.is_empty());
                 (k, ())
-            })
-            .mz_arrange::<RowSpine<_, _, _, _>>("Arranged DistinctBy [val: empty]")
+            });
+            let (arrangement, errs) = self.build_distinct(collection, " [val: empty]");
+            (SpecializedArrangement::RowUnit(arrangement), errs)
+        } else {
+            let collection = collection.inspect(|((_, v), _, _)| assert!(v.is_empty()));
+            let (arrangement, errs) = self.build_distinct(collection, "");
+            (SpecializedArrangement::RowRow(arrangement), errs)
+        }
+    }
+
+    /// Build the dataflow to compute the set of distinct keys.
+    fn build_distinct<S, V>(
+        &self,
+        collection: Collection<S, (Row, V), Diff>,
+        tag: &str,
+    ) -> (
+        KeyValArrangement<S, Row, V>,
+        Collection<S, DataflowError, Diff>,
+    )
+    where
+        S: Scope<Timestamp = G::Timestamp>,
+        V: Columnation + Default + ExchangeData + IntoRowByTypes,
+    {
+        let error_logger = self.error_logger();
+
+        let (input_name, output_name) = (
+            format!("Arranged DistinctBy{}", tag),
+            format!("DistinctBy{}", tag),
+        );
+
+        let (output, errors) = collection
+            .mz_arrange::<RowSpine<_, _, _, _>>(&input_name)
             .reduce_pair::<_, RowSpine<_, _, _, _>, _, ErrValSpine<_, _, _>>(
-                "DistinctBy [val: empty]",
-                "DistinctByErrorCheck",
-                |_key, _input, output| {
-                    // We're pushing a unit value here because the key is implicitly added by the
-                    // arrangement, and the permutation logic takes care of using the key part of the
-                    // output.
-                    output.push(((), 1));
-                },
-                move |key, input: &[(_, Diff)], output| {
-                    for (_, count) in input.iter() {
-                        if count.is_positive() {
-                            continue;
-                        }
-                        let message = "Non-positive multiplicity in DistinctBy";
-                        error_logger.log(message, &format!("row={key:?}, count={count}"));
-                        output.push((EvalError::Internal(message.to_string()).into(), 1));
-                        return;
+            &output_name,
+            "DistinctByErrorCheck",
+            |_key, _input, output| {
+                // We're pushing a unit value here because the key is implicitly added by the
+                // arrangement, and the permutation logic takes care of using the key part of the
+                // output.
+                output.push((V::default(), 1));
+            },
+            move |key, input: &[(_, Diff)], output| {
+                for (_, count) in input.iter() {
+                    if count.is_positive() {
+                        continue;
                     }
-                },
-            );
+                    let message = "Non-positive multiplicity in DistinctBy";
+                    error_logger.log(message, &format!("row={key:?}, count={count}"));
+                    output.push((EvalError::Internal(message.to_string()).into(), 1));
+                    return;
+                }
+            },
+        );
         (output, errors.as_collection(|_k, v| v.clone()))
     }
 
