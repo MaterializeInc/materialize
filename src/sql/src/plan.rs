@@ -947,6 +947,7 @@ pub struct ExplainTimestampPlan {
 #[derive(Debug)]
 pub struct ExplainSchemaPlan {
     pub format: ExplainFormat,
+    pub sink_from: GlobalId,
     pub json_schema: String,
 }
 

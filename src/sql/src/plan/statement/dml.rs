@@ -464,6 +464,7 @@ pub fn plan_explain_schema(
 
             Ok(Plan::ExplainSchema(ExplainSchemaPlan {
                 format,
+                sink_from: sink.from,
                 json_schema: schema,
             }))
         } else {
