@@ -15,6 +15,7 @@ import pg8000
 import requests
 from pg8000.native import identifier
 
+import materialize.parallel_workload.database
 from materialize.data_ingest.data_type import NUMBER_TYPES, Text, TextTextMap
 from materialize.mzcompose.composition import Composition
 from materialize.parallel_workload.database import (
@@ -29,7 +30,6 @@ from materialize.parallel_workload.database import (
     MAX_TABLES,
     MAX_VIEWS,
     MAX_WEBHOOK_SOURCES,
-    NAUGHTY_IDENTIFIERS,
     Cluster,
     ClusterReplica,
     Database,
@@ -100,7 +100,7 @@ class Action:
             )
         if self.db.scenario == Scenario.Rename:
             result.extend(["unknown schema", "ambiguous reference to schema name"])
-        if NAUGHTY_IDENTIFIERS:
+        if materialize.parallel_workload.database.NAUGHTY_IDENTIFIERS:
             result.extend(["identifier length exceeds 255 bytes"])
         return result
 
