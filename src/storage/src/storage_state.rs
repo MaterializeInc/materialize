@@ -1002,14 +1002,10 @@ impl<'w, A: Allocate> Worker<'w, A> {
             }
         }
 
-        // Elide any ingestions we're already aware of while determining what
-        // ingestions no longer exist.
-        let mut stale_ingestions = self
-            .storage_state
-            .ingestions
-            .keys()
-            .collect::<BTreeSet<_>>();
-        let mut stale_exports = self.storage_state.exports.keys().collect::<BTreeSet<_>>();
+        // Track which frontiers this envd expects; we will also set their
+        // initial timestamp to the minimum timestamp to reset them as we don't
+        // know what frontiers the new envd expects.
+        let mut expected_objects = BTreeSet::new();
 
         let mut drop_commands = BTreeSet::new();
         let mut running_ingestion_descriptions = self.storage_state.ingestions.clone();
@@ -1071,7 +1067,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
                             false
                         } else {
-                            stale_ingestions.remove(&ingestion.id);
+                            expected_objects.insert(ingestion.id);
 
                             let running_ingestion =
                                 self.storage_state.ingestions.get(&ingestion.id);
@@ -1099,7 +1095,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
                             false
                         } else if let Some(existing) = self.storage_state.exports.get(&export.id) {
-                            stale_exports.remove(&export.id);
+                            expected_objects.insert(export.id);
                             // If we've been asked to create an export that is
                             // already installed, the descriptions must be
                             // compatible.
@@ -1131,22 +1127,29 @@ impl<'w, A: Allocate> Worker<'w, A> {
             drop_commands
         );
 
-        trace!(
-            worker_id = self.timely_worker.index(),
-            "reconciliation, stale ingestions: {:?}",
-            stale_ingestions
-        );
+        // Determine the ID of all objects we did _not_ see; these are
+        // considered stale.
+        let stale_objects = self
+            .storage_state
+            .ingestions
+            .keys()
+            .chain(self.storage_state.exports.keys())
+            // Objects are considered stale if we did not see them re-created.
+            .filter(|id| !expected_objects.contains(id))
+            // Synthesize the drop command
+            .map(|id| (*id, Antichain::new()))
+            .collect();
 
-        // Synthesize a drop command to remove stale ingestions and exports
-        commands.push(StorageCommand::AllowCompaction(
-            stale_ingestions
-                .into_iter()
-                .chain(stale_exports)
-                .map(|id| (*id, Antichain::new()))
-                .collect(),
-        ));
+        commands.push(StorageCommand::AllowCompaction(stale_objects));
 
-        // Reset the reported frontiers.
+        // Do not report any frontiers that do not belong to expected objects.
+        // Note that this set of objects can differ from th set of sources and
+        // sinks.
+        self.storage_state
+            .reported_frontiers
+            .retain(|id, _| expected_objects.contains(id));
+
+        // Reset the reported frontiers for the remaining objects.
         for (_, frontier) in &mut self.storage_state.reported_frontiers {
             *frontier = Antichain::from_elem(<_>::minimum());
         }
