@@ -231,3 +231,12 @@ class DbFunctionWithCustomPattern(DbFunction):
             )
 
         return self.pattern_per_param_count[args_count]
+
+
+def match_function_by_name(
+    op: DbOperationOrFunction, function_name_in_lower_case: str
+) -> bool:
+    return (
+        isinstance(op, DbFunction)
+        and op.function_name_in_lower_case == function_name_in_lower_case
+    )

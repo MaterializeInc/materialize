@@ -15,8 +15,8 @@ from materialize.output_consistency.expression.expression_with_args import (
     ExpressionWithArgs,
 )
 from materialize.output_consistency.operation.operation import (
-    DbFunction,
     DbOperation,
+    match_function_by_name,
 )
 from materialize.output_consistency.query.query_template import QueryTemplate
 
@@ -40,13 +40,8 @@ def matches_x_and_y(
 def matches_fun_by_name(
     expression: Expression, function_name_in_lower_case: str
 ) -> bool:
-    if isinstance(expression, ExpressionWithArgs) and isinstance(
-        expression.operation, DbFunction
-    ):
-        return (
-            expression.operation.function_name_in_lower_case
-            == function_name_in_lower_case
-        )
+    if isinstance(expression, ExpressionWithArgs):
+        return match_function_by_name(expression.operation, function_name_in_lower_case)
     return False
 
 
