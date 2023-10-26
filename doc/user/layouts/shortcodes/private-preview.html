@@ -1,7 +1,7 @@
 <div class="private-preview">
   <strong class="gutter">PREVIEW</strong>
   {{ with .Inner}}{{.|$.Page.RenderString}}{{else}}This feature{{ end }} is in
-  <strong>private preview</strong>. It has known performance or stability
+  <strong>private preview</strong>. It may have performance or stability
   issues and is under active development. It isn't subject to our backwards
   compatibility guarantees.
   {{if not (.Get "enabled-by-default")}}
