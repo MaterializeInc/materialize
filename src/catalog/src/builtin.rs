@@ -5026,6 +5026,102 @@ pub const MZ_CLUSTER_REPLICA_HISTORY: BuiltinView = BuiltinView {
     sensitivity: DataSensitivity::Public,
 };
 
+pub const MZ_MATERIALIZATION_LAG: BuiltinView = BuiltinView {
+    name: "mz_materialization_lag",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE VIEW mz_internal.mz_materialization_lag AS
+WITH MUTUALLY RECURSIVE
+    -- IDs of objects for which we want to know the lag.
+    materializations (id text) AS (
+        SELECT id FROM mz_indexes
+        UNION ALL
+        SELECT id FROM mz_materialized_views
+        UNION ALL
+        SELECT id FROM mz_sinks
+    ),
+    -- Compute dependencies enriched with sink dependencies.
+    dataflow_dependencies (id text, dep_id text) AS (
+        SELECT object_id, dependency_id
+        FROM mz_internal.mz_compute_dependencies
+        UNION ALL
+        SELECT object_id, referenced_object_id
+        FROM mz_internal.mz_object_dependencies
+        JOIN mz_sinks ON (id = object_id)
+    ),
+    -- Direct dependencies of materializations.
+    direct_dependencies (id text, dep_id text) AS (
+        SELECT id, dep_id
+        FROM materializations
+        JOIN dataflow_dependencies USING (id)
+    ),
+    -- All transitive dependencies of materializations.
+    transitive_dependencies (id text, dep_id text) AS (
+        SELECT id, dep_id FROM direct_dependencies
+        UNION
+        SELECT td.id, dd.dep_id
+        FROM transitive_dependencies td
+        JOIN dataflow_dependencies dd ON (dd.id = td.dep_id)
+    ),
+    -- Root dependencies of materializations (sources and tables).
+    root_dependencies (id text, dep_id text) AS (
+        SELECT *
+        FROM transitive_dependencies td
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM dataflow_dependencies dd
+            WHERE dd.id = td.dep_id
+        )
+    ),
+    -- Write progress times of materializations.
+    materialization_times (id text, time timestamptz) AS (
+        SELECT m.id, to_timestamp(f.write_frontier::text::double / 1000)
+        FROM materializations m
+        JOIN mz_internal.mz_frontiers f ON (m.id = f.object_id)
+    ),
+    -- Write progress times of direct dependencies of materializations.
+    input_times (id text, slowest_dep text, time timestamptz) AS (
+        SELECT DISTINCT ON (d.id)
+            d.id,
+            d.dep_id,
+            to_timestamp(f.write_frontier::text::double / 1000)
+        FROM direct_dependencies d
+        JOIN mz_internal.mz_frontiers f ON (d.dep_id = f.object_id)
+        ORDER BY d.id, f.write_frontier ASC
+    ),
+    -- Write progress times of root dependencies of materializations.
+    root_times (id text, slowest_dep text, time timestamptz) AS (
+        SELECT DISTINCT ON (d.id)
+            d.id,
+            d.dep_id,
+            to_timestamp(f.write_frontier::text::double / 1000)
+        FROM root_dependencies d
+        JOIN mz_internal.mz_frontiers f ON (d.dep_id = f.object_id)
+        ORDER BY d.id, f.write_frontier ASC
+    )
+SELECT
+    id AS object_id,
+    -- Ensure that lag values are always NULL for materializations that have reached the empty
+    -- frontier, as those have processed all their input data.
+    -- Also make sure that lag values are never negative, even when input frontiers are before
+    -- output frontiers (as can happen during hydration).
+    CASE
+        WHEN m.time IS NULL THEN INTERVAL '0'
+        WHEN i.time IS NULL THEN NULL
+        ELSE greatest(i.time - m.time, INTERVAL '0')
+    END AS local_lag,
+    CASE
+        WHEN m.time IS NULL THEN INTERVAL '0'
+        WHEN r.time IS NULL THEN NULL
+        ELSE greatest(r.time - m.time, INTERVAL '0')
+    END AS global_lag,
+    i.slowest_dep AS slowest_local_input_id,
+    r.slowest_dep AS slowest_global_input_id
+FROM materialization_times m
+JOIN input_times i USING (id)
+JOIN root_times r USING (id)",
+    sensitivity: DataSensitivity::Public,
+};
+
 pub const MZ_SHOW_DATABASES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_databases_ind",
     schema: MZ_INTERNAL_SCHEMA,
@@ -5731,6 +5827,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Source(&MZ_FRONTIERS),
         Builtin::View(&MZ_GLOBAL_FRONTIERS),
         Builtin::Source(&MZ_COMPUTE_DEPENDENCIES),
+        Builtin::View(&MZ_MATERIALIZATION_LAG),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS_PER_WORKER),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS),
         Builtin::Source(&MZ_CLUSTER_REPLICA_FRONTIERS),

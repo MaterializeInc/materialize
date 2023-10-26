@@ -497,6 +497,10 @@ mz_kafka_sources
 BASE TABLE
 materialize
 mz_internal
+mz_materialization_lag
+VIEW
+materialize
+mz_internal
 mz_message_batch_counts_received_raw
 SOURCE
 materialize

@@ -611,6 +611,7 @@ mz_dataflows
 mz_dataflows_per_worker
 mz_expected_group_size_advice
 mz_global_frontiers
+mz_materialization_lag
 mz_message_counts
 mz_message_counts_per_worker
 mz_object_fully_qualified_names
