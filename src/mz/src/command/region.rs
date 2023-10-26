@@ -31,13 +31,19 @@ use tabled::Tabled;
 /// In cases where the organization has already enabled the region
 /// the command will try to run a version update. Resulting
 /// in a downtime for a short period.
-pub async fn enable(cx: RegionContext, version: Option<String>) -> Result<(), Error> {
+pub async fn enable(
+    cx: RegionContext,
+    version: Option<String>,
+    environmentd_extra_args: Option<Vec<String>>,
+) -> Result<(), Error> {
     let loading_spinner = cx
         .output_formatter()
         .loading_spinner("Retrieving information...");
     let cloud_provider = cx.get_cloud_provider().await?;
 
     loading_spinner.set_message("Enabling the region...");
+
+    let environmentd_extra_args: Vec<String> = environmentd_extra_args.unwrap_or_else(Vec::new);
 
     // Loop region creation.
     // After 6 minutes it will timeout.
@@ -47,7 +53,11 @@ pub async fn enable(cx: RegionContext, version: Option<String>) -> Result<(), Er
         .retry_async(|_| async {
             let _ = cx
                 .cloud_client()
-                .create_region(version.clone(), vec![], cloud_provider.clone())
+                .create_region(
+                    version.clone(),
+                    environmentd_extra_args.clone(),
+                    cloud_provider.clone(),
+                )
                 .await?;
             Ok(())
         })

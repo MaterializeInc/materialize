@@ -30,6 +30,8 @@ pub enum RegionSubcommand {
     Enable {
         #[clap(hide = true, short, long)]
         version: Option<String>,
+        #[clap(hide = true, short, long)]
+        environmentd_extra_args: Option<Vec<String>>,
     },
     /// Disable a region.
     #[clap(hide = true)]
@@ -44,7 +46,10 @@ pub enum RegionSubcommand {
 pub async fn run(cx: Context, cmd: RegionCommand) -> Result<(), Error> {
     let cx = cx.activate_profile()?.activate_region()?;
     match cmd.subcommand {
-        RegionSubcommand::Enable { version } => mz::command::region::enable(cx, version).await,
+        RegionSubcommand::Enable {
+            version,
+            environmentd_extra_args,
+        } => mz::command::region::enable(cx, version, environmentd_extra_args).await,
         RegionSubcommand::Disable => mz::command::region::disable(cx).await,
         RegionSubcommand::List => mz::command::region::list(cx).await,
         RegionSubcommand::Show => mz::command::region::show(cx).await,
