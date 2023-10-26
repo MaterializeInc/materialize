@@ -240,6 +240,58 @@ enum PersistTableWriteCmd<T: Timestamp + Lattice + Codec64> {
     Shutdown,
 }
 
+async fn append_work<T2: Timestamp + Lattice + Codec64>(
+    frontier_responses: &tokio::sync::mpsc::UnboundedSender<StorageResponse<T2>>,
+    write_handles: &mut BTreeMap<GlobalId, WriteHandle<SourceData, (), T2, Diff>>,
+    mut commands: BTreeMap<GlobalId, (tracing::Span, Vec<Update<T2>>, Antichain<T2>)>,
+) -> Result<(), Vec<GlobalId>> {
+    let futs = FuturesUnordered::new();
+
+    // We cannot iterate through the updates and then set off a persist call
+    // on the write handle because we cannot mutably borrow the write handle
+    // multiple times.
+    //
+    // Instead, we first group the update by ID above and then iterate
+    // through all available write handles and see if there are any updates
+    // for it. If yes, we send them all in one go.
+    for (id, write) in write_handles.iter_mut() {
+        if let Some((span, updates, new_upper)) = commands.remove(id) {
+            let persist_upper = write.upper().clone();
+            let updates = updates
+                .into_iter()
+                .map(|u| ((SourceData(Ok(u.row)), ()), u.timestamp, u.diff));
+
+            futs.push(async move {
+                let persist_upper = persist_upper.clone();
+                write
+                    .compare_and_append(updates.clone(), persist_upper.clone(), new_upper.clone())
+                    .instrument(span.clone())
+                    .await
+                    .expect("cannot append updates")
+                    .or(Err(*id))?;
+
+                Ok::<_, GlobalId>((*id, new_upper))
+            })
+        }
+    }
+
+    // Ensure all futures run to completion, and track status of each of them individually
+    let (new_uppers, failed_appends): (Vec<_>, Vec<_>) = futs
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .partition_result();
+
+    // It is not strictly an error for the controller to hang up.
+    let _ = frontier_responses.send(StorageResponse::FrontierUppers(new_uppers));
+
+    if failed_appends.is_empty() {
+        Ok(())
+    } else {
+        Err(failed_appends)
+    }
+}
+
 // TODO(txn): This impl is duplicative of PersistMonotonicWriteWorker, but it's
 // an intermediate state. The impl of this one will be completely replaced by
 // #20954.
@@ -328,65 +380,6 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
                             all_responses.push((ids, tx));
                         }
                         PersistTableWriteCmd::Shutdown => shutdown = true,
-                    }
-                }
-
-                async fn append_work<T2: Timestamp + Lattice + Codec64>(
-                    frontier_responses: &tokio::sync::mpsc::UnboundedSender<StorageResponse<T2>>,
-                    write_handles: &mut BTreeMap<GlobalId, WriteHandle<SourceData, (), T2, Diff>>,
-                    mut commands: BTreeMap<
-                        GlobalId,
-                        (tracing::Span, Vec<Update<T2>>, Antichain<T2>),
-                    >,
-                ) -> Result<(), Vec<GlobalId>> {
-                    let futs = FuturesUnordered::new();
-
-                    // We cannot iterate through the updates and then set off a persist call
-                    // on the write handle because we cannot mutably borrow the write handle
-                    // multiple times.
-                    //
-                    // Instead, we first group the update by ID above and then iterate
-                    // through all available write handles and see if there are any updates
-                    // for it. If yes, we send them all in one go.
-                    for (id, write) in write_handles.iter_mut() {
-                        if let Some((span, updates, new_upper)) = commands.remove(id) {
-                            let persist_upper = write.upper().clone();
-                            let updates = updates
-                                .into_iter()
-                                .map(|u| ((SourceData(Ok(u.row)), ()), u.timestamp, u.diff));
-
-                            futs.push(async move {
-                                let persist_upper = persist_upper.clone();
-                                write
-                                    .compare_and_append(
-                                        updates.clone(),
-                                        persist_upper.clone(),
-                                        new_upper.clone(),
-                                    )
-                                    .instrument(span.clone())
-                                    .await
-                                    .expect("cannot append updates")
-                                    .or(Err(*id))?;
-
-                                Ok::<_, GlobalId>((*id, new_upper))
-                            })
-                        }
-                    }
-
-                    // Ensure all futures run to completion, and track status of each of them individually
-                    let (new_uppers, failed_appends): (Vec<_>, Vec<_>) = futs
-                        .collect::<Vec<_>>()
-                        .await
-                        .into_iter()
-                        .partition_result();
-
-                    // It is not strictly an error for the controller to hang up.
-                    let _ = frontier_responses.send(StorageResponse::FrontierUppers(new_uppers));
-
-                    if failed_appends.is_empty() {
-                        Ok(())
-                    } else {
-                        Err(failed_appends)
                     }
                 }
 
@@ -664,65 +657,6 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistMonotonicW
                         PersistMonotonicWriteCmd::Shutdown => {
                             shutdown = true;
                         }
-                    }
-                }
-
-                async fn append_work<T2: Timestamp + Lattice + Codec64>(
-                    frontier_responses: &tokio::sync::mpsc::UnboundedSender<StorageResponse<T2>>,
-                    write_handles: &mut BTreeMap<GlobalId, WriteHandle<SourceData, (), T2, Diff>>,
-                    mut commands: BTreeMap<
-                        GlobalId,
-                        (tracing::Span, Vec<Update<T2>>, Antichain<T2>),
-                    >,
-                ) -> Result<(), Vec<GlobalId>> {
-                    let futs = FuturesUnordered::new();
-
-                    // We cannot iterate through the updates and then set off a persist call
-                    // on the write handle because we cannot mutably borrow the write handle
-                    // multiple times.
-                    //
-                    // Instead, we first group the update by ID above and then iterate
-                    // through all available write handles and see if there are any updates
-                    // for it. If yes, we send them all in one go.
-                    for (id, write) in write_handles.iter_mut() {
-                        if let Some((span, updates, new_upper)) = commands.remove(id) {
-                            let persist_upper = write.upper().clone();
-                            let updates = updates
-                                .into_iter()
-                                .map(|u| ((SourceData(Ok(u.row)), ()), u.timestamp, u.diff));
-
-                            futs.push(async move {
-                                let persist_upper = persist_upper.clone();
-                                write
-                                    .compare_and_append(
-                                        updates.clone(),
-                                        persist_upper.clone(),
-                                        new_upper.clone(),
-                                    )
-                                    .instrument(span.clone())
-                                    .await
-                                    .expect("cannot append updates")
-                                    .or(Err(*id))?;
-
-                                Ok::<_, GlobalId>((*id, new_upper))
-                            })
-                        }
-                    }
-
-                    // Ensure all futures run to completion, and track status of each of them individually
-                    let (new_uppers, failed_appends): (Vec<_>, Vec<_>) = futs
-                        .collect::<Vec<_>>()
-                        .await
-                        .into_iter()
-                        .partition_result();
-
-                    // It is not strictly an error for the controller to hang up.
-                    let _ = frontier_responses.send(StorageResponse::FrontierUppers(new_uppers));
-
-                    if failed_appends.is_empty() {
-                        Ok(())
-                    } else {
-                        Err(failed_appends)
                     }
                 }
 
