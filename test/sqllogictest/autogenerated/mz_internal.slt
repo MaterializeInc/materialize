@@ -591,6 +591,8 @@ SELECT DISTINCT object FROM objects WHERE schema IN ('mz_internal') ORDER BY obj
 ----
 mz_active_peeks
 mz_active_peeks_per_worker
+mz_activity_log
+mz_activity_log_redacted
 mz_aggregates
 mz_arrangement_batches_raw
 mz_arrangement_heap_allocations_raw
