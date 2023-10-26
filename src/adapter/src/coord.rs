@@ -782,6 +782,10 @@ impl Drop for ExecuteContextExtra {
             //
             // Once all known causes of this are resolved, bump this
             // back to a soft_assert.
+            //
+            // Note: the impact when this error hits
+            // is that the statement will never be marked
+            // as finished in the statement log.
             tracing::error!("execute context for statement {statement_uuid:?} dropped without being properly retired.");
         }
     }
