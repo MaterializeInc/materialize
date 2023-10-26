@@ -117,7 +117,7 @@ class WorkloadExecutor:
         endpoint: Endpoint,
         workload: Workload,
     ) -> WorkloadResult:
-        print(f"Running workload {workload} on {endpoint.name()} ({endpoint})")
+        print(f"Running workload {workload} on {endpoint}")
 
         df_totals = pd.DataFrame()
         df_details = pd.DataFrame()
@@ -135,13 +135,13 @@ class WorkloadExecutor:
             df_totals = pd.concat([df_totals, df_total], ignore_index=True)
             df_details = pd.concat([df_details, df_detail], ignore_index=True)
 
-            endpoint_name = endpoint.name()
-            pathlib.Path(paths.endpoint_dir(endpoint_name)).mkdir(
+            endpoint_version_name = endpoint.try_load_version()
+            pathlib.Path(paths.endpoint_dir(endpoint_version_name)).mkdir(
                 parents=True, exist_ok=True
             )
 
-            df_totals.to_csv(paths.df_totals_csv(endpoint_name, workload))
-            df_details.to_csv(paths.df_details_csv(endpoint_name, workload))
+            df_totals.to_csv(paths.df_totals_csv(endpoint_version_name, workload))
+            df_details.to_csv(paths.df_details_csv(endpoint_version_name, workload))
 
         self._record_results(endpoint, df_totals)
         return WorkloadResult(workload, df_totals, df_details)
