@@ -10,6 +10,8 @@
   the values from the CSV into that file, matching the behavior of other
   dbt adapters.
 
+* Allow nullability assertions in materialized views via constraints
+
 ## 1.6.0 - 2023-10-12
 
 * Upgrade to `dbt-postgres` v1.6.0:

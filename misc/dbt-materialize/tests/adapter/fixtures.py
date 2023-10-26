@@ -236,11 +236,16 @@ nullability_assertions_schema_yml = """
 version: 2
 models:
   - name: test_materialized_view_nullability_assertions
+    config:
+      contract:
+        enforced: true
     columns:
       - name: a
+        data_type: string
         constraints:
           - type: not_null
       - name: b
+        data_type: string
         constraints:
           - type: not_null
 """

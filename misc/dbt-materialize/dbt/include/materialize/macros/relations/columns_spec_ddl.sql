@@ -19,7 +19,7 @@
 {% macro materialize__get_table_columns_and_constraints() -%}
   {{ exceptions.warn(
         """
-        Materialize does not support constraints.
+        Materialize only supports non-null assertions constraints.
         """
     )}}
 {%- endmacro %}
