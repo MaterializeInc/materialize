@@ -184,3 +184,8 @@ query T
 SELECT * FROM t1 LIMIT 1 OFFSET 1;
 ----
 2
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET persist_fast_path_limit
+----
+COMPLETE 0
