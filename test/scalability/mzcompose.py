@@ -242,7 +242,7 @@ def report_regression_result(
         print("No regression detection because '--regression-against' param is not set")
         return
 
-    baseline_desc = endpoint_name_to_description(baseline_endpoint.name())
+    baseline_desc = endpoint_name_to_description(baseline_endpoint.try_load_version())
 
     if outcome.has_regressions():
         print(

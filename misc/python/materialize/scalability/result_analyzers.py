@@ -84,8 +84,12 @@ class DefaultResultAnalyzer(ResultAnalyzer):
             tps_per_endpoint[df_totals_ext_cols.TPS_DIFF]
             / tps_per_endpoint[df_totals_ext_cols.TPS_BASELINE]
         )
-        tps_per_endpoint[df_totals_ext_cols.INFO_BASELINE] = baseline_endpoint.name()
-        tps_per_endpoint[df_totals_ext_cols.INFO_OTHER] = other_endpoint.name()
+        tps_per_endpoint[
+            df_totals_ext_cols.INFO_BASELINE
+        ] = baseline_endpoint.try_load_version()
+        tps_per_endpoint[
+            df_totals_ext_cols.INFO_OTHER
+        ] = other_endpoint.try_load_version()
 
     def _filter_entries_above_threshold(
         self, tps_per_endpoint: pd.DataFrame

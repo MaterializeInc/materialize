@@ -59,7 +59,7 @@ class PostgresContainer(Endpoint):
             self.composition.up("postgres")
             self._port = self.composition.default_port("postgres")
 
-    def name(self) -> str:
+    def try_load_version(self) -> str:
         return POSTGRES_ENDPOINT_NAME
 
     def __str__(self) -> str:
