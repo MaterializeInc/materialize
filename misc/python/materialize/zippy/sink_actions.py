@@ -13,6 +13,7 @@ from textwrap import dedent
 from materialize.mzcompose.composition import Composition
 from materialize.zippy.framework import Action, ActionFactory, Capabilities, Capability
 from materialize.zippy.mz_capabilities import MzIsRunning
+from materialize.zippy.replica_capabilities import source_capable_clusters
 from materialize.zippy.sink_capabilities import SinkExists
 from materialize.zippy.storaged_capabilities import StoragedRunning
 from materialize.zippy.view_capabilities import ViewExists
@@ -35,8 +36,8 @@ class CreateSinkParameterized(ActionFactory):
 
         if new_sink_name:
             source_view = random.choice(capabilities.get(ViewExists))
-            cluster_name_out = random.choice(["storage", "default"])
-            cluster_name_in = random.choice(["storage", "default"])
+            cluster_name_out = random.choice(source_capable_clusters(capabilities))
+            cluster_name_in = random.choice(source_capable_clusters(capabilities))
 
             dest_view = ViewExists(
                 name=f"{new_sink_name}_view",
