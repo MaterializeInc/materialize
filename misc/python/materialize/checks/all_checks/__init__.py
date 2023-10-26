@@ -8,13 +8,11 @@
 # by the Apache License, Version 2.0.
 
 import glob
+from importlib import import_module
 from os.path import basename, dirname, isfile, join
 
 # Automatically find all python files in this directory and import them when
 # using "from materialize.checks.all_checks import *"
-modules = glob.glob(join(dirname(__file__), "*.py"))
-__all__ = [  # pyright: ignore
-    basename(f).removesuffix(".py")
-    for f in modules
-    if isfile(f) and basename(f) != "__init__.py"
-]
+for f in glob.glob(join(dirname(__file__), "*.py")):
+    if isfile(f) and basename(f) != "__init__.py":
+        import_module(f".{basename(f).removesuffix('.py')}", __package__)
