@@ -18,9 +18,9 @@ use crate::ast::visit::{self, Visit};
 use crate::ast::visit_mut::{self, VisitMut};
 use crate::ast::{
     AstInfo, CreateConnectionStatement, CreateIndexStatement, CreateMaterializedViewStatement,
-    CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateTableStatement,
-    CreateViewStatement, CreateWebhookSourceStatement, Expr, Ident, Query, Raw, RawItemName,
-    Statement, UnresolvedItemName, ViewDefinition,
+    CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateSubsourceStatement,
+    CreateTableStatement, CreateViewStatement, CreateWebhookSourceStatement, Expr, Ident, Query,
+    Raw, RawItemName, Statement, UnresolvedItemName, ViewDefinition,
 };
 use crate::names::FullItemName;
 
@@ -138,6 +138,7 @@ pub fn create_stmt_rename(create_stmt: &mut Statement<Raw>, to_item_name: String
         }
         Statement::CreateSink(CreateSinkStatement { name, .. })
         | Statement::CreateSource(CreateSourceStatement { name, .. })
+        | Statement::CreateSubsource(CreateSubsourceStatement { name, .. })
         | Statement::CreateView(CreateViewStatement {
             definition: ViewDefinition { name, .. },
             ..
@@ -153,7 +154,7 @@ pub fn create_stmt_rename(create_stmt: &mut Statement<Raw>, to_item_name: String
             let item_name_len = name.0.len() - 1;
             name.0[item_name_len] = Ident::new(to_item_name);
         }
-        _ => unreachable!("Internal error: only catalog items can be renamed"),
+        item => unreachable!("Internal error: only catalog items can be renamed {item:?}"),
     }
 }
 
@@ -201,11 +202,14 @@ pub fn create_stmt_rename_refs(
             rewrite_query(from_name, to_item_name, query)?;
         }
         Statement::CreateSource(_)
+        | Statement::CreateSubsource(_)
         | Statement::CreateTable(_)
         | Statement::CreateSecret(_)
         | Statement::CreateConnection(_)
         | Statement::CreateWebhookSource(_) => {}
-        _ => unreachable!("Internal error: only catalog items need to update item refs"),
+        item => {
+            unreachable!("Internal error: only catalog items need to update item refs {item:?}")
+        }
     }
 
     Ok(())
