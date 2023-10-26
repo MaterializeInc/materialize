@@ -1,0 +1,30 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+from materialize.output_consistency.execution.evaluation_strategy import (
+    EvaluationStrategy,
+    EvaluationStrategyKey,
+)
+from materialize.output_consistency.execution.sql_executor import SqlExecutor
+from materialize.output_consistency.execution.sql_executors import SqlExecutors
+
+
+class MultiVersionSqlExecutors(SqlExecutors):
+    def __init__(self, executor1: SqlExecutor, executor2: SqlExecutor):
+        super().__init__(executor1)
+        self.executor2 = executor2
+
+    def get_executor(self, strategy: EvaluationStrategy) -> SqlExecutor:
+        if strategy.identifier in [
+            EvaluationStrategyKey.MZ_DATAFLOW_RENDERING_DB_2,
+            EvaluationStrategyKey.MZ_CONSTANT_FOLDING_DB_2,
+        ]:
+            return self.executor2
+
+        return super().get_executor(strategy)
