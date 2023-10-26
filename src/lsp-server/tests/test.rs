@@ -360,7 +360,7 @@ mod tests {
         let (service, socket) = LspService::new(|client| mz_lsp_server::backend::Backend {
             client,
             parse_results: Mutex::new(HashMap::new()),
-            formatting_width: DEFAULT_FORMATTING_WIDTH,
+            formatting_width: DEFAULT_FORMATTING_WIDTH.into(),
         });
 
         mz_ore::task::spawn(
