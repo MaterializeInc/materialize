@@ -627,14 +627,7 @@ where
                 for (id, new_shard_upper) in list {
                     let (frontier, shard_frontiers) = match self.uppers.get_mut(&id) {
                         Some(value) => value,
-                        None => {
-                            // This can occur if a running clusterd gets
-                            // connected to a new environmentd; the clusterd
-                            // might not yet know that its new envd doesn't have
-                            // this collection.
-                            tracing::warn!("Reference to absent collection: {id}");
-                            return None;
-                        }
+                        None => panic!("Reference to absent collection: {id}"),
                     };
                     let old_upper = frontier.frontier().to_owned();
                     let shard_upper = match &mut shard_frontiers[shard_id] {
@@ -663,14 +656,7 @@ where
                 for id in dropped_ids {
                     let (_, shard_frontiers) = match self.uppers.get_mut(&id) {
                         Some(value) => value,
-                        None => {
-                            // This can occur if a running clusterd gets
-                            // connected to a new environmentd; the clusterd
-                            // might not yet know that its new envd doesn't have
-                            // this collection.
-                            tracing::warn!("Reference to absent collection: {id}");
-                            return None;
-                        }
+                        None => panic!("Reference to absent collection: {id}"),
                     };
                     let prev = shard_frontiers[shard_id].take();
                     assert!(
