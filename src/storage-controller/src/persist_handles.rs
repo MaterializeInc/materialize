@@ -228,7 +228,7 @@ pub struct PersistTableWriteWorker<T: Timestamp + Lattice + Codec64 + TimestampM
 /// Commands for [PersistTableWriteWorker].
 #[derive(Debug)]
 enum PersistTableWriteCmd<T: Timestamp + Lattice + Codec64> {
-    Register(GlobalId, WriteHandle<SourceData, (), T, Diff>),
+    Register(T, Vec<(GlobalId, WriteHandle<SourceData, (), T, Diff>)>),
     Update(GlobalId, WriteHandle<SourceData, (), T, Diff>),
     DropHandle(GlobalId),
     Append {
@@ -311,10 +311,10 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
 
     pub(crate) fn register(
         &self,
-        id: GlobalId,
-        write_handle: WriteHandle<SourceData, (), T, Diff>,
+        register_ts: T,
+        ids_handles: Vec<(GlobalId, WriteHandle<SourceData, (), T, Diff>)>,
     ) {
-        self.send(PersistTableWriteCmd::Register(id, write_handle))
+        self.send(PersistTableWriteCmd::Register(register_ts, ids_handles))
     }
 
     /// Update the existing write handle associated with `id` to `write_handle`.
@@ -388,10 +388,14 @@ async fn table_write_worker<T: Timestamp + Lattice + Codec64 + TimestampManipula
 
         while let Some((span, command)) = commands.pop_front() {
             match command {
-                PersistTableWriteCmd::Register(id, write_handle) => {
-                    let previous = write_handles.insert(id, write_handle);
-                    if previous.is_some() {
-                        panic!("already registered a WriteHandle for collection {:?}", id);
+                PersistTableWriteCmd::Register(_register_ts, ids_handles) => {
+                    // register_ts will be used by the upcoming txns impl of the table
+                    // worker.
+                    for (id, write_handle) in ids_handles {
+                        let previous = write_handles.insert(id, write_handle);
+                        if previous.is_some() {
+                            panic!("already registered a WriteHandle for collection {:?}", id);
+                        }
                     }
                 }
                 PersistTableWriteCmd::Update(id, write_handle) => {

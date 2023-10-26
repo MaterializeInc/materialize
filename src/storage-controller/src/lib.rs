@@ -655,6 +655,7 @@ where
             .await?;
 
         let mut to_create = Vec::with_capacity(to_register.len());
+        let mut table_registers = Vec::with_capacity(to_register.len());
         // This work mutates the controller state, so must be done serially. Because there
         // is no io-bound work, its very fast.
         {
@@ -676,21 +677,21 @@ where
                     DataSource::Introspection(_) | DataSource::Webhook => {
                         debug!(desc = ?description, meta = ?metadata, "registering {} with persist monotonic worker", id);
                         self.persist_monotonic_worker.register(id, write);
+                        self.collections.insert(id, collection_state);
                     }
                     DataSource::Other(DataSourceOther::TableWrites) => {
                         debug!(desc = ?description, meta = ?metadata, "registering {} with persist table worker", id);
-                        self.persist_table_worker.register(id, write);
+                        table_registers.push((id, write, collection_state));
                     }
                     DataSource::Ingestion(_)
                     | DataSource::Progress
                     | DataSource::Other(DataSourceOther::Compute)
                     | DataSource::Other(DataSourceOther::Source) => {
                         debug!(desc = ?description, meta = ?metadata, "not registering {} with a controller persist worker", id);
+                        self.collections.insert(id, collection_state);
                     }
                 }
                 self.persist_read_handles.register(id, since_handle);
-
-                self.collections.insert(id, collection_state);
 
                 if let DataSource::Ingestion(i) = &description.data_source {
                     source_statistics.insert(id, statistics::StatsInitState(BTreeMap::new()));
@@ -701,6 +702,25 @@ where
                 }
 
                 to_create.push((id, description));
+            }
+        }
+
+        // Register the tables all in one batch.
+        if !table_registers.is_empty() {
+            let register_ts = register_ts
+                .expect("caller should have provided a register_ts when creating a table");
+            let mut collection_states = Vec::with_capacity(table_registers.len());
+            let table_registers = table_registers
+                .into_iter()
+                .map(|(id, write, collection_state)| {
+                    collection_states.push((id, collection_state));
+                    (id, write)
+                })
+                .collect();
+            self.persist_table_worker
+                .register(register_ts, table_registers);
+            for (id, collection_state) in collection_states {
+                self.collections.insert(id, collection_state);
             }
         }
 
