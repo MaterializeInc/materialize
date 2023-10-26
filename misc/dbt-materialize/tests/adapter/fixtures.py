@@ -235,7 +235,7 @@ create table {schema}.on_run_hook (
 nullability_assertions_schema_yml = """
 version: 2
 models:
-  - name: test_materialized_view_nullability
+  - name: test_materialized_view_nullability_assertions
     columns:
       - name: a
         constraints:
