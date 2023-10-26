@@ -63,6 +63,11 @@ Field                | Value  | Description
 `AVRO KEY FULLNAME`  | `text` | Default: `row`. Sets the Avro fullname on the generated key schema, if a `KEY` is specified. When used, a value must be specified for `AVRO VALUE FULLNAME`.
 `AVRO VALUE FULLNAME`| `text` | Default: `envelope`. Sets the Avro fullname on the generated value schema. When `KEY` is specified, `AVRO KEY FULLNAME` must additionally be specified.
 `NULL DEFAULTS`      | `bool` | Default: `false`. Whether to automatically default nullable fields to `null` in the generated schemas.
+`[KEY\|VALUE] DOC ON [TYPE\|COLUMN] <identifier>`|`text` | Sets the avro "doc" comment for the given type or column identifier in the generated schemas. See [avro comments](#avro-comments) for more information.
+
+{{< private-preview >}}
+`[KEY|VALUE] DOC ON [TYPE|COLUMN]` option
+{{</ private-preview >}}
 
 ### `WITH` options
 
@@ -118,6 +123,8 @@ When using a Confluent Schema Registry:
   * You can automatically have nullable fields in the Avro schemas default to `null`
     by using the [`NULL DEFAULTS` option](#syntax).
 
+  * It's possible to add [avro "doc" comments](#avro-comments) in the generated avro schema.
+
 SQL types are converted to Avro types according to the following conversion
 table:
 
@@ -157,6 +164,88 @@ able to infer the non-nullability of columns in all cases, and will
 conservatively assume the columns are nullable, thus producing a union
 type as described above. If this is not desired, the materialized view
 may be created using [non-null assertions](../../create-materialized-view#non-null-assertions).
+
+#### Avro comments
+{{< private-preview />}}
+There are two ways to add comments to the generated avro schema
+* Any [comments](/sql/comment-on) added to the materialized view used in the sink
+  will be propagated the generated schema's "doc" options. Note, the comments for the avro schema
+  will be frozen when the sink is created. Any further comment updates will not be propagated to the schema.
+* Comments can also be specified while creating the sink in the [CSR connection options](#csr-connection-options)
+  using `[KEY|VALUE] DOC ON [TYPE|COLUMN] <identifier>` option. This will override any materialize comment.
+  Specifying `KEY` or `VALUE` is optional and it specifies whether the avro comment is meant for the generated key
+  or the value schema. If it's not specified, then it's applicable for both.
+  The `<identifier>` can be either
+  * a `TYPE` like materialied view, source, table or custom type used in the sink,
+  * or it can be a `COLUMN` in a materialized view, source, table or a composite type.
+
+Usage example:
+```sql
+CREATE TABLE t (c1 int, c2 text);
+COMMENT ON TABLE t IS 'materialize comment on t';
+COMMENT ON COLUMN t.c2 IS 'materialize comment on t.c2';
+
+CREATE SINK avro_sink
+  IN CLUSTER my_io_cluster
+  FROM t
+  INTO KAFKA CONNECTION kafka_connection (TOPIC 'test_avro_topic')
+  KEY (c1)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  (
+    DOC ON TYPE t = 'top-level comment for avro record in both key and value schemas',
+    KEY DOC ON COLUMN t.c1 = 'comment on column only in key schema',
+    VALUE DOC ON COLUMN t.c1 = 'comment on column only in value schema'
+  )
+  ENVELOPE UPSERT;
+```
+The above will create the following key and value avro schemas.
+##### Key Schema:
+```json
+{
+  "type": "record",
+  "name": "row",
+  "doc": "top-level comment for avro record in both key and value schemas",
+  "fields": [
+    {
+      "name": "c1",
+      "type": [
+        "null",
+        "int"
+      ],
+      "doc": "comment on column only in key schema"
+    }
+  ]
+}
+
+```
+
+##### Value Schema:
+```json
+{
+  "type": "record",
+  "name": "envelope",
+  "doc": "top-level comment for avro record in both key and value schemas",
+  "fields": [
+    {
+      "name": "c1",
+      "type": [
+        "null",
+        "int"
+      ],
+      "doc": "comment on column only in value schema"
+    },
+    {
+      "name": "c2",
+      "type": [
+        "null",
+        "string"
+      ],
+      "doc": "materialize comment on t.c2"
+    }
+  ]
+}
+
+```
 
 ### JSON
 
