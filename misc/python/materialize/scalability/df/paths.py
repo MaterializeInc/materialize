@@ -37,3 +37,11 @@ def regressions_csv_name() -> str:
 
 def regressions_csv() -> Path:
     return RESULTS_DIR / regressions_csv_name()
+
+
+def results_csv_rel_path(endpoint_name: str) -> Path:
+    return Path(endpoint_name) / "results.csv"
+
+
+def results_csv(endpoint_name: str) -> Path:
+    return RESULTS_DIR / results_csv_rel_path(endpoint_name)

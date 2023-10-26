@@ -45,6 +45,7 @@ class WorkloadExecutor:
         self.baseline_endpoint = baseline_endpoint
         self.other_endpoints = other_endpoints
         self.result_analyzer = result_analyzer
+        self.df_total_by_endpoint_name: dict[str, pd.DataFrame] = dict()
 
     def run_workloads(
         self,
@@ -142,6 +143,7 @@ class WorkloadExecutor:
             df_totals.to_csv(paths.df_totals_csv(endpoint_name, workload))
             df_details.to_csv(paths.df_details_csv(endpoint_name, workload))
 
+        self._record_results(endpoint, df_totals)
         return WorkloadResult(workload, df_totals, df_details)
 
     def run_workload_for_endpoint_with_concurrency(
@@ -285,3 +287,15 @@ class WorkloadExecutor:
             cursor_pool.append(cursor)
 
         return cursor_pool
+
+    def _record_results(self, endpoint: Endpoint, df_totals: pd.DataFrame) -> None:
+        endpoint_name = endpoint.name()
+        print(f"Collecting results of endpoint {endpoint} with name {endpoint_name}")
+
+        if endpoint_name not in self.df_total_by_endpoint_name:
+            self.df_total_by_endpoint_name[endpoint_name] = df_totals
+        else:
+            self.df_total_by_endpoint_name[endpoint_name] = pd.concat(
+                [self.df_total_by_endpoint_name[endpoint_name], df_totals],
+                ignore_index=True,
+            )

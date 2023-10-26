@@ -160,9 +160,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         count=args.count,
     )
 
-    overall_regression_outcome = WorkloadExecutor(
+    executor = WorkloadExecutor(
         config, schema, baseline_endpoint, other_endpoints, result_analyzer
-    ).run_workloads()
+    )
+
+    overall_regression_outcome = executor.run_workloads()
+    store_and_upload_results_to_buildkite(executor.df_total_by_endpoint_name)
 
     report_regression_result(baseline_endpoint, overall_regression_outcome)
 
@@ -270,6 +273,27 @@ def upload_regressions_to_buildkite(outcome: RegressionOutcome) -> None:
         ["buildkite-agent", "artifact", "upload", paths.regressions_csv_name()],
         cwd=paths.RESULTS_DIR,
     )
+
+
+def store_and_upload_results_to_buildkite(
+    df_total_by_endpoint_name: dict[str, pd.DataFrame]
+) -> None:
+    for (endpoint_name, results) in df_total_by_endpoint_name.items():
+        print(
+            f"Writing results of {endpoint_name} to {paths.results_csv(endpoint_name)}"
+        )
+        results.to_csv(paths.results_csv(endpoint_name))
+
+        if buildkite.is_in_buildkite():
+            spawn.runv(
+                [
+                    "buildkite-agent",
+                    "artifact",
+                    "upload",
+                    paths.results_csv_rel_path(endpoint_name),
+                ],
+                cwd=paths.RESULTS_DIR,
+            )
 
 
 def workflow_lab(c: Composition) -> None:
