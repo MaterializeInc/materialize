@@ -87,10 +87,11 @@ consistent snapshot is guaranteed to be available for transactions that are know
 involve a single object (which includes transactions against a single materialized view that was
 created using multiple objects). Such transactions will therefore never block, and always be
 executed immediately. A transaction can only be known ahead of time to involve a single object when
-using auto-commit (i.e. omitting `BEGIN` and `COMMIT`). When using explicit transactions (i.e.
-starting a transaction with `BEGIN`), then it is assumed that all objects that share a schema with
-any object mentioned in the first query of the transaction may be used later in the transaction.
-Therefore, we use a consistent snapshot that is available across all such objects.
+using auto-commit (i.e. omitting `BEGIN` and `COMMIT`) or when using `SUBSCRIBE`. When using
+explicit transactions (i.e. starting a transaction with `BEGIN`) with `SELECT`, then it is assumed
+that all objects that share a schema with any object mentioned in the first query of the
+transaction may be used later in the transaction. Therefore, we use a consistent snapshot that is
+available across all such objects.
 
 ## Strict serializable
 
@@ -120,20 +121,12 @@ Strict Serializable provides stronger consistency guarantees but may have slower
 because Strict Serializable may need to wait for writes to propagate through materialized views and indexes, while
 Serializable does not.
 
-In Serializable mode, if a consistent snapshot is not available across all objects in a query and all other objects in
-the current transaction, then the query will be blocked until one becomes available. On the other
-hand, if a consistent snapshot is available, then the query will be executed immediately. A
-consistent snapshot is guaranteed to be available for transactions that are known ahead of time to
-involve a single object (which includes transactions against a single materialized view that was
-created using multiple objects). Such transactions will therefore never block, and always be
-executed immediately. A transaction can only be known ahead of time to involve a single object when
-using auto-commit (i.e. omitting `BEGIN` and `COMMIT`). When using explicit transactions (i.e.
-starting a transaction with `BEGIN`), then it is assumed that all objects that share a schema with
-any object mentioned in the first query of the transaction may be used later in the transaction.
-Therefore, we use a consistent snapshot that is available across all such objects. If you know you
-will be executing single statement transactions in Serializable mode, then it is strongly
+In Serializable mode, a single auto-committed `SELECT` statement or a `SUBSCRIBE`
+statement that references a single object (which includes transactions against a single
+materialized view that was created using multiple objects) will be executed immediately. Otherwise,
+the statement may block until a consistent snapshot is available. If you know you will be executing
+single `SELECT` statement transactions in Serializable mode, then it is strongly
 recommended to use auto-commit instead of explicit transactions.
-
 
 ## Learn more
 
