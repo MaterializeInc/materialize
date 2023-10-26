@@ -15,7 +15,7 @@ from materialize.util import MzVersion
 
 
 class StatementLogging(Check):
-    def _can_run(self, e: Executor) -> bool:
+    def _can_run(self, _e: Executor) -> bool:
         return self.base_version >= MzVersion(0, 69, 0)
 
     def initialize(self) -> Testdrive:
@@ -50,16 +50,31 @@ class StatementLogging(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
-                $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
-                ALTER SYSTEM SET enable_rbac_checks TO false
-                > SELECT sql, finished_status FROM mz_internal.mz_statement_execution_history mseh, mz_internal.mz_prepared_statement_history mpsh WHERE mseh.prepared_statement_id = mpsh.id AND sql LIKE '%/* Btv was here */' ORDER BY mseh.began_at;
-                "SELECT 'hello' /* Btv was here */" success
-                "SELECT 'goodbye' /* Btv was here */" success
-                $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
-                ALTER SYSTEM SET enable_rbac_checks TO true
-                """
+        if self.base_version == self.current_version:
+            return Testdrive(
+                dedent(
+                    """
+                    $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                    ALTER SYSTEM SET enable_rbac_checks TO false
+                    > SELECT sql, finished_status FROM mz_internal.mz_statement_execution_history mseh, mz_internal.mz_prepared_statement_history mpsh WHERE mseh.prepared_statement_id = mpsh.id AND sql LIKE '%/* Btv was here */' ORDER BY mseh.began_at;
+                    "SELECT 'hello' /* Btv was here */" success
+                    "SELECT 'goodbye' /* Btv was here */" success
+                    $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                    ALTER SYSTEM SET enable_rbac_checks TO true
+                    """
+                )
             )
-        )
+        else:
+            # Rows are expected to maybe disappear across versions
+            return Testdrive(
+                dedent(
+                    """
+                    $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                    ALTER SYSTEM SET enable_rbac_checks TO false
+                    > SELECT count(*) <= 2 FROM mz_internal.mz_statement_execution_history mseh, mz_internal.mz_prepared_statement_history mpsh WHERE mseh.prepared_statement_id = mpsh.id AND sql LIKE '%/* Btv was here */'
+                    true
+                    $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                    ALTER SYSTEM SET enable_rbac_checks TO true
+                    """
+                )
+            )
