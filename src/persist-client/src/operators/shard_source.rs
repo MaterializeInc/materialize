@@ -15,6 +15,7 @@ use std::fmt::Debug;
 use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
+use std::slice;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -32,6 +33,7 @@ use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Enter, Feedback, L
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
 use timely::order::TotalOrder;
+use timely::progress::frontier::AntichainRef;
 use timely::progress::{timestamp::Refines, Antichain, Timestamp};
 use timely::scheduling::Activator;
 use timely::PartialOrder;
@@ -84,7 +86,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     D: Semigroup + Codec64 + Send + Sync,
-    F: FnMut(&PartStats) -> bool + 'static,
+    F: FnMut(&PartStats, AntichainRef<G::Timestamp>) -> bool + 'static,
     G: Scope,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
     G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder,
@@ -183,7 +185,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     D: Semigroup + Codec64 + Send + Sync,
-    F: FnMut(&PartStats) -> bool + 'static,
+    F: FnMut(&PartStats, AntichainRef<G::Timestamp>) -> bool + 'static,
     G: Scope,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
     G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder,
@@ -437,7 +439,7 @@ where
                                 // TODO: Push the filter down into the Subscribe?
                                 if cfg.dynamic.stats_filter_enabled() {
                                     let should_fetch = part_desc.stats.as_ref().map_or(true, |stats| {
-                                        should_fetch_part(&stats.decode())
+                                        should_fetch_part(&stats.decode(), AntichainRef::new(slice::from_ref(&current_ts)))
                                     });
                                     let bytes = u64::cast_from(part_desc.encoded_size_bytes);
                                     if should_fetch {
@@ -658,7 +660,7 @@ mod tests {
                         Arc::new(
                             <std::string::String as mz_persist_types::Codec>::Schema::default(),
                         ),
-                        |_fetch| true,
+                        |_fetch, _frontier| true,
                     );
                     (stream.leave(), token)
                 });
@@ -726,7 +728,7 @@ mod tests {
                         Arc::new(
                             <std::string::String as mz_persist_types::Codec>::Schema::default(),
                         ),
-                        |_fetch| true,
+                        |_fetch, _frontier| true,
                     );
                     (stream.leave(), token)
                 });

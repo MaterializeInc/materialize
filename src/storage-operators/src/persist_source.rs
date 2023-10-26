@@ -192,16 +192,6 @@ where
     let name = source_id.to_string();
     let desc = metadata.relation_desc.clone();
     let filter_plan = map_filter_project.as_ref().map(|p| (*p).clone());
-    let time_range = if let Some(lower) = as_of.as_ref().and_then(|a| a.as_option().copied()) {
-        // If we have a lower bound, we can provide a bound on mz_now to our filter pushdown.
-        // The range is inclusive, so it's safe to use the maximum timestamp as the upper bound when
-        // `until ` is the empty antichain.
-        // TODO: continually narrow this as the frontier progresses.
-        let upper = until.as_option().copied().unwrap_or(Timestamp::MAX);
-        ResultSpec::value_between(Datum::MzTimestamp(lower), Datum::MzTimestamp(upper))
-    } else {
-        ResultSpec::anything()
-    };
 
     let desc_transformer = match flow_control {
         Some(flow_control) => Some(move |mut scope: _, descs: &Stream<_, _>, chosen_worker| {
@@ -217,6 +207,10 @@ where
         None => None,
     };
 
+    // The `until` gives us an upper bound on the possible values of `mz_now` this query may see.
+    // Ranges are inclusive, so it's safe to use the maximum timestamp as the upper bound when
+    // `until ` is the empty antichain.
+    let upper = until.as_option().cloned().unwrap_or(Timestamp::MAX);
     let (fetched, token) = shard_source(
         &mut scope.clone(),
         &name,
@@ -233,10 +227,15 @@ where
         desc_transformer,
         Arc::new(metadata.relation_desc),
         Arc::new(UnitSchema),
-        move |stats| {
+        move |stats, frontier| {
+            let time_range = if let Some(lower) = frontier.as_option().copied() {
+                ResultSpec::value_between(Datum::MzTimestamp(lower), Datum::MzTimestamp(upper))
+            } else {
+                ResultSpec::nothing()
+            };
             if let Some(plan) = &filter_plan {
                 let stats = PersistSourceDataStats { desc: &desc, stats };
-                filter_may_match(desc.typ(), time_range.clone(), stats, plan)
+                filter_may_match(desc.typ(), time_range, stats, plan)
             } else {
                 true
             }
@@ -254,8 +253,7 @@ fn filter_may_match(
 ) -> bool {
     let arena = RowArena::new();
     let mut ranges = ColumnSpecs::new(relation_type, &arena);
-    // TODO: even better if we can use the lower bound of the part itself!
-    ranges.push_unmaterializable(UnmaterializableFunc::MzNow, time_range.clone());
+    ranges.push_unmaterializable(UnmaterializableFunc::MzNow, time_range);
 
     if stats.err_count().into_iter().any(|count| count > 0) {
         // If the error collection is nonempty, we always keep the part.
