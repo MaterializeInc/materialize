@@ -289,6 +289,10 @@ mz_cluster_links
 BASE TABLE
 materialize
 mz_internal
+mz_cluster_replica_frontiers
+SOURCE
+materialize
+mz_internal
 mz_cluster_replica_heartbeats
 SOURCE
 materialize

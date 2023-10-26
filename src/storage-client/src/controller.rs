@@ -52,7 +52,9 @@ pub enum IntrospectionType {
     SinkStatusHistory,
     SourceStatusHistory,
     ShardMapping,
+
     Frontiers,
+    ReplicaFrontiers,
 
     // Note that this single-shard introspection source will be changed to per-replica,
     // once we allow multiplexing multiple sources/sinks on a single cluster.
@@ -471,13 +473,31 @@ pub trait StorageController: Debug + Send {
     async fn inspect_persist_state(&self, id: GlobalId)
         -> Result<serde_json::Value, anyhow::Error>;
 
-    /// Records the current frontiers of all known storage objects.
+    /// Records the current read and write frontiers of all known storage objects.
     ///
-    /// The provided `frontiers` are merged with the frontiers known to the
-    /// storage controller. If `frontiers` contains entries with object IDs
-    /// that are known to storage controller, the contents of `frontiers` take
-    /// precedence.
+    /// The provided `external_frontiers` are merged with the frontiers known to
+    /// the storage controller. If `external_frontiers` contains entries with
+    /// object IDs that are known to storage controller, the storage
+    /// controller's frontiers take precedence. The rationale is that the
+    /// storage controller should be the authority on frontiers of storage
+    /// objects, not the caller of this method.
     async fn record_frontiers(
+        &mut self,
+        external_frontiers: BTreeMap<
+            GlobalId,
+            (Antichain<Self::Timestamp>, Antichain<Self::Timestamp>),
+        >,
+    );
+
+    /// Records the current per-replica write frontiers of all known storage objects.
+    ///
+    /// The provided `external_frontiers` are merged with the frontiers known to
+    /// the storage controller. If `external_frontiers` contains entries with
+    /// object IDs that are known to storage controller, the storage
+    /// controller's frontiers take precedence. The rationale is that the
+    /// storage controller should be the authority on frontiers of storage
+    /// objects, not the caller of this method.
+    async fn record_replica_frontiers(
         &mut self,
         external_frontiers: BTreeMap<(GlobalId, ReplicaId), Antichain<Self::Timestamp>>,
     );
@@ -698,6 +718,11 @@ impl<T: Timestamp> ExportState<T> {
     /// Returns the cluster to which the export is bound.
     pub fn cluster_id(&self) -> StorageInstanceId {
         self.description.instance_id
+    }
+
+    /// Returns whether the export was dropped.
+    pub fn is_dropped(&self) -> bool {
+        self.read_capability.is_empty()
     }
 }
 /// A "oneshot"-like channel that allows you to append a set of updates to a pre-defined [`GlobalId`].

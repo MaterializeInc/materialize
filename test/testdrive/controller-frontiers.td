@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 # Test reporting of controller frontiers through `mz_internal.mz_frontiers` and
-# `mz_internal.mz_global_frontiers`.
+# `mz_internal.mz_cluster_replica_frontiers`.
 #
 # These tests rely on testdrive's retry feature, as they query introspection
 # sources whose data might not be immediately available.
@@ -36,25 +36,26 @@
 > SELECT
     mvs.name,
     replicas.name
-  FROM mz_internal.mz_frontiers frontiers
+  FROM mz_internal.mz_cluster_replica_frontiers frontiers
   JOIN mz_materialized_views mvs
     ON frontiers.object_id = mvs.id
   LEFT JOIN mz_cluster_replicas replicas
     ON frontiers.replica_id = replicas.id
   WHERE
     frontiers.object_id LIKE 'u%' AND
-    frontiers.time > 0
+    frontiers.write_frontier > 0
 mv1 r1
 mv1 r2
 
 > SELECT
     mvs.name
-  FROM mz_internal.mz_global_frontiers frontiers
+  FROM mz_internal.mz_frontiers frontiers
   JOIN mz_materialized_views mvs
     ON frontiers.object_id = mvs.id
   WHERE
     frontiers.object_id LIKE 'u%' AND
-    frontiers.time > 0
+    frontiers.read_frontier > 0 AND
+    frontiers.write_frontier > 0
 mv1
 
 
@@ -65,25 +66,26 @@ mv1
 > SELECT
     indexes.name,
     replicas.name
-  FROM mz_internal.mz_frontiers frontiers
+  FROM mz_internal.mz_cluster_replica_frontiers frontiers
   JOIN mz_indexes indexes
     ON frontiers.object_id = indexes.id
   LEFT JOIN mz_cluster_replicas replicas
     ON frontiers.replica_id = replicas.id
   WHERE
     frontiers.object_id LIKE 'u%' AND
-    frontiers.time > 0
+    frontiers.write_frontier > 0
 idx1 r1
 idx1 r2
 
 > SELECT
     indexes.name
-  FROM mz_internal.mz_global_frontiers frontiers
+  FROM mz_internal.mz_frontiers frontiers
   JOIN mz_indexes indexes
     ON frontiers.object_id = indexes.id
   WHERE
     frontiers.object_id LIKE 'u%' AND
-    frontiers.time > 0
+    frontiers.read_frontier > 0 AND
+    frontiers.write_frontier > 0
 idx1
 
 
@@ -96,25 +98,25 @@ idx1
 > SELECT
     sources.name,
     replicas.name
-  FROM mz_internal.mz_frontiers frontiers
+  FROM mz_internal.mz_cluster_replica_frontiers frontiers
   JOIN mz_sources sources
     ON frontiers.object_id = sources.id
   LEFT JOIN mz_cluster_replicas replicas
     ON frontiers.replica_id = replicas.id
   WHERE
     frontiers.object_id LIKE 'u%' AND
-    frontiers.time > 0
+    frontiers.write_frontier > 0
 source1 s1
-source1_progress <null>
 
 > SELECT
     sources.name
-  FROM mz_internal.mz_global_frontiers frontiers
+  FROM mz_internal.mz_frontiers frontiers
   JOIN mz_sources sources
     ON frontiers.object_id = sources.id
   WHERE
     frontiers.object_id LIKE 'u%' AND
-    frontiers.time > 0
+    frontiers.read_frontier > 0 AND
+    frontiers.write_frontier > 0
 source1
 source1_progress
 
@@ -137,31 +139,32 @@ source1_progress
 > SELECT
     sinks.name,
     replicas.name
-  FROM mz_internal.mz_frontiers frontiers
+  FROM mz_internal.mz_cluster_replica_frontiers frontiers
   JOIN mz_sinks sinks
     ON frontiers.object_id = sinks.id
   LEFT JOIN mz_cluster_replicas replicas
     ON frontiers.replica_id = replicas.id
   WHERE
     frontiers.object_id LIKE 'u%' AND
-    frontiers.time > 0
+    frontiers.write_frontier > 0
 sink1 s1
 
 > SELECT
     sinks.name
-  FROM mz_internal.mz_global_frontiers frontiers
+  FROM mz_internal.mz_frontiers frontiers
   JOIN mz_sinks sinks
     ON frontiers.object_id = sinks.id
   WHERE
     frontiers.object_id LIKE 'u%' AND
-    frontiers.time > 0
+    frontiers.read_frontier IS NULL AND
+    frontiers.write_frontier > 0
 sink1
 
 # Test that the frontiers of introspection sources are reported.
 
 > SELECT
     replicas.name
-  FROM mz_internal.mz_frontiers frontiers
+  FROM mz_internal.mz_cluster_replica_frontiers frontiers
   JOIN mz_indexes indexes
     ON frontiers.object_id = indexes.id
   JOIN mz_clusters clusters
@@ -170,72 +173,49 @@ sink1
     ON frontiers.replica_id = replicas.id
   WHERE
     indexes.name LIKE 'mz_active_peeks_per_worker_u%_primary_idx' AND
-    frontiers.time > 0 AND
+    frontiers.write_frontier > 0 AND
     clusters.name = 'test'
 r1
 r2
 
 > SELECT
     count(*)
-  FROM mz_internal.mz_global_frontiers frontiers
+  FROM mz_internal.mz_frontiers frontiers
   JOIN mz_indexes indexes
     ON frontiers.object_id = indexes.id
   JOIN mz_clusters clusters
     ON indexes.cluster_id = clusters.id
   WHERE
     indexes.name LIKE 'mz_active_peeks_per_worker_u%_primary_idx' AND
-    frontiers.time > 0 AND
+    frontiers.read_frontier > 0 AND
+    frontiers.write_frontier > 0 AND
     clusters.name = 'test'
 1
 
 # Test that the frontiers of tables are reported.
 
 > SELECT
-    tables.name,
-    replicas.name
+    tables.name
   FROM mz_internal.mz_frontiers frontiers
   JOIN mz_tables tables
     ON frontiers.object_id = tables.id
-  LEFT JOIN mz_cluster_replicas replicas
-    ON frontiers.replica_id = replicas.id
   WHERE
     frontiers.object_id LIKE 'u%' AND
-    frontiers.time > 0
-t1 <null>
-
-> SELECT
-    tables.name
-  FROM mz_internal.mz_global_frontiers frontiers
-  JOIN mz_tables tables
-    ON frontiers.object_id = tables.id
-  WHERE
-    frontiers.object_id LIKE 'u%' AND
-    frontiers.time > 0
+    frontiers.read_frontier > 0 AND
+    frontiers.write_frontier > 0
 t1
 
 # Test that the frontiers of storage-managed collections are reported.
 
 > SELECT
-    sources.name,
-    replicas.name
+    sources.name
   FROM mz_internal.mz_frontiers frontiers
   JOIN mz_sources sources
     ON frontiers.object_id = sources.id
-  LEFT JOIN mz_cluster_replicas replicas
-    ON frontiers.replica_id = replicas.id
   WHERE
     sources.name = 'mz_frontiers' AND
-    frontiers.time > 0
-mz_frontiers <null>
-
-> SELECT
-    sources.name
-  FROM mz_internal.mz_global_frontiers frontiers
-  JOIN mz_sources sources
-    ON frontiers.object_id = sources.id
-  WHERE
-    sources.name = 'mz_frontiers' AND
-    frontiers.time > 0
+    frontiers.read_frontier > 0 AND
+    frontiers.write_frontier > 0
 mz_frontiers
 
 # Test that frontiers are added when replicas are created.
@@ -243,7 +223,7 @@ mz_frontiers
 > SELECT
     objects.name,
     replicas.name
-  FROM mz_internal.mz_frontiers frontiers
+  FROM mz_internal.mz_cluster_replica_frontiers frontiers
   JOIN mz_objects objects
     ON frontiers.object_id = objects.id
   JOIN mz_cluster_replicas replicas
@@ -252,7 +232,7 @@ mz_frontiers
     ON replicas.cluster_id = clusters.id
   WHERE
     objects.id LIKE 'u%' AND
-    frontiers.time > 0 AND
+    frontiers.write_frontier > 0 AND
     clusters.name = 'test'
 idx1 r1
 idx1 r2
@@ -264,7 +244,7 @@ mv1  r2
 > SELECT
     objects.name,
     replicas.name
-  FROM mz_internal.mz_frontiers frontiers
+  FROM mz_internal.mz_cluster_replica_frontiers frontiers
   JOIN mz_objects objects
     ON frontiers.object_id = objects.id
   JOIN mz_cluster_replicas replicas
@@ -273,7 +253,7 @@ mv1  r2
     ON replicas.cluster_id = clusters.id
   WHERE
     objects.id LIKE 'u%' AND
-    frontiers.time > 0 AND
+    frontiers.write_frontier > 0 AND
     clusters.name = 'test'
 idx1 r1
 idx1 r2
@@ -289,7 +269,7 @@ mv1  r3
 > SELECT
     objects.name,
     replicas.name
-  FROM mz_internal.mz_frontiers frontiers
+  FROM mz_internal.mz_cluster_replica_frontiers frontiers
   JOIN mz_objects objects
     ON frontiers.object_id = objects.id
   JOIN mz_cluster_replicas replicas
@@ -298,38 +278,55 @@ mv1  r3
     ON replicas.cluster_id = clusters.id
   WHERE
     objects.id LIKE 'u%' AND
-    frontiers.time > 0 AND
+    frontiers.write_frontier > 0 AND
     clusters.name = 'test'
 idx1 r2
 idx1 r3
 mv1  r2
 mv1  r3
 
-# Test that collections with empty frontiers are omitted.
+# Test that empty frontiers show up as NULL.
 
 > CREATE MATERIALIZED VIEW mv2 AS SELECT 1
 
 > SELECT
-    count(*)
+    replicas.name,
+    frontiers.write_frontier
+  FROM mz_internal.mz_cluster_replica_frontiers frontiers
+  JOIN mz_materialized_views mvs
+    ON frontiers.object_id = mvs.id
+  JOIN mz_cluster_replicas replicas
+    ON frontiers.replica_id = replicas.id
+  WHERE
+    mvs.name = 'mv2'
+r2 <null>
+r3 <null>
+
+> SELECT
+    frontiers.read_frontier,
+    frontiers.write_frontier
   FROM mz_internal.mz_frontiers frontiers
   JOIN mz_materialized_views mvs
     ON frontiers.object_id = mvs.id
   WHERE
     mvs.name = 'mv2'
-0
+0 <null>
 
 # Test that frontiers are removed when objects are dropped.
 
 > DROP MATERIALIZED VIEW mv1
+> DROP MATERIALIZED VIEW mv2
 > DROP INDEX idx1
 > DROP SOURCE source1
 > DROP SINK sink1
 > DROP TABLE t1
 
 > SELECT *
+  FROM mz_internal.mz_cluster_replica_frontiers frontiers
+  WHERE object_id LIKE 'u%'
+
+> SELECT *
   FROM mz_internal.mz_frontiers frontiers
-  JOIN mz_objects objects
-    ON frontiers.object_id = objects.id
   WHERE object_id LIKE 'u%'
 
 > DROP CLUSTER test CASCADE

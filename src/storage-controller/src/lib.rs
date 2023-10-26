@@ -334,9 +334,13 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// Note: This is used for finalizing shards of webhook sources, once webhook sources are
     /// installed on a `clusterd` this can likely be refactored away.
     internal_response_sender: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
-    /// Frontiers that have been recorded in the `Frontiers` collection, kept to be able to retract
-    /// old rows.
-    recorded_frontiers: BTreeMap<(GlobalId, Option<ReplicaId>), Antichain<T>>,
+
+    /// `(read, write)` frontiers that have been recorded in the `Frontiers` collection, kept to be
+    /// able to retract old rows.
+    recorded_frontiers: BTreeMap<GlobalId, (Antichain<T>, Antichain<T>)>,
+    /// Write frontiers that have been recorded in the `ReplicaFrontiers` collection, kept to be
+    /// able to retract old rows.
+    recorded_replica_frontiers: BTreeMap<(GlobalId, ReplicaId), Antichain<T>>,
 }
 
 #[async_trait(?Send)]
@@ -783,7 +787,7 @@ where
                         IntrospectionType::ShardMapping => {
                             self.initialize_shard_mapping().await;
                         }
-                        IntrospectionType::Frontiers => {
+                        IntrospectionType::Frontiers | IntrospectionType::ReplicaFrontiers => {
                             // Set the collection to empty.
                             self.reconcile_managed_collection(id, vec![]).await;
                         }
@@ -1655,68 +1659,58 @@ where
 
     async fn record_frontiers(
         &mut self,
-        external_frontiers: BTreeMap<(GlobalId, ReplicaId), Antichain<Self::Timestamp>>,
+        external_frontiers: BTreeMap<
+            GlobalId,
+            (Antichain<Self::Timestamp>, Antichain<Self::Timestamp>),
+        >,
     ) {
-        // Make `replica_id` optional, to account for storage objects that are not installed on
-        // replicas.
-        let mut frontiers = BTreeMap::new();
-        let mut external_ids = HashSet::with_capacity(frontiers.len());
-        for ((object_id, replica_id), frontier) in external_frontiers {
-            frontiers.insert((object_id, Some(replica_id)), frontier);
-            external_ids.insert(object_id);
-        }
+        let mut frontiers = external_frontiers;
 
         // Enrich `frontiers` with storage frontiers.
-        // Make sure to not add frontiers for objects already present in `frontiers`
         for (object_id, collection) in self.active_collections() {
-            if !external_ids.contains(&object_id) {
-                let replica_id = collection
-                    .cluster_id()
-                    .and_then(|c| self.replicas.get(&c))
-                    .copied();
-                let frontier = collection.write_frontier.clone();
-                frontiers.insert((object_id, replica_id), frontier);
-            }
+            let since = collection.read_capabilities.frontier().to_owned();
+            let upper = collection.write_frontier.clone();
+            frontiers.insert(object_id, (since, upper));
         }
-        for (object_id, export) in &self.exports {
-            if !external_ids.contains(object_id) {
-                let cluster_id = export.cluster_id();
-                let replica_id = self.replicas.get(&cluster_id).copied();
-                let frontier = export.write_frontier.clone();
-                frontiers.insert((*object_id, replica_id), frontier);
-            }
+        for (object_id, export) in self.active_exports() {
+            // Exports cannot be read from, so their `since` is always the empty frontier.
+            let since = Antichain::new();
+            let upper = export.write_frontier.clone();
+            frontiers.insert(object_id, (since, upper));
         }
 
         let mut updates = Vec::new();
-        let mut push_update = |(object_id, replica_id): (GlobalId, Option<ReplicaId>),
-                               frontier: Antichain<Self::Timestamp>,
-                               diff: Diff| {
-            let time_datum = match frontier.into_option() {
-                Some(ts) => Datum::MzTimestamp(ts.into()),
-                None => return, // don't record empty frontiers
+        let mut push_update =
+            |object_id: GlobalId,
+             (since, upper): (Antichain<Self::Timestamp>, Antichain<Self::Timestamp>),
+             diff: Diff| {
+                let read_frontier = since
+                    .into_option()
+                    .map_or(Datum::Null, |ts| Datum::MzTimestamp(ts.into()));
+                let write_frontier = upper
+                    .into_option()
+                    .map_or(Datum::Null, |ts| Datum::MzTimestamp(ts.into()));
+                let row = Row::pack_slice(&[
+                    Datum::String(&object_id.to_string()),
+                    read_frontier,
+                    write_frontier,
+                ]);
+                updates.push((row, diff));
             };
-            let object_id = object_id.to_string();
-            let object_datum = Datum::String(&object_id);
-            let replica_id = replica_id.map(|id| id.to_string());
-            let replica_datum = replica_id.as_deref().map_or(Datum::Null, Datum::String);
-
-            let row = Row::pack_slice(&[object_datum, replica_datum, time_datum]);
-            updates.push((row, diff));
-        };
 
         let mut old_frontiers = std::mem::replace(&mut self.recorded_frontiers, frontiers);
-        for (&key, new_frontier) in &self.recorded_frontiers {
-            match old_frontiers.remove(&key) {
-                Some(old_frontier) if &old_frontier != new_frontier => {
-                    push_update(key, new_frontier.clone(), 1);
-                    push_update(key, old_frontier, -1);
+        for (&id, new) in &self.recorded_frontiers {
+            match old_frontiers.remove(&id) {
+                Some(old) if &old != new => {
+                    push_update(id, new.clone(), 1);
+                    push_update(id, old, -1);
                 }
                 Some(_) => (),
-                None => push_update(key, new_frontier.clone(), 1),
+                None => push_update(id, new.clone(), 1),
             }
         }
-        for (key, old_frontier) in old_frontiers {
-            push_update(key, old_frontier, -1);
+        for (id, old) in old_frontiers {
+            push_update(id, old, -1);
         }
 
         self.append_to_managed_collection(
@@ -1725,6 +1719,70 @@ where
         )
         .await;
     }
+
+    async fn record_replica_frontiers(
+        &mut self,
+        external_frontiers: BTreeMap<(GlobalId, ReplicaId), Antichain<Self::Timestamp>>,
+    ) {
+        let mut frontiers = external_frontiers;
+
+        // Enrich `frontiers` with storage frontiers.
+        for (object_id, collection) in self.active_collections() {
+            let replica_id = collection
+                .cluster_id()
+                .and_then(|c| self.replicas.get(&c))
+                .copied();
+            if let Some(replica_id) = replica_id {
+                let upper = collection.write_frontier.clone();
+                frontiers.insert((object_id, replica_id), upper);
+            }
+        }
+        for (object_id, export) in self.active_exports() {
+            let cluster_id = export.cluster_id();
+            let replica_id = self.replicas.get(&cluster_id).copied();
+            if let Some(replica_id) = replica_id {
+                let upper = export.write_frontier.clone();
+                frontiers.insert((object_id, replica_id), upper);
+            }
+        }
+
+        let mut updates = Vec::new();
+        let mut push_update = |(object_id, replica_id): (GlobalId, ReplicaId),
+                               upper: Antichain<Self::Timestamp>,
+                               diff: Diff| {
+            let write_frontier = upper
+                .into_option()
+                .map_or(Datum::Null, |ts| Datum::MzTimestamp(ts.into()));
+            let row = Row::pack_slice(&[
+                Datum::String(&object_id.to_string()),
+                Datum::String(&replica_id.to_string()),
+                write_frontier,
+            ]);
+            updates.push((row, diff));
+        };
+
+        let mut old_frontiers = std::mem::replace(&mut self.recorded_replica_frontiers, frontiers);
+        for (&key, new) in &self.recorded_replica_frontiers {
+            match old_frontiers.remove(&key) {
+                Some(old) if &old != new => {
+                    push_update(key, new.clone(), 1);
+                    push_update(key, old, -1);
+                }
+                Some(_) => (),
+                None => push_update(key, new.clone(), 1),
+            }
+        }
+        for (key, old) in old_frontiers {
+            push_update(key, old, -1);
+        }
+
+        self.append_to_managed_collection(
+            self.introspection_ids[&IntrospectionType::ReplicaFrontiers],
+            updates,
+        )
+        .await;
+    }
+
     async fn record_introspection_updates(
         &mut self,
         type_: IntrospectionType,
@@ -1890,6 +1948,7 @@ where
             persist: persist_clients,
             metrics: StorageControllerMetrics::new(metrics_registry),
             recorded_frontiers: BTreeMap::new(),
+            recorded_replica_frontiers: BTreeMap::new(),
         }
     }
 
@@ -1918,6 +1977,14 @@ where
             .iter()
             .filter(|(_id, c)| !c.is_dropped())
             .map(|(id, c)| (*id, c))
+    }
+
+    /// Iterate over exports that have not been dropped.
+    fn active_exports(&self) -> impl Iterator<Item = (GlobalId, &ExportState<T>)> {
+        self.exports
+            .iter()
+            .filter(|(_id, e)| !e.is_dropped())
+            .map(|(id, e)| (*id, e))
     }
 
     /// Return the since frontier at which we can read from all the given

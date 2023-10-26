@@ -2284,49 +2284,38 @@ pub static MZ_CLUSTER_REPLICA_METRICS: Lazy<BuiltinTable> = Lazy::new(|| Builtin
     sensitivity: DataSensitivity::Public,
 });
 
+pub static MZ_CLUSTER_REPLICA_FRONTIERS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
+    name: "mz_cluster_replica_frontiers",
+    schema: MZ_INTERNAL_SCHEMA,
+    data_source: Some(IntrospectionType::ReplicaFrontiers),
+    desc: RelationDesc::empty()
+        .with_column("object_id", ScalarType::String.nullable(false))
+        .with_column("replica_id", ScalarType::String.nullable(false))
+        .with_column("write_frontier", ScalarType::MzTimestamp.nullable(true)),
+    is_retained_metrics_object: false,
+    sensitivity: DataSensitivity::Public,
+});
+
 pub static MZ_FRONTIERS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_frontiers",
     schema: MZ_INTERNAL_SCHEMA,
     data_source: Some(IntrospectionType::Frontiers),
     desc: RelationDesc::empty()
         .with_column("object_id", ScalarType::String.nullable(false))
-        .with_column("replica_id", ScalarType::String.nullable(true))
-        .with_column("time", ScalarType::MzTimestamp.nullable(true)),
+        .with_column("read_frontier", ScalarType::MzTimestamp.nullable(true))
+        .with_column("write_frontier", ScalarType::MzTimestamp.nullable(true)),
     is_retained_metrics_object: false,
     sensitivity: DataSensitivity::Public,
 });
 
+/// DEPRECATED and scheduled for removal! Use `mz_frontiers` instead.
 pub const MZ_GLOBAL_FRONTIERS: BuiltinView = BuiltinView {
     name: "mz_global_frontiers",
     schema: MZ_INTERNAL_SCHEMA,
     sql: "CREATE VIEW mz_internal.mz_global_frontiers AS
-WITH
-  -- If a collection has reached the empty frontier on one of its replicas,
-  -- the entry for that replica is removed from `mz_frontiers`. In this case,
-  -- it should also be removed from `mz_global_frontiers`, to signal that the
-  -- global frontier is empty as well. The achieve that, we join the replica
-  -- lists from `mz_frontiers` with those in `mz_cluster_replicas`. If a
-  -- replica is missing from `mz_frontiers`, it won't have a match in this
-  -- join and will be omitted from the final output.
-  replica_lists AS (
-    SELECT list_agg(id) AS replicas
-    FROM mz_cluster_replicas
-    GROUP BY cluster_id
-    -- Add a `{NULL}` list to accommodate collections that are not installed
-    -- on a replica.
-    UNION VALUES (LIST[NULL])
-  ),
-  frontiers_with_replicas AS (
-    SELECT
-      object_id,
-      list_agg(replica_id) AS replicas,
-      max(time) AS time
-    FROM mz_internal.mz_frontiers
-    GROUP BY object_id
-  )
-SELECT object_id, time
-FROM frontiers_with_replicas
-JOIN replica_lists USING (replicas)",
+SELECT object_id, write_frontier AS time
+FROM mz_internal.mz_frontiers
+WHERE write_frontier IS NOT NULL",
     sensitivity: DataSensitivity::Public,
 };
 
@@ -5704,6 +5693,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Source(&MZ_COMPUTE_DEPENDENCIES),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS_PER_WORKER),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS),
+        Builtin::Source(&MZ_CLUSTER_REPLICA_FRONTIERS),
         Builtin::Source(&MZ_CLUSTER_REPLICA_HEARTBEATS),
         Builtin::Index(&MZ_SHOW_DATABASES_IND),
         Builtin::Index(&MZ_SHOW_SCHEMAS_IND),
