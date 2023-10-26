@@ -1425,12 +1425,23 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                     .map(|terminated| terminated.exit_code == 137)
                     .unwrap_or(false)
             }
-            let oomed = pod
+            fn is_state_error(state: &ContainerState) -> bool {
+                state
+                    .terminated
+                    .as_ref()
+                    // 134 is the exit code corresponding to  in Kubernetes.
+                    // It'd be a bit clearer to compare the reason to "Error",
+                    // but this doesn't work in Kind for some reason, preventing us from
+                    // writing automated tests.
+                    .map(|terminated| terminated.exit_code == 134)
+                    .unwrap_or(false)
+            }
+            let (oomed, errored) = pod
                 .status
                 .as_ref()
                 .and_then(|status| status.container_statuses.as_ref())
                 .map(|container_statuses| {
-                    container_statuses.iter().any(|cs| {
+                    let oomed = container_statuses.iter().any(|cs| {
                         // We check whether the current _or_ the last state
                         // is an OOM kill. The reason for this is that after a kill,
                         // the state toggles from "Terminated" to "Waiting" very quickly,
@@ -1443,9 +1454,15 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                         // oom-killed.
                         cs.last_state.as_ref().map(is_state_oom).unwrap_or(false)
                             || cs.state.as_ref().map(is_state_oom).unwrap_or(false)
-                    })
+                    });
+                    let errored = container_statuses.iter().any(|cs| {
+                        // See above for why we check both
+                        cs.last_state.as_ref().map(is_state_error).unwrap_or(false)
+                            || cs.state.as_ref().map(is_state_error).unwrap_or(false)
+                    });
+                    (oomed, errored)
                 })
-                .unwrap_or(false);
+                .unwrap_or((false, false));
 
             let (pod_ready, last_probe_time) = pod
                 .status
@@ -1457,7 +1474,16 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             let status = if pod_ready {
                 ServiceStatus::Ready
             } else {
-                ServiceStatus::NotReady(oomed.then_some(NotReadyReason::OomKilled))
+                let maybe_reason = match (oomed, errored) {
+                    // If there was both an OOM and an error recently,
+                    // just report error. Since errors are in general, more severe,
+                    // (i.e., we want to find out about them with priority when they happen),
+                    // it makes sense to report them with higher priority.
+                    (_, true) => Some(NotReadyReason::Errored),
+                    (true, false) => Some(NotReadyReason::OomKilled),
+                    (false, false) => None,
+                };
+                ServiceStatus::NotReady(maybe_reason)
             };
             let time = if let Some(time) = last_probe_time {
                 time.0

@@ -203,6 +203,7 @@ impl AdapterNotice {
                 match status {
                     ServiceStatus::NotReady(None) => Some("The cluster replica may be restarting or going offline.".into()),
                     ServiceStatus::NotReady(Some(NotReadyReason::OomKilled)) => Some("The cluster replica may have run out of memory and been killed.".into()),
+                    ServiceStatus::NotReady(Some(NotReadyReason::Errored)) => Some("The cluster may have exited due to an error. This indicates a bug in Materialize.".into()),
                     ServiceStatus::Ready => None,
                 }
             },

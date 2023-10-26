@@ -313,6 +313,7 @@ impl CatalogState {
             ClusterStatus::Ready => None,
             ClusterStatus::NotReady(None) => None,
             ClusterStatus::NotReady(Some(NotReadyReason::OomKilled)) => Some("oom-killed"),
+            ClusterStatus::NotReady(Some(NotReadyReason::Errored)) => Some("errored"),
         };
 
         BuiltinTableUpdate {
