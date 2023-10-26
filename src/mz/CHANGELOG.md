@@ -2,7 +2,7 @@
 
 All notable changes to the `mz` CLI will be documented in this file.
 
-## [0.3.0] - 2023-10-23
+## [0.3.0] - 2023-10-26
 
 This version includes a more secure app-password storage for macOS, and extends current features. Migration from old profiles to new ones will happen automatically.
 
