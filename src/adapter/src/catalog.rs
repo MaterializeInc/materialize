@@ -142,7 +142,7 @@ pub struct Catalog {
     state: CatalogState,
     plans: CatalogPlans,
     storage: Arc<tokio::sync::Mutex<Box<dyn mz_catalog::durable::DurableCatalogState>>>,
-    transient_revision: u64,
+    transient_revision: Arc<atomic::AtomicU64>,
 }
 
 // Implement our own Clone because derive can't unless S is Clone, which it's
@@ -153,7 +153,7 @@ impl Clone for Catalog {
             state: self.state.clone(),
             plans: self.plans.clone(),
             storage: Arc::clone(&self.storage),
-            transient_revision: self.transient_revision,
+            transient_revision: Arc::clone(&self.transient_revision),
         }
     }
 }
@@ -419,7 +419,7 @@ impl Catalog {
     /// incremented on every change. This is not persisted to disk, and will
     /// restart on every load.
     pub fn transient_revision(&self) -> u64 {
-        self.transient_revision
+        self.transient_revision.load(atomic::Ordering::SeqCst)
     }
 
     /// Creates a debug catalog from a debug stash based on the current
@@ -1272,7 +1272,8 @@ impl Catalog {
         // mutating anything until after f is executed.
         drop(storage);
         self.state = state;
-        self.transient_revision += 1;
+        self.transient_revision
+            .fetch_add(1, atomic::Ordering::SeqCst);
 
         for id in drop_ids {
             self.drop_plans_and_metainfos(id);
