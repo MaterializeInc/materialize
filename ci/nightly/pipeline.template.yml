@@ -826,7 +826,6 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
               args: [--runtime=1500, --threads=100]
-        skip: "TODO(def-): Reenable when #21954 is fixed"
 
       - id: parallel-workload-rename-naughty
         label: "Parallel Workload (rename + naughty identifiers)"
