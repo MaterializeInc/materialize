@@ -625,7 +625,7 @@ CREATE CLUSTER REPLICA default.replica AVAILABILITY ZONE 'a', STORAGECTL ADDRESS
 # Test that the contents of mz_cluster_replicas look sensible
 
 statement ok
-CREATE CLUSTER foo REPLICAS (size_1 (SIZE '1'), size_32 (SIZE '32'), size_2_2 (SIZE '2-2'))
+CREATE CLUSTER foo REPLICAS (size_1 (SIZE '1'), size_32 (SIZE '32'), size_2_2 (SIZE '2-2'), size_1_8g (SIZE '1-8G'))
 
 query TTTTTTT
 SELECT r.name, r.size, s.processes, s.cpu_nano_cores, s.memory_bytes, s.workers, s.credits_per_hour FROM mz_cluster_replicas r JOIN mz_internal.mz_cluster_replica_sizes s ON r.size = s.size ORDER BY r.name
@@ -634,6 +634,7 @@ r1  1  1  18446744073709000000  18446744073709551615  1  1
 r1  1  1  18446744073709000000  18446744073709551615  1  1
 r1  1  1  18446744073709000000  18446744073709551615  1  1
 size_1  1  1  18446744073709000000  18446744073709551615  1  1
+size_1_8g  1-8G  1  18446744073709000000  8589934592  1  1
 size_2_2  2-2  2  18446744073709000000  18446744073709551615  2  2
 size_32  32  1  18446744073709000000  18446744073709551615  32  1
 

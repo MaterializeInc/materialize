@@ -17,7 +17,7 @@ use mz_build_info::BuildInfo;
 use mz_catalog;
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_controller::clusters::ReplicaAllocation;
-use mz_orchestrator::MemoryLimit;
+use mz_orchestrator::{CpuLimit, MemoryLimit};
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_repr::GlobalId;
@@ -121,21 +121,38 @@ impl Default for ClusterReplicaSizeMap {
         //     ...
         //     "mem-16": { "memory_limit": 16Gb },
         // }
+
+        /// Calculate the cpu limit based on the number of Timely workers.
+        ///
+        /// Returns a cpu limit for the number of Timely workers plus one additional core.
+        fn cpu_limit(workers: usize) -> Option<CpuLimit> {
+            Some(CpuLimit::from_millicpus(1000 * (workers + 1)))
+        }
+
         let mut inner = (0..=5)
-            .map(|i| {
+            .flat_map(|i| {
                 let workers: u8 = 1 << i;
-                (
-                    workers.to_string(),
-                    ReplicaAllocation {
-                        memory_limit: None,
-                        cpu_limit: None,
-                        disk_limit: None,
-                        scale: 1,
-                        workers: workers.into(),
-                        credits_per_hour: 1.into(),
-                        disabled: false,
-                    },
-                )
+                [
+                    (workers.to_string(), None),
+                    (format!("{workers}-4G"), Some(4)),
+                    (format!("{workers}-8G"), Some(8)),
+                    (format!("{workers}-16G"), Some(16)),
+                    (format!("{workers}-32G"), Some(32)),
+                ]
+                .map(|(name, memory_limit)| {
+                    (
+                        name,
+                        ReplicaAllocation {
+                            memory_limit: memory_limit.map(|gib| MemoryLimit(ByteSize::gib(gib))),
+                            cpu_limit: cpu_limit(workers.into()),
+                            disk_limit: None,
+                            scale: 1,
+                            workers: workers.into(),
+                            credits_per_hour: 1.into(),
+                            disabled: false,
+                        },
+                    )
+                })
             })
             .collect::<BTreeMap<_, _>>();
 
@@ -145,7 +162,7 @@ impl Default for ClusterReplicaSizeMap {
                 format!("{scale}-1"),
                 ReplicaAllocation {
                     memory_limit: None,
-                    cpu_limit: None,
+                    cpu_limit: cpu_limit(1),
                     disk_limit: None,
                     scale,
                     workers: 1,
@@ -158,7 +175,7 @@ impl Default for ClusterReplicaSizeMap {
                 format!("{scale}-{scale}"),
                 ReplicaAllocation {
                     memory_limit: None,
-                    cpu_limit: None,
+                    cpu_limit: cpu_limit(scale.into()),
                     disk_limit: None,
                     scale,
                     workers: scale.into(),
@@ -171,7 +188,7 @@ impl Default for ClusterReplicaSizeMap {
                 format!("mem-{scale}"),
                 ReplicaAllocation {
                     memory_limit: Some(MemoryLimit(ByteSize(u64::cast_from(scale) * (1 << 30)))),
-                    cpu_limit: None,
+                    cpu_limit: cpu_limit(8),
                     disk_limit: None,
                     scale: 1,
                     workers: 8,
@@ -185,7 +202,7 @@ impl Default for ClusterReplicaSizeMap {
             "2-4".to_string(),
             ReplicaAllocation {
                 memory_limit: None,
-                cpu_limit: None,
+                cpu_limit: cpu_limit(4),
                 disk_limit: None,
                 scale: 2,
                 workers: 4,
