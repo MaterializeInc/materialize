@@ -1118,7 +1118,13 @@ impl<'w, A: Allocate> Worker<'w, A> {
             .filter(|id| !expected_objects.contains(id))
             // Synthesize the drop command
             .map(|id| (*id, Antichain::new()))
-            .collect();
+            .collect::<Vec<_>>();
+
+        trace!(
+            "reconciliation expected objects\n{:?}\ndropping stale objects\n{:?}",
+            expected_objects,
+            stale_objects.iter().map(|(id, _)| id).collect::<Vec<_>>(),
+        );
 
         commands.push(StorageCommand::AllowCompaction(stale_objects));
 
