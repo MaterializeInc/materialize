@@ -65,13 +65,13 @@ impl<T: TimestampManipulation> InMemoryTimestampOracle<T> {
     fn write_ts(&mut self) -> WriteTimestamp<T> {
         let mut next = (self.next)();
         if next.less_equal(&self.write_ts) {
-            next = self.write_ts.step_forward();
+            next = TimestampManipulation::step_forward(&self.write_ts);
         }
         assert!(self.read_ts.less_than(&next));
         assert!(self.write_ts.less_than(&next));
         self.write_ts = next.clone();
         assert!(self.read_ts.less_equal(&self.write_ts));
-        let advance_to = next.step_forward();
+        let advance_to = TimestampManipulation::step_forward(&next);
         WriteTimestamp {
             timestamp: next,
             advance_to,

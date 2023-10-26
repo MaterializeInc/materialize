@@ -637,7 +637,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistMonotonicW
                                         .expect("cannot append data to closed collection")
                                 };
 
-                                let upper = lower.step_forward();
+                                let upper = TimestampManipulation::step_forward(&lower);
                                 let update = update
                                     .into_iter()
                                     .map(|TimestamplessUpdate { row, diff }| Update {
