@@ -1947,7 +1947,7 @@ impl_display!(AlterObjectRenameStatement);
 pub struct AlterObjectSwapStatement {
     pub object_type: ObjectType,
     pub name_a: UnresolvedObjectName,
-    pub name_b: UnresolvedObjectName,
+    pub name_b: Ident,
 }
 
 impl AstDisplay for AlterObjectSwapStatement {

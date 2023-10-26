@@ -74,14 +74,28 @@ ALTER SCHEMA blue SWAP WITH green
 ----
 ALTER SCHEMA blue SWAP WITH green
 =>
-AlterObjectSwap(AlterObjectSwapStatement { object_type: Schema, name_a: Schema(UnresolvedSchemaName([Ident("blue")])), name_b: Schema(UnresolvedSchemaName([Ident("green")])) })
+AlterObjectSwap(AlterObjectSwapStatement { object_type: Schema, name_a: Schema(UnresolvedSchemaName([Ident("blue")])), name_b: Ident("green") })
+
+parse-statement
+ALTER SCHEMA materialize.blue SWAP WITH green
+----
+ALTER SCHEMA materialize.blue SWAP WITH green
+=>
+AlterObjectSwap(AlterObjectSwapStatement { object_type: Schema, name_a: Schema(UnresolvedSchemaName([Ident("materialize"), Ident("blue")])), name_b: Ident("green") })
+
+parse-statement
+ALTER SCHEMA materialize.blue SWAP WITH other.green
+----
+error: Expected end of statement, found dot
+ALTER SCHEMA materialize.blue SWAP WITH other.green
+                                             ^
 
 parse-statement
 ALTER CLUSTER foo SWAP WITH bar
 ----
 ALTER CLUSTER foo SWAP WITH bar
 =>
-AlterObjectSwap(AlterObjectSwapStatement { object_type: Cluster, name_a: Cluster(Ident("foo")), name_b: Cluster(Ident("bar")) })
+AlterObjectSwap(AlterObjectSwapStatement { object_type: Cluster, name_a: Cluster(Ident("foo")), name_b: Ident("bar") })
 
 parse-statement
 ALTER CLUSTER cluster.too_many SWAP WITH cluster.this_wont_work
@@ -103,17 +117,3 @@ ALTER SCHEMA baz RENAME to foobar
 ALTER SCHEMA baz RENAME TO foobar
 =>
 AlterObjectRename(AlterObjectRenameStatement { object_type: Schema, if_exists: false, name: Schema(UnresolvedSchemaName([Ident("baz")])), to_item_name: Ident("foobar") })
-
-parse-statement
-ALTER SCHEMA foo SWAP WITH bar
-----
-ALTER SCHEMA foo SWAP WITH bar
-=>
-AlterObjectSwap(AlterObjectSwapStatement { object_type: Schema, name_a: Schema(UnresolvedSchemaName([Ident("foo")])), name_b: Schema(UnresolvedSchemaName([Ident("bar")])) })
-
-parse-statement
-ALTER CLUSTER c1 SWAP WITH c2
-----
-ALTER CLUSTER c1 SWAP WITH c2
-=>
-AlterObjectSwap(AlterObjectSwapStatement { object_type: Cluster, name_a: Cluster(Ident("c1")), name_b: Cluster(Ident("c2")) })

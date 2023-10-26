@@ -1009,7 +1009,12 @@ impl Coordinator {
         session: &Session,
         AlterClusterRenamePlan { id, name, to_name }: AlterClusterRenamePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let op = Op::RenameCluster { id, name, to_name };
+        let op = Op::RenameCluster {
+            id,
+            name,
+            to_name,
+            check_reserved_names: true,
+        };
         match self.catalog_transact(Some(session), vec![op]).await {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::Cluster)),
             Err(err) => Err(err),
@@ -1031,16 +1036,19 @@ impl Coordinator {
             id: id_a,
             name: name_a.clone(),
             to_name: name_temp.clone(),
+            check_reserved_names: false,
         };
         let op_b = Op::RenameCluster {
             id: id_b,
             name: name_b.clone(),
             to_name: name_a,
+            check_reserved_names: false,
         };
         let op_temp = Op::RenameCluster {
             id: id_a,
             name: name_temp,
             to_name: name_b,
+            check_reserved_names: false,
         };
 
         match self

@@ -57,7 +57,6 @@ CREATE TABLE "!\_\""w3😊_weird_name".t2 (y int);
 statement ok
 INSERT INTO "!\_\""w3😊_weird_name".t2 VALUES (7), (8), (9);
 
-
 statement ok
 ALTER SCHEMA blue SWAP WITH "!\_\""w3😊_weird_name";
 
@@ -97,6 +96,26 @@ SELECT * FROM this_is_a_schema_with_a_super_long_name_of_exactly_255_characters_
 8
 9
 
+statement error db error: ERROR: cannot swap schemas that are in the ambient database
+ALTER SCHEMA mz_internal SWAP WITH mz_catalog;
+
+statement ok
+CREATE DATABASE a;
+
+statement ok
+CREATE SCHEMA a.green;
+
+statement ok
+CREATE DATABASE b;
+
+statement ok
+CREATE SCHEMA b.blue;
+
+statement error db error: ERROR: Expected end of statement, found dot
+ALTER SCHEMA a.green SWAP WITH b.blue;
+
+statement error db error: ERROR: unacceptable schema name 'mz_swap'
+CREATE SCHEMA mz_swap;
 
 statement ok
 CREATE CLUSTER foo SIZE = '1';

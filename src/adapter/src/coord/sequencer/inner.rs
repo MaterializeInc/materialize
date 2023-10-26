@@ -4336,6 +4336,7 @@ impl Coordinator {
             database_spec,
             schema_spec,
             new_name: plan.new_schema_name,
+            check_reserved_names: true,
         };
         match self.catalog_transact(Some(session), vec![op]).await {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::Schema)),
@@ -4360,16 +4361,19 @@ impl Coordinator {
             database_spec: schema_a_db,
             schema_spec: schema_a,
             new_name: name_temp,
+            check_reserved_names: false,
         };
         let op_b = catalog::Op::RenameSchema {
             database_spec: schema_b_db,
             schema_spec: schema_b,
             new_name: schema_a_name,
+            check_reserved_names: false,
         };
         let op_c = catalog::Op::RenameSchema {
             database_spec: schema_a_db,
             schema_spec: schema_a,
             new_name: schema_b_name,
+            check_reserved_names: false,
         };
 
         match self

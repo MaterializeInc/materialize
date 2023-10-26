@@ -53,6 +53,9 @@ SELECT x FROM b1.t
 statement error db error: ERROR: schema 'a1' already exists
 ALTER SCHEMA b1 RENAME TO a1
 
+statement error db error: ERROR: unacceptable schema name 'mz_special'
+ALTER SCHEMA b1 RENAME TO mz_special
+
 statement ok
 ALTER SCHEMA b1 RENAME TO b2
 
@@ -472,10 +475,10 @@ SELECT * FROM j_other.l;
 # Temporary schemas.
 
 statement error db error: ERROR: cannot rename schemas in the ambient database: "mz_temp"
-ALTER SCHEMA mz_temp RENAME TO mz_temp_renamed;
+ALTER SCHEMA mz_temp RENAME TO other_name;
 
 simple conn=mz_system,user=mz_system
-ALTER SCHEMA mz_temp RENAME TO mz_temp_renamed;
+ALTER SCHEMA mz_temp RENAME TO other_name;
 ----
 db error: ERROR: cannot rename schemas in the ambient database: "mz_temp"
 

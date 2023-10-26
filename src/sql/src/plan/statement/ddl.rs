@@ -4901,40 +4901,35 @@ pub fn plan_alter_schema_rename(
 pub fn plan_alter_schema_swap<F>(
     scx: &mut StatementContext,
     name_a: UnresolvedSchemaName,
-    name_b: UnresolvedSchemaName,
+    name_b: Ident,
     gen_temp_suffix: F,
 ) -> Result<Plan, PlanError>
 where
     F: Fn(&dyn Fn(&str) -> bool) -> Result<String, PlanError>,
 {
     let schema_a = scx.resolve_schema(name_a.clone())?;
-    let schema_b = scx.resolve_schema(name_b.clone())?;
 
-    // Schemas need to be in the same database.
-    let db_spec = if schema_a.database() == schema_b.database() {
-        schema_a.database().clone()
-    } else {
-        sql_bail!("cannot swap schemas that are in different databases");
-    };
+    let db_spec = schema_a.database().clone();
     if matches!(db_spec, ResolvedDatabaseSpecifier::Ambient) {
         sql_bail!("cannot swap schemas that are in the ambient database");
     };
+    let schema_b = scx.resolve_schema_in_database(&db_spec, &name_b)?;
 
     // We cannot swap system schemas.
     if schema_a.id().is_system() || schema_b.id().is_system() {
-        bail_never_supported!("swaping a system schema".to_string())
+        bail_never_supported!("swapping a system schema".to_string())
     }
 
     // Generate a temporary name we can swap schema_a to.
     //
     // 'check' returns if the temp schema name would be valid.
     let check = |temp_suffix: &str| {
-        let temp_name = Ident::new(format!("schema_swap_{temp_suffix}"));
+        let temp_name = Ident::new(format!("mz_schema_swap_{temp_suffix}"));
         scx.resolve_schema_in_database(&db_spec, &temp_name)
             .is_err()
     };
     let temp_suffix = gen_temp_suffix(&check)?;
-    let name_temp = format!("schema_swap_{temp_suffix}");
+    let name_temp = format!("mz_schema_swap_{temp_suffix}");
 
     Ok(Plan::AlterSchemaSwap(AlterSchemaSwapPlan {
         schema_a_spec: (*schema_a.database(), *schema_a.id()),
@@ -5032,7 +5027,7 @@ where
     let cluster_b = scx.resolve_cluster(Some(&name_b))?;
 
     let check = |temp_suffix: &str| {
-        let name_temp = Ident::new(format!("cluster_swap_{temp_suffix}"));
+        let name_temp = Ident::new(format!("mz_cluster_swap_{temp_suffix}"));
         match scx.catalog.resolve_cluster(Some(name_temp.as_str())) {
             // Temp name does not exist, so we can use it.
             Err(CatalogError::UnknownCluster(_)) => true,
@@ -5041,7 +5036,7 @@ where
         }
     };
     let temp_suffix = gen_temp_suffix(&check)?;
-    let name_temp = format!("cluster_swap_{temp_suffix}");
+    let name_temp = format!("mz_cluster_swap_{temp_suffix}");
 
     Ok(Plan::AlterClusterSwap(AlterClusterSwapPlan {
         id_a: cluster_a.id(),
@@ -5133,16 +5128,12 @@ pub fn plan_alter_object_swap(
     };
 
     match (object_type, name_a, name_b) {
-        (
-            ObjectType::Schema,
-            UnresolvedObjectName::Schema(name_a),
-            UnresolvedObjectName::Schema(name_b),
-        ) => plan_alter_schema_swap(scx, name_a, name_b, gen_temp_suffix),
-        (
-            ObjectType::Cluster,
-            UnresolvedObjectName::Cluster(name_a),
-            UnresolvedObjectName::Cluster(name_b),
-        ) => plan_alter_cluster_swap(scx, name_a, name_b, gen_temp_suffix),
+        (ObjectType::Schema, UnresolvedObjectName::Schema(name_a), name_b) => {
+            plan_alter_schema_swap(scx, name_a, name_b, gen_temp_suffix)
+        }
+        (ObjectType::Cluster, UnresolvedObjectName::Cluster(name_a), name_b) => {
+            plan_alter_cluster_swap(scx, name_a, name_b, gen_temp_suffix)
+        }
         (object_type, _, _) => Err(PlanError::Unsupported {
             feature: format!("ALTER {object_type} .. SWAP WITH ..."),
             issue_no: Some(12972),

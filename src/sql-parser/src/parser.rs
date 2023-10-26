@@ -4317,12 +4317,9 @@ impl<'a> Parser<'a> {
                     .parse_identifier()
                     .map_parser_err(StatementKind::AlterObjectSwap)?;
 
-                let name_a = UnresolvedObjectName::Cluster(name);
-                let name_b = UnresolvedObjectName::Cluster(name_b);
-
                 Ok(Statement::AlterObjectSwap(AlterObjectSwapStatement {
                     object_type,
-                    name_a,
+                    name_a: UnresolvedObjectName::Cluster(name),
                     name_b,
                 }))
             }
@@ -4959,13 +4956,13 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(WITH)
                     .map_parser_err(StatementKind::AlterObjectSwap)?;
                 let name_b = self
-                    .parse_schema_name()
+                    .parse_identifier()
                     .map_parser_err(StatementKind::AlterObjectSwap)?;
 
                 Ok(Statement::AlterObjectSwap(AlterObjectSwapStatement {
                     object_type,
                     name_a: name,
-                    name_b: UnresolvedObjectName::Schema(name_b),
+                    name_b,
                 }))
             }
             k => unreachable!("programming error, unmatched {k}"),
