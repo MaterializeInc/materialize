@@ -35,16 +35,16 @@ from materialize.util import naughty_strings
 MAX_COLUMNS = 100
 MAX_INCLUDE_HEADERS = 5
 MAX_ROWS = 1000
-MAX_CLUSTERS = 10
-MAX_CLUSTER_REPLICAS = 4
+MAX_CLUSTERS = 5
+MAX_CLUSTER_REPLICAS = 3
 MAX_SCHEMAS = 10
-MAX_TABLES = 100
-MAX_VIEWS = 100
-MAX_ROLES = 100
-MAX_WEBHOOK_SOURCES = 20
-MAX_KAFKA_SOURCES = 20
-MAX_POSTGRES_SOURCES = 20
-MAX_KAFKA_SINKS = 20
+MAX_TABLES = 50
+MAX_VIEWS = 50
+MAX_ROLES = 50
+MAX_WEBHOOK_SOURCES = 10
+MAX_KAFKA_SOURCES = 10
+MAX_POSTGRES_SOURCES = 10
+MAX_KAFKA_SINKS = 10
 
 MAX_INITIAL_SCHEMAS = 1
 MAX_INITIAL_CLUSTERS = 2
@@ -329,6 +329,7 @@ class WebhookSource(DBObject):
     explicit_include_headers: list[str]
     check: str | None
     schema: Schema
+    num_rows: int
 
     def __init__(
         self, source_id: int, cluster: "Cluster", schema: Schema, rng: random.Random
@@ -340,6 +341,7 @@ class WebhookSource(DBObject):
         self.body_format = rng.choice([e for e in BodyFormat])
         self.include_headers = rng.choice([True, False])
         self.explicit_include_headers = []
+        self.num_rows = 0
         self.columns = [
             WebhookColumn(
                 "body",
@@ -409,6 +411,7 @@ class KafkaSource(DBObject):
     lock: threading.Lock
     columns: list[KafkaColumn]
     schema: Schema
+    num_rows: int
 
     def __init__(
         self,
@@ -422,6 +425,7 @@ class KafkaSource(DBObject):
         self.source_id = source_id
         self.cluster = cluster
         self.schema = schema
+        self.num_rows = 0
         fields = []
         for i in range(rng.randint(1, 10)):
             fields.append(
@@ -525,6 +529,7 @@ class PostgresSource(DBObject):
     lock: threading.Lock
     columns: list[PostgresColumn]
     schema: Schema
+    num_rows: int
 
     def __init__(
         self,
@@ -538,6 +543,7 @@ class PostgresSource(DBObject):
         self.source_id = source_id
         self.cluster = cluster
         self.schema = schema
+        self.num_rows = 0
         fields = []
         for i in range(rng.randint(1, 10)):
             fields.append(

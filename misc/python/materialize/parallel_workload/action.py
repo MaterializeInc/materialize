@@ -217,8 +217,7 @@ class InsertAction(Action):
             return
         exe.execute(query)
         exe.insert_table = table.table_id
-        with exe.db.lock:
-            table.num_rows += 1
+        table.num_rows += 1
 
 
 class SourceInsertAction(Action):
@@ -230,6 +229,9 @@ class SourceInsertAction(Action):
             source = self.rng.choice(sources)
         with source.lock:
             transaction = next(source.generator)
+            source.num_rows += sum(
+                [len(row_list.rows) for row_list in transaction.row_lists]
+            )
             source.executor.run(transaction)
 
 
@@ -1151,6 +1153,7 @@ class HttpPostAction(Action):
             f"POST Headers: {', '.join(headers_strs)} Body: {payload.encode('utf-8')}"
         )
         try:
+            source.num_rows += 1
             requests.post(url, data=payload.encode("utf-8"), headers=headers)
         except (requests.exceptions.ConnectionError):
             # Expected when Mz is killed
