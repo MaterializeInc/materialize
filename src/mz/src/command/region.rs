@@ -34,7 +34,7 @@ use tabled::Tabled;
 pub async fn enable(
     cx: RegionContext,
     version: Option<String>,
-    environmentd_extra_args: Option<Vec<String>>,
+    environmentd_extra_arg: Option<Vec<String>>,
 ) -> Result<(), Error> {
     let loading_spinner = cx
         .output_formatter()
@@ -43,7 +43,7 @@ pub async fn enable(
 
     loading_spinner.set_message("Enabling the region...");
 
-    let environmentd_extra_args: Vec<String> = environmentd_extra_args.unwrap_or_else(Vec::new);
+    let environmentd_extra_arg: Vec<String> = environmentd_extra_arg.unwrap_or_else(Vec::new);
 
     // Loop region creation.
     // After 6 minutes it will timeout.
@@ -55,7 +55,7 @@ pub async fn enable(
                 .cloud_client()
                 .create_region(
                     version.clone(),
-                    environmentd_extra_args.clone(),
+                    environmentd_extra_arg.clone(),
                     cloud_provider.clone(),
                 )
                 .await?;
