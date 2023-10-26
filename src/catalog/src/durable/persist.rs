@@ -1087,9 +1087,7 @@ impl DurableCatalogState for PersistCatalogState {
         mappings: Vec<SystemObjectMapping>,
     ) -> Result<(), CatalogError> {
         let mut txn = self.transaction().await?;
-        for mapping in mappings {
-            txn.set_system_object_mapping(mapping)?;
-        }
+        txn.set_system_object_mappings(mappings)?;
         txn.commit().await
     }
 
@@ -1098,9 +1096,7 @@ impl DurableCatalogState for PersistCatalogState {
         mappings: Vec<IntrospectionSourceIndex>,
     ) -> Result<(), CatalogError> {
         let mut txn = self.transaction().await?;
-        for mapping in mappings {
-            txn.set_introspection_source_index(mapping)?;
-        }
+        txn.set_introspection_source_indexes(mappings)?;
         txn.commit().await
     }
 

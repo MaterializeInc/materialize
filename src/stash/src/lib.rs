@@ -790,6 +790,8 @@ where
     /// otherwise None.
     ///
     /// Returns an error if the uniqueness check failed.
+    ///
+    /// DO NOT call this function in a loop, use [`Self::set_many`] instead.
     pub fn set(&mut self, k: K, v: Option<V>) -> Result<Option<V>, StashError> {
         // Save the pending value for the key so we can restore it in case of
         // uniqueness violation.
@@ -822,6 +824,57 @@ where
             Err(err)
         } else {
             Ok(prev)
+        }
+    }
+
+    /// Set the values for many keys. Returns the previous entry for each key if the key existed,
+    /// otherwise None.
+    ///
+    /// Returns an error if any uniqueness check failed.
+    pub fn set_many(
+        &mut self,
+        kvs: BTreeMap<K, Option<V>>,
+    ) -> Result<BTreeMap<K, Option<V>>, StashError> {
+        let mut prevs = BTreeMap::new();
+        let mut restores = BTreeMap::new();
+
+        for (k, v) in kvs {
+            // Save the pending value for the key so we can restore it in case of
+            // uniqueness violation.
+            let restore = self.pending.get(&k).cloned();
+            restores.insert(k.clone(), restore);
+
+            let prev = match self.pending.entry(k.clone()) {
+                // key hasn't been set in this txn yet. Set it and return the
+                // initial txn's value of k.
+                Entry::Vacant(e) => {
+                    e.insert(v);
+                    self.initial.get(&k).cloned()
+                }
+                // key has been set in this txn. Set it and return the previous
+                // pending value.
+                Entry::Occupied(mut e) => e.insert(v),
+            };
+            prevs.insert(k, prev);
+        }
+
+        // Check for uniqueness violation.
+        if let Err(err) = self.verify() {
+            for (k, restore) in restores {
+                // Revert self.pending to the state it was in before calling this
+                // function.
+                match restore {
+                    Some(v) => {
+                        self.pending.insert(k, v);
+                    }
+                    None => {
+                        self.pending.remove(&k);
+                    }
+                }
+            }
+            Err(err)
+        } else {
+            Ok(prevs)
         }
     }
 
