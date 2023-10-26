@@ -409,13 +409,15 @@ impl Catalog {
         // Add any new builtin Clusters or Cluster Replicas that may be newly defined.
         {
             let mut storage = catalog.storage().await;
-            let mut tx = storage.transaction().await?;
-            add_new_builtin_clusters_migration(&mut tx)?;
-            add_new_builtin_cluster_replicas_migration(
-                &mut tx,
-                config.builtin_cluster_replica_size,
-            )?;
-            tx.commit().await?;
+            if !storage.is_read_only() {
+                let mut tx = storage.transaction().await?;
+                add_new_builtin_clusters_migration(&mut tx)?;
+                add_new_builtin_cluster_replicas_migration(
+                    &mut tx,
+                    config.builtin_cluster_replica_size,
+                )?;
+                tx.commit().await?;
+            }
         }
 
         let comments = catalog.storage().await.get_comments().await?;
