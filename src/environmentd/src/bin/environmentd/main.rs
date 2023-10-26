@@ -418,6 +418,13 @@ pub struct Args {
         default_value = "http://localhost:6879"
     )]
     persist_pubsub_url: String,
+    /// Whether to use the new persist-txn tables implementation or the legacy
+    /// one.
+    ///
+    /// TODO(txn): Figure out how to configure this via LaunchDarkly instead of
+    /// a flag.
+    #[clap(long, env = "ENABLE_PERSIST_TXN_TABLES", action = clap::ArgAction::Set, default_value="false")]
+    enable_persist_txn_tables: bool,
 
     // === Adapter options. ===
     /// The PostgreSQL URL for the adapter stash.
@@ -894,6 +901,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             ),
             secrets_reader_aws_prefix: Some(aws_secrets_controller_prefix(&args.environment_id)),
         },
+        enable_persist_txn_tables: args.enable_persist_txn_tables,
     };
 
     let cluster_replica_sizes: ClusterReplicaSizeMap = match args.cluster_replica_sizes {

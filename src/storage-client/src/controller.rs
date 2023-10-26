@@ -371,7 +371,7 @@ pub trait StorageController: Debug + Send {
 
     /// Returns the snapshot of the contents of the local input named `id` at `as_of`.
     async fn snapshot(
-        &self,
+        &mut self,
         id: GlobalId,
         as_of: Self::Timestamp,
     ) -> Result<Vec<(Row, Diff)>, StorageError>;

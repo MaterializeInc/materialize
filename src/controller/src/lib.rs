@@ -159,6 +159,9 @@ pub struct ControllerConfig {
     pub persist_pubsub_url: String,
     /// Arguments for secrets readers.
     pub secrets_args: SecretsReaderCliArgs,
+    /// Whether to use the new persist-txn tables implementation or the legacy
+    /// one.
+    pub enable_persist_txn_tables: bool,
 }
 
 /// Responses that [`Controller`] can produce.
@@ -229,6 +232,9 @@ pub struct Controller<T = mz_repr::Timestamp> {
 
     /// The URL for Persist PubSub.
     persist_pubsub_url: String,
+    /// Whether to use the new persist-txn tables implementation or the legacy
+    /// one.
+    enable_persist_txn_tables: bool,
 
     /// Arguments for secrets readers.
     pub secrets_args: SecretsReaderCliArgs,
@@ -376,6 +382,7 @@ where
             config.stash_metrics,
             envd_epoch,
             config.metrics_registry.clone(),
+            config.enable_persist_txn_tables,
         )
         .await;
 
@@ -401,6 +408,7 @@ where
             metrics_rx: UnboundedReceiverStream::new(metrics_rx).peekable(),
             frontiers_ticker,
             persist_pubsub_url: config.persist_pubsub_url,
+            enable_persist_txn_tables: config.enable_persist_txn_tables,
             secrets_args: config.secrets_args,
         }
     }

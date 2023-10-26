@@ -18,6 +18,7 @@ mz-build-info = { path = "../build-info" }
 mz-cluster-client = { path = "../cluster-client" }
 mz-ore = { path = "../ore", features = ["async", "chrono", "tracing_"] }
 mz-persist-client = { path = "../persist-client" }
+mz-persist-txn = { path = "../persist-txn" }
 mz-persist-types = { path = "../persist-types" }
 mz-proto = { path = "../proto", features = ["tokio-postgres"] }
 mz-repr = { path = "../repr" }

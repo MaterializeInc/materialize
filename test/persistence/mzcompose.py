@@ -187,6 +187,7 @@ def workflow_inspect_shard(c: Composition) -> None:
                 repeat('SENTINEL', 2048),
                 repeat('x', 1024), repeat('x', 1024)
             );
+            SELECT * FROM foo;
             """
         )
     )

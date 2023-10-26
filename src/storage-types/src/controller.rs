@@ -39,6 +39,9 @@ pub struct CollectionMetadata {
     pub status_shard: Option<ShardId>,
     /// The `RelationDesc` that describes the contents of the `data_shard`.
     pub relation_desc: RelationDesc,
+    /// The shard id of the persist-txn shard, if `self.data_shard` is managed
+    /// by the persist-txn system, or None if it's not.
+    pub txns_shard: Option<ShardId>,
 }
 
 impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
@@ -50,6 +53,7 @@ impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
             remap_shard: self.remap_shard.map(|s| s.to_string()),
             status_shard: self.status_shard.map(|s| s.to_string()),
             relation_desc: Some(self.relation_desc.into_proto()),
+            txns_shard: self.txns_shard.map(|x| x.to_string()),
         }
     }
 
@@ -74,6 +78,10 @@ impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
             relation_desc: value
                 .relation_desc
                 .into_rust_if_some("ProtoCollectionMetadata::relation_desc")?,
+            txns_shard: value
+                .txns_shard
+                .map(|s| s.parse().map_err(TryFromProtoError::InvalidShardId))
+                .transpose()?,
         })
     }
 }

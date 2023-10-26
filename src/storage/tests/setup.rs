@@ -259,6 +259,7 @@ where
                 // TODO(guswynn|danhhz): replace this with a real desc when persist requires a
                 // schema.
                 relation_desc: RelationDesc::empty(),
+                txns_shard: None,
             };
             let data_shard = collection_metadata.data_shard.clone();
             let id = GlobalId::User(1);

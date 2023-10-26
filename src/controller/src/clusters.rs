@@ -589,6 +589,7 @@ where
             ClusterRole::User => "user",
         };
         let persist_pubsub_url = self.persist_pubsub_url.clone();
+        let enable_persist_txn_tables = self.enable_persist_txn_tables;
         let secrets_args = self.secrets_args.to_flags();
         let service = self
             .orchestrator
@@ -611,6 +612,7 @@ where
                             format!("--opentelemetry-resource=cluster_id={}", cluster_id),
                             format!("--opentelemetry-resource=replica_id={}", replica_id),
                             format!("--persist-pubsub-url={}", persist_pubsub_url),
+                            format!("--enable-persist-txn-tables={}", enable_persist_txn_tables),
                         ];
                         if let Some(memory_limit) = location.allocation.memory_limit {
                             args.push(format!(
