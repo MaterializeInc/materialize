@@ -176,7 +176,7 @@ There are two ways to add comments to the generated avro schema
   Specifying `KEY` or `VALUE` is optional and it specifies whether the avro comment is meant for the generated key
   or the value schema. If it's not specified, then it's applicable for both.
   The `<identifier>` can be either
-  * a `TYPE` like materialied view, source, tables or custom type used in the sink,
+  * a `TYPE` like materialied view, source, table or custom type used in the sink,
   * or it can be a `COLUMN` in a materialized view, source, table or a composite type.
 
 Usage example:
