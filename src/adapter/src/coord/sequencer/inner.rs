@@ -3136,36 +3136,18 @@ impl Coordinator {
                 broken,
                 non_null_assertions,
             } => {
-                if enable_unified_optimizer_api {
-                    // Please see the docs on `explain_query_optimizer_pipeline` above.
-                    self.explain_create_materialized_view_optimizer_pipeline(
-                        name,
-                        raw_plan,
-                        column_names,
-                        cluster_id,
-                        broken,
-                        non_null_assertions,
-                        root_dispatch,
-                    )
-                    .with_subscriber(&optimizer_trace)
-                    .await
-                } else {
-                    // Allow while the introduction of the new optimizer API in
-                    // #20569 is in progress.
-                    #[allow(deprecated)]
-                    // Please see the docs on `explain_query_optimizer_pipeline` above.
-                    self.explain_create_materialized_view_optimizer_pipeline_deprecated(
-                        name,
-                        raw_plan,
-                        column_names,
-                        cluster_id,
-                        broken,
-                        &non_null_assertions,
-                        root_dispatch,
-                    )
-                    .with_subscriber(&optimizer_trace)
-                    .await
-                }
+                // Please see the docs on `explain_query_optimizer_pipeline` above.
+                self.explain_create_materialized_view_optimizer_pipeline(
+                    name,
+                    raw_plan,
+                    column_names,
+                    cluster_id,
+                    broken,
+                    non_null_assertions,
+                    root_dispatch,
+                )
+                .with_subscriber(&optimizer_trace)
+                .await
             }
             plan::ExplaineeStatement::CreateIndex {
                 name,

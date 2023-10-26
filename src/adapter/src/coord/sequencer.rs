@@ -191,24 +191,10 @@ impl Coordinator {
                 ctx.retire(result);
             }
             Plan::CreateMaterializedView(plan) => {
-                if enable_unified_optimizer_api {
-                    let result = self
-                        .sequence_create_materialized_view(ctx.session_mut(), plan, resolved_ids)
-                        .await;
-                    ctx.retire(result);
-                } else {
-                    // Allow while the introduction of the new optimizer API in
-                    // #20569 is in progress.
-                    #[allow(deprecated)]
-                    let result = self
-                        .sequence_create_materialized_view_deprecated(
-                            ctx.session_mut(),
-                            plan,
-                            resolved_ids,
-                        )
-                        .await;
-                    ctx.retire(result);
-                }
+                let result = self
+                    .sequence_create_materialized_view(ctx.session_mut(), plan, resolved_ids)
+                    .await;
+                ctx.retire(result);
             }
             Plan::CreateIndex(plan) => {
                 if enable_unified_optimizer_api {
