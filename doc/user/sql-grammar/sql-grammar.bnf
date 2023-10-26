@@ -110,10 +110,12 @@ create_materialized_view ::=
   'CREATE' 'MATERIALIZED VIEW' 'IF NOT EXISTS'?
     view_name ( '(' col_ident ( ',' col_ident )* ')' )?
     ('IN CLUSTER' cluster_name)?
+    ('WITH' '(' ( 'ASSERT NOT NULL' col_ident ( ',' 'ASSERT NOT NULL' col_ident )* )? ')')?
     'AS' select_stmt |
   'CREATE' 'OR REPLACE' 'MATERIALIZED VIEW'
     view_name ( '(' col_ident ( ',' col_ident )* ')' )?
     ('IN CLUSTER' cluster_name)?
+    ('WITH' '(' ( 'ASSERT NOT NULL' col_ident ( ',' 'ASSERT NOT NULL' col_ident )* )? ')')?
     'AS' select_stmt
 create_role ::=
     'CREATE' 'ROLE' role_name ('WITH'? 'INHERIT')?
