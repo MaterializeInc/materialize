@@ -35,6 +35,8 @@ from materialize.output_consistency.runner.time_guard import TimeGuard
 from materialize.output_consistency.selection.randomized_picker import RandomizedPicker
 from materialize.output_consistency.validation.result_comparator import ResultComparator
 
+ENABLE_ADDING_WHERE_CONDITIONS = True
+
 
 class ConsistencyTestRunner:
     """Orchestrates the test execution"""
@@ -141,7 +143,8 @@ class ConsistencyTestRunner:
         queries = self.query_generator.consume_queries(test_summary)
 
         for query in queries:
-            self._add_random_where_condition(query)
+            if ENABLE_ADDING_WHERE_CONDITIONS:
+                self._add_random_where_condition(query)
             success = self.execution_manager.execute_query(query, test_summary)
 
             if not success and self.config.fail_fast:
