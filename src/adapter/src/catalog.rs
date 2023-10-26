@@ -4727,7 +4727,14 @@ mod tests {
                 Catalog::open_debug_stash_catalog_factory(&debug_stash_factory, NOW_ZERO.clone())
                     .await
                     .expect("unable to open debug catalog");
+            let catalog_clone = catalog.clone();
+
             assert_eq!(catalog.transient_revision(), 1);
+            assert_eq!(
+                catalog.transient_revision(),
+                catalog_clone.transient_revision()
+            );
+
             catalog
                 .transact(
                     mz_repr::Timestamp::MIN,
@@ -4743,7 +4750,15 @@ mod tests {
                 .await
                 .expect("failed to transact");
             assert_eq!(catalog.transient_revision(), 2);
+
+            // Make sure all clones of the catalog observe the change in transient revision.
+            assert_eq!(
+                catalog.transient_revision(),
+                catalog_clone.transient_revision()
+            );
+
             catalog.expire().await;
+            catalog_clone.expire().await;
         }
         {
             let catalog =

@@ -256,7 +256,7 @@ impl Catalog {
                 physical_plan_by_id: Default::default(),
                 dataflow_metainfos: BTreeMap::new(),
             },
-            transient_revision: 0,
+            transient_revision: Arc::new(atomic::AtomicU64::new(0)),
             storage: Arc::new(tokio::sync::Mutex::new(config.storage)),
         };
 
@@ -1697,7 +1697,7 @@ impl Catalog {
             }));
         }
 
-        c.transient_revision = 1;
+        c.transient_revision.store(1, atomic::Ordering::SeqCst);
         Ok(c)
     }
 
