@@ -77,8 +77,6 @@
 
 //! Shared types for the `mz-storage*` crates
 
-mod ssh_tunnels;
-
 pub mod connections;
 pub mod controller;
 pub mod errors;
