@@ -35,17 +35,19 @@ from materialize.util import naughty_strings
 MAX_COLUMNS = 100
 MAX_INCLUDE_HEADERS = 5
 MAX_ROWS = 1000
-MAX_CLUSTERS = 5
-MAX_CLUSTER_REPLICAS = 3
-MAX_SCHEMAS = 10
-MAX_TABLES = 50
-MAX_VIEWS = 50
-MAX_ROLES = 50
-MAX_WEBHOOK_SOURCES = 10
-MAX_KAFKA_SOURCES = 10
-MAX_POSTGRES_SOURCES = 10
-MAX_KAFKA_SINKS = 10
+MAX_CLUSTERS = 10
+MAX_CLUSTER_REPLICAS = 4
+MAX_DBS = 10
+MAX_SCHEMAS = 20
+MAX_TABLES = 100
+MAX_VIEWS = 100
+MAX_ROLES = 100
+MAX_WEBHOOK_SOURCES = 20
+MAX_KAFKA_SOURCES = 20
+MAX_POSTGRES_SOURCES = 20
+MAX_KAFKA_SINKS = 20
 
+MAX_INITIAL_DBS = 1
 MAX_INITIAL_SCHEMAS = 1
 MAX_INITIAL_CLUSTERS = 2
 MAX_INITIAL_TABLES = 10
@@ -55,8 +57,6 @@ MAX_INITIAL_WEBHOOK_SOURCES = 3
 MAX_INITIAL_KAFKA_SOURCES = 3
 MAX_INITIAL_POSTGRES_SOURCES = 3
 MAX_INITIAL_KAFKA_SINKS = 3
-
-DB_OFFSET = 1_000_000
 
 NAUGHTY_IDENTIFIERS = False
 
@@ -137,12 +137,35 @@ class Column:
         return result
 
 
+class DB:
+    seed: str
+    db_id: int
+
+    def __init__(self, seed: str, db_id: int):
+        self.seed = seed
+        self.db_id = db_id
+
+    def name(self) -> str:
+        return naughtify(f"db-pw-{self.seed}-{self.db_id}")
+
+    def __str__(self) -> str:
+        return identifier(self.name())
+
+    def create(self, exe: Executor) -> None:
+        exe.execute(f"CREATE DATABASE {self}")
+
+    def drop(self, exe: Executor) -> None:
+        exe.execute(f"DROP DATABASE IF EXISTS {self}")
+
+
 class Schema:
     schema_id: int
     rename: int
+    db: DB
 
-    def __init__(self, rng: random.Random, schema_id: int):
+    def __init__(self, db: DB, schema_id: int):
         self.schema_id = schema_id
+        self.db = db
         self.rename = 0
 
     def name(self) -> str:
@@ -151,7 +174,7 @@ class Schema:
         return naughtify(f"s-{self.schema_id}")
 
     def __str__(self) -> str:
-        return identifier(self.name())
+        return f"{self.db}.{identifier(self.name())}"
 
     def create(self, exe: Executor) -> None:
         query = f"CREATE SCHEMA {self}"
@@ -415,7 +438,6 @@ class KafkaSource(DBObject):
 
     def __init__(
         self,
-        database: str,
         source_id: int,
         cluster: "Cluster",
         schema: Schema,
@@ -438,7 +460,7 @@ class KafkaSource(DBObject):
             KafkaColumn(field.name, field.data_type, False, self) for field in fields
         ]
         self.executor = KafkaExecutor(
-            self.source_id, ports, fields, database, schema.name()
+            self.source_id, ports, fields, schema.db.name(), schema.name()
         )
         self.generator = rng.choice(list(WORKLOADS))(None).generate(fields)
         self.lock = threading.Lock()
@@ -533,7 +555,6 @@ class PostgresSource(DBObject):
 
     def __init__(
         self,
-        database: str,
         source_id: int,
         cluster: "Cluster",
         schema: Schema,
@@ -556,7 +577,7 @@ class PostgresSource(DBObject):
             PostgresColumn(field.name, field.data_type, False, self) for field in fields
         ]
         self.executor = PgExecutor(
-            self.source_id, ports, fields, database, schema.name()
+            self.source_id, ports, fields, schema.db.name(), schema.name()
         )
         self.generator = rng.choice(list(WORKLOADS))(None).generate(fields)
         self.lock = threading.Lock()
@@ -659,13 +680,14 @@ class Cluster:
         exe.execute(query)
 
 
+# TODO: Can access both databases from same connection!
 class Database:
-    db_id: int
-    seed: str
     complexity: Complexity
     scenario: Scenario
     host: str
     ports: dict[str, int]
+    dbs: list[DB]
+    db_id: int
     schemas: list[Schema]
     schema_id: int
     tables: list[Table]
@@ -686,10 +708,10 @@ class Database:
     kafka_sinks: list[KafkaSink]
     kafka_sink_id: int
     lock: threading.Lock
+    seed: str
 
     def __init__(
         self,
-        db_id: int,
         rng: random.Random,
         seed: str,
         host: str,
@@ -699,16 +721,18 @@ class Database:
         naughty_identifiers: bool,
     ):
         global NAUGHTY_IDENTIFIERS
-        self.db_id = db_id
-        self.seed = seed
         self.host = host
         self.ports = ports
         self.complexity = complexity
         self.scenario = scenario
+        self.seed = seed
         NAUGHTY_IDENTIFIERS = naughty_identifiers
 
+        self.dbs = [DB(seed, i) for i in range(rng.randint(1, MAX_INITIAL_DBS))]
+        self.db_id = len(self.dbs)
         self.schemas = [
-            Schema(rng, i) for i in range(rng.randint(1, MAX_INITIAL_SCHEMAS))
+            Schema(rng.choice(self.dbs), i)
+            for i in range(rng.randint(1, MAX_INITIAL_SCHEMAS))
         ]
         self.schema_id = len(self.schemas)
         self.tables = [
@@ -727,15 +751,12 @@ class Database:
             view = View(rng, i, base_object, base_object2, rng.choice(self.schemas))
             self.views.append(view)
         self.view_id = len(self.views)
-        self.roles = [
-            Role(db_id * DB_OFFSET + i)
-            for i in range(rng.randint(0, MAX_INITIAL_ROLES))
-        ]
+        self.roles = [Role(i) for i in range(rng.randint(0, MAX_INITIAL_ROLES))]
         self.role_id = len(self.roles)
         # At least one storage cluster required for WebhookSources
         self.clusters = [
             Cluster(
-                self.db_id * DB_OFFSET + i,
+                i,
                 managed=rng.choice([True, False]),
                 size=rng.choice(["1", "2", "4"]),
                 replication_factor=1,
@@ -752,8 +773,7 @@ class Database:
         self.webhook_source_id = len(self.webhook_sources)
         self.kafka_sources = [
             KafkaSource(
-                self.name(),
-                self.db_id * DB_OFFSET + i,
+                i,
                 rng.choice(self.clusters),
                 rng.choice(self.schemas),
                 ports,
@@ -764,8 +784,7 @@ class Database:
         self.kafka_source_id = len(self.kafka_sources)
         self.postgres_sources = [
             PostgresSource(
-                self.name(),
-                self.db_id * DB_OFFSET + i,
+                i,
                 rng.choice(self.clusters),
                 rng.choice(self.schemas),
                 ports,
@@ -786,12 +805,6 @@ class Database:
         ]
         self.kafka_sink_id = len(self.kafka_sinks)
         self.lock = threading.Lock()
-
-    def name(self) -> str:
-        return naughtify(f"db-pw-{self.seed}-{self.db_id}")
-
-    def __str__(self) -> str:
-        return identifier(self.name())
 
     def db_objects(
         self,
@@ -817,28 +830,24 @@ class Database:
             self.schemas + self.clusters + self.roles + self.db_objects()
         ).__iter__()
 
-    def drop(self, exe: Executor) -> None:
-        exe.execute(f"DROP DATABASE IF EXISTS {self}")
-
     def create(self, exe: Executor) -> None:
-        self.drop(exe)
-        exe.execute(f"CREATE DATABASE {self}")
-        exe.execute(f"ALTER DATABASE {self} OWNER TO materialize")
+        for db in self.dbs:
+            db.drop(exe)
+            db.create(exe)
 
-    def create_relations(self, exe: Executor) -> None:
-        # Roles and clusters are system wide, not per DB
-        if self.db_id == 0:
-            exe.execute("SELECT name FROM mz_clusters WHERE name LIKE 'c%'")
-            for row in exe.cur.fetchall():
-                exe.execute(f"DROP CLUSTER {identifier(row[0])} CASCADE")
+        exe.execute("SELECT name FROM mz_clusters WHERE name LIKE 'c%'")
+        for row in exe.cur.fetchall():
+            exe.execute(f"DROP CLUSTER {identifier(row[0])} CASCADE")
 
-            exe.execute("SELECT name FROM mz_roles WHERE name LIKE 'r%'")
-            for row in exe.cur.fetchall():
-                exe.execute(f"DROP ROLE {identifier(row[0])}")
+        exe.execute("SELECT name FROM mz_roles WHERE name LIKE 'r%'")
+        for row in exe.cur.fetchall():
+            exe.execute(f"DROP ROLE {identifier(row[0])}")
 
-        exe.execute("CREATE CONNECTION kafka_conn FOR KAFKA BROKER 'kafka:9092'")
         exe.execute(
-            "CREATE CONNECTION csr_conn FOR CONFLUENT SCHEMA REGISTRY URL 'http://schema-registry:8081'"
+            "CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER 'kafka:9092'"
+        )
+        exe.execute(
+            "CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL 'http://schema-registry:8081'"
         )
         print("Created connections")
 

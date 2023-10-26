@@ -21,9 +21,10 @@ from materialize.data_ingest.query_error import QueryError
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.minio import MINIO_BLOB_URI
 from materialize.parallel_workload.database import (
-    DB_OFFSET,
+    DB,
     MAX_CLUSTER_REPLICAS,
     MAX_CLUSTERS,
+    MAX_DBS,
     MAX_KAFKA_SINKS,
     MAX_KAFKA_SOURCES,
     MAX_POSTGRES_SOURCES,
@@ -438,6 +439,35 @@ class RenameSinkAction(Action):
                 raise
 
 
+class CreateDatabaseAction(Action):
+    def run(self, exe: Executor) -> None:
+        with exe.db.lock:
+            if len(exe.db.dbs) > MAX_DBS:
+                return
+            db_id = exe.db.db_id
+            exe.db.db_id += 1
+        db = DB(exe.db.seed, db_id)
+        db.create(exe)
+        exe.db.dbs.append(db)
+
+
+class DropDatabaseAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            "cannot be dropped with RESTRICT while it contains schemas",
+        ] + super().errors_to_ignore(exe)
+
+    def run(self, exe: Executor) -> None:
+        with exe.db.lock:
+            if len(exe.db.dbs) <= 1:
+                return
+            db_id = self.rng.randrange(len(exe.db.dbs))
+            db = exe.db.dbs[db_id]
+            query = f"DROP DATABASE {db} RESTRICT"
+            exe.execute(query)
+            del exe.db.dbs[db_id]
+
+
 class CreateSchemaAction(Action):
     def run(self, exe: Executor) -> None:
         with exe.db.lock:
@@ -445,7 +475,7 @@ class CreateSchemaAction(Action):
                 return
             schema_id = exe.db.schema_id
             exe.db.schema_id += 1
-        schema = Schema(self.rng, schema_id)
+        schema = Schema(self.rng.choice(exe.db.dbs), schema_id)
         schema.create(exe)
         exe.db.schemas.append(schema)
 
@@ -589,7 +619,7 @@ class CreateRoleAction(Action):
                 return
             role_id = exe.db.role_id
             exe.db.role_id += 1
-        role = Role(exe.db.db_id * DB_OFFSET + role_id)
+        role = Role(role_id)
         role.create(exe)
         exe.db.roles.append(role)
 
@@ -624,7 +654,7 @@ class CreateClusterAction(Action):
             cluster_id = exe.db.cluster_id
             exe.db.cluster_id += 1
         cluster = Cluster(
-            exe.db.db_id * DB_OFFSET + cluster_id,
+            cluster_id,
             managed=self.rng.choice([True, False]),
             size=self.rng.choice(["1", "2", "4"]),
             replication_factor=self.rng.choice([1, 2, 4, 5]),
@@ -793,7 +823,7 @@ class ReconnectAction(Action):
         for i in range(NUM_ATTEMPTS):
             try:
                 conn = pg8000.connect(
-                    host=host, port=port, user=user, database=exe.db.name()
+                    host=host, port=port, user=user, database="materialize"
                 )
                 conn.autocommit = autocommit
                 cur = conn.cursor()
@@ -836,10 +866,10 @@ class CancelAction(Action):
         )
         worker = None
         for i in range(len(self.workers)):
-            for worker_exe in self.workers[i].exes:
-                if worker_exe and worker_exe.pg_pid == pid:
-                    worker = f"worker_{i}"
-                    break
+            worker_exe = self.workers[i].exe
+            if worker_exe and worker_exe.pg_pid == pid:
+                worker = f"worker_{i}"
+                break
         assert worker
         exe.execute(
             f"SELECT pg_cancel_backend({pid})", extra_info=f"Canceling {worker}"
@@ -870,22 +900,21 @@ class KillAction(Action):
 # TODO: Don't restore immediately, keep copy Database objects
 class BackupRestoreAction(Action):
     composition: Composition
-    databases: list[Database]
+    db: Database
     num: int
 
     def __init__(
-        self, rng: random.Random, composition: Composition, databases: list[Database]
+        self, rng: random.Random, composition: Composition, db: Database
     ) -> None:
         super().__init__(rng)
         self.composition = composition
-        self.databases = databases
+        self.db = db
         self.num = 0
 
     def run(self, exe: Executor) -> None:
         self.num += 1
         time.sleep(self.rng.uniform(10, 240))
-        for db in self.databases:
-            db.lock.acquire()
+        self.db.lock.acquire()
 
         try:
             # Backup
@@ -928,8 +957,7 @@ class BackupRestoreAction(Action):
             self.composition.up("materialized")
 
         finally:
-            for db in self.databases:
-                db.lock.release()
+            self.db.lock.release()
 
 
 class CreateWebhookSourceAction(Action):
@@ -984,8 +1012,7 @@ class CreateKafkaSourceAction(Action):
         schema = self.rng.choice(exe.db.schemas)
         try:
             source = KafkaSource(
-                exe.db.name(),
-                exe.db.db_id * DB_OFFSET + source_id,
+                source_id,
                 cluster,
                 schema,
                 exe.db.ports,
@@ -1035,8 +1062,7 @@ class CreatePostgresSourceAction(Action):
             cluster = self.rng.choice(potential_clusters)
         try:
             source = PostgresSource(
-                exe.db.name(),
-                exe.db.db_id * DB_OFFSET + source_id,
+                source_id,
                 cluster,
                 schema,
                 exe.db.ports,
@@ -1091,7 +1117,7 @@ class CreateKafkaSinkAction(Action):
             cluster = self.rng.choice(potential_clusters)
             schema = self.rng.choice(exe.db.schemas)
         sink = KafkaSink(
-            exe.db.db_id * DB_OFFSET + sink_id,
+            sink_id,
             cluster,
             schema,
             self.rng.choice(exe.db.db_objects_without_views()),
@@ -1243,6 +1269,8 @@ ddl_action_list = ActionList(
         (GrantPrivilegesAction, 4),
         (RevokePrivilegesAction, 1),
         (ReconnectAction, 1),
+        (CreateDatabaseAction, 1),
+        (DropDatabaseAction, 1),
         (CreateSchemaAction, 1),
         (DropSchemaAction, 1),
         (RenameSchemaAction, 10),

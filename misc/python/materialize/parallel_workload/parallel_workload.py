@@ -61,14 +61,13 @@ def run(
     scenario: Scenario,
     num_threads: int | None,
     naughty_identifiers: bool,
-    num_databases: int,
     composition: Composition | None,
 ) -> None:
     num_threads = num_threads or os.cpu_count() or 10
     random.seed(seed)
 
     print(
-        f"--- Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity.value} --scenario={scenario.value} {'--naughty-identifiers ' if naughty_identifiers else ''}--databases={num_databases} (--host={host})"
+        f"--- Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity.value} --scenario={scenario.value} {'--naughty-identifiers ' if naughty_identifiers else ''}(--host={host})"
     )
     initialize_logging()
 
@@ -77,40 +76,29 @@ def run(
     ).timestamp()
 
     rng = random.Random(random.randrange(SEED_RANGE))
-    databases = [
-        Database(i, rng, seed, host, ports, complexity, scenario, naughty_identifiers)
-        for i in range(num_databases)
-    ]
+    database = Database(
+        rng, seed, host, ports, complexity, scenario, naughty_identifiers
+    )
 
     system_conn = pg8000.connect(
         host=host, port=ports["mz_system"], user="mz_system", database="materialize"
     )
     system_conn.autocommit = True
     with system_conn.cursor() as system_cur:
-        system_exe = Executor(rng, system_cur, databases[0])
+        system_exe = Executor(rng, system_cur, database)
         system_exe.execute("ALTER SYSTEM SET enable_webhook_sources TO true")
         system_exe.execute(
             f"ALTER SYSTEM SET max_schemas_per_database = {MAX_SCHEMAS * 2}"
         )
         # The presence of ALTER TABLE RENAME can cause the total number of tables to exceed MAX_TABLES
+        system_exe.execute(f"ALTER SYSTEM SET max_tables = {MAX_TABLES * 2}")
+        system_exe.execute(f"ALTER SYSTEM SET max_materialized_views = {MAX_VIEWS * 2}")
         system_exe.execute(
-            f"ALTER SYSTEM SET max_tables = {len(databases) * MAX_TABLES * 2}"
+            f"ALTER SYSTEM SET max_sources = {(MAX_WEBHOOK_SOURCES + MAX_KAFKA_SOURCES + MAX_POSTGRES_SOURCES) * 2}"
         )
-        system_exe.execute(
-            f"ALTER SYSTEM SET max_materialized_views = {len(databases) * MAX_VIEWS * 2}"
-        )
-        system_exe.execute(
-            f"ALTER SYSTEM SET max_sources = {len(databases) * (MAX_WEBHOOK_SOURCES + MAX_KAFKA_SOURCES + MAX_POSTGRES_SOURCES) * 2}"
-        )
-        system_exe.execute(
-            f"ALTER SYSTEM SET max_sinks = {len(databases) * MAX_KAFKA_SINKS * 2}"
-        )
-        system_exe.execute(
-            f"ALTER SYSTEM SET max_roles = {len(databases) * MAX_ROLES * 2}"
-        )
-        system_exe.execute(
-            f"ALTER SYSTEM SET max_clusters = {len(databases) * MAX_CLUSTERS * 2}"
-        )
+        system_exe.execute(f"ALTER SYSTEM SET max_sinks = {MAX_KAFKA_SINKS * 2}")
+        system_exe.execute(f"ALTER SYSTEM SET max_roles = {MAX_ROLES * 2}")
+        system_exe.execute(f"ALTER SYSTEM SET max_clusters = {MAX_CLUSTERS * 2}")
         system_exe.execute(
             f"ALTER SYSTEM SET max_replicas_per_cluster = {MAX_CLUSTER_REPLICAS * 2}"
         )
@@ -136,20 +124,17 @@ def run(
         system_exe.execute(
             "ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL PRIVILEGES ON CLUSTERS TO PUBLIC"
         )
-        for database in databases:
-            database.create(system_exe)
-
-            conn = pg8000.connect(
-                host=host,
-                port=ports["materialized"],
-                user="materialize",
-                database=database.name(),
-            )
-            conn.autocommit = True
-            with conn.cursor() as cur:
-                database.create_relations(Executor(rng, cur, database))
-            conn.close()
-    system_conn.close()
+        system_conn.close()
+        conn = pg8000.connect(
+            host=host,
+            port=ports["materialized"],
+            user="materialize",
+            database="materialize",
+        )
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            database.create(Executor(rng, cur, database))
+        conn.close()
 
     workers = []
     threads = []
@@ -194,7 +179,7 @@ def run(
         thread = threading.Thread(
             name=thread_name,
             target=worker.run,
-            args=(host, ports["materialized"], "materialize", databases),
+            args=(host, ports["materialized"], "materialize", database),
         )
         thread.start()
         threads.append(thread)
@@ -212,7 +197,7 @@ def run(
         thread = threading.Thread(
             name="cancel",
             target=worker.run,
-            args=(host, ports["mz_system"], "mz_system", databases),
+            args=(host, ports["mz_system"], "mz_system", database),
         )
         thread.start()
         threads.append(thread)
@@ -230,7 +215,7 @@ def run(
         thread = threading.Thread(
             name="kill",
             target=worker.run,
-            args=(host, ports["materialized"], "materialize", databases),
+            args=(host, ports["materialized"], "materialize", database),
         )
         thread.start()
         threads.append(thread)
@@ -238,7 +223,7 @@ def run(
         assert composition, "Backup & Restore scenario only works in mzcompose"
         worker = Worker(
             worker_rng,
-            [BackupRestoreAction(worker_rng, composition, databases)],
+            [BackupRestoreAction(worker_rng, composition, database)],
             [1],
             end_time,
             autocommit=False,
@@ -248,7 +233,7 @@ def run(
         thread = threading.Thread(
             name="kill",
             target=worker.run,
-            args=(host, ports["materialized"], "materialize", databases),
+            args=(host, ports["materialized"], "materialize", database),
         )
         thread.start()
         threads.append(thread)
@@ -286,9 +271,10 @@ def run(
     conn = pg8000.connect(host=host, port=ports["materialized"], user="materialize")
     conn.autocommit = True
     with conn.cursor() as cur:
-        for database in databases:
-            print(f"Dropping database {database}")
-            database.drop(Executor(rng, cur, database))
+        exe = Executor(rng, cur, database)
+        print(f"Dropping database {database}")
+        for db in database.dbs:
+            db.drop(exe)
     conn.close()
 
     ignored_errors: defaultdict[str, Counter[type[Action]]] = defaultdict(Counter)
@@ -335,12 +321,6 @@ def parse_common_args(parser: argparse.ArgumentParser) -> None:
         "--naughty-identifiers",
         action="store_true",
         help="Whether to use naughty strings as identifiers, makes the queries unreadable",
-    )
-    parser.add_argument(
-        "--databases",
-        default=2,
-        type=int,
-        help="Number of databases to create and run against, 2 by default",
     )
 
 
@@ -390,7 +370,6 @@ def main() -> int:
         Scenario(args.scenario),
         args.threads,
         args.naughty_identifiers,
-        args.databases,
         composition=None,  # only works in mzcompose
     )
     return 0

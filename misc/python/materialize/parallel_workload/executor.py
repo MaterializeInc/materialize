@@ -73,7 +73,7 @@ class Executor:
         thread_name = threading.current_thread().getName()
 
         with lock:
-            print(f"[{thread_name}][{self.db.name()}] {msg}", file=logging)
+            print(f"[{thread_name}] {msg}", file=logging)
             logging.flush()
 
     def execute(

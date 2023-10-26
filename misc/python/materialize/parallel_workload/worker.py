@@ -28,7 +28,7 @@ class Worker:
     num_queries: int
     autocommit: bool
     system: bool
-    exes: list[Executor]
+    exe: Executor | None
     ignored_errors: defaultdict[str, Counter[type[Action]]]
 
     def __init__(
@@ -48,30 +48,26 @@ class Worker:
         self.autocommit = autocommit
         self.system = system
         self.ignored_errors = defaultdict(Counter)
-        self.exes = []
+        self.exe = None
 
-    def run(self, host: str, port: int, user: str, databases: list[Database]) -> None:
-        self.conns = [
-            pg8000.connect(host=host, port=port, user=user, database=database.name())
-            for database in databases
-        ]
-        for database, conn in zip(databases, self.conns):
-            conn.autocommit = self.autocommit
-            cur = conn.cursor()
-            exe = Executor(self.rng, cur, database)
-            exe.set_isolation("SERIALIZABLE")
-            cur.execute("SELECT pg_backend_pid()")
-            exe.pg_pid = cur.fetchall()[0][0]
-            self.exes.append(exe)
+    def run(self, host: str, port: int, user: str, database: Database) -> None:
+        self.conn = pg8000.connect(
+            host=host, port=port, user=user, database="materialize"
+        )
+        self.conn.autocommit = self.autocommit
+        cur = self.conn.cursor()
+        self.exe = Executor(self.rng, cur, database)
+        self.exe.set_isolation("SERIALIZABLE")
+        cur.execute("SELECT pg_backend_pid()")
+        self.exe.pg_pid = cur.fetchall()[0][0]
 
         while time.time() < self.end_time:
-            exe = self.rng.choice(self.exes)
             action = self.rng.choices(self.actions, self.weights)[0]
             self.num_queries += 1
             try:
-                if exe.rollback_next:
+                if self.exe.rollback_next:
                     try:
-                        exe.rollback()
+                        self.exe.rollback()
                     except QueryError as e:
                         if (
                             "Please disconnect and re-connect" in e.msg
@@ -79,16 +75,16 @@ class Worker:
                             or "Can't create a connection to host" in e.msg
                             or "Connection refused" in e.msg
                         ):
-                            exe.reconnect_next = True
-                            exe.rollback_next = False
+                            self.exe.reconnect_next = True
+                            self.exe.rollback_next = False
                             continue
-                    exe.rollback_next = False
-                if exe.reconnect_next:
-                    ReconnectAction(self.rng, random_role=False).run(exe)
-                    exe.reconnect_next = False
-                action.run(exe)
+                    self.exe.rollback_next = False
+                if self.exe.reconnect_next:
+                    ReconnectAction(self.rng, random_role=False).run(self.exe)
+                    self.exe.reconnect_next = False
+                action.run(self.exe)
             except QueryError as e:
-                for error in action.errors_to_ignore(exe):
+                for error in action.errors_to_ignore(self.exe):
                     if error in e.msg:
                         self.ignored_errors[error][type(action)] += 1
                         if (
@@ -97,13 +93,11 @@ class Worker:
                             or "Can't create a connection to host" in e.msg
                             or "Connection refused" in e.msg
                         ):
-                            exe.reconnect_next = True
+                            self.exe.reconnect_next = True
                         else:
-                            exe.rollback_next = True
+                            self.exe.rollback_next = True
                         break
                 else:
                     thread_name = threading.current_thread().getName()
-                    print(
-                        f"[{thread_name}][{exe.db.name()}] Query failed: {e.query} {e.msg}"
-                    )
+                    print(f"[{thread_name}] Query failed: {e.query} {e.msg}")
                     raise
