@@ -1122,6 +1122,12 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
         commands.push(StorageCommand::AllowCompaction(stale_objects));
 
+        // Do not report dropping any objects that do not belong to expected
+        // objects.
+        self.storage_state
+            .dropped_ids
+            .retain(|id| expected_objects.contains(id));
+
         // Do not report any frontiers that do not belong to expected objects.
         // Note that this set of objects can differ from th set of sources and
         // sinks.
