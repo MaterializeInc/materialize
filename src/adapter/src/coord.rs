@@ -90,10 +90,10 @@ use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFi
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::metrics::{MetricsFutureExt, MetricsRegistry};
 use mz_ore::now::{EpochMillis, NowFn};
+use mz_ore::stack;
 use mz_ore::task::spawn;
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
-use mz_ore::stack;
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::ExplainFormat;
 use mz_repr::role_id::RoleId;
