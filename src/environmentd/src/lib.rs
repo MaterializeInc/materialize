@@ -403,9 +403,6 @@ impl Listeners {
                             default_cluster_replica_size: config
                                 .bootstrap_default_cluster_replica_size
                                 .clone(),
-                            builtin_cluster_replica_size: config
-                                .bootstrap_builtin_cluster_replica_size
-                                .clone(),
                             bootstrap_role: config.bootstrap_role.clone(),
                         },
                         None,
@@ -452,7 +449,6 @@ impl Listeners {
                     default_cluster_replica_size: config
                         .bootstrap_default_cluster_replica_size
                         .clone(),
-                    builtin_cluster_replica_size: config.bootstrap_builtin_cluster_replica_size,
                     bootstrap_role: config.bootstrap_role,
                 },
                 config.deploy_generation,
@@ -512,6 +508,7 @@ impl Listeners {
             cloud_resource_controller: config.cloud_resource_controller,
             cluster_replica_sizes: config.cluster_replica_sizes,
             default_storage_cluster_size: config.default_storage_cluster_size,
+            builtin_cluster_replica_size: config.bootstrap_builtin_cluster_replica_size,
             availability_zones: config.availability_zones,
             system_parameter_defaults: config.system_parameter_defaults,
             connection_context: config.connection_context,

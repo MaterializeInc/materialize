@@ -46,10 +46,7 @@ use crate::durable::objects::{
     AuditLogKey, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
     DurableType, IntrospectionSourceIndex, Snapshot, StorageUsageKey, TimestampValue,
 };
-use crate::durable::transaction::{
-    add_new_builtin_cluster_replicas_migration, add_new_builtin_clusters_migration,
-    TransactionBatch,
-};
+use crate::durable::transaction::TransactionBatch;
 use crate::durable::{
     initialize, BootstrapArgs, CatalogError, Cluster, ClusterReplica, Comment, Database,
     DefaultPrivilege, DurableCatalogError, DurableCatalogState, Epoch, OpenableDurableCatalogState,
@@ -355,7 +352,7 @@ impl PersistHandle {
             fence: Some(Fence { prev_epoch }),
         };
 
-        let mut txn = if is_initialized {
+        let txn = if is_initialized {
             if !read_only {
                 let version =
                     version.ok_or(CatalogError::Durable(DurableCatalogError::Uninitialized))?;
@@ -383,11 +380,6 @@ impl PersistHandle {
             initialize::initialize(&mut txn, bootstrap_args, boot_ts, deploy_generation).await?;
             txn
         };
-
-        if !read_only {
-            add_new_builtin_clusters_migration(&mut txn)?;
-            add_new_builtin_cluster_replicas_migration(&mut txn, bootstrap_args)?;
-        }
 
         if read_only {
             let (txn_batch, _) = txn.into_parts();
