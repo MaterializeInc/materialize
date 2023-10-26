@@ -874,11 +874,11 @@ CREATE TABLE t(x int, y int);
 
 # We could remove the TopK, but we don't do this on the slow path currently.
 query T multiline
-EXPLAIN SELECT * FROM (SELECT * FROM t LIMIT 10) LIMIT 8;
+EXPLAIN SELECT * FROM (SELECT * FROM t LIMIT 10000) LIMIT 8000;
 ----
 Explained Query:
-  Finish limit=8 output=[#0, #1]
-    TopK limit=10
+  Finish limit=8000 output=[#0, #1]
+    TopK limit=10000
       ReadStorage materialize.public.t
 
 EOF

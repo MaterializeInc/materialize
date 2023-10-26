@@ -130,6 +130,8 @@ class ValidateView(Action):
 
     def __init__(self, capabilities: Capabilities) -> None:
         self.view = random.choice(capabilities.get(ViewExists))
+        # Trigger the PeekPersist optimization
+        self.select_limit = random.choice(["", "LIMIT 1"])
         super().__init__(capabilities)
 
     def run(self, c: Composition) -> None:
@@ -141,14 +143,14 @@ class ValidateView(Action):
             c.testdrive(
                 dedent(
                     f"""
-                    > SELECT count_all, count_distinct, min_value, max_value FROM {self.view.name} /* expecting count_all = {(view_max-view_min)+1} count_distinct = {(view_max-view_min)+1} min_value = {view_min} max_value = {view_max} */ ;
+                    > SELECT count_all, count_distinct, min_value, max_value FROM {self.view.name} {self.select_limit} /* expecting count_all = {(view_max-view_min)+1} count_distinct = {(view_max-view_min)+1} min_value = {view_min} max_value = {view_max} */ ;
                     {(view_max-view_min)+1} {(view_max-view_min)+1} {view_min} {view_max}
                 """
                 )
                 if self.view.expensive_aggregates
                 else dedent(
                     f"""
-                    > SELECT count_all FROM {self.view.name} /* expecting count_all = {(view_max-view_min)+1} */ ;
+                    > SELECT count_all FROM {self.view.name} {self.select_limit} /* expecting count_all = {(view_max-view_min)+1} */ ;
                     {(view_max-view_min)+1}
                 """
                 )
