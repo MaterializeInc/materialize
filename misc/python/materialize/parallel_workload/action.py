@@ -17,6 +17,7 @@ from pg8000.native import identifier
 
 import materialize.parallel_workload.database
 from materialize.data_ingest.data_type import NUMBER_TYPES, Text, TextTextMap
+from materialize.data_ingest.query_error import QueryError
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.minio import MINIO_BLOB_URI
 from materialize.parallel_workload.database import (
@@ -45,7 +46,7 @@ from materialize.parallel_workload.database import (
     View,
     WebhookSource,
 )
-from materialize.parallel_workload.executor import Executor, QueryError
+from materialize.parallel_workload.executor import Executor
 from materialize.parallel_workload.settings import Complexity, Scenario
 
 if TYPE_CHECKING:

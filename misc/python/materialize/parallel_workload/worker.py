@@ -14,9 +14,10 @@ from collections import Counter, defaultdict
 
 import pg8000
 
+from materialize.data_ingest.query_error import QueryError
 from materialize.parallel_workload.action import Action, ReconnectAction
 from materialize.parallel_workload.database import Database
-from materialize.parallel_workload.executor import Executor, QueryError
+from materialize.parallel_workload.executor import Executor
 
 
 class Worker:

@@ -25,6 +25,7 @@ from pg8000.native import identifier
 
 from materialize.data_ingest.data_type import Backend
 from materialize.data_ingest.field import Field, formatted_value
+from materialize.data_ingest.query_error import QueryError
 from materialize.data_ingest.row import Operation
 from materialize.data_ingest.transaction import Transaction
 
@@ -76,9 +77,9 @@ class Executor:
             self.reconnect()
             with self.mz_conn.cursor() as cur:
                 self.execute(cur, query)
-        except:
+        except Exception as e:
             print(f"Query failed: {query}")
-            raise
+            raise QueryError(str(e), query)
 
     def execute_with_retry_on_error(
         self,

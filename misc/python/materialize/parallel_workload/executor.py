@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING, TextIO
 
 import pg8000
 
+from materialize.data_ingest.query_error import QueryError
+
 if TYPE_CHECKING:
     from materialize.parallel_workload.database import Database
 
@@ -24,15 +26,6 @@ def initialize_logging() -> None:
     global logging, lock
     logging = open("parallel-workload-queries.log", "w")
     lock = threading.Lock()
-
-
-class QueryError(Exception):
-    msg: str
-    query: str
-
-    def __init__(self, msg: str, query: str):
-        self.msg = msg
-        self.query = query
 
 
 class Executor:
