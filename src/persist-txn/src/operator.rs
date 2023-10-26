@@ -109,17 +109,7 @@ where
     let shutdown_button = builder.build(move |capabilities| async move {
         let [mut cap]: [_; 1] = capabilities.try_into().expect("one capability per output");
         let client = client.await;
-        let (txns_key_schema, txns_val_schema) = C::schemas();
-        let txns_read = client
-            .open_leased_reader::<C::Key, C::Val, _, _>(
-                txns_id,
-                Arc::new(txns_key_schema),
-                Arc::new(txns_val_schema),
-                Diagnostics::from_purpose("txns_progress"),
-            )
-            .await
-            .expect("schema shouldn't change");
-        let mut txns_cache = TxnsCache::<T, C>::open(txns_read).await;
+        let mut txns_cache = TxnsCache::<T, C>::open(&client, txns_id).await;
 
         txns_cache.update_gt(&as_of).await;
         let snap = txns_cache.data_snapshot(data_id, as_of.clone());

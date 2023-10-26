@@ -11,6 +11,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Debug;
+use std::sync::Arc;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::hashable::Hashable;
@@ -19,7 +20,7 @@ use mz_ore::collections::HashMap;
 use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::read::{ListenEvent, ReadHandle, Since, Subscribe};
 use mz_persist_client::write::WriteHandle;
-use mz_persist_client::ShardId;
+use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::{Codec, Codec64, StepForward};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
@@ -68,7 +69,7 @@ use crate::{TxnsCodec, TxnsCodecDefault, TxnsEntry};
 /// shard progress. See [crate::operator::txns_progress].
 #[derive(Debug)]
 pub struct TxnsCache<T: Timestamp + Lattice + Codec64, C: TxnsCodec = TxnsCodecDefault> {
-    _txns_id: ShardId,
+    txns_id: ShardId,
     pub(crate) progress_exclusive: T,
     txns_subscribe: Subscribe<C::Key, C::Val, T, i64>,
 
@@ -93,22 +94,44 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
         txns_write: &mut WriteHandle<C::Key, C::Val, T, i64>,
     ) -> Self {
         let () = crate::empty_caa(|| "txns init", txns_write, init_ts.clone()).await;
-        let mut ret = Self::open(txns_read).await;
+        let mut ret = Self::from_read(txns_read).await;
         ret.update_gt(&init_ts).await;
         ret
     }
 
-    pub(crate) async fn open(txns_read: ReadHandle<C::Key, C::Val, T, i64>) -> Self {
-        let _txns_id = txns_read.shard_id();
+    /// Returns a [TxnsCache] reading from the given txn shard.
+    ///
+    /// `txns_id` identifies which shard will be used as the txns WAL. MZ will
+    /// likely have one of these per env, used by all processes and the same
+    /// across restarts.
+    pub async fn open(client: &PersistClient, txns_id: ShardId) -> Self {
+        let (txns_key_schema, txns_val_schema) = C::schemas();
+        let txns_read = client
+            .open_leased_reader(
+                txns_id,
+                Arc::new(txns_key_schema),
+                Arc::new(txns_val_schema),
+                Diagnostics {
+                    shard_name: "txns".to_owned(),
+                    handle_purpose: "read txns".to_owned(),
+                },
+            )
+            .await
+            .expect("txns schema shouldn't change");
+        Self::from_read(txns_read).await
+    }
+
+    pub(crate) async fn from_read(txns_read: ReadHandle<C::Key, C::Val, T, i64>) -> Self {
         // TODO(txn): Figure out the compaction story. This might require
         // sorting inserts before retractions within each timestamp.
+        let txns_id = txns_read.shard_id();
         let as_of = txns_read.since().clone();
         let subscribe = txns_read
             .subscribe(as_of)
             .await
             .expect("handle holds a capability");
         TxnsCache {
-            _txns_id,
+            txns_id,
             progress_exclusive: T::minimum(),
             txns_subscribe: subscribe,
             next_batch_id: 0,
@@ -116,6 +139,11 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
             batch_idx: HashMap::new(),
             datas: BTreeMap::new(),
         }
+    }
+
+    /// Returns the [ShardId] of the txns shard.
+    pub fn txns_id(&self) -> ShardId {
+        self.txns_id
     }
 
     /// Returns whether the data shard was registered to the txns set at the
@@ -285,7 +313,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
 
     /// Invariant: afterward, self.progress_exclusive will be > ts
     #[instrument(level = "debug", skip_all, fields(ts = ?ts))]
-    pub(crate) async fn update_gt(&mut self, ts: &T) {
+    pub async fn update_gt(&mut self, ts: &T) {
         self.update(|progress_exclusive| progress_exclusive > ts)
             .await;
         debug_assert!(&self.progress_exclusive > ts);
@@ -755,10 +783,7 @@ pub enum DataListenNext<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use mz_persist_client::{Diagnostics, PersistClient, ShardIdSchema};
-    use mz_persist_types::codec_impls::VecU8Schema;
+    use mz_persist_client::PersistClient;
     use DataListenNext::*;
 
     use crate::operator::DataSubscribe;
@@ -772,18 +797,7 @@ mod tests {
             init_ts: u64,
             txns: &TxnsHandle<String, (), u64, i64>,
         ) -> Self {
-            let txns_read = txns
-                .datas
-                .client
-                .open_leased_reader(
-                    txns.txns_id(),
-                    Arc::new(ShardIdSchema),
-                    Arc::new(VecU8Schema),
-                    Diagnostics::for_tests(),
-                )
-                .await
-                .unwrap();
-            let mut ret = TxnsCache::open(txns_read).await;
+            let mut ret = TxnsCache::open(&txns.datas.client, txns.txns_id()).await;
             ret.update_gt(&init_ts).await;
             ret
         }
@@ -818,7 +832,7 @@ mod tests {
             data_id: ShardId,
             as_of: u64,
         ) -> DataSubscribe {
-            DataSubscribe::new("test", client.clone(), self._txns_id, data_id, as_of)
+            DataSubscribe::new("test", client.clone(), self.txns_id, data_id, as_of)
         }
     }
 
