@@ -93,7 +93,7 @@ use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::task::spawn;
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
-use mz_ore::{soft_assert_or_log, stack};
+use mz_ore::stack;
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::ExplainFormat;
 use mz_repr::role_id::RoleId;
@@ -772,10 +772,18 @@ impl ExecuteContextExtra {
 impl Drop for ExecuteContextExtra {
     fn drop(&mut self) {
         let Self { statement_uuid } = &*self;
-        soft_assert_or_log!(
-            statement_uuid.is_none(),
-            "execute context dropped without being properly retired."
-        )
+        if let Some(statement_uuid) = statement_uuid {
+            // TODO [btv] -- We know this is happening in prod now,
+            // seemingly only related to SUBSCRIBEs from the console.
+            //
+            // This is `error` for now until I get around to debugging
+            // the root cause, as it's not a severe enough issue to be
+            // worth breaking staging.
+            //
+            // Once all known causes of this are resolved, bump this
+            // back to a soft_assert.
+            tracing::error!("execute context for statement {statement_uuid:?} dropped without being properly retired.");
+        }
     }
 }
 
