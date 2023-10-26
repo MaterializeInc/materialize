@@ -33,7 +33,6 @@ criterion = { version = "0.4.0", features = ["async_tokio", "html_reports"] }
 crossbeam-deque = { version = "0.8.2" }
 crossbeam-epoch = { version = "0.9.13" }
 crossbeam-utils = { version = "0.8.7" }
-crypto-common = { version = "0.1.3", default-features = false, features = ["std"] }
 debugid = { version = "0.8.0", default-features = false, features = ["serde"] }
 dec = { version = "0.4.8", default-features = false, features = ["serde"] }
 digest = { version = "0.10.6", features = ["mac", "std"] }
@@ -92,7 +91,6 @@ scopeguard = { version = "1.1.0" }
 semver = { version = "1.0.16", features = ["serde"] }
 serde = { version = "1.0.164", features = ["alloc", "derive", "rc"] }
 serde_json = { version = "1.0.99", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value"] }
-sha2 = { version = "0.10.6" }
 similar = { version = "2.2.1", features = ["inline", "unicode"] }
 smallvec = { version = "1.10.0", default-features = false, features = ["const_generics", "serde", "union", "write"] }
 socket2 = { version = "0.4.9", default-features = false, features = ["all"] }
@@ -138,7 +136,6 @@ criterion = { version = "0.4.0", features = ["async_tokio", "html_reports"] }
 crossbeam-deque = { version = "0.8.2" }
 crossbeam-epoch = { version = "0.9.13" }
 crossbeam-utils = { version = "0.8.7" }
-crypto-common = { version = "0.1.3", default-features = false, features = ["std"] }
 debugid = { version = "0.8.0", default-features = false, features = ["serde"] }
 dec = { version = "0.4.8", default-features = false, features = ["serde"] }
 digest = { version = "0.10.6", features = ["mac", "std"] }
@@ -197,7 +194,6 @@ scopeguard = { version = "1.1.0" }
 semver = { version = "1.0.16", features = ["serde"] }
 serde = { version = "1.0.164", features = ["alloc", "derive", "rc"] }
 serde_json = { version = "1.0.99", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value"] }
-sha2 = { version = "0.10.6" }
 similar = { version = "2.2.1", features = ["inline", "unicode"] }
 smallvec = { version = "1.10.0", default-features = false, features = ["const_generics", "serde", "union", "write"] }
 socket2 = { version = "0.4.9", default-features = false, features = ["all"] }

@@ -46,6 +46,13 @@ impl SshKeyPair {
         Ok(SshKeyPair { key_pair })
     }
 
+    /// Deserializes a key pair from a key pair set that was serialized with
+    /// [`SshKeyPairSet::serialize`].
+    pub fn from_bytes(data: &[u8]) -> anyhow::Result<SshKeyPair> {
+        let set = SshKeyPairSet::from_bytes(data)?;
+        Ok(set.primary().clone())
+    }
+
     /// Deserializes a key pair from an OpenSSH-formatted private key.
     fn from_private_key(private_key: &[u8]) -> Result<SshKeyPair, anyhow::Error> {
         let private_key = PrivateKey::from_openssh(private_key)?;
