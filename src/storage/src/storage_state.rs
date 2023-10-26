@@ -828,23 +828,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     sink_description,
                 );
             }
-            InternalStorageCommand::DropDataflow(id) => {
-                let ids: BTreeSet<GlobalId> = match self.storage_state.ingestions.get(&id) {
-                    // Without the source dataflow running, all source exports
-                    // should also be considered dropped. n.b. `source_exports`
-                    // includes `id`
-                    Some(IngestionDescription { source_exports, .. }) => {
-                        source_exports.keys().cloned().collect()
-                    }
-                    None => {
-                        let mut ids = BTreeSet::new();
-                        ids.insert(id);
-                        ids
-                    }
-                };
-
-                mz_ore::soft_assert!(ids.contains(&id));
-
+            InternalStorageCommand::DropDataflow(ids) => {
                 for id in &ids {
                     // Clean up per-source / per-sink state.
                     self.storage_state.source_uppers.remove(id);
@@ -852,18 +836,14 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     self.storage_state.source_statistics.remove(id);
 
                     self.storage_state.sink_tokens.remove(id);
+
+                    // The actual prometheus metrics and other state will be dropped
+                    // when the dataflow shuts down and drop's its `Rc`'s to the stats
+                    // objects. Also, these are always cloned during rendering,
+                    // but not inside dataflows, so we don't have TOCTOU issue here!
+                    self.storage_state.source_statistics.remove(id);
+                    self.storage_state.sink_statistics.remove(id);
                 }
-
-                // The actual prometheus metrics and other state will be dropped
-                // when the dataflow shuts down and drop's its `Rc`'s to the stats
-                // objects. Also, these are always cloned during rendering,
-                // but not inside dataflows, so we don't have TOCTOU issue here!
-                self.storage_state.source_statistics.remove(&id);
-                self.storage_state.sink_statistics.remove(&id);
-
-                // Report the dataflow as dropped once we went through the whole
-                // control flow from external command to this internal command.
-                self.storage_state.dropped_ids.extend(ids);
             }
             InternalStorageCommand::UpdateConfiguration {
                 pg_source_tcp_timeouts,
@@ -1320,28 +1300,53 @@ impl StorageState {
                     if frontier.is_empty() {
                         fail_point!("crash_on_drop");
                         // Indicates that we may drop `id`, as there are no more valid times to read.
-                        //
-                        // This handler removes state that is put in place by
-                        // the handler for `RunIngestions`/`CreateSinks`, while
-                        // the handler for the internal command does the same
-                        // for the state put in place by its corresponding
-                        // creation command.
 
-                        // Cleanup exports and ingestions immediately to ensure
-                        // they are not re-rendered in the case of
-                        // reconciliation.
-                        self.exports.remove(&id);
-                        self.ingestions.remove(&id);
+                        let ids = match self.ingestions.remove(&id) {
+                            Some(description) => {
+                                // Without the source dataflow running, all source exports
+                                // should also be considered dropped. n.b. `source_exports`
+                                // includes `id`
+                                description.subsource_ids().collect::<Vec<_>>()
+                            }
+                            None => {
+                                self.exports.remove(&id);
+                                self.sink_handles.remove(&id);
+                                vec![id]
+                            }
+                        };
 
-                        // This will stop reporting of frontiers.
-                        self.reported_frontiers.remove(&id);
-
-                        self.sink_handles.remove(&id);
+                        for id in &ids {
+                            // This will stop reporting of frontiers.
+                            //
+                            // If this object still has its frontiers reported,
+                            // we will notify the client envd of the drop.
+                            if self.reported_frontiers.remove(id).is_some() {
+                                // The only actions left are internal cleanup, so we can
+                                // commit to the client that these objects have been
+                                // dropped.
+                                //
+                                // This must be done now rather than in response to
+                                // DropDataflow, otherwise we introduce the possibility
+                                // of a timing issue where:
+                                // - We remove all tracking state from the storage state
+                                //   and send `DropDataflow` (i.e. this block)
+                                // - While waiting to process that command, we reconcile
+                                //   with a new envd. That envd has already committed to
+                                //   its catalog that this object no longer exists.
+                                // - We process the DropDataflow command, and identify
+                                //   that this object has been dropped.
+                                // - The next time `dropped_ids` is processed, we send a
+                                //   response that this ID has been dropped, but the
+                                //   upstream state has no record of that object having
+                                //   ever existed.
+                                self.dropped_ids.insert(*id);
+                            }
+                        }
 
                         // Broadcast from one worker to make sure its sequences
                         // with the other internal commands.
                         if worker_index == 0 {
-                            internal_cmd_tx.broadcast(InternalStorageCommand::DropDataflow(id));
+                            internal_cmd_tx.broadcast(InternalStorageCommand::DropDataflow(ids));
                         }
                     }
                 }

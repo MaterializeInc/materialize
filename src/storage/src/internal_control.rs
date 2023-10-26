@@ -127,8 +127,11 @@ pub enum InternalStorageCommand {
         GlobalId,
         StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>,
     ),
-    /// Drop all state and operators for a dataflow.
-    DropDataflow(GlobalId),
+    /// Drop all state and operators for a dataflow. This is a vec because some
+    /// dataflows have their state spread over multiple IDs (i.e. sources that
+    /// spawn subsources); this means that actions taken in response to this
+    /// command should be permissive about missing state.
+    DropDataflow(Vec<GlobalId>),
 
     /// Update the configuration for rendering dataflows.
     UpdateConfiguration {
