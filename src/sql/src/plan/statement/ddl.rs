@@ -108,9 +108,10 @@ use crate::plan::typeconv::{plan_cast, CastContext};
 use crate::plan::with_options::{self, OptionalInterval, TryFromValue};
 use crate::plan::{
     plan_utils, query, transform_ast, AlterClusterPlan, AlterClusterRenamePlan,
-    AlterClusterReplicaRenamePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
-    AlterItemRenamePlan, AlterNoopPlan, AlterOptionParameter, AlterRolePlan, AlterSchemaRenamePlan,
-    AlterSecretPlan, AlterSetClusterPlan, AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan,
+    AlterClusterReplicaRenamePlan, AlterClusterSwapPlan, AlterIndexResetOptionsPlan,
+    AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterNoopPlan, AlterOptionParameter,
+    AlterRolePlan, AlterSchemaRenamePlan, AlterSchemaSwapPlan, AlterSecretPlan,
+    AlterSetClusterPlan, AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan,
     AlterSystemResetPlan, AlterSystemSetPlan, CommentPlan, ComputeReplicaConfig,
     ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan, CreateClusterPlan,
     CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
@@ -4897,6 +4898,48 @@ pub fn plan_alter_schema_rename(
     }))
 }
 
+pub fn plan_alter_schema_swap<F>(
+    scx: &mut StatementContext,
+    name_a: UnresolvedSchemaName,
+    name_b: Ident,
+    gen_temp_suffix: F,
+) -> Result<Plan, PlanError>
+where
+    F: Fn(&dyn Fn(&str) -> bool) -> Result<String, PlanError>,
+{
+    let schema_a = scx.resolve_schema(name_a.clone())?;
+
+    let db_spec = schema_a.database().clone();
+    if matches!(db_spec, ResolvedDatabaseSpecifier::Ambient) {
+        sql_bail!("cannot swap schemas that are in the ambient database");
+    };
+    let schema_b = scx.resolve_schema_in_database(&db_spec, &name_b)?;
+
+    // We cannot swap system schemas.
+    if schema_a.id().is_system() || schema_b.id().is_system() {
+        bail_never_supported!("swapping a system schema".to_string())
+    }
+
+    // Generate a temporary name we can swap schema_a to.
+    //
+    // 'check' returns if the temp schema name would be valid.
+    let check = |temp_suffix: &str| {
+        let temp_name = Ident::new(format!("mz_schema_swap_{temp_suffix}"));
+        scx.resolve_schema_in_database(&db_spec, &temp_name)
+            .is_err()
+    };
+    let temp_suffix = gen_temp_suffix(&check)?;
+    let name_temp = format!("mz_schema_swap_{temp_suffix}");
+
+    Ok(Plan::AlterSchemaSwap(AlterSchemaSwapPlan {
+        schema_a_spec: (*schema_a.database(), *schema_a.id()),
+        schema_a_name: schema_a.name().schema.to_string(),
+        schema_b_spec: (*schema_b.database(), *schema_b.id()),
+        schema_b_name: schema_b.name().schema.to_string(),
+        name_temp,
+    }))
+}
+
 pub fn plan_alter_item_rename(
     scx: &mut StatementContext,
     object_type: ObjectType,
@@ -4971,6 +5014,39 @@ pub fn plan_alter_cluster_rename(
     }
 }
 
+pub fn plan_alter_cluster_swap<F>(
+    scx: &mut StatementContext,
+    name_a: Ident,
+    name_b: Ident,
+    gen_temp_suffix: F,
+) -> Result<Plan, PlanError>
+where
+    F: Fn(&dyn Fn(&str) -> bool) -> Result<String, PlanError>,
+{
+    let cluster_a = scx.resolve_cluster(Some(&name_a))?;
+    let cluster_b = scx.resolve_cluster(Some(&name_b))?;
+
+    let check = |temp_suffix: &str| {
+        let name_temp = Ident::new(format!("mz_cluster_swap_{temp_suffix}"));
+        match scx.catalog.resolve_cluster(Some(name_temp.as_str())) {
+            // Temp name does not exist, so we can use it.
+            Err(CatalogError::UnknownCluster(_)) => true,
+            // Temp name already exists!
+            Ok(_) | Err(_) => false,
+        }
+    };
+    let temp_suffix = gen_temp_suffix(&check)?;
+    let name_temp = format!("mz_cluster_swap_{temp_suffix}");
+
+    Ok(Plan::AlterClusterSwap(AlterClusterSwapPlan {
+        id_a: cluster_a.id(),
+        id_b: cluster_b.id(),
+        name_a: name_a.into_string(),
+        name_b: name_b.into_string(),
+        name_temp,
+    }))
+}
+
 pub fn plan_alter_cluster_replica_rename(
     scx: &mut StatementContext,
     object_type: ObjectType,
@@ -5012,13 +5088,57 @@ pub fn describe_alter_object_swap(
 }
 
 pub fn plan_alter_object_swap(
-    _: &mut StatementContext,
-    _: AlterObjectSwapStatement,
+    scx: &mut StatementContext,
+    stmt: AlterObjectSwapStatement,
 ) -> Result<Plan, PlanError> {
-    Err(PlanError::Unsupported {
-        feature: "ALTER ... SWAP ...".to_string(),
-        issue_no: Some(12972),
-    })
+    scx.require_feature_flag(&vars::ENABLE_ALTER_SWAP)?;
+
+    let AlterObjectSwapStatement {
+        object_type,
+        name_a,
+        name_b,
+    } = stmt;
+    let object_type = object_type.into();
+
+    // We'll try 10 times to generate a temporary suffix.
+    let gen_temp_suffix = |check_fn: &dyn Fn(&str) -> bool| {
+        let mut attempts = 0;
+        let name_temp = loop {
+            attempts += 1;
+            if attempts > 10 {
+                tracing::warn!("Unable to generate temp id for swapping");
+                sql_bail!("unable to swap!");
+            }
+
+            // To make these temporary names a bit more manageable, we make them short, by using
+            // the last component of a UUID, which should be 12 characters long.
+            //
+            // Note: the reason we use the last 12 characters is because the bits 6, 7, and 12 - 15
+            // are all hard coded <https://www.rfc-editor.org/rfc/rfc4122#section-4.4>.
+            let temp_uuid = uuid::Uuid::new_v4().as_hyphenated().to_string();
+            let short_id: String = temp_uuid.chars().rev().take_while(|c| *c != '-').collect();
+
+            // Call the provided closure to make sure this name is unique!
+            if check_fn(&short_id) {
+                break short_id;
+            }
+        };
+
+        Ok(name_temp)
+    };
+
+    match (object_type, name_a, name_b) {
+        (ObjectType::Schema, UnresolvedObjectName::Schema(name_a), name_b) => {
+            plan_alter_schema_swap(scx, name_a, name_b, gen_temp_suffix)
+        }
+        (ObjectType::Cluster, UnresolvedObjectName::Cluster(name_a), name_b) => {
+            plan_alter_cluster_swap(scx, name_a, name_b, gen_temp_suffix)
+        }
+        (object_type, _, _) => Err(PlanError::Unsupported {
+            feature: format!("ALTER {object_type} .. SWAP WITH ..."),
+            issue_no: Some(12972),
+        }),
+    }
 }
 
 pub fn describe_alter_secret_options(

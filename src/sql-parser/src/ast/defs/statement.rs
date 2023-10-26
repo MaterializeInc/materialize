@@ -1947,17 +1947,18 @@ impl_display!(AlterObjectRenameStatement);
 pub struct AlterObjectSwapStatement {
     pub object_type: ObjectType,
     pub name_a: UnresolvedObjectName,
-    pub name_b: UnresolvedObjectName,
+    pub name_b: Ident,
 }
 
 impl AstDisplay for AlterObjectSwapStatement {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("ALTER ");
-        f.write_node(&self.object_type);
-        f.write_str(" SWAP ");
 
-        f.write_node(&self.name_a);
+        f.write_node(&self.object_type);
         f.write_str(" ");
+        f.write_node(&self.name_a);
+
+        f.write_str(" SWAP WITH ");
         f.write_node(&self.name_b);
     }
 }

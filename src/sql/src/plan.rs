@@ -155,6 +155,7 @@ pub enum Plan {
     AlterItemRename(AlterItemRenamePlan),
     AlterItemSwap(AlterItemSwapPlan),
     AlterSchemaRename(AlterSchemaRenamePlan),
+    AlterSchemaSwap(AlterSchemaSwapPlan),
     AlterSecret(AlterSecretPlan),
     AlterSystemSet(AlterSystemSetPlan),
     AlterSystemReset(AlterSystemResetPlan),
@@ -208,6 +209,7 @@ impl Plan {
                 vec![
                     PlanKind::AlterClusterSwap,
                     PlanKind::AlterItemSwap,
+                    PlanKind::AlterSchemaSwap,
                     PlanKind::AlterNoop,
                 ]
             }
@@ -372,6 +374,7 @@ impl Plan {
             Plan::AlterItemRename(_) => "rename item",
             Plan::AlterItemSwap(_) => "swap item",
             Plan::AlterSchemaRename(_) => "alter rename schema",
+            Plan::AlterSchemaSwap(_) => "alter swap schema",
             Plan::AlterSecret(_) => "alter secret",
             Plan::AlterSystemSet(_) => "alter system",
             Plan::AlterSystemReset(_) => "alter system",
@@ -1059,11 +1062,21 @@ pub struct AlterSchemaRenamePlan {
 }
 
 #[derive(Debug)]
+pub struct AlterSchemaSwapPlan {
+    pub schema_a_spec: (ResolvedDatabaseSpecifier, SchemaSpecifier),
+    pub schema_a_name: String,
+    pub schema_b_spec: (ResolvedDatabaseSpecifier, SchemaSpecifier),
+    pub schema_b_name: String,
+    pub name_temp: String,
+}
+
+#[derive(Debug)]
 pub struct AlterClusterSwapPlan {
     pub id_a: ClusterId,
     pub id_b: ClusterId,
     pub name_a: String,
     pub name_b: String,
+    pub name_temp: String,
 }
 
 #[derive(Debug)]

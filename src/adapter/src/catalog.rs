@@ -2648,13 +2648,18 @@ impl Catalog {
                         ),
                     )?;
                 }
-                Op::RenameCluster { id, name, to_name } => {
+                Op::RenameCluster {
+                    id,
+                    name,
+                    to_name,
+                    check_reserved_names,
+                } => {
                     if id.is_system() {
                         return Err(AdapterError::Catalog(Error::new(
                             ErrorKind::ReadOnlyCluster(name.clone()),
                         )));
                     }
-                    if is_reserved_name(&to_name) {
+                    if check_reserved_names && is_reserved_name(&to_name) {
                         return Err(AdapterError::Catalog(Error::new(
                             ErrorKind::ReservedClusterName(to_name),
                         )));
@@ -2847,7 +2852,14 @@ impl Catalog {
                     database_spec,
                     schema_spec,
                     new_name,
+                    check_reserved_names,
                 } => {
+                    if check_reserved_names && is_reserved_name(&new_name) {
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::ReservedSchemaName(new_name),
+                        )));
+                    }
+
                     let conn_id = session
                         .map(|session| session.conn_id())
                         .unwrap_or(&SYSTEM_CONN_ID);
@@ -4004,6 +4016,7 @@ pub enum Op {
         id: ClusterId,
         name: String,
         to_name: String,
+        check_reserved_names: bool,
     },
     RenameClusterReplica {
         cluster_id: ClusterId,
@@ -4020,6 +4033,7 @@ pub enum Op {
         database_spec: ResolvedDatabaseSpecifier,
         schema_spec: SchemaSpecifier,
         new_name: String,
+        check_reserved_names: bool,
     },
     UpdateOwner {
         id: ObjectId,

@@ -431,6 +431,30 @@ class RenameSchemaAction(Action):
                 raise
 
 
+class SwapSchemaAction(Action):
+    def run(self, exe: Executor) -> None:
+        if self.db.scenario != Scenario.Rename:
+            return
+        with self.db.lock:
+            if len(self.db.schemas) < 2:
+                return
+            (i1, schema1), (i2, schema2) = self.rng.sample(
+                list(enumerate(self.db.schemas)), 2
+            )
+            self.db.schemas[i1], self.db.schemas[i2] = (
+                self.db.schemas[i2],
+                self.db.schemas[i1],
+            )
+            try:
+                exe.execute(f"ALTER SCHEMA {schema1} SWAP WITH {schema2}")
+            except:
+                self.db.schemas[i1], self.db.schemas[i2] = (
+                    self.db.schemas[i2],
+                    self.db.schemas[i1],
+                )
+                raise
+
+
 class TransactionIsolationAction(Action):
     def run(self, exe: Executor) -> None:
         level = self.rng.choice(["SERIALIZABLE", "STRICT SERIALIZABLE"])
@@ -1006,6 +1030,7 @@ ddl_action_list = ActionList(
         (DropSchemaAction, 1),
         (RenameSchemaAction, 10),
         (RenameTableAction, 10),
+        (SwapSchemaAction, 10),
         # (TransactionIsolationAction, 1),
     ],
     autocommit=True,
