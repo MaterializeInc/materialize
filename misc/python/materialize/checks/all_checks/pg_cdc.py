@@ -12,7 +12,7 @@ from textwrap import dedent
 from typing import Any
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import Check, CheckDisabled
+from materialize.checks.checks import Check, disabled
 from materialize.util import MzVersion
 
 
@@ -28,7 +28,7 @@ class PgCdcBase:
         self.repeats = 1024 if wait else 16384
         self.expects = 97350 if wait else 1633350
         self.suffix = f"_{str(wait).lower()}"
-        super().__init__(**kwargs)  # foward unused args to Check/CheckDisabled
+        super().__init__(**kwargs)  # foward unused args to Check
 
     def initialize(self) -> Testdrive:
         return Testdrive(
@@ -220,8 +220,8 @@ class PgCdc(PgCdcBase, Check):
         super().__init__(wait=True, base_version=base_version, rng=rng)
 
 
-# TODO(def-) Enable this check (with an adequate version limitation) when #18940 is fixed
-class PgCdcNoWait(PgCdcBase, CheckDisabled):
+@disabled("requires #18940 to be fixed")
+class PgCdcNoWait(PgCdcBase, Check):
     def __init__(self, base_version: MzVersion, rng: Random | None) -> None:
         super().__init__(wait=False, base_version=base_version, rng=rng)
 
