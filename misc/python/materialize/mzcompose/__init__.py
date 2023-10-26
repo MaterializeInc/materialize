@@ -75,6 +75,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_assert_not_null": "true",
     "enable_specialized_arrangements": "true",
     "persist_fast_path_limit": "1000",
+    "enable_alter_swap": "true",
 }
 
 DEFAULT_CRDB_ENVIRONMENT = [

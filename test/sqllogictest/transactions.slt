@@ -975,3 +975,21 @@ EOF
 
 statement ok
 COMMIT
+
+statement ok
+BEGIN
+
+statement error db error: ERROR: ALTER SCHEMA s SWAP WITH t cannot be run inside a transaction block
+ALTER SCHEMA s SWAP WITH t
+
+statement ok
+ROLLBACK
+
+statement ok
+BEGIN
+
+statement error db error: ERROR: ALTER CLUSTER s SWAP WITH t cannot be run inside a transaction block
+ALTER CLUSTER s SWAP WITH t
+
+statement ok
+ROLLBACK

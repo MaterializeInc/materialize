@@ -103,3 +103,17 @@ ALTER SCHEMA baz RENAME to foobar
 ALTER SCHEMA baz RENAME TO foobar
 =>
 AlterObjectRename(AlterObjectRenameStatement { object_type: Schema, if_exists: false, name: Schema(UnresolvedSchemaName([Ident("baz")])), to_item_name: Ident("foobar") })
+
+parse-statement
+ALTER SCHEMA foo SWAP WITH bar
+----
+ALTER SCHEMA foo SWAP WITH bar
+=>
+AlterObjectSwap(AlterObjectSwapStatement { object_type: Schema, name_a: Schema(UnresolvedSchemaName([Ident("foo")])), name_b: Schema(UnresolvedSchemaName([Ident("bar")])) })
+
+parse-statement
+ALTER CLUSTER c1 SWAP WITH c2
+----
+ALTER CLUSTER c1 SWAP WITH c2
+=>
+AlterObjectSwap(AlterObjectSwapStatement { object_type: Cluster, name_a: Cluster(Ident("c1")), name_b: Cluster(Ident("c2")) })
