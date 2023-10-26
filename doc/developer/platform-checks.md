@@ -105,6 +105,9 @@ All checks are located in the `misc/python/materialize/checks/all_checks` direct
 the creation of a particular type of resource is usually placed in the same file as the `Check` that validates the deletion of the
 same resource type.
 
+## Ignoring a Check
+To ignore a `Check`, annotate it with `@disabled(ignore_reason="due to #...")`.
+
 # Writing a Scenario
 
 A Scenario is a list of sequential Actions that the framework will perform one after another:
