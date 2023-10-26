@@ -998,17 +998,8 @@ async fn test_default_privileges(openable_state: impl OpenableDurableCatalogStat
         .await
         .unwrap();
     let mut txn = state.transaction().await.unwrap();
-    for default_privilege in &default_privileges {
-        txn.set_default_privilege(
-            default_privilege.object.role_id,
-            default_privilege.object.database_id,
-            default_privilege.object.schema_id,
-            default_privilege.object.object_type,
-            default_privilege.acl_item.grantee,
-            Some(default_privilege.acl_item.acl_mode),
-        )
+    txn.set_default_privileges(default_privileges.to_vec())
         .unwrap();
-    }
     txn.commit().await.unwrap();
 
     let persisted_default_privileges = state.get_default_privileges().await.unwrap();

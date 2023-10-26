@@ -39,8 +39,8 @@ use crate::durable::objects::{
     SystemPrivilegesKey, SystemPrivilegesValue, TimestampKey, TimestampValue,
 };
 use crate::durable::{
-    CatalogError, DurableCatalogState, Snapshot, TimelineTimestamp, DATABASE_ID_ALLOC_KEY,
-    SCHEMA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
+    CatalogError, DefaultPrivilege, DurableCatalogState, Snapshot, TimelineTimestamp,
+    DATABASE_ID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
 
 /// A [`Transaction`] batches multiple catalog operations together and commits them atomically.
@@ -861,6 +861,8 @@ impl<'a> Transaction<'a> {
     }
 
     /// Set persisted default privilege.
+    ///
+    /// DO NOT call this function in a loop, use [`Self::set_default_privileges`] instead.
     pub fn set_default_privilege(
         &mut self,
         role_id: RoleId,
@@ -883,7 +885,23 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
+    /// Set persisted default privileges.
+    pub fn set_default_privileges(
+        &mut self,
+        default_privileges: Vec<DefaultPrivilege>,
+    ) -> Result<(), CatalogError> {
+        let default_privileges = default_privileges
+            .into_iter()
+            .map(DurableType::into_key_value)
+            .map(|(k, v)| (k, Some(v)))
+            .collect();
+        self.default_privileges.set_many(default_privileges)?;
+        Ok(())
+    }
+
     /// Set persisted system privilege.
+    ///
+    /// DO NOT call this function in a loop, use [`Self::set_system_privileges`] instead.
     pub fn set_system_privilege(
         &mut self,
         grantee: RoleId,
@@ -894,6 +912,20 @@ impl<'a> Transaction<'a> {
             SystemPrivilegesKey { grantee, grantor },
             acl_mode.map(|acl_mode| SystemPrivilegesValue { acl_mode }),
         )?;
+        Ok(())
+    }
+
+    /// Set persisted system privileges.
+    pub fn set_system_privileges(
+        &mut self,
+        system_privileges: Vec<MzAclItem>,
+    ) -> Result<(), CatalogError> {
+        let system_privileges = system_privileges
+            .into_iter()
+            .map(DurableType::into_key_value)
+            .map(|(k, v)| (k, Some(v)))
+            .collect();
+        self.system_privileges.set_many(system_privileges)?;
         Ok(())
     }
 
@@ -911,22 +943,31 @@ impl<'a> Transaction<'a> {
     }
 
     /// Set persisted introspection source index.
-    pub(crate) fn set_introspection_source_index(
+    pub(crate) fn set_introspection_source_indexes(
         &mut self,
-        introspection_source_index: IntrospectionSourceIndex,
+        introspection_source_indexes: Vec<IntrospectionSourceIndex>,
     ) -> Result<(), CatalogError> {
-        let (key, value) = introspection_source_index.into_key_value();
-        self.introspection_sources.set(key, Some(value))?;
+        let introspection_source_indexes = introspection_source_indexes
+            .into_iter()
+            .map(DurableType::into_key_value)
+            .map(|(k, v)| (k, Some(v)))
+            .collect();
+        self.introspection_sources
+            .set_many(introspection_source_indexes)?;
         Ok(())
     }
 
     /// Set persisted system object mappings.
-    pub(crate) fn set_system_object_mapping(
+    pub(crate) fn set_system_object_mappings(
         &mut self,
-        mapping: SystemObjectMapping,
+        mappings: Vec<SystemObjectMapping>,
     ) -> Result<(), CatalogError> {
-        let (key, value) = mapping.into_key_value();
-        self.system_gid_mapping.set(key, Some(value))?;
+        let mappings = mappings
+            .into_iter()
+            .map(DurableType::into_key_value)
+            .map(|(k, v)| (k, Some(v)))
+            .collect();
+        self.system_gid_mapping.set_many(mappings)?;
         Ok(())
     }
 

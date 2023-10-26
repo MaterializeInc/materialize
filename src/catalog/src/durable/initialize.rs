@@ -16,7 +16,10 @@ use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::now::EpochMillis;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
-use mz_sql::catalog::{ObjectType, RoleAttributes, RoleMembership, RoleVars, SystemObjectType};
+use mz_sql::catalog::{
+    DefaultPrivilegeAclItem, DefaultPrivilegeObject, ObjectType, RoleAttributes, RoleMembership,
+    RoleVars, SystemObjectType,
+};
 use mz_sql::names::{
     DatabaseId, ObjectId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier, PUBLIC_ROLE_NAME,
 };
@@ -27,11 +30,10 @@ use mz_stash_types::STASH_VERSION;
 use mz_storage_types::sources::Timeline;
 
 use crate::builtin::BUILTIN_ROLES;
-use crate::durable::objects::{DefaultPrivilegesKey, DefaultPrivilegesValue};
 use crate::durable::{
     BootstrapArgs, CatalogError, ClusterConfig, ClusterVariant, ClusterVariantManaged,
-    ReplicaConfig, ReplicaLocation, Role, Schema, Transaction, AUDIT_LOG_ID_ALLOC_KEY,
-    DATABASE_ID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY,
+    DefaultPrivilege, ReplicaConfig, ReplicaLocation, Role, Schema, Transaction,
+    AUDIT_LOG_ID_ALLOC_KEY, DATABASE_ID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY,
     SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY, USER_CLUSTER_ID_ALLOC_KEY,
     USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
@@ -168,66 +170,58 @@ pub async fn initialize(
     let default_privileges = [
         // mz_support needs USAGE privileges on all clusters, databases, and schemas for
         // debugging.
-        (
-            DefaultPrivilegesKey {
+        DefaultPrivilege {
+            object: DefaultPrivilegeObject {
                 role_id: RoleId::Public,
                 database_id: None,
                 schema_id: None,
                 object_type: mz_sql::catalog::ObjectType::Cluster,
+            },
+            acl_item: DefaultPrivilegeAclItem {
                 grantee: MZ_SUPPORT_ROLE_ID,
+                acl_mode: AclMode::USAGE,
             },
-            DefaultPrivilegesValue {
-                privileges: AclMode::USAGE,
-            },
-        ),
-        (
-            DefaultPrivilegesKey {
+        },
+        DefaultPrivilege {
+            object: DefaultPrivilegeObject {
                 role_id: RoleId::Public,
                 database_id: None,
                 schema_id: None,
                 object_type: mz_sql::catalog::ObjectType::Database,
+            },
+            acl_item: DefaultPrivilegeAclItem {
                 grantee: MZ_SUPPORT_ROLE_ID,
+                acl_mode: AclMode::USAGE,
             },
-            DefaultPrivilegesValue {
-                privileges: AclMode::USAGE,
-            },
-        ),
-        (
-            DefaultPrivilegesKey {
+        },
+        DefaultPrivilege {
+            object: DefaultPrivilegeObject {
                 role_id: RoleId::Public,
                 database_id: None,
                 schema_id: None,
                 object_type: mz_sql::catalog::ObjectType::Schema,
+            },
+            acl_item: DefaultPrivilegeAclItem {
                 grantee: MZ_SUPPORT_ROLE_ID,
+                acl_mode: AclMode::USAGE,
             },
-            DefaultPrivilegesValue {
-                privileges: AclMode::USAGE,
-            },
-        ),
-        (
-            DefaultPrivilegesKey {
+        },
+        DefaultPrivilege {
+            object: DefaultPrivilegeObject {
                 role_id: RoleId::Public,
                 database_id: None,
                 schema_id: None,
                 object_type: mz_sql::catalog::ObjectType::Type,
+            },
+            acl_item: DefaultPrivilegeAclItem {
                 grantee: RoleId::Public,
+                acl_mode: AclMode::USAGE,
             },
-            DefaultPrivilegesValue {
-                privileges: AclMode::USAGE,
-            },
-        ),
+        },
     ];
-    for (default_privilege_key, default_privilege_value) in default_privileges {
-        tx.set_default_privilege(
-            default_privilege_key.role_id.clone(),
-            default_privilege_key.database_id.clone(),
-            default_privilege_key.schema_id.clone(),
-            default_privilege_key.object_type.clone(),
-            default_privilege_key.grantee.clone(),
-            Some(default_privilege_value.privileges.clone()),
-        )?;
-
-        let object_type = match default_privilege_key.object_type {
+    tx.set_default_privileges(default_privileges.to_vec())?;
+    for DefaultPrivilege { object, acl_item } in default_privileges {
+        let object_type = match object.object_type {
             ObjectType::Table => mz_audit_log::ObjectType::Table,
             ObjectType::View => mz_audit_log::ObjectType::View,
             ObjectType::MaterializedView => mz_audit_log::ObjectType::MaterializedView,
@@ -249,11 +243,11 @@ pub async fn initialize(
             object_type,
             mz_audit_log::EventDetails::AlterDefaultPrivilegeV1(
                 mz_audit_log::AlterDefaultPrivilegeV1 {
-                    role_id: default_privilege_key.role_id.to_string(),
-                    database_id: default_privilege_key.database_id.map(|id| id.to_string()),
-                    schema_id: default_privilege_key.schema_id.map(|id| id.to_string()),
-                    grantee_id: default_privilege_key.grantee.to_string(),
-                    privileges: default_privilege_value.privileges.to_string(),
+                    role_id: object.role_id.to_string(),
+                    database_id: object.database_id.map(|id| id.to_string()),
+                    schema_id: object.schema_id.map(|id| id.to_string()),
+                    grantee_id: acl_item.grantee.to_string(),
+                    privileges: acl_item.acl_mode.to_string(),
                 },
             ),
         ));
@@ -546,12 +540,8 @@ pub async fn initialize(
         grantor: MZ_SYSTEM_ROLE_ID,
         acl_mode: rbac::all_object_privileges(SystemObjectType::System),
     }));
+    tx.set_system_privileges(system_privileges.clone().collect())?;
     for system_privilege in system_privileges {
-        tx.set_system_privilege(
-            system_privilege.grantee.clone(),
-            system_privilege.grantor.clone(),
-            Some(system_privilege.acl_mode.clone()),
-        )?;
         audit_events.push((
             mz_audit_log::EventType::Grant,
             mz_audit_log::ObjectType::System,
