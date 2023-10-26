@@ -289,13 +289,15 @@ class WorkloadExecutor:
         return cursor_pool
 
     def _record_results(self, endpoint: Endpoint, df_totals: pd.DataFrame) -> None:
-        endpoint_name = endpoint.name()
-        print(f"Collecting results of endpoint {endpoint} with name {endpoint_name}")
+        endpoint_version_name = endpoint.try_load_version()
+        print(
+            f"Collecting results of endpoint {endpoint} with name {endpoint_version_name}"
+        )
 
-        if endpoint_name not in self.df_total_by_endpoint_name:
-            self.df_total_by_endpoint_name[endpoint_name] = df_totals
+        if endpoint_version_name not in self.df_total_by_endpoint_name:
+            self.df_total_by_endpoint_name[endpoint_version_name] = df_totals
         else:
-            self.df_total_by_endpoint_name[endpoint_name] = pd.concat(
-                [self.df_total_by_endpoint_name[endpoint_name], df_totals],
+            self.df_total_by_endpoint_name[endpoint_version_name] = pd.concat(
+                [self.df_total_by_endpoint_name[endpoint_version_name], df_totals],
                 ignore_index=True,
             )
