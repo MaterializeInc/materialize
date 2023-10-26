@@ -84,9 +84,9 @@ class Executor:
         self,
         cur: pg8000.Cursor,
         query: str,
-        max_tries: int,
-        wait_time_in_sec: int,
         required_error_message_substr: str | None,
+        max_tries: int = 5,
+        wait_time_in_sec: int = 1,
     ) -> None:
         for try_count in range(1, max_tries + 1):
             try:
