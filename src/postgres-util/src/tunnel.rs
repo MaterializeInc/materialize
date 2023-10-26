@@ -13,6 +13,7 @@ use mz_ore::option::OptionExt;
 use mz_ore::task;
 use mz_repr::GlobalId;
 use mz_ssh_util::tunnel::SshTunnelConfig;
+use mz_ssh_util::tunnel_manager::SshTunnelManager;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpStream as TokioTcpStream;
 use tokio_postgres::config::{Host, ReplicationMode};
@@ -22,9 +23,15 @@ use tracing::{info, warn};
 
 use crate::PostgresError;
 
-pub async fn drop_replication_slots(config: Config, slots: &[&str]) -> Result<(), PostgresError> {
-    let client = config.connect("postgres_drop_replication_slots").await?;
-    let replication_client = config.connect_replication().await?;
+pub async fn drop_replication_slots(
+    config: Config,
+    slots: &[&str],
+    ssh_tunnel_manager: &SshTunnelManager,
+) -> Result<(), PostgresError> {
+    let client = config
+        .connect("postgres_drop_replication_slots", ssh_tunnel_manager)
+        .await?;
+    let replication_client = config.connect_replication(ssh_tunnel_manager).await?;
     for slot in slots {
         let rows = client
             .query(
@@ -65,7 +72,10 @@ pub enum TunnelConfig {
     /// and then opening a separate connection from that host to the database.
     /// This is commonly referred by vendors as a "direct SSH tunnel", in
     /// opposition to "reverse SSH tunnel", which is currently unsupported.
-    Ssh(SshTunnelConfig),
+    Ssh {
+        connection_id: GlobalId,
+        config: SshTunnelConfig,
+    },
     /// Establish a TCP connection to the database via an AWS PrivateLink
     /// service.
     AwsPrivatelink {
@@ -112,7 +122,7 @@ pub const DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT: Duration = Duration::ZERO;
 ///
 /// This wraps [`tokio_postgres::Config`] to allow the configuration of a
 /// tunnel via a [`TunnelConfig`].
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, Clone)]
 pub struct Config {
     inner: tokio_postgres::Config,
     tunnel: TunnelConfig,
@@ -149,15 +159,27 @@ impl Config {
     }
 
     /// Connects to the configured PostgreSQL database.
-    pub async fn connect(&self, task_name: &str) -> Result<Client, PostgresError> {
-        self.connect_traced(task_name, |_| ()).await
+    pub async fn connect(
+        &self,
+        task_name: &str,
+        ssh_tunnel_manager: &SshTunnelManager,
+    ) -> Result<Client, PostgresError> {
+        self.connect_traced(task_name, |_| (), ssh_tunnel_manager)
+            .await
     }
 
     /// Starts a replication connection to the configured PostgreSQL database.
-    pub async fn connect_replication(&self) -> Result<Client, PostgresError> {
-        self.connect_traced("postgres_connect_replication", |config| {
-            config.replication_mode(ReplicationMode::Logical);
-        })
+    pub async fn connect_replication(
+        &self,
+        ssh_tunnel_manager: &SshTunnelManager,
+    ) -> Result<Client, PostgresError> {
+        self.connect_traced(
+            "postgres_connect_replication",
+            |config| {
+                config.replication_mode(ReplicationMode::Logical);
+            },
+            ssh_tunnel_manager,
+        )
         .await
     }
 
@@ -172,6 +194,7 @@ impl Config {
         &self,
         task_name: &str,
         configure: F,
+        ssh_tunnel_manager: &SshTunnelManager,
     ) -> Result<Client, PostgresError>
     where
         F: FnOnce(&mut tokio_postgres::Config),
@@ -185,7 +208,10 @@ impl Config {
             self.get_dbname().display_or("<unknown-dbname>")
         );
         info!(%task_name, %address, "connecting");
-        match self.connect_internal(task_name, configure).await {
+        match self
+            .connect_internal(task_name, configure, ssh_tunnel_manager)
+            .await
+        {
             Ok(t) => {
                 info!(%task_name, %address, "connected");
                 Ok(t)
@@ -201,6 +227,7 @@ impl Config {
         &self,
         task_name: &str,
         configure: F,
+        ssh_tunnel_manager: &SshTunnelManager,
     ) -> Result<Client, PostgresError>
     where
         F: FnOnce(&mut tokio_postgres::Config),
@@ -219,9 +246,14 @@ impl Config {
                 task::spawn(|| task_name, connection);
                 Ok(client)
             }
-            TunnelConfig::Ssh(tunnel) => {
+            TunnelConfig::Ssh {
+                connection_id,
+                config,
+            } => {
                 let (host, port) = self.address()?;
-                let tunnel = tunnel.connect(host, port).await?;
+                let tunnel = ssh_tunnel_manager
+                    .connect(*connection_id, config.clone(), host, port)
+                    .await?;
                 let tls = MakeTlsConnect::<TokioTcpStream>::make_tls_connect(&mut tls, host)?;
                 let tcp_stream = TokioTcpStream::connect(tunnel.local_addr()).await?;
                 let (client, connection) = postgres_config.connect_raw(tcp_stream, tls).await?;

@@ -99,6 +99,7 @@ use mz_ore::result::ResultExt;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
+use mz_ssh_util::tunnel_manager::SshTunnelManager;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
 use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
@@ -178,7 +179,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 .await?
                 .tcp_timeouts(config.params.pg_source_tcp_timeouts.clone());
             let slot = &connection.publication_details.slot;
-            let replication_client = connection_config.connect_replication().await?;
+            let replication_client = connection_config.connect_replication(&context.ssh_tunnel_manager).await?;
             super::ensure_replication_slot(&replication_client, slot).await?;
             let slot_lsn = super::fetch_slot_resume_lsn(&replication_client, slot).await?;
 
@@ -215,7 +216,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
             let mut committed_uppers = pin!(committed_uppers);
 
-            let client = connection_config.connect("replication metadata").await?;
+            let client = connection_config.connect("replication metadata", &context.ssh_tunnel_manager).await?;
             if let Err(err) = ensure_publication_exists(&client, &connection.publication).await? {
                 // If the publication gets deleted there is nothing else to do. These errors
                 // are not retractable.
@@ -238,6 +239,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             let slot = &connection.publication_details.slot;
             let mut stream = pin!(raw_stream(
                 &config,
+                &context.ssh_tunnel_manager,
                 &connection_config,
                 &client,
                 slot,
@@ -265,6 +267,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                 commit_lsn,
                                 &table_info,
                                 &connection_config,
+                                &context.ssh_tunnel_manager,
                                 &metrics,
                                 &connection.publication,
                                 &mut errored
@@ -350,6 +353,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 /// The returned stream will contain all transactions that whose commit LSN is beyond `resume_lsn`.
 fn raw_stream<'a>(
     config: &'a RawSourceCreationConfig,
+    ssh_tunnel_manager: &'a SshTunnelManager,
     connection_config: &'a mz_postgres_util::Config,
     metadata_client: &'a Client,
     slot: &'a str,
@@ -362,7 +366,9 @@ fn raw_stream<'a>(
         let mut uppers = pin!(uppers);
         let mut last_committed_upper = resume_lsn;
 
-        let replication_client = connection_config.connect_replication().await?;
+        let replication_client = connection_config
+            .connect_replication(ssh_tunnel_manager)
+            .await?;
         super::ensure_replication_slot(&replication_client, slot).await?;
 
         // Postgres will return all transactions that commit *at or after* after the provided LSN,
@@ -438,6 +444,7 @@ fn extract_transaction<'a>(
     commit_lsn: MzOffset,
     table_info: &'a BTreeMap<u32, (usize, PostgresTableDesc, Vec<MirScalarExpr>)>,
     connection_config: &'a mz_postgres_util::Config,
+    ssh_tunnel_manager: &'a SshTunnelManager,
     metrics: &'a PgSourceMetrics,
     publication: &'a str,
     errored_tables: &'a mut HashSet<u32>,
@@ -508,6 +515,7 @@ fn extract_transaction<'a>(
                             connection_config,
                             publication,
                             Some(rel_id),
+                            ssh_tunnel_manager,
                         )
                         .await?;
                         let upstream_info = upstream_info.into_iter().map(|t| (t.oid, t)).collect();

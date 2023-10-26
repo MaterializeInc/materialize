@@ -28,10 +28,11 @@ class SshBastionHost(Service):
             MZ_ROOT / "misc" / "images" / "sshd" / "setup.sh",
             loader.composition_path,
         )
+
         super().__init__(
             name=name,
             config={
-                "image": "panubo/sshd:1.5.0",
+                "image": "quay.io/panubo/sshd",
                 "init": True,
                 "ports": ["22"],
                 "environment": [
