@@ -565,8 +565,13 @@ async fn purify_create_source(
                 .config(&*connection_context.secrets_reader)
                 .await?;
 
-            let publication_tables =
-                mz_postgres_util::publication_info(&config, &publication, None).await?;
+            let publication_tables = mz_postgres_util::publication_info(
+                &config,
+                &publication,
+                None,
+                &connection_context.ssh_tunnel_manager,
+            )
+            .await?;
 
             if publication_tables.is_empty() {
                 Err(PgSourcePurificationError::EmptyPublication(
@@ -596,11 +601,14 @@ async fn purify_create_source(
                     }
                 }
                 ReferencedSubsources::SubsetSchemas(schemas) => {
-                    let available_schemas: BTreeSet<_> = mz_postgres_util::get_schemas(&config)
-                        .await?
-                        .into_iter()
-                        .map(|s| s.name)
-                        .collect();
+                    let available_schemas: BTreeSet<_> = mz_postgres_util::get_schemas(
+                        &config,
+                        &connection_context.ssh_tunnel_manager,
+                    )
+                    .await?
+                    .into_iter()
+                    .map(|s| s.name)
+                    .collect();
 
                     let requested_schemas: BTreeSet<_> =
                         schemas.iter().map(|s| s.as_str().to_string()).collect();
@@ -649,8 +657,12 @@ async fn purify_create_source(
                 );
             }
 
-            postgres::validate_requested_subsources(&config, &validated_requested_subsources)
-                .await?;
+            postgres::validate_requested_subsources(
+                &config,
+                &validated_requested_subsources,
+                &connection_context.ssh_tunnel_manager,
+            )
+            .await?;
 
             let text_cols_dict = postgres::generate_text_columns(
                 &publication_catalog,
@@ -928,9 +940,13 @@ async fn purify_alter_source(
         .config(&*connection_context.secrets_reader)
         .await?;
 
-    let mut publication_tables =
-        mz_postgres_util::publication_info(&config, &pg_source_connection.publication, None)
-            .await?;
+    let mut publication_tables = mz_postgres_util::publication_info(
+        &config,
+        &pg_source_connection.publication,
+        None,
+        &connection_context.ssh_tunnel_manager,
+    )
+    .await?;
 
     if publication_tables.is_empty() {
         Err(PgSourcePurificationError::EmptyPublication(
@@ -973,7 +989,12 @@ async fn purify_alter_source(
         }
     }
 
-    postgres::validate_requested_subsources(&config, &validated_requested_subsources).await?;
+    postgres::validate_requested_subsources(
+        &config,
+        &validated_requested_subsources,
+        &connection_context.ssh_tunnel_manager,
+    )
+    .await?;
     let mut subsource_id_counter = 0;
     let get_transient_subsource_id = move || {
         subsource_id_counter += 1;

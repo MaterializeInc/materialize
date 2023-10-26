@@ -80,14 +80,18 @@ def workflow_validate_connection(c: Composition) -> None:
     c.run("testdrive", "--no-reset", "validate-success.td")
 
 
-def workflow_pg_via_ssh_tunnel(c: Composition) -> None:
+def workflow_pg(c: Composition) -> None:
     c.up("materialized", "ssh-bastion-host", "postgres")
 
     c.run("testdrive", "setup.td")
 
-    public_key = c.sql_query("select public_key_1 from mz_ssh_tunnel_connections;")[0][
-        0
-    ]
+    public_key = c.sql_query(
+        """
+        select public_key_1 from mz_ssh_tunnel_connections ssh \
+        join mz_connections c on c.id = ssh.id
+        where c.name = 'thancred';
+        """
+    )[0][0]
 
     c.exec(
         "ssh-bastion-host",
@@ -97,9 +101,13 @@ def workflow_pg_via_ssh_tunnel(c: Composition) -> None:
     )
 
     c.run("testdrive", "--no-reset", "pg-source.td")
+    c.kill("ssh-bastion-host")
+    c.run("testdrive", "--no-reset", "pg-source-after-ssh-failure.td")
+    c.up("ssh-bastion-host")
+    c.run("testdrive", "--no-reset", "pg-source-after-ssh-restart.td")
 
 
-def workflow_kafka_csr_via_ssh_tunnel(c: Composition, redpanda: bool = False) -> None:
+def workflow_kafka(c: Composition, redpanda: bool = False) -> None:
     c.down()
     # Configure the SSH bastion host to allow only two connections to be
     # initiated simultaneously. This is enough to establish *one* Kafka SSH
@@ -118,9 +126,13 @@ def workflow_kafka_csr_via_ssh_tunnel(c: Composition, redpanda: bool = False) ->
 
         c.run("testdrive", "setup.td")
 
-        public_key = c.sql_query("select public_key_1 from mz_ssh_tunnel_connections;")[
-            0
-        ][0]
+        public_key = c.sql_query(
+            """
+            select public_key_1 from mz_ssh_tunnel_connections ssh \
+            join mz_connections c on c.id = ssh.id
+            where c.name = 'thancred';
+            """
+        )[0][0]
 
         c.exec(
             "ssh-bastion-host",
@@ -321,7 +333,7 @@ def workflow_default(c: Composition) -> None:
     # and kafka implementations.
     for workflow in [
         workflow_basic_ssh_features,
-        workflow_kafka_csr_via_ssh_tunnel,
+        workflow_kafka,
         workflow_hidden_hosts,
     ]:
         workflow(c, redpanda=False)
@@ -333,7 +345,7 @@ def workflow_default(c: Composition) -> None:
         workflow_validate_connection,
         workflow_ssh_key_after_restart,
         workflow_rotated_ssh_key_after_restart,
-        workflow_pg_via_ssh_tunnel,
+        workflow_pg,
         workflow_pg_via_ssh_tunnel_with_ssl,
         workflow_pg_restart_bastion,
     ]:

@@ -1018,12 +1018,16 @@ impl PostgresConnection<InlinedConnection> {
             }) => {
                 let secret = secrets_reader.read(*connection_id).await?;
                 let key_pair = SshKeyPair::from_bytes(&secret)?;
-                mz_postgres_util::TunnelConfig::Ssh(SshTunnelConfig {
-                    host: connection.host.clone(),
-                    port: connection.port,
-                    user: connection.user.clone(),
-                    key_pair,
-                })
+
+                mz_postgres_util::TunnelConfig::Ssh {
+                    connection_id: *connection_id,
+                    config: SshTunnelConfig {
+                        host: connection.host.clone(),
+                        port: connection.port,
+                        user: connection.user.clone(),
+                        key_pair,
+                    },
+                }
             }
             Tunnel::AwsPrivatelink(connection) => {
                 assert!(connection.port.is_none());
@@ -1042,7 +1046,12 @@ impl PostgresConnection<InlinedConnection> {
         connection_context: &ConnectionContext,
     ) -> Result<(), anyhow::Error> {
         let config = self.config(&*connection_context.secrets_reader).await?;
-        config.connect("connection validation").await?;
+        config
+            .connect(
+                "connection validation",
+                &connection_context.ssh_tunnel_manager,
+            )
+            .await?;
         Ok(())
     }
 }
