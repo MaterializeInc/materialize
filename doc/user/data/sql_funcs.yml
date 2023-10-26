@@ -705,7 +705,7 @@
     For example, you can use a window aggregation to smooth measurement data by computing the average of the last 5
     measurements before every row as follows:
     ```
-    SELECT avg(measurement) OVER (ROWS BETWEEN 4 PRECEDING AND CURRENT ROW ORDER BY time) FROM measurements
+    SELECT avg(measurement) OVER (ORDER BY time ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) FROM measurements;
     ```.
     Window functions always need an `OVER` clause. For the `OVER` clause, Materialize supports the same
     [syntax as PostgreSQL](https://www.postgresql.org/docs/current/tutorial-window.html), but currently
