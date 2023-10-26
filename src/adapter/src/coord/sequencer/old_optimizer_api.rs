@@ -18,6 +18,7 @@
 use std::collections::BTreeMap;
 
 use differential_dataflow::lattice::Lattice;
+use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW_TS;
 use mz_compute_types::dataflows::{DataflowDesc, IndexDesc};
 use mz_controller_types::ClusterId;
 use mz_expr::CollectionPlan;
@@ -39,7 +40,7 @@ use crate::coord::dataflows::{
 };
 use crate::coord::peek::FastPathPlan;
 use crate::coord::sequencer::inner::catch_unwind;
-use crate::coord::{Coordinator, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS};
+use crate::coord::Coordinator;
 use crate::session::Session;
 use crate::util::ResultExt;
 use crate::{catalog, AdapterError, AdapterNotice, ExecuteResponse, TimestampProvider};

@@ -14,6 +14,7 @@ from materialize.mzcompose.composition import Composition
 from materialize.zippy.framework import Action, ActionFactory, Capabilities, Capability
 from materialize.zippy.kafka_capabilities import KafkaRunning, TopicExists
 from materialize.zippy.mz_capabilities import MzIsRunning
+from materialize.zippy.replica_capabilities import source_capable_clusters
 from materialize.zippy.source_capabilities import SourceExists
 from materialize.zippy.storaged_capabilities import StoragedRunning
 
@@ -40,6 +41,9 @@ class CreateSourceParameterized(ActionFactory):
                     source=SourceExists(
                         name=new_source_name,
                         topic=random.choice(capabilities.get(TopicExists)),
+                        cluster_name=random.choice(
+                            source_capable_clusters(capabilities)
+                        ),
                     ),
                 )
             ]
@@ -64,7 +68,7 @@ class CreateSource(Action):
                   TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
 
                 > CREATE SOURCE {self.source.name}
-                  IN CLUSTER storaged
+                  IN CLUSTER {self.source.cluster_name}
                   FROM KAFKA CONNECTION {self.source.name}_kafka_conn
                   (TOPIC 'testdrive-{self.source.topic.name}-${{testdrive.seed}}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {self.source.name}_csr_conn

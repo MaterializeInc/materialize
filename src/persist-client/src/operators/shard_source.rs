@@ -11,7 +11,6 @@
 
 use std::any::Any;
 use std::collections::hash_map::DefaultHasher;
-use std::convert::Infallible;
 use std::fmt::Debug;
 use std::future::Future;
 use std::hash::{Hash, Hasher};
@@ -98,7 +97,7 @@ where
         Stream<Child<'g, G, T>, (usize, SerdeLeasedBatchPart)>,
         Rc<dyn Any>,
     ),
-    C: Future<Output = PersistClient> + 'static,
+    C: Future<Output = PersistClient> + Send + 'static,
 {
     // WARNING! If emulating any of this code, you should read the doc string on
     // [`LeasedBatchPart`] and [`Subscribe`] or will likely run into intentional
@@ -154,22 +153,6 @@ where
     )
 }
 
-/// Flow control configuration.
-/// TODO(guswynn): move to `persist_source`
-#[derive(Debug)]
-pub struct FlowControl<G: Scope> {
-    /// Stream providing in-flight frontier updates.
-    ///
-    /// As implied by its type, this stream never emits data, only progress updates.
-    ///
-    /// TODO: Replace `Infallible` with `!` once the latter is stabilized.
-    pub progress_stream: Stream<G, Infallible>,
-    /// Maximum number of in-flight bytes.
-    pub max_inflight_bytes: usize,
-    /// TODO(guswynn): explain
-    pub summary: <G::Timestamp as Timestamp>::Summary,
-}
-
 #[derive(Debug)]
 struct ActivateOnDrop {
     token_rx: tokio::sync::mpsc::Receiver<()>,
@@ -186,7 +169,7 @@ impl Drop for ActivateOnDrop {
 pub(crate) fn shard_source_descs<K, V, D, F, G>(
     scope: &G,
     name: &str,
-    client: impl Future<Output = PersistClient> + 'static,
+    client: impl Future<Output = PersistClient> + Send + 'static,
     shard_id: ShardId,
     as_of: Option<Antichain<G::Timestamp>>,
     until: Antichain<G::Timestamp>,
@@ -258,22 +241,31 @@ where
         let token_is_dropped = token_tx.closed();
         tokio::pin!(token_is_dropped);
 
-        let create_read_handle = async {
-            let read = client.await
-                .open_leased_reader::<K, V, G::Timestamp, D>(
-                    shard_id,
-                    key_schema,
-                    val_schema,
-                    Diagnostics {
-                        shard_name: name_owned.clone(),
-                        handle_purpose: format!("shard_source({})", name_owned),
-                    }
-                )
-                .await
-                .expect("could not open persist shard");
-
-            read
-        };
+        // Internally, the `open_leased_reader` call registers a new LeasedReaderId and then fires
+        // up a background tokio task to heartbeat it. It is possible that we might get a
+        // particularly adversarial scheduling where the CRDB query to register the id is sent and
+        // then our Future is not polled again for a long time, resulting is us never spawning the
+        // heartbeat task. Run reader creation in a task to attempt to defend against this.
+        //
+        // TODO: Really we likely need to swap the inners of all persist operators to be
+        // communicating with a tokio task over a channel, but that's much much harder, so for now
+        // we whack the moles as we see them.
+        let create_read_handle = mz_ore::task::spawn(|| format!("shard_source_reader({})", name_owned), {
+            let diagnostics = Diagnostics {
+                handle_purpose: format!("shard_source({})", name_owned),
+                shard_name: name_owned.clone(),
+            };
+            async move {
+                client.await
+                    .open_leased_reader::<K, V, G::Timestamp, D>(
+                        shard_id,
+                        key_schema,
+                        val_schema,
+                        diagnostics,
+                    )
+                    .await
+            }
+        });
 
         tokio::pin!(create_read_handle);
 
@@ -292,6 +284,8 @@ where
             }
             Either::Right((read, _)) => {
                 read
+                    .expect("reader creation shouldn't panic")
+                    .expect("could not open persist shard")
             }
         };
         let cfg = read.cfg.clone();

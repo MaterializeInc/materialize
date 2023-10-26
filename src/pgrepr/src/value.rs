@@ -599,7 +599,11 @@ impl Value {
             Type::Map { value_type } => Value::Map(strconv::parse_map(
                 s,
                 matches!(**value_type, Type::Map { .. }),
-                |elem_text| Value::decode_text(value_type, elem_text.as_bytes()).map(Some),
+                |elem_text| {
+                    elem_text
+                        .map(|t| Value::decode_text(value_type, t.as_bytes()))
+                        .transpose()
+                },
             )?),
             Type::Name => Value::Name(strconv::parse_pg_legacy_name(s)),
             Type::Numeric { .. } => Value::Numeric(Numeric(strconv::parse_numeric(s)?)),

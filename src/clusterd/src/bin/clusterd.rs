@@ -91,7 +91,6 @@ use mz_http_util::DynamicFilterTarget;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
-use mz_ore::halt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::netio::{Listener, SocketAddr};
 use mz_ore::now::SYSTEM_TIME;
@@ -211,22 +210,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             metrics_registry.clone(),
         )
         .await?;
-
-    if args.tracing.log_filter.is_some() {
-        halt!(
-            "`MZ_LOG_FILTER` / `--log-filter` has been removed. The filter is now configured by the \
-             `log_filter` system variable. In the rare case the filter is needed before the \
-             process has access to the system variable, use `MZ_STARTUP_LOG_FILTER` / `--startup-log-filter`."
-        )
-    }
-    if args.tracing.opentelemetry_filter.is_some() {
-        halt!(
-            "`MZ_OPENTELEMETRY_FILTER` / `--opentelemetry-filter` has been removed. The filter is now \
-            configured by the `opentelemetry_filter` system variable. In the rare case the filter \
-            is needed before the process has access to the system variable, use \
-            `MZ_STARTUP_OPENTELEMETRY_FILTER` / `--startup-opentelemetry-filter`."
-        )
-    }
 
     let tracing_handle = Arc::new(tracing_handle);
 

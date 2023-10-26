@@ -83,7 +83,7 @@ static MAPPINGS: Lazy<Option<Vec<Mapping>>> = Lazy::new(|| {
 });
 
 #[cfg(not(target_os = "linux"))]
-static BUILD_IDS: Lazy<Option<Vec<Mapping>>> = Lazy::new(|| {
+static MAPPINGS: Lazy<Option<Vec<Mapping>>> = Lazy::new(|| {
     error!("build ID fetching is only supported on Linux");
     None
 });

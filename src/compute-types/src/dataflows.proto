@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+// buf breaking: ignore (does currently not require backward-compatibility)
+
 syntax = "proto3";
 
 import "compute-types/src/plan.proto";
@@ -66,8 +68,6 @@ message ProtoBuildDesc {
 }
 
 message ProtoYieldSpec {
-    oneof kind {
-        uint64 by_work = 1;
-        mz_proto.ProtoDuration by_time = 2;
-    }
+    optional uint64 after_work = 1;
+    optional mz_proto.ProtoDuration after_time = 2;
 }

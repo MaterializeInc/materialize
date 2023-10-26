@@ -67,6 +67,7 @@ pub(crate) enum BuiltinTableUpdateSource {
 pub(crate) enum PendingWriteTxn {
     /// Write to a user table.
     User {
+        span: Span,
         /// List of all write operations within the transaction.
         writes: Vec<WriteOp>,
         /// Holds the coordinator's write lock.
@@ -294,6 +295,7 @@ impl Coordinator {
         for pending_write_txn in pending_writes {
             match pending_write_txn {
                 PendingWriteTxn::User {
+                    span: _,
                     writes,
                     write_lock_guard: _,
                     pending_txn:

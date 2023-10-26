@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from textwrap import dedent
 from typing import Protocol
 
+from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
@@ -22,6 +23,11 @@ from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
+
+
+def schema() -> str:
+    return dedent(KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD)
+
 
 SERVICES = [
     Redpanda(),
@@ -103,6 +109,8 @@ class KafkaTransactionLogGreaterThan1:
                   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-${testdrive.seed}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE DEBEZIUM
+
+                $ kafka-verify-topic sink=materialize.public.kafka_sink
                 """
             ),
         )
@@ -191,6 +199,8 @@ class KafkaDisruption:
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE DEBEZIUM
                 # WITH ( REMOTE 'clusterd:2100' ) https://github.com/MaterializeInc/materialize/issues/16582
+
+                $ kafka-verify-topic sink=materialize.public.sink1
                 """
             )
         )
@@ -203,15 +213,6 @@ class KafkaDisruption:
                   FROM mz_internal.mz_source_statuses
                   WHERE name = 'source1'
                 stalled true
-
-                # Sinks generally halt after receiving an error, which means that they may alternate
-                # between `stalled` and `starting`. Instead of relying on the current status, we
-                # check that there is a stalled status with the expected error.
-                > SELECT bool_or(error ~* '{error}'), bool_or(details->'namespaced'->>'kafka' ~* '{error}')
-                  FROM mz_internal.mz_sink_status_history
-                  JOIN mz_sinks ON mz_sinks.id = sink_id
-                  WHERE name = 'sink1' and status = 'stalled'
-                true true
                 """
             )
         )
@@ -230,7 +231,103 @@ class KafkaDisruption:
                   FROM mz_internal.mz_source_statuses
                   WHERE name = 'source1'
                 running <null>
+                """
+            )
+        )
 
+
+@dataclass
+class KafkaSinkDisruption:
+    name: str
+    breakage: Callable
+    expected_error: str
+    fixage: Callable | None
+
+    def run_test(self, c: Composition) -> None:
+        print(f"+++ Running Kafka sink disruption scenario {self.name}")
+        seed = random.randint(0, 256**4)
+
+        c.down(destroy_volumes=True, sanity_restart_mz=False)
+        c.up("testdrive", persistent=True)
+        c.up("redpanda", "materialized", "clusterd")
+
+        with c.override(
+            Testdrive(
+                no_reset=True,
+                seed=seed,
+                entrypoint_extra=["--initial-backoff=1s", "--backoff-factor=0"],
+            )
+        ):
+            self.populate(c)
+            self.breakage(c, seed)
+            self.assert_error(c, self.expected_error)
+
+            if self.fixage:
+                self.fixage(c, seed)
+                self.assert_recovery(c)
+
+    def populate(self, c: Composition) -> None:
+        # Create a source and a sink
+        c.testdrive(
+            schema()
+            + dedent(
+                """
+                # We specify the progress topic explicitly so we can delete it in a test later,
+                # and confirm that the sink stalls. (Deleting the output topic is not enough if
+                # we're not actively publishing new messages to the sink.)
+                > CREATE CONNECTION kafka_conn
+                  TO KAFKA (
+                    BROKER '${testdrive.kafka-addr}',
+                    PROGRESS TOPIC 'testdrive-progress-topic-${testdrive.seed}'
+                  );
+
+                > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
+                  URL '${testdrive.schema-registry-url}'
+                  );
+
+                $ kafka-create-topic topic=source-topic
+
+                $ kafka-ingest topic=source-topic format=avro schema=${schema}
+                {"f1": "A"}
+
+                > CREATE SOURCE source1
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-source-topic-${testdrive.seed}')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE NONE
+                # WITH ( REMOTE 'clusterd:2100' ) https://github.com/MaterializeInc/materialize/issues/16582
+
+                > CREATE SINK sink1 FROM source1
+                  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-topic-${testdrive.seed}')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE DEBEZIUM
+                # WITH ( REMOTE 'clusterd:2100' ) https://github.com/MaterializeInc/materialize/issues/16582
+
+                $ kafka-verify-data format=avro sink=materialize.public.sink1 sort-messages=true
+                {"before": null, "after": {"row":{"f1": "A"}}}
+                """
+            )
+        )
+
+    def assert_error(self, c: Composition, error: str) -> None:
+        c.testdrive(
+            dedent(
+                f"""
+                # Sinks generally halt after receiving an error, which means that they may alternate
+                # between `stalled` and `starting`. Instead of relying on the current status, we
+                # check that there is a stalled status with the expected error.
+                > SELECT bool_or(error ~* '{error}'), bool_or(details->'namespaced'->>'kafka' ~* '{error}')
+                  FROM mz_internal.mz_sink_status_history
+                  JOIN mz_sinks ON mz_sinks.id = sink_id
+                  WHERE name = 'sink1' and status = 'stalled'
+                true true
+                """
+            )
+        )
+
+    def assert_recovery(self, c: Composition) -> None:
+        c.testdrive(
+            dedent(
+                """
                 > SELECT status, error
                   FROM mz_internal.mz_sink_statuses
                   WHERE name = 'sink1'
@@ -342,9 +439,29 @@ class PgDisruption:
 
 
 disruptions: list[Disruption] = [
+    KafkaSinkDisruption(
+        name="delete-sink-topic-delete-progress-fix",
+        breakage=lambda c, seed: delete_sink_topic(c, seed),
+        expected_error="sink progress data exists, but sink data topic is missing",
+        # If we delete the progress topic, we will re-create the sink as if it is new.
+        fixage=lambda c, seed: c.exec(
+            "redpanda", "rpk", "topic", "delete", f"testdrive-progress-topic-{seed}"
+        ),
+    ),
+    KafkaSinkDisruption(
+        name="delete-sink-topic-recreate-topic-fix",
+        breakage=lambda c, seed: delete_sink_topic(c, seed),
+        expected_error="sink progress data exists, but sink data topic is missing",
+        # If we recreate the sink topic, the sink will work but will likely be inconsistent.
+        fixage=lambda c, seed: c.exec(
+            "redpanda", "rpk", "topic", "create", f"testdrive-sink-topic-{seed}"
+        ),
+    ),
     KafkaDisruption(
-        name="delete-topic",
-        breakage=lambda c, seed: redpanda_topics(c, "delete", seed),
+        name="delete-source-topic",
+        breakage=lambda c, seed: c.exec(
+            "redpanda", "rpk", "topic", "delete", f"testdrive-source-topic-{seed}"
+        ),
         expected_error="UnknownTopicOrPartition|topic",
         fixage=None
         # Re-creating the topic does not restart the source
@@ -418,9 +535,22 @@ def workflow_default(c: Composition) -> None:
         disruption.run_test(c)
 
 
-def redpanda_topics(c: Composition, action: str, seed: int) -> None:
-    for topic in ["source", "sink", "progress"]:
-        c.exec("redpanda", "rpk", "topic", action, f"testdrive-{topic}-topic-{seed}")
+def delete_sink_topic(c: Composition, seed: int) -> None:
+    c.exec("redpanda", "rpk", "topic", "delete", f"testdrive-sink-topic-{seed}")
+
+    # Write new data to source otherwise nothing will encounter the missing topic
+    c.testdrive(
+        schema()
+        + dedent(
+            """
+            $ kafka-ingest topic=source-topic format=avro schema=${schema}
+            {"f1": "B"}
+
+            > SELECT COUNT(*) FROM source1;
+            2
+            """
+        )
+    )
 
 
 def alter_pg_table(c: Composition) -> None:

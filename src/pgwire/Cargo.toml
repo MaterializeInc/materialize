@@ -15,6 +15,7 @@ bytesize = "1.1.0"
 futures = "0.3.25"
 itertools = "0.10.5"
 mz-adapter = { path = "../adapter" }
+mz-adapter-types = { path = "../adapter-types" }
 mz-expr = { path = "../expr" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-ore = { path = "../ore", features = ["tracing_"] }

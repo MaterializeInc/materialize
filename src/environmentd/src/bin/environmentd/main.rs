@@ -98,7 +98,7 @@ use mz_aws_secrets_controller::AwsSecretsController;
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
 use mz_controller::ControllerConfig;
-use mz_environmentd::{Listeners, ListenersConfig, BUILD_INFO};
+use mz_environmentd::{CatalogConfig, Listeners, ListenersConfig, BUILD_INFO};
 use mz_frontegg_auth::{Authentication, FronteggCliArgs};
 use mz_orchestrator::Orchestrator;
 use mz_orchestrator_kubernetes::{
@@ -110,10 +110,10 @@ use mz_orchestrator_process::{
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs, TracingOrchestrator};
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::error::ErrorExt;
+use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task::RuntimeExt;
-use mz_ore::{halt, metric};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::{
@@ -421,8 +421,16 @@ pub struct Args {
 
     // === Adapter options. ===
     /// The PostgreSQL URL for the adapter stash.
-    #[clap(long, env = "ADAPTER_STASH_URL", value_name = "POSTGRES_URL")]
-    adapter_stash_url: String,
+    #[clap(
+        long,
+        env = "ADAPTER_STASH_URL",
+        value_name = "POSTGRES_URL",
+        required_if_eq("catalog-store", "stash")
+    )]
+    adapter_stash_url: Option<String>,
+    /// The backing durable store of the catalog.
+    #[clap(long, arg_enum, env = "CATALOG_STORE", default_value("stash"))]
+    catalog_store: CatalogKind,
 
     // === Bootstrap options. ===
     #[clap(
@@ -579,6 +587,12 @@ enum OrchestratorKind {
     Process,
 }
 
+#[derive(ArgEnum, Debug, Clone)]
+enum CatalogKind {
+    Stash,
+    Persist,
+}
+
 // TODO [Alex Hunt] move this to a shared function that can be imported by the
 // region-controller.
 fn aws_secrets_controller_prefix(env_id: &EnvironmentId) -> String {
@@ -644,22 +658,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         },
         metrics_registry.clone(),
     ))?;
-
-    if args.tracing.log_filter.is_some() {
-        halt!(
-            "`MZ_LOG_FILTER` / `--log-filter` has been removed. The filter is now configured by the \
-             `log_filter` system variable. In the rare case the filter is needed before the \
-             process has access to the system variable, use `MZ_STARTUP_LOG_FILTER` / `--startup-log-filter`."
-        )
-    }
-    if args.tracing.opentelemetry_filter.is_some() {
-        halt!(
-            "`MZ_OPENTELEMETRY_FILTER` / `--opentelemetry-filter` has been removed. The filter is now \
-            configured by the `opentelemetry_filter` system variable. In the rare case the filter \
-            is needed before the process has access to the system variable, use \
-            `MZ_STARTUP_OPENTELEMETRY_FILTER` / `--startup-opentelemetry-filter`."
-        )
-    }
 
     let span = tracing::info_span!("environmentd::run").entered();
 
@@ -877,7 +875,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             blob_uri: args.persist_blob_url.to_string(),
             consensus_uri: args.persist_consensus_url.to_string(),
         },
-        persist_clients,
+        persist_clients: Arc::clone(&persist_clients),
         storage_stash_url: args.storage_stash_url,
         clusterd_image: args.clusterd_image.expect("clap enforced"),
         init_container_image: args.orchestrator_kubernetes_init_container_image,
@@ -926,12 +924,18 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             internal_http_listen_addr: args.internal_http_listen_addr,
         })
         .await?;
+        let catalog_config = match args.catalog_store {
+            CatalogKind::Stash => CatalogConfig::Stash {
+                url: args.adapter_stash_url.expect("required for stash catalog"),
+            },
+            CatalogKind::Persist => CatalogConfig::Persist { persist_clients },
+        };
         listeners
             .serve(mz_environmentd::Config {
                 tls,
                 frontegg,
                 cors_allowed_origin,
-                adapter_stash_url: args.adapter_stash_url,
+                catalog_config,
                 controller,
                 secrets_controller,
                 cloud_resource_controller,

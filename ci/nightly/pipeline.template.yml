@@ -38,19 +38,40 @@ steps:
     agents:
       queue: builder-linux-x86_64
 
-  - id: feature-benchmark
-    label: "Feature benchmark against merge base or 'latest'"
-    timeout_in_minutes: 360
-    agents:
-      queue: linux-x86_64-large
-    artifact_paths: junit_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: feature-benchmark
-          args:
-             - --other-tag
-             # common-ancestor will default to latest if not in a PR
-             - common-ancestor
+  - group: Benchmarks
+    key: benchmark
+    steps:
+    - id: feature-benchmark
+      label: "Feature benchmark against merge base or 'latest'"
+      timeout_in_minutes: 360
+      agents:
+        queue: linux-x86_64-large
+      artifact_paths: junit_*.xml
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: feature-benchmark
+            args:
+               - --other-tag
+               # common-ancestor will default to latest if not in a PR
+               - common-ancestor
+    - id: scalability-benchmark
+      label: "Scalability benchmark against merge base or 'latest'"
+      timeout_in_minutes: 120
+      agents:
+        queue: linux-x86_64-large
+      artifact_paths: junit_*.xml
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: scalability
+            args:
+              - --target
+              - HEAD
+              - --target
+              - common-ancestor
+              - --regression-against
+              - common-ancestor
+              - --max-concurrency
+              - "256"
 
   - id: kafka-matrix
     label: Kafka smoke test against previous Kafka versions
@@ -85,18 +106,18 @@ steps:
               composition: testdrive
               args: [--redpanda, --aws-region=us-east-1]
 
-      # Disabled due to taking too long for the value provided
-      #  - id: redpanda-testdrive-aarch64
-      #    label: ":panda_face: :racing_car: testdrive aarch64"
-      #    timeout_in_minutes: 600
-      #    agents:
-      #      queue: linux-aarch64
-      #    artifact_paths: junit_*.xml
-      #    plugins:
-      #      - ./ci/plugins/scratch-aws-access: ~
-      #      - ./ci/plugins/mzcompose:
-      #          composition: testdrive
-      #          args: [--redpanda, --aws-region=us-east-1]
+      - id: redpanda-testdrive-aarch64
+        label: ":panda_face: :racing_car: testdrive aarch64"
+        timeout_in_minutes: 600
+        agents:
+          queue: linux-aarch64
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/scratch-aws-access: ~
+          - ./ci/plugins/mzcompose:
+              composition: testdrive
+              args: [--redpanda, --aws-region=us-east-1]
+        skip: "Disabled due to taking too long for the value provided"
 
       - id: testdrive-partitions-5
         label: ":racing_car: testdrive with --kafka-default-partitions 5"
@@ -168,7 +189,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: testdrive
               args: [--aws-region=us-east-1, --persistent-user-tables]
-        skip: Persistence tests disabled
+        skip: "Persistence tests disabled"
 
   - id: limits
     label: "Product limits"
@@ -565,6 +586,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: persist
               args: [--consensus=mem, --blob=mem, --persist-txn]
+        skip: "TODO(txn): Turn on before enabling by default/in production."
 
   - id: persistence-failpoints
     label: Persistence failpoints
@@ -774,7 +796,7 @@ steps:
     steps:
       - id: parallel-workload-dml
         label: "Parallel Workload (DML)"
-        artifact_paths: junit_*.xml
+        artifact_paths: [junit_*.xml, parallel-workload-queries.log.zst]
         timeout_in_minutes: 40
         agents:
           queue: builder-linux-x86_64
@@ -785,7 +807,7 @@ steps:
 
       - id: parallel-workload-ddl
         label: "Parallel Workload (DDL)"
-        artifact_paths: junit_*.xml
+        artifact_paths: [junit_*.xml, parallel-workload-queries.log.zst]
         timeout_in_minutes: 40
         agents:
           queue: builder-linux-x86_64
@@ -794,21 +816,21 @@ steps:
               composition: parallel-workload
               args: [--runtime=1500]
 
-      # TODO: Reenable when #21954 is fixed
-      # - id: parallel-workload-100-threads
-      #   label: "Parallel Workload (100 threads)"
-      #   artifact_paths: junit_*.xml
-      #   timeout_in_minutes: 40
-      #   agents:
-      #     queue: builder-linux-x86_64
-      #   plugins:
-      #     - ./ci/plugins/mzcompose:
-      #         composition: parallel-workload
-      #         args: [--runtime=1500, --threads=100]
+      - id: parallel-workload-100-threads
+        label: "Parallel Workload (100 threads)"
+        artifact_paths: [junit_*.xml, parallel-workload-queries.log.zst]
+        timeout_in_minutes: 40
+        agents:
+          queue: builder-linux-x86_64
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: parallel-workload
+              args: [--runtime=1500, --threads=100]
+        skip: "TODO(def-): Reenable when #21954 is fixed"
 
       - id: parallel-workload-rename-naughty
         label: "Parallel Workload (rename + naughty identifiers)"
-        artifact_paths: junit_*.xml
+        artifact_paths: [junit_*.xml, parallel-workload-queries.log.zst]
         timeout_in_minutes: 40
         agents:
           queue: builder-linux-x86_64
@@ -819,7 +841,7 @@ steps:
 
       - id: parallel-workload-rename
         label: "Parallel Workload (rename)"
-        artifact_paths: junit_*.xml
+        artifact_paths: [junit_*.xml, parallel-workload-queries.log.zst]
         timeout_in_minutes: 40
         agents:
           queue: builder-linux-x86_64
@@ -830,7 +852,7 @@ steps:
 
       - id: parallel-workload-cancel
         label: "Parallel Workload (cancel)"
-        artifact_paths: junit_*.xml
+        artifact_paths: [junit_*.xml, parallel-workload-queries.log.zst]
         timeout_in_minutes: 40
         agents:
           queue: builder-linux-x86_64
@@ -839,17 +861,17 @@ steps:
               composition: parallel-workload
               args: [--runtime=1500, --scenario=cancel]
 
-      # TODO(def-) Enable after figuring out restoring catalog
-      # - id: parallel-workload-kill
-      #   label: "Parallel Workload (kill)"
-      #   artifact_paths: junit_*.xml
-      #   timeout_in_minutes: 40
-      #   agents:
-      #     queue: builder-linux-x86_64
-      #   plugins:
-      #     - ./ci/plugins/mzcompose:
-      #         composition: parallel-workload
-      #         args: [--runtime=1500, --scenario=kill]
+      - id: parallel-workload-kill
+        label: "Parallel Workload (kill)"
+        artifact_paths: [junit_*.xml, parallel-workload-queries.log.zst]
+        timeout_in_minutes: 40
+        agents:
+          queue: builder-linux-x86_64
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: parallel-workload
+              args: [--runtime=1500, --scenario=kill]
+        skip: "TODO(def-) Enable after figuring out restoring catalog"
 
   - id: incident-70
     label: "Test for incident 70"

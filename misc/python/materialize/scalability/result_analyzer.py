@@ -16,27 +16,12 @@ from materialize.scalability.workload_result import WorkloadResult
 
 
 class ResultAnalyzer:
-    def determine_regression(
+    def determine_regression_in_workload(
         self,
-        baseline_endpoint: Endpoint,
-        results_by_workload_name: dict[str, dict[Endpoint, WorkloadResult]],
-    ) -> RegressionOutcome:
-        regression_outcome = RegressionOutcome()
-        for workload_name in results_by_workload_name.keys():
-            self.determine_regressions_in_workload(
-                regression_outcome,
-                baseline_endpoint,
-                workload_name,
-                results_by_workload_name[workload_name],
-            )
-
-        return regression_outcome
-
-    def determine_regressions_in_workload(
-        self,
-        regression_outcome: RegressionOutcome,
-        baseline_endpoint: Endpoint,
         workload_name: str,
-        results_by_endpoint: dict[Endpoint, WorkloadResult],
-    ) -> bool:
+        baseline_endpoint: Endpoint,
+        other_endpoint: Endpoint,
+        regression_baseline_result: WorkloadResult,
+        other_result: WorkloadResult,
+    ) -> RegressionOutcome:
         raise NotImplementedError

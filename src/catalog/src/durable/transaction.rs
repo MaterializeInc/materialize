@@ -7,23 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use crate::builtin::{BuiltinLog, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS};
-use crate::objects::{
-    AuditLogKey, Cluster, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
-    ClusterKey, ClusterReplica, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, CommentKey,
-    CommentValue, Config, ConfigKey, ConfigValue, Database, DatabaseKey, DatabaseValue,
-    DefaultPrivilegesKey, DefaultPrivilegesValue, DurableType, GidMappingKey, GidMappingValue,
-    IdAllocKey, IdAllocValue, IntrospectionSourceIndex, Item, ItemKey, ItemValue, ReplicaConfig,
-    Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue, ServerConfigurationKey,
-    ServerConfigurationValue, SettingKey, SettingValue, StorageUsageKey, SystemObjectMapping,
-    SystemPrivilegesKey, SystemPrivilegesValue, TimestampKey, TimestampValue,
-};
-use crate::objects::{ClusterConfig, ClusterVariant};
-use crate::{
-    BootstrapArgs, CatalogError, DurableCatalogState, ReplicaLocation, Snapshot, TimelineTimestamp,
-    DATABASE_ID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY,
-    SYSTEM_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
-};
 use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller::clusters::ReplicaLogging;
@@ -44,6 +27,24 @@ use mz_stash_types::objects::proto;
 use mz_storage_types::sources::Timeline;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
+
+use crate::builtin::{BuiltinLog, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS};
+use crate::durable::objects::{
+    AuditLogKey, Cluster, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
+    ClusterKey, ClusterReplica, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, CommentKey,
+    CommentValue, Config, ConfigKey, ConfigValue, Database, DatabaseKey, DatabaseValue,
+    DefaultPrivilegesKey, DefaultPrivilegesValue, DurableType, GidMappingKey, GidMappingValue,
+    IdAllocKey, IdAllocValue, IntrospectionSourceIndex, Item, ItemKey, ItemValue, ReplicaConfig,
+    Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue, ServerConfigurationKey,
+    ServerConfigurationValue, SettingKey, SettingValue, StorageUsageKey, SystemObjectMapping,
+    SystemPrivilegesKey, SystemPrivilegesValue, TimestampKey, TimestampValue,
+};
+use crate::durable::objects::{ClusterConfig, ClusterVariant};
+use crate::durable::{
+    BootstrapArgs, CatalogError, DurableCatalogState, ReplicaLocation, Snapshot, TimelineTimestamp,
+    DATABASE_ID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY,
+    SYSTEM_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
+};
 
 pub(crate) fn add_new_builtin_clusters_migration(
     txn: &mut Transaction<'_>,

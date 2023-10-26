@@ -14,6 +14,9 @@ class Workload:
     def operations(self) -> list[Operation]:
         raise NotImplementedError
 
+    def name(self) -> str:
+        return self.__class__.__name__
+
 
 class WorkloadSelfTest(Workload):
     """Used to self-test the framework, so need to be excluded from regular benchmark runs."""

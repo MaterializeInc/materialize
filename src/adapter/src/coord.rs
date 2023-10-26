@@ -78,6 +78,8 @@ use differential_dataflow::lattice::Lattice;
 use fail::fail_point;
 use futures::StreamExt;
 use itertools::Itertools;
+use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW_TS;
+use mz_adapter_types::connection::ConnectionId;
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig};
 use mz_compute_types::dataflows::DataflowDescription;
@@ -88,11 +90,10 @@ use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFi
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::metrics::{MetricsFutureExt, MetricsRegistry};
 use mz_ore::now::{EpochMillis, NowFn};
-use mz_ore::retry::Retry;
 use mz_ore::task::spawn;
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
-use mz_ore::{soft_assert_or_log, stack, task};
+use mz_ore::{soft_assert_or_log, stack};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::ExplainFormat;
 use mz_repr::role_id::RoleId;
@@ -106,13 +107,9 @@ use mz_sql::plan::{CopyFormat, CreateConnectionPlan, Params, QueryWhen};
 use mz_sql::rbac::UnauthorizedError;
 use mz_sql::session::user::{RoleMetadata, User};
 use mz_sql::session::vars::ConnectionCounter;
-use mz_storage_client::controller::{
-    CollectionDescription, CreateExportToken, DataSource, DataSourceOther,
-};
-use mz_storage_types::connections::inline::{IntoInlineConnection, ReferencedConnection};
+use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
+use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::controller::StorageError;
-use mz_storage_types::sinks::StorageSinkConnection;
 use mz_storage_types::sources::Timeline;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::Optimizer;
@@ -125,9 +122,9 @@ use uuid::Uuid;
 
 use crate::catalog::{
     self, AwsPrincipalContext, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog, CatalogItem,
-    ClusterReplicaSizeMap, DataSourceDesc, Source, StorageSinkConnectionState,
+    ClusterReplicaSizeMap, DataSourceDesc, Source,
 };
-use crate::client::{Client, ConnectionId, Handle};
+use crate::client::{Client, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
 use crate::config::SystemParameterSyncConfig;
 use crate::coord::appends::{Deferred, GroupCommitPermit, PendingWriteTxn};
@@ -170,33 +167,12 @@ mod read_policy;
 mod sequencer;
 mod sql;
 
-// TODO: We can have only two consts here, instead of three, once there exists a `const` way to
-// convert between a `Timestamp` and a `Duration`, and unwrap a result in const contexts. Currently
-// unstable compiler features that would allow this are:
-// * `const_option`: https://github.com/rust-lang/rust/issues/67441
-// * `const_result`: https://github.com/rust-lang/rust/issues/82814
-// * `const_num_from_num`: https://github.com/rust-lang/rust/issues/87852
-// * `const_precise_live_drops`: https://github.com/rust-lang/rust/issues/73255
-
-/// `DEFAULT_LOGICAL_COMPACTION_WINDOW`, in milliseconds.
-/// The default is set to a second to track the default timestamp frequency for sources.
-const DEFAULT_LOGICAL_COMPACTION_WINDOW_MILLIS: u64 = 1000;
-
-/// The default logical compaction window for new objects
-pub const DEFAULT_LOGICAL_COMPACTION_WINDOW: Duration =
-    Duration::from_millis(DEFAULT_LOGICAL_COMPACTION_WINDOW_MILLIS);
-
-/// `DEFAULT_LOGICAL_COMPACTION_WINDOW` as an `EpochMillis` timestamp
-pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_TS: mz_repr::Timestamp =
-    Timestamp::new(DEFAULT_LOGICAL_COMPACTION_WINDOW_MILLIS);
-
 #[derive(Debug)]
 pub enum Message<T = mz_repr::Timestamp> {
     Command(Command),
     ControllerReady,
     PurifiedStatementReady(PurifiedStatementReady),
     CreateConnectionValidationReady(CreateConnectionValidationReady),
-    SinkConnectionReady(SinkConnectionReady),
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
     /// Initiates a group commit.
     GroupCommitInitiate(Span, Option<GroupCommitPermit>),
@@ -271,7 +247,6 @@ impl Message {
             Message::ControllerReady => "controller_ready",
             Message::PurifiedStatementReady(_) => "purified_statement_ready",
             Message::CreateConnectionValidationReady(_) => "create_connection_validation_ready",
-            Message::SinkConnectionReady(_) => "sink_connection_ready",
             Message::WriteLockGrant(_) => "write_lock_grant",
             Message::GroupCommitInitiate(..) => "group_commit_initiate",
             Message::GroupCommitApply(..) => "group_commit_apply",
@@ -318,17 +293,6 @@ pub struct CreateConnectionValidationReady {
     pub connection_gid: GlobalId,
     pub plan_validity: PlanValidity,
     pub otel_ctx: OpenTelemetryContext,
-}
-
-#[derive(Derivative)]
-#[derivative(Debug)]
-pub struct SinkConnectionReady {
-    #[derivative(Debug = "ignore")]
-    pub ctx: Option<ExecuteContext>,
-    pub id: GlobalId,
-    pub oid: u32,
-    pub create_export_token: CreateExportToken,
-    pub result: Result<StorageSinkConnection<ReferencedConnection>, AdapterError>,
 }
 
 #[derive(Debug)]
@@ -539,7 +503,7 @@ impl PlanValidity {
 /// Configures a coordinator.
 pub struct Config {
     pub dataflow_client: mz_controller::Controller,
-    pub storage: Box<dyn mz_catalog::DurableCatalogState>,
+    pub storage: Box<dyn mz_catalog::durable::DurableCatalogState>,
     pub unsafe_mode: bool,
     pub all_features: bool,
     pub build_info: &'static BuildInfo,
@@ -1073,14 +1037,17 @@ impl Coordinator {
         info!("coordinator init: beginning bootstrap");
 
         // Inform the controllers about their initial configuration.
-        let compute_config = flags::compute_config(self.catalog().system_config());
+        let system_config = self.catalog().system_config();
+        let compute_config = flags::compute_config(system_config);
+        let storage_config = flags::storage_config(system_config);
+        let scheduling_config = flags::orchestrator_scheduling_config(system_config);
+        let merge_effort = system_config.default_idle_arrangement_merge_effort();
         self.controller.compute.update_configuration(compute_config);
-        let storage_config = flags::storage_config(self.catalog().system_config());
         self.controller.storage.update_configuration(storage_config);
-        let orchestrator_scheduling_config =
-            flags::orchestrator_scheduling_config(self.catalog().system_config());
         self.controller
-            .update_orchestrator_scheduling_config(orchestrator_scheduling_config);
+            .update_orchestrator_scheduling_config(scheduling_config);
+        self.controller
+            .set_default_idle_arrangement_merge_effort(merge_effort);
 
         // Capture identifiers that need to have their read holds relaxed once the bootstrap completes.
         //
@@ -1626,64 +1593,10 @@ impl Coordinator {
                     }
                 }
                 CatalogItem::Sink(sink) => {
-                    // Re-create the sink.
-                    let builder = match &sink.connection {
-                        StorageSinkConnectionState::Pending(builder) => builder.clone(),
-                        StorageSinkConnectionState::Ready(_) => {
-                            panic!("sink already initialized during catalog boot")
-                        }
-                    };
-                    // Now we're ready to create the sink connection. Arrange to notify the
-                    // main coordinator thread when the future completes.
-                    let internal_cmd_tx = self.internal_cmd_tx.clone();
-                    let connection_context = self.connection_context.clone();
                     let id = entry.id();
-                    let oid = entry.oid();
-
-                    let create_export_token = self
-                        .controller
-                        .storage
-                        .prepare_export(id, sink.from)
-                        .unwrap_or_terminate("cannot fail to prepare export");
-
-                    let referenced_builder = builder.clone();
-                    let builder = builder.into_inline_connection(self.catalog().state());
-
-                    task::spawn(
-                        || format!("sink_connection_ready:{}", sink.from),
-                        async move {
-                            let conn_result = Retry::default()
-                                .max_tries(usize::MAX)
-                                .clamp_backoff(Duration::from_secs(60 * 10))
-                                .retry_async(|_| async {
-                                    let referenced_builder = referenced_builder.clone();
-                                    let builder = builder.clone();
-                                    let connection_context = connection_context.clone();
-                                    mz_storage_client::sink::build_sink_connection(
-                                        builder,
-                                        referenced_builder,
-                                        connection_context,
-                                    )
-                                    .await
-                                })
-                                .await
-                                .map_err(StorageError::Generic)
-                                .map_err(AdapterError::from);
-                            // It is not an error for sink connections to become ready after `internal_cmd_rx` is dropped.
-                            let result = internal_cmd_tx.send(Message::SinkConnectionReady(
-                                SinkConnectionReady {
-                                    ctx: None,
-                                    id,
-                                    oid,
-                                    create_export_token,
-                                    result: conn_result,
-                                },
-                            ));
-                            if let Err(e) = result {
-                                warn!("internal_cmd_rx dropped before we could send: {:?}", e);
-                            }
-                        },
-                    );
+                    self.create_storage_export(id, sink)
+                        .await
+                        .unwrap_or_terminate("cannot fail to create exports");
                 }
                 CatalogItem::Connection(catalog_connection) => {
                     if let mz_storage_types::connections::Connection::AwsPrivatelink(conn) =
@@ -1999,8 +1912,25 @@ impl Coordinator {
                 }
                 // See [`appends::GroupCommitWaiter`] for notes on why this is cancel safe.
                 permit = group_commit_rx.ready() => {
-                    let span = info_span!(parent: None, "group_commit_notify");
-                    span.follows_from(Span::current());
+                    // If we happen to have batched exactly one user write, use
+                    // that span so the `emit_trace_id_notice` hooks up.
+                    // Otherwise, the best we can do is invent a new root span
+                    // and make it follow from all the Spans in the pending
+                    // writes.
+                    let user_write_spans = self.pending_writes.iter().flat_map(|x| match x {
+                        PendingWriteTxn::User{span, ..} => Some(span),
+                        PendingWriteTxn::System{..} => None,
+                    });
+                    let span = match user_write_spans.exactly_one() {
+                        Ok(span) => span.clone(),
+                        Err(user_write_spans) => {
+                            let span = info_span!(parent: None, "group_commit_notify");
+                            for s in user_write_spans {
+                                span.follows_from(s);
+                            }
+                            span
+                        }
+                    };
                     Message::GroupCommitInitiate(span, Some(permit))
                 },
                 // `recv()` on `UnboundedReceiver` is cancellation safe:

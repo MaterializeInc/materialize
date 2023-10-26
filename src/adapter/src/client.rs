@@ -18,9 +18,10 @@ use anyhow::bail;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use futures::{Stream, StreamExt};
+use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_build_info::BuildInfo;
 use mz_ore::collections::CollectionExt;
-use mz_ore::id_gen::{IdAllocator, IdHandle};
+use mz_ore::id_gen::IdAllocator;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::result::ResultExt;
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
@@ -53,14 +54,6 @@ use crate::statement_logging::StatementEndedExecutionReason;
 use crate::telemetry::{self, SegmentClientExt, StatementFailureType};
 use crate::webhook::AppendWebhookResponse;
 use crate::{AdapterNotice, PeekResponseUnary, StartupResponse};
-
-/// Inner type of a [`ConnectionId`], `u32` for postgres compatibility.
-///
-/// Note: Generally you should not use this type directly, and instead use [`ConnectionId`].
-pub type ConnectionIdType = u32;
-
-/// An abstraction allowing us to name different connections.
-pub type ConnectionId = IdHandle<ConnectionIdType>;
 
 /// A handle to a running coordinator.
 ///

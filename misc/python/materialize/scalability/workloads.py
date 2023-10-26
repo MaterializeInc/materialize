@@ -11,6 +11,7 @@ from materialize.scalability.operation import Operation
 from materialize.scalability.operations import (
     InsertDefaultValues,
     SelectCount,
+    SelectLimit,
     SelectOne,
     SelectStar,
     SelectUnionAll,
@@ -32,6 +33,11 @@ class SelectOneWorkload(Workload):
 class SelectStarWorkload(Workload):
     def operations(self) -> list["Operation"]:
         return [SelectStar()]
+
+
+class SelectLimitWorkload(Workload):
+    def operations(self) -> list["Operation"]:
+        return [SelectLimit()]
 
 
 class SelectCountWorkload(Workload):

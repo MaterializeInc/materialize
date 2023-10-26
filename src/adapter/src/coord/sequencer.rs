@@ -28,7 +28,7 @@ use mz_sql::rbac;
 use mz_sql_parser::ast::{Raw, Statement};
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use tokio::sync::oneshot;
-use tracing::{event, Level};
+use tracing::{event, Instrument, Level, Span};
 
 use crate::catalog::{Catalog, ErrorKind};
 use crate::command::{Command, ExecuteResponse, Response};
@@ -646,7 +646,8 @@ impl Coordinator {
                 // We ignore the resp.result because it's not clear what to do if it failed since we
                 // can only send a single ExecuteResponse to tx.
                 tx.send(result, commit_response.session);
-            },
+            }
+            .instrument(Span::current()),
         );
     }
 

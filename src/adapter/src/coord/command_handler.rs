@@ -13,6 +13,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -26,6 +27,7 @@ use mz_sql::plan::{
     AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, Params, Plan, TransactionType,
 };
 use mz_sql::rbac;
+use mz_sql::rbac::CREATE_ITEM_USAGE;
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{
     EndTransactionAction, OwnedVarInput, Var, STATEMENT_LOGGING_SAMPLE_RATE,
@@ -36,7 +38,6 @@ use tracing::Instrument;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::catalog::{CatalogItem, DataSourceDesc, Source};
-use crate::client::{ConnectionId, ConnectionIdType};
 use crate::command::{
     Canceled, CatalogSnapshot, Command, ExecuteResponse, GetVariablesResponse, StartupResponse,
 };
@@ -630,11 +631,12 @@ impl Coordinator {
                     // Checks if the session is authorized to purify a statement. Usually
                     // authorization is checked after planning, however purification happens before
                     // planning, which may require the use of some connections and secrets.
-                    if let Err(e) = rbac::check_item_usage(
+                    if let Err(e) = rbac::check_usage(
                         &catalog,
                         ctx.session().role_metadata(),
                         ctx.session().vars(),
                         &resolved_ids,
+                        &CREATE_ITEM_USAGE,
                     ) {
                         return ctx.retire(Err(e.into()));
                     }

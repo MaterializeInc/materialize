@@ -203,3 +203,49 @@ impl LoadGeneratorSourcePurificationError {
         }
     }
 }
+
+/// Logical errors detectable during purification for a KAFKA SOURCE.
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum KafkaSinkPurificationError {
+    #[error("{0} is not a KAFKA CONNECTION")]
+    NotKafkaConnection(FullItemName),
+    #[error("admin client errored")]
+    AdminClientError(String),
+    #[error("zero brokers discovered in metadata request")]
+    ZeroBrokers,
+}
+
+impl KafkaSinkPurificationError {
+    pub fn detail(&self) -> Option<String> {
+        match self {
+            Self::AdminClientError(e) => Some(e.clone()),
+            _ => None,
+        }
+    }
+
+    pub fn hint(&self) -> Option<String> {
+        None
+    }
+}
+
+/// Logical errors detectable during purification for a KAFKA SOURCE.
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum CsrPurificationError {
+    #[error("{0} is not a CONFLUENT SCHEMA REGISTRY CONNECTION")]
+    NotCsrConnection(FullItemName),
+    #[error("client errored")]
+    ClientError(String),
+}
+
+impl CsrPurificationError {
+    pub fn detail(&self) -> Option<String> {
+        match self {
+            Self::ClientError(e) => Some(e.clone()),
+            _ => None,
+        }
+    }
+
+    pub fn hint(&self) -> Option<String> {
+        None
+    }
+}

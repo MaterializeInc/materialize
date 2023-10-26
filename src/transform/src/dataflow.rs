@@ -17,7 +17,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
-use mz_compute_types::dataflows::{DataflowDesc, IndexImport};
+use mz_compute_types::dataflows::{BuildDesc, DataflowDesc, IndexImport};
 use mz_expr::visit::Visit;
 use mz_expr::{
     AccessStrategy, CollectionPlan, Id, JoinImplementation, LocalId, MapFilterProject,
@@ -480,6 +480,7 @@ fn prune_and_annotate_dataflow_index_imports(
     indexes: &dyn IndexOracle,
     dataflow_metainfo: &mut DataflowMetainfo,
 ) -> Result<(), TransformError> {
+    // Preparation.
     // Let's save the unique keys of the sources. This will inform which indexes to choose for full
     // scans. (We can't get this info from `source_imports`, because `source_imports` only has those
     // sources that are not getting an indexed read.)
@@ -657,6 +658,10 @@ id: {}, key: {:?}",
                                     // We already know that it's an indexed access.
                                     unreachable!()
                                 }
+                                AccessStrategy::SameDataflow => {
+                                    // We have not added such annotations yet.
+                                    unreachable!()
+                                }
                                 AccessStrategy::Index(accesses) => {
                                     for (idx_id, usage_type) in accesses {
                                         if matches!(usage_type, IndexUsageType::FullScan) {
@@ -713,8 +718,35 @@ id: {}, key: {:?}",
         .index_imports
         .retain(|id, _index_import| dataflow_metainfo.index_usage_types.contains_key(id));
 
-    // A sanity check that all Get annotations indicate indexes that are present in `index_imports`.
+    // Determine AccessStrategy::SameDataflow accesses. These were classified as
+    // AccessStrategy::Persist inside collect_index_reqs, so now we check these, and if the id is of
+    // a collection that we are building ourselves, then we adjust the access strategy.
+    let mut objects_to_build_ids = BTreeSet::new();
+    for BuildDesc { id, plan: _ } in dataflow.objects_to_build.iter() {
+        objects_to_build_ids.insert(id.clone());
+    }
     for build_desc in dataflow.objects_to_build.iter_mut() {
+        build_desc.plan.as_inner_mut().visit_mut_post(
+            &mut |expr: &mut MirRelationExpr| match expr {
+                MirRelationExpr::Get {
+                    id: Id::Global(global_id),
+                    typ: _,
+                    access_strategy,
+                } => match access_strategy {
+                    AccessStrategy::Persist => {
+                        if objects_to_build_ids.contains(global_id) {
+                            *access_strategy = AccessStrategy::SameDataflow;
+                        }
+                    }
+                    _ => {}
+                },
+                _ => {}
+            },
+        )?;
+    }
+
+    // A sanity check that all Get annotations indicate indexes that are present in `index_imports`.
+    for build_desc in dataflow.objects_to_build.iter() {
         build_desc
             .plan
             .as_inner()
@@ -722,18 +754,15 @@ id: {}, key: {:?}",
                 MirRelationExpr::Get {
                     id: Id::Global(_),
                     typ: _,
-                    access_strategy,
-                } => match access_strategy {
-                    AccessStrategy::Index(accesses) => {
-                        for (idx_id, _) in accesses {
-                            soft_assert!(
-                                dataflow.index_imports.contains_key(idx_id),
-                                "Dangling Get index annotation"
-                            );
-                        }
+                    access_strategy: AccessStrategy::Index(accesses),
+                } => {
+                    for (idx_id, _) in accesses {
+                        soft_assert!(
+                            dataflow.index_imports.contains_key(idx_id),
+                            "Dangling Get index annotation"
+                        );
                     }
-                    _ => {}
-                },
+                }
                 _ => {}
             })?;
     }

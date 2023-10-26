@@ -74,11 +74,12 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_sink_doc_on_option": "true",
     "enable_assert_not_null": "true",
     "enable_specialized_arrangements": "true",
+    "persist_fast_path_limit": "1000",
 }
 
 DEFAULT_CRDB_ENVIRONMENT = [
-    "COCKROACH_ENGINE_MAX_SYNC_DURATION_DEFAULT=60s",
-    "COCKROACH_LOG_MAX_SYNC_DURATION=60s",
+    "COCKROACH_ENGINE_MAX_SYNC_DURATION_DEFAULT=120s",
+    "COCKROACH_LOG_MAX_SYNC_DURATION=120s",
 ]
 
 

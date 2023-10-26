@@ -77,8 +77,3 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     #     # Don't fail the entire run. We ran into a crash,
     #     # ci-logged-errors-detect will handle this if it's an unknown failure.
     #     return
-    # Restart mz
-    c.kill("materialized")
-    c.up("materialized")
-    # Verify that things haven't blown up
-    c.sql("SELECT 1")

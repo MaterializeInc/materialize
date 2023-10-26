@@ -15,6 +15,7 @@ import pg8000
 import requests
 from pg8000.native import identifier
 
+import materialize.parallel_workload.database
 from materialize.data_ingest.data_type import NUMBER_TYPES, Text, TextTextMap
 from materialize.mzcompose.composition import Composition
 from materialize.parallel_workload.database import (
@@ -29,7 +30,6 @@ from materialize.parallel_workload.database import (
     MAX_TABLES,
     MAX_VIEWS,
     MAX_WEBHOOK_SOURCES,
-    NAUGHTY_IDENTIFIERS,
     Cluster,
     ClusterReplica,
     Database,
@@ -99,12 +99,8 @@ class Action:
                 ]
             )
         if self.db.scenario == Scenario.Rename:
-            result.extend(
-                [
-                    "unknown schema",
-                ]
-            )
-        if NAUGHTY_IDENTIFIERS:
+            result.extend(["unknown schema", "ambiguous reference to schema name"])
+        if materialize.parallel_workload.database.NAUGHTY_IDENTIFIERS:
             result.extend(["identifier length exceeds 255 bytes"])
         return result
 
@@ -544,7 +540,8 @@ class CreateClusterAction(Action):
 class DropClusterAction(Action):
     def errors_to_ignore(self) -> list[str]:
         return [
-            "cannot drop cluster with active objects",
+            # cannot drop cluster "..." because other objects depend on it
+            "because other objects depend on it",
         ] + super().errors_to_ignore()
 
     def run(self, exe: Executor) -> None:
@@ -676,7 +673,8 @@ class ReconnectAction(Action):
         except:
             pass
 
-        while True:
+        NUM_ATTEMPTS = 20
+        for i in range(NUM_ATTEMPTS):
             try:
                 conn = pg8000.connect(
                     host=host, port=port, user=user, database=self.db.name()
@@ -688,7 +686,7 @@ class ReconnectAction(Action):
                 cur.execute("SELECT pg_backend_pid()")
                 exe.pg_pid = cur.fetchall()[0][0]
             except Exception as e:
-                if (
+                if i < NUM_ATTEMPTS - 1 and (
                     "network error" in str(e)
                     or "Can't create a connection to host" in str(e)
                     or "Connection refused" in str(e)

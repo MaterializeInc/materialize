@@ -15,12 +15,17 @@ use std::time::Instant;
 
 use anyhow::bail;
 use itertools::Itertools;
+use mz_adapter_types::connection::ConnectionId;
 use serde::Serialize;
 use tracing::info;
 
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_catalog::builtin::{Builtin, BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable};
+use mz_catalog::memory::objects::{
+    CatalogEntry, CatalogItem, Cluster, ClusterConfig, ClusterReplica, ClusterReplicaProcessStatus,
+    CommentsMap, Database, DefaultPrivileges, Index, Role, Schema, View,
+};
 use mz_controller::clusters::{
     ClusterStatus, ManagedReplicaLocation, ProcessId, ReplicaConfig, ReplicaLocation,
 };
@@ -56,19 +61,17 @@ use mz_storage_types::connections::inline::{
 use mz_transform::Optimizer;
 
 use crate::catalog::{
-    AwsPrincipalContext, BuiltinTableUpdate, Catalog, CatalogEntry, CatalogItem, Cluster,
-    ClusterConfig, ClusterReplica, ClusterReplicaProcessStatus, ClusterReplicaSizeMap, CommentsMap,
-    Database, DefaultPrivileges, Error, ErrorKind, Index, Role, Schema, View,
+    AwsPrincipalContext, BuiltinTableUpdate, Catalog, ClusterReplicaSizeMap, Error, ErrorKind,
     LINKED_CLUSTER_REPLICA_NAME, SYSTEM_CONN_ID,
 };
-use crate::client::ConnectionId;
 use crate::coord::ConnMeta;
 use crate::session::Session;
 use crate::util::{index_sql, ResultExt};
 use crate::AdapterError;
 
 /// The in-memory representation of the Catalog. This struct is not directly used to persist
-/// metadata to persistent storage. For persistent metadata see [`mz_catalog::DurableCatalogState`].
+/// metadata to persistent storage. For persistent metadata see
+/// [`mz_catalog::durable::DurableCatalogState`].
 ///
 /// [`Serialize`] is implemented to create human readable dumps of the in-memory state, not for
 /// storing the contents of this struct on disk.
@@ -685,13 +688,16 @@ impl CatalogState {
         let mut session_catalog = Catalog::for_system_session_state(self);
 
         // Enable catalog features that might be required during planning in
-        // [Catalog::open]. Existing catalog items might have been created while a
-        // specific feature flag turned on, so we need to ensure that this is also the
-        // case during catalog rehydration in order to avoid panics.
-        // WARNING / CONTRACT: The session catalog with all features enabled should be used
-        // exclusively for parsing and obtaining an an mz_sql::plan::Plan. After this step,
-        // feature flag configuration must not be overridden.
-        session_catalog.system_vars_mut().enable_all_feature_flags();
+        // [Catalog::open]. Existing catalog items might have been created while
+        // a specific feature flag was turned on, so we need to ensure that this
+        // is also the case during catalog rehydration in order to avoid panics.
+        //
+        // WARNING / CONTRACT:
+        // 1. Features used in this method that related to parsing / planning
+        //    should be `enable_for_item_parsing` set to `true`.
+        // 2. After this step, feature flag configuration must not be
+        //    overridden.
+        session_catalog.system_vars_mut().enable_for_item_parsing();
 
         let stmt = mz_sql::parse::parse(&create_sql)?.into_element().ast;
         let (stmt, resolved_ids) = mz_sql::names::resolve(&session_catalog, stmt)?;
@@ -757,7 +763,7 @@ impl CatalogState {
         owner_id: RoleId,
         privileges: PrivilegeMap,
     ) {
-        if !id.is_system() && !item.is_placeholder() {
+        if !id.is_system() {
             info!(
                 "create {} {} ({})",
                 item.typ(),
@@ -822,14 +828,12 @@ impl CatalogState {
     #[tracing::instrument(level = "trace", skip(self))]
     pub(super) fn drop_item(&mut self, id: GlobalId) {
         let metadata = self.entry_by_id.remove(&id).expect("catalog out of sync");
-        if !metadata.item().is_placeholder() {
-            info!(
-                "drop {} {} ({})",
-                metadata.item_type(),
-                self.resolve_full_name(metadata.name(), metadata.conn_id()),
-                id
-            );
-        }
+        info!(
+            "drop {} {} ({})",
+            metadata.item_type(),
+            self.resolve_full_name(metadata.name(), metadata.conn_id()),
+            id
+        );
         for u in &metadata.uses().0 {
             if let Some(dep_metadata) = self.entry_by_id.get_mut(u) {
                 dep_metadata.used_by.retain(|u| *u != metadata.id())
@@ -1614,7 +1618,7 @@ impl CatalogState {
         &self,
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
-        tx: &mut mz_catalog::Transaction,
+        tx: &mut mz_catalog::durable::Transaction,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         audit_events: &mut Vec<VersionedEvent>,
         event_type: EventType,
@@ -1632,7 +1636,8 @@ impl CatalogState {
             Some(ts) => ts.into(),
             _ => oracle_write_ts.into(),
         };
-        let id = tx.get_and_increment_id(mz_catalog::AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
+        let id =
+            tx.get_and_increment_id(mz_catalog::durable::AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
         let event = VersionedEvent::new(id, event_type, object_type, details, user, occurred_at);
         builtin_table_updates.push(self.pack_audit_log_update(&event)?);
         audit_events.push(event.clone());
@@ -1642,13 +1647,14 @@ impl CatalogState {
 
     pub(super) fn add_to_storage_usage(
         &self,
-        tx: &mut mz_catalog::Transaction,
+        tx: &mut mz_catalog::durable::Transaction,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         shard_id: Option<String>,
         size_bytes: u64,
         collection_timestamp: EpochMillis,
     ) -> Result<(), Error> {
-        let id = tx.get_and_increment_id(mz_catalog::STORAGE_USAGE_ID_ALLOC_KEY.to_string())?;
+        let id =
+            tx.get_and_increment_id(mz_catalog::durable::STORAGE_USAGE_ID_ALLOC_KEY.to_string())?;
 
         let details = VersionedStorageUsage::new(id, shard_id, size_bytes, collection_timestamp);
         builtin_table_updates.push(self.pack_storage_usage_update(&details)?);

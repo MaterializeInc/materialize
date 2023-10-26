@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::iter;
 
 use itertools::Itertools;
+use maplit::btreeset;
 use mz_controller_types::ClusterId;
 use mz_expr::{CollectionPlan, MirRelationExpr};
 use mz_ore::str::StrExt;
@@ -18,6 +19,7 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql_parser::ast::QualifiedReplica;
+use once_cell::sync::Lazy;
 use tracing::debug;
 
 use crate::catalog::{
@@ -32,7 +34,9 @@ use crate::plan::{
     DataSourceDesc, Explainee, MutationKind, Plan, SideEffectingFunc, SourceSinkClusterConfig,
     UpdatePrivilege,
 };
-use crate::session::user::{RoleMetadata, MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
+use crate::session::user::{
+    RoleMetadata, MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER,
+};
 use crate::session::vars::{SessionVars, SystemVars};
 
 /// Common checks that need to be performed before we can start checking a role's privileges.
@@ -82,6 +86,19 @@ macro_rules! rbac_preamble {
         }
     };
 }
+
+// The default item types that most statements require USAGE privileges for.
+static DEFAULT_ITEM_USAGE: Lazy<BTreeSet<CatalogItemType>> = Lazy::new(|| {
+    btreeset! {CatalogItemType::Secret, CatalogItemType::Connection}
+});
+// CREATE statements require USAGE privileges on the default item types and USAGE privileges on
+// Types.
+pub static CREATE_ITEM_USAGE: Lazy<BTreeSet<CatalogItemType>> = Lazy::new(|| {
+    let mut items = DEFAULT_ITEM_USAGE.clone();
+    items.insert(CatalogItemType::Type);
+    items
+});
+pub static EMPTY_ITEM_USAGE: Lazy<BTreeSet<CatalogItemType>> = Lazy::new(BTreeSet::new);
 
 /// Errors that can occur due to an unauthorized action.
 #[derive(Debug, thiserror::Error)]
@@ -146,11 +163,11 @@ struct RbacRequirements {
     /// The privileges required. The tuples are of the form:
     /// (What object the privilege is on, What privilege is required, Who must possess the privilege).
     privileges: Vec<(SystemObjectId, AclMode, RoleId)>,
-    /// true if the plan requires USAGE privileges on all applicable items, false otherwise.
+    /// The types of catalog items that this plan requires USAGE privileges on.
     ///
-    /// Most plans will be true but some plans, like SHOW CREATE, can reference an item without
-    /// requiring any privileges on that item.
-    item_usage: bool,
+    /// Most plans will require USAGE on secrets and connections but some plans, like SHOW CREATE,
+    /// can reference an item without requiring any privileges on that item.
+    item_usage: &'static BTreeSet<CatalogItemType>,
     /// Some action if superuser is required to perform that action, None otherwise.
     superuser_action: Option<String>,
 }
@@ -166,9 +183,13 @@ impl RbacRequirements {
         // Obtain all roles that the current session is a member of.
         let role_membership = catalog.collect_role_membership(&role_metadata.current_role);
 
-        if self.item_usage {
-            check_item_usage(catalog, role_metadata, session_vars, resolved_ids)?;
-        }
+        check_usage(
+            catalog,
+            role_metadata,
+            session_vars,
+            resolved_ids,
+            self.item_usage,
+        )?;
 
         // Validate that the current session has the required role membership to execute the provided
         // plan.
@@ -217,18 +238,19 @@ impl Default for RbacRequirements {
             role_membership: BTreeSet::new(),
             ownership: Vec::new(),
             privileges: Vec::new(),
-            item_usage: true,
+            item_usage: &DEFAULT_ITEM_USAGE,
             superuser_action: None,
         }
     }
 }
 
 /// Checks if a `session` is authorized to use `resolved_ids`. If not, an error is returned.
-pub fn check_item_usage(
+pub fn check_usage(
     catalog: &impl SessionCatalog,
     role_metadata: &RoleMetadata,
     session_vars: &SessionVars,
     resolved_ids: &ResolvedIds,
+    item_types: &BTreeSet<CatalogItemType>,
 ) -> Result<(), UnauthorizedError> {
     rbac_preamble!(catalog, role_metadata, session_vars);
 
@@ -244,10 +266,15 @@ pub fn check_item_usage(
         .cloned()
         .collect();
     let existing_resolved_ids = ResolvedIds(existing_resolved_ids);
-    let required_privileges =
-        generate_item_usage_privileges(catalog, &existing_resolved_ids, role_metadata.current_role)
-            .into_iter()
-            .collect();
+
+    let required_privileges = generate_usage_privileges(
+        catalog,
+        &existing_resolved_ids,
+        role_metadata.current_role,
+        item_types,
+    )
+    .into_iter()
+    .collect();
     check_object_privileges(
         catalog,
         required_privileges,
@@ -315,6 +342,7 @@ fn generate_rbac_requirements(
                 AclMode::CREATE,
                 role_id,
             )],
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::CreateDatabase(plan::CreateDatabasePlan {
@@ -322,6 +350,7 @@ fn generate_rbac_requirements(
             if_not_exists: _,
         }) => RbacRequirements {
             privileges: vec![(SystemObjectId::System, AclMode::CREATE_DB, role_id)],
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::CreateSchema(plan::CreateSchemaPlan {
@@ -341,6 +370,7 @@ fn generate_rbac_requirements(
             };
             RbacRequirements {
                 privileges,
+                item_usage: &CREATE_ITEM_USAGE,
                 ..Default::default()
             }
         }
@@ -349,6 +379,7 @@ fn generate_rbac_requirements(
             attributes: _,
         }) => RbacRequirements {
             privileges: vec![(SystemObjectId::System, AclMode::CREATE_ROLE, role_id)],
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::CreateCluster(plan::CreateClusterPlan {
@@ -356,6 +387,7 @@ fn generate_rbac_requirements(
             variant: _,
         }) => RbacRequirements {
             privileges: vec![(SystemObjectId::System, AclMode::CREATE_CLUSTER, role_id)],
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::CreateClusterReplica(plan::CreateClusterReplicaPlan {
@@ -364,6 +396,7 @@ fn generate_rbac_requirements(
             config: _,
         }) => RbacRequirements {
             ownership: vec![ObjectId::Cluster(*cluster_id)],
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::CreateSource(plan::CreateSourcePlan {
@@ -379,6 +412,7 @@ fn generate_rbac_requirements(
                 cluster_config,
                 role_id,
             ),
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::CreateSources(plans) => RbacRequirements {
@@ -407,6 +441,7 @@ fn generate_rbac_requirements(
                     },
                 )
                 .collect(),
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::CreateSecret(plan::CreateSecretPlan {
@@ -419,6 +454,7 @@ fn generate_rbac_requirements(
                 AclMode::CREATE,
                 role_id,
             )],
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::CreateSink(plan::CreateSinkPlan {
@@ -446,6 +482,7 @@ fn generate_rbac_requirements(
             }
             RbacRequirements {
                 privileges,
+                item_usage: &CREATE_ITEM_USAGE,
                 ..Default::default()
             }
         }
@@ -459,6 +496,7 @@ fn generate_rbac_requirements(
                 AclMode::CREATE,
                 role_id,
             )],
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::CreateView(plan::CreateViewPlan {
@@ -477,6 +515,7 @@ fn generate_rbac_requirements(
                 AclMode::CREATE,
                 role_id,
             )],
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::CreateMaterializedView(plan::CreateMaterializedViewPlan {
@@ -502,6 +541,7 @@ fn generate_rbac_requirements(
                     role_id,
                 ),
             ],
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::CreateIndex(plan::CreateIndexPlan {
@@ -523,6 +563,7 @@ fn generate_rbac_requirements(
                     role_id,
                 ),
             ],
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::CreateType(plan::CreateTypePlan { name, typ: _ }) => RbacRequirements {
@@ -531,6 +572,7 @@ fn generate_rbac_requirements(
                 AclMode::CREATE,
                 role_id,
             )],
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::Comment(plan::CommentPlan {
@@ -611,7 +653,7 @@ fn generate_rbac_requirements(
                 AclMode::USAGE,
                 role_id,
             )],
-            item_usage: false,
+            item_usage: &EMPTY_ITEM_USAGE,
             ..Default::default()
         },
         Plan::ShowColumns(plan::ShowColumnsPlan {
@@ -720,8 +762,8 @@ fn generate_rbac_requirements(
                     .collect(),
             },
             item_usage: match explainee {
-                Explainee::MaterializedView(_) | Explainee::Index(_) => false,
-                Explainee::Statement(_) => true,
+                Explainee::MaterializedView(_) | Explainee::Index(_) => &EMPTY_ITEM_USAGE,
+                Explainee::Statement(_) => &DEFAULT_ITEM_USAGE,
             },
             ..Default::default()
         },
@@ -799,17 +841,20 @@ fn generate_rbac_requirements(
             options: _,
         }) => RbacRequirements {
             ownership: vec![ObjectId::Cluster(*id)],
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::AlterIndexSetOptions(plan::AlterIndexSetOptionsPlan { id, options: _ }) => {
             RbacRequirements {
                 ownership: vec![ObjectId::Item(*id)],
+                item_usage: &CREATE_ITEM_USAGE,
                 ..Default::default()
             }
         }
         Plan::AlterIndexResetOptions(plan::AlterIndexResetOptionsPlan { id, options: _ }) => {
             RbacRequirements {
                 ownership: vec![ObjectId::Item(*id)],
+                item_usage: &CREATE_ITEM_USAGE,
                 ..Default::default()
             }
         }
@@ -820,14 +865,17 @@ fn generate_rbac_requirements(
                 AclMode::CREATE,
                 role_id,
             )],
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::AlterSink(plan::AlterSinkPlan { id, size: _ }) => RbacRequirements {
             ownership: vec![ObjectId::Item(*id)],
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::AlterSource(plan::AlterSourcePlan { id, action: _ }) => RbacRequirements {
             ownership: vec![ObjectId::Item(*id)],
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::PurifiedAlterSource {
@@ -862,6 +910,7 @@ fn generate_rbac_requirements(
                     },
                 )
                 .collect(),
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::AlterClusterRename(plan::AlterClusterRenamePlan {
@@ -930,6 +979,7 @@ fn generate_rbac_requirements(
         }
         Plan::AlterSecret(plan::AlterSecretPlan { id, secret_as: _ }) => RbacRequirements {
             ownership: vec![ObjectId::Item(*id)],
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::AlterRole(plan::AlterRolePlan {
@@ -944,6 +994,7 @@ fn generate_rbac_requirements(
             // Otherwise to ALTER a role, you need to have the CREATE_ROLE privilege.
             _ => RbacRequirements {
                 privileges: vec![(SystemObjectId::System, AclMode::CREATE_ROLE, role_id)],
+                item_usage: &CREATE_ITEM_USAGE,
                 ..Default::default()
             },
         },
@@ -1393,31 +1444,25 @@ fn generate_read_privileges_inner(
     privileges
 }
 
-fn generate_item_usage_privileges(
+fn generate_usage_privileges(
     catalog: &impl SessionCatalog,
     ids: &ResolvedIds,
     role_id: RoleId,
+    item_types: &BTreeSet<CatalogItemType>,
 ) -> BTreeSet<(SystemObjectId, AclMode, RoleId)> {
     // Use a `BTreeSet` to remove duplicate privileges.
     ids.0
         .iter()
         .filter_map(move |id| {
             let item = catalog.get_item(id);
-            match item.item_type() {
-                CatalogItemType::Type | CatalogItemType::Secret | CatalogItemType::Connection => {
-                    let schema_id = item.name().qualifiers.clone().into();
-                    Some([
-                        (SystemObjectId::Object(schema_id), AclMode::USAGE, role_id),
-                        (SystemObjectId::Object(id.into()), AclMode::USAGE, role_id),
-                    ])
-                }
-                CatalogItemType::Table
-                | CatalogItemType::Source
-                | CatalogItemType::Sink
-                | CatalogItemType::View
-                | CatalogItemType::MaterializedView
-                | CatalogItemType::Index
-                | CatalogItemType::Func => None,
+            if item_types.contains(&item.item_type()) {
+                let schema_id = item.name().qualifiers.clone().into();
+                Some([
+                    (SystemObjectId::Object(schema_id), AclMode::USAGE, role_id),
+                    (SystemObjectId::Object(id.into()), AclMode::USAGE, role_id),
+                ])
+            } else {
+                None
             }
         })
         .flatten()
@@ -1512,8 +1557,8 @@ pub const fn owner_privilege(object_type: ObjectType, owner_id: RoleId) -> MzAcl
     }
 }
 
-pub const fn default_builtin_object_privilege(object_type: ObjectType) -> MzAclItem {
-    let acl_mode = match object_type {
+const fn default_builtin_object_acl_mode(object_type: ObjectType) -> AclMode {
+    match object_type {
         ObjectType::Table
         | ObjectType::View
         | ObjectType::MaterializedView
@@ -1528,7 +1573,20 @@ pub const fn default_builtin_object_privilege(object_type: ObjectType) -> MzAclI
         | ObjectType::Connection
         | ObjectType::Database
         | ObjectType::Func => AclMode::empty(),
-    };
+    }
+}
+
+pub const fn support_builtin_object_privilege(object_type: ObjectType) -> MzAclItem {
+    let acl_mode = default_builtin_object_acl_mode(object_type);
+    MzAclItem {
+        grantee: MZ_SUPPORT_ROLE_ID,
+        grantor: MZ_SYSTEM_ROLE_ID,
+        acl_mode,
+    }
+}
+
+pub const fn default_builtin_object_privilege(object_type: ObjectType) -> MzAclItem {
+    let acl_mode = default_builtin_object_acl_mode(object_type);
     MzAclItem {
         grantee: RoleId::Public,
         grantor: MZ_SYSTEM_ROLE_ID,

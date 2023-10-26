@@ -791,8 +791,8 @@ impl Stash {
         let stmts = CountedStatements::from(stmts, &self.metrics);
         // Generate statements to execute depending on our mode.
         let (tx_start, tx_end) = match self.txn_mode {
-            TransactionMode::Writeable => ("BEGIN", "COMMIT"),
-            TransactionMode::Readonly => ("BEGIN READ  ONLY", "COMMIT"),
+            TransactionMode::Writeable => ("BEGIN PRIORITY HIGH", "COMMIT"),
+            TransactionMode::Readonly => ("BEGIN READ ONLY PRIORITY HIGH", "COMMIT"),
             TransactionMode::Savepoint => ("SAVEPOINT stash", "RELEASE SAVEPOINT stash"),
         };
         batch_execute(client, tx_start)
@@ -1286,10 +1286,10 @@ impl Consolidator {
                 }
             },
         );
-        // The Config is shared with the Stash, so we update the application name in the
-        // session instead of the Config.
+        // `self.config` is shared with the Stash, so we update the application name in the
+        // session instead of the `self.config`.
         client
-            .execute("SET application_name = 'stash-consolidator'", &[])
+            .batch_execute("SET application_name = 'stash-consolidator'; SET default_transaction_priority = 'low';")
             .await?;
         if let Some(schema) = &self.schema {
             client

@@ -388,7 +388,7 @@ impl PersistClient {
         ))
     }
 
-    /// [Self::open], but returning only a [/eadHandle].
+    /// [Self::open], but returning only a [ReadHandle].
     ///
     /// Use this to save latency and a bit of persist traffic if you're just
     /// going to immediately drop or expire the [WriteHandle].
@@ -783,6 +783,7 @@ impl Schema<ShardId> for ShardIdSchema {
 #[cfg(test)]
 mod tests {
     use std::future::Future;
+    use std::mem;
     use std::pin::Pin;
     use std::str::FromStr;
     use std::task::Context;
@@ -1985,12 +1986,12 @@ mod tests {
             .expect("client construction failed")
             .expect_open::<(), (), u64, i64>(ShardId::new())
             .await;
-        let read_heartbeat_tasks = read
-            .heartbeat_tasks
+        let mut read_unexpired_state = read
+            .unexpired_state
             .take()
-            .expect("handle should have heartbeat task");
+            .expect("handle should have unexpired state");
         read.expire().await;
-        for read_heartbeat_task in read_heartbeat_tasks {
+        for read_heartbeat_task in mem::take(&mut read_unexpired_state.heartbeat_tasks) {
             let () = read_heartbeat_task
                 .await
                 .expect("task should shutdown cleanly");

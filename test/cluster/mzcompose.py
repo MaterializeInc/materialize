@@ -2242,6 +2242,8 @@ def workflow_test_replica_metrics(c: Composition) -> None:
 
     maintenance = metrics.get_value("mz_arrangement_maintenance_seconds_total")
     assert maintenance > 0, f"unexpected arrangement maintanence time: {maintenance}"
+    delayed_time = metrics.get_value("mz_dataflow_delayed_time_seconds_total")
+    assert delayed_time < 1, f"unexpected delayed time: {delayed_time}"
 
 
 def workflow_test_compute_controller_metrics(c: Composition) -> None:

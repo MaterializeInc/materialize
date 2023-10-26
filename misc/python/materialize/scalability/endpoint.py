@@ -14,7 +14,7 @@ import psycopg
 
 class Endpoint:
 
-    _name: str | None = None
+    _version: str | None = None
 
     def sql_connection(self) -> psycopg.connection.Connection[tuple[Any, ...]]:
         conn = psycopg.connect(self.url())
@@ -46,13 +46,21 @@ class Endpoint:
         cursor = conn.cursor()
         cursor.execute(sql.encode("utf8"))
 
-    def name(self) -> str:
-        if self._name is not None:
-            return self._name
+    def try_load_version(self) -> str:
+        """
+        Tries to load the version from the database or returns 'unknown' otherwise.
+        This first invocation requires the endpoint to be up; subsequent invocations will use the cached information.
+        """
 
-        cursor = self.sql_connection().cursor()
-        cursor.execute(b"SELECT mz_version()")
-        row = cursor.fetchone()
-        assert row is not None
-        self._name = str(row[0])
-        return self._name
+        if self._version is not None:
+            return self._version
+
+        try:
+            cursor = self.sql_connection().cursor()
+            cursor.execute(b"SELECT mz_version()")
+            row = cursor.fetchone()
+            assert row is not None
+            self._version = str(row[0])
+            return self._version
+        except:
+            return "unknown"

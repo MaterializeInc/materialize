@@ -47,8 +47,8 @@ use mz_storage_types::connections::{
     KafkaSecurity, KafkaTlsConfig, SaslConfig, SshTunnel, StringOrSecret, TlsIdentity, Tunnel,
 };
 use mz_storage_types::sinks::{
-    KafkaConsistencyConfig, KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention,
-    KafkaSinkFormat, SinkEnvelope, StorageSinkConnectionBuilder,
+    KafkaConsistencyConfig, KafkaSinkAvroFormatState, KafkaSinkConnection,
+    KafkaSinkConnectionRetention, KafkaSinkFormat, SinkEnvelope, StorageSinkConnection,
 };
 use mz_storage_types::sources::encoding::{
     included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, DataEncodingInner,
@@ -2334,7 +2334,7 @@ pub fn plan_create_sink(
         sink: Sink {
             create_sql,
             from: from.id(),
-            connection_builder,
+            connection: connection_builder,
             envelope,
         },
         with_snapshot,
@@ -2468,7 +2468,7 @@ fn kafka_sink_builder(
     value_desc: RelationDesc,
     envelope: SinkEnvelope,
     sink_from: GlobalId,
-) -> Result<StorageSinkConnectionBuilder<ReferencedConnection>, PlanError> {
+) -> Result<StorageSinkConnection<ReferencedConnection>, PlanError> {
     let item = scx.get_item_by_resolved_name(&connection)?;
     // Get Kafka connection
     let mut connection = match item.connection()? {
@@ -2596,11 +2596,11 @@ fn kafka_sink_builder(
                 .key_writer_schema()
                 .map(|key_schema| key_schema.to_string());
 
-            KafkaSinkFormat::Avro {
+            KafkaSinkFormat::Avro(KafkaSinkAvroFormatState::UnpublishedMaybe {
                 key_schema,
                 value_schema,
                 csr_connection,
-            }
+            })
         }
         Some(Format::Json) => KafkaSinkFormat::Json,
         Some(format) => bail_unsupported!(format!("sink format {:?}", format)),
@@ -2640,22 +2640,20 @@ fn kafka_sink_builder(
         bytes: retention_bytes,
     };
 
-    Ok(StorageSinkConnectionBuilder::Kafka(
-        KafkaSinkConnectionBuilder {
-            connection_id,
-            connection,
-            format,
-            topic_name,
-            consistency_config,
-            partition_count,
-            replication_factor,
-            fuel: 10000,
-            relation_key_indices,
-            key_desc_and_indices,
-            value_desc,
-            retention,
-        },
-    ))
+    Ok(StorageSinkConnection::Kafka(KafkaSinkConnection {
+        connection_id,
+        connection,
+        format,
+        topic: topic_name,
+        consistency_config,
+        partition_count,
+        replication_factor,
+        fuel: 10000,
+        relation_key_indices,
+        key_desc_and_indices,
+        value_desc,
+        retention,
+    }))
 }
 
 pub fn describe_create_index(
@@ -4052,7 +4050,11 @@ fn plan_drop_cluster(
     Ok(match resolve_cluster(scx, name, if_exists)? {
         Some(cluster) => {
             if !cascade && !cluster.bound_objects().is_empty() {
-                sql_bail!("cannot drop cluster with active objects");
+                return Err(PlanError::DependentObjectsStillExist {
+                    object_type: "cluster".to_string(),
+                    object_name: cluster.name().to_string(),
+                    dependents: Vec::new(),
+                });
             }
             ensure_cluster_is_not_linked(scx, cluster.id())?;
             Some(cluster.id())
@@ -4226,14 +4228,17 @@ fn plan_drop_item_inner(
 
                         let dep = scx.catalog.get_item(id);
                         if dependency_prevents_drop(object_type, dep) {
-                            // TODO: Add a hint to add cascade.
-                            sql_bail!(
-                                "cannot drop {} {}: still depended upon by {} {}",
-                                catalog_item.item_type(),
-                                scx.catalog.minimal_qualification(catalog_item.name()),
-                                dep.item_type(),
-                                scx.catalog.minimal_qualification(dep.name())
-                            );
+                            return Err(PlanError::DependentObjectsStillExist {
+                                object_type: catalog_item.item_type().to_string(),
+                                object_name: scx
+                                    .catalog
+                                    .minimal_qualification(catalog_item.name())
+                                    .to_string(),
+                                dependents: vec![(
+                                    dep.item_type().to_string(),
+                                    scx.catalog.minimal_qualification(dep.name()).to_string(),
+                                )],
+                            });
                         }
                     }
                     // TODO(jkosh44) It would be nice to also check if any active subscribe or pending peek
@@ -4332,14 +4337,18 @@ pub fn plan_drop_owned(
                 if !non_owned_bound_objects.is_empty() {
                     let names: Vec<_> = non_owned_bound_objects
                         .into_iter()
-                        .map(|item| scx.catalog.resolve_full_name(item.name()))
-                        .map(|name| name.to_string().quoted().to_string())
+                        .map(|item| {
+                            (
+                                item.item_type().to_string(),
+                                scx.catalog.resolve_full_name(item.name()).to_string(),
+                            )
+                        })
                         .collect();
-                    sql_bail!(
-                        "cannot drop cluster {} without CASCADE: still depended upon by non-owned catalog items {}",
-                        cluster.name().quoted(),
-                        names.join(", ")
-                    );
+                    return Err(PlanError::DependentObjectsStillExist {
+                        object_type: "cluster".to_string(),
+                        object_name: cluster.name().to_string(),
+                        dependents: names,
+                    });
                 }
             }
             drop_ids.push(cluster.id().into());
@@ -4374,14 +4383,22 @@ pub fn plan_drop_owned(
                     if !non_owned_dependencies.is_empty() {
                         let names: Vec<_> = non_owned_dependencies
                             .into_iter()
-                            .map(|item| scx.catalog.resolve_full_name(item.name()))
-                            .map(|name| name.to_string().quoted().to_string())
+                            .map(|item| {
+                                (
+                                    item.item_type().to_string(),
+                                    scx.catalog.resolve_full_name(item.name()).to_string(),
+                                )
+                            })
                             .collect();
-                        sql_bail!(
-                            "cannot drop {} without CASCADE: still depended upon by non-owned catalog items {}",
-                            scx.catalog.resolve_full_name(item.name()).to_string().quoted(),
-                            names.join(", ")
-                        );
+                        return Err(PlanError::DependentObjectsStillExist {
+                            object_type: item.item_type().to_string(),
+                            object_name: scx
+                                .catalog
+                                .resolve_full_name(item.name())
+                                .to_string()
+                                .to_string(),
+                            dependents: names,
+                        });
                     }
                 }
             }

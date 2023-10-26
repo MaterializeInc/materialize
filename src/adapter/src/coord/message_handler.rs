@@ -13,6 +13,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
+use mz_adapter_types::connection::ConnectionId;
 use mz_controller::clusters::ClusterEvent;
 use mz_controller::ControllerResponse;
 use mz_ore::now::EpochMillis;
@@ -25,13 +26,11 @@ use mz_storage_types::controller::CollectionMetadata;
 use rand::{rngs, Rng, SeedableRng};
 use tracing::{event, warn, Instrument, Level};
 
-use crate::client::ConnectionId;
-use crate::command::{Command, ExecuteResponse};
+use crate::command::Command;
 use crate::coord::appends::Deferred;
 use crate::coord::{
     Coordinator, CreateConnectionValidationReady, Message, PeekStage, PeekStageFinish,
     PendingReadTxn, PlanValidity, PurifiedStatementReady, RealTimeRecencyContext,
-    SinkConnectionReady,
 };
 use crate::session::Session;
 use crate::util::{ComputeSinkId, ResultExt};
@@ -57,7 +56,6 @@ impl Coordinator {
             Message::CreateConnectionValidationReady(ready) => {
                 self.message_create_connection_validation_ready(ready).await
             }
-            Message::SinkConnectionReady(ready) => self.message_sink_connection_ready(ready).await,
             Message::WriteLockGrant(write_lock_guard) => {
                 self.message_write_lock_grant(write_lock_guard).await;
             }
@@ -337,7 +335,7 @@ impl Coordinator {
             Err(e) => return ctx.retire(Err(e)),
         };
 
-        let mut plans: Vec<CreateSourcePlans> = vec![];
+        let mut create_source_plans: Vec<CreateSourcePlans> = vec![];
         let mut id_allocation = BTreeMap::new();
 
         // First we'll allocate global ids for each subsource and plan them
@@ -360,7 +358,7 @@ impl Coordinator {
                 Err(e) => return ctx.retire(Err(e)),
             };
             id_allocation.insert(transient_id, source_id);
-            plans.push(CreateSourcePlans {
+            create_source_plans.push(CreateSourcePlans {
                 source_id,
                 plan,
                 resolved_ids,
@@ -383,7 +381,7 @@ impl Coordinator {
                     Err(e) => return ctx.retire(Err(e.into())),
                 };
 
-                plans.push(CreateSourcePlans {
+                create_source_plans.push(CreateSourcePlans {
                     source_id,
                     plan,
                     resolved_ids,
@@ -392,7 +390,7 @@ impl Coordinator {
                 // Finally, sequence all plans in one go
                 self.sequence_plan(
                     ctx,
-                    Plan::CreateSources(plans),
+                    Plan::CreateSources(create_source_plans),
                     ResolvedIds(BTreeSet::new()),
                 )
                 .await;
@@ -402,7 +400,7 @@ impl Coordinator {
                     ctx,
                     Plan::PurifiedAlterSource {
                         alter_source,
-                        subsources: plans,
+                        subsources: create_source_plans,
                     },
                     ResolvedIds(BTreeSet::new()),
                 )
@@ -412,9 +410,13 @@ impl Coordinator {
                 self.sequence_plan(ctx, plan, ResolvedIds(BTreeSet::new()))
                     .await
             }
-            Ok(Plan::CreateSink(create_sink)) => {
-                self.sequence_plan(ctx, Plan::CreateSink(create_sink), resolved_ids)
-                    .await;
+            Ok(plan @ Plan::CreateSink(_)) => {
+                assert!(
+                    create_source_plans.is_empty(),
+                    "CREATE SINK does not generate source plans"
+                );
+
+                self.sequence_plan(ctx, plan, resolved_ids).await
             }
             Ok(p) => {
                 unreachable!("{:?} is not purified", p)
@@ -463,79 +465,6 @@ impl Coordinator {
             )
             .await;
         ctx.retire(result);
-    }
-
-    #[tracing::instrument(level = "debug", skip(self, ctx))]
-    async fn message_sink_connection_ready(
-        &mut self,
-        SinkConnectionReady {
-            ctx,
-            id,
-            oid,
-            create_export_token,
-            result,
-        }: SinkConnectionReady,
-    ) {
-        match result {
-            Ok(connection) => {
-                // NOTE: we must not fail from here on out. We have a
-                // connection, which means there is external state (like
-                // a Kafka topic) that's been created on our behalf. If
-                // we fail now, we'll leak that external state.
-                if self.catalog().try_get_entry(&id).is_some() {
-                    // TODO(benesch): this `expect` here is possibly scary, but
-                    // no better solution presents itself. Possibly sinks should
-                    // have an error bit, and an error here would set the error
-                    // bit on the sink.
-                    self.handle_sink_connection_ready(
-                        id,
-                        oid,
-                        connection,
-                        create_export_token,
-                        ctx.as_ref().map(|ctx| ctx.session()),
-                    )
-                    .await
-                    // XXX(chae): I really don't like this -- especially as we're now doing cross
-                    // process calls to start a sink.
-                    .expect("sinks should be validated by sequence_create_sink");
-                } else {
-                    // Another session dropped the sink while we were
-                    // creating the connection. Report to the client that
-                    // we created the sink, because from their
-                    // perspective we did, as there is state (e.g. a
-                    // Kafka topic) they need to clean up.
-                }
-                if let Some(ctx) = ctx {
-                    ctx.retire(Ok(ExecuteResponse::CreatedSink));
-                }
-            }
-            Err(e) => {
-                // Drop the placeholder sink if still present.
-                if self.catalog().try_get_entry(&id).is_some() {
-                    let ops = self
-                        .catalog()
-                        .item_dependents(id)
-                        .into_iter()
-                        .map(catalog::Op::DropObject)
-                        .collect();
-                    self.catalog_transact(ctx.as_ref().map(|ctx| ctx.session()), ops)
-                        .await
-                        .expect("deleting placeholder sink cannot fail");
-                } else {
-                    // Another session may have dropped the placeholder sink while we were
-                    // attempting to create the connection, in which case we don't need to do
-                    // anything.
-                }
-                // Drop the placeholder sink in the storage controller
-                let () = self
-                    .controller
-                    .storage
-                    .cancel_prepare_export(create_export_token);
-                if let Some(ctx) = ctx {
-                    ctx.retire(Err(e));
-                }
-            }
-        }
     }
 
     #[tracing::instrument(level = "debug", skip_all)]

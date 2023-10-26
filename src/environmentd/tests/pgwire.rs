@@ -87,6 +87,7 @@ use bytes::BytesMut;
 use fallible_iterator::FallibleIterator;
 use futures::future;
 use mz_adapter::session::DEFAULT_DATABASE_NAME;
+use mz_environmentd::test_util::{self, PostgresErrorExt};
 use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
 use mz_ore::task;
@@ -99,15 +100,11 @@ use postgres_array::{Array, Dimension};
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 
-use crate::util::PostgresErrorExt;
-
-pub mod util;
-
 #[mz_ore::test]
 #[ignore]
 fn test_bind_params() {
-    let config = util::Config::default().unsafe_mode();
-    let server = util::start_server(config).unwrap();
+    let config = test_util::Config::default().unsafe_mode();
+    let server = test_util::start_server(config).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     match client.query("SELECT ROW(1, 2) = $1", &[&"(1,2)"]) {
@@ -174,7 +171,7 @@ fn test_bind_params() {
 
 #[mz_ore::test]
 fn test_partial_read() {
-    let server = util::start_server(util::Config::default()).unwrap();
+    let server = test_util::start_server(test_util::Config::default()).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
     let query = "VALUES ('1'), ('2'), ('3'), ('4'), ('5'), ('6'), ('7')";
 
@@ -200,7 +197,7 @@ fn test_partial_read() {
 
 #[mz_ore::test]
 fn test_read_many_rows() {
-    let server = util::start_server(util::Config::default()).unwrap();
+    let server = test_util::start_server(test_util::Config::default()).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
     let query = "VALUES (1), (2), (3)";
 
@@ -214,7 +211,7 @@ fn test_read_many_rows() {
 
 #[mz_ore::test]
 fn test_conn_startup() {
-    let server = util::start_server(util::Config::default()).unwrap();
+    let server = test_util::start_server(test_util::Config::default()).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     // The default database should be `materialize`.
@@ -362,7 +359,7 @@ fn test_conn_startup() {
 
 #[mz_ore::test]
 fn test_conn_user() {
-    let server = util::start_server(util::Config::default()).unwrap();
+    let server = test_util::start_server(test_util::Config::default()).unwrap();
 
     // This sometimes returns a network error, so retry until we get a db error.
     let err = Retry::default()
@@ -396,7 +393,7 @@ fn test_conn_user() {
 
 #[mz_ore::test]
 fn test_simple_query_no_hang() {
-    let server = util::start_server(util::Config::default()).unwrap();
+    let server = test_util::start_server(test_util::Config::default()).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
     assert!(client.simple_query("asdfjkl;").is_err());
     // This will hang if #2880 is not fixed.
@@ -405,7 +402,7 @@ fn test_simple_query_no_hang() {
 
 #[mz_ore::test]
 fn test_copy() {
-    let server = util::start_server(util::Config::default()).unwrap();
+    let server = test_util::start_server(test_util::Config::default()).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     // Ensure empty COPY result sets work. We used to mishandle this with binary
@@ -454,7 +451,7 @@ fn test_copy() {
 
 #[mz_ore::test]
 fn test_arrays() {
-    let server = util::start_server(util::Config::default().unsafe_mode()).unwrap();
+    let server = test_util::start_server(test_util::Config::default().unsafe_mode()).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     let row = client
@@ -501,7 +498,7 @@ fn test_arrays() {
 
 #[mz_ore::test]
 fn test_record_types() {
-    let server = util::start_server(util::Config::default()).unwrap();
+    let server = test_util::start_server(test_util::Config::default()).unwrap();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     let row = client.query_one("SELECT ROW()", &[]).unwrap();
@@ -550,7 +547,7 @@ fn test_record_types() {
 fn pg_test_inner(dir: PathBuf, flags: &[&'static str]) {
     // We want a new server per file, so we can't use pgtest::walk.
     datadriven::walk(dir.to_str().unwrap(), |tf| {
-        let server = util::start_server(util::Config::default().unsafe_mode()).unwrap();
+        let server = test_util::start_server(test_util::Config::default().unsafe_mode()).unwrap();
         server.enable_feature_flags(flags);
         let config = server.pg_config();
         let addr = match &config.get_hosts()[0] {

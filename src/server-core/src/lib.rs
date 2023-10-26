@@ -141,7 +141,7 @@ impl ListenerHandle {
 /// produced by the listener. When the handle is dropped, the listener is
 /// closed, and the stream of incoming connections terminates.
 pub async fn listen(
-    addr: SocketAddr,
+    addr: &SocketAddr,
 ) -> Result<(ListenerHandle, Pin<Box<dyn ConnectionStream>>), io::Error> {
     let listener = TcpListener::bind(addr).await?;
     let local_addr = listener.local_addr()?;

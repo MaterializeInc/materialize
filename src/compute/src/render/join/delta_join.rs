@@ -453,9 +453,6 @@ where
         }
     });
 
-    let mut key_buf = Row::default();
-    let mut lookup_row_buf = Row::default();
-
     let mut datums = DatumVec::new();
     let mut row_builder = Row::default();
 
@@ -474,12 +471,17 @@ where
                 // shutting down.
                 shutdown_token.probe()?;
 
-                let key = key.into_row(&mut key_buf, trace_key_types.as_deref());
-                let lookup_row =
-                    lookup_row.into_row(&mut lookup_row_buf, trace_val_types.as_deref());
-
                 let temp_storage = RowArena::new();
-                let mut datums_local = datums.borrow_with_many(&[key, stream_row, lookup_row]);
+
+                let key = key.into_datum_iter(trace_key_types.as_deref());
+                let stream_row = stream_row.into_datum_iter(None);
+                let lookup_row = lookup_row.into_datum_iter(trace_val_types.as_deref());
+
+                let mut datums_local = datums.borrow();
+                datums_local.extend(key);
+                datums_local.extend(stream_row);
+                datums_local.extend(lookup_row);
+
                 let row = closure.apply(&mut datums_local, &temp_storage, &mut row_builder);
                 let diff = diff1.clone() * diff2.clone();
                 let dout = (row, time.clone());
@@ -514,12 +516,17 @@ where
                 // shutting down.
                 shutdown_token.probe()?;
 
-                let key = key.into_row(&mut key_buf, trace_key_types.as_deref());
-                let lookup_row =
-                    lookup_row.into_row(&mut lookup_row_buf, trace_val_types.as_deref());
-
                 let temp_storage = RowArena::new();
-                let mut datums_local = datums.borrow_with_many(&[key, stream_row, lookup_row]);
+
+                let key = key.into_datum_iter(trace_key_types.as_deref());
+                let stream_row = stream_row.into_datum_iter(None);
+                let lookup_row = lookup_row.into_datum_iter(trace_val_types.as_deref());
+
+                let mut datums_local = datums.borrow();
+                datums_local.extend(key);
+                datums_local.extend(stream_row);
+                datums_local.extend(lookup_row);
+
                 let row = closure
                     .apply(&mut datums_local, &temp_storage, &mut row_builder)
                     .expect("Closure claimed to never errer");
@@ -610,9 +617,6 @@ where
         inner_as_of.insert(<G::Timestamp>::to_inner(event_time.clone()));
     }
 
-    let mut key_buf = Row::default();
-    let mut val_buf = Row::default();
-
     let mut row_buf = Row::default();
     let (ok_stream, err_stream) =
         trace
@@ -635,14 +639,17 @@ where
                                         if source_relation == 0
                                             || !inner_as_of.elements().contains(time)
                                         {
-                                            let key = key
-                                                .into_row(&mut key_buf, trace_key_types.as_deref());
-                                            let val = val
-                                                .into_row(&mut val_buf, trace_val_types.as_deref());
-
                                             let temp_storage = RowArena::new();
-                                            let mut datums_local =
-                                                datums.borrow_with_many(&[key, val]);
+
+                                            let key =
+                                                key.into_datum_iter(trace_key_types.as_deref());
+                                            let val =
+                                                val.into_datum_iter(trace_val_types.as_deref());
+
+                                            let mut datums_local = datums.borrow();
+                                            datums_local.extend(key);
+                                            datums_local.extend(val);
+
                                             if !initial_closure.is_identity() {
                                                 match initial_closure
                                                     .apply(
