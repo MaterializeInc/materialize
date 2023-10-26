@@ -589,6 +589,7 @@ impl Coordinator {
                     .create_collections(Some(register_ts), vec![(table_id, collection_desc)])
                     .await
                     .unwrap_or_terminate("cannot fail to create collections");
+                self.apply_local_write(register_ts).await;
 
                 self.initialize_storage_read_policies(
                     vec![table_id],
@@ -596,20 +597,32 @@ impl Coordinator {
                 )
                 .await;
 
-                // Advance the new table to a timestamp higher than the current read timestamp so
-                // that the table is immediately readable. Since we're applying the register ts, do
-                // this through group commit so all the other tables are immediately readable again,
-                // too.
-                let upper = register_ts.step_forward();
+                // Advance the new table to a timestamp higher than the current
+                // read timestamp so that the table is immediately readable.
+                // Since we're applying the register ts, do this through group
+                // commit so all the other tables are immediately readable
+                // again, too.
+                //
+                // TODO: It's a little odd to use a second timestamp here, but
+                // create tables should be rare and at most one of them will
+                // actually need to communicate with CRDB since we still
+                // allocate ranges of timestamps. This whole advancement and
+                // group_commit can be removed once we've finished the migration
+                // to the persist-txn tables.
+                let initial_read_ts = self.get_local_write_ts().await;
                 let appends = vec![(table_id, Vec::new())];
                 self.controller
                     .storage
-                    .append_table(register_ts, upper, appends)
+                    .append_table(
+                        initial_read_ts.timestamp,
+                        initial_read_ts.advance_to,
+                        appends,
+                    )
                     .expect("invalid table upper initialization")
                     .await
                     .expect("One-shot dropped while waiting synchronously")
                     .unwrap_or_terminate("cannot fail to append");
-                self.apply_local_write(register_ts).await;
+                self.apply_local_write(initial_read_ts.timestamp).await;
 
                 // Kick off a group commit so the new rest of the tables catch up to the new oracle read
                 // ts.
