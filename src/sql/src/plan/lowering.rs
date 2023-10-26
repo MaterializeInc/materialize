@@ -2170,32 +2170,39 @@ impl OnPredicates {
     /// Check if the predicates can be lowered with an equijoin-based strategy.
     fn is_equijoin(&self) -> bool {
         // Count each `OnPredicate` variant in `self.predicates`.
-        let (const_cnt, lhs_cnt, rhs_cnt, eq_cnt, theta_cnt) =
-            self.predicates
-                .iter()
-                .fold((0, 0, 0, 0, 0), |(c, l, r, e, t), p| {
+        let (const_cnt, lhs_cnt, rhs_cnt, eq_cnt, eq_cols, theta_cnt) =
+            self.predicates.iter().fold(
+                (0, 0, 0, 0, 0, 0),
+                |(const_cnt, lhs_cnt, rhs_cnt, eq_cnt, eq_cols, theta_cnt), p| {
                     (
-                        c + usize::from(matches!(p, OnPredicate::Const(..))),
-                        l + usize::from(matches!(p, OnPredicate::Lhs(..))),
-                        r + usize::from(matches!(p, OnPredicate::Rhs(..))),
-                        e + usize::from(matches!(p, OnPredicate::Eq(..))),
-                        t + usize::from(matches!(p, OnPredicate::Theta(..))),
+                        const_cnt + usize::from(matches!(p, OnPredicate::Const(..))),
+                        lhs_cnt + usize::from(matches!(p, OnPredicate::Lhs(..))),
+                        rhs_cnt + usize::from(matches!(p, OnPredicate::Rhs(..))),
+                        eq_cnt + usize::from(matches!(p, OnPredicate::Eq(..))),
+                        eq_cols + usize::from(matches!(p, OnPredicate::Eq(lhs, rhs) if lhs.is_column() && rhs.is_column())),
+                        theta_cnt + usize::from(matches!(p, OnPredicate::Theta(..))),
                     )
-                });
+                },
+            );
 
+        // Revert to the old classifier for now.
+        let is_equijion =
+            eq_cnt > 0 && eq_cnt == eq_cols && theta_cnt + const_cnt + lhs_cnt + rhs_cnt == 0;
+
+        // Log an entry only if this is an equijoin according to the new classifier.
         if eq_cnt > 0 && theta_cnt == 0 {
             tracing::debug!(
                 const_cnt,
                 lhs_cnt,
                 rhs_cnt,
                 eq_cnt,
+                eq_cols,
                 theta_cnt,
                 "OnPredicates::is_equijoin"
             );
-            true
-        } else {
-            false
         }
+
+        is_equijion
     }
 
     /// Return an [`MirRelationExpr`] list that represents the keys for the
