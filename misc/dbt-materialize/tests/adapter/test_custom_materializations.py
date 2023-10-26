@@ -18,6 +18,7 @@ from dbt.tests.util import check_relations_equal, run_dbt
 from fixtures import (
     actual_indexes,
     expected_indexes,
+    nullability_assertions_schema_yml,
     test_materialized_view,
     test_materialized_view_index,
     test_relation_name_length,
@@ -47,6 +48,7 @@ class TestCustomMaterializations:
             "actual_indexes.sql": actual_indexes,
             "test_materialized_view.sql": test_materialized_view,
             "test_materialized_view_index.sql": test_materialized_view_index,
+            "test_materialized_view_nullability_assertions.sql": test_materialized_view,
             "test_relation_name_loooooooooooooooooonger_than_postgres_63_limit.sql": test_relation_name_length,
             "test_source.sql": test_source,
             "test_source_index.sql": test_source_index,
@@ -54,6 +56,7 @@ class TestCustomMaterializations:
             "test_sink.sql": test_sink,
             "test_table_index.sql": test_table_index,
             "test_view_index.sql": test_view_index,
+            "constraints_schema.yml": nullability_assertions_schema_yml,
         }
 
     def test_custom_materializations(self, project):

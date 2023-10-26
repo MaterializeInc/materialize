@@ -41,9 +41,30 @@
       -- See /relations/columns_spec_ddl.sql for details.
       {{ get_table_columns_and_constraints() }}
     {%- endif %}
+
   {% if cluster %}
     in cluster {{ cluster }}
   {% endif %}
+
+  {% set nullability_assertions = [] %}
+  {% set user_provided_columns = model['columns'] %}
+  {% for i in user_provided_columns %}
+    {% set col = user_provided_columns[i] %}
+    {% for c in col['constraints'] %}
+      {% set constraint_type = c['type'] %}
+      {% if constraint_type == 'not_null' %}
+        {% do nullability_assertions.append(col['name']) %}
+      {% endif %}
+    {% endfor %}
+  {% endfor %}
+  {% if nullability_assertions %}
+    with (
+      {% for col in nullability_assertions %}
+        assert not null {{ col }} {{ "," if not loop.last }}
+      {% endfor %}
+    )
+  {% endif %}
+
   as (
     {{ sql }}
   );

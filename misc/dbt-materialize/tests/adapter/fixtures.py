@@ -231,3 +231,16 @@ create table {schema}.on_run_hook (
     thread_id        TEXT
 )
 """
+
+nullability_assertions_schema_yml = """
+version: 2
+models:
+  - name: test_materialized_view_nullability
+    columns:
+      - name: a
+        constraints:
+          - type: not_null
+      - name: b
+        constraints:
+          - type: not_null
+"""
