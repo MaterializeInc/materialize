@@ -116,7 +116,7 @@ class WorkloadExecutor:
         endpoint: Endpoint,
         workload: Workload,
     ) -> WorkloadResult:
-        print(f"Running workload {workload} on {endpoint.name()} ({endpoint})")
+        print(f"Running workload {workload} on {endpoint}")
 
         df_totals = pd.DataFrame()
         df_details = pd.DataFrame()
