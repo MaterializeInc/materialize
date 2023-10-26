@@ -14,11 +14,11 @@ from materialize.output_consistency.expression.expression_characteristics import
 )
 
 TIME_ZONE_PARAM = EnumConstantOperationParam(
-    {"UTC", "CET", "+8", "America/New_York"}, add_quotes=True
+    ["UTC", "CET", "+8", "America/New_York"], add_quotes=True
 )
 
 DATE_TIME_COMPONENT_PARAM = EnumConstantOperationParam(
-    {
+    [
         "microseconds",
         "milliseconds",
         "second",
@@ -32,36 +32,36 @@ DATE_TIME_COMPONENT_PARAM = EnumConstantOperationParam(
         "decade",
         "century",
         "millennium",
-    },
+    ],
     add_quotes=True,
 )
 
 TYPE_FORMAT_PARAM = EnumConstantOperationParam(
-    {"Dy, Mon DD YYYY HH24:MI:SS +0000", "Welcome to Mon, YYYY", 'Dth "of" Mon'},
+    ["Dy, Mon DD YYYY HH24:MI:SS +0000", "Welcome to Mon, YYYY", 'Dth "of" Mon'],
     add_quotes=True,
 )
 
 ISO8601_TIMESTAMP_PARAM = EnumConstantOperationParam(
-    {"0000-01-01T00:00:00.000Z", "2015-09-18T23:56:04.123Z", "invalid_timestamp"},
+    ["0000-01-01T00:00:00.000Z", "2015-09-18T23:56:04.123Z", "invalid_timestamp"],
     add_quotes=True,
 )
 
-REGEX_PARAM = EnumConstantOperationParam({".*", "A+", "[ab]"}, add_quotes=True)
+REGEX_PARAM = EnumConstantOperationParam([".*", "A+", "[ab]"], add_quotes=True)
 
-REGEX_FLAG_PARAM = EnumConstantOperationParam({"i"}, add_quotes=True, optional=True)
+REGEX_FLAG_PARAM = EnumConstantOperationParam(["i"], add_quotes=True, optional=True)
 
 TEXT_TRIM_SPEC_PARAM = EnumConstantOperationParam(
-    {"BOTH ", "LEADING", "TRAILING"},
+    ["BOTH ", "LEADING", "TRAILING"],
     add_quotes=False,
 )
 
 REPETITIONS_PARAM = EnumConstantOperationParam(
-    {"0", "1", "2", "10", "100", "-2"}, add_quotes=False
+    ["0", "1", "2", "10", "100", "-2"], add_quotes=False
 )
 REPETITIONS_PARAM.characteristics_per_index[REPETITIONS_PARAM.values.index("-2")].add(
     ExpressionCharacteristics.NEGATIVE
 )
 
 PRECISION_PARAM = EnumConstantOperationParam(
-    {"0", "1", "2", "3", "6", "9"}, add_quotes=False
+    ["0", "1", "2", "3", "6", "9"], add_quotes=False
 )

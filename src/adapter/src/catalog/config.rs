@@ -51,6 +51,8 @@ pub struct Config<'a> {
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
     /// Default storage cluster size. Must be a key from cluster_replica_sizes.
     pub default_storage_cluster_size: Option<String>,
+    /// Builtin cluster replica size.
+    pub builtin_cluster_replica_size: String,
     /// Dynamic defaults for system parameters.
     pub system_parameter_defaults: BTreeMap<String, String>,
     /// Valid availability zones for replicas.

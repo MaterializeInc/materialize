@@ -1464,10 +1464,17 @@ impl DebugStashFactory {
 
 impl Drop for DebugStashFactory {
     fn drop(&mut self) {
-        assert!(
-            self.dropped,
-            "You forgot to call `drop()` on a `DebugStashFactory` before dropping it! You may also \
-            see this if a test panicked before calling `drop()`."
-        );
+        let message =
+            "You forgot to call `drop()` on a `DebugStashFactory` before dropping it! You \
+        may also see this if a test panicked before calling `drop()`.";
+
+        if !self.dropped {
+            // Don't double panic so we keep the stack trace relatively small.
+            if std::thread::panicking() {
+                tracing::error!("{message}");
+            } else {
+                panic!("{message}");
+            }
+        }
     }
 }
