@@ -127,8 +127,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     print(f"--- Random seed is {args.seed}")
     random.seed(args.seed)
 
+    all_checks = {check.__name__: check for check in all_subclasses(Check)}
     checks = (
-        [globals()[check] for check in args.check]
+        [all_checks[check] for check in args.check]
         if args.check
         else list(all_subclasses(Check))
     )
