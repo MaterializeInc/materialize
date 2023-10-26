@@ -68,7 +68,7 @@ def run(
     random.seed(seed)
 
     print(
-        f"--- Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity.value} --scenario={scenario.value} --naughty_identifiers={naughty_identifiers} --databases={num_databases} (--host={host})"
+        f"--- Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity.value} --scenario={scenario.value} {'--naughty-identifiers ' if naughty_identifiers else ''}--databases={num_databases} (--host={host})"
     )
     initialize_logging()
 

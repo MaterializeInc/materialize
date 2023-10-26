@@ -1152,9 +1152,9 @@ class HttpPostAction(Action):
         )
         try:
             requests.post(url, data=payload.encode("utf-8"), headers=headers)
-        except requests.exceptions.ConnectionError:
-            # Expeceted when Mz is killed
-            if exe.db.scenario != Scenario.Kill:
+        except (requests.exceptions.ConnectionError):
+            # Expected when Mz is killed
+            if exe.db.scenario not in (Scenario.Kill, Scenario.BackupRestore):
                 raise
 
 
