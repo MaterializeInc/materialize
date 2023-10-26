@@ -39,8 +39,8 @@ use crate::durable::objects::{
     SystemPrivilegesKey, SystemPrivilegesValue, TimestampKey, TimestampValue,
 };
 use crate::durable::{
-    CatalogError, DurableCatalogState, Snapshot, TimelineTimestamp, DATABASE_ID_ALLOC_KEY,
-    SCHEMA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
+    CatalogError, DefaultPrivilege, DurableCatalogState, Snapshot, TimelineTimestamp,
+    DATABASE_ID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
 
 /// A [`Transaction`] batches multiple catalog operations together and commits them atomically.
