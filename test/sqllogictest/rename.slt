@@ -516,7 +516,7 @@ statement ok
 SET SCHEMA TO public_renamed;
 
 query I
-SELECT bar FROM t1;
+SELECT bar FROM t1 ORDER BY bar ASC;
 ----
 100
 200
@@ -609,3 +609,14 @@ CREATE VIEW "d"."amb"."v1" AS SELECT "amb"."t1"."x" FROM "materialize"."amb"."t1
 
 statement error db error: ERROR: renaming conflict: in d\.amb\.v1, which uses d\.amb, ambiguous reference to schema named amb
 ALTER SCHEMA d.amb RENAME TO this_rename_will_fail;
+
+# Test subsource renames
+
+statement ok
+CREATE SOURCE s FROM LOAD GENERATOR AUCTION FOR ALL TABLES WITH (SIZE '1');
+
+statement ok
+ALTER SOURCE users RENAME TO userz
+
+statement ok
+SELECT * FROM userz LIMIT 0
