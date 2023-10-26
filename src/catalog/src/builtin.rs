@@ -2179,8 +2179,9 @@ pub static MZ_ACTIVITY_LOG: BuiltinView = BuiltinView {
     sql: "CREATE VIEW mz_internal.mz_activity_log AS
 SELECT mseh.id AS execution_id, sample_rate, cluster_id, application_name, cluster_name,
 transaction_isolation, execution_timestamp, params, began_at, finished_at, finished_status,
-error_message, rows_returned, execution_strategy,
-sql, session_id, redacted_sql, prepared_at
+error_message, rows_returned, execution_strategy, transaction_id,
+mpsh.id AS prepared_statement_id, sql, mpsh.name AS prepared_statement_name,
+session_id, redacted_sql, prepared_at
 FROM mz_internal.mz_statement_execution_history mseh, mz_internal.mz_prepared_statement_history mpsh
 WHERE mseh.prepared_statement_id = mpsh.id",
     sensitivity: DataSensitivity::Superuser,
@@ -2192,8 +2193,8 @@ pub static MZ_ACTIVITY_LOG_REDACTED: BuiltinView = BuiltinView {
     sql: "CREATE VIEW mz_internal.mz_activity_log_redacted AS
 SELECT execution_id, sample_rate, cluster_id, application_name, cluster_name,
 transaction_isolation, execution_timestamp, began_at, finished_at, finished_status,
-error_message, rows_returned, execution_strategy,
-session_id, redacted_sql, prepared_at
+error_message, rows_returned, execution_strategy, transaction_id, prepared_statement_id,
+prepared_statement_name, session_id, redacted_sql, prepared_at
 FROM mz_internal.mz_activity_log",
     sensitivity: DataSensitivity::SuperuserAndSupport,
 };
