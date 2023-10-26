@@ -754,7 +754,6 @@ ReduceMinsMaxes
 "ArrangeBy[[Column(0)]]-errors"
 "ArrangeBy[[Column(0)]]-errors"
 "ArrangeBy[[Column(0)]]-errors"
-"ArrangeBy[[Column(1), Column(0)]] [val: empty]"
 "ArrangeBy[[Column(1), Column(3)]]"
 "ArrangeBy[[Column(1), Column(3)]]"
 "ArrangeBy[[Column(1)]]"
