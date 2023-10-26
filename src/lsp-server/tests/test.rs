@@ -78,6 +78,7 @@
 #[cfg(test)]
 mod tests {
 
+    use mz_lsp_server::backend::DEFAULT_FORMATTING_WIDTH;
     use mz_lsp_server::{PKG_NAME, PKG_VERSION};
     use mz_ore::collections::HashMap;
     use serde::{Deserialize, Serialize};
@@ -359,6 +360,7 @@ mod tests {
         let (service, socket) = LspService::new(|client| mz_lsp_server::backend::Backend {
             client,
             parse_results: Mutex::new(HashMap::new()),
+            formatting_width: DEFAULT_FORMATTING_WIDTH,
         });
 
         mz_ore::task::spawn(

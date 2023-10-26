@@ -16,18 +16,21 @@
 // The original source code is subject to the terms of the <APACHE|MIT> license, a copy
 // of which can be found in the LICENSE file at the root of this repository.
 
+use ::serde::Deserialize;
 use mz_ore::collections::HashMap;
 use mz_sql_parser::ast::{Raw, Statement};
 use regex::Regex;
 use ropey::Rope;
 use serde_json::Value;
-use std::borrow::Cow;
 use tokio::sync::Mutex;
-use tower_lsp::jsonrpc::{Error, ErrorCode, Result};
+use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
 
 use crate::{PKG_NAME, PKG_VERSION};
+
+/// Default formatting width to use in the [Backend::formatting] implementation.
+pub const DEFAULT_FORMATTING_WIDTH: usize = 60;
 
 /// This is a re-implemention of [mz_sql_parser::parser::StatementParseResult]
 /// but replacing the sql code with a rope.
@@ -67,11 +70,50 @@ pub struct Backend {
     /// E.g. The user formats or performs an action
     /// prior to save the file.
     pub parse_results: Mutex<HashMap<Url, ParseResult>>,
+
+    /// Formatting width to use in mz- prettier
+    pub formatting_width: Mutex<usize>,
+}
+
+/// Contains customizable options send by the client.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InitializeOptions {
+    /// Represents the width used to format text using [mz_sql_pretty].
+    formatting_width: Option<usize>,
 }
 
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
-    async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
+    async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+        // Load the formatting width option sent by the client.
+        if let Some(value_options) = params.initialization_options {
+            match serde_json::from_value(value_options) {
+                Ok(options) => {
+                    self.client
+                        .log_message(
+                            MessageType::INFO,
+                            format!("Initialization options: {:?}", options),
+                        )
+                        .await;
+
+                    let options: InitializeOptions = options;
+                    if let Some(formatting_width) = options.formatting_width {
+                        let mut mutex_changer = self.formatting_width.lock().await;
+                        *mutex_changer = formatting_width;
+                    }
+                }
+                Err(err) => {
+                    self.client
+                        .log_message(
+                            MessageType::INFO,
+                            format!("Initialization options are erroneus: {:?}", err.to_string()),
+                        )
+                        .await;
+                }
+            };
+        }
+
         Ok(InitializeResult {
             server_info: Some(ServerInfo {
                 name: PKG_NAME.clone(),
@@ -204,19 +246,21 @@ impl LanguageServer for Backend {
     }
 
     /// Formats the code using [mz_sql_pretty].
-    /// [`textDocument/formatting`]: https://microsoft.github.io/language-server-protocol/specification#textDocument_formatting
+    ///
+    /// Implements the [`textDocument/formatting`](https://microsoft.github.io/language-server-protocol/specification#textDocument_formatting) language feature.
     async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
         self.client
             .log_message(MessageType::INFO, format!("Formatting: {:?}", params))
             .await;
 
         let locked_map = self.parse_results.lock().await;
+        let width = self.formatting_width.lock().await;
 
         if let Some(parse_result) = locked_map.get(&params.text_document.uri) {
             let pretty = parse_result
                 .asts
                 .iter()
-                .map(|ast| mz_sql_pretty::to_pretty(ast, 60))
+                .map(|ast| mz_sql_pretty::to_pretty(ast, *width))
                 .collect::<Vec<String>>()
                 .join("\n");
             let rope = &parse_result.rope;
@@ -249,6 +293,7 @@ impl Backend {
             .await;
         let rope = ropey::Rope::from_str(&params.text);
 
+        let mut parse_results = self.parse_results.lock().await;
         // Parse the text
         let parse_result = mz_sql_parser::parser::parse_statements(&params.text);
 
@@ -262,7 +307,6 @@ impl Backend {
 
                 let asts = results.iter().map(|x| x.ast.clone()).collect();
                 let parse_result: ParseResult = ParseResult { asts, rope };
-                let mut parse_results = self.parse_results.lock().await;
                 parse_results.insert(params.uri, parse_result);
             }
 
@@ -272,6 +316,8 @@ impl Backend {
                 let start = offset_to_position(error_position, &rope).unwrap();
                 let end = start;
                 let range = Range { start, end };
+
+                parse_results.remove(&params.uri);
 
                 // Check for Jinja code (dbt)
                 // If Jinja code is detected, inform that parsing is not available..
@@ -330,17 +376,4 @@ fn offset_to_position(offset: usize, rope: &Rope) -> Option<Position> {
     let column_u32 = column.try_into().ok()?;
 
     Some(Position::new(line_u32, column_u32))
-}
-
-/// Utility function to translate any error to a JSON RPC error
-/// understood by the extension and the Tower LSP parser.
-fn to_json_rpc_error<T>(error: T) -> Error
-where
-    T: ToString,
-{
-    Error {
-        code: ErrorCode::InternalError,
-        message: Cow::Owned(error.to_string()),
-        data: None,
-    }
 }
