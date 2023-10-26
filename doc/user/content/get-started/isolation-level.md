@@ -80,7 +80,11 @@ large propagation delays. For example, if SQL-transaction T1 happens before SQL-
 table t, and T2 queries materialized view mv where mv is an expensive materialized view including t, then T2 may not see
 all the rows that were seen by T1 if they are executed close enough together in real time.
 
-If a consistent snapshot is not available across all objects in a query, the query will be blocked until one becomes available. On the other hand, if a consistent snapshot is available, the query will be executed immediately. A consistent snapshot is guaranteed to be available for queries that involve a single object (which includes queries against a single materialized view that was created using multiple objects). Such queries will therefore never block, and always be executed immediately.
+If a consistent snapshot is not available across all objects in a query, the query will be blocked
+until one becomes available. On the other hand, if a consistent snapshot is available, the query
+will be executed immediately. A consistent snapshot is guaranteed to be available for queries that
+involve a single object (which includes queries against a single materialized view that was created
+using multiple objects). Such queries will therefore never block, and always be executed immediately.
 
 ## Strict serializable
 
