@@ -17,7 +17,7 @@ reset-server
 statement ok
 CREATE CLUSTER foo SIZE '1'
 
-statement error db error: ERROR: Expected one of OWNER or RENAME or RESET or SET, found dot
+statement error db error: ERROR: Expected one of OWNER or RENAME or RESET or SET or SWAP, found dot
 ALTER CLUSTER foo.bar SET (SIZE '2')
 
 statement ok

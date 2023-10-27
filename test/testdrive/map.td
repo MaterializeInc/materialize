@@ -51,7 +51,7 @@ bool
 contains:cannot drop type bool because it is required by the database system
 
 ! DROP TYPE public.bool
-contains:cannot drop type public.bool: still depended upon by type another_custom
+contains:cannot drop type "public.bool": still depended upon by type "another_custom"
 
 > DROP TYPE another_custom
 

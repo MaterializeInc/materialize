@@ -80,6 +80,29 @@ class Executor:
             print(f"Query failed: {query}")
             raise
 
+    def execute_with_retry_on_error(
+        self,
+        cur: pg8000.Cursor,
+        query: str,
+        required_error_message_substr: str | None,
+        max_tries: int = 5,
+        wait_time_in_sec: int = 1,
+    ) -> None:
+        for try_count in range(1, max_tries + 1):
+            try:
+                self.execute(cur, query)
+                return
+            except Exception as e:
+                if (
+                    required_error_message_substr is not None
+                    and required_error_message_substr not in e.__str__()
+                ):
+                    raise
+                elif try_count == max_tries:
+                    raise
+                else:
+                    time.sleep(wait_time_in_sec)
+
 
 class PrintExecutor(Executor):
     def create(self) -> None:
@@ -398,7 +421,7 @@ class KafkaRoundtripExecutor(Executor):
         keys = [field.name for field in self.fields if field.is_key]
 
         self.mz_conn.autocommit = True
-        with self.mz_conn.cursor() as cur:
+        with (self.mz_conn.cursor() as cur):
             self.execute(cur, f"DROP TABLE IF EXISTS {identifier(self.table_original)}")
             self.execute(
                 cur,
@@ -415,13 +438,16 @@ class KafkaRoundtripExecutor(Executor):
                     USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                     ENVELOPE DEBEZIUM""",
             )
-            self.execute(
+            self.execute_with_retry_on_error(
                 cur,
                 f"""CREATE SOURCE {identifier(self.schema)}.{identifier(self.table)}
                     FROM KAFKA CONNECTION kafka_conn (TOPIC '{self.topic}')
                     FORMAT AVRO
                     USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                     ENVELOPE DEBEZIUM""",
+                wait_time_in_sec=1,
+                max_tries=15,
+                required_error_message_substr="No value schema found",
             )
         self.mz_conn.autocommit = False
 

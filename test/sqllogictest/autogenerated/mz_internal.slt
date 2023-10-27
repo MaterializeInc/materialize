@@ -30,6 +30,13 @@ statement ok
 CREATE INDEX objects_idx ON objects(schema, object)
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_frontiers' ORDER BY position
+----
+1  object_id  text
+2  replica_id  text
+3  write_frontier  mz_timestamp
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_metrics' ORDER BY position
 ----
 1  replica_id  text
@@ -113,14 +120,8 @@ query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_frontiers' ORDER BY position
 ----
 1  object_id  text
-2  replica_id  text
-3  time  mz_timestamp
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_global_frontiers' ORDER BY position
-----
-1  object_id  text
-2  time  mz_timestamp
+2  read_frontier  mz_timestamp
+3  write_frontier  mz_timestamp
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_kafka_sources' ORDER BY position
@@ -590,6 +591,8 @@ SELECT DISTINCT object FROM objects WHERE schema IN ('mz_internal') ORDER BY obj
 ----
 mz_active_peeks
 mz_active_peeks_per_worker
+mz_activity_log
+mz_activity_log_redacted
 mz_aggregates
 mz_arrangement_batches_raw
 mz_arrangement_heap_allocations_raw
@@ -602,6 +605,7 @@ mz_arrangement_sharing_raw
 mz_arrangement_sizes
 mz_arrangement_sizes_per_worker
 mz_cluster_links
+mz_cluster_replica_frontiers
 mz_cluster_replica_heartbeats
 mz_cluster_replica_history
 mz_cluster_replica_metrics
@@ -666,6 +670,7 @@ mz_peek_durations_histogram_per_worker
 mz_peek_durations_histogram_raw
 mz_postgres_sources
 mz_prepared_statement_history
+mz_prepared_statement_history_redacted
 mz_records_per_dataflow
 mz_records_per_dataflow_operator
 mz_records_per_dataflow_operator_per_worker
@@ -706,6 +711,7 @@ mz_source_statistics
 mz_source_status_history
 mz_source_statuses
 mz_statement_execution_history
+mz_statement_execution_history_redacted
 mz_storage_shards
 mz_storage_usage_by_shard
 mz_subscriptions

@@ -101,17 +101,12 @@ must either be `TEMPORARY` or be explicitly dropped at the end of the section.
 
 ## Adding the Check to the tests
 
-All checks are located in the `misc/python/materialize/checks/` directory, functionally grouped in files. A `Check` that performs
+All checks are located in the `misc/python/materialize/checks/all_checks` directory, functionally grouped in files. A `Check` that performs
 the creation of a particular type of resource is usually placed in the same file as the `Check` that validates the deletion of the
 same resource type.
 
-Checks need to be imported into the `misc/python/materialize/checks/all_checks.py` file:
-
-```
-from materialize.checks.my_new_check_file import *  # noqa: F401 F403
-```
-
-The `noqa` directives are used to enable wildcard imports.
+## Ignoring a Check
+To ignore a `Check`, annotate it with `@disabled(ignore_reason="due to #...")`.
 
 # Writing a Scenario
 

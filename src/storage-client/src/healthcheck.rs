@@ -80,6 +80,12 @@ pub static MZ_SINK_STATUS_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {
         .with_column("details", ScalarType::Jsonb.nullable(true))
 });
 
+// NOTE: Update the views `mz_statement_execution_history_redacted`
+// and `mz_activity_log`, and `mz_activity_log_redacted` whenever this
+// is updated, to include the new columns where appropriate.
+//
+// The `redacted` views should contain only those columns that should
+// be queryable by support.
 pub static MZ_PREPARED_STATEMENT_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {
     RelationDesc::empty()
         .with_column("id", ScalarType::Uuid.nullable(false))
@@ -107,6 +113,12 @@ pub static MZ_SESSION_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {
         .with_column("authenticated_user", ScalarType::String.nullable(false))
 });
 
+// NOTE: Update the views `mz_statement_execution_history_redacted`
+// and `mz_activity_log`, and `mz_activity_log_redacted` whenever this
+// is updated, to include the new columns where appropriate.
+//
+// The `redacted` views should contain only those columns that should
+// be queryable by support.
 pub static MZ_STATEMENT_EXECUTION_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {
     RelationDesc::empty()
         .with_column("id", ScalarType::Uuid.nullable(false))
@@ -119,6 +131,7 @@ pub static MZ_STATEMENT_EXECUTION_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|
         // Note that this can't be a timestamp, as it might be u64::max,
         // which is out of range.
         .with_column("execution_timestamp", ScalarType::UInt64.nullable(true))
+        .with_column("transaction_id", ScalarType::UInt64.nullable(false))
         .with_column(
             "params",
             ScalarType::Array(Box::new(ScalarType::String)).nullable(false),

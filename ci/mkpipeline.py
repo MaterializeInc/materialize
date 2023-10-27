@@ -234,7 +234,11 @@ def add_test_selection_block(pipeline: Any, pipeline_name: str) -> None:
         return
 
     def visit(step: dict[str, Any]) -> None:
-        if "id" in step and step["id"] not in ("analyze", "build-x86_64"):
+        if (
+            "id" in step
+            and step["id"] not in ("analyze", "build-x86_64")
+            and "skip" not in step
+        ):
             selection_step["fields"][0]["options"].append({"value": step["id"]})
 
     for step in pipeline["steps"]:

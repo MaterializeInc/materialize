@@ -27,13 +27,17 @@ from materialize.output_consistency.ignore_filter.expression_matchers import (
     matches_op_by_pattern,
     matches_x_or_y,
 )
-from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
+from materialize.output_consistency.ignore_filter.ignore_verdict import (
     IgnoreVerdict,
-    InconsistencyIgnoreFilter,
     NoIgnore,
+    YesIgnore,
+)
+from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
+    InconsistencyIgnoreFilter,
+)
+from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter_base import (
     PostExecutionInconsistencyIgnoreFilterBase,
     PreExecutionInconsistencyIgnoreFilterBase,
-    YesIgnore,
 )
 from materialize.output_consistency.input_data.return_specs.date_time_return_spec import (
     DateTimeReturnTypeSpec,
@@ -250,6 +254,7 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             "value out of range: overflow" in pg_error_msg
             or "value out of range: underflow" in pg_error_msg
             or "timestamp out of range" in pg_error_msg
+            or "integer out of range" in pg_error_msg
         ):
             return YesIgnore("#22265")
 

@@ -87,8 +87,8 @@ mod message;
 mod severity;
 
 pub use codec::{
-    decode_startup, input_err, parse_frame_len, Cursor, DecodeState, ACCEPT_SSL_ENCRYPTION,
-    MAX_REQUEST_SIZE, REJECT_ENCRYPTION,
+    decode_startup, input_err, parse_frame_len, CodecError, Cursor, DecodeState,
+    ACCEPT_SSL_ENCRYPTION, MAX_REQUEST_SIZE, REJECT_ENCRYPTION,
 };
 pub use conn::Conn;
 pub use format::Format;

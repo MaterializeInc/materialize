@@ -522,6 +522,7 @@ mz_arrangement_sharing_raw                   log   <null>   <null>
 mz_arrangement_heap_size_raw                 log   <null>   <null>
 mz_arrangement_heap_capacity_raw             log   <null>   <null>
 mz_arrangement_heap_allocations_raw          log   <null>   <null>
+mz_cluster_replica_frontiers                 source <null>  <null>
 mz_cluster_replica_heartbeats                source <null>  <null>
 mz_compute_delays_histogram_raw              log   <null>   <null>
 mz_compute_dependencies                      source <null>  <null>
@@ -575,6 +576,8 @@ mz_webhook_sources
 name
 -------------------------------------
 mz_active_peeks
+mz_activity_log
+mz_activity_log_redacted
 mz_arrangement_sharing
 mz_arrangement_sharing_per_worker
 mz_arrangement_sizes
@@ -615,6 +618,7 @@ mz_object_lifetimes
 mz_object_transitive_dependencies
 mz_peek_durations_histogram
 mz_peek_durations_histogram_per_worker
+mz_prepared_statement_history_redacted
 mz_records_per_dataflow
 mz_records_per_dataflow_operator
 mz_records_per_dataflow_operator_per_worker
@@ -646,6 +650,7 @@ mz_show_schema_privileges
 mz_show_system_privileges
 mz_sink_statuses
 mz_source_statuses
+mz_statement_execution_history_redacted
 
 > SET database = materialize
 
@@ -664,7 +669,7 @@ test_table
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-111
+112
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

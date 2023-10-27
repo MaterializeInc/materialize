@@ -32,7 +32,7 @@ class Testdrive(Service):
         kafka_args: str | None = None,
         schema_registry_url: str = "http://schema-registry:8081",
         no_reset: bool = False,
-        default_timeout: str = "120s",
+        default_timeout: str | None = None,
         seed: int | None = None,
         consistent_seed: bool = False,
         validate_postgres_stash: str | None = None,
@@ -101,6 +101,8 @@ class Testdrive(Service):
         for k, v in materialize_params.items():
             entrypoint.append(f"--materialize-param={k}={v}")
 
+        if default_timeout is None:
+            default_timeout = "120s"
         entrypoint.append(f"--default-timeout={default_timeout}")
 
         if kafka_default_partitions:

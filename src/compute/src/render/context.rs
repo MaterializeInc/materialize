@@ -27,8 +27,6 @@ use mz_repr::{ColumnType, DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowAren
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
-use mz_timely_util::probe;
-use mz_timely_util::probe::ProbeNotify;
 use timely::communication::message::RefOrMut;
 use timely::container::columnation::Columnation;
 use timely::dataflow::channels::pact::Pipeline;
@@ -278,7 +276,9 @@ where
                 logic(&datums_borrow)
             }),
             SpecializedArrangement::RowRow(inner) => inner.as_collection(move |k, v| {
-                let datums_borrow = datums.borrow_with_many(&[k, v]);
+                let mut datums_borrow = datums.borrow();
+                datums_borrow.extend(&**k);
+                datums_borrow.extend(&**v);
                 logic(&datums_borrow)
             }),
         }
@@ -315,7 +315,9 @@ where
                 inner,
                 key,
                 move |k, v, t, d| {
-                    let mut datums_borrow = datums.borrow_with_many(&[&k, &v]);
+                    let mut datums_borrow = datums.borrow();
+                    datums_borrow.extend(&**k);
+                    datums_borrow.extend(&**v);
                     logic(&mut datums_borrow, t, d)
                 },
                 refuel,
@@ -345,19 +347,6 @@ impl<S: Scope> SpecializedArrangement<S>
 where
     S: ScopeParent<Timestamp = mz_repr::Timestamp>,
 {
-    /// Attaches probes to the stream of the underlying arrangement
-    /// to notify on index frontier advancement.
-    pub fn probe_notify_with(&self, probes: Vec<probe::Handle<mz_repr::Timestamp>>) {
-        match self {
-            SpecializedArrangement::RowUnit(inner) => {
-                inner.stream.probe_notify_with(probes);
-            }
-            SpecializedArrangement::RowRow(inner) => {
-                inner.stream.probe_notify_with(probes);
-            }
-        }
-    }
-
     /// Obtains a `SpecializedTraceHandle` for the underlying arrangement.
     pub fn trace_handle(&self) -> SpecializedTraceHandle {
         match self {
@@ -425,7 +414,9 @@ where
                 logic(&datums_borrow)
             }),
             SpecializedArrangementImport::RowRow(inner) => inner.as_collection(move |k, v| {
-                let datums_borrow = datums.borrow_with_many(&[k, v]);
+                let mut datums_borrow = datums.borrow();
+                datums_borrow.extend(&**k);
+                datums_borrow.extend(&**v);
                 logic(&datums_borrow)
             }),
         }
@@ -462,7 +453,9 @@ where
                 inner,
                 key,
                 move |k, v, t, d| {
-                    let mut datums_borrow = datums.borrow_with_many(&[&k, &v]);
+                    let mut datums_borrow = datums.borrow();
+                    datums_borrow.extend(&**k);
+                    datums_borrow.extend(&**v);
                     logic(&mut datums_borrow, t, d)
                 },
                 refuel,

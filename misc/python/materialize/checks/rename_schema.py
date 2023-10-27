@@ -14,35 +14,7 @@ from materialize.checks.executors import Executor
 from materialize.util import MzVersion
 
 
-class CheckSchemas(Check):
-    def manipulate(self) -> list[Testdrive]:
-        return [
-            Testdrive(dedent(s))
-            for s in [
-                """
-                > CREATE SCHEMA to_be_created;
-
-                > CREATE SCHEMA to_be_dropped;
-                > CREATE TABLE to_be_dropped.t1 (f1 INTEGER);
-                """,
-                """
-                > DROP SCHEMA to_be_dropped CASCADE;
-                """,
-            ]
-        ]
-
-    def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
-                > SHOW SCHEMAS LIKE 'to_be_%';
-                to_be_created
-                """
-            )
-        )
-
-
-class RenameSchemas(Check):
+class RenameSchema(Check):
     def _can_run(self, e: Executor) -> bool:
         return self.base_version >= MzVersion.parse("0.73.0-dev")
 

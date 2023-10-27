@@ -95,11 +95,14 @@ mz_system         mz_system=UC/mz_system
 mz_system         mz_support=U/mz_system
 
 ### The materialize privilege comes from the views created above
+### The mz_support privilege comes from the `_redacted`
+### statement logging views.
 query T
 SELECT DISTINCT(privilege) FROM item_privileges WHERE type = 'view' OR type = 'materialized view' OR type = 'source'
 ----
 =r/mz_system
 mz_system=r/mz_system
+mz_support=r/mz_system
 materialize=r/materialize
 
 query T
@@ -4711,7 +4714,11 @@ materialize,materialize,materialize,public,s,SELECT,NO,YES
 materialize,materialize,materialize,public,t,SELECT,NO,YES
 materialize,materialize,materialize,public,v,SELECT,NO,YES
 materialize,materialize,materialize,public,s_progress,SELECT,NO,YES
-COMPLETE 13
+mz_system,mz_support,materialize,mz_internal,mz_session_history,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_internal,mz_activity_log_redacted,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_internal,mz_prepared_statement_history_redacted,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_internal,mz_statement_execution_history_redacted,SELECT,NO,YES
+COMPLETE 17
 
 simple conn=mz_system,user=mz_system
 SELECT COUNT(*) >= 166 FROM information_schema.table_privileges WHERE grantee = 'PUBLIC'
@@ -4753,7 +4760,11 @@ materialize,materialize,materialize,public,s,SELECT,NO,YES
 materialize,materialize,materialize,public,t,SELECT,NO,YES
 materialize,materialize,materialize,public,v,SELECT,NO,YES
 materialize,materialize,materialize,public,s_progress,SELECT,NO,YES
-COMPLETE 13
+mz_system,mz_support,materialize,mz_internal,mz_session_history,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_internal,mz_activity_log_redacted,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_internal,mz_prepared_statement_history_redacted,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_internal,mz_statement_execution_history_redacted,SELECT,NO,YES
+COMPLETE 17
 
 simple conn=mz_system,user=mz_system
 SELECT COUNT(*) >= 166 FROM information_schema.role_table_grants WHERE grantee = 'PUBLIC'

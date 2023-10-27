@@ -700,7 +700,23 @@
         Computes the SHA-512 hash of the given bytea `data`.
 
 - type: Window
-  description: Window functions compute values across sets of rows related to the current query.
+  description: >-
+    Window functions compute values across sets of rows related to the current row.
+    For example, you can use a window aggregation to smooth measurement data by computing the average of the last 5
+    measurements before every row as follows:
+    ```
+    SELECT avg(measurement) OVER (ORDER BY time ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) FROM measurements;
+    ```.
+    Window functions always need an `OVER` clause. For the `OVER` clause, Materialize supports the same
+    [syntax as PostgreSQL](https://www.postgresql.org/docs/current/tutorial-window.html), but currently
+    only with the `ROWS` frame mode (except for the default frame, which is
+    `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`, and is supported).
+    In addition to the below window functions, you can use the `OVER` clause with any aggregation function
+    (e.g., `sum`, `avg`) as well. Using an aggregation with an `OVER` clause is called a _window aggregation_. A
+    window aggregation computes the aggregate not on the groups specified by the `GROUP BY` clause, but on the frames
+    specified inside the `OVER` clause. (Note that a window aggregation produces exactly one output value _for each input
+    row_. This is different from a standard aggregation, which produces one output value for each _group_ specified by
+    the `GROUP BY` clause.)
   functions:
   - signature: 'dense_rank() -> int'
     description: >-

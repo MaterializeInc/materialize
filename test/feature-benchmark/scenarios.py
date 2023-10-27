@@ -9,6 +9,7 @@
 
 
 from math import ceil, floor
+from textwrap import dedent
 
 from parameterized import parameterized_class  # type: ignore
 
@@ -164,6 +165,33 @@ true
   /* B */
 """
             + "\n".join([str(x) for x in range(self.n() - 1000, self.n())])
+        )
+
+
+class FastPathLimit(FastPath):
+    """Benchmark the case SELECT * FROM source LIMIT <i> , optimized by #21615"""
+
+    def init(self) -> list[Action]:
+        return [
+            TdAction(
+                f"""
+                > CREATE MATERIALIZED VIEW v1 AS SELECT * FROM generate_series(1, {self.n()})
+                """
+            ),
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        return Td(
+            dedent(
+                """
+                > SELECT 1;
+                  /* A */
+                1
+                > SELECT * FROM v1 LIMIT 100
+                  /* B */
+                """
+            )
+            + "\n".join([str(x) for x in range(1, 101)])
         )
 
 
@@ -1131,6 +1159,8 @@ $ kafka-ingest format=avro topic=sink-input key-format=avro key-schema=${{keysch
   KEY (f1)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+
+$ kafka-verify-topic sink=materialize.public.sink1 await-value-schema=true await-key-schema=true
 
 # Wait until all the records have been emited from the sink, as observed by the sink1_check source
 

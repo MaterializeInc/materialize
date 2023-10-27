@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! The current types used by the [`crate::catalog::Catalog`].
+//! The current types used by the Catalog.
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
@@ -15,11 +15,12 @@ use std::ops::{Deref, DerefMut};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW;
+use mz_adapter_types::connection::ConnectionId;
 use once_cell::sync::Lazy;
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Serialize};
 
-use mz_catalog::builtin::{MZ_INTROSPECTION_CLUSTER, MZ_SYSTEM_CLUSTER};
 use mz_compute_client::logging::LogVariant;
 use mz_controller::clusters::{
     ClusterRole, ClusterStatus, ProcessId, ReplicaConfig, ReplicaLogging,
@@ -49,13 +50,13 @@ use mz_sql::rbac;
 use mz_sql::session::vars::OwnedVarInput;
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::connections::inline::ReferencedConnection;
-use mz_storage_types::sinks::{SinkEnvelope, StorageSinkConnection, StorageSinkConnectionBuilder};
+use mz_storage_types::sinks::{SinkEnvelope, StorageSinkConnection};
 use mz_storage_types::sources::{
     IngestionDescription, SourceConnection, SourceDesc, SourceEnvelope, SourceExport, Timeline,
 };
 
-use crate::client::ConnectionId;
-use crate::coord::DEFAULT_LOGICAL_COMPACTION_WINDOW;
+use crate::builtin::{MZ_INTROSPECTION_CLUSTER, MZ_SYSTEM_CLUSTER};
+use crate::durable;
 
 #[derive(Debug, Serialize, Clone)]
 pub struct Database {
@@ -70,9 +71,9 @@ pub struct Database {
     pub privileges: PrivilegeMap,
 }
 
-impl From<Database> for mz_catalog::Database {
-    fn from(database: Database) -> mz_catalog::Database {
-        mz_catalog::Database {
+impl From<Database> for durable::Database {
+    fn from(database: Database) -> durable::Database {
+        durable::Database {
             id: database.id,
             name: database.name,
             owner_id: database.owner_id,
@@ -94,8 +95,8 @@ pub struct Schema {
 }
 
 impl Schema {
-    pub(crate) fn into_durable_schema(self, database_id: Option<DatabaseId>) -> mz_catalog::Schema {
-        mz_catalog::Schema {
+    pub fn into_durable_schema(self, database_id: Option<DatabaseId>) -> durable::Schema {
+        durable::Schema {
             id: self.id.into(),
             name: self.name.schema,
             database_id,
@@ -126,9 +127,9 @@ impl Role {
     }
 }
 
-impl From<Role> for mz_catalog::Role {
-    fn from(role: Role) -> mz_catalog::Role {
-        mz_catalog::Role {
+impl From<Role> for durable::Role {
+    fn from(role: Role) -> durable::Role {
+        durable::Role {
             id: role.id,
             name: role.name,
             attributes: role.attributes,
@@ -149,9 +150,9 @@ pub struct Cluster {
     /// Objects bound to this cluster. Does not include introspection source
     /// indexes.
     pub bound_objects: BTreeSet<GlobalId>,
-    pub(super) replica_id_by_name_: BTreeMap<String, ReplicaId>,
+    pub replica_id_by_name_: BTreeMap<String, ReplicaId>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
-    pub(super) replicas_by_id_: BTreeMap<ReplicaId, ClusterReplica>,
+    pub replicas_by_id_: BTreeMap<ReplicaId, ClusterReplica>,
     pub owner_id: RoleId,
     pub privileges: PrivilegeMap,
 }
@@ -191,7 +192,7 @@ impl Cluster {
     }
 
     /// Lookup a replica by ID and return a mutable reference.
-    pub(crate) fn replica_mut(&mut self, replica_id: ReplicaId) -> Option<&mut ClusterReplica> {
+    pub fn replica_mut(&mut self, replica_id: ReplicaId) -> Option<&mut ClusterReplica> {
         self.replicas_by_id_.get_mut(&replica_id)
     }
 
@@ -203,7 +204,7 @@ impl Cluster {
     /// Insert a new replica into the cluster.
     ///
     /// Panics if the name or ID are reused.
-    pub(crate) fn insert_replica(&mut self, replica: ClusterReplica) {
+    pub fn insert_replica(&mut self, replica: ClusterReplica) {
         assert!(self
             .replica_id_by_name_
             .insert(replica.name.clone(), replica.replica_id)
@@ -217,7 +218,7 @@ impl Cluster {
     /// Remove a replica from this cluster.
     ///
     /// Panics if the replica ID does not exist, or if the internal state is inconsistent.
-    pub(crate) fn remove_replica(&mut self, replica_id: ReplicaId) {
+    pub fn remove_replica(&mut self, replica_id: ReplicaId) {
         let replica = self
             .replicas_by_id_
             .remove(&replica_id)
@@ -232,7 +233,7 @@ impl Cluster {
     ///
     /// Panics if the replica ID is unknown, or new name is not unique, or the internal state is
     /// inconsistent.
-    pub(crate) fn rename_replica(&mut self, replica_id: ReplicaId, to_name: String) {
+    pub fn rename_replica(&mut self, replica_id: ReplicaId, to_name: String) {
         let replica = self.replica_mut(replica_id).expect("Must exist");
         let old_name = std::mem::take(&mut replica.name);
         replica.name = to_name.clone();
@@ -245,9 +246,9 @@ impl Cluster {
     }
 }
 
-impl From<Cluster> for mz_catalog::Cluster {
-    fn from(cluster: Cluster) -> mz_catalog::Cluster {
-        mz_catalog::Cluster {
+impl From<Cluster> for durable::Cluster {
+    fn from(cluster: Cluster) -> durable::Cluster {
+        durable::Cluster {
             id: cluster.id,
             name: cluster.name,
             linked_object_id: cluster.linked_object_id,
@@ -292,9 +293,9 @@ impl ClusterReplica {
     }
 }
 
-impl From<ClusterReplica> for mz_catalog::ClusterReplica {
-    fn from(replica: ClusterReplica) -> mz_catalog::ClusterReplica {
-        mz_catalog::ClusterReplica {
+impl From<ClusterReplica> for durable::ClusterReplica {
+    fn from(replica: ClusterReplica) -> durable::ClusterReplica {
+        durable::ClusterReplica {
             cluster_id: replica.cluster_id,
             replica_id: replica.replica_id,
             name: replica.name,
@@ -312,15 +313,15 @@ pub struct ClusterReplicaProcessStatus {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct CatalogEntry {
-    pub(super) item: CatalogItem,
+    pub item: CatalogItem,
     #[serde(skip)]
-    pub(super) used_by: Vec<GlobalId>,
-    pub(super) id: GlobalId,
+    pub used_by: Vec<GlobalId>,
+    pub id: GlobalId,
     #[serde(skip)]
-    pub(super) oid: u32,
-    pub(super) name: QualifiedItemName,
-    pub(super) owner_id: RoleId,
-    pub(super) privileges: PrivilegeMap,
+    pub oid: u32,
+    pub name: QualifiedItemName,
+    pub owner_id: RoleId,
+    pub privileges: PrivilegeMap,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -338,9 +339,9 @@ pub enum CatalogItem {
     Connection(Connection),
 }
 
-impl From<CatalogEntry> for mz_catalog::Item {
-    fn from(entry: CatalogEntry) -> mz_catalog::Item {
-        mz_catalog::Item {
+impl From<CatalogEntry> for durable::Item {
+    fn from(entry: CatalogEntry) -> durable::Item {
+        durable::Item {
             id: entry.id,
             schema_id: entry.name.qualifiers.schema_spec.into(),
             name: entry.name.item,
@@ -632,7 +633,7 @@ pub struct Sink {
     // TODO(benesch): this field duplicates information that could be derived
     // from the connection ID. Too hard to fix at the moment.
     #[serde(skip)]
-    pub connection: StorageSinkConnectionState,
+    pub connection: StorageSinkConnection<ReferencedConnection>,
     pub envelope: SinkEnvelope,
     pub with_snapshot: bool,
     pub resolved_ids: ResolvedIds,
@@ -641,10 +642,7 @@ pub struct Sink {
 
 impl Sink {
     pub fn sink_type(&self) -> &str {
-        match &self.connection {
-            StorageSinkConnectionState::Pending(pending) => pending.name(),
-            StorageSinkConnectionState::Ready(ready) => ready.name(),
-        }
+        self.connection.name()
     }
 
     /// Envelope of the sink.
@@ -656,16 +654,13 @@ impl Sink {
     }
 
     pub fn connection_id(&self) -> Option<GlobalId> {
-        match &self.connection {
-            StorageSinkConnectionState::Pending(pending) => pending.connection_id(),
-            StorageSinkConnectionState::Ready(ready) => ready.connection_id(),
-        }
+        self.connection.connection_id()
     }
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub enum StorageSinkConnectionState {
-    Pending(StorageSinkConnectionBuilder<ReferencedConnection>),
+    Pending(StorageSinkConnection<ReferencedConnection>),
     Ready(StorageSinkConnection<ReferencedConnection>),
 }
 
@@ -729,7 +724,7 @@ pub struct Connection {
 
 impl CatalogItem {
     /// Returns a string indicating the type of this catalog entry.
-    pub(crate) fn typ(&self) -> mz_sql::catalog::CatalogItemType {
+    pub fn typ(&self) -> mz_sql::catalog::CatalogItemType {
         match self {
             CatalogItem::Table(_) => mz_sql::catalog::CatalogItemType::Table,
             CatalogItem::Source(_) => mz_sql::catalog::CatalogItemType::Source,
@@ -821,27 +816,6 @@ impl CatalogItem {
         }
     }
 
-    /// Indicates whether this item is a placeholder for a future item
-    /// or if it's actually a real item.
-    pub fn is_placeholder(&self) -> bool {
-        match self {
-            CatalogItem::Func(_)
-            | CatalogItem::Index(_)
-            | CatalogItem::Source(_)
-            | CatalogItem::Log(_)
-            | CatalogItem::Table(_)
-            | CatalogItem::Type(_)
-            | CatalogItem::View(_)
-            | CatalogItem::MaterializedView(_)
-            | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => false,
-            CatalogItem::Sink(s) => match s.connection {
-                StorageSinkConnectionState::Pending(_) => true,
-                StorageSinkConnectionState::Ready(_) => false,
-            },
-        }
-    }
-
     /// Returns the connection ID that this item belongs to, if this item is
     /// temporary.
     pub fn conn_id(&self) -> Option<&ConnectionId> {
@@ -865,12 +839,13 @@ impl CatalogItem {
         self.conn_id().is_some()
     }
 
-    pub(crate) fn rename_schema_refs(
+    pub fn rename_schema_refs(
         &self,
+        database_name: &str,
         cur_schema_name: &str,
-        new_schema_name: String,
-    ) -> Result<CatalogItem, String> {
-        let do_rewrite = |create_sql: String| -> String {
+        new_schema_name: &str,
+    ) -> Result<CatalogItem, (String, String)> {
+        let do_rewrite = |create_sql: String| -> Result<String, (String, String)> {
             let mut create_stmt = mz_sql::parse::parse(&create_sql)
                 .expect("invalid create sql persisted to catalog")
                 .into_element()
@@ -879,58 +854,59 @@ impl CatalogItem {
             // Rename all references to cur_schema_name.
             mz_sql::ast::transform::create_stmt_rename_schema_refs(
                 &mut create_stmt,
+                database_name,
                 cur_schema_name,
                 new_schema_name,
-            );
+            )?;
 
-            create_stmt.to_ast_string_stable()
+            Ok(create_stmt.to_ast_string_stable())
         };
 
         match self {
             CatalogItem::Table(i) => {
                 let mut i = i.clone();
-                i.create_sql = do_rewrite(i.create_sql);
+                i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::Table(i))
             }
             CatalogItem::Log(i) => Ok(CatalogItem::Log(i.clone())),
             CatalogItem::Source(i) => {
                 let mut i = i.clone();
-                i.create_sql = do_rewrite(i.create_sql);
+                i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::Source(i))
             }
             CatalogItem::Sink(i) => {
                 let mut i = i.clone();
-                i.create_sql = do_rewrite(i.create_sql);
+                i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::Sink(i))
             }
             CatalogItem::View(i) => {
                 let mut i = i.clone();
-                i.create_sql = do_rewrite(i.create_sql);
+                i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::View(i))
             }
             CatalogItem::MaterializedView(i) => {
                 let mut i = i.clone();
-                i.create_sql = do_rewrite(i.create_sql);
+                i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::MaterializedView(i))
             }
             CatalogItem::Index(i) => {
                 let mut i = i.clone();
-                i.create_sql = do_rewrite(i.create_sql);
+                i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::Index(i))
             }
             CatalogItem::Secret(i) => {
                 let mut i = i.clone();
-                i.create_sql = do_rewrite(i.create_sql);
+                i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::Secret(i))
             }
             CatalogItem::Connection(i) => {
                 let mut i = i.clone();
-                i.create_sql = do_rewrite(i.create_sql);
+                i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::Connection(i))
             }
             CatalogItem::Type(i) => {
                 let mut i = i.clone();
-                i.create_sql = do_rewrite(i.create_sql);
+                i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::Type(i))
             }
             CatalogItem::Func(i) => Ok(CatalogItem::Func(i.clone())),
@@ -940,7 +916,7 @@ impl CatalogItem {
     /// Returns a clone of `self` with all instances of `from` renamed to `to`
     /// (with the option of including the item's own name) or errors if request
     /// is ambiguous.
-    pub(crate) fn rename_item_refs(
+    pub fn rename_item_refs(
         &self,
         from: FullItemName,
         to_item_name: String,
@@ -1116,7 +1092,7 @@ impl CatalogItem {
         }
     }
 
-    pub(crate) fn to_serialized(&self) -> String {
+    pub fn to_serialized(&self) -> String {
         match self {
             CatalogItem::Table(table) => table.create_sql.clone(),
             CatalogItem::Log(_) => unreachable!("builtin logs cannot be serialized"),
@@ -1138,7 +1114,7 @@ impl CatalogItem {
         }
     }
 
-    pub(crate) fn into_serialized(self) -> String {
+    pub fn into_serialized(self) -> String {
         match self {
             CatalogItem::Table(table) => table.create_sql,
             CatalogItem::Log(_) => unreachable!("builtin logs cannot be serialized"),
@@ -1524,11 +1500,7 @@ impl DerefMut for RoleDefaultPrivileges {
 
 impl DefaultPrivileges {
     /// Add a new default privilege into the set of all default privileges.
-    pub(crate) fn grant(
-        &mut self,
-        object: DefaultPrivilegeObject,
-        privilege: DefaultPrivilegeAclItem,
-    ) {
+    pub fn grant(&mut self, object: DefaultPrivilegeObject, privilege: DefaultPrivilegeAclItem) {
         if privilege.acl_mode.is_empty() {
             return;
         }
@@ -1542,11 +1514,7 @@ impl DefaultPrivileges {
     }
 
     /// Revoke a default privilege from the set of all default privileges.
-    pub(crate) fn revoke(
-        &mut self,
-        object: &DefaultPrivilegeObject,
-        privilege: &DefaultPrivilegeAclItem,
-    ) {
+    pub fn revoke(&mut self, object: &DefaultPrivilegeObject, privilege: &DefaultPrivilegeAclItem) {
         if let Some(privileges) = self.privileges.get_mut(object) {
             if let Some(default_privilege) = privileges.get_mut(&privilege.grantee) {
                 default_privilege.acl_mode =
@@ -1563,7 +1531,7 @@ impl DefaultPrivileges {
 
     /// Get the privileges that will be granted on all objects matching `object` to `grantee`, if
     /// any exist.
-    pub(crate) fn get_privileges_for_grantee(
+    pub fn get_privileges_for_grantee(
         &self,
         object: &DefaultPrivilegeObject,
         grantee: &RoleId,
@@ -1575,7 +1543,7 @@ impl DefaultPrivileges {
     }
 
     /// Get all default privileges that apply to the provided object details.
-    pub(crate) fn get_applicable_privileges(
+    pub fn get_applicable_privileges(
         &self,
         role_id: RoleId,
         database_id: Option<DatabaseId>,
@@ -1659,7 +1627,7 @@ impl DefaultPrivileges {
         })
     }
 
-    pub(crate) fn iter(
+    pub fn iter(
         &self,
     ) -> impl Iterator<
         Item = (
@@ -1678,7 +1646,7 @@ pub struct ClusterConfig {
     pub variant: ClusterVariant,
 }
 
-impl From<ClusterConfig> for mz_catalog::ClusterConfig {
+impl From<ClusterConfig> for durable::ClusterConfig {
     fn from(config: ClusterConfig) -> Self {
         Self {
             variant: config.variant.into(),
@@ -1686,8 +1654,8 @@ impl From<ClusterConfig> for mz_catalog::ClusterConfig {
     }
 }
 
-impl From<mz_catalog::ClusterConfig> for ClusterConfig {
-    fn from(config: mz_catalog::ClusterConfig) -> Self {
+impl From<durable::ClusterConfig> for ClusterConfig {
+    fn from(config: durable::ClusterConfig) -> Self {
         Self {
             variant: config.variant.into(),
         }
@@ -1704,7 +1672,7 @@ pub struct ClusterVariantManaged {
     pub disk: bool,
 }
 
-impl From<ClusterVariantManaged> for mz_catalog::ClusterVariantManaged {
+impl From<ClusterVariantManaged> for durable::ClusterVariantManaged {
     fn from(managed: ClusterVariantManaged) -> Self {
         Self {
             size: managed.size,
@@ -1717,8 +1685,8 @@ impl From<ClusterVariantManaged> for mz_catalog::ClusterVariantManaged {
     }
 }
 
-impl From<mz_catalog::ClusterVariantManaged> for ClusterVariantManaged {
-    fn from(managed: mz_catalog::ClusterVariantManaged) -> Self {
+impl From<durable::ClusterVariantManaged> for ClusterVariantManaged {
+    fn from(managed: durable::ClusterVariantManaged) -> Self {
         Self {
             size: managed.size,
             availability_zones: managed.availability_zones,
@@ -1736,7 +1704,7 @@ pub enum ClusterVariant {
     Unmanaged,
 }
 
-impl From<ClusterVariant> for mz_catalog::ClusterVariant {
+impl From<ClusterVariant> for durable::ClusterVariant {
     fn from(variant: ClusterVariant) -> Self {
         match variant {
             ClusterVariant::Managed(managed) => Self::Managed(managed.into()),
@@ -1745,11 +1713,11 @@ impl From<ClusterVariant> for mz_catalog::ClusterVariant {
     }
 }
 
-impl From<mz_catalog::ClusterVariant> for ClusterVariant {
-    fn from(variant: mz_catalog::ClusterVariant) -> Self {
+impl From<durable::ClusterVariant> for ClusterVariant {
+    fn from(variant: durable::ClusterVariant) -> Self {
         match variant {
-            mz_catalog::ClusterVariant::Managed(managed) => Self::Managed(managed.into()),
-            mz_catalog::ClusterVariant::Unmanaged => Self::Unmanaged,
+            durable::ClusterVariant::Managed(managed) => Self::Managed(managed.into()),
+            durable::ClusterVariant::Unmanaged => Self::Unmanaged,
         }
     }
 }

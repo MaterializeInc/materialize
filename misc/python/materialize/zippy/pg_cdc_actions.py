@@ -16,6 +16,7 @@ from materialize.zippy.framework import Action, Capabilities, Capability
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.pg_cdc_capabilities import PostgresCdcTableExists
 from materialize.zippy.postgres_capabilities import PostgresRunning, PostgresTableExists
+from materialize.zippy.replica_capabilities import source_capable_clusters
 from materialize.zippy.storaged_capabilities import StoragedRunning
 
 
@@ -30,6 +31,7 @@ class CreatePostgresCdcTable(Action):
         postgres_table = random.choice(capabilities.get(PostgresTableExists))
         postgres_pg_cdc_name = f"postgres_{postgres_table.name}"
         this_postgres_cdc_table = PostgresCdcTableExists(name=postgres_pg_cdc_name)
+        cluster_name = random.choice(source_capable_clusters(capabilities))
 
         existing_postgres_cdc_tables = [
             s
@@ -42,6 +44,7 @@ class CreatePostgresCdcTable(Action):
 
             self.postgres_cdc_table = this_postgres_cdc_table
             self.postgres_cdc_table.postgres_table = postgres_table
+            self.cluster_name = cluster_name
         elif len(existing_postgres_cdc_tables) == 1:
             self.new_postgres_cdc_table = False
 
@@ -73,7 +76,7 @@ class CreatePostgresCdcTable(Action):
                       );
 
                     > CREATE SOURCE {name}_source
-                      IN CLUSTER storaged
+                      IN CLUSTER {self.cluster_name}
                       FROM POSTGRES CONNECTION {name}_connection (PUBLICATION '{name}_publication')
                       FOR TABLES ({self.postgres_cdc_table.postgres_table.name} AS {name})
                     """

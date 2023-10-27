@@ -25,7 +25,7 @@ CREATE CLUSTER foo
 statement ok
 CREATE CLUSTER foo REPLICAS ()
 
-statement error db error: ERROR: Expected one of OWNER or RENAME or RESET or SET, found dot
+statement error db error: ERROR: Expected one of OWNER or RENAME or RESET or SET or SWAP, found dot
 ALTER CLUSTER foo.bar RENAME TO bar
 
 statement ok
@@ -315,7 +315,7 @@ default
 statement error unknown cluster 'baz'
 DROP CLUSTER baz
 
-statement error cannot drop cluster with active objects
+statement error cannot drop cluster "bar" because other objects depend on it
 DROP CLUSTER bar
 
 query TTTT
@@ -344,7 +344,7 @@ CREATE CLUSTER baz REPLICAS (r1 (SIZE '1'))
 statement ok
 CREATE DEFAULT INDEX IN CLUSTER baz ON v
 
-statement error cannot drop cluster with active objects
+statement error cannot drop cluster "baz" because other objects depend on it
 DROP CLUSTER baz
 
 statement ok
@@ -409,7 +409,7 @@ CREATE CLUSTER test REPLICAS (foo (SIZE '1'));
 query I
 SELECT COUNT(name) FROM mz_indexes;
 ----
-136
+137
 
 statement ok
 DROP CLUSTER test CASCADE
@@ -417,7 +417,7 @@ DROP CLUSTER test CASCADE
 query T
 SELECT COUNT(name) FROM mz_indexes;
 ----
-111
+112
 
 simple conn=mz_system,user=mz_system
 ALTER CLUSTER default OWNER TO materialize

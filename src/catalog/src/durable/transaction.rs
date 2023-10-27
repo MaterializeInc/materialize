@@ -7,26 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use crate::builtin::{BuiltinLog, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS};
-use crate::objects::{
-    AuditLogKey, Cluster, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
-    ClusterKey, ClusterReplica, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, CommentKey,
-    CommentValue, Config, ConfigKey, ConfigValue, Database, DatabaseKey, DatabaseValue,
-    DefaultPrivilegesKey, DefaultPrivilegesValue, DurableType, GidMappingKey, GidMappingValue,
-    IdAllocKey, IdAllocValue, IntrospectionSourceIndex, Item, ItemKey, ItemValue, ReplicaConfig,
-    Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue, ServerConfigurationKey,
-    ServerConfigurationValue, SettingKey, SettingValue, StorageUsageKey, SystemObjectMapping,
-    SystemPrivilegesKey, SystemPrivilegesValue, TimestampKey, TimestampValue,
-};
-use crate::objects::{ClusterConfig, ClusterVariant};
-use crate::{
-    BootstrapArgs, CatalogError, DurableCatalogState, ReplicaLocation, Snapshot, TimelineTimestamp,
-    DATABASE_ID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY,
-    SYSTEM_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
-};
 use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
-use mz_controller::clusters::ReplicaLogging;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::CollectionExt;
 use mz_proto::RustType;
@@ -43,103 +25,23 @@ use mz_stash::TableTransaction;
 use mz_stash_types::objects::proto;
 use mz_storage_types::sources::Timeline;
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::Duration;
 
-pub(crate) fn add_new_builtin_clusters_migration(
-    txn: &mut Transaction<'_>,
-) -> Result<(), CatalogError> {
-    let cluster_names: BTreeSet<_> = txn
-        .clusters
-        .items()
-        .into_values()
-        .map(|value| value.name)
-        .collect();
-
-    for builtin_cluster in BUILTIN_CLUSTERS {
-        if !cluster_names.contains(builtin_cluster.name) {
-            let id = txn.get_and_increment_id(SYSTEM_CLUSTER_ID_ALLOC_KEY.to_string())?;
-            let id = ClusterId::System(id);
-            txn.insert_system_cluster(
-                id,
-                builtin_cluster.name,
-                vec![],
-                builtin_cluster.privileges.to_vec(),
-                ClusterConfig {
-                    // TODO: Should builtin clusters be managed or unmanaged?
-                    variant: ClusterVariant::Unmanaged,
-                },
-            )?;
-        }
-    }
-    Ok(())
-}
-
-pub(crate) fn add_new_builtin_cluster_replicas_migration(
-    txn: &mut Transaction<'_>,
-    bootstrap_args: &BootstrapArgs,
-) -> Result<(), CatalogError> {
-    let cluster_lookup: BTreeMap<_, _> = txn
-        .clusters
-        .items()
-        .into_iter()
-        .map(|(key, value)| (value.name, key.id))
-        .collect();
-
-    let replicas: BTreeMap<_, _> =
-        txn.cluster_replicas
-            .items()
-            .into_values()
-            .fold(BTreeMap::new(), |mut acc, value| {
-                acc.entry(value.cluster_id)
-                    .or_insert_with(BTreeSet::new)
-                    .insert(value.name);
-                acc
-            });
-
-    for builtin_replica in BUILTIN_CLUSTER_REPLICAS {
-        let cluster_id = cluster_lookup
-            .get(builtin_replica.cluster_name)
-            .expect("builtin cluster replica references non-existent cluster");
-
-        let replica_names = replicas.get(cluster_id);
-        if matches!(replica_names, None)
-            || matches!(replica_names, Some(names) if !names.contains(builtin_replica.name))
-        {
-            let replica_id = txn.get_and_increment_id(SYSTEM_REPLICA_ID_ALLOC_KEY.to_string())?;
-            let replica_id = ReplicaId::System(replica_id);
-            let config = builtin_cluster_replica_config(bootstrap_args);
-            txn.insert_cluster_replica(
-                *cluster_id,
-                replica_id,
-                builtin_replica.name,
-                config,
-                MZ_SYSTEM_ROLE_ID,
-            )?;
-        }
-    }
-    Ok(())
-}
-
-pub(crate) fn builtin_cluster_replica_config(bootstrap_args: &BootstrapArgs) -> ReplicaConfig {
-    ReplicaConfig {
-        location: ReplicaLocation::Managed {
-            availability_zone: None,
-            billed_as: None,
-            disk: false,
-            internal: false,
-            size: bootstrap_args.builtin_cluster_replica_size.clone(),
-        },
-        logging: default_logging_config(),
-        idle_arrangement_merge_effort: None,
-    }
-}
-
-fn default_logging_config() -> ReplicaLogging {
-    ReplicaLogging {
-        log_logging: false,
-        interval: Some(Duration::from_secs(1)),
-    }
-}
+use crate::builtin::BuiltinLog;
+use crate::durable::objects::ClusterConfig;
+use crate::durable::objects::{
+    AuditLogKey, Cluster, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
+    ClusterKey, ClusterReplica, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, CommentKey,
+    CommentValue, Config, ConfigKey, ConfigValue, Database, DatabaseKey, DatabaseValue,
+    DefaultPrivilegesKey, DefaultPrivilegesValue, DurableType, GidMappingKey, GidMappingValue,
+    IdAllocKey, IdAllocValue, IntrospectionSourceIndex, Item, ItemKey, ItemValue, ReplicaConfig,
+    Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue, ServerConfigurationKey,
+    ServerConfigurationValue, SettingKey, SettingValue, StorageUsageKey, SystemObjectMapping,
+    SystemPrivilegesKey, SystemPrivilegesValue, TimestampKey, TimestampValue,
+};
+use crate::durable::{
+    CatalogError, DefaultPrivilege, DurableCatalogState, Snapshot, TimelineTimestamp,
+    DATABASE_ID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
+};
 
 /// A [`Transaction`] batches multiple catalog operations together and commits them atomically.
 pub struct Transaction<'a> {
@@ -371,7 +273,7 @@ impl<'a> Transaction<'a> {
     }
 
     /// Panics if any introspection source id is not a system id
-    fn insert_system_cluster(
+    pub fn insert_system_cluster(
         &mut self,
         cluster_id: ClusterId,
         cluster_name: &str,
@@ -959,6 +861,8 @@ impl<'a> Transaction<'a> {
     }
 
     /// Set persisted default privilege.
+    ///
+    /// DO NOT call this function in a loop, use [`Self::set_default_privileges`] instead.
     pub fn set_default_privilege(
         &mut self,
         role_id: RoleId,
@@ -981,7 +885,23 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
+    /// Set persisted default privileges.
+    pub fn set_default_privileges(
+        &mut self,
+        default_privileges: Vec<DefaultPrivilege>,
+    ) -> Result<(), CatalogError> {
+        let default_privileges = default_privileges
+            .into_iter()
+            .map(DurableType::into_key_value)
+            .map(|(k, v)| (k, Some(v)))
+            .collect();
+        self.default_privileges.set_many(default_privileges)?;
+        Ok(())
+    }
+
     /// Set persisted system privilege.
+    ///
+    /// DO NOT call this function in a loop, use [`Self::set_system_privileges`] instead.
     pub fn set_system_privilege(
         &mut self,
         grantee: RoleId,
@@ -992,6 +912,20 @@ impl<'a> Transaction<'a> {
             SystemPrivilegesKey { grantee, grantor },
             acl_mode.map(|acl_mode| SystemPrivilegesValue { acl_mode }),
         )?;
+        Ok(())
+    }
+
+    /// Set persisted system privileges.
+    pub fn set_system_privileges(
+        &mut self,
+        system_privileges: Vec<MzAclItem>,
+    ) -> Result<(), CatalogError> {
+        let system_privileges = system_privileges
+            .into_iter()
+            .map(DurableType::into_key_value)
+            .map(|(k, v)| (k, Some(v)))
+            .collect();
+        self.system_privileges.set_many(system_privileges)?;
         Ok(())
     }
 
@@ -1009,22 +943,31 @@ impl<'a> Transaction<'a> {
     }
 
     /// Set persisted introspection source index.
-    pub(crate) fn set_introspection_source_index(
+    pub(crate) fn set_introspection_source_indexes(
         &mut self,
-        introspection_source_index: IntrospectionSourceIndex,
+        introspection_source_indexes: Vec<IntrospectionSourceIndex>,
     ) -> Result<(), CatalogError> {
-        let (key, value) = introspection_source_index.into_key_value();
-        self.introspection_sources.set(key, Some(value))?;
+        let introspection_source_indexes = introspection_source_indexes
+            .into_iter()
+            .map(DurableType::into_key_value)
+            .map(|(k, v)| (k, Some(v)))
+            .collect();
+        self.introspection_sources
+            .set_many(introspection_source_indexes)?;
         Ok(())
     }
 
     /// Set persisted system object mappings.
-    pub(crate) fn set_system_object_mapping(
+    pub(crate) fn set_system_object_mappings(
         &mut self,
-        mapping: SystemObjectMapping,
+        mappings: Vec<SystemObjectMapping>,
     ) -> Result<(), CatalogError> {
-        let (key, value) = mapping.into_key_value();
-        self.system_gid_mapping.set(key, Some(value))?;
+        let mappings = mappings
+            .into_iter()
+            .map(DurableType::into_key_value)
+            .map(|(k, v)| (k, Some(v)))
+            .collect();
+        self.system_gid_mapping.set_many(mappings)?;
         Ok(())
     }
 
@@ -1139,6 +1082,22 @@ impl<'a> Transaction<'a> {
             Ok(_) => Ok(()),
             Err(_) => Err(SqlCatalogError::ConfigAlreadyExists(key).into()),
         }
+    }
+
+    pub fn get_clusters(&self) -> impl Iterator<Item = Cluster> {
+        self.clusters
+            .items()
+            .clone()
+            .into_iter()
+            .map(|(k, v)| DurableType::from_key_value(k, v))
+    }
+
+    pub fn get_cluster_replicas(&self) -> impl Iterator<Item = ClusterReplica> {
+        self.cluster_replicas
+            .items()
+            .clone()
+            .into_iter()
+            .map(|(k, v)| DurableType::from_key_value(k, v))
     }
 
     pub(crate) fn into_parts(self) -> (TransactionBatch, &'a mut dyn DurableCatalogState) {

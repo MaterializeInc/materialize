@@ -105,12 +105,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23b62fc65de8e4e7f52534fb52b0f3ed04746ae267519eef2a83941e8085068b"
 
 [[package]]
-name = "arrayvec"
-version = "0.7.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8da52d66c7071e2e3fa2a1e5c6d088fec47b593032b254f5e980de8ea54454d6"
-
-[[package]]
 name = "arrow-format"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1697,9 +1691,9 @@ dependencies = [
 
 [[package]]
 name = "derive-getters"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c5905670fd9c320154f3a4a01c9e609733cd7b753f3c58777ab7d5ce26686b3"
+checksum = "7a2c35ab6e03642397cdda1dd58abbc05d418aef8e36297f336d5aba060fe8df"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2785,15 +2779,14 @@ dependencies = [
 
 [[package]]
 name = "junit-report"
-version = "0.7.1"
+version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6396ba8050c58c3e5c7dc5886b629a00e8f1ffbf7d255945646a50a1fc92b2d"
+checksum = "06c3a3342e6720a82d7d179f380e9841b73a1dd49344e33959fdfe571ce56b55"
 dependencies = [
  "derive-getters",
+ "quick-xml",
  "strip-ansi-escapes",
- "thiserror",
  "time",
- "xml-rs",
 ]
 
 [[package]]
@@ -3420,7 +3413,7 @@ dependencies = [
 
 [[package]]
 name = "mz"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "assert_cmd",
  "axum",
@@ -3478,6 +3471,7 @@ dependencies = [
  "itertools",
  "launchdarkly-server-sdk",
  "maplit",
+ "mz-adapter-types",
  "mz-audit-log",
  "mz-build-info",
  "mz-catalog",
@@ -3544,6 +3538,15 @@ dependencies = [
  "uncased",
  "url",
  "uuid",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-adapter-types"
+version = "0.0.0"
+dependencies = [
+ "mz-ore",
+ "mz-repr",
  "workspace-hack",
 ]
 
@@ -3646,6 +3649,7 @@ dependencies = [
  "hyper-openssl",
  "jsonwebtoken",
  "mz-build-info",
+ "mz-environmentd",
  "mz-frontegg-auth",
  "mz-orchestrator-tracing",
  "mz-ore",
@@ -3653,6 +3657,7 @@ dependencies = [
  "mz-server-core",
  "num_cpus",
  "openssl",
+ "postgres",
  "semver",
  "tokio",
  "tokio-openssl",
@@ -3678,15 +3683,18 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "bytes",
+ "chrono",
  "derivative",
  "differential-dataflow",
  "futures",
  "insta",
  "itertools",
+ "mz-adapter-types",
  "mz-audit-log",
  "mz-compute-client",
  "mz-controller",
  "mz-controller-types",
+ "mz-expr",
  "mz-ore",
  "mz-persist-client",
  "mz-persist-types",
@@ -3842,7 +3850,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "0.75.0-dev"
+version = "0.76.0-dev"
 dependencies = [
  "anyhow",
  "axum",
@@ -4038,7 +4046,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.75.0-dev"
+version = "0.76.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -4068,12 +4076,14 @@ dependencies = [
  "libc",
  "mime",
  "mz-adapter",
+ "mz-adapter-types",
  "mz-alloc",
  "mz-aws-secrets-controller",
  "mz-build-info",
  "mz-catalog",
  "mz-cloud-resources",
  "mz-controller",
+ "mz-environmentd",
  "mz-expr",
  "mz-frontegg-auth",
  "mz-http-util",
@@ -4103,6 +4113,7 @@ dependencies = [
  "mz-storage-client",
  "mz-storage-types",
  "mz-tls-util",
+ "mz-tracing",
  "nix",
  "num_cpus",
  "once_cell",
@@ -4640,7 +4651,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.75.0-dev"
+version = "0.76.0-dev"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4793,6 +4804,7 @@ dependencies = [
  "futures",
  "itertools",
  "mz-adapter",
+ "mz-adapter-types",
  "mz-expr",
  "mz-frontegg-auth",
  "mz-ore",
@@ -5526,6 +5538,7 @@ dependencies = [
  "differential-dataflow",
  "http",
  "itertools",
+ "maplit",
  "mz-ccsr",
  "mz-cluster-client",
  "mz-kafka-util",
@@ -5693,7 +5706,7 @@ dependencies = [
 
 [[package]]
 name = "mz-testdrive"
-version = "0.75.0-dev"
+version = "0.76.0-dev"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -6708,7 +6721,7 @@ version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b55c4d17d994b637e2f4daf6e5dc5d660d209d5642377d675d7a1c3ab69fa579"
 dependencies = [
- "arrayvec 0.5.2",
+ "arrayvec",
  "typed-arena",
  "unicode-width",
 ]
@@ -6966,6 +6979,15 @@ name = "quick-error"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ac73b1112776fc109b2e61909bc46c7e1bf0d7f690ffb1676553acce16d5cda"
+
+[[package]]
+name = "quick-xml"
+version = "0.31.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1004a344b30a54e2ee58d66a71b32d2db2feb0a31f9a2d302bf0536f15de2a33"
+dependencies = [
+ "memchr",
+]
 
 [[package]]
 name = "quickcheck"
@@ -8033,9 +8055,9 @@ dependencies = [
 
 [[package]]
 name = "strip-ansi-escapes"
-version = "0.1.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "011cbb39cf7c1f62871aea3cc46e5817b0937b49e9447370c93cacbe93a766d8"
+checksum = "55ff8ef943b384c414f54aefa961dd2bd853add74ec75e7ac74cf91dba62bcfa"
 dependencies = [
  "vte",
 ]
@@ -9073,8 +9095,9 @@ checksum = "09cc8ee72d2a9becf2f2febe0205bbed8fc6615b7cb429ad062dc7b7ddd036a9"
 
 [[package]]
 name = "utf8parse"
-version = "0.2.0"
-source = "git+https://github.com/MaterializeInc/vte?rev=45670c47cebd7af050def2f80a307bdeec7caba3#45670c47cebd7af050def2f80a307bdeec7caba3"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "711b9620af191e0cdc7468a8d14e709c3dcdb115b36f838e601583af800a370a"
 
 [[package]]
 name = "uuid"
@@ -9113,10 +9136,10 @@ checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
 
 [[package]]
 name = "vte"
-version = "0.10.1"
-source = "git+https://github.com/MaterializeInc/vte?rev=45670c47cebd7af050def2f80a307bdeec7caba3#45670c47cebd7af050def2f80a307bdeec7caba3"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f5022b5fbf9407086c180e9557be968742d839e68346af7792b8592489732197"
 dependencies = [
- "arrayvec 0.7.2",
  "utf8parse",
  "vte_generate_state_changes",
 ]
@@ -9124,7 +9147,8 @@ dependencies = [
 [[package]]
 name = "vte_generate_state_changes"
 version = "0.1.1"
-source = "git+https://github.com/MaterializeInc/vte?rev=45670c47cebd7af050def2f80a307bdeec7caba3#45670c47cebd7af050def2f80a307bdeec7caba3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d257817081c7dffcdbab24b9e62d2def62e2ff7d00b1c20062551e6cccc145ff"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -9589,12 +9613,6 @@ checksum = "244c3741f4240ef46274860397c7c74e50eb23624996930e484c16679633a54c"
 dependencies = [
  "libc",
 ]
-
-[[package]]
-name = "xml-rs"
-version = "0.8.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2d7d3948613f75c98fd9328cfdcc45acc4d360655289d0a7d4ec931392200a3"
 
 [[package]]
 name = "xmlparser"

@@ -238,6 +238,11 @@ impl<T> Controller<T> {
     pub fn active_compute(&mut self) -> ActiveComputeController<T> {
         self.compute.activate(&mut *self.storage)
     }
+
+    pub fn set_default_idle_arrangement_merge_effort(&mut self, value: u32) {
+        self.compute
+            .set_default_idle_arrangement_merge_effort(value);
+    }
 }
 
 impl<T> Controller<T>
@@ -321,8 +326,13 @@ where
     }
 
     async fn record_frontiers(&mut self) {
-        let compute_frontiers = self.compute.replica_write_frontiers();
+        let compute_frontiers = self.compute.collection_frontiers();
         self.storage.record_frontiers(compute_frontiers).await;
+
+        let compute_replica_frontiers = self.compute.replica_write_frontiers();
+        self.storage
+            .record_replica_frontiers(compute_replica_frontiers)
+            .await;
     }
 
     /// Produces a timestamp that reflects all data available in

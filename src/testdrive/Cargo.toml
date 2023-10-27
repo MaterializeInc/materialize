@@ -1,7 +1,7 @@
 [package]
 name = "mz-testdrive"
 description = "Integration test driver for Materialize."
-version = "0.75.0-dev"
+version = "0.76.0-dev"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
@@ -26,7 +26,7 @@ hex = "0.4.3"
 http = "0.2.8"
 humantime = "2.1.0"
 itertools = "0.10.5"
-junit-report = "0.7.1"
+junit-report = "0.8.3"
 once_cell = "1.16.0"
 maplit = "1.0.2"
 md-5 = "0.10.5"

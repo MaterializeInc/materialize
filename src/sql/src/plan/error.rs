@@ -37,7 +37,8 @@ use crate::names::{PartialItemName, ResolvedItemName};
 use crate::plan::plan_utils::JoinSide;
 use crate::plan::scope::ScopeItem;
 use crate::pure::error::{
-    KafkaSourcePurificationError, LoadGeneratorSourcePurificationError, PgSourcePurificationError,
+    CsrPurificationError, KafkaSinkPurificationError, KafkaSourcePurificationError,
+    LoadGeneratorSourcePurificationError, PgSourcePurificationError,
     TestScriptSourcePurificationError,
 };
 use crate::session::vars::VarError;
@@ -136,6 +137,12 @@ pub enum PlanError {
     DropLastSubsource {
         source: String,
     },
+    DependentObjectsStillExist {
+        object_type: String,
+        object_name: String,
+        // (dependent type, name)
+        dependents: Vec<(String, String)>,
+    },
     AlterViewOnMaterializedView(String),
     ShowCreateViewOnMaterializedView(String),
     ExplainViewOnMaterializedView(String),
@@ -215,8 +222,10 @@ pub enum PlanError {
     InvalidGroupSizeHints,
     PgSourcePurification(PgSourcePurificationError),
     KafkaSourcePurification(KafkaSourcePurificationError),
+    KafkaSinkPurification(KafkaSinkPurificationError),
     TestScriptSourcePurification(TestScriptSourcePurificationError),
     LoadGeneratorSourcePurification(LoadGeneratorSourcePurificationError),
+    CsrPurification(CsrPurificationError),
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -267,6 +276,8 @@ impl PlanError {
             Self::KafkaSourcePurification(e) => e.detail(),
             Self::TestScriptSourcePurification(e) => e.detail(),
             Self::LoadGeneratorSourcePurification(e) => e.detail(),
+            Self::CsrPurification(e) => e.detail(),
+            Self::KafkaSinkPurification(e) => e.detail(),
             _ => None,
         }
     }
@@ -282,6 +293,7 @@ impl PlanError {
             Self::DropLastSubsource { source } | Self::DropProgressCollection { source, .. } => Some(format!(
                 "Use DROP SOURCE {source} to drop the primary source along with all subsources"
             )),
+            Self::DependentObjectsStillExist {..} => Some("Use DROP ... CASCADE to drop the dependent objects too.".into()),
             Self::AlterViewOnMaterializedView(_) => {
                 Some("Use ALTER MATERIALIZED VIEW to rename a materialized view.".into())
             }
@@ -341,6 +353,8 @@ impl PlanError {
             Self::KafkaSourcePurification(e) => e.hint(),
             Self::TestScriptSourcePurification(e) => e.hint(),
             Self::LoadGeneratorSourcePurification(e) => e.hint(),
+            Self::CsrPurification(e) => e.hint(),
+            Self::KafkaSinkPurification(e) => e.hint(),
             Self::UnknownColumn { table, similar, .. } => {
                 let suffix = "Make sure to surround case sensitive names in double quotes.";
                 match &similar[..] {
@@ -486,6 +500,17 @@ impl fmt::Display for PlanError {
             Self::DropLastSubsource { source } => write!(f, "SOURCE {} must retain at least one non-progress subsource", source.quoted()),
             Self::DropProgressCollection { progress_collection, source: _} => write!(f, "SOURCE {} is a progress collection and cannot be dropped independently of its primary source", progress_collection.quoted()),
             Self::DropNonSubsource { non_subsource, source} => write!(f, "SOURCE {} is a not a subsource of {}", non_subsource.quoted(), source.quoted()),
+            Self::DependentObjectsStillExist {object_type, object_name, dependents} => {
+                let reason = match &dependents[..] {
+                    [] => " because other objects depend on it".to_string(),
+                    dependents => {
+                        let dependents = dependents.iter().map(|(dependent_type, dependent_name)| format!("{} {}", dependent_type, dependent_name.quoted())).join(", ");
+                        format!(": still depended upon by {dependents}")
+                    },
+                };
+                let object_name = object_name.quoted();
+                write!(f, "cannot drop {object_type} {object_name}{reason}")
+            }
             Self::InvalidOptionValue { option_name, err } => write!(f, "invalid {} option value: {}", option_name, err),
             Self::UnexpectedDuplicateReference { name } => write!(f, "unexpected multiple references to {}", name.to_ast_string()),
             Self::RecursiveTypeMismatch(name, declared, inferred) => {
@@ -560,6 +585,8 @@ impl fmt::Display for PlanError {
             Self::KafkaSourcePurification(e) => write!(f, "KAFKA source validation: {}", e),
             Self::TestScriptSourcePurification(e) => write!(f, "TEST SCRIPT source validation: {}", e),
             Self::LoadGeneratorSourcePurification(e) => write!(f, "LOAD GENERATOR source validation: {}", e),
+            Self::KafkaSinkPurification(e) => write!(f, "KAFKA sink validation: {}", e),
+            Self::CsrPurification(e) => write!(f, "CONFLUENT SCHEMA REGISTRY validation: {}", e),
             Self::MangedReplicaName(name) => {
                 write!(f, "{name} is reserved for replicas of managed clusters")
             }
@@ -669,6 +696,18 @@ impl From<PgSourcePurificationError> for PlanError {
 impl From<KafkaSourcePurificationError> for PlanError {
     fn from(e: KafkaSourcePurificationError) -> Self {
         PlanError::KafkaSourcePurification(e)
+    }
+}
+
+impl From<KafkaSinkPurificationError> for PlanError {
+    fn from(e: KafkaSinkPurificationError) -> Self {
+        PlanError::KafkaSinkPurification(e)
+    }
+}
+
+impl From<CsrPurificationError> for PlanError {
+    fn from(e: CsrPurificationError) -> Self {
+        PlanError::CsrPurification(e)
     }
 }
 

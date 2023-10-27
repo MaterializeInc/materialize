@@ -20,7 +20,7 @@ use async_trait::async_trait;
 use bytes::{Buf, BufMut, BytesMut};
 use bytesize::ByteSize;
 use futures::{sink, SinkExt, TryStreamExt};
-use mz_adapter::client::ConnectionId;
+use mz_adapter_types::connection::ConnectionId;
 use mz_ore::cast::CastFrom;
 use mz_ore::future::OreSinkExt;
 use mz_ore::netio::AsyncReady;

@@ -15,6 +15,7 @@ import pg8000
 import requests
 from pg8000.native import identifier
 
+import materialize.parallel_workload.database
 from materialize.data_ingest.data_type import NUMBER_TYPES, Text, TextTextMap
 from materialize.mzcompose.composition import Composition
 from materialize.parallel_workload.database import (
@@ -29,7 +30,6 @@ from materialize.parallel_workload.database import (
     MAX_TABLES,
     MAX_VIEWS,
     MAX_WEBHOOK_SOURCES,
-    NAUGHTY_IDENTIFIERS,
     Cluster,
     ClusterReplica,
     Database,
@@ -99,12 +99,8 @@ class Action:
                 ]
             )
         if self.db.scenario == Scenario.Rename:
-            result.extend(
-                [
-                    "unknown schema",
-                ]
-            )
-        if NAUGHTY_IDENTIFIERS:
+            result.extend(["unknown schema", "ambiguous reference to schema name"])
+        if materialize.parallel_workload.database.NAUGHTY_IDENTIFIERS:
             result.extend(["identifier length exceeds 255 bytes"])
         return result
 
@@ -435,6 +431,30 @@ class RenameSchemaAction(Action):
                 raise
 
 
+class SwapSchemaAction(Action):
+    def run(self, exe: Executor) -> None:
+        if self.db.scenario != Scenario.Rename:
+            return
+        with self.db.lock:
+            if len(self.db.schemas) < 2:
+                return
+            (i1, schema1), (i2, schema2) = self.rng.sample(
+                list(enumerate(self.db.schemas)), 2
+            )
+            self.db.schemas[i1], self.db.schemas[i2] = (
+                self.db.schemas[i2],
+                self.db.schemas[i1],
+            )
+            try:
+                exe.execute(f"ALTER SCHEMA {schema1} SWAP WITH {schema2}")
+            except:
+                self.db.schemas[i1], self.db.schemas[i2] = (
+                    self.db.schemas[i2],
+                    self.db.schemas[i1],
+                )
+                raise
+
+
 class TransactionIsolationAction(Action):
     def run(self, exe: Executor) -> None:
         level = self.rng.choice(["SERIALIZABLE", "STRICT SERIALIZABLE"])
@@ -544,7 +564,8 @@ class CreateClusterAction(Action):
 class DropClusterAction(Action):
     def errors_to_ignore(self) -> list[str]:
         return [
-            "cannot drop cluster with active objects",
+            # cannot drop cluster "..." because other objects depend on it
+            "because other objects depend on it",
         ] + super().errors_to_ignore()
 
     def run(self, exe: Executor) -> None:
@@ -676,7 +697,8 @@ class ReconnectAction(Action):
         except:
             pass
 
-        while True:
+        NUM_ATTEMPTS = 20
+        for i in range(NUM_ATTEMPTS):
             try:
                 conn = pg8000.connect(
                     host=host, port=port, user=user, database=self.db.name()
@@ -688,7 +710,7 @@ class ReconnectAction(Action):
                 cur.execute("SELECT pg_backend_pid()")
                 exe.pg_pid = cur.fetchall()[0][0]
             except Exception as e:
-                if (
+                if i < NUM_ATTEMPTS - 1 and (
                     "network error" in str(e)
                     or "Can't create a connection to host" in str(e)
                     or "Connection refused" in str(e)
@@ -1008,6 +1030,7 @@ ddl_action_list = ActionList(
         (DropSchemaAction, 1),
         (RenameSchemaAction, 10),
         (RenameTableAction, 10),
+        (SwapSchemaAction, 10),
         # (TransactionIsolationAction, 1),
     ],
     autocommit=True,

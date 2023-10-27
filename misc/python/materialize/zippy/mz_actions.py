@@ -41,7 +41,19 @@ class MzStart(Action):
             )
 
         c.sql(
-            "ALTER CLUSTER default SET (MANAGED = false)", user="mz_system", port=6877
+            """
+            ALTER CLUSTER default SET (MANAGED = false);
+            ALTER SYSTEM SET enable_unified_clusters = true;
+            """,
+            user="mz_system",
+            port=6877,
+        )
+
+        # Make sure all eligible LIMIT queries use the PeekPersist optimization
+        c.sql(
+            "ALTER SYSTEM SET persist_fast_path_limit = 1000000000",
+            user="mz_system",
+            port=6877,
         )
 
     def provides(self) -> list[Capability]:

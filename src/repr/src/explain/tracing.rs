@@ -117,7 +117,7 @@ pub fn trace_plan<T: Clone + 'static>(plan: &T) {
 ///
 /// [^example]: <https://github.com/MaterializeInc/materialize/commit/2ce93229>
 pub fn dbg_plan<S: Display, T: Clone + 'static>(segment: S, plan: &T) {
-    span!(target: "optimizer", Level::TRACE, "segment", path.segment = %segment).in_scope(|| {
+    span!(target: "optimizer", Level::DEBUG, "segment", path.segment = %segment).in_scope(|| {
         trace_plan(plan);
     });
 }
@@ -129,7 +129,7 @@ pub fn dbg_plan<S: Display, T: Clone + 'static>(segment: S, plan: &T) {
 ///
 /// [^example]: <https://github.com/MaterializeInc/materialize/commit/2ce93229>
 pub fn dbg_misc<S: Display, T: Display>(segment: S, misc: T) {
-    span!(target: "optimizer", Level::TRACE, "segment", path.segment = %segment).in_scope(|| {
+    span!(target: "optimizer", Level::DEBUG, "segment", path.segment = %segment).in_scope(|| {
         trace_plan(&misc.to_string());
     });
 }
@@ -334,7 +334,11 @@ impl field::Visit for ExtractStr {
         }
     }
 
-    fn record_debug(&mut self, _field: &tracing::field::Field, _value: &dyn std::fmt::Debug) {}
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        if field.name() == self.key {
+            self.val = Some(format!("{value:?}"))
+        }
+    }
 }
 
 /// A [`subscriber::Subscriber`] implementation that delegates to the default

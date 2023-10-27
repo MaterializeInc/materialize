@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 from random import Random
+from typing import Any
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.executors import Executor
@@ -20,6 +21,7 @@ class Check:
     def __init__(self, base_version: MzVersion, rng: Random | None) -> None:
         self.base_version = base_version
         self.rng = rng
+        self.enabled = True
 
     def _can_run(self, e: Executor) -> bool:
         return True
@@ -34,17 +36,17 @@ class Check:
         assert False
 
     def start_initialize(self, e: Executor) -> None:
-        if self._can_run(e):
+        if self._can_run(e) and self.enabled:
             self.current_version = e.current_mz_version
             self._initialize = self.initialize()
             self._initialize.execute(e)
 
     def join_initialize(self, e: Executor) -> None:
-        if self._can_run(e):
+        if self._can_run(e) and self.enabled:
             self._initialize.join(e)
 
     def start_manipulate(self, e: Executor, phase: int) -> None:
-        if self._can_run(e):
+        if self._can_run(e) and self.enabled:
             self.current_version = e.current_mz_version
             self._manipulate = self.manipulate()
             assert (
@@ -53,23 +55,29 @@ class Check:
             self._manipulate[phase].execute(e)
 
     def join_manipulate(self, e: Executor, phase: int) -> None:
-        if self._can_run(e):
+        if self._can_run(e) and self.enabled:
             self._manipulate[phase].join(e)
 
     def start_validate(self, e: Executor) -> None:
-        if self._can_run(e):
+        if self._can_run(e) and self.enabled:
             self.current_version = e.current_mz_version
             self._validate = self.validate()
             self._validate.execute(e)
 
     def join_validate(self, e: Executor) -> None:
-        if self._can_run(e):
+        if self._can_run(e) and self.enabled:
             self._validate.join(e)
 
 
-class CheckDisabled(Check):
-    def manipulate(self) -> list[Testdrive]:
-        return [Testdrive(TESTDRIVE_NOP), Testdrive(TESTDRIVE_NOP)]
+def disabled(ignore_reason: str):
+    class ClassWrapper:
+        def __init__(self, cls: type[Check]):
+            assert issubclass(cls, Check)
+            self.check_class = cls
 
-    def validate(self) -> Testdrive:
-        return Testdrive(TESTDRIVE_NOP)
+        def __call__(self, *cls_ars: Any):
+            check = self.check_class(*cls_ars)
+            check.enabled = False
+            return check
+
+    return ClassWrapper

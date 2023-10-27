@@ -1028,6 +1028,47 @@ async fn test_stash_table(stash: &mut Stash) {
         items,
         BTreeMap::from([(3i64.to_le_bytes().to_vec(), "v6".to_string())])
     );
+
+    // Test `set_many`.
+    let items = TABLE.peek_one(stash).await.unwrap();
+    let mut table = TableTransaction::new(items, uniqueness_violation).unwrap();
+    // Uniqueness violation.
+    table
+        .set_many(BTreeMap::from([
+            (1i64.to_le_bytes().to_vec(), Some("v6".to_string())),
+            (42i64.to_le_bytes().to_vec(), Some("v1".to_string())),
+        ]))
+        .unwrap_err();
+    table
+        .set_many(BTreeMap::from([
+            (1i64.to_le_bytes().to_vec(), Some("v6".to_string())),
+            (3i64.to_le_bytes().to_vec(), Some("v1".to_string())),
+        ]))
+        .unwrap();
+    table
+        .set_many(BTreeMap::from([
+            (42i64.to_le_bytes().to_vec(), Some("v7".to_string())),
+            (3i64.to_le_bytes().to_vec(), None),
+        ]))
+        .unwrap();
+    let pending = table.pending();
+    assert_eq!(
+        pending,
+        vec![
+            (1i64.to_le_bytes().to_vec(), "v6".to_string(), 1),
+            (3i64.to_le_bytes().to_vec(), "v6".to_string(), -1),
+            (42i64.to_le_bytes().to_vec(), "v7".to_string(), 1),
+        ]
+    );
+    commit(stash, collection, pending).await.unwrap();
+    let items = TABLE.peek_one(stash).await.unwrap();
+    assert_eq!(
+        items,
+        BTreeMap::from([
+            (1i64.to_le_bytes().to_vec(), "v6".to_string()),
+            (42i64.to_le_bytes().to_vec(), "v7".to_string())
+        ])
+    );
 }
 
 #[mz_ore::test]

@@ -95,9 +95,7 @@ use mz_adapter::catalog::ClusterReplicaSizeMap;
 use mz_adapter::config::{system_parameter_sync, SystemParameterSyncConfig};
 use mz_adapter::webhook::WebhookConcurrencyLimiter;
 use mz_build_info::{build_info, BuildInfo};
-use mz_catalog::{
-    BootstrapArgs, OpenableDurableCatalogState, ReadOnlyDurableCatalogState, StashConfig,
-};
+use mz_catalog::durable::{BootstrapArgs, OpenableDurableCatalogState, StashConfig};
 use mz_cloud_resources::CloudResourceController;
 use mz_controller::ControllerConfig;
 use mz_frontegg_auth::Authentication as FronteggAuthentication;
@@ -106,6 +104,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::task;
 use mz_ore::tracing::TracingHandle;
+use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::usage::StorageUsageClient;
 use mz_secrets::SecretsController;
 use mz_server_core::{ConnectionStream, ListenerHandle, TlsCertConfig};
@@ -115,11 +114,14 @@ use mz_storage_types::connections::ConnectionContext;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::RecvError;
 use tower_http::cors::AllowOrigin;
+use tracing::info;
 
 use crate::http::{HttpConfig, HttpServer, InternalHttpConfig, InternalHttpServer};
 
 pub mod http;
 mod telemetry;
+#[cfg(feature = "test")]
+pub mod test_util;
 
 pub use crate::http::{SqlResponse, WebSocketAuth, WebSocketResponse};
 
@@ -160,8 +162,8 @@ pub struct Config {
     pub cloud_resource_controller: Option<Arc<dyn CloudResourceController>>,
 
     // === Adapter options. ===
-    /// The PostgreSQL URL for the adapter stash.
-    pub adapter_stash_url: String,
+    /// Catalog configuration.
+    pub catalog_config: CatalogConfig,
 
     // === Bootstrap options. ===
     /// The cloud ID of this environment.
@@ -239,6 +241,21 @@ pub struct ListenersConfig {
     pub internal_http_listen_addr: SocketAddr,
 }
 
+/// Configuration for the Catalog.
+#[derive(Debug, Clone)]
+pub enum CatalogConfig {
+    /// The catalog contents are stored the stash.
+    Stash {
+        /// The PostgreSQL URL for the adapter stash.
+        url: String,
+    },
+    /// The catalog contents are stored in persist.
+    Persist {
+        /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
+        persist_clients: Arc<PersistClientCache>,
+    },
+}
+
 /// Listeners for an `environmentd` server.
 pub struct Listeners {
     // Drop order matters for these fields.
@@ -272,12 +289,12 @@ impl Listeners {
             internal_http_listen_addr,
         }: ListenersConfig,
     ) -> Result<Listeners, anyhow::Error> {
-        let sql = mz_server_core::listen(sql_listen_addr).await?;
-        let http = mz_server_core::listen(http_listen_addr).await?;
-        let balancer_sql = mz_server_core::listen(balancer_sql_listen_addr).await?;
-        let balancer_http = mz_server_core::listen(balancer_http_listen_addr).await?;
-        let internal_sql = mz_server_core::listen(internal_sql_listen_addr).await?;
-        let internal_http = mz_server_core::listen(internal_http_listen_addr).await?;
+        let sql = mz_server_core::listen(&sql_listen_addr).await?;
+        let http = mz_server_core::listen(&http_listen_addr).await?;
+        let balancer_sql = mz_server_core::listen(&balancer_sql_listen_addr).await?;
+        let balancer_http = mz_server_core::listen(&balancer_http_listen_addr).await?;
+        let internal_sql = mz_server_core::listen(&internal_sql_listen_addr).await?;
+        let internal_http = mz_server_core::listen(&internal_http_listen_addr).await?;
         Ok(Listeners {
             sql,
             http,
@@ -316,10 +333,6 @@ impl Listeners {
             internal_http: (internal_http_listener, internal_http_conns),
         } = self;
 
-        let tls = mz_tls_util::make_tls(&tokio_postgres::config::Config::from_str(
-            &config.adapter_stash_url,
-        )?)?;
-
         // Validate TLS configuration, if present.
         let (pgwire_tls, http_tls) = match &config.tls {
             None => (None, None),
@@ -341,7 +354,6 @@ impl Listeners {
 
         let (ready_to_promote_tx, ready_to_promote_rx) = oneshot::channel();
         let (promote_leader_tx, promote_leader_rx) = oneshot::channel();
-        let stash_schema = None;
 
         // Start the internal HTTP server.
         //
@@ -368,15 +380,12 @@ impl Listeners {
             };
             tracing::info!("Requested deploy generation {deploy_generation}");
 
-            let mut openable_adapter_storage =
-                mz_catalog::stash_backed_catalog_state(StashConfig {
-                    stash_factory: mz_stash::StashFactory::from_metrics(Arc::clone(
-                        &config.controller.stash_metrics,
-                    )),
-                    stash_url: config.adapter_stash_url.clone(),
-                    schema: stash_schema.clone(),
-                    tls: tls.clone(),
-                });
+            let mut openable_adapter_storage = catalog_opener(
+                &config.catalog_config,
+                &config.controller,
+                &config.environment_id,
+            )
+            .await?;
 
             if !openable_adapter_storage.is_initialized().await? {
                 tracing::info!("Stash doesn't exist so there's no current deploy generation. We won't wait to be leader");
@@ -393,9 +402,6 @@ impl Listeners {
                         &BootstrapArgs {
                             default_cluster_replica_size: config
                                 .bootstrap_default_cluster_replica_size
-                                .clone(),
-                            builtin_cluster_replica_size: config
-                                .bootstrap_builtin_cluster_replica_size
                                 .clone(),
                             bootstrap_role: config.bootstrap_role.clone(),
                         },
@@ -430,29 +436,24 @@ impl Listeners {
             }
         }
 
-        let openable_adapter_storage = mz_catalog::stash_backed_catalog_state(StashConfig {
-            stash_factory: mz_stash::StashFactory::from_metrics(Arc::clone(
-                &config.controller.stash_metrics,
-            )),
-            stash_url: config.adapter_stash_url.clone(),
-            schema: stash_schema.clone(),
-            tls: tls.clone(),
-        });
-        let mut adapter_storage = Box::new(
-            openable_adapter_storage
-                .open(
-                    config.now.clone(),
-                    &BootstrapArgs {
-                        default_cluster_replica_size: config
-                            .bootstrap_default_cluster_replica_size
-                            .clone(),
-                        builtin_cluster_replica_size: config.bootstrap_builtin_cluster_replica_size,
-                        bootstrap_role: config.bootstrap_role,
-                    },
-                    config.deploy_generation,
-                )
-                .await?,
-        );
+        let openable_adapter_storage = catalog_opener(
+            &config.catalog_config,
+            &config.controller,
+            &config.environment_id,
+        )
+        .await?;
+        let mut adapter_storage = openable_adapter_storage
+            .open(
+                config.now.clone(),
+                &BootstrapArgs {
+                    default_cluster_replica_size: config
+                        .bootstrap_default_cluster_replica_size
+                        .clone(),
+                    bootstrap_role: config.bootstrap_role,
+                },
+                config.deploy_generation,
+            )
+            .await?;
 
         // Load the adapter catalog from disk.
         if !config
@@ -507,6 +508,7 @@ impl Listeners {
             cloud_resource_controller: config.cloud_resource_controller,
             cluster_replica_sizes: config.cluster_replica_sizes,
             default_storage_cluster_size: config.default_storage_cluster_size,
+            builtin_cluster_replica_size: config.bootstrap_builtin_cluster_replica_size,
             availability_zones: config.availability_zones,
             system_parameter_defaults: config.system_parameter_defaults,
             connection_context: config.connection_context,
@@ -658,6 +660,43 @@ impl Listeners {
     pub fn internal_http_local_addr(&self) -> SocketAddr {
         self.internal_http.0.local_addr()
     }
+}
+
+async fn catalog_opener(
+    catalog_config: &CatalogConfig,
+    controller_config: &ControllerConfig,
+    environment_id: &EnvironmentId,
+) -> Result<Box<dyn OpenableDurableCatalogState>, anyhow::Error> {
+    Ok(match catalog_config {
+        CatalogConfig::Stash { url } => {
+            info!("Using stash backed catalog");
+            let stash_factory =
+                mz_stash::StashFactory::from_metrics(Arc::clone(&controller_config.stash_metrics));
+            let tls = mz_tls_util::make_tls(&tokio_postgres::config::Config::from_str(url)?)?;
+            Box::new(mz_catalog::durable::stash_backed_catalog_state(
+                StashConfig {
+                    stash_factory,
+                    stash_url: url.clone(),
+                    schema: None,
+                    tls,
+                },
+            ))
+        }
+        CatalogConfig::Persist { persist_clients } => {
+            info!("Using persist backed catalog");
+            let persist_client = persist_clients
+                .open(controller_config.persist_location.clone())
+                .await?;
+
+            Box::new(
+                mz_catalog::durable::persist_backed_catalog_state(
+                    persist_client,
+                    environment_id.organization_id(),
+                )
+                .await,
+            )
+        }
+    })
 }
 
 /// A running `environmentd` server.

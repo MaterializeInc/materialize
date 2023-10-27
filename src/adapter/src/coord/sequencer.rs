@@ -28,7 +28,7 @@ use mz_sql::rbac;
 use mz_sql_parser::ast::{Raw, Statement};
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use tokio::sync::oneshot;
-use tracing::{event, Level};
+use tracing::{event, Instrument, Level, Span};
 
 use crate::catalog::{Catalog, ErrorKind};
 use crate::command::{Command, ExecuteResponse, Response};
@@ -191,24 +191,10 @@ impl Coordinator {
                 ctx.retire(result);
             }
             Plan::CreateMaterializedView(plan) => {
-                if enable_unified_optimizer_api {
-                    let result = self
-                        .sequence_create_materialized_view(ctx.session_mut(), plan, resolved_ids)
-                        .await;
-                    ctx.retire(result);
-                } else {
-                    // Allow while the introduction of the new optimizer API in
-                    // #20569 is in progress.
-                    #[allow(deprecated)]
-                    let result = self
-                        .sequence_create_materialized_view_deprecated(
-                            ctx.session_mut(),
-                            plan,
-                            resolved_ids,
-                        )
-                        .await;
-                    ctx.retire(result);
-                }
+                let result = self
+                    .sequence_create_materialized_view(ctx.session_mut(), plan, resolved_ids)
+                    .await;
+                ctx.retire(result);
             }
             Plan::CreateIndex(plan) => {
                 if enable_unified_optimizer_api {
@@ -365,10 +351,9 @@ impl Coordinator {
                     .await;
                 ctx.retire(result);
             }
-            Plan::AlterClusterSwap(_plan) => {
-                // Note: we should never reach this point because we return an unsupported error in
-                // planning.
-                ctx.retire(Err(AdapterError::Unsupported("ALTER ... SWAP ...")));
+            Plan::AlterClusterSwap(plan) => {
+                let result = self.sequence_alter_cluster_swap(ctx.session(), plan).await;
+                ctx.retire(result);
             }
             Plan::AlterClusterReplicaRename(plan) => {
                 let result = self
@@ -391,6 +376,10 @@ impl Coordinator {
             }
             Plan::AlterSchemaRename(plan) => {
                 let result = self.sequence_alter_schema_rename(ctx.session(), plan).await;
+                ctx.retire(result);
+            }
+            Plan::AlterSchemaSwap(plan) => {
+                let result = self.sequence_alter_schema_swap(ctx.session(), plan).await;
                 ctx.retire(result);
             }
             Plan::AlterIndexSetOptions(plan) => {
@@ -646,7 +635,8 @@ impl Coordinator {
                 // We ignore the resp.result because it's not clear what to do if it failed since we
                 // can only send a single ExecuteResponse to tx.
                 tx.send(result, commit_response.session);
-            },
+            }
+            .instrument(Span::current()),
         );
     }
 

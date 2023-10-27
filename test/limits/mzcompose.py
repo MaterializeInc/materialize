@@ -499,6 +499,7 @@ class KafkaSinks(Generator):
                        INTO KAFKA CONNECTION kafka_conn (TOPIC 'kafka-sink-{i}')
                        FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                        ENVELOPE DEBEZIUM;
+                     $ kafka-verify-topic sink=materialize.public.s{i}
                      """
                 )
             )
@@ -544,6 +545,7 @@ class KafkaSinksSameSource(Generator):
                        INTO KAFKA CONNECTION kafka_conn (TOPIC 'kafka-sink-same-source-{i}')
                        FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                        ENVELOPE DEBEZIUM
+                     $ kafka-verify-topic sink=materialize.public.s{i}
                      """
                 )
             )

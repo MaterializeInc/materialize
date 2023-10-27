@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
+use mz_adapter_types::connection::ConnectionId;
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_controller_types::ClusterId;
 use mz_ore::now::EpochMillis;
@@ -45,7 +46,7 @@ use tokio::sync::watch;
 use tokio::sync::OwnedMutexGuard;
 use uuid::Uuid;
 
-use crate::client::{ConnectionId, RecordFirstRowStream};
+use crate::client::RecordFirstRowStream;
 use crate::coord::peek::PeekResponseUnary;
 use crate::coord::statement_logging::PreparedStatementLoggingInfo;
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};

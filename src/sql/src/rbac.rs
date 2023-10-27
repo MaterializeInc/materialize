@@ -34,7 +34,9 @@ use crate::plan::{
     DataSourceDesc, Explainee, MutationKind, Plan, SideEffectingFunc, SourceSinkClusterConfig,
     UpdatePrivilege,
 };
-use crate::session::user::{RoleMetadata, MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
+use crate::session::user::{
+    RoleMetadata, MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER,
+};
 use crate::session::vars::{SessionVars, SystemVars};
 
 /// Common checks that need to be performed before we can start checking a role's privileges.
@@ -924,6 +926,7 @@ fn generate_rbac_requirements(
             id_b,
             name_a: _,
             name_b: _,
+            name_temp: _,
         }) => RbacRequirements {
             ownership: vec![ObjectId::Cluster(*id_a), ObjectId::Cluster(*id_b)],
             ..Default::default()
@@ -971,6 +974,38 @@ fn generate_rbac_requirements(
 
             RbacRequirements {
                 ownership: vec![ObjectId::Schema(*cur_schema_spec)],
+                privileges,
+                ..Default::default()
+            }
+        }
+        Plan::AlterSchemaSwap(plan::AlterSchemaSwapPlan {
+            schema_a_spec,
+            schema_a_name: _,
+            schema_b_spec,
+            schema_b_name: _,
+            name_temp: _,
+        }) => {
+            let mut privileges = vec![];
+            if let ResolvedDatabaseSpecifier::Id(id_a) = schema_a_spec.0 {
+                privileges.push((
+                    SystemObjectId::Object(ObjectId::Database(id_a)),
+                    AclMode::CREATE,
+                    role_id,
+                ));
+            }
+            if let ResolvedDatabaseSpecifier::Id(id_b) = schema_b_spec.0 {
+                privileges.push((
+                    SystemObjectId::Object(ObjectId::Database(id_b)),
+                    AclMode::CREATE,
+                    role_id,
+                ));
+            }
+
+            RbacRequirements {
+                ownership: vec![
+                    ObjectId::Schema(*schema_a_spec),
+                    ObjectId::Schema(*schema_b_spec),
+                ],
                 privileges,
                 ..Default::default()
             }
@@ -1555,8 +1590,8 @@ pub const fn owner_privilege(object_type: ObjectType, owner_id: RoleId) -> MzAcl
     }
 }
 
-pub const fn default_builtin_object_privilege(object_type: ObjectType) -> MzAclItem {
-    let acl_mode = match object_type {
+const fn default_builtin_object_acl_mode(object_type: ObjectType) -> AclMode {
+    match object_type {
         ObjectType::Table
         | ObjectType::View
         | ObjectType::MaterializedView
@@ -1571,7 +1606,20 @@ pub const fn default_builtin_object_privilege(object_type: ObjectType) -> MzAclI
         | ObjectType::Connection
         | ObjectType::Database
         | ObjectType::Func => AclMode::empty(),
-    };
+    }
+}
+
+pub const fn support_builtin_object_privilege(object_type: ObjectType) -> MzAclItem {
+    let acl_mode = default_builtin_object_acl_mode(object_type);
+    MzAclItem {
+        grantee: MZ_SUPPORT_ROLE_ID,
+        grantor: MZ_SYSTEM_ROLE_ID,
+        acl_mode,
+    }
+}
+
+pub const fn default_builtin_object_privilege(object_type: ObjectType) -> MzAclItem {
+    let acl_mode = default_builtin_object_acl_mode(object_type);
     MzAclItem {
         grantee: RoleId::Public,
         grantor: MZ_SYSTEM_ROLE_ID,

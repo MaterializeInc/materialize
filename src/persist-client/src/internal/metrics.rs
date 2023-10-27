@@ -23,6 +23,7 @@ use mz_ore::metric;
 use mz_ore::metrics::{
     ComputedGauge, ComputedIntGauge, Counter, CounterVecExt, DeleteOnDropCounter,
     DeleteOnDropGauge, GaugeVecExt, IntCounter, MakeCollector, MetricsRegistry, UIntGauge,
+    UIntGaugeVec,
 };
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_persist::location::{
@@ -1185,6 +1186,9 @@ pub struct ShardsMetrics {
     blob_sets: mz_ore::metrics::IntCounterVec,
     live_writers: mz_ore::metrics::UIntGaugeVec,
     unconsolidated_snapshot: mz_ore::metrics::IntCounterVec,
+    backpressure_emitted_bytes: IntCounterVec,
+    backpressure_last_backpressured_bytes: UIntGaugeVec,
+    backpressure_retired_bytes: IntCounterVec,
     // We hand out `Arc<ShardMetrics>` to read and write handles, but store it
     // here as `Weak`. This allows us to discover if it's no longer in use and
     // so we can remove it from the map.
@@ -1352,6 +1356,23 @@ impl ShardsMetrics {
                 help: "in snapshot_and_read, the number of times consolidating the raw data wasn't enough to produce consolidated output",
                 var_labels: ["shard", "name"],
             )),
+            backpressure_emitted_bytes: registry.register(metric!(
+                name: "mz_persist_backpressure_emitted_bytes",
+                help: "A counter with the number of emitted bytes.",
+                var_labels: ["shard", "name"],
+            )),
+            backpressure_last_backpressured_bytes: registry.register(metric!(
+                name: "mz_persist_backpressure_last_backpressured_bytes",
+                help: "The last count of bytes we are waiting to be retired in \
+                    the operator. This cannot be directly compared to \
+                    `retired_bytes`, but CAN indicate that backpressure is happening.",
+                var_labels: ["shard", "name"],
+            )),
+            backpressure_retired_bytes: registry.register(metric!(
+                name: "mz_persist_backpressure_retired_bytes",
+                help:"A counter with the number of bytes retired by downstream processing.",
+                var_labels: ["shard", "name"],
+            )),
             shards,
         }
     }
@@ -1425,6 +1446,10 @@ pub struct ShardMetrics {
     pub blob_sets: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
     pub live_writers: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     pub unconsolidated_snapshot: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub backpressure_emitted_bytes: Arc<DeleteOnDropCounter<'static, AtomicU64, Vec<String>>>,
+    pub backpressure_last_backpressured_bytes:
+        Arc<DeleteOnDropGauge<'static, AtomicU64, Vec<String>>>,
+    pub backpressure_retired_bytes: Arc<DeleteOnDropCounter<'static, AtomicU64, Vec<String>>>,
 }
 
 impl ShardMetrics {
@@ -1518,7 +1543,22 @@ impl ShardMetrics {
                 .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
             unconsolidated_snapshot: shards_metrics
                 .unconsolidated_snapshot
-                .get_delete_on_drop_counter(vec![shard, name.to_string()]),
+                .get_delete_on_drop_counter(vec![shard.clone(), name.to_string()]),
+            backpressure_emitted_bytes: Arc::new(
+                shards_metrics
+                    .backpressure_emitted_bytes
+                    .get_delete_on_drop_counter(vec![shard.clone(), name.to_string()]),
+            ),
+            backpressure_last_backpressured_bytes: Arc::new(
+                shards_metrics
+                    .backpressure_last_backpressured_bytes
+                    .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),
+            ),
+            backpressure_retired_bytes: Arc::new(
+                shards_metrics
+                    .backpressure_retired_bytes
+                    .get_delete_on_drop_counter(vec![shard, name.to_string()]),
+            ),
         }
     }
 

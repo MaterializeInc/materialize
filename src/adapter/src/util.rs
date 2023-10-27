@@ -300,7 +300,7 @@ impl ShouldHalt for crate::catalog::Error {
     }
 }
 
-impl ShouldHalt for mz_catalog::CatalogError {
+impl ShouldHalt for mz_catalog::durable::CatalogError {
     fn should_halt(&self) -> bool {
         match &self {
             Self::Durable(e) => e.should_halt(),
@@ -309,7 +309,7 @@ impl ShouldHalt for mz_catalog::CatalogError {
     }
 }
 
-impl ShouldHalt for mz_catalog::DurableCatalogError {
+impl ShouldHalt for mz_catalog::durable::DurableCatalogError {
     fn should_halt(&self) -> bool {
         self.is_unrecoverable()
     }
@@ -332,6 +332,7 @@ impl ShouldHalt for StorageError {
             | StorageError::Generic(_)
             | StorageError::DataflowError(_)
             | StorageError::InvalidAlterSource { .. }
+            | StorageError::IncompatibleSinkDescriptions { .. }
             | StorageError::ShuttingDown(_) => false,
             StorageError::IOError(e) => e.is_unrecoverable(),
         }

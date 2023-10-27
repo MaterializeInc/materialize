@@ -19,12 +19,19 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use mz_catalog::builtin::{
-    Builtin, Fingerprint, BUILTINS, BUILTIN_CLUSTERS, BUILTIN_PREFIXES, BUILTIN_ROLES,
+    Builtin, DataSensitivity, Fingerprint, BUILTINS, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS,
+    BUILTIN_PREFIXES, BUILTIN_ROLES,
 };
-use mz_catalog::objects::{
-    IntrospectionSourceIndex, SystemObjectDescription, SystemObjectUniqueIdentifier,
+use mz_catalog::durable::objects::{
+    IntrospectionSourceIndex, SystemObjectDescription, SystemObjectMapping,
+    SystemObjectUniqueIdentifier,
 };
-use mz_catalog::SystemObjectMapping;
+use mz_catalog::durable::{SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY};
+use mz_catalog::memory::objects::{
+    CatalogEntry, CatalogItem, CommentsMap, DataSourceDesc, Database, DefaultPrivileges, Func, Log,
+    Role, Schema, Source, Table, Type,
+};
+use mz_cluster_client::ReplicaId;
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_compute_client::logging::LogVariant;
 use mz_controller::clusters::{ReplicaConfig, ReplicaLogging};
@@ -55,10 +62,6 @@ use mz_sql_parser::ast::Expr;
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_types::sources::Timeline;
 
-use crate::catalog::objects::{
-    CatalogEntry, CatalogItem, CommentsMap, DataSourceDesc, Database, DefaultPrivileges, Func, Log,
-    Role, Schema, Source, Table, Type,
-};
 use crate::catalog::{
     is_reserved_name, migrate, BuiltinTableUpdate, Catalog, CatalogPlans, CatalogState, Config,
     Error, ErrorKind, Op, CREATE_SQL_TODO, SYSTEM_CONN_ID,
@@ -284,7 +287,7 @@ impl Catalog {
         catalog.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
 
         let databases = catalog.storage().await.get_databases().await?;
-        for mz_catalog::Database {
+        for mz_catalog::durable::Database {
             id,
             name,
             owner_id,
@@ -311,7 +314,7 @@ impl Catalog {
         }
 
         let schemas = catalog.storage().await.get_schemas().await?;
-        for mz_catalog::Schema {
+        for mz_catalog::durable::Schema {
             id,
             name,
             database_id,
@@ -358,7 +361,7 @@ impl Catalog {
         }
 
         let roles = catalog.storage().await.get_roles().await?;
-        for mz_catalog::Role {
+        for mz_catalog::durable::Role {
             id,
             name,
             attributes,
@@ -382,7 +385,7 @@ impl Catalog {
         }
 
         let default_privileges = catalog.storage().await.get_default_privileges().await?;
-        for mz_catalog::DefaultPrivilege { object, acl_item } in default_privileges {
+        for mz_catalog::durable::DefaultPrivilege { object, acl_item } in default_privileges {
             catalog.state.default_privileges.grant(object, acl_item);
         }
 
@@ -403,8 +406,22 @@ impl Catalog {
         mz_repr::VARIABLE_LENGTH_ROW_ENCODING
             .store(variable_length_row_encoding, atomic::Ordering::SeqCst);
 
+        // Add any new builtin Clusters or Cluster Replicas that may be newly defined.
+        {
+            let mut storage = catalog.storage().await;
+            if !storage.is_read_only() {
+                let mut tx = storage.transaction().await?;
+                add_new_builtin_clusters_migration(&mut tx)?;
+                add_new_builtin_cluster_replicas_migration(
+                    &mut tx,
+                    config.builtin_cluster_replica_size,
+                )?;
+                tx.commit().await?;
+            }
+        }
+
         let comments = catalog.storage().await.get_comments().await?;
-        for mz_catalog::Comment {
+        for mz_catalog::durable::Comment {
             object_id,
             sub_component,
             comment,
@@ -478,6 +495,23 @@ impl Catalog {
                 match builtin {
                     Builtin::Log(log) => {
                         let oid = catalog.allocate_oid()?;
+                        let mut acl_items = vec![rbac::owner_privilege(
+                            mz_sql::catalog::ObjectType::Source,
+                            MZ_SYSTEM_ROLE_ID,
+                        )];
+                        match log.sensitivity {
+                            DataSensitivity::Public => {
+                                acl_items.push(rbac::default_builtin_object_privilege(
+                                    mz_sql::catalog::ObjectType::Source,
+                                ));
+                            }
+                            DataSensitivity::SuperuserAndSupport => {
+                                acl_items.push(rbac::support_builtin_object_privilege(
+                                    mz_sql::catalog::ObjectType::Source,
+                                ));
+                            }
+                            DataSensitivity::Superuser => {}
+                        }
                         catalog.state.insert_item(
                             id,
                             oid,
@@ -487,20 +521,30 @@ impl Catalog {
                                 has_storage_collection: false,
                             }),
                             MZ_SYSTEM_ROLE_ID,
-                            PrivilegeMap::from_mz_acl_items(vec![
-                                rbac::default_builtin_object_privilege(
-                                    mz_sql::catalog::ObjectType::Source,
-                                ),
-                                rbac::owner_privilege(
-                                    mz_sql::catalog::ObjectType::Source,
-                                    MZ_SYSTEM_ROLE_ID,
-                                ),
-                            ]),
+                            PrivilegeMap::from_mz_acl_items(acl_items),
                         );
                     }
 
                     Builtin::Table(table) => {
                         let oid = catalog.allocate_oid()?;
+                        let mut acl_items = vec![rbac::owner_privilege(
+                            mz_sql::catalog::ObjectType::Table,
+                            MZ_SYSTEM_ROLE_ID,
+                        )];
+                        match table.sensitivity {
+                            DataSensitivity::Public => {
+                                acl_items.push(rbac::default_builtin_object_privilege(
+                                    mz_sql::catalog::ObjectType::Table,
+                                ));
+                            }
+                            DataSensitivity::SuperuserAndSupport => {
+                                acl_items.push(rbac::support_builtin_object_privilege(
+                                    mz_sql::catalog::ObjectType::Table,
+                                ));
+                            }
+                            DataSensitivity::Superuser => {}
+                        }
+
                         catalog.state.insert_item(
                             id,
                             oid,
@@ -517,15 +561,7 @@ impl Catalog {
                                 is_retained_metrics_object: table.is_retained_metrics_object,
                             }),
                             MZ_SYSTEM_ROLE_ID,
-                            PrivilegeMap::from_mz_acl_items(vec![
-                                rbac::default_builtin_object_privilege(
-                                    mz_sql::catalog::ObjectType::Table,
-                                ),
-                                rbac::owner_privilege(
-                                    mz_sql::catalog::ObjectType::Table,
-                                    MZ_SYSTEM_ROLE_ID,
-                                ),
-                            ]),
+                            PrivilegeMap::from_mz_acl_items(acl_items),
                         );
                     }
                     Builtin::Index(_) => {
@@ -551,21 +587,31 @@ impl Catalog {
                                 )
                             });
                         let oid = catalog.allocate_oid()?;
+                        let mut acl_items = vec![rbac::owner_privilege(
+                            mz_sql::catalog::ObjectType::View,
+                            MZ_SYSTEM_ROLE_ID,
+                        )];
+                        match view.sensitivity {
+                            DataSensitivity::Public => {
+                                acl_items.push(rbac::default_builtin_object_privilege(
+                                    mz_sql::catalog::ObjectType::View,
+                                ));
+                            }
+                            DataSensitivity::SuperuserAndSupport => {
+                                acl_items.push(rbac::support_builtin_object_privilege(
+                                    mz_sql::catalog::ObjectType::View,
+                                ));
+                            }
+                            DataSensitivity::Superuser => {}
+                        }
+
                         catalog.state.insert_item(
                             id,
                             oid,
                             name,
                             item,
                             MZ_SYSTEM_ROLE_ID,
-                            PrivilegeMap::from_mz_acl_items(vec![
-                                rbac::default_builtin_object_privilege(
-                                    mz_sql::catalog::ObjectType::View,
-                                ),
-                                rbac::owner_privilege(
-                                    mz_sql::catalog::ObjectType::View,
-                                    MZ_SYSTEM_ROLE_ID,
-                                ),
-                            ]),
+                            PrivilegeMap::from_mz_acl_items(acl_items),
                         );
                     }
 
@@ -590,6 +636,24 @@ impl Catalog {
                         };
 
                         let oid = catalog.allocate_oid()?;
+                        let mut acl_items = vec![rbac::owner_privilege(
+                            mz_sql::catalog::ObjectType::Source,
+                            MZ_SYSTEM_ROLE_ID,
+                        )];
+                        match coll.sensitivity {
+                            DataSensitivity::Public => {
+                                acl_items.push(rbac::default_builtin_object_privilege(
+                                    mz_sql::catalog::ObjectType::Source,
+                                ));
+                            }
+                            DataSensitivity::SuperuserAndSupport => {
+                                acl_items.push(rbac::support_builtin_object_privilege(
+                                    mz_sql::catalog::ObjectType::Source,
+                                ));
+                            }
+                            DataSensitivity::Superuser => {}
+                        }
+
                         catalog.state.insert_item(
                             id,
                             oid,
@@ -606,15 +670,7 @@ impl Catalog {
                                 is_retained_metrics_object: coll.is_retained_metrics_object,
                             }),
                             MZ_SYSTEM_ROLE_ID,
-                            PrivilegeMap::from_mz_acl_items(vec![
-                                rbac::default_builtin_object_privilege(
-                                    mz_sql::catalog::ObjectType::Source,
-                                ),
-                                rbac::owner_privilege(
-                                    mz_sql::catalog::ObjectType::Source,
-                                    MZ_SYSTEM_ROLE_ID,
-                                ),
-                            ]),
+                            PrivilegeMap::from_mz_acl_items(acl_items),
                         );
                     }
                 }
@@ -623,7 +679,7 @@ impl Catalog {
 
         let clusters = catalog.storage().await.get_clusters().await?;
         let mut cluster_azs = BTreeMap::new();
-        for mz_catalog::Cluster {
+        for mz_catalog::durable::Cluster {
             id,
             name,
             linked_object_id,
@@ -670,7 +726,7 @@ impl Catalog {
                 )
                 .await?;
 
-            if let mz_catalog::ClusterVariant::Managed(managed) = &config.variant {
+            if let mz_catalog::durable::ClusterVariant::Managed(managed) = &config.variant {
                 cluster_azs.insert(id, managed.availability_zones.clone());
             }
 
@@ -686,7 +742,7 @@ impl Catalog {
         }
 
         let replicas = catalog.storage().await.get_cluster_replicas().await?;
-        for mz_catalog::ClusterReplica {
+        for mz_catalog::durable::ClusterReplica {
             cluster_id,
             replica_id,
             name,
@@ -1030,7 +1086,7 @@ impl Catalog {
                 Err(e) => return Err(e),
             };
         }
-        for mz_catalog::SystemConfiguration { name, value } in system_config {
+        for mz_catalog::durable::SystemConfiguration { name, value } in system_config {
             match self
                 .state
                 .insert_system_configuration(&name, VarInput::Flat(&value))
@@ -1503,7 +1559,7 @@ impl Catalog {
     /// TODO(justin): it might be nice if these were two different types.
     #[tracing::instrument(level = "info", skip_all)]
     pub fn load_catalog_items<'a>(
-        tx: &mut mz_catalog::Transaction<'a>,
+        tx: &mut mz_catalog::durable::Transaction<'a>,
         c: &Catalog,
     ) -> Result<Catalog, Error> {
         let mut c = c.clone();
@@ -1600,7 +1656,7 @@ impl Catalog {
 
         // Error on any unsatisfied dependencies.
         if let Some((missing_dep, mut dependents)) = awaiting_id_dependencies.into_iter().next() {
-            let mz_catalog::Item {
+            let mz_catalog::durable::Item {
                 id,
                 schema_id,
                 name,
@@ -1628,7 +1684,7 @@ impl Catalog {
         }
 
         if let Some((missing_dep, mut dependents)) = awaiting_name_dependencies.into_iter().next() {
-            let mz_catalog::Item {
+            let mz_catalog::durable::Item {
                 id,
                 schema_id,
                 name,
@@ -1729,12 +1785,101 @@ impl Catalog {
     }
 }
 
-#[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-async fn test_builtin_migration() {
+fn add_new_builtin_clusters_migration(
+    txn: &mut mz_catalog::durable::Transaction<'_>,
+) -> Result<(), mz_catalog::durable::CatalogError> {
+    let cluster_names: BTreeSet<_> = txn.get_clusters().map(|cluster| cluster.name).collect();
+
+    for builtin_cluster in BUILTIN_CLUSTERS {
+        if !cluster_names.contains(builtin_cluster.name) {
+            let id = txn.get_and_increment_id(SYSTEM_CLUSTER_ID_ALLOC_KEY.to_string())?;
+            let id = ClusterId::System(id);
+            txn.insert_system_cluster(
+                id,
+                builtin_cluster.name,
+                vec![],
+                builtin_cluster.privileges.to_vec(),
+                mz_catalog::durable::ClusterConfig {
+                    // TODO: Should builtin clusters be managed or unmanaged?
+                    variant: mz_catalog::durable::ClusterVariant::Unmanaged,
+                },
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn add_new_builtin_cluster_replicas_migration(
+    txn: &mut mz_catalog::durable::Transaction<'_>,
+    builtin_cluster_replica_size: String,
+) -> Result<(), mz_catalog::durable::CatalogError> {
+    let cluster_lookup: BTreeMap<_, _> = txn
+        .get_clusters()
+        .map(|cluster| (cluster.name, cluster.id))
+        .collect();
+
+    let replicas: BTreeMap<_, _> =
+        txn.get_cluster_replicas()
+            .fold(BTreeMap::new(), |mut acc, replica| {
+                acc.entry(replica.cluster_id)
+                    .or_insert_with(BTreeSet::new)
+                    .insert(replica.name);
+                acc
+            });
+
+    for builtin_replica in BUILTIN_CLUSTER_REPLICAS {
+        let cluster_id = cluster_lookup
+            .get(builtin_replica.cluster_name)
+            .expect("builtin cluster replica references non-existent cluster");
+
+        let replica_names = replicas.get(cluster_id);
+        if matches!(replica_names, None)
+            || matches!(replica_names, Some(names) if !names.contains(builtin_replica.name))
+        {
+            let replica_id = txn.get_and_increment_id(SYSTEM_REPLICA_ID_ALLOC_KEY.to_string())?;
+            let replica_id = ReplicaId::System(replica_id);
+            let config = builtin_cluster_replica_config(builtin_cluster_replica_size.clone());
+            txn.insert_cluster_replica(
+                *cluster_id,
+                replica_id,
+                builtin_replica.name,
+                config,
+                MZ_SYSTEM_ROLE_ID,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn builtin_cluster_replica_config(
+    builtin_cluster_replica_size: String,
+) -> mz_catalog::durable::ReplicaConfig {
+    mz_catalog::durable::ReplicaConfig {
+        location: mz_catalog::durable::ReplicaLocation::Managed {
+            availability_zone: None,
+            billed_as: None,
+            disk: false,
+            internal: false,
+            size: builtin_cluster_replica_size,
+        },
+        logging: default_logging_config(),
+        idle_arrangement_merge_effort: None,
+    }
+}
+
+fn default_logging_config() -> ReplicaLogging {
+    ReplicaLogging {
+        log_logging: false,
+        interval: Some(Duration::from_secs(1)),
+    }
+}
+
+#[cfg(test)]
+mod builtin_migration_tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use itertools::Itertools;
+    use mz_catalog::memory::objects::Table;
 
     use mz_controller_types::ClusterId;
     use mz_expr::MirRelationExpr;
@@ -1742,8 +1887,11 @@ async fn test_builtin_migration() {
 
     use mz_repr::{GlobalId, RelationType, ScalarType};
     use mz_sql::catalog::CatalogDatabase;
-    use mz_sql::names::{ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier};
+    use mz_sql::names::{
+        ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
+    };
     use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
+    use mz_sql_parser::ast::Expr;
 
     use crate::catalog::RelationDesc;
     use crate::catalog::{
@@ -1912,8 +2060,108 @@ async fn test_builtin_migration() {
             .collect()
     }
 
-    let test_cases = vec![
-        BuiltinMigrationTestCase {
+    async fn run_test_case(test_case: BuiltinMigrationTestCase) {
+        Catalog::with_debug(NOW_ZERO.clone(), |mut catalog| async move {
+            let mut id_mapping = BTreeMap::new();
+            let mut name_mapping = BTreeMap::new();
+            for entry in test_case.initial_state {
+                let (name, namespace, item) = entry.to_catalog_item(&id_mapping);
+                let id = add_item(&mut catalog, name.clone(), item, namespace).await;
+                id_mapping.insert(name.clone(), id);
+                name_mapping.insert(id, name);
+            }
+
+            let migrated_ids = test_case
+                .migrated_names
+                .into_iter()
+                .map(|name| id_mapping[&name])
+                .collect();
+            let id_fingerprint_map: BTreeMap<GlobalId, String> = id_mapping
+                .iter()
+                .filter(|(_name, id)| id.is_system())
+                // We don't use the new fingerprint in this test, so we can just hard code it
+                .map(|(_name, id)| (*id, "".to_string()))
+                .collect();
+            let migration_metadata = catalog
+                .generate_builtin_migration_metadata(migrated_ids, id_fingerprint_map)
+                .await
+                .expect("failed to generate builtin migration metadata");
+
+            assert_eq!(
+                convert_id_vec_to_name_vec(migration_metadata.previous_sink_ids, &name_mapping),
+                test_case.expected_previous_sink_names,
+                "{} test failed with wrong previous sink ids",
+                test_case.test_name
+            );
+            assert_eq!(
+                convert_id_vec_to_name_vec(
+                    migration_metadata.previous_materialized_view_ids,
+                    &name_mapping
+                ),
+                test_case.expected_previous_materialized_view_names,
+                "{} test failed with wrong previous materialized view ids",
+                test_case.test_name
+            );
+            assert_eq!(
+                convert_id_vec_to_name_vec(migration_metadata.previous_source_ids, &name_mapping),
+                test_case.expected_previous_source_names,
+                "{} test failed with wrong previous source ids",
+                test_case.test_name
+            );
+            assert_eq!(
+                convert_id_vec_to_name_vec(migration_metadata.all_drop_ops, &name_mapping),
+                test_case.expected_all_drop_ops,
+                "{} test failed with wrong all drop ops",
+                test_case.test_name
+            );
+            assert_eq!(
+                convert_id_vec_to_name_vec(migration_metadata.user_drop_ops, &name_mapping),
+                test_case.expected_user_drop_ops,
+                "{} test failed with wrong user drop ops",
+                test_case.test_name
+            );
+            assert_eq!(
+                migration_metadata
+                    .all_create_ops
+                    .into_iter()
+                    .map(|(_, _, name, _, _, _)| name.item)
+                    .collect::<Vec<_>>(),
+                test_case.expected_all_create_ops,
+                "{} test failed with wrong all create ops",
+                test_case.test_name
+            );
+            assert_eq!(
+                migration_metadata
+                    .user_create_ops
+                    .into_iter()
+                    .map(|(_, _, name)| name)
+                    .collect::<Vec<_>>(),
+                test_case.expected_user_create_ops,
+                "{} test failed with wrong user create ops",
+                test_case.test_name
+            );
+            assert_eq!(
+                migration_metadata
+                    .migrated_system_object_mappings
+                    .values()
+                    .map(|mapping| mapping.description.object_name.clone())
+                    .collect::<BTreeSet<_>>(),
+                test_case
+                    .expected_migrated_system_object_mappings
+                    .into_iter()
+                    .collect::<BTreeSet<_>>(),
+                "{} test failed with wrong migrated system object mappings",
+                test_case.test_name
+            );
+            catalog.expire().await;
+        })
+        .await
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn test_builtin_migration_no_migrations() {
+        let test_case = BuiltinMigrationTestCase {
             test_name: "no_migrations",
             initial_state: vec![SimplifiedCatalogEntry {
                 name: "s1".to_string(),
@@ -1929,8 +2177,14 @@ async fn test_builtin_migration() {
             expected_all_create_ops: vec![],
             expected_user_create_ops: vec![],
             expected_migrated_system_object_mappings: vec![],
-        },
-        BuiltinMigrationTestCase {
+        };
+        run_test_case(test_case).await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn test_builtin_migration_single_migrations() {
+        let test_case = BuiltinMigrationTestCase {
             test_name: "single_migrations",
             initial_state: vec![SimplifiedCatalogEntry {
                 name: "s1".to_string(),
@@ -1946,8 +2200,14 @@ async fn test_builtin_migration() {
             expected_all_create_ops: vec!["s1".to_string()],
             expected_user_create_ops: vec![],
             expected_migrated_system_object_mappings: vec!["s1".to_string()],
-        },
-        BuiltinMigrationTestCase {
+        };
+        run_test_case(test_case).await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn test_builtin_migration_child_migrations() {
+        let test_case = BuiltinMigrationTestCase {
             test_name: "child_migrations",
             initial_state: vec![
                 SimplifiedCatalogEntry {
@@ -1972,8 +2232,14 @@ async fn test_builtin_migration() {
             expected_all_create_ops: vec!["s1".to_string(), "u1".to_string()],
             expected_user_create_ops: vec!["u1".to_string()],
             expected_migrated_system_object_mappings: vec!["s1".to_string()],
-        },
-        BuiltinMigrationTestCase {
+        };
+        run_test_case(test_case).await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn test_builtin_migration_multi_child_migrations() {
+        let test_case = BuiltinMigrationTestCase {
             test_name: "multi_child_migrations",
             initial_state: vec![
                 SimplifiedCatalogEntry {
@@ -2005,8 +2271,14 @@ async fn test_builtin_migration() {
             expected_all_create_ops: vec!["s1".to_string(), "u2".to_string(), "u1".to_string()],
             expected_user_create_ops: vec!["u2".to_string(), "u1".to_string()],
             expected_migrated_system_object_mappings: vec!["s1".to_string()],
-        },
-        BuiltinMigrationTestCase {
+        };
+        run_test_case(test_case).await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn test_builtin_migration_topological_sort() {
+        let test_case = BuiltinMigrationTestCase {
             test_name: "topological_sort",
             initial_state: vec![
                 SimplifiedCatalogEntry {
@@ -2053,8 +2325,14 @@ async fn test_builtin_migration() {
             ],
             expected_user_create_ops: vec!["u1".to_string(), "u2".to_string()],
             expected_migrated_system_object_mappings: vec!["s1".to_string(), "s2".to_string()],
-        },
-        BuiltinMigrationTestCase {
+        };
+        run_test_case(test_case).await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn test_builtin_migration_topological_sort_complex() {
+        let test_case = BuiltinMigrationTestCase {
             test_name: "topological_sort_complex",
             initial_state: vec![
                 SimplifiedCatalogEntry {
@@ -2275,8 +2553,14 @@ async fn test_builtin_migration() {
                 "s421".to_string(),
                 "s349".to_string(),
             ],
-        },
-        BuiltinMigrationTestCase {
+        };
+        run_test_case(test_case).await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn test_builtin_migration_system_child_migrations() {
+        let test_case = BuiltinMigrationTestCase {
             test_name: "system_child_migrations",
             initial_state: vec![
                 SimplifiedCatalogEntry {
@@ -2301,104 +2585,7 @@ async fn test_builtin_migration() {
             expected_all_create_ops: vec!["s1".to_string(), "s2".to_string()],
             expected_user_create_ops: vec![],
             expected_migrated_system_object_mappings: vec!["s1".to_string(), "s2".to_string()],
-        },
-    ];
-
-    for test_case in test_cases {
-        Catalog::with_debug(NOW_ZERO.clone(), |mut catalog| async move {
-            let mut id_mapping = BTreeMap::new();
-            let mut name_mapping = BTreeMap::new();
-            for entry in test_case.initial_state {
-                let (name, namespace, item) = entry.to_catalog_item(&id_mapping);
-                let id = add_item(&mut catalog, name.clone(), item, namespace).await;
-                id_mapping.insert(name.clone(), id);
-                name_mapping.insert(id, name);
-            }
-
-            let migrated_ids = test_case
-                .migrated_names
-                .into_iter()
-                .map(|name| id_mapping[&name])
-                .collect();
-            let id_fingerprint_map: BTreeMap<GlobalId, String> = id_mapping
-                .iter()
-                .filter(|(_name, id)| id.is_system())
-                // We don't use the new fingerprint in this test, so we can just hard code it
-                .map(|(_name, id)| (*id, "".to_string()))
-                .collect();
-            let migration_metadata = catalog
-                .generate_builtin_migration_metadata(migrated_ids, id_fingerprint_map)
-                .await
-                .expect("failed to generate builtin migration metadata");
-
-            assert_eq!(
-                convert_id_vec_to_name_vec(migration_metadata.previous_sink_ids, &name_mapping),
-                test_case.expected_previous_sink_names,
-                "{} test failed with wrong previous sink ids",
-                test_case.test_name
-            );
-            assert_eq!(
-                convert_id_vec_to_name_vec(
-                    migration_metadata.previous_materialized_view_ids,
-                    &name_mapping
-                ),
-                test_case.expected_previous_materialized_view_names,
-                "{} test failed with wrong previous materialized view ids",
-                test_case.test_name
-            );
-            assert_eq!(
-                convert_id_vec_to_name_vec(migration_metadata.previous_source_ids, &name_mapping),
-                test_case.expected_previous_source_names,
-                "{} test failed with wrong previous source ids",
-                test_case.test_name
-            );
-            assert_eq!(
-                convert_id_vec_to_name_vec(migration_metadata.all_drop_ops, &name_mapping),
-                test_case.expected_all_drop_ops,
-                "{} test failed with wrong all drop ops",
-                test_case.test_name
-            );
-            assert_eq!(
-                convert_id_vec_to_name_vec(migration_metadata.user_drop_ops, &name_mapping),
-                test_case.expected_user_drop_ops,
-                "{} test failed with wrong user drop ops",
-                test_case.test_name
-            );
-            assert_eq!(
-                migration_metadata
-                    .all_create_ops
-                    .into_iter()
-                    .map(|(_, _, name, _, _, _)| name.item)
-                    .collect::<Vec<_>>(),
-                test_case.expected_all_create_ops,
-                "{} test failed with wrong all create ops",
-                test_case.test_name
-            );
-            assert_eq!(
-                migration_metadata
-                    .user_create_ops
-                    .into_iter()
-                    .map(|(_, _, name)| name)
-                    .collect::<Vec<_>>(),
-                test_case.expected_user_create_ops,
-                "{} test failed with wrong user create ops",
-                test_case.test_name
-            );
-            assert_eq!(
-                migration_metadata
-                    .migrated_system_object_mappings
-                    .values()
-                    .map(|mapping| mapping.description.object_name.clone())
-                    .collect::<BTreeSet<_>>(),
-                test_case
-                    .expected_migrated_system_object_mappings
-                    .into_iter()
-                    .collect::<BTreeSet<_>>(),
-                "{} test failed with wrong migrated system object mappings",
-                test_case.test_name
-            );
-            catalog.expire().await;
-        })
-        .await
+        };
+        run_test_case(test_case).await;
     }
 }

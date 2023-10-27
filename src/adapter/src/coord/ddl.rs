@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fail::fail_point;
+use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::VersionedEvent;
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_controller::clusters::ReplicaLocation;
@@ -33,20 +34,18 @@ use mz_sql::session::vars::{
     MAX_OBJECTS_PER_SCHEMA, MAX_POSTGRES_CONNECTIONS, MAX_REPLICAS_PER_CLUSTER, MAX_ROLES,
     MAX_SCHEMAS_PER_DATABASE, MAX_SECRETS, MAX_SINKS, MAX_SOURCES, MAX_TABLES,
 };
-use mz_storage_client::controller::{CreateExportToken, ExportDescription, ReadPolicy};
-use mz_storage_types::connections::inline::{IntoInlineConnection, ReferencedConnection};
+use mz_storage_client::controller::{ExportDescription, ReadPolicy};
+use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
-use mz_storage_types::sinks::{SinkAsOf, StorageSinkConnection};
+use mz_storage_types::sinks::SinkAsOf;
 use mz_storage_types::sources::{GenericSourceConnection, Timeline};
 use serde_json::json;
 use timely::progress::Antichain;
 use tracing::{event, warn, Level};
 
 use crate::catalog::{
-    CatalogItem, CatalogState, DataSourceDesc, Op, Sink, StorageSinkConnectionState,
-    TransactionResult, SYSTEM_CONN_ID,
+    CatalogItem, CatalogState, DataSourceDesc, Op, Sink, TransactionResult, SYSTEM_CONN_ID,
 };
-use crate::client::ConnectionId;
 use crate::coord::read_policy::SINCE_GRANULARITY;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::{Coordinator, ReplicaMetadata};
@@ -126,6 +125,7 @@ impl Coordinator {
         let mut update_secrets_caching_config = false;
         let mut update_cluster_scheduling_config = false;
         let mut update_jemalloc_profiling_config = false;
+        let mut update_default_arrangement_idle_merge_effort = false;
         let mut update_http_config = false;
         let mut log_indexes_to_drop = Vec::new();
 
@@ -165,12 +165,9 @@ impl Coordinator {
                                 }
                             }
                         }
-                        CatalogItem::Sink(catalog::Sink { connection, .. }) => match connection {
-                            StorageSinkConnectionState::Ready(_) => {
-                                storage_sinks_to_drop.push(*id);
-                            }
-                            StorageSinkConnectionState::Pending(_) => (),
-                        },
+                        CatalogItem::Sink(catalog::Sink { .. }) => {
+                            storage_sinks_to_drop.push(*id);
+                        }
                         CatalogItem::Index(catalog::Index { cluster_id, .. }) => {
                             indexes_to_drop.push((*cluster_id, *id));
                         }
@@ -225,6 +222,8 @@ impl Coordinator {
                     update_cluster_scheduling_config |= vars::is_cluster_scheduling_var(name);
                     update_jemalloc_profiling_config |=
                         name == vars::ENABLE_JEMALLOC_PROFILING.name();
+                    update_default_arrangement_idle_merge_effort |=
+                        name == vars::DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT.name();
                     update_http_config |= vars::is_http_config_var(name);
                 }
                 catalog::Op::ResetAllSystemConfiguration => {
@@ -238,6 +237,7 @@ impl Coordinator {
                     update_secrets_caching_config = true;
                     update_cluster_scheduling_config = true;
                     update_jemalloc_profiling_config = true;
+                    update_default_arrangement_idle_merge_effort = true;
                     update_http_config = true;
                 }
                 _ => (),
@@ -513,6 +513,9 @@ impl Coordinator {
             }
             if update_jemalloc_profiling_config {
                 self.update_jemalloc_profiling_config().await;
+            }
+            if update_default_arrangement_idle_merge_effort {
+                self.update_default_idle_arrangement_merge_effort();
             }
             if update_http_config {
                 self.update_http_config();
@@ -792,6 +795,16 @@ impl Coordinator {
         }
     }
 
+    fn update_default_idle_arrangement_merge_effort(&mut self) {
+        let effort = self
+            .catalog()
+            .system_config()
+            .default_idle_arrangement_merge_effort();
+        self.controller
+            .compute
+            .set_default_idle_arrangement_merge_effort(effort);
+    }
+
     fn update_http_config(&mut self) {
         let webhook_request_limit = self
             .catalog()
@@ -801,14 +814,11 @@ impl Coordinator {
             .set_limit(webhook_request_limit);
     }
 
-    async fn create_storage_export(
+    pub(crate) async fn create_storage_export(
         &mut self,
-        create_export_token: CreateExportToken,
+        id: GlobalId,
         sink: &Sink,
-        connection: StorageSinkConnection<ReferencedConnection>,
     ) -> Result<(), AdapterError> {
-        let connection = connection.into_inline_connection(self.catalog().state());
-
         // Validate `sink.from` is in fact a storage collection
         self.controller.storage.collection(sink.from)?;
 
@@ -847,8 +857,11 @@ impl Coordinator {
                 ))
                 .expect("indexes can only be built on items with descs")
                 .into_owned(),
-            connection,
-            envelope: Some(sink.envelope),
+            connection: sink
+                .connection
+                .clone()
+                .into_inline_connection(self.catalog().state()),
+            envelope: sink.envelope,
             as_of,
             status_id,
             from_storage_metadata: (),
@@ -858,71 +871,13 @@ impl Coordinator {
             .controller
             .storage
             .create_exports(vec![(
-                create_export_token,
+                id,
                 ExportDescription {
                     sink: storage_sink_desc,
                     instance_id: sink.cluster_id,
                 },
             )])
             .await?)
-    }
-
-    pub(crate) async fn handle_sink_connection_ready(
-        &mut self,
-        id: GlobalId,
-        oid: u32,
-        connection: StorageSinkConnection<ReferencedConnection>,
-        create_export_token: CreateExportToken,
-        session: Option<&Session>,
-    ) -> Result<(), AdapterError> {
-        // Update catalog entry with sink connection.
-        let entry = self.catalog().get_entry(&id);
-        let name = entry.name().clone();
-        let owner_id = entry.owner_id().clone();
-        let sink = match entry.item() {
-            CatalogItem::Sink(sink) => sink,
-            _ => unreachable!(),
-        };
-        let sink = catalog::Sink {
-            connection: StorageSinkConnectionState::Ready(connection.clone()),
-            ..sink.clone()
-        };
-
-        // We always need to drop the already existing item: either because we fail to create it or we're replacing it.
-        let mut ops = vec![catalog::Op::DropObject(ObjectId::Item(id))];
-
-        // Speculatively create the storage export before confirming in the catalog.  We chose this order of operations
-        // for the following reasons:
-        // - We want to avoid ever putting into the catalog a sink in `StorageSinkConnectionState::Ready`
-        //   if we're not able to actually create the sink for some reason
-        // - Dropping the sink will either succeed (or panic) so it's easier to reason about rolling that change back
-        //   than it is rolling back a catalog change.
-        match self
-            .create_storage_export(create_export_token, &sink, connection)
-            .await
-        {
-            Ok(()) => {
-                ops.push(catalog::Op::CreateItem {
-                    id,
-                    oid,
-                    name,
-                    item: CatalogItem::Sink(sink.clone()),
-                    owner_id,
-                });
-                match self.catalog_transact(session, ops).await {
-                    Ok(()) => (),
-                    catalog_err @ Err(_) => {
-                        let () = self.drop_storage_sinks(vec![id]);
-                        catalog_err?
-                    }
-                }
-            }
-            storage_err @ Err(_) => match self.catalog_transact(session, ops).await {
-                Ok(()) => storage_err?,
-                catalog_err @ Err(_) => catalog_err?,
-            },
-        };
-        Ok(())
     }
 
     /// Validate all resource limits in a catalog transaction and return an error if that limit is

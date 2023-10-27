@@ -8,12 +8,13 @@ menu:
     parent: 'sql-patterns'
 ---
 
-Some query patterns that are commonly used in batch are tricky to support in streaming due to the unbounded nature of the input data. Window functions, such as `LAG`, `LEAD`, `ROW_NUMBER`, `FIRST_VALUE`, are one of those patterns.
-As is, Materialize doesn't handle window functions efficiently for large partition sizes: when an input record is added, removed or changed, the system recomputes the results for the entire partition that the changed record belongs to. For this reason, we recommend using the alternative approaches described in this page whenever possible, until window function support is refactored to provide better performance.
+Materialize offers a wide range of [window functions](/sql/functions/#window-func), such as `LAG`, `LEAD`, `ROW_NUMBER`, and `FIRST_VALUE`, to support a variety of complex query patterns. This page discusses certain window function query patterns where rewriting your query to not use window functions can yield a better performance.
 
-It's important to note that **temporal windows** are efficiently supported by using [temporal filters and time bucketing](/sql/patterns/temporal-filters). For example, if you want to window over the last hour of data, or group data based on which hour each record occurred in.
+Currently, Materialize implements window functions by recomputing results for an entire window partition when an input record is added, removed or changed in the partition. This means that when a new batch of input data arrives (that is, every second) the system has to perform an amount of computation proportional to the total size of the touched partitions (where the partitions are determined by the `PARTITION BY` clause inside the `OVER` clause of your window function call). For example, if in a certain second 20 input records change, and these records belong to 10 different partitions, and the average sizes of these partitions is 100, then the system will perform work proportional to computing window function results for 10*100=1000 rows.
 
-By "window functions", this page does _not_ refer to temporal windows, but instead refers to functions such as `LAG`, `LEAD`, `ROW_NUMBER`, `FIRST_VALUE`. You can access these functions with the `OVER` clause, in which you use the `PARTITION BY` clause to group input records into partitions by a key, and use the `ORDER BY` clause to order records inside each partition. Window functions compute results based on the position of records inside these partitions. For example, `x - LAG(x)` computes the differences of attribute `x` between each pair of _consecutive_ rows in each partition.
+As a rule of thumb, if the total size of all touched window partitions is at most 1000000 rows per second, then the system should be able to keep up with the input data as it arrives. However, if you find that your use case has higher performance requirements, then consider rewriting your query to not use window functions. This page helps with such rewrites.
+
+It's important to note that **temporal windows** are _not_ the focus of this page. Temporal windows are efficiently supported by using [temporal filters and time bucketing](/sql/patterns/temporal-filters) instead of window functions that use the `OVER` clause. Examples of temporal windows are when you want to window over the last hour of data, or group data based on which hour each record occurred in.
 
 ## Example data
 
@@ -87,28 +88,6 @@ WHERE cities.state = max_pops.state;
 ```
 
 If the `ROW_NUMBER` would be called with an expression that is different from the expression in the `ORDER BY` clause, then the inner query would have to be replaced by a [`DISTINCT ON` query](/sql/patterns/top-k).
-
-## Aggregate window functions over an entire partition
-
-Suppose that you want to compute the ratio of each city's population vs. the total population of the city's state. You can do so using an aggregate window function as follows:
-
-```sql
-SELECT state, name,
-       CAST(pop AS float) / SUM(pop)
-         OVER (PARTITION BY state)
-FROM cities;
-```
-
-Aggregate window functions are not yet supported in Materialize, but you can rewrite this query to first compute the total population of each state using an aggregation, and then join against that:
-
-```sql
-SELECT cities.state, name, CAST(pop as float) / total_pops.total_pop
-FROM cities,
-     (SELECT state, SUM(pop) as total_pop
-      FROM cities
-      GROUP BY state) total_pops
-WHERE cities.state = total_pops.state;
-```
 
 ## `LAG`/`LEAD` for time series
 

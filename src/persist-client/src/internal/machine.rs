@@ -1074,6 +1074,19 @@ where
             }
 
             if !existed {
+                // If the read handle was intentionally expired, this task
+                // *should* be aborted before it observes the expiration. So if
+                // we get here, this task somehow failed to keep the read lease
+                // alive. Warn loudly, because there's now a live read handle to
+                // an expired shard that will panic if used, but don't panic,
+                // just in case there is some edge case that results in this
+                // task observing the intentional expiration of a read handle.
+                warn!(
+                    "heartbeat task for reader ({}) of shard ({}) exiting due to expired lease \
+                     while read handle is live",
+                    reader_id,
+                    machine.shard_id(),
+                );
                 return;
             }
         }

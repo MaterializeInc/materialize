@@ -234,6 +234,11 @@ url = "/integrations"
 weight = 5
 
 [[menu.main]]
+identifier = "cli-reference"
+name = "Command reference"
+parent = "cli"
+
+[[menu.main]]
 identifier = "client-libraries"
 name = "SQL drivers"
 parent = "integrations"

@@ -15,6 +15,7 @@ use std::sync::Arc;
 use derivative::Derivative;
 use enum_kinds::EnumKind;
 use futures::future::BoxFuture;
+use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -31,7 +32,6 @@ use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
-use crate::client::{ConnectionId, ConnectionIdType};
 use crate::coord::consistency::CoordinatorInconsistencies;
 use crate::coord::peek::PeekResponseUnary;
 use crate::coord::ExecuteContextExtra;
@@ -599,6 +599,7 @@ impl ExecuteResponse {
             | AlterItemSwap
             | AlterNoop
             | AlterSchemaRename
+            | AlterSchemaSwap
             | AlterSecret
             | AlterSink
             | AlterSource

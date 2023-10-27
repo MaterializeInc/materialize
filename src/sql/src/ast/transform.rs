@@ -13,14 +13,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use mz_ore::str::StrExt;
 use mz_repr::GlobalId;
-use mz_sql_parser::ast::CreateSubsourceStatement;
 
 use crate::ast::visit::{self, Visit};
 use crate::ast::visit_mut::{self, VisitMut};
 use crate::ast::{
     AstInfo, CreateConnectionStatement, CreateIndexStatement, CreateMaterializedViewStatement,
-    CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateTableStatement,
-    CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement, Expr, Ident, Query,
+    CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateSubsourceStatement,
+    CreateTableStatement, CreateViewStatement, CreateWebhookSourceStatement, Expr, Ident, Query,
     Raw, RawItemName, Statement, UnresolvedItemName, ViewDefinition,
 };
 use crate::names::FullItemName;
@@ -29,42 +28,37 @@ use crate::names::FullItemName;
 /// `new_schema_name`.
 pub fn create_stmt_rename_schema_refs(
     create_stmt: &mut Statement<Raw>,
-    cur_schema_name: &str,
-    new_schema_name: String,
-) {
-    let maybe_update_item_name = |item_name: &mut UnresolvedItemName| {
-        if let [.., schema, _item] = &mut item_name.0[..] {
-            if schema.as_str() == cur_schema_name {
-                *schema = Ident::new(new_schema_name.clone());
-            }
-        }
-    };
-
+    database: &str,
+    cur_schema: &str,
+    new_schema: &str,
+) -> Result<(), (String, String)> {
     match create_stmt {
-        Statement::CreateIndex(CreateIndexStatement { on_name, .. }) => {
-            maybe_update_item_name(on_name.name_mut());
-        }
-        Statement::CreateSink(CreateSinkStatement { from, .. }) => {
-            maybe_update_item_name(from.name_mut());
-        }
-        Statement::CreateTable(CreateTableStatement { name, .. })
-        | Statement::CreateSecret(CreateSecretStatement { name, .. })
-        | Statement::CreateConnection(CreateConnectionStatement { name, .. })
-        | Statement::CreateWebhookSource(CreateWebhookSourceStatement { name, .. })
-        | Statement::CreateType(CreateTypeStatement { name, .. })
-        | Statement::CreateSource(CreateSourceStatement { name, .. })
-        | Statement::CreateSubsource(CreateSubsourceStatement { name, .. }) => {
-            maybe_update_item_name(name);
-        }
-        Statement::CreateView(CreateViewStatement {
-            definition: ViewDefinition { query, name, .. },
-            ..
-        })
-        | Statement::CreateMaterializedView(CreateMaterializedViewStatement {
-            query, name, ..
-        }) => {
-            maybe_update_item_name(name);
-            rewrite_query_schema(cur_schema_name, new_schema_name, query);
+        stmt @ Statement::CreateConnection(_)
+        | stmt @ Statement::CreateDatabase(_)
+        | stmt @ Statement::CreateSchema(_)
+        | stmt @ Statement::CreateWebhookSource(_)
+        | stmt @ Statement::CreateSource(_)
+        | stmt @ Statement::CreateSubsource(_)
+        | stmt @ Statement::CreateSink(_)
+        | stmt @ Statement::CreateView(_)
+        | stmt @ Statement::CreateMaterializedView(_)
+        | stmt @ Statement::CreateTable(_)
+        | stmt @ Statement::CreateIndex(_)
+        | stmt @ Statement::CreateType(_)
+        | stmt @ Statement::CreateSecret(_) => {
+            let mut visitor = CreateSqlRewriteSchema {
+                database,
+                cur_schema,
+                new_schema,
+                error: None,
+            };
+            visitor.visit_statement_mut(stmt);
+
+            if let Some(e) = visitor.error.take() {
+                Err(e)
+            } else {
+                Ok(())
+            }
         }
         stmt => {
             unreachable!("Internal error: only catalog items need to update item refs. {stmt:?}")
@@ -72,31 +66,30 @@ pub fn create_stmt_rename_schema_refs(
     }
 }
 
-/// Rewrites `query`'s references of `from` to `to` or errors if too ambiguous.
-fn rewrite_query_schema<'a>(
-    cur_schema_name: &'a str,
-    new_schema_name: String,
-    query: &mut Query<Raw>,
-) {
-    let new_schema = Ident::new(new_schema_name);
-    let mut visitor = CreateSqlRewriteSchema {
-        cur_schema: cur_schema_name,
-        new_schema,
-    };
-    visitor.visit_query_mut(query);
-}
-
 struct CreateSqlRewriteSchema<'a> {
+    database: &'a str,
     cur_schema: &'a str,
-    new_schema: Ident,
+    new_schema: &'a str,
+    error: Option<(String, String)>,
 }
 
 impl<'a> CreateSqlRewriteSchema<'a> {
     fn maybe_rewrite_idents(&mut self, name: &mut [Ident]) {
-        if let [.., schema, _item] = name {
-            if schema.as_str() == self.cur_schema {
-                *schema = self.new_schema.clone();
+        match name {
+            [schema, item] if schema.as_str() == self.cur_schema => {
+                // TODO(parkmycar): I _think_ when the database component is not specified we can
+                // always infer we're using the current database. But I'm not positive, so for now
+                // we'll bail in this case.
+                if self.error.is_none() {
+                    self.error = Some((schema.to_string(), item.to_string()));
+                }
             }
+            [database, schema, _item] => {
+                if database.as_str() == self.database && schema.as_str() == self.cur_schema {
+                    *schema = Ident::new(self.new_schema);
+                }
+            }
+            _ => (),
         }
     }
 }
@@ -116,12 +109,14 @@ impl<'a, 'ast> VisitMut<'ast, Raw> for CreateSqlRewriteSchema<'a> {
             _ => visit_mut::visit_expr_mut(self, e),
         }
     }
+
     fn visit_unresolved_item_name_mut(
         &mut self,
         unresolved_item_name: &'ast mut UnresolvedItemName,
     ) {
         self.maybe_rewrite_idents(&mut unresolved_item_name.0);
     }
+
     fn visit_item_name_mut(
         &mut self,
         item_name: &'ast mut <mz_sql_parser::ast::Raw as AstInfo>::ItemName,
@@ -143,6 +138,7 @@ pub fn create_stmt_rename(create_stmt: &mut Statement<Raw>, to_item_name: String
         }
         Statement::CreateSink(CreateSinkStatement { name, .. })
         | Statement::CreateSource(CreateSourceStatement { name, .. })
+        | Statement::CreateSubsource(CreateSubsourceStatement { name, .. })
         | Statement::CreateView(CreateViewStatement {
             definition: ViewDefinition { name, .. },
             ..
@@ -158,7 +154,7 @@ pub fn create_stmt_rename(create_stmt: &mut Statement<Raw>, to_item_name: String
             let item_name_len = name.0.len() - 1;
             name.0[item_name_len] = Ident::new(to_item_name);
         }
-        _ => unreachable!("Internal error: only catalog items can be renamed"),
+        item => unreachable!("Internal error: only catalog items can be renamed {item:?}"),
     }
 }
 
@@ -206,11 +202,14 @@ pub fn create_stmt_rename_refs(
             rewrite_query(from_name, to_item_name, query)?;
         }
         Statement::CreateSource(_)
+        | Statement::CreateSubsource(_)
         | Statement::CreateTable(_)
         | Statement::CreateSecret(_)
         | Statement::CreateConnection(_)
         | Statement::CreateWebhookSource(_) => {}
-        _ => unreachable!("Internal error: only catalog items need to update item refs"),
+        item => {
+            unreachable!("Internal error: only catalog items need to update item refs {item:?}")
+        }
     }
 
     Ok(())

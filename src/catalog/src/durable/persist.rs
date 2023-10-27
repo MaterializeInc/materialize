@@ -41,16 +41,13 @@ use timely::progress::Antichain;
 use tracing::debug;
 use uuid::Uuid;
 
-use crate::initialize::DEPLOY_GENERATION;
-use crate::objects::{
+use crate::durable::initialize::DEPLOY_GENERATION;
+use crate::durable::objects::{
     AuditLogKey, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
     DurableType, IntrospectionSourceIndex, Snapshot, StorageUsageKey, TimestampValue,
 };
-use crate::transaction::{
-    add_new_builtin_cluster_replicas_migration, add_new_builtin_clusters_migration,
-    TransactionBatch,
-};
-use crate::{
+use crate::durable::transaction::TransactionBatch;
+use crate::durable::{
     initialize, BootstrapArgs, CatalogError, Cluster, ClusterReplica, Comment, Database,
     DefaultPrivilege, DurableCatalogError, DurableCatalogState, Epoch, OpenableDurableCatalogState,
     ReadOnlyDurableCatalogState, ReplicaConfig, Role, Schema, SystemConfiguration,
@@ -259,18 +256,18 @@ pub struct PersistHandle {
 }
 
 impl PersistHandle {
-    /// Deterministically generate the a ID for the given `environment_id` and `seed`.
-    fn shard_id(environment_id: Uuid, seed: usize) -> ShardId {
-        let hash = sha2::Sha256::digest(format!("{environment_id}{seed}")).to_vec();
+    /// Deterministically generate the a ID for the given `organization_id` and `seed`.
+    fn shard_id(organization_id: Uuid, seed: usize) -> ShardId {
+        let hash = sha2::Sha256::digest(format!("{organization_id}{seed}")).to_vec();
         soft_assert_eq!(hash.len(), 32, "SHA256 returns 32 bytes (256 bits)");
         let uuid = Uuid::from_slice(&hash[0..16]).expect("from_slice accepts exactly 16 bytes");
         ShardId::from_str(&format!("s{uuid}")).expect("known to be valid")
     }
 
-    /// Create a new [`PersistHandle`] to the catalog state associated with `environment_id`.
-    pub(crate) async fn new(persist_client: PersistClient, environment_id: Uuid) -> PersistHandle {
+    /// Create a new [`PersistHandle`] to the catalog state associated with `organization_id`.
+    pub(crate) async fn new(persist_client: PersistClient, organization_id: Uuid) -> PersistHandle {
         const SEED: usize = 1;
-        let shard_id = Self::shard_id(environment_id, SEED);
+        let shard_id = Self::shard_id(organization_id, SEED);
         let (write_handle, read_handle) = persist_client
             .open(
                 shard_id,
@@ -295,7 +292,7 @@ impl PersistHandle {
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
-    ) -> Result<PersistCatalogState, CatalogError> {
+    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         let (is_initialized, upper) = self.is_initialized_inner().await;
 
         if !matches!(mode, Mode::Writable) && !is_initialized {
@@ -309,8 +306,9 @@ impl PersistHandle {
 
         // Grab the current catalog contents from persist.
         let mut initial_snapshot: Vec<_> = self.snapshot(upper).await.collect();
+
         // Sniff out the most recent epoch.
-        let mut epoch = if is_initialized {
+        let prev_epoch = if is_initialized {
             let epoch_idx = initial_snapshot
                 .iter()
                 .rposition(|update| {
@@ -330,29 +328,31 @@ impl PersistHandle {
                     ..
                 } => {
                     soft_assert_eq!(diff, 1);
-                    epoch
+                    Some(epoch)
                 }
                 _ => unreachable!("checked above"),
             }
         } else {
-            Epoch::new(1).expect("known to be non-zero")
+            None
         };
+        let mut current_epoch = prev_epoch.map(|epoch| epoch.get()).unwrap_or(1);
         // Note only writable catalogs attempt to increment the epoch.
         if matches!(mode, Mode::Writable) {
-            epoch = Epoch::new(epoch.get() + 1).expect("known to be non-zero");
+            current_epoch = current_epoch + 1;
         }
+        let current_epoch = Epoch::new(current_epoch).expect("known to be non-zero");
 
         let mut catalog = PersistCatalogState {
             mode,
             persist_handle: self,
             upper,
-            epoch,
+            epoch: current_epoch,
             // Initialize empty in-memory state.
             snapshot: Snapshot::empty(),
-            fenced: false,
+            fence: Some(Fence { prev_epoch }),
         };
 
-        let mut txn = if is_initialized {
+        let txn = if is_initialized {
             if !read_only {
                 let version =
                     version.ok_or(CatalogError::Durable(DurableCatalogError::Uninitialized))?;
@@ -381,11 +381,6 @@ impl PersistHandle {
             txn
         };
 
-        if !read_only {
-            add_new_builtin_clusters_migration(&mut txn)?;
-            add_new_builtin_cluster_replicas_migration(&mut txn, bootstrap_args)?;
-        }
-
         if read_only {
             let (txn_batch, _) = txn.into_parts();
             // The upper here doesn't matter because we are only apply the updates in memory.
@@ -395,7 +390,7 @@ impl PersistHandle {
             txn.commit().await?;
         }
 
-        Ok(catalog)
+        Ok(Box::new(catalog))
     }
 
     /// Fetch the current upper of the catalog state.
@@ -484,32 +479,32 @@ impl PersistHandle {
 }
 
 #[async_trait]
-impl OpenableDurableCatalogState<PersistCatalogState> for PersistHandle {
+impl OpenableDurableCatalogState for PersistHandle {
     async fn open_savepoint(
-        mut self,
+        mut self: Box<Self>,
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
-    ) -> Result<PersistCatalogState, CatalogError> {
+    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.open_inner(Mode::Savepoint, now, bootstrap_args, deploy_generation)
             .await
     }
 
     async fn open_read_only(
-        mut self,
+        mut self: Box<Self>,
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
-    ) -> Result<PersistCatalogState, CatalogError> {
+    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.open_inner(Mode::Readonly, now, bootstrap_args, None)
             .await
     }
 
     async fn open(
-        mut self,
+        mut self: Box<Self>,
         now: NowFn,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
-    ) -> Result<PersistCatalogState, CatalogError> {
+    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.open_inner(Mode::Writable, now, bootstrap_args, deploy_generation)
             .await
     }
@@ -542,8 +537,9 @@ pub struct PersistCatalogState {
     epoch: Epoch,
     /// A cache of the entire catalogs state.
     snapshot: Snapshot,
-    /// True if this catalog has fenced out older catalogs, false otherwise.
-    fenced: bool,
+    /// `Some` indicates that we need to fence the previous catalog, None indicates that we've
+    /// already fenced the previous catalog.
+    fence: Option<Fence>,
 }
 
 impl PersistCatalogState {
@@ -939,7 +935,18 @@ impl DurableCatalogState for PersistCatalogState {
                     .expect("invalid usage");
             }
             // If we haven't fenced the previous catalog state, do that now.
-            if !self.fenced {
+            if let Some(Fence { prev_epoch }) = self.fence.take() {
+                if let Some(prev_epoch) = prev_epoch {
+                    batch_builder
+                        .add(
+                            &StateUpdateKind::Epoch(prev_epoch),
+                            &(),
+                            &current_upper,
+                            &-1,
+                        )
+                        .await
+                        .expect("invalid usage");
+                }
                 batch_builder
                     .add(&StateUpdateKind::Epoch(self.epoch), &(), &current_upper, &1)
                     .await
@@ -977,7 +984,6 @@ impl DurableCatalogState for PersistCatalogState {
             }
         }
 
-        self.fenced = true;
         Ok(())
     }
 
@@ -1073,9 +1079,7 @@ impl DurableCatalogState for PersistCatalogState {
         mappings: Vec<SystemObjectMapping>,
     ) -> Result<(), CatalogError> {
         let mut txn = self.transaction().await?;
-        for mapping in mappings {
-            txn.set_system_object_mapping(mapping)?;
-        }
+        txn.set_system_object_mappings(mappings)?;
         txn.commit().await
     }
 
@@ -1084,9 +1088,7 @@ impl DurableCatalogState for PersistCatalogState {
         mappings: Vec<IntrospectionSourceIndex>,
     ) -> Result<(), CatalogError> {
         let mut txn = self.transaction().await?;
-        for mapping in mappings {
-            txn.set_introspection_source_index(mapping)?;
-        }
+        txn.set_introspection_source_indexes(mappings)?;
         txn.commit().await
     }
 
@@ -1128,4 +1130,11 @@ impl DurableCatalogState for PersistCatalogState {
         txn.commit().await?;
         Ok(ids)
     }
+}
+
+/// Extra metadata needed to fence previous catalog.
+#[derive(Debug)]
+pub struct Fence {
+    /// Previous epoch, if one existed.
+    prev_epoch: Option<Epoch>,
 }

@@ -23,6 +23,30 @@ reference these objects is not allowed.
 
 ## System Relations
 
+### `mz_cluster_replica_frontiers`
+
+The `mz_cluster_replica_frontiers` table describes the per-replica frontiers of
+sources, sinks, materialized views, indexes, and subscriptions in the system,
+as observed from the coordinator.
+
+[`mz_compute_frontiers`](#mz_compute_frontiers) is similar to
+`mz_cluster_replica_frontiers`, but `mz_compute_frontiers` reports the
+frontiers known to the active compute replica, while
+`mz_cluster_replica_frontiers` reports the frontiers of all replicas. Note also
+that `mz_compute_frontiers` is restricted to compute objects (indexes,
+materialized views, and subscriptions) while `mz_cluster_replica_frontiers`
+contains storage objects that are installed on replicas (sources, sinks) as
+well.
+
+At this time, we do not make any guarantees about the freshness of these numbers.
+
+<!-- RELATION_SPEC mz_internal.mz_cluster_replica_frontiers -->
+| Field            | Type             | Meaning                                                                |
+| -----------------| ---------------- | --------                                                               |
+| `object_id`      | [`text`]         | The ID of the source, sink, index, materialized view, or subscription. |
+| `replica_id`     | [`text`]         | The ID of a cluster replica.                                           |
+| `write_frontier` | [`mz_timestamp`] | The next timestamp at which the output may change.                     |
+
 ### `mz_cluster_replica_metrics`
 
 The `mz_cluster_replica_metrics` table gives the last known CPU and RAM utilization statistics
@@ -178,45 +202,16 @@ The `mz_frontiers` table describes the frontiers of each source, sink, table,
 materialized view, index, and subscription in the system, as observed from the
 coordinator.
 
-For objects that are installed on replicas (e.g., materialized views and
-indexes), the `replica_id` field is always non-`NULL`. If an object is installed
-on multiple replicas, it has multiple entries describing the frontier on each
-individual replica. For objects that are not installed on replicas (e.g.,
-tables), the `replica_id` field is `NULL`.
-
-[`mz_compute_frontiers`](#mz_compute_frontiers) is similar to `mz_frontiers`,
-but `mz_compute_frontiers` reports the frontiers known to the active compute
-replica, while `mz_frontiers` reports the frontiers of all replicas. Note also
-that `mz_compute_frontiers` is restricted to compute objects (indexes,
-materialized views, and subscriptions) while `mz_frontiers` contains storage
-objects (sources, sinks, and tables) as well.
-
 At this time, we do not make any guarantees about the freshness of these numbers.
 
 <!-- RELATION_SPEC mz_internal.mz_frontiers -->
-| Field         | Type             | Meaning                                                                             |
-| ------------- | ------------     | --------                                                                            |
-| `object_id`   | [`text`]         | The ID of the source, sink, table, index, materialized view, or subscription.       |
-| `replica_id`  | [`text`]         | The ID of a cluster replica, or `NULL` if the object is not installed on a replica. |
-| `time`        | [`mz_timestamp`] | The next timestamp at which the output may change.                                  |
+| Field            | Type             | Meaning                                                                             |
+| ---------------- | ------------     | --------                                                                            |
+| `object_id`      | [`text`]         | The ID of the source, sink, table, index, materialized view, or subscription.       |
+| `read_frontier`  | [`mz_timestamp`] | The earliest timestamp at which the output is still readable.                       |
+| `write_frontier` | [`mz_timestamp`] | The next timestamp at which the output may change.                                  |
 
-### `mz_global_frontiers`
-
-The `mz_global_frontiers` view describes the global frontiers of each source,
-sink, table, materialized view, index, and subscription in the system, as
-observed from the coordinator.
-
-For objects that are installed on replicas (e.g., materialized views and
-indexes), the global frontier is the maximum of the per-replica frontiers.
-Objects that are not installed on replicas only have a single, global frontier.
-
-At this time, we do not make any guarantees about the freshness of these numbers.
-
-<!-- RELATION_SPEC mz_internal.mz_global_frontiers -->
-| Field         | Type             | Meaning                                                                       |
-| ------------- | ------------     | --------                                                                      |
-| `object_id`   | [`text`]         | The ID of the source, sink, table, index, materialized view, or subscription. |
-| `time`        | [`mz_timestamp`] | The next timestamp at which the output may change.                            |
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_global_frontiers -->
 
 ### `mz_kafka_sources`
 
@@ -778,6 +773,8 @@ Specifically, reductions can use more memory than we show here.
 | `allocations` | [`numeric`] | The number of separate memory allocations backing the arrangement.                                                        |
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_sizes_per_worker -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_records_raw -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_batches_raw -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_heap_allocations_raw -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_heap_capacity_raw -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_heap_size_raw -->
@@ -1121,13 +1118,14 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 [Top K]: /transform-data/patterns/top-k
 [query hints]: /sql/select/#query-hints
 
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_activity_log -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_activity_log_redacted -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_aggregates -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_batches_raw -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_arrangement_records_raw -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_reachability -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_reachability_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_reachability_raw -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_prepared_statement_history -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_prepared_statement_history_redacted -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_session_history -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_cluster_replicas -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_indexes -->
@@ -1135,6 +1133,7 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_sinks -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_sources -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_statement_execution_history -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_statement_execution_history_redacted -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_storage_shards -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_storage_usage_by_shard -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_type_pg_metadata -->

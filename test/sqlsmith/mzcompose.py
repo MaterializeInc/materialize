@@ -34,8 +34,6 @@ SERVICES = [
         restart="on-failure",
         memory=f"{TOTAL_MEMORY / len(MZ_SERVERS)}GB",
         use_default_volumes=False,
-        # TODO(def-): Remove this when #19496 is fixed
-        additional_system_parameter_defaults={"persist_stats_filter_enabled": "false"},
     )
     for mz_server in MZ_SERVERS
 ] + [
@@ -240,7 +238,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             f"--max-joins={args.max_joins}",
             f"--seed={seed + i}",
             "--log-json",
-            f"--target=host={MZ_SERVERS[i % len(MZ_SERVERS)]} port=6875 dbname=materialize user=materialize",
+            # we use mz_system to have access to all tables, including ones with restricted permissions
+            f"--target=host={MZ_SERVERS[i % len(MZ_SERVERS)]} port=6877 dbname=materialize user=mz_system",
         ]
         if args.exclude_catalog:
             cmd.append("--exclude-catalog")

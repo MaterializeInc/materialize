@@ -2,6 +2,18 @@
 
 All notable changes to the `mz` CLI will be documented in this file.
 
+## [0.3.0] - 2023-10-26
+
+This version includes a more secure app-password storage for macOS, and extends current features. Migration from old profiles to new ones will happen automatically.
+
+### Added
+ - Support to store app-passwords in the keychain for macOS.
+ - A new vault field in the configuration file has been added to indicate if keychain usage.
+
+### Changed
+ - The command `mz app-password create` does not require a name anymore.
+ - The command `mz profile init` requires a `--force` option if a profile already exists.
+
 ## [0.2.2] - 2023-09-25
 
 This version implements a change to use a new API version '1' of the Region API, and usability improvements.

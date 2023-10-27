@@ -32,7 +32,7 @@ use crate::config::SystemParameterSyncConfig;
 #[derive(Debug)]
 pub struct Config<'a> {
     /// The connection to the stash.
-    pub storage: Box<dyn mz_catalog::DurableCatalogState>,
+    pub storage: Box<dyn mz_catalog::durable::DurableCatalogState>,
     /// Whether to enable unsafe mode.
     pub unsafe_mode: bool,
     /// Whether the build is a local dev build.
@@ -51,6 +51,8 @@ pub struct Config<'a> {
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
     /// Default storage cluster size. Must be a key from cluster_replica_sizes.
     pub default_storage_cluster_size: Option<String>,
+    /// Builtin cluster replica size.
+    pub builtin_cluster_replica_size: String,
     /// Dynamic defaults for system parameters.
     pub system_parameter_defaults: BTreeMap<String, String>,
     /// Valid availability zones for replicas.

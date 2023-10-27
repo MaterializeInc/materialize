@@ -4145,13 +4145,6 @@ impl<'a> Parser<'a> {
     fn parse_alter_object(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
         let object_type = self.expect_object_type().map_no_statement_parser_err()?;
 
-        // ALTER ... SWAP works the same for all items, hence this separate branch.
-        if self.parse_keyword(SWAP) {
-            return self
-                .parse_alter_swap(object_type)
-                .map_parser_err(StatementKind::AlterObjectSwap);
-        }
-
         match object_type {
             ObjectType::Role => self
                 .parse_alter_role()
@@ -4258,7 +4251,7 @@ impl<'a> Parser<'a> {
         let if_exists = self.parse_if_exists().map_no_statement_parser_err()?;
         let name = self.parse_identifier().map_no_statement_parser_err()?;
         let action = self
-            .expect_one_of_keywords(&[OWNER, RENAME, RESET, SET])
+            .expect_one_of_keywords(&[OWNER, RENAME, RESET, SET, SWAP])
             .map_no_statement_parser_err()?;
         match action {
             OWNER => {
@@ -4315,6 +4308,19 @@ impl<'a> Parser<'a> {
                     if_exists,
                     name,
                     action: AlterClusterAction::SetOptions(options),
+                }))
+            }
+            SWAP => {
+                self.expect_keyword(WITH)
+                    .map_parser_err(StatementKind::AlterObjectSwap)?;
+                let name_b = self
+                    .parse_identifier()
+                    .map_parser_err(StatementKind::AlterObjectSwap)?;
+
+                Ok(Statement::AlterObjectSwap(AlterObjectSwapStatement {
+                    object_type,
+                    name_a: UnresolvedObjectName::Cluster(name),
+                    name_b,
                 }))
             }
             _ => unreachable!(),
@@ -4906,85 +4912,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_alter_swap(&mut self, object_type: ObjectType) -> Result<Statement<Raw>, ParserError> {
-        match object_type {
-            ObjectType::Table
-            | ObjectType::View
-            | ObjectType::MaterializedView
-            | ObjectType::Source
-            | ObjectType::Sink
-            | ObjectType::Index
-            | ObjectType::Type
-            | ObjectType::Secret
-            | ObjectType::Connection
-            | ObjectType::Func => {
-                let name_a = self.parse_item_name()?;
-                let name_b = self.parse_item_name()?;
-
-                Ok(Statement::AlterObjectSwap(AlterObjectSwapStatement {
-                    object_type,
-                    name_a: UnresolvedObjectName::Item(name_a),
-                    name_b: UnresolvedObjectName::Item(name_b),
-                }))
-            }
-            ObjectType::Cluster => {
-                let name_a = self.parse_identifier()?;
-                let name_b = self.parse_identifier()?;
-
-                Ok(Statement::AlterObjectSwap(AlterObjectSwapStatement {
-                    object_type,
-                    name_a: UnresolvedObjectName::Cluster(name_a),
-                    name_b: UnresolvedObjectName::Cluster(name_b),
-                }))
-            }
-            ObjectType::ClusterReplica => {
-                let name_a = self.parse_cluster_replica_name()?;
-                let name_b = self.parse_cluster_replica_name()?;
-
-                Ok(Statement::AlterObjectSwap(AlterObjectSwapStatement {
-                    object_type,
-                    name_a: UnresolvedObjectName::ClusterReplica(name_a),
-                    name_b: UnresolvedObjectName::ClusterReplica(name_b),
-                }))
-            }
-            ObjectType::Database => {
-                let name_a = self.parse_database_name()?;
-                let name_b = self.parse_database_name()?;
-
-                Ok(Statement::AlterObjectSwap(AlterObjectSwapStatement {
-                    object_type,
-                    name_a: UnresolvedObjectName::Database(name_a),
-                    name_b: UnresolvedObjectName::Database(name_b),
-                }))
-            }
-            ObjectType::Schema => {
-                let name_a = self.parse_schema_name()?;
-                let name_b = self.parse_schema_name()?;
-
-                Ok(Statement::AlterObjectSwap(AlterObjectSwapStatement {
-                    object_type,
-                    name_a: UnresolvedObjectName::Schema(name_a),
-                    name_b: UnresolvedObjectName::Schema(name_b),
-                }))
-            }
-            ObjectType::Role => {
-                let name_a = self.parse_identifier()?;
-                let name_b = self.parse_identifier()?;
-
-                Ok(Statement::AlterObjectSwap(AlterObjectSwapStatement {
-                    object_type,
-                    name_a: UnresolvedObjectName::Role(name_a),
-                    name_b: UnresolvedObjectName::Role(name_b),
-                }))
-            }
-            ObjectType::Subsource => parser_err!(
-                self,
-                self.peek_prev_pos(),
-                "Unexpected object type 'SUBSOURCE'"
-            ),
-        }
-    }
-
     fn parse_alter_schema(
         &mut self,
         object_type: ObjectType,
@@ -4993,7 +4920,7 @@ impl<'a> Parser<'a> {
         let name = self.parse_schema_name().map_no_statement_parser_err()?;
         let name = UnresolvedObjectName::Schema(name);
         let action = self
-            .expect_one_of_keywords(&[OWNER, RENAME])
+            .expect_one_of_keywords(&[OWNER, RENAME, SWAP])
             .map_no_statement_parser_err()?;
 
         match action {
@@ -5023,6 +4950,19 @@ impl<'a> Parser<'a> {
                     if_exists,
                     name,
                     to_item_name,
+                }))
+            }
+            SWAP => {
+                self.expect_keyword(WITH)
+                    .map_parser_err(StatementKind::AlterObjectSwap)?;
+                let name_b = self
+                    .parse_identifier()
+                    .map_parser_err(StatementKind::AlterObjectSwap)?;
+
+                Ok(Statement::AlterObjectSwap(AlterObjectSwapStatement {
+                    object_type,
+                    name_a: name,
+                    name_b,
                 }))
             }
             k => unreachable!("programming error, unmatched {k}"),

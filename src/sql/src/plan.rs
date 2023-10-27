@@ -46,7 +46,7 @@ use mz_sql_parser::ast::{
     TransactionIsolationLevel, TransactionMode, WithOptionValue,
 };
 use mz_storage_types::connections::inline::ReferencedConnection;
-use mz_storage_types::sinks::{SinkEnvelope, StorageSinkConnectionBuilder};
+use mz_storage_types::sinks::{SinkEnvelope, StorageSinkConnection};
 use mz_storage_types::sources::{SourceDesc, Timeline};
 use serde::{Deserialize, Serialize};
 
@@ -68,7 +68,6 @@ pub(crate) mod explain;
 pub(crate) mod expr;
 pub(crate) mod lowering;
 pub(crate) mod notice;
-pub(crate) mod optimize;
 pub(crate) mod plan_utils;
 pub(crate) mod query;
 pub(crate) mod scope;
@@ -86,8 +85,8 @@ pub use expr::{
     AggregateExpr, CoercibleScalarExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind,
     WindowExprType,
 };
+pub use lowering::Config as HirToMirConfig;
 pub use notice::PlanNotice;
-pub use optimize::OptimizerConfig;
 pub use query::{ExprContext, QueryContext, QueryLifetime};
 pub use scope::Scope;
 pub use side_effecting_func::SideEffectingFunc;
@@ -155,6 +154,7 @@ pub enum Plan {
     AlterItemRename(AlterItemRenamePlan),
     AlterItemSwap(AlterItemSwapPlan),
     AlterSchemaRename(AlterSchemaRenamePlan),
+    AlterSchemaSwap(AlterSchemaSwapPlan),
     AlterSecret(AlterSecretPlan),
     AlterSystemSet(AlterSystemSetPlan),
     AlterSystemReset(AlterSystemResetPlan),
@@ -208,6 +208,7 @@ impl Plan {
                 vec![
                     PlanKind::AlterClusterSwap,
                     PlanKind::AlterItemSwap,
+                    PlanKind::AlterSchemaSwap,
                     PlanKind::AlterNoop,
                 ]
             }
@@ -372,6 +373,7 @@ impl Plan {
             Plan::AlterItemRename(_) => "rename item",
             Plan::AlterItemSwap(_) => "swap item",
             Plan::AlterSchemaRename(_) => "alter rename schema",
+            Plan::AlterSchemaSwap(_) => "alter swap schema",
             Plan::AlterSecret(_) => "alter secret",
             Plan::AlterSystemSet(_) => "alter system",
             Plan::AlterSystemReset(_) => "alter system",
@@ -1059,11 +1061,21 @@ pub struct AlterSchemaRenamePlan {
 }
 
 #[derive(Debug)]
+pub struct AlterSchemaSwapPlan {
+    pub schema_a_spec: (ResolvedDatabaseSpecifier, SchemaSpecifier),
+    pub schema_a_name: String,
+    pub schema_b_spec: (ResolvedDatabaseSpecifier, SchemaSpecifier),
+    pub schema_b_name: String,
+    pub name_temp: String,
+}
+
+#[derive(Debug)]
 pub struct AlterClusterSwapPlan {
     pub id_a: ClusterId,
     pub id_b: ClusterId,
     pub name_a: String,
     pub name_b: String,
+    pub name_temp: String,
 }
 
 #[derive(Debug)]
@@ -1337,7 +1349,7 @@ pub struct Secret {
 pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
-    pub connection_builder: StorageSinkConnectionBuilder<ReferencedConnection>,
+    pub connection: StorageSinkConnection<ReferencedConnection>,
     pub envelope: SinkEnvelope,
 }
 

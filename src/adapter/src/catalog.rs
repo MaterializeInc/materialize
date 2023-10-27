@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use futures::Future;
 use itertools::Itertools;
+use mz_adapter_types::connection::ConnectionId;
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::sync::MutexGuard;
 use tracing::{info, trace};
@@ -26,7 +27,7 @@ use mz_catalog::builtin::{
     BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BuiltinType, BUILTINS,
     BUILTIN_PREFIXES, MZ_INTROSPECTION_CLUSTER,
 };
-use mz_catalog::{
+use mz_catalog::durable::{
     debug_bootstrap_args, DurableCatalogState, OpenableDurableCatalogState, StashConfig,
     Transaction,
 };
@@ -84,20 +85,19 @@ use mz_transform::Optimizer;
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap, Config};
 pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
-pub use crate::catalog::objects::{
-    CatalogEntry, CatalogItem, Cluster, ClusterConfig, ClusterReplica, ClusterReplicaProcessStatus,
-    ClusterVariant, ClusterVariantManaged, CommentsMap, Connection, DataSourceDesc, Database,
-    DefaultPrivileges, Func, Index, Log, MaterializedView, Role, Schema, Secret, Sink, Source,
-    StorageSinkConnectionState, Table, Type, View,
-};
 pub use crate::catalog::open::BuiltinMigrationMetadata;
 pub use crate::catalog::state::CatalogState;
-use crate::client::ConnectionId;
 use crate::command::CatalogDump;
 use crate::coord::{ConnMeta, TargetCluster};
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
 use crate::util::ResultExt;
 use crate::{AdapterError, AdapterNotice, ExecuteResponse};
+pub use mz_catalog::memory::objects::{
+    CatalogEntry, CatalogItem, Cluster, ClusterConfig, ClusterReplica, ClusterReplicaProcessStatus,
+    ClusterVariant, ClusterVariantManaged, CommentsMap, Connection, DataSourceDesc, Database,
+    DefaultPrivileges, Func, Index, Log, MaterializedView, Role, Schema, Secret, Sink, Source,
+    StorageSinkConnectionState, Table, Type, View,
+};
 
 mod builtin_table_updates;
 mod config;
@@ -106,7 +106,6 @@ mod error;
 mod migrate;
 
 mod inner;
-mod objects;
 mod open;
 mod state;
 
@@ -142,7 +141,7 @@ pub const LINKED_CLUSTER_REPLICA_NAME: &str = "linked";
 pub struct Catalog {
     state: CatalogState,
     plans: CatalogPlans,
-    storage: Arc<tokio::sync::Mutex<Box<dyn mz_catalog::DurableCatalogState>>>,
+    storage: Arc<tokio::sync::Mutex<Box<dyn mz_catalog::durable::DurableCatalogState>>>,
     transient_revision: u64,
 }
 
@@ -455,7 +454,9 @@ impl Catalog {
         debug_stash_factory: &DebugStashFactory,
         now: NowFn,
     ) -> Result<Catalog, anyhow::Error> {
-        let openable_storage = mz_catalog::debug_stash_backed_catalog_state(debug_stash_factory);
+        let openable_storage = Box::new(mz_catalog::durable::debug_stash_backed_catalog_state(
+            debug_stash_factory,
+        ));
         let storage = openable_storage
             .open(now.clone(), &debug_bootstrap_args(), None)
             .await?;
@@ -479,7 +480,9 @@ impl Catalog {
             schema: Some(schema),
             tls,
         };
-        let openable_storage = mz_catalog::stash_backed_catalog_state(stash_config);
+        let openable_storage = Box::new(mz_catalog::durable::stash_backed_catalog_state(
+            stash_config,
+        ));
         let storage = openable_storage
             .open(now.clone(), &debug_bootstrap_args(), None)
             .await?;
@@ -493,7 +496,9 @@ impl Catalog {
         stash_config: StashConfig,
         now: NowFn,
     ) -> Result<Catalog, anyhow::Error> {
-        let openable_storage = mz_catalog::stash_backed_catalog_state(stash_config);
+        let openable_storage = Box::new(mz_catalog::durable::stash_backed_catalog_state(
+            stash_config,
+        ));
         let storage = openable_storage
             .open_read_only(now.clone(), &debug_bootstrap_args())
             .await?;
@@ -501,11 +506,10 @@ impl Catalog {
     }
 
     async fn open_debug_stash_catalog(
-        storage: impl DurableCatalogState + 'static,
+        storage: Box<dyn DurableCatalogState>,
         now: NowFn,
     ) -> Result<Catalog, anyhow::Error> {
         let metrics_registry = &MetricsRegistry::new();
-        let storage = Box::new(storage);
         let active_connection_count = Arc::new(std::sync::Mutex::new(ConnectionCounter::new(0)));
         let secrets_reader = Arc::new(InMemorySecretsController::new());
         let variable_length_row_encoding =
@@ -525,6 +529,7 @@ impl Catalog {
             metrics_registry,
             cluster_replica_sizes: Default::default(),
             default_storage_cluster_size: None,
+            builtin_cluster_replica_size: "1".into(),
             system_parameter_defaults: [(
                 "variable_length_row_encoding".to_string(),
                 variable_length_row_encoding.to_string(),
@@ -602,7 +607,9 @@ impl Catalog {
         Self::for_sessionless_user_state(state, MZ_SYSTEM_ROLE_ID)
     }
 
-    async fn storage<'a>(&'a self) -> MutexGuard<'a, Box<dyn mz_catalog::DurableCatalogState>> {
+    async fn storage<'a>(
+        &'a self,
+    ) -> MutexGuard<'a, Box<dyn mz_catalog::durable::DurableCatalogState>> {
         self.storage.lock().await
     }
 
@@ -650,7 +657,7 @@ impl Catalog {
             .get_timestamps()
             .await?
             .into_iter()
-            .map(|mz_catalog::TimelineTimestamp { timeline, ts }| (timeline, ts))
+            .map(|mz_catalog::durable::TimelineTimestamp { timeline, ts }| (timeline, ts))
             .collect())
     }
 
@@ -989,11 +996,6 @@ impl Catalog {
             .cluster_replica_dependents(cluster_id, replica_id, &mut seen)
     }
 
-    pub(crate) fn item_dependents(&self, item_id: GlobalId) -> Vec<ObjectId> {
-        let mut seen = BTreeSet::new();
-        self.state.item_dependents(item_id, &mut seen)
-    }
-
     /// Gets GlobalIds of temporary items to be created, checks for name collisions
     /// within a connection id.
     fn temporary_ids(
@@ -1066,12 +1068,12 @@ impl Catalog {
 
     pub fn concretize_replica_location(
         &self,
-        location: mz_catalog::ReplicaLocation,
+        location: mz_catalog::durable::ReplicaLocation,
         allowed_sizes: &Vec<String>,
         allowed_availability_zones: Option<&[String]>,
     ) -> Result<ReplicaLocation, AdapterError> {
         let location = match location {
-            mz_catalog::ReplicaLocation::Unmanaged {
+            mz_catalog::durable::ReplicaLocation::Unmanaged {
                 storagectl_addrs,
                 storage_addrs,
                 computectl_addrs,
@@ -1092,7 +1094,7 @@ impl Catalog {
                     workers,
                 })
             }
-            mz_catalog::ReplicaLocation::Managed {
+            mz_catalog::durable::ReplicaLocation::Managed {
                 size,
                 availability_zone,
                 disk,
@@ -2647,13 +2649,18 @@ impl Catalog {
                         ),
                     )?;
                 }
-                Op::RenameCluster { id, name, to_name } => {
+                Op::RenameCluster {
+                    id,
+                    name,
+                    to_name,
+                    check_reserved_names,
+                } => {
                     if id.is_system() {
                         return Err(AdapterError::Catalog(Error::new(
                             ErrorKind::ReadOnlyCluster(name.clone()),
                         )));
                     }
-                    if is_reserved_name(&to_name) {
+                    if check_reserved_names && is_reserved_name(&to_name) {
                         return Err(AdapterError::Catalog(Error::new(
                             ErrorKind::ReservedClusterName(to_name),
                         )));
@@ -2846,12 +2853,28 @@ impl Catalog {
                     database_spec,
                     schema_spec,
                     new_name,
+                    check_reserved_names,
                 } => {
+                    if check_reserved_names && is_reserved_name(&new_name) {
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::ReservedSchemaName(new_name),
+                        )));
+                    }
+
                     let conn_id = session
                         .map(|session| session.conn_id())
                         .unwrap_or(&SYSTEM_CONN_ID);
+
                     let schema = state.get_schema(&database_spec, &schema_spec, conn_id);
                     let cur_name = schema.name().schema.clone();
+
+                    let ResolvedDatabaseSpecifier::Id(database_id) = database_spec else {
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::AmbientSchemaRename(cur_name),
+                        )));
+                    };
+                    let database = state.get_database(&database_id);
+                    let database_name = &database.name;
 
                     let mut updates = Vec::new();
                     let mut already_updated = HashSet::new();
@@ -2867,8 +2890,16 @@ impl Catalog {
                         let mut new_entry = entry.clone();
                         new_entry.item = entry
                             .item
-                            .rename_schema_refs(&cur_name, new_name.clone())
-                            .expect("no failures");
+                            .rename_schema_refs(database_name, &cur_name, &new_name)
+                            .map_err(|(s, _i)| {
+                                Error::new(ErrorKind::from(AmbiguousRename {
+                                    depender: state
+                                        .resolve_full_name(entry.name(), entry.conn_id())
+                                        .to_string(),
+                                    dependee: format!("{database_name}.{cur_name}"),
+                                    message: format!("ambiguous reference to schema named {s}"),
+                                }))
+                            })?;
 
                         // Update the Stash and Builtin Tables.
                         if !new_entry.item().is_temporary() {
@@ -3466,13 +3497,16 @@ impl Catalog {
     ) -> Result<CatalogItem, AdapterError> {
         let mut session_catalog = self.for_system_session();
         // Enable catalog features that might be required during planning in
-        // [Catalog::open]. Existing catalog items might have been created while a
-        // specific feature flag turned on, so we need to ensure that this is also the
-        // case during catalog rehydration in order to avoid panics.
-        // WARNING / CONTRACT: The session catalog with all features enabled should be used
-        // exclusively for parsing and obtaining an mz_sql::plan::Plan. After this step,
-        // feature flag configuration must not be overridden.
-        session_catalog.system_vars_mut().enable_all_feature_flags();
+        // [Catalog::open]. Existing catalog items might have been created while
+        // a specific feature flag was turned on, so we need to ensure that this
+        // is also the case during catalog rehydration in order to avoid panics.
+        //
+        // WARNING / CONTRACT:
+        // 1. Features used in this method that related to parsing / planning
+        //    should be `enable_for_item_parsing` set to `true`.
+        // 2. After this step, feature flag configuration must not be
+        //    overridden.
+        session_catalog.system_vars_mut().enable_for_item_parsing();
 
         let stmt = mz_sql::parse::parse(&create_sql)?.into_element().ast;
         let (stmt, resolved_ids) = mz_sql::names::resolve(&session_catalog, stmt)?;
@@ -3535,7 +3569,7 @@ impl Catalog {
                 let optimizer =
                     Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
                 let raw_expr = view.expr;
-                let decorrelated_expr = raw_expr.optimize_and_lower(&plan::OptimizerConfig {})?;
+                let decorrelated_expr = raw_expr.lower(session_catalog.system_vars())?;
                 let optimized_expr = optimizer.optimize(decorrelated_expr)?;
                 let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
                 CatalogItem::View(View {
@@ -3552,7 +3586,7 @@ impl Catalog {
                 let optimizer =
                     Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
                 let raw_expr = materialized_view.expr;
-                let decorrelated_expr = raw_expr.optimize_and_lower(&plan::OptimizerConfig {})?;
+                let decorrelated_expr = raw_expr.lower(session_catalog.system_vars())?;
                 let optimized_expr = optimizer.optimize(decorrelated_expr)?;
                 let mut typ = optimized_expr.typ();
                 for &i in &materialized_view.non_null_assertions {
@@ -3586,7 +3620,7 @@ impl Catalog {
             }) => CatalogItem::Sink(Sink {
                 create_sql: sink.create_sql,
                 from: sink.from,
-                connection: StorageSinkConnectionState::Pending(sink.connection_builder),
+                connection: sink.connection,
                 envelope: sink.envelope,
                 with_snapshot,
                 resolved_ids,
@@ -3983,6 +4017,7 @@ pub enum Op {
         id: ClusterId,
         name: String,
         to_name: String,
+        check_reserved_names: bool,
     },
     RenameClusterReplica {
         cluster_id: ClusterId,
@@ -3999,6 +4034,7 @@ pub enum Op {
         database_spec: ResolvedDatabaseSpecifier,
         schema_spec: SchemaSpecifier,
         new_name: String,
+        check_reserved_names: bool,
     },
     UpdateOwner {
         id: ObjectId,

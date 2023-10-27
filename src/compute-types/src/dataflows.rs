@@ -643,33 +643,26 @@ impl RustType<ProtoBuildDesc> for BuildDesc<crate::plan::Plan> {
 
 /// Specification of a dataflow operator's yielding behavior.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
-pub enum YieldSpec {
-    ByWork(usize),
-    ByTime(Duration),
+pub struct YieldSpec {
+    /// Yield after the given amount of work was performed.
+    pub after_work: Option<usize>,
+    /// Yield after the given amount of time has elapsed.
+    pub after_time: Option<Duration>,
 }
 
 impl RustType<ProtoYieldSpec> for YieldSpec {
     fn into_proto(&self) -> ProtoYieldSpec {
-        use proto_yield_spec::Kind;
-
-        let kind = match *self {
-            Self::ByWork(w) => Kind::ByWork(w.into_proto()),
-            Self::ByTime(t) => Kind::ByTime(t.into_proto()),
-        };
-        ProtoYieldSpec { kind: Some(kind) }
+        ProtoYieldSpec {
+            after_work: self.after_work.into_proto(),
+            after_time: self.after_time.into_proto(),
+        }
     }
 
     fn from_proto(proto: ProtoYieldSpec) -> Result<Self, TryFromProtoError> {
-        use proto_yield_spec::Kind;
-
-        let Some(kind) = proto.kind else {
-            return Err(TryFromProtoError::missing_field("ProtoYieldSpec::kind"));
-        };
-        let spec = match kind {
-            Kind::ByWork(w) => Self::ByWork(w.into_rust()?),
-            Kind::ByTime(t) => Self::ByTime(t.into_rust()?),
-        };
-        Ok(spec)
+        Ok(Self {
+            after_work: proto.after_work.into_rust()?,
+            after_time: proto.after_time.into_rust()?,
+        })
     }
 }
 

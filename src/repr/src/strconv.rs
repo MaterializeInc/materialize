@@ -1301,7 +1301,7 @@ fn lex_unquoted_element<'a>(
 pub fn parse_map<'a, V, E>(
     s: &'a str,
     is_value_type_map: bool,
-    gen_elem: impl FnMut(Cow<'a, str>) -> Result<V, E>,
+    gen_elem: impl FnMut(Option<Cow<'a, str>>) -> Result<V, E>,
 ) -> Result<BTreeMap<String, V>, ParseError>
 where
     E: ToString,
@@ -1313,7 +1313,7 @@ where
 fn parse_map_inner<'a, V, E>(
     s: &'a str,
     is_value_type_map: bool,
-    mut gen_elem: impl FnMut(Cow<'a, str>) -> Result<V, E>,
+    mut gen_elem: impl FnMut(Option<Cow<'a, str>>) -> Result<V, E>,
 ) -> Result<BTreeMap<String, V>, String>
 where
     E: ToString,
@@ -1388,7 +1388,7 @@ where
             Some(_) => lex_unquoted_element(buf, is_special_char, is_end_of_literal)?,
             None => bail!("unexpected end of input"),
         };
-        let value = gen_value(value.unwrap())?;
+        let value = gen_value(value)?;
 
         // Insert elements.
         map.insert(key, value);
