@@ -183,7 +183,66 @@ ORDER BY elapsed_ns DESC
 From the results of this query we can see that most of the elapsed time of the dataflow is caused by the time it takes to maintain the updates in one of the arrangements of the dataflow of the materialized view.
 
 ## Why is Materialize unresponsive or slow?
+Slow responses can be the result of a number of factors, which we can help you understand and address.
 
+### Indexes
+
+If you haven’t already, consider creating an [index](https://materialize.com/docs/sql/create-index/) for your query. The [optimizations](https://materialize.com/docs/transform-data/optimization/) page in our docs has more advanced guidance on building an efficient index. Indexes maintain a query’s up-to-date results in memory within a [cluster](https://materialize.com/docs/get-started/key-concepts#clusters), which allows future queries to return quickly.
+
+If you’re planning to run a query regularly and expect it to be fast, an index is highly recommended.
+
+Some tips for troubleshooting using an index:
+
+- Start by querying the [EXPLAIN](https://materialize.com/docs/sql/explain/) plan. This will tell you the query plan that Materialize will execute for your query.
+- Once you add an index, re-issue the explain plan to ensure the index was actually used.
+- If you have already created an index, and it’s not showing up in the explain plan, you may be running the query in a different cluster than where the index resides. An index caches the results in memory on the cluster on which you create it. You need to execute your query on that same cluster in order to utilize the index.
+
+If you do not want to use an index, consider the size of the underlying dataset on which you’re querying. Without an index, the query is computed on the fly, so larger data sizes translate to more on-the-fly computation, which can lead to longer latencies.
+
+For more on when to use an index, check out our blog post [When to Use Indexes and Materialized Views](https://materialize.com/blog/views-indexes/).
+
+### Isolation level
+
+Isolation level is a way to specify how you want your query to behave with respect to the other queries, source ingestion, and index & materialize view updates happening at the same time within your Materialize region. All isolation levels at Materialize guarantee you’re getting a consistent snapshot of the data - we provide the effect that all transactions are running in serial order and you will not see partially-committed transaction data.
+
+The default isolation level is Strict Serializable, which ensures that for each query you execute, you will always see results that are at least as fresh as previous runs of the query. You get the most up to date correct result each time. The tradeoff with Strict Serializable is that you may need need to wait for data ingested and updates made at a previous time to propagate through materialized views and indexes before you can run your next query, resulting in your queries being occasionally blocked.
+
+An alternative isolation level is Serializable. With Serializable level, the results are still guaranteed to be correct, but may be from an earlier point in time. As a result, queries do not have to wait for recent updates and data ingestion to propagate, thus reducing the likelihood of your query being blocked. In Serializable, queries that involve a single object should never block.
+
+What you can do: if you...
+
+- care more about latency than freshness, and would prefer to receive fast, stale results \
+AND
+- are ok with queries "traveling back in time" with respect to other queries in order to serve those fast, stale results
+
+then you can switch your isolation level to Serializable.
+
+To change your session's isolation level to Serializable, run
+```
+SET transaction_isolation TO 'SERIALIZABLE';
+```
+Read more about this topic in the Consistency Guarantees docs.
+
+### Transactions
+
+Transactions are a database concept for bundling multiple query steps into a single, all-or-nothing operation. You can read more about them in the [transactions](https://materialize.com/docs/sql/begin) section of our docs.
+
+In Materialize, `BEGIN` starts a transaction block. All statements in a transaction block will be executed in a single transaction until an explicit `COMMIT` or `ROLLBACK` is given. All statements in that transaction happen at the same timestamp.
+
+Because Materialize does not know which objects (sources, indexes, or materialized views) will be queried during the transaction, the objects in the first `SELECT` and any other object in the same schemas are assumed to be possible query targets. As a result, during that first query, a timestamp for the transaction is chosen that is valid for all of the objects in that same schema.
+
+What this means for latency: even in serializable isolation level, some queries made within a transaction may not be able return immediately. For example, if a materialized view is lagging or a source is stalled out, a query on that object in a transaction will block until the object catches up to the current time.
+
+What you can do:
+
+- Avoid using transactions where you don’t need them, if you’re only executing single statements at a time, for example.
+- Double check wither your SQL library or ORM is wrapping all queries in transactions on your behalf, and disable that setting, only using transactions explicitly when you want them.
+
+### Client-side latency
+
+To reduce the roundtrip latency associated with making requests to Materialize, make your requests as physically close to your Materialize region as possible. E.g. if you use the AWS us-east-1 region for Materialize, ideally your client server would also be running in AWS us-east-1. The closer geographically to the region, the lesser the network latency.
+
+### Debugging expensive dataflows and operators
 A large class of problems can be identified by using [`elapsed_time`](#identifying-expensive-operators-in-a-dataflow) to estimate the most expensive dataflows and operators.
 However, `elapsed_time` contains all work since the operator or dataflow was first created.
 Sometimes, a lot of work happens initially when the operator is created, but later on it takes only little continuous effort.
