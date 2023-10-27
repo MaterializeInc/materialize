@@ -254,6 +254,7 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             "value out of range: overflow" in pg_error_msg
             or "value out of range: underflow" in pg_error_msg
             or "timestamp out of range" in pg_error_msg
+            or "integer out of range" in pg_error_msg
         ):
             return YesIgnore("#22265")
 
