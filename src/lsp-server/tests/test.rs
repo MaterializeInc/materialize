@@ -81,11 +81,16 @@ mod tests {
     use mz_lsp_server::backend::DEFAULT_FORMATTING_WIDTH;
     use mz_lsp_server::{PKG_NAME, PKG_VERSION};
     use mz_ore::collections::HashMap;
+    use once_cell::sync::Lazy;
     use serde::{Deserialize, Serialize};
     use serde_json::json;
+    use std::env::temp_dir;
     use std::fmt::Debug;
+    use std::fs;
+    use std::path::PathBuf;
     use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
     use tokio::sync::Mutex;
+    use tower_lsp::jsonrpc::Error;
     use tower_lsp::lsp_types::*;
     use tower_lsp::{lsp_types::InitializeResult, LspService, Server};
 
@@ -100,13 +105,20 @@ mod tests {
     /// This way provides a safe way to handle the types and a simple
     /// way to test the response is the expected.
     #[derive(Debug, Deserialize, PartialEq, Serialize)]
+    #[serde(rename_all = "camelCase")]
     struct LspMessage<T, R> {
         jsonrpc: String,
         method: Option<String>,
         params: Option<T>,
         result: Option<R>,
+        error: Option<Error>,
         id: Option<i32>,
     }
+
+    /// The file path used during the tests is where the SQL code resides.
+    const FILE_PATH: Lazy<PathBuf> = Lazy::new(|| temp_dir().join("foo.sql"));
+    /// The SQL code written inside [FILE_PATH].
+    const FILE_SQL_CONTENT: Lazy<String> = Lazy::new(|| "SELECT \t\t\t200, 200;".to_string());
 
     /// Tests the different capabilities of [Backend](mz_lsp::backend::Backend)
     ///
@@ -121,11 +133,12 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `pipe2` on OS `linux`
     async fn test_lsp() {
+        build_file();
         let (mut req_client, mut resp_client) = start_server();
         test_initialize(&mut req_client, &mut resp_client).await;
         // Test a simple query
         test_query(
-            "SELECT 100;",
+            &FILE_SQL_CONTENT,
             Some(vec![]),
             &mut req_client,
             &mut resp_client,
@@ -134,6 +147,16 @@ mod tests {
         test_formatting(&mut req_client, &mut resp_client).await;
         test_simple_query(&mut req_client, &mut resp_client).await;
         test_jinja_query(&mut req_client, &mut resp_client).await;
+    }
+
+    /// Builds the file containing a simple query
+    fn build_file() {
+        fs::write(FILE_PATH.clone(), FILE_SQL_CONTENT.clone()).unwrap();
+    }
+
+    /// Returns the file path as String.
+    fn get_file_uri() -> String {
+        format!("file://{}", FILE_PATH.clone().display().to_string())
     }
 
     async fn test_jinja_query(req_client: &mut DuplexStream, resp_client: &mut DuplexStream) {
@@ -166,7 +189,7 @@ mod tests {
 
     /// Asserts that the server can parse a single SQL statement `SELECT 100;`.
     async fn test_simple_query(req_client: &mut DuplexStream, resp_client: &mut DuplexStream) {
-        test_query("SELECT 100;", Some(vec![]), req_client, resp_client).await;
+        test_query(&FILE_SQL_CONTENT, Some(vec![]), req_client, resp_client).await;
     }
 
     /// Asserts that the server initialize correctly.
@@ -188,6 +211,7 @@ mod tests {
         }"#;
         let expected_response: Vec<LspMessage<bool, InitializeResult>> = vec![LspMessage {
             jsonrpc: "2.0".to_string(),
+            error: None,
             method: None,
             params: None,
             result: Some(InitializeResult {
@@ -236,13 +260,11 @@ mod tests {
         T: Debug + Deserialize<'de> + PartialEq + ToOwned + Clone,
         R: Debug + Deserialize<'de> + PartialEq + ToOwned + Clone,
     {
-        // println!("Writing message.");
         req_client
             .write_all(req(input_message).as_bytes())
             .await
             .unwrap();
 
-        // println!("Waiting read.");
         let n = resp_client.read(buf).await.unwrap();
         let buf_as = std::str::from_utf8(&buf[..n]).unwrap();
 
@@ -251,38 +273,52 @@ mod tests {
     }
 
     async fn test_formatting(req_client: &mut DuplexStream, resp_client: &mut DuplexStream) {
-        println!("Testing formatting.");
-
-        let formatting_message = json!({
-            "jsonrpc":"2.0".to_string(),
+        let request = format!(
+            r#"{{
+            "jsonrpc":"2.0",
             "id": 2,
-            "method":"textDocument/formatting".to_string(),
-            "params": {
-                "options":  {
-                    "tabSize": 4,
-                    "insertSpaces": true,
-                },
-                "textDocument": {
-                    "uri": "/Users/joaquincolacci/Code/Javascript/cube.js-1/SELECT%2001%3B%3B.sql",
-                },
-            }
-        })
-        .to_string();
+            "method":"textDocument/formatting",
+            "params": {{
+                "options": {{
+                    "tabSize": 1,
+                    "insertSpaces": true
+                }},
+                "textDocument": {{
+                    "uri": "{}"
+                }}
+            }}
+        }}"#,
+            get_file_uri()
+        );
 
-        // TODO: This is not the correct response.
-        let formatting_response: Vec<LspMessage<serde_json::Value, String>> = vec![LspMessage {
-            id: Some(2),
-            method: None,
-            params: None,
-            result: None,
-            jsonrpc: "2.0".to_string(),
-        }];
+        let formatting_response: Vec<LspMessage<serde_json::Value, Vec<TextEdit>>> = vec![
+            LspMessage {
+                jsonrpc: "2.0".to_string(),
+                id: Some(2),
+                method: None,
+                params: None,
+                result: Some(vec![TextEdit {
+                    range: Range {
+                        end: Position {
+                            line: 0,
+                            character: 19,
+                        },
+                        start: Position {
+                            line: 0,
+                            character: 0,
+                        },
+                    },
+                    new_text: "SELECT 200, 200;".to_string(),
+                }]),
+                error: None,
+            },
+        ];
 
         write_and_assert(
             req_client,
             resp_client,
             &mut [0; 1024],
-            &formatting_message,
+            &request,
             formatting_response,
         )
         .await;
@@ -353,7 +389,6 @@ mod tests {
     /// Returns the two clients to send and read request to and from the
     /// server.
     fn start_server() -> (tokio::io::DuplexStream, tokio::io::DuplexStream) {
-        println!("Starting server");
         let (req_client, req_server) = tokio::io::duplex(1024);
         let (resp_server, resp_client) = tokio::io::duplex(1024);
 
@@ -385,6 +420,7 @@ mod tests {
                 message: message.to_string(),
                 typ: MessageType::INFO
             }))),
+            error: None,
             result: None,
             id: None,
         }
@@ -400,7 +436,7 @@ mod tests {
             "method": "textDocument/didOpen",
             "params": {
                 "textDocument": {
-                    "uri": "file:///foo.rs",
+                    "uri": get_file_uri(),
                     "languageId": "sql",
                     "version": 1,
                     "text": sql
@@ -411,9 +447,10 @@ mod tests {
 
         let mut did_open_response: Vec<LspMessage<serde_json::Value, String>> = vec![
             build_log_message("file opened!"),
-            build_log_message(
-                r#"on_change Url { scheme: "file", cannot_be_a_base: false, username: "", password: None, host: None, port: None, path: "/foo.rs", query: None, fragment: None }"#,
-            ),
+            build_log_message(&format!(
+                r#"on_change Url {{ scheme: "file", cannot_be_a_base: false, username: "", password: None, host: None, port: None, path: {:?}, query: None, fragment: None }}"#,
+                FILE_PATH.clone().display()
+            )),
         ];
 
         if let Some(diagnostics) = diagnostics {
@@ -421,10 +458,11 @@ mod tests {
                 jsonrpc: "2.0".to_string(),
                 method: Some("textDocument/publishDiagnostics".to_string()),
                 params: Some(json!(json!(PublishDiagnosticsParams {
-                    uri: "file:///foo.rs".parse().unwrap(),
+                    uri: get_file_uri().parse().unwrap(),
                     diagnostics,
                     version: Some(1),
                 }))),
+                error: None,
                 result: None,
                 id: None,
             });

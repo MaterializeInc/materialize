@@ -30,7 +30,7 @@ use tower_lsp::{Client, LanguageServer};
 use crate::{PKG_NAME, PKG_VERSION};
 
 /// Default formatting width to use in the [Backend::formatting] implementation.
-pub const DEFAULT_FORMATTING_WIDTH: usize = 60;
+pub const DEFAULT_FORMATTING_WIDTH: usize = 100;
 
 /// This is a re-implemention of [mz_sql_parser::parser::StatementParseResult]
 /// but replacing the sql code with a rope.
@@ -249,16 +249,10 @@ impl LanguageServer for Backend {
     ///
     /// Implements the [`textDocument/formatting`](https://microsoft.github.io/language-server-protocol/specification#textDocument_formatting) language feature.
     async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
-        self.client
-            .log_message(MessageType::INFO, format!("Formatting: {:?}", params))
-            .await;
-
         let locked_map = self.parse_results.lock().await;
         let width = self.formatting_width.lock().await;
 
-        let Some(parse_result) = locked_map.get(&params.text_document.uri) else {
-            return Ok(None);
-        }
+        if let Some(parse_result) = locked_map.get(&params.text_document.uri) {
             let pretty = parse_result
                 .asts
                 .iter()
@@ -275,6 +269,9 @@ impl LanguageServer for Backend {
                     end: offset_to_position(rope.len_chars(), rope).unwrap(),
                 },
             }]));
+        } else {
+            return Ok(None);
+        }
     }
 }
 
