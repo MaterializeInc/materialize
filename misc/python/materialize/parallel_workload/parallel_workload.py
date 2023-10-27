@@ -103,27 +103,18 @@ def run(
             f"ALTER SYSTEM SET max_replicas_per_cluster = {MAX_CLUSTER_REPLICAS * 2}"
         )
         # Most queries should not fail because of privileges
-        system_exe.execute(
-            "ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL PRIVILEGES ON TABLES TO PUBLIC"
-        )
-        system_exe.execute(
-            "ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL PRIVILEGES ON TYPES TO PUBLIC"
-        )
-        system_exe.execute(
-            "ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL PRIVILEGES ON SECRETS TO PUBLIC"
-        )
-        system_exe.execute(
-            "ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL PRIVILEGES ON CONNECTIONS TO PUBLIC"
-        )
-        system_exe.execute(
-            "ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL PRIVILEGES ON DATABASES TO PUBLIC"
-        )
-        system_exe.execute(
-            "ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL PRIVILEGES ON SCHEMAS TO PUBLIC"
-        )
-        system_exe.execute(
-            "ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL PRIVILEGES ON CLUSTERS TO PUBLIC"
-        )
+        for object_type in [
+            "TABLES",
+            "TYPES",
+            "SECRETS",
+            "CONNECTIONS",
+            "DATABASES",
+            "SCHEMAS",
+            "CLUSTERS",
+        ]:
+            system_exe.execute(
+                f"ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL PRIVILEGES ON {object_type} TO PUBLIC"
+            )
         system_conn.close()
         conn = pg8000.connect(
             host=host,
