@@ -9,7 +9,8 @@
 
 //! Interfaces for reading txn shards as well as data shards.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, BinaryHeap, VecDeque};
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -17,7 +18,6 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use mz_ore::collections::HashMap;
-use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::read::{ListenEvent, ReadHandle, Since, Subscribe};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
@@ -70,6 +70,8 @@ use crate::{TxnsCodec, TxnsCodecDefault, TxnsEntry};
 #[derive(Debug)]
 pub struct TxnsCache<T: Timestamp + Lattice + Codec64, C: TxnsCodec = TxnsCodecDefault> {
     txns_id: ShardId,
+    // Invariant: <= the minimum unapplied batch.
+    since_ts: T,
     pub(crate) progress_exclusive: T,
     txns_subscribe: Subscribe<C::Key, C::Val, T, i64>,
 
@@ -80,11 +82,15 @@ pub struct TxnsCache<T: Timestamp + Lattice + Codec64, C: TxnsCodec = TxnsCodecD
     /// timestamps are not unique.
     ///
     /// Invariant: Values are sorted by timestamp.
-    unapplied_batches: BTreeMap<usize, (ShardId, Vec<u8>, T)>,
+    pub(crate) unapplied_batches: BTreeMap<usize, (ShardId, Vec<u8>, T)>,
     /// An index into `unapplied_batches` keyed by the serialized batch.
     batch_idx: HashMap<Vec<u8>, usize>,
     /// The times at which each data shard has been written.
     pub(crate) datas: BTreeMap<ShardId, DataTimes<T>>,
+
+    /// Invariant: Contains the minimum write time (if any) for each value in
+    /// `self.datas`.
+    datas_min_write_ts: BinaryHeap<Reverse<(T, ShardId)>>,
 }
 
 impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> TxnsCache<T, C> {
@@ -122,22 +128,23 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
     }
 
     pub(crate) async fn from_read(txns_read: ReadHandle<C::Key, C::Val, T, i64>) -> Self {
-        // TODO(txn): Figure out the compaction story. This might require
-        // sorting inserts before retractions within each timestamp.
         let txns_id = txns_read.shard_id();
         let as_of = txns_read.since().clone();
+        let since_ts = as_of.as_option().expect("txns shard is not closed").clone();
         let subscribe = txns_read
             .subscribe(as_of)
             .await
             .expect("handle holds a capability");
         TxnsCache {
             txns_id,
+            since_ts,
             progress_exclusive: T::minimum(),
             txns_subscribe: subscribe,
             next_batch_id: 0,
             unapplied_batches: BTreeMap::new(),
             batch_idx: HashMap::new(),
             datas: BTreeMap::new(),
+            datas_min_write_ts: BinaryHeap::new(),
         }
     }
 
@@ -230,6 +237,9 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
             data_times,
         );
 
+        if ts < self.since_ts {
+            return CompactedTo(self.since_ts.clone());
+        }
         let Some(data_times) = data_times else {
             // Not registered, maybe it will be in the future? In the meantime,
             // treat it like a normal shard (i.e. pass through reads) and check
@@ -309,6 +319,30 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
     ) -> impl Iterator<Item = (&'a Vec<u8>, &'a ShardId)> {
         assert!(&self.progress_exclusive >= expected_txns_upper);
         retractions.filter(|(batch_raw, _)| self.batch_idx.contains_key(*batch_raw))
+    }
+
+    /// Allows compaction to internal representations, losing the ability to
+    /// answer queries about times less_than since_ts.
+    ///
+    /// To ensure that this is not `O(data shard)`, we update them lazily as
+    /// they are touched in self.update.
+    ///
+    /// Callers must first wait for `update_ge` with the same or later timestamp
+    /// to return. Panics otherwise.
+    pub fn compact_to(&mut self, since_ts: &T) {
+        // Make things easier on ourselves by allowing update to work on
+        // un-compacted data.
+        assert!(&self.progress_exclusive >= since_ts);
+
+        // NB: This intentionally does not compact self.unapplied_batches,
+        // because we aren't allowed to alter those timestamps. This is fine
+        // because it and self.batch_idx are self-compacting, anyway.
+        if &self.since_ts < since_ts {
+            self.since_ts.clone_from(since_ts);
+        } else {
+            return;
+        }
+        self.compact_data_times()
     }
 
     /// Invariant: afterward, self.progress_exclusive will be > ts
@@ -424,11 +458,12 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
                 .unapplied_batches
                 .insert(idx, (data_id, batch, ts.clone()));
             assert_eq!(prev, None);
-            self.datas
-                .get_mut(&data_id)
-                .expect("data is initialized")
-                .writes
-                .push_back(ts);
+            let times = self.datas.get_mut(&data_id).expect("data is initialized");
+            if times.writes.is_empty() {
+                self.datas_min_write_ts.push(Reverse((ts.clone(), data_id)));
+            }
+            times.writes.push_back(ts);
+            self.compact_data_times();
         } else if diff == -1 {
             debug!(
                 "cache learned {:.9} applied t={:?} b={}",
@@ -451,6 +486,87 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
         } else {
             unreachable!("only +1/-1 diffs are used");
         }
+    }
+
+    fn compact_data_times(&mut self) {
+        debug!(
+            "cache compact since={:?} min_writes={:?}",
+            self.since_ts, self.datas_min_write_ts
+        );
+        loop {
+            // Repeatedly grab the data shard with the minimum write_ts while it
+            // (the minimum since_ts) is less_than the since_ts. If that results
+            // in no registration and no writes, forget about the data shard
+            // entirely, so it doesn't sit around in the map forever. This will
+            // eventually finish because each data shard we compact will not
+            // meet the compaction criteria if we see it again.
+            //
+            // NB: This intentionally doesn't compact the registration
+            // timestamps if none of the writes need to be compacted, so that
+            // compaction isn't `O(compact calls * data shards)`.
+            let data_id = match self.datas_min_write_ts.peek() {
+                Some(Reverse((ts, _))) if ts < &self.since_ts => {
+                    let Reverse((_, data_id)) = self.datas_min_write_ts.pop().expect("just peeked");
+                    data_id
+                }
+                Some(_) | None => break,
+            };
+            let times = self
+                .datas
+                .get_mut(&data_id)
+                .expect("datas_min_write_ts should be an index into datas");
+            debug!(
+                "cache compact {:.9} since={:?} times={:?}",
+                data_id.to_string(),
+                self.since_ts,
+                times
+            );
+
+            // Advance the registration times.
+            while let Some(x) = times.registered.front_mut() {
+                if x.register_ts < self.since_ts {
+                    x.register_ts.clone_from(&self.since_ts);
+                }
+                if let Some(forget_ts) = x.forget_ts.as_ref() {
+                    if forget_ts < &self.since_ts {
+                        times.registered.pop_front();
+                        continue;
+                    }
+                }
+                break;
+            }
+
+            // Pop any write times before since_ts. We can stop as soon
+            // as something is >=.
+            while let Some(write_ts) = times.writes.front() {
+                if write_ts < &self.since_ts {
+                    times.writes.pop_front();
+                } else {
+                    break;
+                }
+            }
+
+            // Now re-insert it into datas_min_write_ts if non-empty.
+            if let Some(ts) = times.writes.front() {
+                self.datas_min_write_ts.push(Reverse((ts.clone(), data_id)));
+            }
+
+            if times.registered.is_empty() {
+                assert!(times.writes.is_empty());
+                self.datas.remove(&data_id);
+            }
+            debug!(
+                "cache compact {:.9} DONE since={:?} times={:?}",
+                data_id.to_string(),
+                self.since_ts,
+                self.datas.get(&data_id),
+            );
+        }
+        debug!(
+            "cache compact DONE since={:?} min_writes={:?}",
+            self.since_ts, self.datas_min_write_ts
+        );
+        debug_assert_eq!(self.validate(), Ok(()));
     }
 
     pub(crate) fn validate(&self) -> Result<(), String> {
@@ -480,8 +596,29 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
             prev_ts = ts.clone();
         }
 
-        for (_, data_times) in self.datas.iter() {
-            let () = data_times.validate()?;
+        for (data_id, data_times) in self.datas.iter() {
+            let () = data_times.validate(&self.since_ts)?;
+
+            if let Some(ts) = data_times.writes.front() {
+                assert!(&self.since_ts <= ts);
+                // Oof, bummer to do this iteration.
+                assert!(
+                    self.datas_min_write_ts
+                        .iter()
+                        .any(|Reverse((t, d))| t == ts && d == data_id),
+                    "{:?} {:?} missing from {:?}",
+                    data_id,
+                    ts,
+                    self.datas_min_write_ts
+                );
+            }
+        }
+
+        for Reverse((ts, data_id)) in self.datas_min_write_ts.iter() {
+            assert_eq!(
+                self.datas.get(data_id).unwrap().writes.front().as_ref(),
+                Some(&ts)
+            );
         }
 
         Ok(())
@@ -500,6 +637,8 @@ pub(crate) struct DataTimes<T> {
     /// - Everything in writes is in one of these intervals.
     pub(crate) registered: VecDeque<DataRegistered<T>>,
     /// Invariant: These are in increasing order.
+    ///
+    /// Invariant: Each of these is >= self.since_ts.
     pub(crate) writes: VecDeque<T>,
 }
 
@@ -535,7 +674,7 @@ impl<T: Timestamp + TotalOrder> DataTimes<T> {
         self.registered.back().expect("at least one registration")
     }
 
-    pub(crate) fn validate(&self) -> Result<(), String> {
+    pub(crate) fn validate(&self, since_ts: &T) -> Result<(), String> {
         // Writes are sorted
         let mut prev_ts = T::minimum();
         for ts in self.writes.iter() {
@@ -543,6 +682,12 @@ impl<T: Timestamp + TotalOrder> DataTimes<T> {
                 return Err(format!(
                     "write ts {:?} out of order after {:?}",
                     ts, prev_ts
+                ));
+            }
+            if ts < since_ts {
+                return Err(format!(
+                    "write ts {:?} not advanced past since ts {:?}",
+                    ts, since_ts
                 ));
             }
             prev_ts = ts.clone();
@@ -559,9 +704,9 @@ impl<T: Timestamp + TotalOrder> DataTimes<T> {
                 ));
             }
             if let Some(forget_ts) = x.forget_ts.as_ref() {
-                if !(&x.register_ts < forget_ts) {
+                if !(&x.register_ts <= forget_ts) {
                     return Err(format!(
-                        "register ts {:?} not less than forget ts {:?}",
+                        "register ts {:?} not less_equal forget ts {:?}",
                         x.register_ts, forget_ts
                     ));
                 }
@@ -622,8 +767,16 @@ pub struct DataSnapshot<T> {
 impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
     /// Unblocks reading a snapshot at `self.as_of` by waiting for the latest
     /// write before that time and then running an empty CaA if necessary.
+    ///
+    /// Returns a frontier that is greater than the as_of and less_equal the
+    /// physical upper of the data shard. This is suitable for use as an initial
+    /// input to `TxnsCache::data_listen_next` (after reading up to it, of
+    /// course).
     #[instrument(level = "debug", skip_all, fields(shard = %self.data_id, ts = ?self.as_of))]
-    pub(crate) async fn unblock_read<K, V, D>(&self, mut data_write: WriteHandle<K, V, T, D>)
+    pub(crate) async fn unblock_read<K, V, D>(
+        &self,
+        mut data_write: WriteHandle<K, V, T, D>,
+    ) -> Antichain<T>
     where
         K: Debug + Codec,
         V: Debug + Codec,
@@ -643,13 +796,8 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
         }
 
         // Now fill `(latest_write,as_of]` with empty updates, so we can read
-        // the shard at as_of normally.
-        //
-        // In practice, because CaA takes an exclusive upper, we actually fill
-        // `(latest_write, empty_to)`. It is an invariant of DataSnapshot that
-        // this range is empty and that as_of is "in the middle". We really only
-        // care about as_of being readable, so exit the loop as soon as this is
-        // the case, even if the upper is not empty_to.
+        // the shard at as_of normally. In practice, because CaA takes an
+        // exclusive upper, we actually fill `(latest_write, empty_to)`.
         //
         // It's quite counter-intuitive for reads to involve writes, but I think
         // this is fine. In particular, because writing empty updates to a
@@ -660,68 +808,44 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
         // timestamps to the most recent write and reading that.
         let Some(mut data_upper) = data_write.shared_upper().into_option() else {
             // If the upper is the empty antichain, then we've unblocked all
-            // possible reads.
+            // possible reads. Return early.
             debug!(
                 "CaA data snapshot {:.9} shard finalized",
                 self.data_id.to_string(),
             );
-            return;
+            return Antichain::new();
         };
-        while data_upper <= self.as_of {
+        while data_upper < self.empty_to {
             // It would be very bad if we accidentally filled any times <=
             // latest_write with empty updates, so defensively assert on each
             // iteration through the loop.
             if let Some(latest_write) = self.latest_write.as_ref() {
                 assert!(latest_write < &data_upper);
             }
-            debug!(
-                "CaA data snapshot {:.9} [{:?},{:?})",
-                self.data_id.to_string(),
-                data_upper,
-                self.empty_to,
-            );
-            if let Some(latest_write) = self.latest_write.as_ref() {
-                assert!(latest_write <= &self.as_of);
-            }
             assert!(self.as_of < self.empty_to);
-            let res = data_write
-                .compare_and_append_batch(
-                    &mut [],
-                    Antichain::from_elem(data_upper.clone()),
-                    Antichain::from_elem(self.empty_to.clone()),
-                )
-                .await
-                .expect("usage was valid");
+            let res = crate::small_caa(
+                || format!("data {:.9} unblock reads", self.data_id.to_string()),
+                &mut data_write,
+                &[],
+                data_upper.clone(),
+                self.empty_to.clone(),
+            )
+            .await;
             match res {
                 Ok(()) => {
-                    debug!(
-                        "CaA data snapshot {:.9} [{:?},{:?}) success",
-                        self.data_id.to_string(),
-                        data_upper,
-                        self.empty_to,
-                    );
-                    // Persist registers writes on the first write, so politely
+                    // Persist registers writers on the first write, so politely
                     // expire the writer we just created, but (as a performance
                     // optimization) only if we actually wrote something.
                     data_write.expire().await;
                     break;
                 }
-                Err(UpperMismatch { current, .. }) => {
-                    let current = current
-                        .into_option()
-                        .expect("txns shard should not be closed");
-                    debug!(
-                        "CaA data snapshot {:.9} [{:?},{:?}) mismatch actual={:?}",
-                        self.data_id.to_string(),
-                        data_upper,
-                        self.empty_to,
-                        current,
-                    );
-                    data_upper = current;
+                Err(new_data_upper) => {
+                    data_upper = new_data_upper;
                     continue;
                 }
             }
         }
+        Antichain::from_elem(self.empty_to.clone())
     }
 
     /// See [ReadHandle::snapshot_and_fetch].
@@ -779,6 +903,9 @@ pub enum DataListenNext<T> {
     /// shard. Wait for it to progress with `update_gt` and call
     /// `data_listen_next` again.
     WaitForTxnsProgress,
+    /// We've lost historical distinctions and can no longer answer queries
+    /// about times before the returned one.
+    CompactedTo(T),
 }
 
 #[cfg(test)]
@@ -799,6 +926,7 @@ mod tests {
         ) -> Self {
             let mut ret = TxnsCache::open(&txns.datas.client, txns.txns_id()).await;
             ret.update_gt(&init_ts).await;
+            ret.compact_to(&init_ts);
             ret
         }
 
@@ -836,6 +964,8 @@ mod tests {
         }
     }
 
+    // TODO(txn): Rewrite this test to exercise more edge cases, something like:
+    // registrations at `[2,4], [8,9]` and writes at 1, 3, 6, 10, 12.
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // too slow
     async fn data_snapshot() {
@@ -901,6 +1031,8 @@ mod tests {
         assert_eq!(cache.data_snapshot(d0, 6), ds(d0, Some(6), 6, 8));
     }
 
+    // TODO(txn): Rewrite this test to exercise more edge cases, something like:
+    // registrations at `[2,4], [8,9]` and writes at 1, 3, 6, 10, 12.
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // too slow
     async fn txns_cache_data_listen_next() {
@@ -1013,7 +1145,8 @@ mod tests {
                 })
             }
             dt.writes = write_ts.into_iter().cloned().collect();
-            dt.validate().map_err(|_| ())
+            let since_ts = u64::minimum();
+            dt.validate(&since_ts).map_err(|_| ())
         }
 
         // Valid
@@ -1021,6 +1154,7 @@ mod tests {
         assert_eq!(dt(&[1, 3], &[2]), Ok(()));
         assert_eq!(dt(&[1, 3, 5], &[2, 6, 7]), Ok(()));
         assert_eq!(dt(&[1, 3, 5], &[2, 6, 7]), Ok(()));
+        assert_eq!(dt(&[1, 1], &[1]), Ok(()));
 
         // Invalid
         assert_eq!(dt(&[], &[]), Err(()));

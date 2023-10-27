@@ -106,7 +106,6 @@ where
 {
     pub(crate) txns_cache: TxnsCache<T, C>,
     pub(crate) txns_write: WriteHandle<C::Key, C::Val, T, i64>,
-    #[allow(dead_code)] // TODO(txn): Becomes used in the txns compaction PR.
     pub(crate) txns_since: SinceHandle<C::Key, C::Val, T, i64, O>,
     pub(crate) datas: DataHandles<K, V, T, D>,
 }
@@ -242,8 +241,6 @@ where
                 })
                 .collect::<Vec<_>>();
             // If the txns_upper has passed register_ts, we can no longer write.
-            // Return success if we have nothing left to write or an Error if we
-            // do.
             if register_ts < txns_upper {
                 debug!(
                     "txns register {} at {:?} mismatch current={:?}",
@@ -323,8 +320,6 @@ where
             };
 
             // If the txns_upper has passed forget_ts, we can no longer write.
-            // Return success if we have nothing left to write or an Error if we
-            // do.
             if forget_ts < txns_upper {
                 debug!(
                     "txns forget {:.9} at {:?} mismatch current={:?}",
@@ -337,8 +332,23 @@ where
 
             // Ensure the latest write has been applied, so we don't run into
             // any issues trying to apply it later.
-            let data_times = self.txns_cache.datas.get(&data_id);
-            if let Some(latest_write) = data_times.and_then(|x| x.writes.back()) {
+            //
+            // NB: It's _very_ important for correctness to get this from the
+            // unapplied batches (which compact themselves naturally) and not
+            // from the writes (which are artificially compacted based on when
+            // we need reads for).
+            let data_latest_unapplied = self
+                .txns_cache
+                .unapplied_batches
+                .values()
+                .rev()
+                .find(|(x, _, _)| x == &data_id);
+            if let Some((_, _, latest_write)) = data_latest_unapplied {
+                debug!(
+                    "txns forget {:.9} applying latest write {:?}",
+                    data_id.to_string(),
+                    latest_write,
+                );
                 let latest_write = latest_write.clone();
                 let _tidy = self.apply_le(&latest_write).await;
             }
@@ -372,7 +382,7 @@ where
         // won't get around to telling the caller that it's safe to use this
         // shard directly again. Presumably it will retry at some point.
         let () = crate::empty_caa(
-            || format!("txns forget fill {:.9}", data_id.to_string()),
+            || format!("txns {:.9} forget fill", data_id.to_string()),
             self.datas.get_write(&data_id).await,
             forget_ts,
         )
@@ -455,6 +465,33 @@ where
 
         debug!("tidy at {:?} success", tidy_ts);
         Ok(())
+    }
+
+    /// Allows compaction to the txns shard as well as internal representations,
+    /// losing the ability to answer queries about times less_than since_ts.
+    ///
+    /// In practice, this will likely only be called from the singleton
+    /// controller process.
+    pub async fn compact_to(&mut self, mut since_ts: T) {
+        tracing::debug!("compact_to {:?}", since_ts);
+        // This call to compact the cache only affects the write and
+        // registration times, not the unapplied batches. The unapplied batches
+        // have a very important correctness invariant to hold, are
+        // self-compacting as batches are applied, and are handled below. This
+        // means it's always safe to compact the cache past where the txns shard
+        // is physically compacted to, so do that regardless of min_unapplied_ts
+        // and of whether the maybe_downgrade goes through.
+        self.txns_cache.update_gt(&since_ts).await;
+        self.txns_cache.compact_to(&since_ts);
+
+        // NB: A critical invariant for how this all works is that we never
+        // allow the since of the txns shard to pass any unapplied writes, so
+        // reduce it as necessary.
+        let min_unapplied_ts = self.txns_cache.min_unapplied_ts();
+        if min_unapplied_ts < &since_ts {
+            since_ts.clone_from(min_unapplied_ts);
+        }
+        crate::maybe_cads::<T, O, C>(&mut self.txns_since, since_ts).await;
     }
 
     /// Returns the [ShardId] of the txns shard.
@@ -544,12 +581,13 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::time::UNIX_EPOCH;
+    use std::time::{Duration, UNIX_EPOCH};
 
     use differential_dataflow::Hashable;
     use futures::future::BoxFuture;
     use mz_ore::cast::CastFrom;
     use mz_persist_client::cache::PersistClientCache;
+    use mz_persist_client::cfg::{PersistParameters, RetryParameters};
     use mz_persist_client::PersistLocation;
     use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
     use rand::rngs::SmallRng;
@@ -559,7 +597,7 @@ mod tests {
     use tracing::{info, info_span, Instrument};
 
     use crate::operator::DataSubscribe;
-    use crate::tests::{reader, writer, CommitLog};
+    use crate::tests::{reader, write_directly, writer, CommitLog};
 
     use super::*;
 
@@ -741,28 +779,6 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // too slow
     async fn register_forget() {
-        async fn write_directly(
-            data_write: &mut WriteHandle<String, (), u64, i64>,
-            key: &str,
-            ts: u64,
-            log: &CommitLog,
-        ) {
-            let updates = [((key.to_owned(), ()), ts, 1)];
-            let mut current = data_write.shared_upper();
-            loop {
-                let res = data_write
-                    .compare_and_append(&updates, current, Antichain::from_elem(ts + 1))
-                    .await
-                    .unwrap();
-                match res {
-                    Ok(()) => {
-                        log.record((data_write.shard_id(), key.to_owned(), ts, 1));
-                        return;
-                    }
-                    Err(err) => current = err.current,
-                }
-            }
-        }
         async fn step_some_past(subs: &mut Vec<DataSubscribe>, ts: u64) {
             for (idx, sub) in subs.iter_mut().enumerate() {
                 // Only step some of them to try to maximize edge cases.
@@ -798,8 +814,12 @@ mod tests {
             info!("{} direct", ts);
             subs.push(txns.read_cache().expect_subscribe(&client, d0, ts));
             ts += 1;
-            write_directly(&mut d0_write, &format!("d{}", ts), ts, &log).await;
+            write_directly(ts, &mut d0_write, &[&format!("d{}", ts)], &log).await;
             step_some_past(&mut subs, ts).await;
+            if ts % 11 == 0 {
+                // ts - 1 because we just wrote directly, which doesn't advance txns
+                txns.compact_to(ts - 1).await;
+            }
 
             info!("{} register", ts);
             subs.push(txns.read_cache().expect_subscribe(&client, d0, ts));
@@ -808,6 +828,9 @@ mod tests {
                 .await
                 .unwrap();
             step_some_past(&mut subs, ts).await;
+            if ts % 11 == 0 {
+                txns.compact_to(ts).await;
+            }
 
             info!("{} txns", ts);
             subs.push(txns.read_cache().expect_subscribe(&client, d0, ts));
@@ -815,12 +838,18 @@ mod tests {
             txns.expect_commit_at(ts, d0, &[&format!("t{}", ts)], &log)
                 .await;
             step_some_past(&mut subs, ts).await;
+            if ts % 11 == 0 {
+                txns.compact_to(ts).await;
+            }
 
             info!("{} forget", ts);
             subs.push(txns.read_cache().expect_subscribe(&client, d0, ts));
             ts += 1;
             txns.forget(ts, d0).await.unwrap();
             step_some_past(&mut subs, ts).await;
+            if ts % 11 == 0 {
+                txns.compact_to(ts).await;
+            }
         }
 
         // Check all the subscribes.
@@ -902,19 +931,27 @@ mod tests {
 
     impl StressWorker {
         pub async fn step(&mut self) {
-            debug!("{} step {} START ts={}", self.idx, self.step, self.ts);
+            debug!(
+                "stress {} step {} START ts={}",
+                self.idx, self.step, self.ts
+            );
             let data_id =
                 self.data_ids[usize::cast_from(self.rng.next_u64()) % self.data_ids.len()];
-            match self.rng.next_u64() % 4 {
+            match self.rng.next_u64() % 5 {
                 0 => self.write(data_id).await,
                 // The register and forget impls intentionally don't switch on
                 // whether it's already registered to stress idempotence.
                 1 => self.register(data_id).await,
                 2 => self.forget(data_id).await,
-                3 => self.start_read(data_id),
+                3 => {
+                    debug!("stress compact {:.9} to {}", data_id.to_string(), self.ts);
+                    self.txns.txns_cache.update_ge(&self.ts).await;
+                    self.txns.txns_cache.compact_to(&self.ts)
+                }
+                4 => self.start_read(data_id),
                 _ => unreachable!(""),
             }
-            debug!("{} step {} DONE ts={}", self.idx, self.step, self.ts);
+            debug!("stress {} step {} DONE ts={}", self.idx, self.step, self.ts);
             self.step += 1;
         }
 
@@ -946,7 +983,11 @@ mod tests {
         }
 
         async fn write_via_txns(&mut self, data_id: ShardId) -> Result<(), u64> {
-            debug!("write_via_txns {:.9} at {}", data_id.to_string(), self.ts);
+            debug!(
+                "stress write_via_txns {:.9} at {}",
+                data_id.to_string(),
+                self.ts
+            );
             let mut txn = self.txns.begin();
             txn.tidy(std::mem::take(&mut self.tidy));
             txn.write(&data_id, self.key(), (), 1).await;
@@ -965,37 +1006,45 @@ mod tests {
         }
 
         async fn write_direct(&mut self, data_id: ShardId) -> Result<(), u64> {
-            debug!("write_direct {:.9} at {}", data_id.to_string(), self.ts);
+            debug!(
+                "stress write_direct {:.9} at {}",
+                data_id.to_string(),
+                self.ts
+            );
             // First write an empty txn to ensure that the shard isn't
             // registered at this ts by someone else.
             self.txns.begin().commit_at(&mut self.txns, self.ts).await?;
 
             let mut write = writer(&self.txns.datas.client, data_id).await;
-            let mut current = write.shared_upper();
+            let mut current = write.shared_upper().into_option().unwrap();
             loop {
-                if !current.less_equal(&self.ts) {
-                    return Err(current.into_option().unwrap());
+                if !(current <= self.ts) {
+                    return Err(current);
                 }
                 let key = self.key();
-                let updates = [((key.clone(), ()), self.ts, 1)];
-                let res = write
-                    .compare_and_append(&updates, current, Antichain::from_elem(self.ts + 1))
-                    .await
-                    .unwrap();
+                let updates = [((&key, &()), &self.ts, 1)];
+                let res = crate::small_caa(
+                    || format!("data {:.9} direct", data_id.to_string()),
+                    &mut write,
+                    &updates,
+                    current,
+                    self.ts + 1,
+                )
+                .await;
                 match res {
                     Ok(()) => {
                         debug!("log {:.9} {} at {}", data_id.to_string(), key, self.ts);
                         self.log.record((data_id, key, self.ts, 1));
                         return Ok(());
                     }
-                    Err(err) => current = err.current,
+                    Err(new_current) => current = new_current,
                 }
             }
         }
 
         async fn register(&mut self, data_id: ShardId) {
             self.retry_ts_err(&mut |w: &mut StressWorker| {
-                debug!("register {:.9} at {}", data_id.to_string(), w.ts);
+                debug!("stress register {:.9} at {}", data_id.to_string(), w.ts);
                 Box::pin(async move {
                     let data_write = writer(&w.txns.datas.client, data_id).await;
                     let _ = w.txns.register(w.ts, [data_write]).await?;
@@ -1007,14 +1056,18 @@ mod tests {
 
         async fn forget(&mut self, data_id: ShardId) {
             self.retry_ts_err(&mut |w: &mut StressWorker| {
-                debug!("forget {:.9} at {}", data_id.to_string(), w.ts);
+                debug!("stress forget {:.9} at {}", data_id.to_string(), w.ts);
                 Box::pin(async move { w.txns.forget(w.ts, data_id).await })
             })
             .await
         }
 
         fn start_read(&mut self, data_id: ShardId) {
-            debug!("start_read {:.9} at {}", data_id.to_string(), self.ts);
+            debug!(
+                "stress start_read {:.9} at {}",
+                data_id.to_string(),
+                self.ts
+            );
             let client = self.txns.datas.client.clone();
             let txns_id = self.txns.txns_id();
             let as_of = self.ts;
@@ -1070,6 +1123,17 @@ mod tests {
         eprintln!("using seed {}", seed);
 
         let mut clients = PersistClientCache::new_no_metrics();
+        // We disable pubsub below, so retune the listen retries (pubsub
+        // fallback) to keep the test speedy.
+        PersistParameters {
+            next_listen_batch_retryer: Some(RetryParameters {
+                initial_backoff: Duration::from_millis(1),
+                multiplier: 1,
+                clamp: Duration::from_millis(1),
+            }),
+            ..Default::default()
+        }
+        .apply(clients.cfg());
         let client = clients.open(PersistLocation::new_in_mem()).await.unwrap();
         let mut txns = TxnsHandle::expect_open(client.clone()).await;
         let log = txns.new_log();
@@ -1103,7 +1167,7 @@ mod tests {
                 txns: TxnsHandle::expect_open_id(client.clone(), txns.txns_id()).await,
                 data_ids: data_ids.clone(),
                 tidy: Tidy::default(),
-                ts: register_ts + 1,
+                ts: register_ts,
                 step: 0,
                 rng: SmallRng::seed_from_u64(seed.wrapping_add(u64::cast_from(idx))),
                 reads: Vec::new(),
@@ -1126,16 +1190,24 @@ mod tests {
             reads.append(&mut r);
         }
 
-        info!("finished with max_ts of {}", max_ts);
-        txns.apply_le(&max_ts).await;
-        for data_id in data_ids {
-            log.assert_snapshot(data_id, max_ts).await;
-        }
-        info!("now waiting for reads {}", max_ts);
-        for (tx, data_id, as_of, subscribe) in reads {
-            let _ = tx.send(max_ts + 1);
-            let output = subscribe.await.unwrap();
-            log.assert_eq(data_id, as_of, max_ts + 1, output);
-        }
+        // Run all of the following in a timeout to make hangs easier to debug.
+        tokio::time::timeout(Duration::from_secs(30), async {
+            info!("finished with max_ts of {}", max_ts);
+            txns.apply_le(&max_ts).await;
+            for data_id in data_ids {
+                info!("reading data shard {}", data_id);
+                log.assert_snapshot(data_id, max_ts)
+                    .instrument(info_span!("read_data", data_id = format!("{:.9}", data_id)))
+                    .await;
+            }
+            info!("now waiting for reads {}", max_ts);
+            for (tx, data_id, as_of, subscribe) in reads {
+                let _ = tx.send(max_ts + 1);
+                let output = subscribe.await.unwrap();
+                log.assert_eq(data_id, as_of, max_ts + 1, output);
+            }
+        })
+        .await
+        .unwrap();
     }
 }
