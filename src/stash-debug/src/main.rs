@@ -267,7 +267,7 @@ macro_rules! for_collections {
                 $macro!(catalog::CLUSTER_COLLECTION);
                 $macro!(catalog::CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION);
                 $macro!(catalog::CLUSTER_REPLICA_COLLECTION);
-                $macro!(catalog::CONFIG_COLLECTION);
+                $macro!(catalog::COMMENTS_COLLECTION);
                 $macro!(catalog::CONFIG_COLLECTION);
                 $macro!(catalog::DATABASES_COLLECTION);
                 $macro!(catalog::DEFAULT_PRIVILEGES_COLLECTION);
