@@ -434,6 +434,19 @@ SELECT generate_series(1, 2)
 query error db error: ERROR: result exceeds max size of 100 B
 SELECT generate_series(1, 10)
 
+# Regression for #22724
+# Ensure duplicate rows don't overcount bytes in the presence of LIMIT.
+query T
+SELECT x FROM (VALUES ('{"row": 1}')) AS a (x), generate_series(1, 50000) LIMIT 1
+----
+{"row": 1}
+
+# Ensure that a large ordering key but small projection does not count against the result size limit.
+query I
+select 1 from (select array_agg(generate_series) x from generate_series(1, 1000000)) order by x limit 1
+----
+1
+
 statement ok
 RESET max_query_result_size
 
