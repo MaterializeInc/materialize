@@ -4711,6 +4711,9 @@ pub fn plan_alter_cluster(
                 options.introspection_interval = AlterOptionParameter::Set(introspection_interval);
             }
             if let Some(disk) = disk {
+                if disk {
+                    scx.require_feature_flag(&vars::ENABLE_DISK_CLUSTER_REPLICAS)?;
+                }
                 options.disk = AlterOptionParameter::Set(disk);
             }
             if !replicas.is_empty() {
