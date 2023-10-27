@@ -187,6 +187,7 @@ impl<'ctx> Optimize<'ctx, LocalMirPlan> for OptimizeMaterializedView {
         let mut df_desc = MirDataflowDescription::new(self.debug_name.clone());
 
         df_builder.import_view_into_dataflow(&self.internal_view_id, &expr, &mut df_desc)?;
+        df_builder.reoptimize_imported_views(&mut df_desc, &self.config)?;
 
         for BuildDesc { plan, .. } in &mut df_desc.objects_to_build {
             prep_relation_expr(self.catalog.state(), plan, ExprPrepStyle::Index)?;
