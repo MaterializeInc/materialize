@@ -78,11 +78,19 @@
 #[cfg(test)]
 mod tests {
 
+    use mz_lsp_server::backend::DEFAULT_FORMATTING_WIDTH;
     use mz_lsp_server::{PKG_NAME, PKG_VERSION};
+    use mz_ore::collections::HashMap;
+    use once_cell::sync::Lazy;
     use serde::{Deserialize, Serialize};
     use serde_json::json;
+    use std::env::temp_dir;
     use std::fmt::Debug;
+    use std::fs;
+    use std::path::PathBuf;
     use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
+    use tokio::sync::Mutex;
+    use tower_lsp::jsonrpc::Error;
     use tower_lsp::lsp_types::*;
     use tower_lsp::{lsp_types::InitializeResult, LspService, Server};
 
@@ -97,13 +105,20 @@ mod tests {
     /// This way provides a safe way to handle the types and a simple
     /// way to test the response is the expected.
     #[derive(Debug, Deserialize, PartialEq, Serialize)]
+    #[serde(rename_all = "camelCase")]
     struct LspMessage<T, R> {
         jsonrpc: String,
         method: Option<String>,
         params: Option<T>,
         result: Option<R>,
+        error: Option<Error>,
         id: Option<i32>,
     }
+
+    /// The file path used during the tests is where the SQL code resides.
+    const FILE_PATH: Lazy<PathBuf> = Lazy::new(|| temp_dir().join("foo.sql"));
+    /// The SQL code written inside [FILE_PATH].
+    const FILE_SQL_CONTENT: Lazy<String> = Lazy::new(|| "SELECT \t\t\t200, 200;".to_string());
 
     /// Tests the different capabilities of [Backend](mz_lsp::backend::Backend)
     ///
@@ -118,18 +133,30 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `pipe2` on OS `linux`
     async fn test_lsp() {
+        build_file();
         let (mut req_client, mut resp_client) = start_server();
         test_initialize(&mut req_client, &mut resp_client).await;
-
         // Test a simple query
         test_query(
-            "SELECT 100;",
+            &FILE_SQL_CONTENT,
             Some(vec![]),
             &mut req_client,
             &mut resp_client,
         )
         .await;
+        test_formatting(&mut req_client, &mut resp_client).await;
+        test_simple_query(&mut req_client, &mut resp_client).await;
         test_jinja_query(&mut req_client, &mut resp_client).await;
+    }
+
+    /// Builds the file containing a simple query
+    fn build_file() {
+        fs::write(FILE_PATH.clone(), FILE_SQL_CONTENT.clone()).unwrap();
+    }
+
+    /// Returns the file path as String.
+    fn get_file_uri() -> String {
+        format!("file://{}", FILE_PATH.clone().display())
     }
 
     async fn test_jinja_query(req_client: &mut DuplexStream, resp_client: &mut DuplexStream) {
@@ -161,9 +188,9 @@ mod tests {
     }
 
     /// Asserts that the server can parse a single SQL statement `SELECT 100;`.
-    // async fn test_simple_query(req_client: &mut DuplexStream, resp_client: &mut DuplexStream) {
-    //     test_query("SELECT 100;", Some(vec![]), req_client, resp_client);
-    // }
+    async fn test_simple_query(req_client: &mut DuplexStream, resp_client: &mut DuplexStream) {
+        test_query(&FILE_SQL_CONTENT, Some(vec![]), req_client, resp_client).await;
+    }
 
     /// Asserts that the server initialize correctly.
     ///
@@ -171,9 +198,20 @@ mod tests {
     /// Every time a new capability to the server is added,
     /// the response for this test will change.
     async fn test_initialize(req_client: &mut DuplexStream, resp_client: &mut DuplexStream) {
-        let request = r#"{"jsonrpc":"2.0","method":"initialize","params":{"capabilities":{"textDocumentSync":1}},"id":1}"#;
+        let request = r#"{
+            "jsonrpc":"2.0",
+            "method":"initialize",
+            "params":{
+                "capabilities":{
+                    "textDocumentSync": 1,
+                    "documentFormattingProvider": 1
+                }
+            },
+            "id":1
+        }"#;
         let expected_response: Vec<LspMessage<bool, InitializeResult>> = vec![LspMessage {
             jsonrpc: "2.0".to_string(),
+            error: None,
             method: None,
             params: None,
             result: Some(InitializeResult {
@@ -183,6 +221,7 @@ mod tests {
                 }),
                 offset_encoding: None,
                 capabilities: ServerCapabilities {
+                    document_formatting_provider: Some(tower_lsp::lsp_types::OneOf::Left(true)),
                     text_document_sync: Some(TextDocumentSyncCapability::Kind(
                         TextDocumentSyncKind::FULL,
                     )),
@@ -209,7 +248,7 @@ mod tests {
         .await;
     }
 
-    /// Writes a request to the server and asserts that the expected output
+    /// Writes a request to the LSP server and asserts that the expected output
     /// message is ok, otherwise it will fail.
     async fn write_and_assert<'de, T, R>(
         req_client: &mut DuplexStream,
@@ -225,11 +264,63 @@ mod tests {
             .write_all(req(input_message).as_bytes())
             .await
             .unwrap();
+
         let n = resp_client.read(buf).await.unwrap();
         let buf_as = std::str::from_utf8(&buf[..n]).unwrap();
 
         let messages = parse_response::<T, R>(buf_as);
         assert_eq!(messages, expected_output_message)
+    }
+
+    async fn test_formatting(req_client: &mut DuplexStream, resp_client: &mut DuplexStream) {
+        let request = format!(
+            r#"{{
+            "jsonrpc":"2.0",
+            "id": 2,
+            "method":"textDocument/formatting",
+            "params": {{
+                "options": {{
+                    "tabSize": 1,
+                    "insertSpaces": true
+                }},
+                "textDocument": {{
+                    "uri": "{}"
+                }}
+            }}
+        }}"#,
+            get_file_uri()
+        );
+
+        let formatting_response: Vec<LspMessage<serde_json::Value, Vec<TextEdit>>> =
+            vec![LspMessage {
+                jsonrpc: "2.0".to_string(),
+                id: Some(2),
+                method: None,
+                params: None,
+                result: Some(vec![TextEdit {
+                    range: Range {
+                        end: Position {
+                            line: 0,
+                            character: 19,
+                        },
+                        start: Position {
+                            line: 0,
+                            character: 0,
+                        },
+                    },
+                    new_text: "SELECT 200, 200;".to_string(),
+                }]),
+                error: None,
+            }];
+
+        write_and_assert(
+            req_client,
+            resp_client,
+            &mut [0; 1024],
+            &request,
+            formatting_response,
+        )
+        .await;
     }
 
     /// A utility function to test a query and assert
@@ -300,8 +391,11 @@ mod tests {
         let (req_client, req_server) = tokio::io::duplex(1024);
         let (resp_server, resp_client) = tokio::io::duplex(1024);
 
-        let (service, socket) =
-            LspService::new(|client| mz_lsp_server::backend::Backend { client });
+        let (service, socket) = LspService::new(|client| mz_lsp_server::backend::Backend {
+            client,
+            parse_results: Mutex::new(HashMap::new()),
+            formatting_width: DEFAULT_FORMATTING_WIDTH.into(),
+        });
 
         mz_ore::task::spawn(
             || format!("taskname:{}", "lsp_server"),
@@ -325,6 +419,7 @@ mod tests {
                 message: message.to_string(),
                 typ: MessageType::INFO
             }))),
+            error: None,
             result: None,
             id: None,
         }
@@ -340,7 +435,7 @@ mod tests {
             "method": "textDocument/didOpen",
             "params": {
                 "textDocument": {
-                    "uri": "file:///foo.rs",
+                    "uri": get_file_uri(),
                     "languageId": "sql",
                     "version": 1,
                     "text": sql
@@ -351,9 +446,10 @@ mod tests {
 
         let mut did_open_response: Vec<LspMessage<serde_json::Value, String>> = vec![
             build_log_message("file opened!"),
-            build_log_message(
-                r#"on_change Url { scheme: "file", cannot_be_a_base: false, username: "", password: None, host: None, port: None, path: "/foo.rs", query: None, fragment: None }"#,
-            ),
+            build_log_message(&format!(
+                r#"on_change Url {{ scheme: "file", cannot_be_a_base: false, username: "", password: None, host: None, port: None, path: {:?}, query: None, fragment: None }}"#,
+                FILE_PATH.clone().display()
+            )),
         ];
 
         if let Some(diagnostics) = diagnostics {
@@ -361,10 +457,11 @@ mod tests {
                 jsonrpc: "2.0".to_string(),
                 method: Some("textDocument/publishDiagnostics".to_string()),
                 params: Some(json!(json!(PublishDiagnosticsParams {
-                    uri: "file:///foo.rs".parse().unwrap(),
+                    uri: get_file_uri().parse().unwrap(),
                     diagnostics,
                     version: Some(1),
                 }))),
+                error: None,
                 result: None,
                 id: None,
             });
