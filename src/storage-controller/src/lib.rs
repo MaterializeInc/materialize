@@ -2052,22 +2052,17 @@ where
             shard_name: id.to_string(),
             handle_purpose: format!("controller data for {}", id),
         };
-        let write = persist_client
-            .open_writer(
-                shard,
-                Arc::new(relation_desc),
-                Arc::new(UnitSchema),
-                diagnostics.clone(),
-            )
-            .await
-            .expect("invalid persist usage");
 
         // Construct the handle in a separate block to ensure all error paths are diverging
         let since_handle = {
             // This block's aim is to ensure the handle is in terms of our epoch
             // by the time we return it.
             let mut handle: SinceHandle<_, _, _, _, PersistEpoch> = persist_client
-                .open_critical_since(shard, PersistClient::CONTROLLER_CRITICAL_SINCE, diagnostics)
+                .open_critical_since(
+                    shard,
+                    PersistClient::CONTROLLER_CRITICAL_SINCE,
+                    diagnostics.clone(),
+                )
                 .await
                 .expect("invalid persist usage");
 
@@ -2102,6 +2097,26 @@ where
                 }
             }
         };
+
+        let mut write = persist_client
+            .open_writer(
+                shard,
+                Arc::new(relation_desc),
+                Arc::new(UnitSchema),
+                diagnostics.clone(),
+            )
+            .await
+            .expect("invalid persist usage");
+
+        // N.B.
+        // Fetch the most recent upper for the write handle. Otherwise, this may be behind
+        // the since of the since handle. Its vital this happens AFTER we create
+        // the since handle as it needs to be linearized with that operation. It may be true
+        // that creating the write handle after the since handle already ensures this, but we
+        // do this out of an abundance of caution.
+        //
+        // Note that this returns the upper, but also sets it on the handle to be fetched later.
+        write.fetch_recent_upper().await;
 
         (write, since_handle)
     }
