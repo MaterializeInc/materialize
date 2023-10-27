@@ -817,6 +817,7 @@ where
                 with_snapshot: se.with_snapshot,
                 up_to: se.up_to,
                 non_null_assertions: se.non_null_assertions,
+                refresh_schedule: se.refresh_schedule,
             };
             sink_exports.insert(id, desc);
         }

@@ -3240,8 +3240,18 @@ impl<'a> Parser<'a> {
     fn parse_materialized_view_option_name(
         &mut self,
     ) -> Result<MaterializedViewOptionName, ParserError> {
-        self.expect_keywords(&[ASSERT, NOT, NULL])?;
-        Ok(MaterializedViewOptionName::AssertNotNull)
+        let name = match self.expect_one_of_keywords(&[ASSERT, REFRESH])? {
+            ASSERT => {
+                self.expect_keywords(&[NOT, NULL])?;
+                MaterializedViewOptionName::AssertNotNull
+            },
+            REFRESH => {
+                self.expect_keyword(EVERY)?;
+                MaterializedViewOptionName::RefreshInterval
+            },
+            _ => unreachable!(),
+        };
+        Ok(name)
     }
 
     fn parse_materialized_view_option(

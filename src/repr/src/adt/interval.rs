@@ -376,6 +376,12 @@ impl Interval {
         i128::from(self.micros)
     }
 
+    /// Computes the total number of milliseconds in the interval. Discards fractional millisecond!
+    pub fn as_milliseconds(&self) -> i128 {
+        ////// todo: use convert_date_time_unit with DateTimeField::Milliseconds
+        self.as_microseconds() / 1000
+    }
+
     /// Converts this `Interval`'s duration into `chrono::Duration`.
     pub fn duration_as_chrono(&self) -> chrono::Duration {
         use chrono::Duration;

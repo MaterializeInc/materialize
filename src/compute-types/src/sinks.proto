@@ -13,6 +13,8 @@ import "google/protobuf/empty.proto";
 import "repr/src/antichain.proto";
 import "repr/src/global_id.proto";
 import "repr/src/relation_and_scalar.proto";
+import "repr/src/adt/interval.proto";
+import "repr/src/adt/date.proto";
 import "storage-types/src/controller.proto";
 
 package mz_compute_types.sinks;
@@ -24,6 +26,23 @@ message ProtoComputeSinkDesc {
     bool with_snapshot = 4;
     mz_repr.antichain.ProtoU64Antichain up_to = 5;
     repeated uint64 non_null_assertions = 6;
+    ProtoRefreshSchedule refresh_schedule = 7;
+}
+
+message ProtoRefreshSchedule {
+//    mz_repr.global_id.ProtoGlobalId from = 1;
+//    mz_repr.relation_and_scalar.ProtoRelationDesc from_desc = 2;
+//    ProtoComputeSinkConnection connection = 3;
+//    bool with_snapshot = 4;
+//    mz_repr.antichain.ProtoU64Antichain up_to = 5;
+//    repeated uint64 non_null_assertions = 6;
+//    ProtoRefreshSchedule refresh_schedule = 7;
+//
+//    //mz_repr.adt.date.ProtoDate aaaa = 8;
+//
+//    mz_repr.chrono.ProtoTz bbbb = 9;
+
+    mz_repr.adt.interval.ProtoInterval interval = 10;
 }
 
 message ProtoComputeSinkConnection {

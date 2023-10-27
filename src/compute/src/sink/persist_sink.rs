@@ -16,9 +16,9 @@ use std::sync::Arc;
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{Collection, Hashable};
-use mz_compute_types::sinks::{ComputeSinkDesc, PersistSinkConnection};
+use mz_compute_types::sinks::{ComputeSinkDesc, PersistSinkConnection, RefreshSchedule};
 use mz_ore::cast::CastFrom;
-use mz_ore::collections::HashMap;
+use mz_ore::collections::{CollectionExt, HashMap};
 use mz_persist_client::batch::{Batch, BatchBuilder, ProtoBatch};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::Diagnostics;
@@ -34,8 +34,10 @@ use timely::dataflow::operators::{
     Broadcast, Capability, CapabilitySet, ConnectLoop, Feedback, Inspect,
 };
 use timely::dataflow::{Scope, Stream};
+use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use timely::PartialOrder;
+use tracing::log::{debug, info};
 use tracing::trace;
 
 use crate::compute_state::ComputeState;
@@ -45,6 +47,7 @@ impl<G> SinkRender<G> for PersistSinkConnection<CollectionMetadata>
 where
     G: Scope<Timestamp = Timestamp>,
 {
+    #[allow(clippy::as_conversions)]
     fn render_continuous_sink(
         &self,
         compute_state: &mut ComputeState,
@@ -57,7 +60,30 @@ where
     where
         G: Scope<Timestamp = Timestamp>,
     {
-        let desired_collection = sinked_collection.map(Ok).concat(&err_collection.map(Err));
+        let mut desired_collection = sinked_collection.map(Ok).concat(&err_collection.map(Err));
+
+        // If `REFRESH EVERY` was specified, round up timestamps.
+        if let Some(RefreshSchedule {interval}) = sink.refresh_schedule {
+            let is_initial_hydration = is_initial_hydration(
+                compute_state,
+                &self.storage_metadata,
+                sink_id,
+            );
+            let initial_since = if !is_initial_hydration {
+                None
+            } else {
+                Some(as_of.clone())
+            };
+            info!(
+                "REFRESH EVERY MV's persist_sink ({}/{}) initial_since: {:?}",
+                sink_id,
+                self.storage_metadata.data_shard,
+                initial_since,
+            );
+            // `as` conversion ok, because we made sure in the planning that this is not too big.
+            desired_collection = round_up(desired_collection, interval.as_milliseconds() as u64, initial_since);
+        }
+
         if sink.up_to != Antichain::default() {
             unimplemented!(
                 "UP TO is not supported for persist sinks yet, and shouldn't have been accepted during parsing/planning"
@@ -1178,4 +1204,89 @@ where
 
     let token = Rc::new(shutdown_button.press_on_drop());
     (output_stream, token)
+}
+
+/// TODO: comment
+/// This currently only works with 1-dim timestamps. (Not an issue for WMR, because iteration
+/// numbers should disappear by the time the data gets to the Persist sink.)
+fn round_up<G>(coll: Collection<G, Result<Row, DataflowError>, Diff>, refresh_interval: u64, initial_since: Option<Antichain<Timestamp>>) -> Collection<G, Result<Row, DataflowError>, Diff>
+    where
+        G: Scope<Timestamp = Timestamp>,
+{
+    let mut builder = OperatorBuilder::new("round_up".to_string(), coll.scope().clone());
+    let (mut output_buf, output_stream) = builder.new_output();
+    let mut input = builder.new_input_connection(&coll.inner, Pipeline, vec![Antichain::new()]);
+    builder.build(move |capabilities| {
+        let mut capability = Some(capabilities.into_element());
+        let mut buffer = Vec::new();
+        move |frontiers| {
+            let ac = frontiers.into_element();
+            match ac.frontier().to_owned().into_option() {
+                Some(ts) => {
+                    capability.as_mut().unwrap().downgrade(&ts.round_up(refresh_interval));
+                }
+                None => {
+                    capability = None;
+                }
+            }
+            input.for_each(|_cap, data| {
+                data.swap(&mut buffer);
+                for (_d, t, _r) in buffer.iter_mut() {
+                    // We do the rounding up, unless it's the initial_since.
+                    let do_it = match &initial_since {
+                        None => true,
+                        Some(initial_since) => match initial_since.as_option() {
+                            None => true,
+                            Some(initial_since) => t != initial_since, /////// todo: or `t > initial_since` would be more future-proof
+                        }
+                    };
+
+                    println!("############### initial_since: {:?}, t: {:?}, do_it: {}", initial_since, t, do_it);
+
+                    if do_it {
+                        *t = t.round_up(refresh_interval);
+                    }
+                }
+                output_buf.activate().session(capability.as_ref().unwrap()).give_container(&mut buffer);
+            });
+        }
+    });
+
+    use differential_dataflow::AsCollection;
+    output_stream.as_collection()
+}
+
+/// If the [since, upper) of the target shard is empty, we haven't yet completed the
+/// initial hydration.
+fn is_initial_hydration(
+    compute_state: &mut ComputeState,
+    target: &CollectionMetadata,
+    sink_id: GlobalId,
+) -> bool {
+    // Open the shard for a moment to check its frontiers.
+    let persist_location = target.persist_location.clone();
+    let persist_client = futures::executor::block_on(
+        compute_state.persist_clients.open(persist_location)
+    ).expect("could not open persist client");
+    let shard_id = target.data_shard;
+    let target_relation_desc = target.relation_desc.clone();
+    let (writer, reader) = futures::executor::block_on(persist_client
+        .open::<SourceData, (), Timestamp, Diff>(
+            shard_id,
+            Arc::new(target_relation_desc),
+            Arc::new(UnitSchema),
+            Diagnostics {
+                shard_name: sink_id.to_string(),
+                handle_purpose: format!(
+                    "compute::persist_sink::mint_batch_descriptions {}",
+                    sink_id
+                ),
+            },
+        )).expect("could not open persist shard");
+
+    let since = reader.since();
+    let upper = writer.upper();
+    debug!("is_initial_hydration ({}/{}) since: {:?}, upper: {:?})", sink_id, shard_id, since, upper);
+
+    PartialOrder::less_equal(upper, since)
 }

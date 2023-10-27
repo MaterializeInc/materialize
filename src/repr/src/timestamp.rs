@@ -181,6 +181,12 @@ impl Timestamp {
     pub fn step_back(&self) -> Option<Self> {
         self.checked_sub(1)
     }
+
+    pub fn round_up(&self, interval: u64) -> Self {
+        //self.saturating_add(Self::new(interval - self.internal % interval))
+
+        Timestamp::new(((self.internal + interval - 1) / interval) * interval)
+    }
 }
 
 impl From<u64> for Timestamp {

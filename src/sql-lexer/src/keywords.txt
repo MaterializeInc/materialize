@@ -133,6 +133,7 @@ Enforced
 Envelope
 Error
 Escape
+Every
 Except
 Execute
 Exists

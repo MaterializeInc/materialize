@@ -43,10 +43,7 @@ use mz_sql::names::{
     Aug, CommentObjectId, DatabaseId, FullItemName, QualifiedItemName, QualifiedSchemaName,
     ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier,
 };
-use mz_sql::plan::{
-    CreateSourcePlan, HirRelationExpr, Ingestion as PlanIngestion, WebhookHeaders,
-    WebhookValidation,
-};
+use mz_sql::plan::{CreateSourcePlan, HirRelationExpr, Ingestion as PlanIngestion, RefreshSchedule, WebhookHeaders, WebhookValidation};
 use mz_sql::rbac;
 use mz_sql::session::vars::OwnedVarInput;
 use mz_storage_client::controller::IntrospectionType;
@@ -675,6 +672,7 @@ pub struct MaterializedView {
     pub resolved_ids: ResolvedIds,
     pub cluster_id: ClusterId,
     pub non_null_assertions: Vec<usize>,
+    pub refresh_schedule: Option<RefreshSchedule>,
 }
 
 #[derive(Debug, Clone, Serialize)]

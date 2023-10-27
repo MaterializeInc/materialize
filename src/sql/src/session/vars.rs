@@ -2072,6 +2072,13 @@ feature_flags!(
         internal: true,
         enable_for_item_parsing: false,
     },
+    {
+        name: enable_refresh_every_mvs,
+        desc: "REFRESH EVERY materialized views",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
 );
 
 /// Represents the input to a variable.

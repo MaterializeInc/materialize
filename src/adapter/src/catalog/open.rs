@@ -1938,6 +1938,7 @@ mod builtin_migration_tests {
                         resolved_ids: ResolvedIds(BTreeSet::from_iter(resolved_ids)),
                         cluster_id: ClusterId::User(1),
                         non_null_assertions: vec![],
+                        refresh_schedule: None,
                     })
                 }
                 SimplifiedItem::Index { on } => {

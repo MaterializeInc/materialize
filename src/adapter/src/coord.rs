@@ -1659,6 +1659,7 @@ impl Coordinator {
                         internal_view_id,
                         mv.desc.iter_names().cloned().collect(),
                         mv.non_null_assertions.clone(),
+                        mv.refresh_schedule.clone(),
                         debug_name,
                         optimizer_config.clone(),
                     );
@@ -1787,6 +1788,17 @@ impl Coordinator {
         let write_frontier = self.least_valid_write(&id_bundle);
         // Things go wrong if we try to create a dataflow with `as_of = []`, so avoid that.
         if write_frontier.is_empty() {
+
+            if dataflow.source_imports.contains_key(&GlobalId::User(2)) {
+                println!();
+                println!();
+                println!("### min_as_of: {:?}", min_as_of);
+                println!();
+                println!();
+
+                panic!();
+            }
+
             tracing::info!(
                 export_ids = %dataflow.display_export_ids(),
                 %cluster_id,
@@ -1814,6 +1826,8 @@ impl Coordinator {
             }))
         } else {
             DEFAULT_LOGICAL_COMPACTION_WINDOW_TS
+
+            //Timestamp::new(60000)
         };
 
         let time = write_frontier.clone().into_option().expect("checked above");
@@ -1858,6 +1872,16 @@ impl Coordinator {
             max_compaction_frontier = ?max_compaction_frontier.elements(),
             "bootstrapping index `as_of`",
         );
+
+        if dataflow.source_imports.contains_key(&GlobalId::User(2)) {
+            println!();
+            println!();
+            println!("### as_of: {:?}", as_of);
+            println!();
+            println!();
+
+            //panic!();
+        }
 
         as_of
     }

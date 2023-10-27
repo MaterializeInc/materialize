@@ -86,6 +86,7 @@ pub use expr::{
     WindowExprType,
 };
 pub use lowering::Config as HirToMirConfig;
+use mz_repr::adt::interval::Interval;
 pub use notice::PlanNotice;
 pub use query::{ExprContext, QueryContext, QueryLifetime};
 pub use scope::Scope;
@@ -861,6 +862,7 @@ pub enum ExplaineeStatement {
         /// Broken flag (see [`ExplaineeStatement::broken()`]).
         broken: bool,
         non_null_assertions: Vec<usize>,
+        refresh_schedule: Option<RefreshSchedule>,
     },
     /// The object to be explained is a CREATE INDEX.
     CreateIndex {
@@ -1431,6 +1433,13 @@ pub struct MaterializedView {
     pub column_names: Vec<ColumnName>,
     pub cluster_id: ClusterId,
     pub non_null_assertions: Vec<usize>,
+    pub refresh_schedule: Option<RefreshSchedule>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct RefreshSchedule {
+    pub interval: Interval,
+    //////// todo: time of first refresh will also come here
 }
 
 #[derive(Clone, Debug)]

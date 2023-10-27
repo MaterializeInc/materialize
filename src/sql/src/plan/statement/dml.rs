@@ -373,6 +373,7 @@ pub fn plan_explain_plan(
                         column_names,
                         cluster_id,
                         non_null_assertions,
+                        refresh_schedule,
                         ..
                     },
                 ..
@@ -388,6 +389,7 @@ pub fn plan_explain_plan(
                 cluster_id,
                 broken,
                 non_null_assertions,
+                refresh_schedule,
             })
         }
         Explainee::CreateIndex(mut stmt, broken) => {

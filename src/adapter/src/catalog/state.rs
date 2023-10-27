@@ -906,6 +906,7 @@ impl CatalogState {
                     resolved_ids,
                     cluster_id: materialized_view.cluster_id,
                     non_null_assertions: materialized_view.non_null_assertions,
+                    refresh_schedule: materialized_view.refresh_schedule,
                 })
             }
             Plan::CreateIndex(CreateIndexPlan { index, .. }) => CatalogItem::Index(Index {

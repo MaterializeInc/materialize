@@ -90,3 +90,57 @@ $ kafka-ingest format=avro topic=materialized-views schema=${materialized-views}
 
 ! SELECT * FROM v1;
 contains: invalid input syntax for type integer
+
+# REFRESH EVERY
+
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+ALTER SYSTEM SET enable_refresh_every_mvs = true
+
+> CREATE TABLE t1(x int);
+
+> INSERT INTO t1 VALUES (1);
+
+> CREATE MATERIALIZED VIEW mv1 WITH (REFRESH EVERY '6sec') AS SELECT x+x as x2 FROM t1;
+
+> INSERT INTO t1 VALUES (3);
+
+# The following will not immediately return the recently inserted values, but Testdrive will wait.
+> SELECT * FROM mv1;
+2
+6
+
+> INSERT INTO t1 VALUES (5);
+
+# What we just inserted shouldn't be in the mv yet, because we are just after a refresh (because the previous SELECT
+# returned correct results only after a refresh).
+> SELECT * FROM mv1;
+2
+6
+
+> SELECT * FROM mv1;
+2
+6
+10
+
+> DELETE FROM t1;
+
+# Check that I can query it together with other objects, even between refreshes, and that data added later than the last
+# refresh in other objects is reflected in the result.
+> CREATE MATERIALIZED VIEW mv2 WITH (REFRESH EVERY '10000sec') AS SELECT x+x as x2 FROM t1;
+
+> CREATE TABLE t2(y int);
+
+> INSERT INTO t2 VALUES (100);
+
+> (SELECT * from mv2) UNION (SELECT * FROM t2);
+2
+6
+10
+100
+
+######### This was the failing test when I tried to do the initial refresh at the initial since.
+## Check that there is an implicit refresh immediately at the creation of the MV, even if it's REFRESH EVERY.
+#> CREATE MATERIALIZED VIEW mv3 WITH (REFRESH EVERY '10000sec') AS SELECT y+y as y2 FROM t2;
+#
+#> SELECT * FROM mv3;
+#200

@@ -30,12 +30,18 @@ use crate::ast::{AstInfo, Expr, Ident, OrderByExpr, UnresolvedItemName, WithOpti
 pub enum MaterializedViewOptionName {
     /// The `ASSERT NOT NULL [=] <ident>` option.
     AssertNotNull,
+    /// The `REFRESH INTERVAL [=] <interval>` option.
+    RefreshInterval,
+    // /// The `FIRST REFRESH [=] <timestamp>` option. /////////// todo: what's the type here?
+    // FirstRefresh,
 }
 
 impl AstDisplay for MaterializedViewOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             MaterializedViewOptionName::AssertNotNull => f.write_str("ASSERT NOT NULL"),
+            MaterializedViewOptionName::RefreshInterval => f.write_str("REFRESH EVERY"),
+            ////// MaterializedViewOptionName::FirstRefresh => f.write_str("FIRST REFRESH"),
         }
     }
 }

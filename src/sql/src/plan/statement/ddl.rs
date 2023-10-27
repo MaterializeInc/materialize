@@ -60,6 +60,7 @@ use mz_storage_types::sources::{
     TestScriptSourceConnection, Timeline, UnplannedSourceEnvelope, UpsertStyle,
 };
 use prost::Message;
+use mz_ore::option::FallibleMapExt;
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
@@ -113,11 +114,12 @@ use crate::plan::{
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
     CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
     DropOwnedPlan, FullItemName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan,
-    PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, Secret, Sink, Source,
-    SourceSinkClusterConfig, Table, Type, VariableValue, View, WebhookHeaderFilters,
+    PlanClusterOption, PlanNotice, QueryContext, RefreshSchedule, ReplicaConfig, Secret, Sink,
+    Source, SourceSinkClusterConfig, Table, Type, VariableValue, View, WebhookHeaderFilters,
     WebhookHeaders, WebhookValidation,
 };
 use crate::session::vars;
+use crate::session::vars::ENABLE_REFRESH_EVERY_MVS;
 
 mod connection;
 
@@ -2079,8 +2081,26 @@ pub fn plan_create_materialized_view(
 
     let MaterializedViewOptionExtracted {
         assert_not_null,
+        refresh_interval,
         seen: _,
     }: MaterializedViewOptionExtracted = stmt.with_options.try_into()?;
+
+    let refresh_schedule = refresh_interval.try_map(|interval| {
+        scx.require_feature_flag(&ENABLE_REFRESH_EVERY_MVS)?;
+        if interval.as_microseconds() <= 0 {
+            sql_bail!(
+                "REFRESH INTERVAL must be positive; got: {}",
+                interval
+            );
+        }
+        if interval.as_microseconds() > Interval::new(12, 0, 0).as_microseconds() {
+            sql_bail!(
+                "REFRESH INTERVAL too big: {}",
+                interval
+            );
+        }
+        Ok(RefreshSchedule {interval: interval.clone()})
+    })?;
 
     if !assert_not_null.is_empty() {
         scx.require_feature_flag(&crate::session::vars::ENABLE_ASSERT_NOT_NULL)?;
@@ -2170,6 +2190,7 @@ pub fn plan_create_materialized_view(
             column_names,
             cluster_id,
             non_null_assertions,
+            refresh_schedule,
         },
         replace,
         drop_ids,
@@ -2180,7 +2201,9 @@ pub fn plan_create_materialized_view(
 
 generate_extracted_config!(
     MaterializedViewOption,
-    (AssertNotNull, Ident, AllowMultiple)
+    (AssertNotNull, Ident, AllowMultiple),
+    (RefreshInterval, Interval)
+    //(FirstRefresh, chrono::DateTime::<chrono::Utc>) ///// todo
 );
 
 pub fn describe_create_sink(
