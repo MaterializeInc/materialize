@@ -183,6 +183,8 @@ pub struct ExplainConfig {
     pub column_names: bool,
     /// Use inferred column names when rendering scalar and aggregate expressions.
     pub humanized_exprs: bool,
+    /// Enable outer join lowering implemented in #22343.
+    pub enable_new_outer_join_lowering: bool,
 }
 
 impl Default for ExplainConfig {
@@ -203,6 +205,7 @@ impl Default for ExplainConfig {
             cardinality: false,
             column_names: false,
             humanized_exprs: false,
+            enable_new_outer_join_lowering: false,
         }
     }
 }
@@ -244,6 +247,7 @@ impl TryFrom<BTreeSet<String>> for ExplainConfig {
             cardinality: flags.remove("cardinality"),
             column_names: flags.remove("column_names"),
             humanized_exprs: flags.remove("humanized_exprs") && !flags.contains("raw_plans"),
+            enable_new_outer_join_lowering: flags.remove("enable_new_outer_join_lowering"),
         };
         if flags.is_empty() {
             Ok(result)
@@ -887,6 +891,7 @@ mod tests {
             cardinality: false,
             column_names: false,
             humanized_exprs: false,
+            enable_new_outer_join_lowering: false,
         };
         let context = ExplainContext {
             env,
