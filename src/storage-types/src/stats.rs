@@ -21,15 +21,17 @@ use mz_repr::{
 };
 use tracing::warn;
 
+/// Bundles together a relation desc with the stats for a specific part, and translates between
+/// Persist's stats representation and the `ResultSpec`s that are used for eg. filter pushdown.
 #[derive(Debug)]
-pub struct PersistSourceDataStats<'a> {
+pub struct RelationPartStats<'a> {
     pub(crate) name: &'a str,
     pub(crate) metrics: &'a Metrics,
     pub(crate) desc: &'a RelationDesc,
     pub(crate) stats: &'a PartStats,
 }
 
-impl<'a> PersistSourceDataStats<'a> {
+impl<'a> RelationPartStats<'a> {
     pub fn new(
         name: &'a str,
         metrics: &'a Metrics,
@@ -71,7 +73,7 @@ fn downcast_stats<'a, T: Data>(
     }
 }
 
-impl PersistSourceDataStats<'_> {
+impl RelationPartStats<'_> {
     fn json_spec<'a>(len: usize, stats: &'a JsonStats, arena: &'a RowArena) -> ResultSpec<'a> {
         match stats {
             JsonStats::JsonNulls => ResultSpec::value(Datum::JsonNull),
@@ -258,7 +260,7 @@ mod tests {
             return;
         }
 
-        struct ValidateStats<'a>(PersistSourceDataStats<'a>, &'a RowArena, Datum<'a>);
+        struct ValidateStats<'a>(RelationPartStats<'a>, &'a RowArena, Datum<'a>);
         impl<'a> DatumToPersistFn<()> for ValidateStats<'a> {
             fn call<T: DatumToPersist>(self) -> () {
                 let ValidateStats(stats, arena, datum) = self;
@@ -283,7 +285,7 @@ mod tests {
             let stats = part.key_stats()?;
 
             let metrics = Metrics::new(&PersistConfig::new_for_tests(), &MetricsRegistry::new());
-            let stats = PersistSourceDataStats {
+            let stats = RelationPartStats {
                 name: "test",
                 metrics: &metrics,
                 stats: &PartStats { key: stats },

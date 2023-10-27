@@ -35,7 +35,7 @@ use mz_repr::{Datum, DatumVec, Diff, GlobalId, RelationType, Row, RowArena, Time
 use mz_storage_types::controller::{CollectionMetadata, TxnsCodecRow};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
-use mz_storage_types::stats::PersistSourceDataStats;
+use mz_storage_types::stats::RelationPartStats;
 use mz_timely_util::buffer::ConsolidateBuffer;
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 use mz_timely_util::probe::ProbeNotify;
@@ -327,7 +327,7 @@ where
                 ResultSpec::nothing()
             };
             if let Some(plan) = &filter_plan {
-                let stats = PersistSourceDataStats::new(&filter_name, &metrics, &desc, stats);
+                let stats = RelationPartStats::new(&filter_name, &metrics, &desc, stats);
                 filter_may_match(desc.typ(), time_range, stats, plan)
             } else {
                 true
@@ -342,7 +342,7 @@ where
 fn filter_may_match(
     relation_type: &RelationType,
     time_range: ResultSpec,
-    stats: PersistSourceDataStats,
+    stats: RelationPartStats,
     plan: &MfpPlan,
 ) -> bool {
     let arena = RowArena::new();
