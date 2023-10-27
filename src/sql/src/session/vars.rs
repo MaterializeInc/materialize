@@ -1761,13 +1761,6 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_monotonic_oneshot_selects,
-        desc: "monotonic evaluation of one-shot SELECT queries",
-        default: false,
-        internal: true,
-        enable_for_item_parsing: true,
-    },
-    {
         name: enable_primary_key_not_enforced,
         desc: "PRIMARY KEY NOT ENFORCED",
         default: false,
