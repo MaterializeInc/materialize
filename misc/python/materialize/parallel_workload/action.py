@@ -88,7 +88,7 @@ class Action:
                     "canceling statement due to user request",
                 ]
             )
-        if exe.db.scenario == Scenario.Kill:
+        if exe.db.scenario in (Scenario.Kill, Scenario.BackupRestore):
             result.extend(
                 [
                     "network error",
@@ -339,9 +339,9 @@ class DropIndexAction(Action):
                 exe.execute(query)
             except QueryError as e:
                 # expected, see #20465
-                if (
-                    exe.db.scenario != Scenario.Kill
-                    or "unknown catalog item" not in e.msg
+                if exe.db.scenario != Scenario.Kill or (
+                    "unknown catalog item" not in e.msg
+                    and "unknown schema" not in e.msg
                 ):
                     raise e
             exe.db.indexes.remove(index_name)
@@ -374,9 +374,9 @@ class DropTableAction(Action):
                 exe.execute(query)
             except QueryError as e:
                 # expected, see #20465
-                if (
-                    exe.db.scenario != Scenario.Kill
-                    or "unknown catalog item" not in e.msg
+                if exe.db.scenario != Scenario.Kill or (
+                    "unknown catalog item" not in e.msg
+                    and "unknown schema" not in e.msg
                 ):
                     raise e
             exe.db.tables.remove(table)
@@ -573,8 +573,10 @@ class CreateViewAction(Action):
             exe.db.view_id += 1
         # Don't use views for now since LIMIT 1 and statement_timeout are
         # not effective yet at preventing long-running queries and OoMs.
-        base_object = self.rng.choice(exe.db.db_objects())
-        base_object2: DBObject | None = self.rng.choice(exe.db.db_objects())
+        base_object = self.rng.choice(exe.db.db_objects_without_views())
+        base_object2: DBObject | None = self.rng.choice(
+            exe.db.db_objects_without_views()
+        )
         if self.rng.choice([True, False]) or base_object2 == base_object:
             base_object2 = None
         view = View(
@@ -608,9 +610,9 @@ class DropViewAction(Action):
                 exe.execute(query)
             except QueryError as e:
                 # expected, see #20465
-                if (
-                    exe.db.scenario != Scenario.Kill
-                    or "unknown catalog item" not in e.msg
+                if exe.db.scenario != Scenario.Kill or (
+                    "unknown catalog item" not in e.msg
+                    and "unknown schema" not in e.msg
                 ):
                     raise e
             del exe.db.views[view_id]
@@ -996,9 +998,9 @@ class DropWebhookSourceAction(Action):
                 exe.execute(query)
             except QueryError as e:
                 # expected, see #20465
-                if (
-                    exe.db.scenario != Scenario.Kill
-                    or "unknown catalog item" not in e.msg
+                if exe.db.scenario != Scenario.Kill or (
+                    "unknown catalog item" not in e.msg
+                    and "unknown schema" not in e.msg
                 ):
                     raise e
             del exe.db.webhook_sources[source_id]
@@ -1046,9 +1048,9 @@ class DropKafkaSourceAction(Action):
                 exe.execute(query)
             except QueryError as e:
                 # expected, see #20465
-                if (
-                    exe.db.scenario != Scenario.Kill
-                    or "unknown catalog item" not in e.msg
+                if exe.db.scenario != Scenario.Kill or (
+                    "unknown catalog item" not in e.msg
+                    and "unknown schema" not in e.msg
                 ):
                     raise e
             del exe.db.kafka_sources[source_id]
@@ -1096,9 +1098,9 @@ class DropPostgresSourceAction(Action):
                 exe.execute(query)
             except QueryError as e:
                 # expected, see #20465
-                if (
-                    exe.db.scenario != Scenario.Kill
-                    or "unknown catalog item" not in e.msg
+                if exe.db.scenario != Scenario.Kill or (
+                    "unknown catalog item" not in e.msg
+                    and "unknown schema" not in e.msg
                 ):
                     raise e
             del exe.db.postgres_sources[source_id]
@@ -1148,9 +1150,9 @@ class DropKafkaSinkAction(Action):
                 exe.execute(query)
             except QueryError as e:
                 # expected, see #20465
-                if (
-                    exe.db.scenario != Scenario.Kill
-                    or "unknown catalog item" not in e.msg
+                if exe.db.scenario != Scenario.Kill or (
+                    "unknown catalog item" not in e.msg
+                    and "unknown schema" not in e.msg
                 ):
                     raise e
             del exe.db.kafka_sinks[sink_id]

@@ -260,15 +260,16 @@ def run(
         datetime.datetime.now() + datetime.timedelta(seconds=300)
     ).timestamp()
     while time.time() < stopping_time:
-        for worker, thread in zip(workers, threads):
+        for thread in threads:
             thread.join(timeout=1)
-            if thread.is_alive():
-                print(f"{thread.name} still running: {worker.exe.last_log}")
         if all([not thread.is_alive() for thread in threads]):
             break
     else:
+        for worker, thread in zip(workers, threads):
+            if thread.is_alive():
+                print(f"{thread.name} still running: {worker.exe.last_log}")
         print("Threads have not stopped within 5 minutes, exiting hard")
-        sys.exit(1)
+        os._exit(1)
 
     conn = pg8000.connect(host=host, port=ports["materialized"], user="materialize")
     conn.autocommit = True
