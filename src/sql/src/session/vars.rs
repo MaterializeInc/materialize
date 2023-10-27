@@ -2193,13 +2193,14 @@ impl SessionVars {
             &STANDARD_CONFORMING_STRINGS,
             &TIMEZONE,
             &INTERVAL_STYLE,
-            // Including `cluster`, `cluster_replica`, and `database` in the notify set is a
-            // Materialize extension. Doing so allows users to more easily identify where their
-            // queries will be executing, which is important to know when you consider the size of
-            // a cluster, what indexes are present, etc.
+            // Including `cluster`, `cluster_replica`, `database`, and `search_path` in the notify
+            // set is a Materialize extension. Doing so allows users to more easily identify where
+            // their queries will be executing, which is important to know when you consider the
+            // size of a cluster, what indexes are present, etc.
             &*CLUSTER,
             &CLUSTER_REPLICA,
             &*DATABASE,
+            &*SEARCH_PATH,
         ]
         .into_iter()
         .map(|p| self.get(None, p.name()).expect("SystemVars known to exist"))
