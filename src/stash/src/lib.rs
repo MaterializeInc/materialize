@@ -798,11 +798,15 @@ where
         let restore = self.pending.get(&k).cloned();
 
         let prev = match self.pending.entry(k.clone()) {
-            // key hasn't been set in this txn yet. Set it and return the
-            // initial txn's value of k.
+            // key hasn't been set in this txn yet.
             Entry::Vacant(e) => {
-                e.insert(v);
-                self.initial.get(&k).cloned()
+                let initial = self.initial.get(&k);
+                if initial != v.as_ref() {
+                    // Provided value and initial value are different. Set key.
+                    e.insert(v);
+                }
+                // Return the initial txn's value of k.
+                initial.cloned()
             }
             // key has been set in this txn. Set it and return the previous
             // pending value.
@@ -845,11 +849,15 @@ where
             restores.insert(k.clone(), restore);
 
             let prev = match self.pending.entry(k.clone()) {
-                // key hasn't been set in this txn yet. Set it and return the
-                // initial txn's value of k.
+                // key hasn't been set in this txn yet.
                 Entry::Vacant(e) => {
-                    e.insert(v);
-                    self.initial.get(&k).cloned()
+                    let initial = self.initial.get(&k);
+                    if initial != v.as_ref() {
+                        // Provided value and initial value are different. Set key.
+                        e.insert(v);
+                    }
+                    // Return the initial txn's value of k.
+                    initial.cloned()
                 }
                 // key has been set in this txn. Set it and return the previous
                 // pending value.

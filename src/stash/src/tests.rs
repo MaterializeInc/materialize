@@ -1029,6 +1029,15 @@ async fn test_stash_table(stash: &mut Stash) {
         BTreeMap::from([(3i64.to_le_bytes().to_vec(), "v6".to_string())])
     );
 
+    // Duplicate `set`.
+    let items = TABLE.peek_one(stash).await.unwrap();
+    let mut table = TableTransaction::new(items, uniqueness_violation).unwrap();
+    table
+        .set(3i64.to_le_bytes().to_vec(), Some("v6".to_string()))
+        .unwrap();
+    let pending = table.pending::<Vec<u8>, String>();
+    assert!(pending.is_empty());
+
     // Test `set_many`.
     let items = TABLE.peek_one(stash).await.unwrap();
     let mut table = TableTransaction::new(items, uniqueness_violation).unwrap();
@@ -1069,6 +1078,18 @@ async fn test_stash_table(stash: &mut Stash) {
             (42i64.to_le_bytes().to_vec(), "v7".to_string())
         ])
     );
+
+    // Duplicate `set_many`.
+    let items = TABLE.peek_one(stash).await.unwrap();
+    let mut table = TableTransaction::new(items, uniqueness_violation).unwrap();
+    table
+        .set_many(BTreeMap::from([
+            (1i64.to_le_bytes().to_vec(), Some("v6".to_string())),
+            (42i64.to_le_bytes().to_vec(), Some("v7".to_string())),
+        ]))
+        .unwrap();
+    let pending = table.pending::<Vec<u8>, String>();
+    assert!(pending.is_empty());
 }
 
 #[mz_ore::test]
