@@ -58,9 +58,9 @@ impl JoinInputMapper {
     /// efficient if input arities have been pre-calculated
     pub fn new_from_input_arities<I>(arities: I) -> Self
     where
-        I: Iterator<Item = usize>,
+        I: IntoIterator<Item = usize>,
     {
-        let arities = arities.collect::<Vec<usize>>();
+        let arities = arities.into_iter().collect::<Vec<usize>>();
         let mut offset = 0;
         let mut prior_arities = Vec::new();
         for input in 0..arities.len() {

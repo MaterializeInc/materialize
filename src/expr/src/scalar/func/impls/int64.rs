@@ -171,7 +171,7 @@ sqlfunc!(
 
 sqlfunc!(
     #[sqlname = "bigint_to_double"]
-    #[preserves_uniqueness = false]
+    #[preserves_uniqueness = false] // Witness: (1111111111111111111, 1111111111111111112).
     #[inverse = to_unary!(super::CastFloat64ToInt64)]
     #[is_monotone = true]
     fn cast_int64_to_float64(a: i64) -> f64 {

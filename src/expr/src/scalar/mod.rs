@@ -645,16 +645,41 @@ impl MirScalarExpr {
         matches!(self, MirScalarExpr::Literal(Err(_), _typ))
     }
 
+    pub fn is_column(&self) -> bool {
+        matches!(self, MirScalarExpr::Column(_))
+    }
+
+    pub fn is_error_if_null(&self) -> bool {
+        matches!(
+            self,
+            Self::CallVariadic {
+                func: VariadicFunc::ErrorIfNull,
+                ..
+            }
+        )
+    }
+
+    #[deprecated = "Use `might_error` instead"]
     pub fn contains_error_if_null(&self) -> bool {
         let mut worklist = vec![self];
         while let Some(expr) = worklist.pop() {
-            if matches!(
-                expr,
-                MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::ErrorIfNull,
-                    ..
-                }
-            ) {
+            if expr.is_error_if_null() {
+                return true;
+            }
+            worklist.extend(expr.children());
+        }
+        false
+    }
+
+    /// A very crude approximation for scalar expressions that might produce an
+    /// error.
+    ///
+    /// Currently, this is restricted only to expressions that either contain a
+    /// literal error or a [`VariadicFunc::ErrorIfNull`] call.
+    pub fn might_error(&self) -> bool {
+        let mut worklist = vec![self];
+        while let Some(expr) = worklist.pop() {
+            if expr.is_literal_err() || expr.is_error_if_null() {
                 return true;
             }
             worklist.extend(expr.children());
