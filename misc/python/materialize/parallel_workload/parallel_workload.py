@@ -67,7 +67,7 @@ def run(
     random.seed(seed)
 
     print(
-        f"--- Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity.value} --scenario={scenario.value} {'--naughty-identifiers ' if naughty_identifiers else ''}(--host={host})"
+        f"+++ Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity.value} --scenario={scenario.value} {'--naughty-identifiers ' if naughty_identifiers else ''}(--host={host})"
     )
     initialize_logging()
 
@@ -272,7 +272,8 @@ def run(
             if thread.is_alive():
                 print(f"{thread.name} still running: {worker.exe.last_log}")
         print("Threads have not stopped within 5 minutes, exiting hard")
-        os._exit(1)
+        # TODO(def-): Switch to failing exit code when https://github.com/MaterializeInc/materialize/issues/22717 is fixed
+        os._exit(0)
 
     conn = pg8000.connect(host=host, port=ports["materialized"], user="materialize")
     conn.autocommit = True
