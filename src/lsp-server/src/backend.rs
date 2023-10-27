@@ -256,7 +256,9 @@ impl LanguageServer for Backend {
         let locked_map = self.parse_results.lock().await;
         let width = self.formatting_width.lock().await;
 
-        if let Some(parse_result) = locked_map.get(&params.text_document.uri) {
+        let Some(parse_result) = locked_map.get(&params.text_document.uri) else {
+            return Ok(None);
+        }
             let pretty = parse_result
                 .asts
                 .iter()
@@ -273,9 +275,6 @@ impl LanguageServer for Backend {
                     end: offset_to_position(rope.len_chars(), rope).unwrap(),
                 },
             }]));
-        }
-
-        return Ok(None);
     }
 }
 
