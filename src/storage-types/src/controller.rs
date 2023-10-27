@@ -12,14 +12,17 @@ use std::fmt::{self, Debug};
 
 use itertools::Itertools;
 use mz_persist_client::{PersistLocation, ShardId};
+use mz_persist_txn::{TxnsCodec, TxnsEntry};
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{GlobalId, RelationDesc};
+use mz_repr::{Datum, GlobalId, RelationDesc, Row, ScalarType};
 use mz_stash_types::StashError;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::errors::DataflowError;
 use crate::instances::StorageInstanceId;
+use crate::sources::SourceData;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_types.controller.rs"));
 
@@ -270,5 +273,54 @@ impl From<StashError> for StorageError {
 impl From<DataflowError> for StorageError {
     fn from(error: DataflowError) -> Self {
         Self::DataflowError(error)
+    }
+}
+
+#[derive(Debug)]
+pub struct TxnsCodecRow;
+
+impl TxnsCodecRow {
+    pub fn desc() -> RelationDesc {
+        RelationDesc::empty()
+            .with_column("shard_id", ScalarType::String.nullable(false))
+            .with_column("batch", ScalarType::Bytes.nullable(true))
+    }
+}
+
+impl TxnsCodec for TxnsCodecRow {
+    type Key = SourceData;
+    type Val = ();
+
+    fn schemas() -> (
+        <Self::Key as mz_persist_types::Codec>::Schema,
+        <Self::Val as mz_persist_types::Codec>::Schema,
+    ) {
+        (Self::desc(), UnitSchema)
+    }
+
+    fn encode(e: TxnsEntry) -> (Self::Key, Self::Val) {
+        let row = match &e {
+            TxnsEntry::Register(data_id) => {
+                Row::pack([Datum::from(data_id.to_string().as_str()), Datum::Null])
+            }
+            TxnsEntry::Append(data_id, batch) => Row::pack([
+                Datum::from(data_id.to_string().as_str()),
+                Datum::from(batch.as_slice()),
+            ]),
+        };
+        (SourceData(Ok(row)), ())
+    }
+
+    fn decode(row: SourceData, _: ()) -> TxnsEntry {
+        let mut datums = row.0.as_ref().expect("valid entry").iter();
+        let data_id = datums.next().expect("valid entry").unwrap_str();
+        let data_id = data_id.parse::<ShardId>().expect("valid entry");
+        let batch = datums.next().expect("valid entry");
+        assert!(datums.next().is_none());
+        if batch.is_null() {
+            TxnsEntry::Register(data_id)
+        } else {
+            TxnsEntry::Append(data_id, batch.unwrap_bytes().to_vec())
+        }
     }
 }

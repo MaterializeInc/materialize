@@ -5647,6 +5647,7 @@ dependencies = [
  "mz-kafka-util",
  "mz-ore",
  "mz-persist-client",
+ "mz-persist-txn",
  "mz-persist-types",
  "mz-postgres-util",
  "mz-proto",
