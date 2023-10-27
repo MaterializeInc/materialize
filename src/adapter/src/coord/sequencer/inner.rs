@@ -873,7 +873,7 @@ impl Coordinator {
         let view_id = self.catalog_mut().allocate_user_id().await?;
         let view_oid = self.catalog_mut().allocate_oid()?;
         let raw_expr = view.expr.clone();
-        let decorrelated_expr = raw_expr.optimize_and_lower(&plan::OptimizerConfig {})?;
+        let decorrelated_expr = raw_expr.lower(self.catalog().system_config())?;
         let optimized_expr = self.view_optimizer.optimize(decorrelated_expr)?;
         let desc = RelationDesc::new(optimized_expr.typ(), view.column_names.clone());
         let view = catalog::View {
@@ -3315,7 +3315,7 @@ impl Coordinator {
 
         // Execute the `optimize/hir_to_mir` stage.
         let decorrelated_plan = catch_unwind(broken, "hir_to_mir", || {
-            raw_plan.optimize_and_lower(&plan::OptimizerConfig {})
+            raw_plan.lower(catalog.system_config())
         })?;
 
         let mut timeline_context =
@@ -3765,7 +3765,7 @@ impl Coordinator {
     > {
         let plan::ExplainTimestampPlan { format, raw_plan } = plan;
 
-        let decorrelated_plan = raw_plan.optimize_and_lower(&plan::OptimizerConfig {})?;
+        let decorrelated_plan = raw_plan.lower(self.catalog().system_config())?;
         let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
         let source_ids = optimized_plan.depends_on();
         let cluster = self

@@ -68,7 +68,6 @@ pub(crate) mod explain;
 pub(crate) mod expr;
 pub(crate) mod lowering;
 pub(crate) mod notice;
-pub(crate) mod optimize;
 pub(crate) mod plan_utils;
 pub(crate) mod query;
 pub(crate) mod scope;
@@ -86,8 +85,8 @@ pub use expr::{
     AggregateExpr, CoercibleScalarExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind,
     WindowExprType,
 };
+pub use lowering::Config as HirToMirConfig;
 pub use notice::PlanNotice;
-pub use optimize::OptimizerConfig;
 pub use query::{ExprContext, QueryContext, QueryLifetime};
 pub use scope::Scope;
 pub use side_effecting_func::SideEffectingFunc;

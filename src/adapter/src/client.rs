@@ -632,7 +632,7 @@ impl SessionClient {
         let result: Result<_, AdapterError> =
             mz_sql::plan::plan_copy_from(&pcx, &conn_catalog, id, columns, rows)
                 .err_into()
-                .and_then(|values| values.lower().err_into())
+                .and_then(|values| values.lower(conn_catalog.system_vars()).err_into())
                 .and_then(|values| {
                     Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context())
                         .optimize(values)

@@ -58,15 +58,18 @@
 
 # Different results in Postgres and Materialize; returns an error in
 # v0.48.0, swallows an error in v0.49.0 and erroneously returns 1248.
-! SELECT
-    SUM(count)
-  FROM
-    (
-      SELECT
-        (NOT (NOT (t4.c0)))::INT as count
-      FROM
-        t4
-        RIGHT OUTER JOIN (SELECT - (t3.c0) FROM t1, t3) AS sub0 ON t4.c0
-        RIGHT OUTER JOIN (SELECT (0.47583646) NOT IN (- (t3.c0)), CAST(t4.c0 AS VARCHAR(813))!~*t1.c0 FROM t3, t4, t2, v0, t1 WHERE NOT (((t4.c0)<(t4.c0))) LIMIT 5633455955921112428) AS sub1 ON t4.c0
-    ) as res;
-contains: invalid regular expression
+#
+# This test was fixed by #22560, indicating that the issue is not
+# affecting the equijoin-based outer join lowering strategy.
+# ! SELECT
+#     SUM(count)
+#   FROM
+#     (
+#       SELECT
+#         (NOT (NOT (t4.c0)))::INT as count
+#       FROM
+#         t4
+#         RIGHT OUTER JOIN (SELECT - (t3.c0) FROM t1, t3) AS sub0 ON t4.c0
+#         RIGHT OUTER JOIN (SELECT (0.47583646) NOT IN (- (t3.c0)), CAST(t4.c0 AS VARCHAR(813))!~*t1.c0 FROM t3, t4, t2, v0, t1 WHERE NOT (((t4.c0)<(t4.c0))) LIMIT 5633455955921112428) AS sub1 ON t4.c0
+#     ) as res;
+# contains: invalid regular expression
