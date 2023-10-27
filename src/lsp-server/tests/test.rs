@@ -156,7 +156,7 @@ mod tests {
 
     /// Returns the file path as String.
     fn get_file_uri() -> String {
-        format!("file://{}", FILE_PATH.clone().display().to_string())
+        format!("file://{}", FILE_PATH.clone().display())
     }
 
     async fn test_jinja_query(req_client: &mut DuplexStream, resp_client: &mut DuplexStream) {
