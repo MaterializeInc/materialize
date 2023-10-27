@@ -52,10 +52,12 @@
 
 mod index;
 mod materialized_view;
+mod view;
 
 // Re-export optimzier structs
 pub use index::{Index, OptimizeIndex};
 pub use materialized_view::OptimizeMaterializedView;
+pub use view::OptimizeView;
 
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
