@@ -32,6 +32,7 @@ from typing import Any
 import yaml
 
 from materialize import mzbuild, spawn
+from materialize.ci_util.trim_pipeline import permit_rerunning_successful_steps
 from materialize.mzcompose.composition import Composition
 
 from .deploy.deploy_util import rust_version
@@ -192,22 +193,6 @@ def prioritize_pipeline(pipeline: Any) -> None:
                     visit(inner_config)
                 continue
             visit(config)
-
-
-def permit_rerunning_successful_steps(pipeline: Any) -> None:
-    def visit(step: Any) -> None:
-        step.setdefault("retry", {}).setdefault("manual", {}).setdefault(
-            "permit_on_passed", True
-        )
-
-    for config in pipeline["steps"]:
-        if "trigger" in config or "wait" in config or "block" in config:
-            continue
-        if "group" in config:
-            for inner_config in config.get("steps", []):
-                visit(inner_config)
-            continue
-        visit(config)
 
 
 def add_test_selection_block(pipeline: Any, pipeline_name: str) -> None:
