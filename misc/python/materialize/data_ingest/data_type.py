@@ -60,7 +60,7 @@ class Boolean(DataType):
         record_size: RecordSize = RecordSize.LARGE,
         in_query: bool = False,
     ) -> Any:
-        return random.choice((True, False))
+        return rng.choice((True, False))
 
     @staticmethod
     def name(backend: Backend = Backend.POSTGRES) -> str:
@@ -243,13 +243,13 @@ class Text(DataType):
         # chars = string.printable
         chars = string.ascii_letters + string.digits
         if record_size == RecordSize.TINY:
-            result = random.choice(("foo", "bar", "baz"))
+            result = rng.choice(("foo", "bar", "baz"))
         elif record_size == RecordSize.SMALL:
-            result = "".join(random.choice(chars) for _ in range(3))
+            result = "".join(rng.choice(chars) for _ in range(3))
         elif record_size == RecordSize.MEDIUM:
-            result = "".join(random.choice(chars) for _ in range(10))
+            result = "".join(rng.choice(chars) for _ in range(10))
         elif record_size == RecordSize.LARGE:
-            result = "".join(random.choice(chars) for _ in range(100))
+            result = "".join(rng.choice(chars) for _ in range(100))
         else:
             raise ValueError(f"Unexpected record size {record_size}")
 
@@ -357,10 +357,13 @@ class TextTextMap(DataType):
         return f"'{values_str}'::map[text=>text]" if in_query else values_str
 
 
-DATA_TYPES = list(all_subclasses(DataType))
+# Sort to keep determinism for reproducible runs with specific seed
+DATA_TYPES = sorted(list(all_subclasses(DataType)), key=repr)
 
 # fastavro._schema_common.UnknownType: record
 # bytea requires Python bytes type instead of str
-DATA_TYPES_FOR_AVRO = list(set(DATA_TYPES) - {TextTextMap, Jsonb, Bytea, Boolean})
+DATA_TYPES_FOR_AVRO = sorted(
+    list(set(DATA_TYPES) - {TextTextMap, Jsonb, Bytea, Boolean}), key=repr
+)
 
 NUMBER_TYPES = [SmallInt, Int, Long, Float, Double]
