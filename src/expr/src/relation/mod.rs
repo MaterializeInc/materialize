@@ -3035,31 +3035,40 @@ impl RowSetFinishing {
 
         let limit = self.limit.unwrap_or(usize::MAX);
 
-        // Count how many rows we'd expand into, returning early from the whole function
-        // if we don't have enough memory to expand the result, or break early from the
-        // iteration once we pass our limit.
-        let mut num_rows = 0;
-        let mut num_bytes: usize = 0;
-        for (row, count) in &rows[offset_nth_row..] {
-            num_rows += count.get();
-            num_bytes = num_bytes.saturating_add(count.get().saturating_mul(row.byte_len()));
+        // The code below is logically equivalent to:
+        //
+        // let mut total = 0;
+        // for (_, count) in &rows[offset_nth_row..] {
+        //     total += count.get();
+        // }
+        // let return_size = std::cmp::min(total, limit);
+        //
+        // but it breaks early if the limit is reached, instead of scanning the entire code.
+        let return_row_count = rows[offset_nth_row..]
+            .iter()
+            .try_fold(0, |sum: usize, (_, count)| {
+                let new_sum = sum.saturating_add(count.get());
+                if new_sum > limit {
+                    None
+                } else {
+                    Some(new_sum)
+                }
+            })
+            .unwrap_or(limit);
 
-            // Check that result fits into max_result_size.
-            if num_bytes > max_result_size {
-                return Err(format!(
-                    "result exceeds max size of {}",
-                    ByteSize::b(u64::cast_from(max_result_size))
-                ));
-            }
-
-            // Stop iterating if we've passed limit.
-            if num_rows > limit {
-                break;
-            }
+        // Check that the bytes allocated in the Vec below will be less than the minimum possible
+        // byte limit (i.e., if zero rows spill to heap). We still have to check each row below
+        // because they could spill to heap and end up using more memory.
+        const MINIMUM_ROW_BYTES: usize = std::mem::size_of::<Row>();
+        let bytes_to_be_allocated = MINIMUM_ROW_BYTES.saturating_mul(return_row_count);
+        if bytes_to_be_allocated > max_result_size {
+            return Err(format!(
+                "result exceeds max size of {}",
+                ByteSize::b(u64::cast_from(max_result_size))
+            ));
         }
-        let return_size = std::cmp::min(num_rows, limit);
 
-        let mut ret = Vec::with_capacity(return_size);
+        let mut ret = Vec::with_capacity(return_row_count);
         let mut remaining = limit;
         let mut row_buf = Row::default();
         let mut datum_vec = mz_repr::DatumVec::new();
