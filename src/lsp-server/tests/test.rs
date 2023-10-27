@@ -291,8 +291,8 @@ mod tests {
             get_file_uri()
         );
 
-        let formatting_response: Vec<LspMessage<serde_json::Value, Vec<TextEdit>>> = vec![
-            LspMessage {
+        let formatting_response: Vec<LspMessage<serde_json::Value, Vec<TextEdit>>> =
+            vec![LspMessage {
                 jsonrpc: "2.0".to_string(),
                 id: Some(2),
                 method: None,
@@ -311,8 +311,7 @@ mod tests {
                     new_text: "SELECT 200, 200;".to_string(),
                 }]),
                 error: None,
-            },
-        ];
+            }];
 
         write_and_assert(
             req_client,
