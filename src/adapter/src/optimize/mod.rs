@@ -109,12 +109,6 @@ pub struct OptimizerConfig {
     ///
     /// The refinement happens in the LIR ⇒ LIR phase.
     pub enable_consolidate_after_union_negate: bool,
-    /// Enable relaxing of consolidation enforcers for optimization pipelines
-    /// that produce dataflows that run a computation for a single timestamp
-    /// (such as SELECTs).
-    ///
-    /// The refinement happens in the LIR ⇒ LIR phase.
-    pub enable_monotonic_oneshot_selects: bool,
     /// Enable collecting type information so that rendering can type-specialize
     /// arrangements.
     ///
@@ -129,7 +123,6 @@ impl From<&SystemVars> for OptimizerConfig {
     fn from(vars: &SystemVars) -> Self {
         Self {
             enable_consolidate_after_union_negate: vars.enable_consolidate_after_union_negate(),
-            enable_monotonic_oneshot_selects: vars.enable_monotonic_oneshot_selects(),
             enable_specialized_arrangements: vars.enable_specialized_arrangements(),
             persist_fast_path_limit: vars.persist_fast_path_limit(),
         }

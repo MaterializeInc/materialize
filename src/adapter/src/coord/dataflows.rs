@@ -296,9 +296,6 @@ impl Coordinator {
                 .enable_consolidate_after_union_negate(),
             self.catalog()
                 .system_config()
-                .enable_monotonic_oneshot_selects(),
-            self.catalog()
-                .system_config()
                 .enable_specialized_arrangements(),
         )
         .map_err(AdapterError::Internal)

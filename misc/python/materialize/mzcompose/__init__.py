@@ -51,7 +51,6 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "persist_stats_audit_percent": "100",
     "enable_ld_rbac_checks": "true",
     "enable_rbac_checks": "true",
-    "enable_monotonic_oneshot_selects": "true",
     "enable_try_parse_monotonic_iso8601_timestamp": "true",
     "enable_dangerous_functions": "true",
     "enable_disk_cluster_replicas": "true",

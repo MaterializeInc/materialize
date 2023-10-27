@@ -1833,7 +1833,6 @@ This is not expected to cause incorrect results, but could indicate a performanc
     pub fn finalize_dataflow(
         desc: DataflowDescription<OptimizedMirRelationExpr>,
         enable_consolidate_after_union_negate: bool,
-        enable_monotonic_oneshot_selects: bool,
         enable_specialized_arrangements: bool,
     ) -> Result<DataflowDescription<Self>, String> {
         // First, we lower the dataflow description from MIR to LIR.
@@ -1846,7 +1845,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
             Self::refine_union_negate_consolidation(&mut dataflow);
         }
 
-        if enable_monotonic_oneshot_selects {
+        if dataflow.is_single_time() {
             Self::refine_single_time_operator_selection(&mut dataflow);
 
             // The relaxation of the `must_consolidate` flag performs an LIR-based
@@ -1877,7 +1876,6 @@ This is not expected to cause incorrect results, but could indicate a performanc
             let config = TransformConfig { monotonic_ids };
             Self::refine_single_time_consolidation(&mut dataflow, &config)?;
         }
-
         mz_repr::explain::trace_plan(&dataflow);
 
         Ok(dataflow)
@@ -2062,10 +2060,9 @@ This is not expected to cause incorrect results, but could indicate a performanc
         fields(path.segment = "refine_single_time_operator_selection")
     )]
     fn refine_single_time_operator_selection(dataflow: &mut DataflowDescription<Self>) {
-        // Check if we have a one-shot SELECT query, i.e., a single-time dataflow.
-        if !dataflow.is_single_time() {
-            return;
-        }
+        // We should only reach here if we have a one-shot SELECT query, i.e.,
+        // a single-time dataflow.
+        assert!(dataflow.is_single_time());
 
         // Upgrade single-time plans to monotonic.
         for build_desc in dataflow.objects_to_build.iter_mut() {
@@ -2118,10 +2115,9 @@ This is not expected to cause incorrect results, but could indicate a performanc
         dataflow: &mut DataflowDescription<Self>,
         config: &TransformConfig,
     ) -> Result<(), String> {
-        // Check if we have a one-shot SELECT query, i.e., a single-time dataflow.
-        if !dataflow.is_single_time() {
-            return Ok(());
-        }
+        // We should only reach here if we have a one-shot SELECT query, i.e.,
+        // a single-time dataflow.
+        assert!(dataflow.is_single_time());
 
         let transform = transform::RelaxMustConsolidate::<T>::new();
         for build_desc in dataflow.objects_to_build.iter_mut() {

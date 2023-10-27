@@ -236,7 +236,6 @@ impl<'ctx> Optimize<'ctx, GlobalMirPlan<Resolved>> for OptimizeIndex {
         let df_desc = Plan::finalize_dataflow(
             df_desc,
             self.config.enable_consolidate_after_union_negate,
-            false, // we are not in a monotonic context here
             self.config.enable_specialized_arrangements,
         )
         .map_err(OptimizerError::Internal)?;
