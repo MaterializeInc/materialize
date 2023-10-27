@@ -886,11 +886,12 @@ impl Coordinator {
         let view_id = self.catalog_mut().allocate_user_id().await?;
         let view_oid = self.catalog_mut().allocate_oid()?;
         let raw_expr = view.expr.clone();
-        let decorrelated_expr = raw_expr.lower(self.catalog().system_config())?;
+        let decorrelated_expr = raw_expr.clone().lower(self.catalog().system_config())?;
         let optimized_expr = self.view_optimizer.optimize(decorrelated_expr)?;
         let desc = RelationDesc::new(optimized_expr.typ(), view.column_names.clone());
         let view = catalog::View {
             create_sql: view.create_sql.clone(),
+            raw_expr,
             optimized_expr,
             desc,
             conn_id: if view.temporary {
@@ -981,7 +982,7 @@ impl Coordinator {
         );
 
         // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
-        let local_mir_plan = optimizer.optimize(raw_expr)?;
+        let local_mir_plan = optimizer.optimize(raw_expr.clone())?;
         let global_mir_plan = optimizer.optimize(local_mir_plan.clone())?;
         // Timestamp selection
         let since = self.least_valid_read(&global_mir_plan.id_bundle());
@@ -1001,6 +1002,7 @@ impl Coordinator {
             name: name.clone(),
             item: CatalogItem::MaterializedView(catalog::MaterializedView {
                 create_sql,
+                raw_expr,
                 optimized_expr: local_mir_plan.expr(),
                 desc: global_lir_plan.desc(),
                 resolved_ids,
