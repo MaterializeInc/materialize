@@ -79,7 +79,7 @@ Argument              | Environment variables | Description
 Remove the `acme-corp` profile:
 
 ```shell
-mz profile remove acme-corp
+mz profile remove --profile=acme-corp
 ```
 
 ## `config get`
