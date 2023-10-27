@@ -225,6 +225,89 @@ impl ProjectionPushdown {
                 for expr in exprs.iter() {
                     columns_to_pushdown.extend(expr.support());
                 }
+
+                // Check if any output columns of the flatmap are used, before removing them.
+                let output_columns_used = columns_to_pushdown.iter().any(|c| *c >= inner_arity);
+
+                // If we use none of the output columns, we can potentially simplify the flatmap.
+                // For example, `generate_series` could be simplified to `repeat`, plausibly.
+                // There may be other examples with known output counts, but I don't know them.
+                // The timestamp-based `generate_series` functions seemingly lack a division method.
+                if !output_columns_used {
+                    use mz_expr::{BinaryFunc, TableFunc, VariadicFunc};
+
+                    match func {
+                        TableFunc::GenerateSeriesInt32 => {
+                            // The arguments in `exprs` are `[start, stop, step]`.
+                            // Per Brennan, the number of elements seems likely to be max (0, (stop - start + 1) / step)
+                            let expr = MirScalarExpr::CallVariadic {
+                                func: VariadicFunc::Greatest,
+                                exprs: vec![
+                                    MirScalarExpr::literal_ok(
+                                        mz_repr::Datum::Int32(0),
+                                        mz_repr::ScalarType::Int32,
+                                    ),
+                                    MirScalarExpr::CallBinary {
+                                        func: BinaryFunc::DivInt32,
+                                        expr1: Box::new(MirScalarExpr::CallBinary {
+                                            func: BinaryFunc::SubInt32,
+                                            expr1: Box::new(MirScalarExpr::CallBinary {
+                                                func: BinaryFunc::AddInt32,
+                                                expr1: Box::new(exprs[1].clone()),
+                                                expr2: Box::new(MirScalarExpr::literal_ok(
+                                                    mz_repr::Datum::Int32(1),
+                                                    mz_repr::ScalarType::Int32,
+                                                )),
+                                            }),
+                                            expr2: Box::new(exprs[0].clone()),
+                                        }),
+                                        expr2: Box::new(exprs[2].clone()),
+                                    },
+                                ],
+                            };
+
+                            *func = TableFunc::Repeat;
+                            *exprs = vec![expr];
+                        }
+                        TableFunc::GenerateSeriesInt64 => {
+                            // The arguments in `exprs` are `[start, stop, step]`.
+                            // Per Brennan, the number of elements seems likely to be max (0, (stop - start + 1) / step)
+                            let expr = MirScalarExpr::CallVariadic {
+                                func: VariadicFunc::Greatest,
+                                exprs: vec![
+                                    MirScalarExpr::literal_ok(
+                                        mz_repr::Datum::Int64(0),
+                                        mz_repr::ScalarType::Int64,
+                                    ),
+                                    MirScalarExpr::CallBinary {
+                                        func: BinaryFunc::DivInt64,
+                                        expr1: Box::new(MirScalarExpr::CallBinary {
+                                            func: BinaryFunc::SubInt64,
+                                            expr1: Box::new(MirScalarExpr::CallBinary {
+                                                func: BinaryFunc::AddInt64,
+                                                expr1: Box::new(exprs[1].clone()),
+                                                expr2: Box::new(MirScalarExpr::literal_ok(
+                                                    mz_repr::Datum::Int64(1),
+                                                    mz_repr::ScalarType::Int64,
+                                                )),
+                                            }),
+                                            expr2: Box::new(exprs[0].clone()),
+                                        }),
+                                        expr2: Box::new(exprs[2].clone()),
+                                    },
+                                ],
+                            };
+
+                            *func = TableFunc::Repeat;
+                            *exprs = vec![expr];
+                        }
+                        _ => {
+                            // Do nothing for table functions we do not recognize.
+                            // Doing nothing is a safe default.
+                        }
+                    }
+                }
+
                 columns_to_pushdown.retain(|c| *c < inner_arity);
 
                 reverse_permute(exprs.iter_mut(), columns_to_pushdown.iter());

@@ -451,10 +451,10 @@ impl FoldConstants {
                 ))));
             }
 
-            if limit_remaining < *diff as usize {
+            if limit_remaining < 1 as usize {
                 return None;
             }
-            limit_remaining -= *diff as usize;
+            limit_remaining -= 1 as usize;
 
             let datums = row.unpack();
             let temp_storage = RowArena::new();
