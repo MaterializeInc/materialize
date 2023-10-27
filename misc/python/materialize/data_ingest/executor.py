@@ -78,7 +78,7 @@ class Executor:
             with self.mz_conn.cursor() as cur:
                 self.execute(cur, query)
         except Exception as e:
-            print(f"Query failed: {query}")
+            print(f"Query failed: {query} {e}")
             raise QueryError(str(e), query)
 
     def execute_with_retry_on_error(

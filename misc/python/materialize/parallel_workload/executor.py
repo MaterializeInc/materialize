@@ -37,6 +37,7 @@ class Executor:
     db: "Database"
     reconnect_next: bool
     rollback_next: bool
+    last_log: str
 
     def __init__(self, rng: random.Random, cur: pg8000.Cursor, db: "Database"):
         self.rng = rng
@@ -46,6 +47,7 @@ class Executor:
         self.insert_table = None
         self.reconnect_next = True
         self.rollback_next = True
+        self.last_log = ""
 
     def set_isolation(self, level: str) -> None:
         self.execute(f"SET TRANSACTION_ISOLATION TO '{level}'")
@@ -71,6 +73,7 @@ class Executor:
             return
 
         thread_name = threading.current_thread().getName()
+        self.last_log = msg
 
         with lock:
             print(f"[{thread_name}] {msg}", file=logging)

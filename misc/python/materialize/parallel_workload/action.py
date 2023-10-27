@@ -516,7 +516,9 @@ class RenameSchemaAction(Action):
             old_name = str(schema)
             schema.rename += 1
             try:
-                exe.execute(f"ALTER SCHEMA {old_name} RENAME TO {schema}")
+                exe.execute(
+                    f"ALTER SCHEMA {old_name} RENAME TO {identifier(schema.name())}"
+                )
             except:
                 schema.rename -= 1
                 raise
@@ -524,24 +526,26 @@ class RenameSchemaAction(Action):
 
 class SwapSchemaAction(Action):
     def run(self, exe: Executor) -> None:
-        if self.db.scenario != Scenario.Rename:
+        if exe.db.scenario != Scenario.Rename:
             return
-        with self.db.lock:
-            if len(self.db.schemas) < 2:
+        with exe.db.lock:
+            db = self.rng.choice(exe.db.dbs)
+            schemas = [schema for schema in exe.db.schemas if schema.db == db]
+            if len(schemas) < 2:
                 return
-            (i1, schema1), (i2, schema2) = self.rng.sample(
-                list(enumerate(self.db.schemas)), 2
-            )
-            self.db.schemas[i1], self.db.schemas[i2] = (
-                self.db.schemas[i2],
-                self.db.schemas[i1],
+            (i1, schema1), (i2, schema2) = self.rng.sample(list(enumerate(schemas)), 2)
+            exe.db.schemas[i1], exe.db.schemas[i2] = (
+                exe.db.schemas[i2],
+                exe.db.schemas[i1],
             )
             try:
-                exe.execute(f"ALTER SCHEMA {schema1} SWAP WITH {schema2}")
+                exe.execute(
+                    f"ALTER SCHEMA {schema1} SWAP WITH {identifier(schema2.name())}"
+                )
             except:
-                self.db.schemas[i1], self.db.schemas[i2] = (
-                    self.db.schemas[i2],
-                    self.db.schemas[i1],
+                exe.db.schemas[i1], exe.db.schemas[i2] = (
+                    exe.db.schemas[i2],
+                    exe.db.schemas[i1],
                 )
                 raise
 
@@ -862,7 +866,7 @@ class CancelAction(Action):
 
     def run(self, exe: Executor) -> None:
         pid = self.rng.choice(
-            [exe.pg_pid for worker in self.workers for exe in worker.exes if exe and exe.pg_pid != -1]  # type: ignore
+            [worker.exe.pg_pid for worker in self.workers if worker.exe and worker.exe.pg_pid != -1]  # type: ignore
         )
         worker = None
         for i in range(len(self.workers)):
@@ -1007,22 +1011,22 @@ class CreateKafkaSourceAction(Action):
                 return
             source_id = exe.db.kafka_source_id
             exe.db.kafka_source_id += 1
-        potential_clusters = [c for c in exe.db.clusters if len(c.replicas) == 1]
-        cluster = self.rng.choice(potential_clusters)
-        schema = self.rng.choice(exe.db.schemas)
-        try:
-            source = KafkaSource(
-                source_id,
-                cluster,
-                schema,
-                exe.db.ports,
-                self.rng,
-            )
-            source.create(exe)
-            exe.db.kafka_sources.append(source)
-        except:
-            if exe.db.scenario != Scenario.Kill:
-                raise
+            potential_clusters = [c for c in exe.db.clusters if len(c.replicas) == 1]
+            cluster = self.rng.choice(potential_clusters)
+            schema = self.rng.choice(exe.db.schemas)
+            try:
+                source = KafkaSource(
+                    source_id,
+                    cluster,
+                    schema,
+                    exe.db.ports,
+                    self.rng,
+                )
+                source.create(exe)
+                exe.db.kafka_sources.append(source)
+            except:
+                if exe.db.scenario != Scenario.Kill:
+                    raise
 
 
 class DropKafkaSourceAction(Action):
@@ -1060,19 +1064,19 @@ class CreatePostgresSourceAction(Action):
             potential_clusters = [c for c in exe.db.clusters if len(c.replicas) == 1]
             schema = self.rng.choice(exe.db.schemas)
             cluster = self.rng.choice(potential_clusters)
-        try:
-            source = PostgresSource(
-                source_id,
-                cluster,
-                schema,
-                exe.db.ports,
-                self.rng,
-            )
-            source.create(exe)
-            exe.db.postgres_sources.append(source)
-        except:
-            if exe.db.scenario != Scenario.Kill:
-                raise
+            try:
+                source = PostgresSource(
+                    source_id,
+                    cluster,
+                    schema,
+                    exe.db.ports,
+                    self.rng,
+                )
+                source.create(exe)
+                exe.db.postgres_sources.append(source)
+            except:
+                if exe.db.scenario != Scenario.Kill:
+                    raise
 
 
 class DropPostgresSourceAction(Action):
