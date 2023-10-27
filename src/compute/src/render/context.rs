@@ -276,7 +276,9 @@ where
                 logic(&datums_borrow)
             }),
             SpecializedArrangement::RowRow(inner) => inner.as_collection(move |k, v| {
-                let datums_borrow = datums.borrow_with_many(&[k, v]);
+                let mut datums_borrow = datums.borrow();
+                datums_borrow.extend(&**k);
+                datums_borrow.extend(&**v);
                 logic(&datums_borrow)
             }),
         }
@@ -313,7 +315,9 @@ where
                 inner,
                 key,
                 move |k, v, t, d| {
-                    let mut datums_borrow = datums.borrow_with_many(&[&k, &v]);
+                    let mut datums_borrow = datums.borrow();
+                    datums_borrow.extend(&**k);
+                    datums_borrow.extend(&**v);
                     logic(&mut datums_borrow, t, d)
                 },
                 refuel,
@@ -410,7 +414,9 @@ where
                 logic(&datums_borrow)
             }),
             SpecializedArrangementImport::RowRow(inner) => inner.as_collection(move |k, v| {
-                let datums_borrow = datums.borrow_with_many(&[k, v]);
+                let mut datums_borrow = datums.borrow();
+                datums_borrow.extend(&**k);
+                datums_borrow.extend(&**v);
                 logic(&datums_borrow)
             }),
         }
@@ -447,7 +453,9 @@ where
                 inner,
                 key,
                 move |k, v, t, d| {
-                    let mut datums_borrow = datums.borrow_with_many(&[&k, &v]);
+                    let mut datums_borrow = datums.borrow();
+                    datums_borrow.extend(&**k);
+                    datums_borrow.extend(&**v);
                     logic(&mut datums_borrow, t, d)
                 },
                 refuel,
