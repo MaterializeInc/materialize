@@ -112,8 +112,9 @@ class PgWireDatabaseSqlExecutor(SqlExecutor):
         self, error: ProgrammingError | DatabaseError
     ) -> str:
         error_args = error.args[0]
-        message = error_args.get("M")
-        details = error_args.get("H")
+
+        message = error_args.get("M") if "M" in error_args else str(error_args)
+        details = error_args.get("H") if "H" in error_args else None
 
         if details is None:
             return f"{message}"
