@@ -12,6 +12,7 @@ use std::num::NonZeroUsize;
 use std::ops::DerefMut;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
 use bytesize::ByteSize;
 use differential_dataflow::trace::{Cursor, TraceReader};
@@ -36,7 +37,7 @@ use timely::container::columnation::Columnation;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::worker::Worker as TimelyWorker;
-use tracing::{error, info, span, Level};
+use tracing::{error, info, span, warn, Level};
 use uuid::Uuid;
 
 use crate::arrangement::manager::{SpecializedTraceHandle, TraceBundle, TraceManager};
@@ -44,7 +45,7 @@ use crate::logging;
 use crate::logging::compute::ComputeEvent;
 use crate::metrics::ComputeMetrics;
 use crate::render::{LinearJoinImpl, LinearJoinSpec};
-use crate::server::ResponseSender;
+use crate::server::{ComputeInstanceContext, ResponseSender};
 use crate::typedefs::TraceRowHandle;
 
 /// Worker-local state that is maintained across dataflows.
@@ -91,6 +92,8 @@ pub struct ComputeState {
     tracing_handle: Arc<TracingHandle>,
     /// Enable arrangement type specialization.
     pub enable_specialized_arrangements: bool,
+    /// Other configuration for compute
+    pub context: ComputeInstanceContext,
 }
 
 impl ComputeState {
@@ -100,6 +103,7 @@ impl ComputeState {
         persist_clients: Arc<PersistClientCache>,
         metrics: ComputeMetrics,
         tracing_handle: Arc<TracingHandle>,
+        context: ComputeInstanceContext,
     ) -> Self {
         let traces = TraceManager::new(metrics.for_traces(worker_id));
         let command_history = ComputeCommandHistory::new(metrics.for_history(worker_id));
@@ -119,6 +123,7 @@ impl ComputeState {
             metrics,
             tracing_handle,
             enable_specialized_arrangements: Default::default(),
+            context,
         }
     }
 
@@ -201,6 +206,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             enable_mz_join_core,
             enable_jemalloc_profiling,
             enable_specialized_arrangements,
+            enable_columnation_lgalloc,
             persist,
             tracing,
             grpc_client: _grpc_client,
@@ -238,6 +244,26 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 );
             }
             None => (),
+        }
+        match enable_columnation_lgalloc {
+            Some(true) => {
+                if let Some(path) = self.compute_state.context.scratch_directory.as_ref() {
+                    info!(path = ?path, "Enabling lgalloc");
+                    lgalloc::lgalloc_set_config(
+                        lgalloc::LgAlloc::new()
+                            .enable()
+                            .with_path(path.clone())
+                            .with_background_config(lgalloc::BackgroundWorkerConfig {
+                                interval: Duration::from_secs(1),
+                                batch: 32,
+                            }),
+                    );
+                } else {
+                    warn!("Not enabling lgalloc, scratch directory not specified");
+                }
+            }
+            Some(false) => lgalloc::lgalloc_set_config(&lgalloc::LgAlloc::new()),
+            None => {}
         }
 
         persist.apply(self.compute_state.persist_clients.cfg());
