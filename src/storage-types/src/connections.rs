@@ -817,7 +817,8 @@ impl CsrConnection {
         _id: GlobalId,
         connection_context: &ConnectionContext,
     ) -> Result<(), anyhow::Error> {
-        self.connect(connection_context).await?;
+        let client = self.connect(connection_context).await?;
+        client.list_subjects().await?;
         Ok(())
     }
 }

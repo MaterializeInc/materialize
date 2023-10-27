@@ -169,6 +169,7 @@ fn test_no_block() {
     mz_ore::test::timeout(Duration::from_secs(120), || {
         println!("test_no_block: starting server");
         let server = test_util::start_server(test_util::Config::default()).unwrap();
+        server.enable_feature_flags(&["enable_connection_validation_syntax"]);
 
         server.runtime.block_on(async {
             println!("test_no_block: starting mock HTTP server");
@@ -181,7 +182,7 @@ fn test_no_block() {
                 println!("test_no_block: in thread; executing create source");
                 let result = client
                 .batch_execute(&format!(
-                    "CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL 'http://{}');",
+                    "CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL 'http://{}') WITH (VALIDATE = false);",
                     schema_registry_server.addr,
                 ))
                 .await;
@@ -190,7 +191,7 @@ fn test_no_block() {
 
                 let result = client
                     .batch_execute(&format!(
-                        "CREATE CONNECTION kafka_conn TO KAFKA (BROKER '{}')",
+                        "CREATE CONNECTION kafka_conn TO KAFKA (BROKER '{}') WITH (VALIDATE = false)",
                         &*KAFKA_ADDRS,
                     ))
                     .await;
@@ -243,6 +244,7 @@ fn test_no_block() {
 #[mz_ore::test]
 fn test_drop_connection_race() {
     let server = test_util::start_server(test_util::Config::default().unsafe_mode()).unwrap();
+    server.enable_feature_flags(&["enable_connection_validation_syntax"]);
     info!("test_drop_connection_race: server started");
 
     server.runtime.block_on(async {
@@ -253,14 +255,14 @@ fn test_drop_connection_race() {
         let (client, _conn) = server.connect_async(postgres::NoTls).await.unwrap();
         client
             .batch_execute(&format!(
-                "CREATE CONNECTION conn TO CONFLUENT SCHEMA REGISTRY (URL 'http://{}')",
+                "CREATE CONNECTION conn TO CONFLUENT SCHEMA REGISTRY (URL 'http://{}') WITH (VALIDATE = false)",
                 schema_registry_server.addr,
             ))
             .await
             .unwrap();
         client
             .batch_execute(&format!(
-                "CREATE CONNECTION kafka_conn TO KAFKA (BROKER '{}')",
+                "CREATE CONNECTION kafka_conn TO KAFKA (BROKER '{}') WITH (VALIDATE = false)",
                 &*KAFKA_ADDRS,
             ))
             .await

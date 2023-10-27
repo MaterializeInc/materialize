@@ -1334,7 +1334,7 @@ DROP TABLE t;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL 'https://google.com');
+CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL 'https://google.com') WITH (VALIDATE = false);
 ----
 COMPLETE 0
 
@@ -1356,13 +1356,13 @@ COMPLETE 0
 simple conn=joe,user=joe
 SHOW CREATE CONNECTION csr_conn;
 ----
-materialize.public.csr_conn,CREATE CONNECTION "materialize"."public"."csr_conn" TO CONFLUENT SCHEMA REGISTRY (URL = 'https://google.com')
+materialize.public.csr_conn,CREATE CONNECTION "materialize"."public"."csr_conn" TO CONFLUENT SCHEMA REGISTRY (URL = 'https://google.com') WITH (VALIDATE = false)
 COMPLETE 1
 
 simple conn=child,user=child
 SHOW CREATE CONNECTION csr_conn;
 ----
-materialize.public.csr_conn,CREATE CONNECTION "materialize"."public"."csr_conn" TO CONFLUENT SCHEMA REGISTRY (URL = 'https://google.com')
+materialize.public.csr_conn,CREATE CONNECTION "materialize"."public"."csr_conn" TO CONFLUENT SCHEMA REGISTRY (URL = 'https://google.com') WITH (VALIDATE = false)
 COMPLETE 1
 
 simple conn=mz_system,user=mz_system
