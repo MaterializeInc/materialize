@@ -26,6 +26,11 @@ use bytes::{Buf, Bytes};
 use internal::SegmentedReader;
 use smallvec::SmallVec;
 
+// TODO(parkmycar): Move SegmentedBytes to it's own module.
+
+mod compact;
+pub use compact::CompactBytes;
+
 /// A cheaply clonable collection of possibly non-contiguous bytes.
 ///
 /// `Vec<u8>` or `Bytes` are contiguous chunks of memory, which are fast (e.g. better cache
