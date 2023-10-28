@@ -133,6 +133,8 @@ sink_definition ::=
     ('FORMAT' sink_format_spec)?
     ('ENVELOPE' ('DEBEZIUM'|'UPSERT'))
     ('WITH' with_options)?
+create_sink_doc_on_option ::=
+    ('KEY' | 'VALUE')? 'DOC ON' ('TYPE' type_name | 'COLUMN' column_name) '='? string
 create_source_kafka ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
