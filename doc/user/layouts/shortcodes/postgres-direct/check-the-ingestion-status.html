@@ -6,8 +6,8 @@ In this step, you'll first verify that the source is running and then check the 
 
     ```sql
     WITH
-      source_id AS
-      (SELECT id FROM mz_objects WHERE name = 'mz_source')
+      source_ids AS
+      (SELECT id FROM mz_sources WHERE name = 'mz_source')
     SELECT *
     FROM
       mz_internal.mz_source_statuses
@@ -16,8 +16,8 @@ In this step, you'll first verify that the source is running and then check the 
             SELECT referenced_object_id
             FROM mz_internal.mz_object_dependencies
             WHERE
-              object_id = (SELECT id FROM source_id)
-            UNION SELECT id FROM source_id
+              object_id IN (SELECT id FROM source_ids)
+            UNION SELECT id FROM source_ids
           )
           AS sources
         ON mz_source_statuses.id = sources.referenced_object_id;
@@ -29,28 +29,29 @@ In this step, you'll first verify that the source is running and then check the 
 
     ```sql
     WITH
-      source_id AS
-      (SELECT id FROM mz_objects WHERE name = 'mz_source')
-    SELECT bool_and(snapshot_committed) AS snapshot_committed
+      source_ids AS
+      (SELECT id FROM mz_sources WHERE name = 'mz_source')
+    SELECT sources.object_id, bool_and(snapshot_committed) AS snapshot_committed
     FROM
       mz_internal.mz_source_statistics
         JOIN
           (
-            SELECT referenced_object_id
+            SELECT object_id, referenced_object_id
             FROM mz_internal.mz_object_dependencies
             WHERE
-              object_id = (SELECT id FROM source_id)
-            UNION SELECT id FROM source_id
+              object_id IN (SELECT id FROM source_ids)
+            UNION SELECT id, id FROM source_ids
           )
           AS sources
-        ON mz_source_statistics.id = sources.referenced_object_id;
+        ON mz_source_statistics.id = sources.referenced_object_id
+      GROUP BY sources.object_id;
     ```
     <p></p>
 
     ```nofmt
-     snapshot_committed
-    --------------------
-     t
+    object_id | snapshot_committed
+    ----------|------------------
+     u144     | t
     (1 row)
     ```
 
