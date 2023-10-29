@@ -447,7 +447,14 @@ pub enum SourceIncludeMetadataType {
     Timestamp,
     Partition,
     Offset,
+    Header(KafkaHeader),
     Headers,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct KafkaHeader {
+    pub key: String,
+    pub use_bytes: bool,
 }
 
 impl AstDisplay for SourceIncludeMetadataType {
@@ -457,6 +464,7 @@ impl AstDisplay for SourceIncludeMetadataType {
             SourceIncludeMetadataType::Timestamp => f.write_str("TIMESTAMP"),
             SourceIncludeMetadataType::Partition => f.write_str("PARTITION"),
             SourceIncludeMetadataType::Offset => f.write_str("OFFSET"),
+            SourceIncludeMetadataType::Header(_) => f.write_str("HEADER"),
             SourceIncludeMetadataType::Headers => f.write_str("HEADERS"),
         }
     }
@@ -471,10 +479,27 @@ pub struct SourceIncludeMetadata {
 
 impl AstDisplay for SourceIncludeMetadata {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_node(&self.ty);
-        if let Some(alias) = &self.alias {
-            f.write_str(" AS ");
-            f.write_node(alias);
+        match &self.ty {
+            SourceIncludeMetadataType::Header(KafkaHeader { key, use_bytes }) => {
+                f.write_node(&self.ty);
+                f.write_str(" '");
+                f.write_str(&display::escape_single_quote_string(key));
+                f.write_str("'");
+                if let Some(alias) = &self.alias {
+                    f.write_str(" AS ");
+                    f.write_node(alias);
+                }
+                if *use_bytes {
+                    f.write_str("BYTES");
+                }
+            }
+            _ => {
+                f.write_node(&self.ty);
+                if let Some(alias) = &self.alias {
+                    f.write_str(" AS ");
+                    f.write_node(alias);
+                }
+            }
         }
     }
 }

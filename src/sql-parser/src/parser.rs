@@ -3621,15 +3621,17 @@ impl<'a> Parser<'a> {
         if self.parse_keyword(INCLUDE) {
             self.parse_comma_separated(|parser| {
                 let ty = match parser
-                    .expect_one_of_keywords(&[KEY, TIMESTAMP, PARTITION, OFFSET, HEADERS])?
+                    .expect_one_of_keywords(&[KEY, TIMESTAMP, PARTITION, OFFSET, HEADERS, HEADER])?
                 {
                     KEY => SourceIncludeMetadataType::Key,
                     TIMESTAMP => SourceIncludeMetadataType::Timestamp,
                     PARTITION => SourceIncludeMetadataType::Partition,
                     OFFSET => SourceIncludeMetadataType::Offset,
+                    HEADER => return parser.parse_kafka_header(),
                     HEADERS => SourceIncludeMetadataType::Headers,
                     _ => unreachable!("only explicitly allowed items can be parsed"),
                 };
+
                 let alias = parser
                     .parse_keyword(AS)
                     .then(|| parser.parse_identifier())
@@ -3639,6 +3641,22 @@ impl<'a> Parser<'a> {
         } else {
             Ok(vec![])
         }
+    }
+
+    fn parse_kafka_header(&mut self) -> Result<SourceIncludeMetadata, ParserError> {
+        let key = self.parse_literal_string()?;
+        let alias = self
+            .parse_keyword(AS)
+            .then(|| self.parse_identifier())
+            .transpose()?;
+        let use_bytes = self.parse_keyword(BYTES);
+
+        let header = KafkaHeader { key, use_bytes };
+
+        Ok(SourceIncludeMetadata {
+            ty: SourceIncludeMetadataType::Header(header),
+            alias,
+        })
     }
 
     fn parse_discard(&mut self) -> Result<Statement<Raw>, ParserError> {

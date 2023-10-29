@@ -628,12 +628,13 @@ impl PartialOrder for MzOffset {
 impl TotalOrder for MzOffset {}
 
 /// Which piece of metadata a column corresponds to
-#[derive(Arbitrary, Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum KafkaMetadataKind {
     Partition,
     Offset,
     Timestamp,
     Headers,
+    Header { key: String, use_bytes: bool },
 }
 
 impl RustType<ProtoKafkaMetadataKind> for KafkaMetadataKind {
@@ -645,6 +646,10 @@ impl RustType<ProtoKafkaMetadataKind> for KafkaMetadataKind {
                 KafkaMetadataKind::Offset => Kind::Offset(()),
                 KafkaMetadataKind::Timestamp => Kind::Timestamp(()),
                 KafkaMetadataKind::Headers => Kind::Headers(()),
+                KafkaMetadataKind::Header { key, use_bytes } => Kind::Header(ProtoKafkaHeader {
+                    key: key.clone(),
+                    use_bytes: *use_bytes,
+                }),
             }),
         }
     }
@@ -659,6 +664,9 @@ impl RustType<ProtoKafkaMetadataKind> for KafkaMetadataKind {
             Kind::Offset(()) => KafkaMetadataKind::Offset,
             Kind::Timestamp(()) => KafkaMetadataKind::Timestamp,
             Kind::Headers(()) => KafkaMetadataKind::Headers,
+            Kind::Header(ProtoKafkaHeader { key, use_bytes }) => {
+                KafkaMetadataKind::Header { key, use_bytes }
+            }
         })
     }
 }
@@ -1480,9 +1488,15 @@ impl<C: ConnectionAccess> SourceConnection for KafkaSourceConnection<C> {
             .iter()
             .map(|(name, kind)| {
                 let typ = match kind {
-                    KafkaMetadataKind::Partition => ScalarType::Int32,
-                    KafkaMetadataKind::Offset => ScalarType::UInt64,
-                    KafkaMetadataKind::Timestamp => ScalarType::Timestamp { precision: None },
+                    KafkaMetadataKind::Partition => ScalarType::Int32.nullable(false),
+                    KafkaMetadataKind::Offset => ScalarType::UInt64.nullable(false),
+                    KafkaMetadataKind::Timestamp => {
+                        ScalarType::Timestamp { precision: None }.nullable(false)
+                    }
+                    KafkaMetadataKind::Header { use_bytes, .. } => use_bytes
+                        .then_some(ScalarType::Bytes)
+                        .unwrap_or(ScalarType::String)
+                        .nullable(true),
                     KafkaMetadataKind::Headers => ScalarType::List {
                         element_type: Box::new(ScalarType::Record {
                             fields: vec![
@@ -1504,9 +1518,10 @@ impl<C: ConnectionAccess> SourceConnection for KafkaSourceConnection<C> {
                             custom_id: None,
                         }),
                         custom_id: None,
-                    },
+                    }
+                    .nullable(false),
                 };
-                (&**name, typ.nullable(false))
+                (&**name, typ)
             })
             .collect()
     }

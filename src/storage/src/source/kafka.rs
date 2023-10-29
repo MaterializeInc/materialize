@@ -12,6 +12,7 @@ use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::rc::Rc;
+use std::str;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -1010,6 +1011,30 @@ fn construct_source_message(
                     })
                     .into();
                 packer.push(d)
+            }
+            KafkaMetadataKind::Header { key, use_bytes } => {
+                if let Some(headers) = msg.headers() {
+                    let d = headers
+                        .iter()
+                        //match the first header (FIXME: according to which order?)
+                        .find(|header| header.key == key)
+                        .map(|header| match header.value {
+                            Some(v) => {
+                                if *use_bytes {
+                                    Datum::Bytes(v)
+                                } else {
+                                    match str::from_utf8(v) {
+                                        Ok(str) => Datum::String(str),
+                                        Err(_) => Datum::Null,
+                                    }
+                                }
+                            }
+                            None => Datum::Null,
+                        })
+                        //if header is not found, default to null
+                        .unwrap_or(Datum::Null);
+                    packer.push(d);
+                }
             }
             KafkaMetadataKind::Headers => {
                 packer.push_list_with(|r| {

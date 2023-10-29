@@ -37,9 +37,9 @@ use mz_sql_parser::ast::{
     AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement,
     CommentObjectType, CommentStatement, CreateConnectionOption, CreateConnectionOptionName,
     CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
-    DeferredItemName, DocOnIdentifier, DocOnSchema, DropOwnedStatement, MaterializedViewOption,
-    MaterializedViewOptionName, SetRoleVar, UnresolvedItemName, UnresolvedObjectName,
-    UnresolvedSchemaName, Value,
+    DeferredItemName, DocOnIdentifier, DocOnSchema, DropOwnedStatement, KafkaHeader,
+    MaterializedViewOption, MaterializedViewOptionName, SetRoleVar, UnresolvedItemName,
+    UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 use mz_sql_parser::ident;
 use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnection};
@@ -683,7 +683,7 @@ pub fn plan_create_source(
 
             let metadata_columns = include_metadata
                 .into_iter()
-                .flat_map(|item| match item.ty {
+                .flat_map(|item| match &item.ty {
                     SourceIncludeMetadataType::Timestamp => {
                         let name = match item.alias.as_ref() {
                             Some(name) => name.to_string(),
@@ -706,11 +706,24 @@ pub fn plan_create_source(
                         Some((name, KafkaMetadataKind::Offset))
                     }
                     SourceIncludeMetadataType::Headers => {
-                        let name = match item.alias.as_ref() {
+                        let name: String = match item.alias.as_ref() {
                             Some(name) => name.to_string(),
                             None => "headers".to_owned(),
                         };
                         Some((name, KafkaMetadataKind::Headers))
+                    }
+                    SourceIncludeMetadataType::Header(KafkaHeader { key, use_bytes }) => {
+                        let name: String = match item.alias.as_ref() {
+                            Some(name) => name.to_string(),
+                            None => key.clone(),
+                        };
+                        Some((
+                            name,
+                            KafkaMetadataKind::Header {
+                                key: key.clone(),
+                                use_bytes: *use_bytes,
+                            },
+                        ))
                     }
                     SourceIncludeMetadataType::Key => {
                         // handled below
