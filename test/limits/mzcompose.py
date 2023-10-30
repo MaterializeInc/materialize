@@ -1239,8 +1239,14 @@ class FilterSubqueries(Generator):
 
             > INSERT INTO t1 VALUES (1);
 
-            #Increase SQL timeout to 10 minutes (~5 should be enough).
-            $ set-sql-timeout duration=600s
+            # Increase SQL timeout to 10 minutes (~5 should be enough).
+            #
+            # Update: Now 15 minutes, not 10. This query appears to scale
+            # super-linear with COUNT. Here are timings for the first few
+            # multiples of 10 on a fresh staging env.
+            #
+            # 10: 200ms, 20: 375ms, 30: 1.5s, 40: 5.5s, 50: 16s, 60: 45s
+            $ set-sql-timeout duration=900s
 
             > SELECT * FROM t1 AS a1 WHERE {
                 " AND ".join(
