@@ -375,3 +375,12 @@ TEXT_OPERATION_TYPES.append(
         TextReturnTypeSpec(),
     )
 )
+
+TEXT_OPERATION_TYPES.append(
+    DbFunction(
+        "constant_time_eq",
+        [TextOperationParam(), TextOperationParam()],
+        BooleanReturnTypeSpec(),
+        is_pg_compatible=False,
+    )
+)

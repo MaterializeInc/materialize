@@ -292,6 +292,12 @@
   - signature: 'get_byte(b: bytea, n: int) -> int'
     description: Return the `n`th byte from `b`, where the left-most byte in `b` is at the 0th position.
 
+  - signature: 'constant_time_eq(a: bytea, b: bytea) -> bool'
+    description: Performs a constant-time comparison between byte arrays `a` and `b`. Returns `true` if the arrays are identical, otherwise returns `false`. This method is designed to mitigate timing attacks by ensuring the comparison takes the same amount of time regardless of the content of the arrays.
+
+  - signature: 'constant_time_eq(a: text, b: text) -> bool'
+    description: Performs a constant-time comparison between strings `a` and `b` by first converting them to byte sequences. Returns `true` if the strings are identical, otherwise returns `false`. This method is designed to mitigate timing attacks by ensuring the comparison takes the same amount of time regardless of the content of the strings.
+
   - signature: 'left(s: str, n: int) -> str'
     description: The first `n` characters of `s`. If `n` is negative, all but the last `|n|` characters of `s`.
 

@@ -1619,3 +1619,44 @@ query T
 SELECT translate('hello', 'fl', 'tx')
 ----
 hexxo
+
+# constant_time_eq for string
+
+statement ok
+CREATE TABLE test_constant_time_eq (ord integer, str1 text, str2 text);
+
+statement ok
+INSERT INTO test_constant_time_eq VALUES
+    (1, NULL, NULL),
+    (2, NULL, ''),
+    (3, '', ''),
+    (4, '', ' '),
+    (5, NULL, 'abc'),
+    (6, 'abc', 'abc'),
+    (7, 'abc', 'abcd'),
+    (8, 'abcd', 'abc'),
+    (9, 'ABC', 'abc'),
+    (10, ' abc', 'abc'),
+    (11, '\t\n3@\u0930\u0930', '\t\n3@\u0930\u0930'),
+    (12, '.*', 'aa');
+
+query B
+SELECT constant_time_eq(str1, str2) FROM test_constant_time_eq ORDER BY ord;
+----
+NULL
+NULL
+true
+false
+NULL
+true
+false
+false
+false
+false
+true
+false
+
+query I
+SELECT count(*) FROM test_constant_time_eq WHERE constant_time_eq(str1, str2) <> (str1 = str2);
+----
+0

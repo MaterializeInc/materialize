@@ -53,7 +53,7 @@ CREATE SOURCE my_segment_source IN CLUSTER webhooks_cluster FROM WEBHOOK
   INCLUDE HEADERS
   CHECK (
     WITH ( BODY BYTES, HEADERS, SECRET segment_shared_secret AS secret BYTES)
-    decode(headers->'x-signature', 'hex') = hmac(body, secret, 'sha1')
+    constant_time_eq(decode(headers->'x-signature', 'hex'), hmac(body, secret, 'sha1'))
   );
 ```
 
