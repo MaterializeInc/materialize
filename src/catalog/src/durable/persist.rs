@@ -104,6 +104,8 @@ impl StateUpdate {
             system_privileges,
             audit_log_updates,
             storage_usage_updates,
+            // Persist implementation does not use the connection timeout.
+            connection_timeout: _,
         } = txn_batch;
         let databases = from_batch(databases, ts, StateUpdateKind::Database);
         let schemas = from_batch(schemas, ts, StateUpdateKind::Schema);
@@ -800,12 +802,6 @@ impl DurableCatalogState for PersistCatalogState {
             ))
             .into())
         }
-    }
-
-    async fn set_connect_timeout(&mut self, _connect_timeout: Duration) {
-        // Persist is able to set this timeout internally so this is a no-op. The connect timeout
-        // passed to this function in production and the timeout Persist uses are both derived
-        // from the "crdb_connect_timeout" system variable.
     }
 
     // TODO(jkosh44) For most modifications we delegate to transactions to avoid duplicate code.

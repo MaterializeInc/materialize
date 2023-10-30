@@ -394,6 +394,10 @@ impl Catalog {
         mz_repr::VARIABLE_LENGTH_ROW_ENCODING
             .store(variable_length_row_encoding, atomic::Ordering::SeqCst);
 
+        // Now that LD is loaded, set the intended catalog timeout.
+        // TODO: Move this into the catalog constructor.
+        txn.set_connection_timeout(state.system_config().crdb_connect_timeout());
+
         // Add any new builtin Clusters or Cluster Replicas that may be newly defined.
         if !is_read_only {
             add_new_builtin_clusters_migration(&mut txn)?;
@@ -851,14 +855,6 @@ impl Catalog {
             transient_revision: 1,
             storage: Arc::new(tokio::sync::Mutex::new(storage)),
         };
-
-        // After LD is loaded, set the intended stash timeout.
-        // TODO: Move this into the stash constructor.
-        catalog
-            .storage()
-            .await
-            .set_connect_timeout(catalog.system_config().crdb_connect_timeout())
-            .await;
 
         // Load public keys for SSH connections from the secrets store to the catalog
         for (id, entry) in catalog.state.entry_by_id.iter_mut() {
