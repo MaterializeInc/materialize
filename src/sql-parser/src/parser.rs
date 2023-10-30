@@ -6993,7 +6993,7 @@ impl<'a> Parser<'a> {
         if self.parse_keyword(TIMESTAMP) {
             self.parse_explain_timestamp()
                 .map_parser_err(StatementKind::ExplainTimestamp)
-        } else if self.parse_keyword(KEY) || self.parse_keyword(VALUE) {
+        } else if self.peek_keyword(KEY) || self.peek_keyword(VALUE) {
             self.parse_explain_schema()
                 .map_parser_err(StatementKind::ExplainSchema)
         } else {
@@ -7145,7 +7145,6 @@ impl<'a> Parser<'a> {
     /// Parse an `EXPLAIN [KEY|VALUE] SCHEMA` statement assuming that the `EXPLAIN [KEY|VALUE]` tokens
     /// have already been consumed
     fn parse_explain_schema(&mut self) -> Result<Statement<Raw>, ParserError> {
-        self.prev_token();
         let schema_for = match self.expect_one_of_keywords(&[KEY, VALUE])? {
             KEY => ExplainSchemaFor::Key,
             VALUE => ExplainSchemaFor::Value,
