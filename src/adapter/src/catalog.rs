@@ -4629,7 +4629,7 @@ mod tests {
     use mz_ore::collections::CollectionExt;
     use mz_ore::now::{to_datetime, NOW_ZERO, SYSTEM_TIME};
     use mz_ore::task;
-    use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_UNPINNED_OID};
+    use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_UNPINNED_OID, FIRST_USER_OID};
     use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
     use mz_repr::namespaces::{INFORMATION_SCHEMA, PG_CATALOG_SCHEMA};
     use mz_repr::role_id::RoleId;
@@ -5422,6 +5422,13 @@ mod tests {
                                 "{} reused oid {}",
                                 func.name,
                                 imp.oid
+                            );
+
+                            assert!(
+                                imp.oid < FIRST_USER_OID,
+                                "built-in function {} erroneously has OID in user space ({})",
+                                func.name,
+                                imp.oid,
                             );
 
                             // For functions that have a postgres counterpart, verify that the name and
