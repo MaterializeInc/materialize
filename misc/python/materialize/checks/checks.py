@@ -18,10 +18,13 @@ TESTDRIVE_NOP = "$ nop"
 
 
 class Check:
+    # Has to be set for the class already, not just in the constructor, so that
+    # we can change the value for the entire class in the decorator
+    enabled: bool = True
+
     def __init__(self, base_version: MzVersion, rng: Random | None) -> None:
         self.base_version = base_version
         self.rng = rng
-        self.enabled = True
 
     def _can_run(self, e: Executor) -> bool:
         return True
@@ -74,10 +77,10 @@ def disabled(ignore_reason: str):
         def __init__(self, cls: type[Check]):
             assert issubclass(cls, Check)
             self.check_class = cls
+            self.check_class.enabled = False
 
         def __call__(self, *cls_ars: Any):
             check = self.check_class(*cls_ars)
-            check.enabled = False
             return check
 
     return ClassWrapper
