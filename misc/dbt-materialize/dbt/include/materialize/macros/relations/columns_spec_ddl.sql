@@ -21,7 +21,7 @@
   {% if not assertions %}
     {{ exceptions.warn(
           """
-          Materialize does not support constraints.
+          Materialize only supports non-null assertion constraints.
           """
       )}}
   {% endif %}

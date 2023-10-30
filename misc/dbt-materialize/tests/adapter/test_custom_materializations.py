@@ -14,7 +14,7 @@
 # limitations under the License.
 
 import pytest
-from dbt.tests.util import check_relations_equal, run_dbt
+from dbt.tests.util import check_relations_equal, run_dbt, run_sql_with_adapter
 from fixtures import (
     actual_indexes,
     expected_indexes,
@@ -77,6 +77,23 @@ class TestCustomMaterializations:
         check_relations_equal(
             project.adapter,
             ["test_materialized_view_index", "test_table_index"],
+        )
+        # confirm null assertions
+        nullability_assertions_model = ".".join(
+            [
+                project.adapter.config.credentials.database,
+                project.adapter.config.credentials.schema,
+                "test_materialized_view_nullability_assertions",
+            ]
+        )
+        nullability_assertions_ddl = run_sql_with_adapter(
+            project.adapter,
+            f"show create materialized view {nullability_assertions_model}",
+            fetch="one",
+        )
+        assert (
+            'WITH (ASSERT NOT NULL "a", ASSERT NOT NULL "b")'
+            in nullability_assertions_ddl[1]
         )
 
         check_relations_equal(project.adapter, ["actual_indexes", "expected_indexes"])
