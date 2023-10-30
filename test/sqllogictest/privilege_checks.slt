@@ -1713,6 +1713,94 @@ DROP TYPE ty;
 ----
 COMPLETE 0
 
+## Explain schema
+
+simple conn=mz_system,user=mz_system
+CREATE TYPE ty AS (a text);
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON TYPE ty FROM PUBLIC;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE TABLE t (a ty);
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE CONNECTION kafka_conn TO KAFKA (BROKER 'localhost:9092') WITH (VALIDATE = false);
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL 'https://google.com');
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+EXPLAIN VALUE SCHEMA FOR CREATE SINK sink FROM t INTO KAFKA CONNECTION kafka_conn (TOPIC 'topic') KEY (a) NOT ENFORCED FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT;
+----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON TYPE ty TO joe;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SCHEMA materialize.public TO joe;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE on CONNECTION kafka_conn TO joe;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE on CONNECTION csr_conn TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+EXPLAIN VALUE SCHEMA FOR CREATE SINK sink FROM t INTO KAFKA CONNECTION kafka_conn (TOPIC 'topic') KEY (a) NOT ENFORCED FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT;
+----
+{"fields":[{"name":"a","type":["null",{"fields":[{"name":"a","type":["null","string"]}],"name":"record0","namespace":"com.materialize.sink","type":"record"}]}],"name":"envelope","type":"record"}
+COMPLETE 1
+
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON TYPE ty FROM joe;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON SCHEMA materialize.public FROM joe;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP TABLE t;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP TYPE ty;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP CONNECTION kafka_conn;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP CONNECTION csr_conn;
+----
+COMPLETE 0
+
 ## View
 
 simple conn=mz_system,user=mz_system

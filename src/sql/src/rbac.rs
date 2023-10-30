@@ -776,6 +776,7 @@ fn generate_rbac_requirements(
                     let schema_id: ObjectId = item.name().qualifiers.clone().into();
                     vec![(SystemObjectId::Object(schema_id), AclMode::USAGE, role_id)]
                 },
+                item_usage: &CREATE_ITEM_USAGE,
                 ..Default::default()
             }
         }
