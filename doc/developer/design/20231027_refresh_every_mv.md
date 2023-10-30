@@ -1,0 +1,154 @@
+# Tuning Freshness on Materialized Views
+
+- Associated:
+  - [#13762: CREATE MATERIALIZED VIEW could support REFRESH modifiers](https://github.com/MaterializeInc/materialize/issues/13762)
+  - [#6745: Consider WITH FREQUENCY option for sources, views, sinks.](https://github.com/MaterializeInc/materialize/issues/6745)
+
+## TLDR
+
+Users should be able to configure materialized views to compute result changes less frequently, but cheaper. It turns out that we can do this by simply
+- turning on a replica only when we want a result refresh, and
+- rounding up the timestamps of data and frontiers that go into the Persist sink to the time of the next result refresh.
+
+
+## The Problem
+
+Materialize keeps materialized views fresh by running a dataflow continuously. These dataflows consume significant resources, but the resource usage is worth it for a large class of use cases. Therefore, the use cases that are the main focus of Materialize are the ones that can derive value from always fresh computation results, termed Operational Data Warehouse (ODW) use cases.
+
+ODW use cases typically focus on the most recent input data (hot data). However, there is often a significantly larger amount of older data lying around (cold data). The cold data is often of the same kind as the hot data, and therefore we postulate that users will often want to perform the same or similar computations on these. In this case, it would be convenient for users to simply use Materialize for both hot and cold computations, and not complicate their architectures by implementing the same computations in both Materialize and a different, traditional data warehouse.
+
+The problem is that Materialize is currently not so cost-effective for running a materialized view on cold data, because
+- there is significantly more cold data than hot data, so a much larger compute instance is needed to keep compute state in memory, and
+- keeping results always fresh is not so valuable for cold data.
+
+This currently prevents us from capturing these cold use cases, even though they feel very close to our hot, core ODW use cases.
+
+## Success Criteria
+
+We should give users a way to trade off freshness vs. cost.
+
+Note that other systems also expose similar knobs. Making this trade-off tunable by users is an important point also in the [Napa paper](http://www.vldb.org/pvldb/vol14/p2986-sankaranarayanan.pdf). Snowflake's dynamic tables allow the user to configure a ["target lag"](https://docs.snowflake.com/en/user-guide/dynamic-tables-refresh#understanding-target-lag).
+
+1. Importantly, our solution shouldn't complicate the user's architecture. For example, the user shouldn't need to externally schedule jobs that perform an array of non-trivial tasks (and manage their possible failures), such as managing multistep table updates (e.g., first delete old results than insert new results) and turning replicas on and off. This is a crucial criterion, because if we can only propose a complicated solution, then users won't be better off with our solution than with using a different system for the cold data.
+
+2. Another critical requirement is that our solution should achieve a significant cost reduction. This is because the cold data is often significantly larger than the hot data. For example, at one important user, the hot data is from the last 14 days, while the cold data is the same data but from the last 5 years.
+
+3. The slowly updated results should be queryable together with other, normal objects. This is important because sometimes we might want to join the cold results with other objects. Also, one important user needs a unified view of the hot and cold results, so we should be able to union them.
+
+4. We shouldn't hold back Persist compaction of inputs to the time of the last refresh. This is to avoid potentially interfering with other parts of the system.
+
+## Out of Scope
+
+We are targeting only materialized views, but not indexes for now. Indexes are useful for sub-second querying of data, which is probably not so valuable in the case of cold data.
+
+We are not aiming to cover the entire range of possible freshness-cost trade-off settings. In particular:
+- We are not aiming here to make results more fresh at a higher cost than what Materialize can provide by default. For efforts in that direction, see [#19322: Re-enable TIMESTAMP INTERVAL source option](https://github.com/MaterializeInc/materialize/issues/19322).
+- A more subtle scoping consideration is that we are also not targeting the range of settings that would require incremental computation, but non-continuous dataflows (and on-disk computation state). Instead, we now focus only on the easy case that is the range of freshness where redoing the entire computation periodically yields a lower cost than having a continuously running dataflow. This means that setting a refresh interval of less than 1 hour will not work well in most cases. It might be that even a few-hour refresh interval won't make using this feature worthwhile. Note that for one important user, a 1-day refresh interval is perfectly ok, and even a few-day refresh interval will probably be ok for them. (Later, we might be able to cover this missing intermediate range of freshness by an entirely different approach: suspending the replica process and saving its entire state to S3 and a local disk cache, and restoring it when a refresh is needed. [There are existing techniques for saving process state, e.g., CRIU](https://faun.pub/kubernetes-checkpointing-a-definitive-guide-33dd1a0310f6).)
+
+The below proposal only considers timelines that have totally ordered timestamps, and whose timestamps relate to wall clock time (as opposed to, e.g., transaction sequence ids of some system).
+
+## Solution Proposal
+
+We propose providing users an option on materialized views called `REFRESH EVERY <interval>` (the actual syntax should probably allow for optionally configuring two more things, see [below](#further-requirements)), to which in response we will
+
+_A._ automatically turn on a replica periodically, at times when we want to perform a result refresh, and
+
+_B._ round up the timestamps of data and frontiers that go into the Persist sink that is writing the results of the materialized view.
+
+### _A._ Automatically Turning on a Replica Periodically
+
+_A._ alone could already achieve success criteria 1. and 2. How this would work is that we would compute the materialized view on a cluster that has 0 replicas most of the time, and Materialize would automatically add a replica briefly when it is time to perform a refresh. This replica would rehydrate, and compute result updates for the Materialized view. After we observe that the materialized view's upper frontier has passed the time of the needed refresh, we'd automatically drop the replica.
+
+We could implement this, for example, in `ActiveComputeController::process`: We'd periodically check whether we need to spin a replica up or down: We'd check the progress of the materialized view, and
+- if progress is not where it should be, and we don't have a replica, then create a replica;
+- if progress is good, and we have a replica, then drop it.
+
+However, _A._ alone falls short of the rest of the success criteria: The problem is that the upper frontier of the materialized view would be stuck at the time when the replica was dropped. This would mean that it wouldn't satisfy 3., i.e, the slowly updated materialized view being queryable together with other, normal objects. This is because the sinces (and uppers) of other objects would be far past the stuck upper, making timestamp selection impossible for such queries that involve both a slowly changing materialized view and normal objects (even in `SERIALIZABLE` mode). It would also not satisfy criterion 4., because Persist compaction would be held back by the stuck upper, due to Persist expecting further updates from the time near the stuck upper frontier.
+
+### _B._ Rounding Up Timestamps Going Into the Persist Sink
+
+We can solve the shortcomings of _A._ by rounding up timestamps that go into the Persist sink that is writing the results of the materialized view. The modified timestamps should fall to the time of the next desired refresh.
+
+Importantly, we have to round up both the timestamps in the data and also the frontiers. This is because we want the upper frontier of the materialized view to jump ahead to the time of the next refresh (i.e., to the end of the current refresh interval), indicating to the rest of the system that the materialized view won't receive data whose timestamp is before the time of the next refresh. This is needed because normally a replica sending us `FrontierUpper`s would keep ticking the upper of the materialized view forward, but in our case we want to have 0 replicas for most of the refresh interval. So, what we do instead is to make the upper jump forward while we have the replica, and then we don't need to manipulate the upper later while we have 0 replicas.
+
+Contrast the above behavior of upper to what _A._ alone would get us: With only _A._, the upper would be mostly stuck near the _beginning_ of the current refresh interval. With _B._, the upper will be mostly standing at the _end_ of the current refresh interval. This behavior of upper gets us halfway to achieving success criterion 3.: The materialized view's upper won't impede timestamp selection of queries that also involve other objects, because the MV's upper will be far ahead of the sinces of other, normal objects (that don't have a refresh interval specified).
+
+We still need to consider how the since frontier of the materialized view moves. Crucially, it shouldn't jump forward to near the time of the next refresh, because that would again preclude timestamp selection when querying the MV together with other objects, violating success criterion 3., because the since of the MV would be far ahead of the uppers of normal objects. When initially designing this feature, we mistakenly thought that without some further code modifications the since would jump forward to the next refresh because that is the since that the Compute controller would request on the MV: tailing the upper by 1 second (or more generally, by the compaction window of the MV). However, it turns out that the Adapter is keeping the sinces of all objects from jumping into the future in any case: The Coordinator is keeping read holds on all objects, and ticks these read holds forward every second. ([See `Coordinator::advance_timelines`](https://github.com/MaterializeInc/materialize/blob/b89d4961f8a8ccd172be2dc46f7b83bb00b9b871/src/adapter/src/coord/timeline.rs#L645).)
+
+A code modularity argument could be made for not relying on the Adapter to hold the sinces near the current time: One could say that the Compute Controller should be keeping sinces reasonable without relying on other components (the Adapter). However, I would counter this argument by saying that it is the Adapter's responsibility to keep sinces from moving into the future, because it's the Adapter that will be issuing the queries that need the sinces to be near the current time. Therefore, I'd say it's ok to rely on Adapter holding back the sinces from jumping far into the future.
+
+Note that the compaction of downstream objects, e.g. an index on the materialized view, will be similarly controlled by the Adapter, even if their uppers jump forward together with the materialized view.
+
+## Further Requirements and Refinements
+
+### Starting the Refresh Early
+
+Notice that if we turn on the replica at exactly the moment when a refresh should happen, then the MV's upper will be stuck for the time that the refresh takes. This is because the upper would still be at the logical time of the refresh during most of the time of the replica's rehydration. (More specifically, until the replica is finished processing the input data whose timestamps are before the time of the refresh, which are rounded up to the time of the refresh.) This would violate success criterion 3. for the time of performing the refresh, because other objects' sinces would keep ticking forward, and would therefore have no overlap with our special materialized view's since-upper interval.
+
+We can solve this problem by starting up the replica a bit before the exact moment of the refresh, so that it can rehydrate already. For example, let's say we have an MV that is to be updated at every midnight. If we know that a refresh will take approximately 1 hour, then we can start up the replica at, say, 10:50 PM, so that it will be rehydrated by about 11:50 PM. At this point, most of the Compute processing that is needed for the refresh has already happened. Now the replica just needs to process the last 10 minutes of input data until midnight at a normal pace. We let the replica run until the MV's upper passes midnight (and jumps to the next midnight), which should happen within a few seconds after midnight. Note that before midnight, queries against the MV will still read the old state (as they should), because the new data is written at timestamps rounded up to midnight.
+
+How do we know how much earlier than the refresh time should we turn on the replica, that is, how much time the refresh will take? In the first version of this feature, we can let the user set this explicitly by something like `REFRESH EVERY <interval> EARLY <interval>`. Later, we should record the times the refreshes take, and infer the time requirement of the next refresh based on earlier ones. Note that this will be complicated by the fact that we have different instance types [that have wildly differing CPU performance](https://materializeinc.slack.com/archives/CM7ATT65S/p1697816482502819).
+
+### Covering the Times Between Creating the MV and the First Refresh
+
+Consider what happens with the materialized view during the time between creating the materialized view and the first refresh. With the solution proposed so far, we would immediately move the upper of the materialized view to the first refresh time. The issue with this is that the materialized view is initially empty, and we would lock in this empty state until the first refresh. This means that querying the materialized view in this time range would always yield an empty result. Note that there was a recent fix for such an issue with sources; we shouldn't introduce now this problem in a new way.
+
+We could solve this simply as follows: When rounding up times, we would treat times not beyond the `as_of` of the MV specially: we don't round them up, but keep them as it is. (These times should actually be only the `as_of` itself, as sources modify earlier times to the `as_of`.) This would mean that the materialized view's upper would move past the `as_of` only once it has managed to process all input data that happened no later than the creation of the materialized view. If we don't give a replica to the MV initially, then this would simply mean that queries would block on the MV until the first refresh completes. This would surely cause confusion for some users, so to make the user experience more convenient, we could also start up a replica right away when creating the MV, and keep it running until the initial snapshot is complete. This would allow users to examine the contents of the MV soon after creating it, i.e., they wouldn't have to wait until the time of the first refresh.
+
+### Controlling the "Phase"
+
+Some users will probably want to control not just the refresh interval but also when exactly refreshes happen (the "phase"). For example, if the interval is 1 day, then maybe a user would want refreshes to happen outside business hours. Therefore, we should add an optional argument to `REFRESH EVERY` that specifies the exact time of the first refresh.
+
+### Logical Times vs. Wall Clock Times
+
+Note that generally we can't guarantee that refreshes will happen at exactly the wall clock times specified by the user. For example, the system might be down due to scheduled maintenance at the time when a refresh should happen. However, we should still perform the refresh at the logical time specified by the user. In other words, each refresh should consider exactly the data whose timestamps were at most the refresh timestamp, even if the refresh happens a bit later in wall clock time. The proposed solution naturally satisfies this requirement, as the rounding up is performed on logical timestamps.
+
+## Minimal Viable Prototype
+
+A prototype is available [here](https://github.com/ggevay/materialize/commit/f1f279cad786f4b3cb96ac4e376fa1bd90e160ea) (written together with Jan). It simply inserts an operator in front of the Persist sink, which rounds up the timestamps as proposed above. The prototype does it for all MVs (with a fix interval), so there is no SQL syntax in the prototype. Automated replica management is not implemented yet, but one can manually drop and create replicas.
+
+## Alternatives
+
+### Tables Managed by Externally Scheduled Jobs
+
+Even without any new features, users could keep the data in a table instead of an MV, and schedule jobs on their own to run refreshes. The problem with this approach is that it would place a considerable burden on users: they would have to schedule external jobs, deal with possible failure scenarios of these jobs, etc. When we suggested this approach as a workaround to a big user, they told us that an important advantage of Materialize in their eyes is simplicity (compared to their existing architecture), which would be lost with this approach, and they are willing to pay for the simplicity.
+
+### `REFRESH NEVER` MVs Periodically Recreated by Externally Scheduled Jobs
+
+`REFRESH NEVER` MVs would probably be also easy to implement. These would be sealed forever after their initial snapshot is done. With these, a user could manually simulate `REFRESH EVERY` by dropping and recreating the MV at every refresh. This would require users to manually create and drop also replicas around the time of the refresh, so this approach has the same drawback of the above, tables approach: it is too complex for users, as it requires complex external job scheduling.
+
+### `REFRESH ON DEMAND` MVs
+
+We could add a `REFRESH ON DEMAND` option to MVs, and a `REFRESH MATERIALIZED VIEW` command that would trigger a refresh. Users could then schedule an external job that would give the `REFRESH MATERIALIZE VIEW` command periodically. Replicas could be automatically managed by us, so this would be a less complex external job scheduling burden for users as the two above alternatives.
+
+However, the problem with this is that then we wouldn't know where to move the upper of the MV after a `REFRESH MATERIALIZED VIEW` command completes a refresh, because we couldn't know when the next refresh will happen. This would mean that we'd have to either give up on success criteria 3. and 4., or we'd have to do some more implementation:
+- We'd need a task that periodically ticks forward the uppers and sinces of the MV even when there is no replica for the MV.
+- We'd still need to manipulate the timestamps that go into the Persist source, but this time we wouldn't know at dataflow creation where to round up the times, but would have to instead tell this to the roundup operator at every refresh.
+
+Considering that the implementation wouldn't be simpler for us, and it would be more complicated for users (externally scheduled job), we reject this alternative for now. (In the future it might happen that some other use case will require `REFRESH ON DEMAND` MVs, and then we can implement also this, in addition to `REFRESH EVERY`.)
+
+### Just Creating a Replica When a Refresh Should Happen
+
+As mentioned before, simply keeping the cluster of an MV at 0 replicas most of the time and creating a replica when a refresh should happen would satisfy success criteria 1. and 2., but not 3. and 4. We initially suggested this as a workaround [to a big user](https://materializeinc.slack.com/archives/C053EPHMU05/p1698173967255099), but it turned out that it's not suitable for them, because they would like to consume a unified view of the cold and hot results through PowerBI, which seems unable to perform this unioning. Therefore, they'd need to `UNION` the cold and hot results inside Materialize, for which they need success criterion 3. Also, not satisfying success criterion 4., i.e. holding back Persist compaction of inputs to the time of the previous refresh, would be "low-to-medium scary".
+
+### Implementation Alternative: Creating a New Dataflow at Each Refresh
+
+(The above alternatives are alternatives to `REFRESH EVERY` MVs, but this alternative is just about the implementation details of `REFRESH EVERY` MVs.)
+
+This approach would need similar replica management as the proposed solution, but instead of rehydrating an existing dataflow, we would always create a new dataflow to run the refresh. An advantage of this approach is that these dataflows could be single-time dataflows, and thus rely on one-shot SELECT optimizations. However, this approach would be more complicated, as we would have to separate the lifecycle of dataflows from the lifecycle of MVs. These new dataflows would be a kind of hybrid between Peek dataflows and MV dataflows, and would require new code in various parts of the Compute Controller. As we are under some time pressure to implement this feature, we opted for the simpler solution proposed in this document.
+
+### Implementation Alternative: Suspending the Replica Process to Disk
+
+As mentioned in the [scoping section](#out-of-scope), an alternative implementation that would cover also intermediate refresh intervals would be to suspend the replica process and save its entire state to S3 and a local disk cache, and restore it when a refresh is needed. [There are existing techniques for saving process state, e.g., CRIU.](https://faun.pub/kubernetes-checkpointing-a-definitive-guide-33dd1a0310f6) However, this would be a much bigger project than the proposed solution.
+
+## Open questions
+
+### Special Clusters for `REFRESH EVERY` MVs
+
+I'm still thinking about how exactly to tie a `REFRESH EVERY` MV to the cluster whose replicas will be managed by the MV. I can see two approaches:
+- These MVs would automatically manage not just replicas, but even their cluster. That is, the system would create a cluster when creating the MV, and drop the cluster when dropping the MV. (And this cluster could not be used for anything else.) The problem with this approach is that then certain cluster creation options (e.g, size) would have to be copied from `CREATE CLUSTER` to `CREATE MATERIALIZED VIEW`. I'm not sure how big of an issue this would be.
+- Another approach would be to create `REFRESH EVERY` MVs simply on the active cluster (as other, normal MVs), and the user would be expected to separately create a cluster manually. A further tweak could be to let the user specify a special option at cluster creation, which would make the system let only `REFRESH EVERY` MVs be created on this cluster (possibly only with the exact same refresh settings). This would avoid situations where a user accidentally creates some other, normal object on a cluster whose replicas are being managed by a `REFRESH EVERY` MV, and then this other object would unexpectedly also stop refreshing.
+
+## Rollout
+
+I plan to first implement the feature without automatically turning replicas on and off, and release the feature in this half-finished state behind a feature flag. At this point, we can already show the feature to the customer whose needs prompted this work, and they can validate it to some degree. At this point, the user will need to manually manage the replicas, but hopefully a full implementation with automatic replica management can follow in 1-2 weeks.
