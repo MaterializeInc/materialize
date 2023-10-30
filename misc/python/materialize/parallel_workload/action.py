@@ -967,6 +967,14 @@ class BackupRestoreAction(Action):
 
 
 class CreateWebhookSourceAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        result = super().errors_to_ignore(exe)
+        if exe.db.scenario == Scenario.Kill:
+            result.extend(
+                ["cannot create source in cluster with more than one replica"]
+            )
+        return result
+
     def run(self, exe: Executor) -> None:
         with exe.db.lock:
             if len(exe.db.webhook_sources) > MAX_WEBHOOK_SOURCES:
@@ -1007,6 +1015,14 @@ class DropWebhookSourceAction(Action):
 
 
 class CreateKafkaSourceAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        result = super().errors_to_ignore(exe)
+        if exe.db.scenario == Scenario.Kill:
+            result.extend(
+                ["cannot create source in cluster with more than one replica"]
+            )
+        return result
+
     def run(self, exe: Executor) -> None:
         with exe.db.lock:
             if len(exe.db.kafka_sources) > MAX_KAFKA_SOURCES:
@@ -1057,6 +1073,14 @@ class DropKafkaSourceAction(Action):
 
 
 class CreatePostgresSourceAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        result = super().errors_to_ignore(exe)
+        if exe.db.scenario == Scenario.Kill:
+            result.extend(
+                ["cannot create source in cluster with more than one replica"]
+            )
+        return result
+
     def run(self, exe: Executor) -> None:
         with exe.db.lock:
             if len(exe.db.postgres_sources) > MAX_POSTGRES_SOURCES:
