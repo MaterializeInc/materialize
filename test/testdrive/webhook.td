@@ -9,9 +9,6 @@
 
 # Exercies Webhook sources.
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_webhook_sources = true
-
 > CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));
 
 > CREATE SOURCE webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK
@@ -333,16 +330,8 @@ SELECT id FROM mz_sources WHERE name = 'webhook_bytes';
 > SELECT COUNT(*) FROM mz_internal.mz_storage_shards WHERE object_id = '${webhook-source-id}';
 0
 
-# Turn off the feature.
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_webhook_sources = false
-
-# Appending should now fail because the feature isn't enabled.
-$ webhook-append database=materialize schema=public name=webhook_text status=400
-d
-
 # Cleanup.
-DROP CLUSTER webhook_cluster CASCADE;
+> DROP CLUSTER webhook_cluster CASCADE;
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_unstable_dependencies = false;

@@ -2446,7 +2446,6 @@ fn test_cancel_ws() {
 #[cfg_attr(miri, ignore)] // too slow
 fn smoketest_webhook_source() {
     let server = test_util::start_server(test_util::Config::default()).unwrap();
-    server.enable_feature_flags(&["enable_webhook_sources"]);
 
     let mut client = server.connect(postgres::NoTls).unwrap();
 
@@ -2559,7 +2558,6 @@ fn smoketest_webhook_source() {
 #[cfg_attr(miri, ignore)] // too slow
 fn test_invalid_webhook_body() {
     let server = test_util::start_server(test_util::Config::default()).unwrap();
-    server.enable_feature_flags(&["enable_webhook_sources"]);
 
     let mut client = server.connect(postgres::NoTls).unwrap();
     let http_client = Client::new();
@@ -2643,7 +2641,6 @@ fn test_invalid_webhook_body() {
 #[cfg_attr(miri, ignore)] // too slow
 fn test_webhook_duplicate_headers() {
     let server = test_util::start_server(test_util::Config::default()).unwrap();
-    server.enable_feature_flags(&["enable_webhook_sources"]);
 
     let mut client = server.connect(postgres::NoTls).unwrap();
     let http_client = Client::new();
@@ -2870,7 +2867,6 @@ fn test_http_metrics() {
 #[cfg_attr(miri, ignore)] // too slow
 fn webhook_concurrent_actions() {
     let server = test_util::start_server(test_util::Config::default()).unwrap();
-    server.enable_feature_flags(&["enable_webhook_sources"]);
 
     let mut client = server.connect(postgres::NoTls).unwrap();
 
@@ -3030,11 +3026,7 @@ fn webhook_concurrency_limit() {
     let server = test_util::start_server(config).unwrap();
 
     // Note: we need enable_unstable_dependencies to use mz_sleep.
-    server.enable_feature_flags(&[
-        "enable_webhook_sources",
-        "enable_unstable_dependencies",
-        "enable_dangerous_functions",
-    ]);
+    server.enable_feature_flags(&["enable_unstable_dependencies", "enable_dangerous_functions"]);
 
     // Reduce the webhook concurrency limit;
     let mut mz_client = server
@@ -3117,7 +3109,6 @@ fn webhook_concurrency_limit() {
 #[cfg_attr(miri, ignore)] // too slow
 fn webhook_too_large_request() {
     let server = test_util::start_server(test_util::Config::default()).unwrap();
-    server.enable_feature_flags(&["enable_webhook_sources"]);
 
     let mut client = server.connect(postgres::NoTls).unwrap();
 
@@ -3167,7 +3158,6 @@ fn webhook_too_large_request() {
 #[cfg_attr(miri, ignore)] // too slow
 fn test_webhook_url_notice() {
     let server = test_util::start_server(test_util::Config::default()).unwrap();
-    server.enable_feature_flags(&["enable_webhook_sources"]);
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
 
     let mut client = server
