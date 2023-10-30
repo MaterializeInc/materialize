@@ -80,8 +80,8 @@ impl CompactBytes {
     /// The maximum amount of bytes that a [`CompactBytes`] can store inline.
     pub const MAX_INLINE: usize = 23;
 
-    /// The minimum size allocation size for [`HeapBytes`].
-    pub const MIN_HEAP: usize = std::mem::size_of::<usize>() * 4;
+    /// The minimum amount of bytes that a [`CompactBytes`] will store on the heap.
+    pub const MIN_HEAP: usize = std::mem::size_of::<usize>() * 2;
     /// The maximum amount of bytes that a [`CompactBytes`] can store on the heap.
     pub const MAX_HEAP: usize = usize::MAX >> 1;
 
@@ -797,6 +797,7 @@ mod test {
     use super::{CompactBytes, HeapBytes};
 
     #[crate::test]
+    #[cfg_attr(miri, ignore)]
     fn test_discriminant() {
         // We're testing the discriminant (capacity) to make sure it's identified correctly. So
         // we don't care if the pointer is valid.
