@@ -3919,9 +3919,11 @@ impl Coordinator {
         let optimized_mir = if let Some(..) = &plan.values.as_const() {
             // We don't perform any optimizations on an expression that is already
             // a constant for writes, as we want to maximize bulk-insert throughput.
-            OptimizedMirRelationExpr(plan.values)
+            let expr = return_if_err!(plan.values.lower(self.catalog().system_config()), ctx);
+            OptimizedMirRelationExpr(expr)
         } else {
-            return_if_err!(self.view_optimizer.optimize(plan.values), ctx)
+            let expr = return_if_err!(plan.values.lower(self.catalog().system_config()), ctx);
+            return_if_err!(self.view_optimizer.optimize(expr), ctx)
         };
 
         match optimized_mir.into_inner() {
