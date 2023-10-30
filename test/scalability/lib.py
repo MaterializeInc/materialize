@@ -12,7 +12,7 @@ import os
 import pandas as pd
 from matplotlib import pyplot as plt  # type: ignore
 
-from materialize.scalability.df import paths
+from materialize.scalability.df import df_details_cols, df_totals_cols, paths
 from materialize.scalability.endpoints import endpoint_name_to_description
 
 
@@ -36,11 +36,17 @@ def plotit(workload_name: str) -> None:
         legend.append(endpoint_name_to_description(endpoint_name))
 
         df = pd.read_csv(totals_data_path)
-        summary_subplot.scatter(df["concurrency"], df["tps"], label="tps")
+        summary_subplot.scatter(
+            df[df_totals_cols.CONCURRENCY],
+            df[df_totals_cols.TPS],
+            label=df_totals_cols.TPS,
+        )
 
         df_details = pd.read_csv(details_data_path)
         details_subplot.scatter(
-            df_details["concurrency"] + i, df_details["wallclock"], alpha=0.25
+            df_details[df_details_cols.CONCURRENCY] + i,
+            df_details[df_details_cols.WALLCLOCK],
+            alpha=0.25,
         )
 
     summary_subplot.set_ylabel("Transactions Per Second")
