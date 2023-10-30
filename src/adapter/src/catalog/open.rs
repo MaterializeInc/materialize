@@ -26,7 +26,7 @@ use mz_catalog::durable::objects::{
     IntrospectionSourceIndex, SystemObjectDescription, SystemObjectMapping,
     SystemObjectUniqueIdentifier,
 };
-use mz_catalog::durable::{SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY};
+use mz_catalog::durable::{Transaction, SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, CommentsMap, DataSourceDesc, Database, DefaultPrivileges, Func, Log,
     Role, Schema, Source, Table, Type,
@@ -64,11 +64,10 @@ use mz_storage_types::sources::Timeline;
 
 use crate::catalog::{
     is_reserved_name, migrate, BuiltinTableUpdate, Catalog, CatalogPlans, CatalogState, Config,
-    Error, ErrorKind, Op, CREATE_SQL_TODO, SYSTEM_CONN_ID,
+    Error, ErrorKind, CREATE_SQL_TODO, SYSTEM_CONN_ID,
 };
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
 use crate::coord::timestamp_oracle;
-use crate::util::ResultExt;
 use crate::AdapterError;
 
 #[derive(Debug)]
@@ -155,7 +154,7 @@ impl CatalogItemRebuilder {
         }
     }
 
-    fn build(self, catalog: &Catalog) -> CatalogItem {
+    fn build(self, state: &CatalogState) -> CatalogItem {
         match self {
             Self::SystemSource(item) => item,
             Self::Object {
@@ -163,7 +162,7 @@ impl CatalogItemRebuilder {
                 sql,
                 is_retained_metrics_object,
                 custom_logical_compaction_window,
-            } => catalog
+            } => state
                 .parse_item(
                     id,
                     sql.clone(),
@@ -210,83 +209,74 @@ impl Catalog {
             );
         }
 
-        let mut catalog = Catalog {
-            state: CatalogState {
-                database_by_name: BTreeMap::new(),
-                database_by_id: BTreeMap::new(),
-                entry_by_id: BTreeMap::new(),
-                ambient_schemas_by_name: BTreeMap::new(),
-                ambient_schemas_by_id: BTreeMap::new(),
-                temporary_schemas: BTreeMap::new(),
-                clusters_by_id: BTreeMap::new(),
-                clusters_by_name: BTreeMap::new(),
-                clusters_by_linked_object_id: BTreeMap::new(),
-                roles_by_name: BTreeMap::new(),
-                roles_by_id: BTreeMap::new(),
-                config: mz_sql::catalog::CatalogConfig {
-                    start_time: to_datetime((config.now)()),
-                    start_instant: Instant::now(),
-                    nonce: rand::random(),
-                    environment_id: config.environment_id,
-                    session_id: Uuid::new_v4(),
-                    build_info: config.build_info,
-                    timestamp_interval: Duration::from_secs(1),
-                    now: config.now.clone(),
-                },
-                oid_counter: FIRST_USER_OID,
-                cluster_replica_sizes: config.cluster_replica_sizes,
-                default_storage_cluster_size: config.default_storage_cluster_size,
-                availability_zones: config.availability_zones,
-                system_configuration: {
-                    let mut s = SystemVars::new(config.active_connection_count)
-                        .set_unsafe(config.unsafe_mode);
-                    if config.all_features {
-                        s.enable_all_feature_flags_by_default();
-                    }
-                    s
-                },
-                egress_ips: config.egress_ips,
-                aws_principal_context: config.aws_principal_context,
-                aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
-                http_host_name: config.http_host_name,
-                default_privileges: DefaultPrivileges::default(),
-                system_privileges: PrivilegeMap::default(),
-                comments: CommentsMap::default(),
+        let mut state = CatalogState {
+            database_by_name: BTreeMap::new(),
+            database_by_id: BTreeMap::new(),
+            entry_by_id: BTreeMap::new(),
+            ambient_schemas_by_name: BTreeMap::new(),
+            ambient_schemas_by_id: BTreeMap::new(),
+            temporary_schemas: BTreeMap::new(),
+            clusters_by_id: BTreeMap::new(),
+            clusters_by_name: BTreeMap::new(),
+            clusters_by_linked_object_id: BTreeMap::new(),
+            roles_by_name: BTreeMap::new(),
+            roles_by_id: BTreeMap::new(),
+            config: mz_sql::catalog::CatalogConfig {
+                start_time: to_datetime((config.now)()),
+                start_instant: Instant::now(),
+                nonce: rand::random(),
+                environment_id: config.environment_id,
+                session_id: Uuid::new_v4(),
+                build_info: config.build_info,
+                timestamp_interval: Duration::from_secs(1),
+                now: config.now.clone(),
             },
-            plans: CatalogPlans {
-                optimized_plan_by_id: Default::default(),
-                physical_plan_by_id: Default::default(),
-                dataflow_metainfos: BTreeMap::new(),
+            oid_counter: FIRST_USER_OID,
+            cluster_replica_sizes: config.cluster_replica_sizes,
+            default_storage_cluster_size: config.default_storage_cluster_size,
+            availability_zones: config.availability_zones,
+            system_configuration: {
+                let mut s =
+                    SystemVars::new(config.active_connection_count).set_unsafe(config.unsafe_mode);
+                if config.all_features {
+                    s.enable_all_feature_flags_by_default();
+                }
+                s
             },
-            transient_revision: 0,
-            storage: Arc::new(tokio::sync::Mutex::new(config.storage)),
+            egress_ips: config.egress_ips,
+            aws_principal_context: config.aws_principal_context,
+            aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
+            http_host_name: config.http_host_name,
+            default_privileges: DefaultPrivileges::default(),
+            system_privileges: PrivilegeMap::default(),
+            comments: CommentsMap::default(),
         };
 
+        let mut storage = config.storage;
+        let is_read_only = storage.is_read_only();
+        let mut txn = storage.transaction().await?;
         // Choose a time at which to boot. This is the time at which we will run
         // internal migrations.
         //
         // This time is usually the current system time, but with protection
         // against backwards time jumps, even across restarts.
         let boot_ts = {
-            let mut storage = catalog.storage().await;
-            let previous_ts = storage
+            let previous_ts = txn
                 .get_timestamp(&Timeline::EpochMilliseconds)
-                .await?
                 .expect("missing EpochMilliseconds timeline");
-            let boot_ts = timestamp_oracle::catalog_oracle::monotonic_now(config.now, previous_ts);
-            if !storage.is_read_only() {
+            let boot_ts =
+                timestamp_oracle::catalog_oracle::monotonic_now(config.now.clone(), previous_ts);
+            if !is_read_only {
                 // IMPORTANT: we durably record the new timestamp before using it.
-                storage
-                    .set_timestamp(&Timeline::EpochMilliseconds, boot_ts)
-                    .await?;
+                txn.set_timestamp(Timeline::EpochMilliseconds, boot_ts)?;
             }
 
             boot_ts
         };
 
-        catalog.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
+        state.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
 
-        let databases = catalog.storage().await.get_databases().await?;
+        let databases = txn.get_databases();
         for mz_catalog::durable::Database {
             id,
             name,
@@ -294,8 +284,8 @@ impl Catalog {
             privileges,
         } in databases
         {
-            let oid = catalog.allocate_oid()?;
-            catalog.state.database_by_id.insert(
+            let oid = state.allocate_oid()?;
+            state.database_by_id.insert(
                 id.clone(),
                 Database {
                     name: name.clone(),
@@ -307,13 +297,10 @@ impl Catalog {
                     privileges: PrivilegeMap::from_mz_acl_items(privileges),
                 },
             );
-            catalog
-                .state
-                .database_by_name
-                .insert(name.clone(), id.clone());
+            state.database_by_name.insert(name.clone(), id.clone());
         }
 
-        let schemas = catalog.storage().await.get_schemas().await?;
+        let schemas = txn.get_schemas();
         for mz_catalog::durable::Schema {
             id,
             name,
@@ -322,11 +309,10 @@ impl Catalog {
             privileges,
         } in schemas
         {
-            let oid = catalog.allocate_oid()?;
+            let oid = state.allocate_oid()?;
             let (schemas_by_id, schemas_by_name, database_spec) = match &database_id {
                 Some(database_id) => {
-                    let db = catalog
-                        .state
+                    let db = state
                         .database_by_id
                         .get_mut(database_id)
                         .expect("catalog out of sync");
@@ -337,8 +323,8 @@ impl Catalog {
                     )
                 }
                 None => (
-                    &mut catalog.state.ambient_schemas_by_id,
-                    &mut catalog.state.ambient_schemas_by_name,
+                    &mut state.ambient_schemas_by_id,
+                    &mut state.ambient_schemas_by_name,
                     ResolvedDatabaseSpecifier::Ambient,
                 ),
             };
@@ -360,7 +346,7 @@ impl Catalog {
             schemas_by_name.insert(name.clone(), id);
         }
 
-        let roles = catalog.storage().await.get_roles().await?;
+        let roles = txn.get_roles();
         for mz_catalog::durable::Role {
             id,
             name,
@@ -369,9 +355,9 @@ impl Catalog {
             vars,
         } in roles
         {
-            let oid = catalog.allocate_oid()?;
-            catalog.state.roles_by_name.insert(name.clone(), id);
-            catalog.state.roles_by_id.insert(
+            let oid = state.allocate_oid()?;
+            state.roles_by_name.insert(name.clone(), id);
+            state.roles_by_id.insert(
                 id,
                 Role {
                     name,
@@ -384,93 +370,76 @@ impl Catalog {
             );
         }
 
-        let default_privileges = catalog.storage().await.get_default_privileges().await?;
+        let default_privileges = txn.get_default_privileges();
         for mz_catalog::durable::DefaultPrivilege { object, acl_item } in default_privileges {
-            catalog.state.default_privileges.grant(object, acl_item);
+            state.default_privileges.grant(object, acl_item);
         }
 
-        let system_privileges = catalog.storage().await.get_system_privileges().await?;
-        catalog.state.system_privileges.grant_all(system_privileges);
+        let system_privileges = txn.get_system_privileges();
+        state.system_privileges.grant_all(system_privileges);
 
-        catalog
-            .load_system_configuration(
-                config.system_parameter_defaults,
-                config.system_parameter_sync_config,
-                boot_ts,
-            )
-            .await?;
+        Catalog::load_system_configuration(
+            &mut state,
+            &mut txn,
+            is_read_only,
+            config.system_parameter_defaults,
+            config.system_parameter_sync_config,
+        )
+        .await?;
+
         // We need to set this variable ASAP, so that builtins get planned with the correct value
-        let variable_length_row_encoding = catalog
+        let variable_length_row_encoding = state
             .system_config()
             .variable_length_row_encoding_DANGEROUS();
         mz_repr::VARIABLE_LENGTH_ROW_ENCODING
             .store(variable_length_row_encoding, atomic::Ordering::SeqCst);
 
         // Add any new builtin Clusters or Cluster Replicas that may be newly defined.
-        {
-            let mut storage = catalog.storage().await;
-            if !storage.is_read_only() {
-                let mut tx = storage.transaction().await?;
-                add_new_builtin_clusters_migration(&mut tx)?;
-                add_new_builtin_cluster_replicas_migration(
-                    &mut tx,
-                    config.builtin_cluster_replica_size,
-                )?;
-                tx.commit().await?;
-            }
+        if !is_read_only {
+            add_new_builtin_clusters_migration(&mut txn)?;
+            add_new_builtin_cluster_replicas_migration(
+                &mut txn,
+                config.builtin_cluster_replica_size,
+            )?;
         }
 
-        let comments = catalog.storage().await.get_comments().await?;
+        let comments = txn.get_comments();
         for mz_catalog::durable::Comment {
             object_id,
             sub_component,
             comment,
         } in comments
         {
-            catalog
-                .state
+            state
                 .comments
                 .update_comment(object_id, sub_component, Some(comment));
         }
 
-        // Now that LD is loaded, set the intended stash timeout.
-        // TODO: Move this into the stash constructor.
-        catalog
-            .storage()
-            .await
-            .set_connect_timeout(catalog.system_config().crdb_connect_timeout())
-            .await;
+        Catalog::load_builtin_types(&mut state, &mut txn)?;
 
-        catalog.load_builtin_types().await?;
-
-        let persisted_builtin_ids: BTreeMap<_, _> = catalog
-            .storage()
-            .await
+        let persisted_builtin_ids: BTreeMap<_, _> = txn
             .get_system_items()
-            .await?
-            .into_iter()
             .map(|mapping| (mapping.description, mapping.unique_identifier))
             .collect();
         let AllocatedBuiltinSystemIds {
             all_builtins,
             new_builtins,
             migrated_builtins,
-        } = catalog
-            .allocate_system_ids(
-                BUILTINS::iter()
-                    .filter(|builtin| !matches!(builtin, Builtin::Type(_)))
-                    .collect(),
-                |builtin| {
-                    persisted_builtin_ids
-                        .get(&SystemObjectDescription {
-                            schema_name: builtin.schema().to_string(),
-                            object_type: builtin.catalog_item_type(),
-                            object_name: builtin.name().to_string(),
-                        })
-                        .cloned()
-                },
-            )
-            .await?;
+        } = Catalog::allocate_system_ids(
+            &mut txn,
+            BUILTINS::iter()
+                .filter(|builtin| !matches!(builtin, Builtin::Type(_)))
+                .collect(),
+            |builtin| {
+                persisted_builtin_ids
+                    .get(&SystemObjectDescription {
+                        schema_name: builtin.schema().to_string(),
+                        object_type: builtin.catalog_item_type(),
+                        object_name: builtin.name().to_string(),
+                    })
+                    .cloned()
+            },
+        )?;
 
         let id_fingerprint_map: BTreeMap<GlobalId, String> = all_builtins
             .iter()
@@ -484,7 +453,7 @@ impl Catalog {
             let span = tracing::span!(tracing::Level::DEBUG, "builtin_non_indexes");
             let _enter = span.enter();
             for (builtin, id) in builtin_non_indexes {
-                let schema_id = catalog.state.ambient_schemas_by_name[builtin.schema()];
+                let schema_id = state.ambient_schemas_by_name[builtin.schema()];
                 let name = QualifiedItemName {
                     qualifiers: ItemQualifiers {
                         database_spec: ResolvedDatabaseSpecifier::Ambient,
@@ -494,7 +463,7 @@ impl Catalog {
                 };
                 match builtin {
                     Builtin::Log(log) => {
-                        let oid = catalog.allocate_oid()?;
+                        let oid = state.allocate_oid()?;
                         let mut acl_items = vec![rbac::owner_privilege(
                             mz_sql::catalog::ObjectType::Source,
                             MZ_SYSTEM_ROLE_ID,
@@ -512,7 +481,7 @@ impl Catalog {
                             }
                             DataSensitivity::Superuser => {}
                         }
-                        catalog.state.insert_item(
+                        state.insert_item(
                             id,
                             oid,
                             name.clone(),
@@ -526,7 +495,7 @@ impl Catalog {
                     }
 
                     Builtin::Table(table) => {
-                        let oid = catalog.allocate_oid()?;
+                        let oid = state.allocate_oid()?;
                         let mut acl_items = vec![rbac::owner_privilege(
                             mz_sql::catalog::ObjectType::Table,
                             MZ_SYSTEM_ROLE_ID,
@@ -545,7 +514,7 @@ impl Catalog {
                             DataSensitivity::Superuser => {}
                         }
 
-                        catalog.state.insert_item(
+                        state.insert_item(
                             id,
                             oid,
                             name.clone(),
@@ -557,7 +526,7 @@ impl Catalog {
                                 resolved_ids: ResolvedIds(BTreeSet::new()),
                                 custom_logical_compaction_window: table
                                     .is_retained_metrics_object
-                                    .then(|| catalog.state.system_config().metrics_retention()),
+                                    .then(|| state.system_config().metrics_retention()),
                                 is_retained_metrics_object: table.is_retained_metrics_object,
                             }),
                             MZ_SYSTEM_ROLE_ID,
@@ -568,7 +537,7 @@ impl Catalog {
                         unreachable!("handled later once clusters have been created")
                     }
                     Builtin::View(view) => {
-                        let item = catalog
+                        let item = state
                             .parse_item(
                                 id,
                                 view.sql.into(),
@@ -586,7 +555,7 @@ impl Catalog {
                                     view.name, e
                                 )
                             });
-                        let oid = catalog.allocate_oid()?;
+                        let oid = state.allocate_oid()?;
                         let mut acl_items = vec![rbac::owner_privilege(
                             mz_sql::catalog::ObjectType::View,
                             MZ_SYSTEM_ROLE_ID,
@@ -605,7 +574,7 @@ impl Catalog {
                             DataSensitivity::Superuser => {}
                         }
 
-                        catalog.state.insert_item(
+                        state.insert_item(
                             id,
                             oid,
                             name,
@@ -618,8 +587,8 @@ impl Catalog {
                     Builtin::Type(_) => unreachable!("loaded separately"),
 
                     Builtin::Func(func) => {
-                        let oid = catalog.allocate_oid()?;
-                        catalog.state.insert_item(
+                        let oid = state.allocate_oid()?;
+                        state.insert_item(
                             id,
                             oid,
                             name.clone(),
@@ -635,7 +604,7 @@ impl Catalog {
                             None => continue,
                         };
 
-                        let oid = catalog.allocate_oid()?;
+                        let oid = state.allocate_oid()?;
                         let mut acl_items = vec![rbac::owner_privilege(
                             mz_sql::catalog::ObjectType::Source,
                             MZ_SYSTEM_ROLE_ID,
@@ -654,7 +623,7 @@ impl Catalog {
                             DataSensitivity::Superuser => {}
                         }
 
-                        catalog.state.insert_item(
+                        state.insert_item(
                             id,
                             oid,
                             name.clone(),
@@ -666,7 +635,7 @@ impl Catalog {
                                 resolved_ids: ResolvedIds(BTreeSet::new()),
                                 custom_logical_compaction_window: coll
                                     .is_retained_metrics_object
-                                    .then(|| catalog.state.system_config().metrics_retention()),
+                                    .then(|| state.system_config().metrics_retention()),
                                 is_retained_metrics_object: coll.is_retained_metrics_object,
                             }),
                             MZ_SYSTEM_ROLE_ID,
@@ -677,7 +646,7 @@ impl Catalog {
             }
         }
 
-        let clusters = catalog.storage().await.get_clusters().await?;
+        let clusters = txn.get_clusters();
         let mut cluster_azs = BTreeMap::new();
         for mz_catalog::durable::Cluster {
             id,
@@ -688,49 +657,38 @@ impl Catalog {
             config,
         } in clusters
         {
-            let introspection_source_index_gids = catalog
-                .storage()
-                .await
-                .get_introspection_source_indexes(id)
-                .await?;
+            let introspection_source_index_gids = txn.get_introspection_source_indexes(id);
 
             let AllocatedBuiltinSystemIds {
                 all_builtins: all_indexes,
                 new_builtins: new_indexes,
                 ..
-            } = catalog
-                .allocate_system_ids(BUILTINS::logs().collect(), |log| {
-                    introspection_source_index_gids
-                        .get(log.name)
-                        .cloned()
-                        // We migrate introspection sources later so we can hardcode the fingerprint as ""
-                        .map(|id| SystemObjectUniqueIdentifier {
-                            id,
-                            fingerprint: "".to_string(),
-                        })
-                })
-                .await?;
+            } = Catalog::allocate_system_ids(&mut txn, BUILTINS::logs().collect(), |log| {
+                introspection_source_index_gids
+                    .get(log.name)
+                    .cloned()
+                    // We migrate introspection sources later so we can hardcode the fingerprint as ""
+                    .map(|id| SystemObjectUniqueIdentifier {
+                        id,
+                        fingerprint: "".to_string(),
+                    })
+            })?;
 
-            catalog
-                .storage()
-                .await
-                .set_introspection_source_indexes(
-                    new_indexes
-                        .iter()
-                        .map(|(log, index_id)| IntrospectionSourceIndex {
-                            cluster_id: id,
-                            name: log.name.to_string(),
-                            index_id: *index_id,
-                        })
-                        .collect(),
-                )
-                .await?;
+            let new_indexes = new_indexes
+                .iter()
+                .map(|(log, index_id)| IntrospectionSourceIndex {
+                    cluster_id: id,
+                    name: log.name.to_string(),
+                    index_id: *index_id,
+                })
+                .collect();
+            txn.set_introspection_source_indexes(new_indexes)?;
 
             if let mz_catalog::durable::ClusterVariant::Managed(managed) = &config.variant {
                 cluster_azs.insert(id, managed.availability_zones.clone());
             }
 
-            catalog.state.insert_cluster(
+            state.insert_cluster(
                 id,
                 name,
                 linked_object_id,
@@ -741,7 +699,8 @@ impl Catalog {
             );
         }
 
-        let replicas = catalog.storage().await.get_cluster_replicas().await?;
+        let replicas = txn.get_cluster_replicas();
+        let mut allocated_replicas = Vec::new();
         for mz_catalog::durable::ClusterReplica {
             cluster_id,
             replica_id,
@@ -755,7 +714,7 @@ impl Catalog {
                 interval: config.logging.interval,
             };
             let config = ReplicaConfig {
-                location: catalog.concretize_replica_location(
+                location: state.concretize_replica_location(
                     config.location,
                     &vec![],
                     cluster_azs.get(&cluster_id).map(|zones| &**zones),
@@ -766,26 +725,20 @@ impl Catalog {
                 },
             };
 
-            // And write the allocated sources back to storage
-            catalog
-                .storage()
-                .await
-                .set_replica_config(
-                    replica_id,
-                    cluster_id,
-                    name.clone(),
-                    config.clone().into(),
-                    owner_id,
-                )
-                .await?;
+            allocated_replicas.push(mz_catalog::durable::ClusterReplica {
+                cluster_id,
+                replica_id,
+                name: name.clone(),
+                config: config.clone().into(),
+                owner_id: owner_id.clone(),
+            });
 
-            catalog
-                .state
-                .insert_cluster_replica(cluster_id, name, replica_id, config, owner_id);
+            state.insert_cluster_replica(cluster_id, name, replica_id, config, owner_id);
         }
+        txn.set_replicas(allocated_replicas)?;
 
         for (builtin, id) in builtin_indexes {
-            let schema_id = catalog.state.ambient_schemas_by_name[builtin.schema()];
+            let schema_id = state.ambient_schemas_by_name[builtin.schema()];
             let name = QualifiedItemName {
                 qualifiers: ItemQualifiers {
                     database_spec: ResolvedDatabaseSpecifier::Ambient,
@@ -795,13 +748,13 @@ impl Catalog {
             };
             match builtin {
                 Builtin::Index(index) => {
-                    let mut item = catalog
+                    let mut item = state
                         .parse_item(
                             id,
                             index.sql.into(),
                             None,
                             index.is_retained_metrics_object,
-                            if index.is_retained_metrics_object { Some(catalog.state.system_config().metrics_retention())} else { None },
+                            if index.is_retained_metrics_object { Some(state.system_config().metrics_retention()) } else { None },
                         )
                         .unwrap_or_else(|e| {
                             panic!(
@@ -817,8 +770,8 @@ impl Catalog {
                         panic!("internal error: builtin index {}'s SQL does not begin with \"CREATE INDEX\".", index.name);
                     };
 
-                    let oid = catalog.allocate_oid()?;
-                    catalog.state.insert_item(
+                    let oid = state.allocate_oid()?;
+                    state.insert_item(
                         id,
                         oid,
                         name,
@@ -852,51 +805,60 @@ impl Catalog {
                 },
             })
             .collect();
-        catalog
-            .storage()
-            .await
-            .set_system_items(new_system_id_mappings)
-            .await?;
+        txn.set_system_object_mappings(new_system_id_mappings)?;
 
-        let last_seen_version = catalog
-            .storage()
-            .await
+        let last_seen_version = txn
             .get_catalog_content_version()
-            .await?
             .unwrap_or_else(|| "new".to_string());
 
         if !config.skip_migrations {
-            migrate::migrate(&catalog, config.connection_context)
+            migrate::migrate(&mut state, &mut txn, config.now, config.connection_context)
                 .await
                 .map_err(|e| {
                     Error::new(ErrorKind::FailedMigration {
                         last_seen_version: last_seen_version.clone(),
-                        this_version: catalog.config().build_info.version,
+                        this_version: config.build_info.version,
                         cause: e.to_string(),
                     })
                 })?;
-            catalog
-                .storage()
-                .await
-                .set_catalog_content_version(catalog.config().build_info.version)
-                .await?;
+            txn.set_catalog_content_version(config.build_info.version.to_string())?;
         }
 
-        let mut catalog = {
-            let mut storage = catalog.storage().await;
-            let mut tx = storage.transaction().await?;
-            let catalog = Self::load_catalog_items(&mut tx, &catalog)?;
-            tx.commit().await?;
-            catalog
+        let mut state = Catalog::load_catalog_items(&mut txn, &state)?;
+
+        let mut builtin_migration_metadata = Catalog::generate_builtin_migration_metadata(
+            &state,
+            &mut txn,
+            migrated_builtins,
+            id_fingerprint_map,
+        )?;
+        Catalog::apply_in_memory_builtin_migration(&mut state, &mut builtin_migration_metadata)?;
+        Catalog::apply_persisted_builtin_migration(
+            &state,
+            &mut txn,
+            &mut builtin_migration_metadata,
+        )?;
+
+        txn.commit().await?;
+
+        let mut catalog = Catalog {
+            state,
+            plans: CatalogPlans {
+                optimized_plan_by_id: Default::default(),
+                physical_plan_by_id: Default::default(),
+                dataflow_metainfos: BTreeMap::new(),
+            },
+            transient_revision: 1,
+            storage: Arc::new(tokio::sync::Mutex::new(storage)),
         };
 
-        let mut builtin_migration_metadata = catalog
-            .generate_builtin_migration_metadata(migrated_builtins, id_fingerprint_map)
-            .await?;
-        catalog.apply_in_memory_builtin_migration(&mut builtin_migration_metadata)?;
+        // After LD is loaded, set the intended stash timeout.
+        // TODO: Move this into the stash constructor.
         catalog
-            .apply_persisted_builtin_migration(&mut builtin_migration_metadata)
-            .await?;
+            .storage()
+            .await
+            .set_connect_timeout(catalog.system_config().crdb_connect_timeout())
+            .await;
 
         // Load public keys for SSH connections from the secrets store to the catalog
         for (id, entry) in catalog.state.entry_by_id.iter_mut() {
@@ -1067,18 +1029,16 @@ impl Catalog {
     /// # Errors
     #[tracing::instrument(level = "info", skip_all)]
     async fn load_system_configuration(
-        &mut self,
+        state: &mut CatalogState,
+        txn: &mut Transaction<'_>,
+        is_read_only: bool,
         system_parameter_defaults: BTreeMap<String, String>,
         system_parameter_sync_config: Option<SystemParameterSyncConfig>,
-        boot_ts: mz_repr::Timestamp,
     ) -> Result<(), AdapterError> {
-        let system_config = self.storage().await.get_system_configurations().await?;
+        let system_config = txn.get_system_configurations();
 
         for (name, value) in &system_parameter_defaults {
-            match self
-                .state
-                .set_system_configuration_default(name, VarInput::Flat(value))
-            {
+            match state.set_system_configuration_default(name, VarInput::Flat(value)) {
                 Ok(_) => (),
                 Err(AdapterError::VarError(VarError::UnknownParameter(name))) => {
                     warn!(%name, "cannot load unknown system parameter from stash");
@@ -1087,10 +1047,7 @@ impl Catalog {
             };
         }
         for mz_catalog::durable::SystemConfiguration { name, value } in system_config {
-            match self
-                .state
-                .insert_system_configuration(&name, VarInput::Flat(&value))
-            {
+            match state.insert_system_configuration(&name, VarInput::Flat(&value)) {
                 Ok(_) => (),
                 Err(AdapterError::VarError(VarError::UnknownParameter(name))) => {
                     warn!(%name, "cannot load unknown system parameter from stash");
@@ -1099,9 +1056,9 @@ impl Catalog {
             };
         }
         if let Some(system_parameter_sync_config) = system_parameter_sync_config {
-            if self.storage().await.is_read_only() {
+            if is_read_only {
                 tracing::info!("parameter sync on boot: skipping sync as catalog is read-only");
-            } else if !self.state.system_config().config_has_synced_once() {
+            } else if !state.system_config().config_has_synced_once() {
                 tracing::info!("parameter sync on boot: start sync");
 
                 // We intentionally block initial startup, potentially forever,
@@ -1143,7 +1100,7 @@ impl Catalog {
                 //       back online.
                 //    6. Reboot environmentd.
 
-                let mut params = SynchronizedParameters::new(self.state.system_config().clone());
+                let mut params = SynchronizedParameters::new(state.system_config().clone());
                 let frontend = SystemParameterFrontend::from(&system_parameter_sync_config).await?;
                 frontend.pull(&mut params);
                 let ops = params
@@ -1153,24 +1110,18 @@ impl Catalog {
                         let name = param.name;
                         let value = param.value;
                         tracing::debug!(name, value, "sync parameter");
-                        Op::UpdateSystemConfiguration {
-                            name,
-                            value: OwnedVarInput::Flat(value),
-                        }
+                        (name, OwnedVarInput::Flat(value))
                     })
                     .chain(std::iter::once({
                         let name = CONFIG_HAS_SYNCED_ONCE.name().to_string();
                         let value = true.to_string();
                         tracing::debug!(name, value, "sync parameter");
-                        Op::UpdateSystemConfiguration {
-                            name,
-                            value: OwnedVarInput::Flat(value),
-                        }
+                        (name, OwnedVarInput::Flat(value))
                     }))
                     .collect::<Vec<_>>();
-                self.transact(boot_ts, None, ops, |_| Ok(()))
-                    .await
-                    .unwrap_or_terminate("cannot fail to transact");
+                for (name, value) in ops {
+                    Catalog::update_system_configuration(state, txn, &name, value.borrow())?;
+                }
                 tracing::info!("parameter sync on boot: end sync");
             } else {
                 tracing::info!("parameter sync on boot: skipping sync as config has synced once");
@@ -1186,13 +1137,9 @@ impl Catalog {
     /// built-in objects, and requires us to make multiple passes over the types to correctly
     /// resolve all references.
     #[tracing::instrument(level = "info", skip_all)]
-    async fn load_builtin_types(&mut self) -> Result<(), Error> {
-        let persisted_builtin_ids: BTreeMap<_, _> = self
-            .storage()
-            .await
+    fn load_builtin_types(state: &mut CatalogState, txn: &mut Transaction) -> Result<(), Error> {
+        let persisted_builtin_ids: BTreeMap<_, _> = txn
             .get_system_items()
-            .await?
-            .into_iter()
             .map(|mapping| (mapping.description, mapping.unique_identifier))
             .collect();
 
@@ -1200,17 +1147,15 @@ impl Catalog {
             all_builtins,
             new_builtins,
             migrated_builtins,
-        } = self
-            .allocate_system_ids(BUILTINS::types().collect(), |typ| {
-                persisted_builtin_ids
-                    .get(&SystemObjectDescription {
-                        schema_name: typ.schema.to_string(),
-                        object_type: CatalogItemType::Type,
-                        object_name: typ.name.to_string(),
-                    })
-                    .cloned()
-            })
-            .await?;
+        } = Catalog::allocate_system_ids(txn, BUILTINS::types().collect(), |typ| {
+            persisted_builtin_ids
+                .get(&SystemObjectDescription {
+                    schema_name: typ.schema.to_string(),
+                    object_type: CatalogItemType::Type,
+                    object_name: typ.name.to_string(),
+                })
+                .cloned()
+        })?;
         assert!(migrated_builtins.is_empty(), "types cannot be migrated");
         let name_to_id_map: BTreeMap<&str, GlobalId> = all_builtins
             .into_iter()
@@ -1219,7 +1164,7 @@ impl Catalog {
 
         // Replace named references with id references
         let mut builtin_types: Vec<_> = BUILTINS::types()
-            .map(|typ| Self::resolve_builtin_type(typ, &name_to_id_map))
+            .map(|typ| Catalog::resolve_builtin_type(typ, &name_to_id_map))
             .collect();
 
         // Resolve array_id for types
@@ -1233,7 +1178,7 @@ impl Catalog {
                 _ => {}
             }
         }
-        let pg_catalog_schema_id = self.state.get_pg_catalog_schema_id().clone();
+        let pg_catalog_schema_id = state.get_pg_catalog_schema_id().clone();
         for typ in &mut builtin_types {
             let element_id = name_to_id_map[typ.name];
             typ.details.array_id = element_id_to_array_id.get(&element_id).map(|id| id.clone());
@@ -1249,7 +1194,7 @@ impl Catalog {
             let desc = None;
             assert!(!matches!(typ.details.typ, CatalogType::Record { .. }));
 
-            self.state.insert_item(
+            state.insert_item(
                 element_id,
                 typ.oid,
                 QualifiedItemName {
@@ -1274,7 +1219,7 @@ impl Catalog {
         }
 
         let new_system_id_mappings = new_builtins
-            .iter()
+            .into_iter()
             .map(|(typ, id)| SystemObjectMapping {
                 description: SystemObjectDescription {
                     schema_name: typ.schema.to_string(),
@@ -1282,15 +1227,12 @@ impl Catalog {
                     object_name: typ.name.to_string(),
                 },
                 unique_identifier: SystemObjectUniqueIdentifier {
-                    id: *id,
+                    id,
                     fingerprint: typ.fingerprint(),
                 },
             })
             .collect();
-        self.storage()
-            .await
-            .set_system_items(new_system_id_mappings)
-            .await?;
+        txn.set_system_object_mappings(new_system_id_mappings)?;
 
         Ok(())
     }
@@ -1303,21 +1245,23 @@ impl Catalog {
     ///
     /// Objects need to be dropped starting from the leafs of the DAG going up towards the roots,
     /// and they need to be recreated starting at the roots of the DAG and going towards the leafs.
-    async fn generate_builtin_migration_metadata(
-        &self,
+    fn generate_builtin_migration_metadata(
+        state: &CatalogState,
+        txn: &mut Transaction<'_>,
         migrated_ids: Vec<GlobalId>,
         id_fingerprint_map: BTreeMap<GlobalId, String>,
     ) -> Result<BuiltinMigrationMetadata, Error> {
         // First obtain a topological sorting of all migrated objects and their children.
         let mut visited_set = BTreeSet::new();
-        let mut topological_sort = Vec::new();
+        let mut sorted_entries = Vec::new();
         for id in migrated_ids {
             if !visited_set.contains(&id) {
-                let migrated_topological_sort = self.topological_sort(id, &mut visited_set);
-                topological_sort.extend(migrated_topological_sort);
+                let migrated_topological_sort =
+                    Catalog::topological_sort(state, id, &mut visited_set);
+                sorted_entries.extend(migrated_topological_sort);
             }
         }
-        topological_sort.reverse();
+        sorted_entries.reverse();
 
         // Then process all objects in sorted order.
         let mut migration_metadata = BuiltinMigrationMetadata::new();
@@ -1326,21 +1270,16 @@ impl Catalog {
         let log_name_map: BTreeMap<_, _> = BUILTINS::logs()
             .map(|log| (log.variant.clone(), log.name))
             .collect();
-        for entry in topological_sort {
+        for entry in sorted_entries {
             let id = entry.id();
 
             let new_id = match id {
-                GlobalId::System(_) => self
-                    .storage()
-                    .await
-                    .allocate_system_ids(1)
-                    .await?
-                    .into_element(),
-                GlobalId::User(_) => self.storage().await.allocate_user_id().await?,
+                GlobalId::System(_) => txn.allocate_system_item_ids(1)?.into_element(),
+                GlobalId::User(_) => txn.allocate_user_item_ids(1)?.into_element(),
                 _ => unreachable!("can't migrate id: {id}"),
             };
 
-            let name = self.resolve_full_name(entry.name(), None);
+            let name = state.resolve_full_name(entry.name(), None);
             info!("migrating {name} from {id} to {new_id}");
 
             // Generate value to update fingerprint and global ID persisted mapping for system objects.
@@ -1350,7 +1289,7 @@ impl Catalog {
                     id.is_system(),
                     "id_fingerprint_map should only contain builtin objects"
                 );
-                let schema_name = self
+                let schema_name = state
                     .get_schema(
                         &entry.name().qualifiers.database_spec,
                         &entry.name().qualifiers.schema_spec,
@@ -1452,26 +1391,27 @@ impl Catalog {
         Ok(migration_metadata)
     }
 
-    fn topological_sort(
-        &self,
+    fn topological_sort<'a, 'b>(
+        state: &'a CatalogState,
         id: GlobalId,
-        visited_set: &mut BTreeSet<GlobalId>,
-    ) -> Vec<&CatalogEntry> {
-        let mut topological_sort = Vec::new();
+        visited_set: &'b mut BTreeSet<GlobalId>,
+    ) -> Vec<&'a CatalogEntry> {
+        let mut sorted_entries = Vec::new();
         visited_set.insert(id);
-        let entry = self.get_entry(&id);
+        let entry = state.get_entry(&id);
         for dependant in entry.used_by() {
             if !visited_set.contains(dependant) {
-                let child_topological_sort = self.topological_sort(*dependant, visited_set);
-                topological_sort.extend(child_topological_sort);
+                let child_topological_sort =
+                    Catalog::topological_sort(state, *dependant, visited_set);
+                sorted_entries.extend(child_topological_sort);
             }
         }
-        topological_sort.push(entry);
-        topological_sort
+        sorted_entries.push(entry);
+        sorted_entries
     }
 
     fn apply_in_memory_builtin_migration(
-        &mut self,
+        state: &mut CatalogState,
         migration_metadata: &mut BuiltinMigrationMetadata,
     ) -> Result<(), Error> {
         assert_eq!(
@@ -1480,19 +1420,16 @@ impl Catalog {
             "we should be re-creating every dropped object"
         );
         for id in migration_metadata.all_drop_ops.drain(..) {
-            self.state.drop_item(id);
-            self.drop_plans_and_metainfos(id);
+            state.drop_item(id);
         }
         for (id, oid, name, owner_id, privileges, item_rebuilder) in
             migration_metadata.all_create_ops.drain(..)
         {
-            let item = item_rebuilder.build(self);
-            self.state
-                .insert_item(id, oid, name, item, owner_id, privileges);
+            let item = item_rebuilder.build(state);
+            state.insert_item(id, oid, name, item, owner_id, privileges);
         }
         for (cluster_id, updates) in &migration_metadata.introspection_source_index_updates {
-            let log_indexes = &mut self
-                .state
+            let log_indexes = &mut state
                 .clusters_by_id
                 .get_mut(cluster_id)
                 .unwrap_or_else(|| panic!("invalid cluster {cluster_id}"))
@@ -1507,18 +1444,17 @@ impl Catalog {
     }
 
     #[tracing::instrument(level = "info", skip_all)]
-    async fn apply_persisted_builtin_migration(
-        &self,
+    fn apply_persisted_builtin_migration(
+        state: &CatalogState,
+        txn: &mut Transaction<'_>,
         migration_metadata: &mut BuiltinMigrationMetadata,
     ) -> Result<(), Error> {
-        let mut storage = self.storage().await;
-        let mut tx = storage.transaction().await?;
-        tx.remove_items(migration_metadata.user_drop_ops.drain(..).collect())?;
+        txn.remove_items(migration_metadata.user_drop_ops.drain(..).collect())?;
         for (id, schema_id, name) in migration_metadata.user_create_ops.drain(..) {
-            let entry = self.get_entry(&id);
+            let entry = state.get_entry(&id);
             let item = entry.item();
             let serialized_item = item.to_serialized();
-            tx.insert_item(
+            txn.insert_item(
                 id,
                 schema_id,
                 &name,
@@ -1527,10 +1463,10 @@ impl Catalog {
                 entry.privileges().all_values_owned().collect(),
             )?;
         }
-        tx.update_system_object_mappings(std::mem::take(
+        txn.update_system_object_mappings(std::mem::take(
             &mut migration_metadata.migrated_system_object_mappings,
         ))?;
-        tx.update_introspection_source_index_gids(
+        txn.update_introspection_source_index_gids(
             std::mem::take(&mut migration_metadata.introspection_source_index_updates)
                 .into_iter()
                 .map(|(cluster_id, updates)| {
@@ -1542,8 +1478,6 @@ impl Catalog {
                     )
                 }),
         )?;
-
-        tx.commit().await?;
 
         Ok(())
     }
@@ -1559,10 +1493,10 @@ impl Catalog {
     /// TODO(justin): it might be nice if these were two different types.
     #[tracing::instrument(level = "info", skip_all)]
     pub fn load_catalog_items<'a>(
-        tx: &mut mz_catalog::durable::Transaction<'a>,
-        c: &Catalog,
-    ) -> Result<Catalog, Error> {
-        let mut c = c.clone();
+        tx: &mut Transaction<'a>,
+        state: &CatalogState,
+    ) -> Result<CatalogState, Error> {
+        let mut state = state.clone();
         let mut awaiting_id_dependencies: BTreeMap<GlobalId, Vec<_>> = BTreeMap::new();
         let mut awaiting_name_dependencies: BTreeMap<String, Vec<_>> = BTreeMap::new();
         let mut items: VecDeque<_> = tx.loaded_items().into_iter().collect();
@@ -1575,7 +1509,7 @@ impl Catalog {
             static LOGGING_ERROR: Lazy<Regex> =
                 Lazy::new(|| Regex::new("mz_catalog.[^']*").expect("valid regex"));
 
-            let catalog_item = match c.deserialize_item(item.id, d_c) {
+            let catalog_item = match state.deserialize_item(item.id, d_c) {
                 Ok(item) => item,
                 Err(AdapterError::Catalog(Error {
                     kind: ErrorKind::Sql(SqlCatalogError::UnknownItem(name)),
@@ -1610,7 +1544,7 @@ impl Catalog {
                     continue;
                 }
                 Err(e) => {
-                    let schema = c.state().find_non_temp_schema(&item.schema_id);
+                    let schema = state.find_non_temp_schema(&item.schema_id);
                     let name = QualifiedItemName {
                         qualifiers: ItemQualifiers {
                             database_spec: schema.database().clone(),
@@ -1618,19 +1552,19 @@ impl Catalog {
                         },
                         item: item.name,
                     };
-                    let name = c.resolve_full_name(&name, None);
+                    let name = state.resolve_full_name(&name, None);
                     return Err(Error::new(ErrorKind::Corruption {
                         detail: format!("failed to deserialize item {} ({}): {}", item.id, name, e),
                     }));
                 }
             };
-            let oid = c.allocate_oid()?;
+            let oid = state.allocate_oid()?;
 
             // Enqueue any items waiting on this dependency.
             if let Some(dependent_items) = awaiting_id_dependencies.remove(&item.id) {
                 items.extend(dependent_items);
             }
-            let schema = c.state().find_non_temp_schema(&item.schema_id);
+            let schema = state.find_non_temp_schema(&item.schema_id);
             let name = QualifiedItemName {
                 qualifiers: ItemQualifiers {
                     database_spec: schema.database().clone(),
@@ -1638,13 +1572,13 @@ impl Catalog {
                 },
                 item: item.name,
             };
-            let full_name = c.resolve_full_name(&name, None);
+            let full_name = state.resolve_full_name(&name, None);
             if let Some(dependent_items) = awaiting_name_dependencies.remove(&full_name.to_string())
             {
                 items.extend(dependent_items);
             }
 
-            c.state.insert_item(
+            state.insert_item(
                 item.id,
                 oid,
                 name,
@@ -1664,7 +1598,7 @@ impl Catalog {
                 owner_id: _,
                 privileges: _,
             } = dependents.remove(0);
-            let schema = c.state().find_non_temp_schema(&schema_id);
+            let schema = state.find_non_temp_schema(&schema_id);
             let name = QualifiedItemName {
                 qualifiers: ItemQualifiers {
                     database_spec: schema.database().clone(),
@@ -1672,7 +1606,7 @@ impl Catalog {
                 },
                 item: name,
             };
-            let name = c.resolve_full_name(&name, None);
+            let name = state.resolve_full_name(&name, None);
             return Err(Error::new(ErrorKind::Corruption {
                 detail: format!(
                     "failed to deserialize item {} ({}): {}",
@@ -1692,7 +1626,7 @@ impl Catalog {
                 owner_id: _,
                 privileges: _,
             } = dependents.remove(0);
-            let schema = c.state().find_non_temp_schema(&schema_id);
+            let schema = state.find_non_temp_schema(&schema_id);
             let name = QualifiedItemName {
                 qualifiers: ItemQualifiers {
                     database_spec: schema.database().clone(),
@@ -1700,7 +1634,7 @@ impl Catalog {
                 },
                 item: name,
             };
-            let name = c.resolve_full_name(&name, None);
+            let name = state.resolve_full_name(&name, None);
             return Err(Error::new(ErrorKind::Corruption {
                 detail: format!(
                     "failed to deserialize item {} ({}): {}",
@@ -1713,14 +1647,13 @@ impl Catalog {
             }));
         }
 
-        c.transient_revision = 1;
-        Ok(c)
+        Ok(state)
     }
 
     /// Allocate new system ids for any new builtin objects and looks up existing system ids for
     /// existing builtin objects
-    async fn allocate_system_ids<T, F>(
-        &self,
+    fn allocate_system_ids<T, F>(
+        txn: &mut Transaction,
         builtins: Vec<T>,
         builtin_lookup: F,
     ) -> Result<AllocatedBuiltinSystemIds<T>, Error>
@@ -1733,15 +1666,12 @@ impl Catalog {
             .filter(|builtin| builtin_lookup(builtin).is_none())
             .count();
 
-        let mut global_ids = self
-            .storage()
-            .await
-            .allocate_system_ids(
+        let mut global_ids = txn
+            .allocate_system_item_ids(
                 new_builtin_amount
                     .try_into()
                     .expect("builtins should fit into u64"),
-            )
-            .await?
+            )?
             .into_iter();
 
         let mut all_builtins = Vec::new();
@@ -1810,7 +1740,7 @@ fn add_new_builtin_clusters_migration(
 }
 
 fn add_new_builtin_cluster_replicas_migration(
-    txn: &mut mz_catalog::durable::Transaction<'_>,
+    txn: &mut Transaction<'_>,
     builtin_cluster_replica_size: String,
 ) -> Result<(), mz_catalog::durable::CatalogError> {
     let cluster_lookup: BTreeMap<_, _> = txn
@@ -1885,7 +1815,7 @@ mod builtin_migration_tests {
     use mz_expr::MirRelationExpr;
     use mz_ore::now::NOW_ZERO;
 
-    use mz_repr::{GlobalId, RelationType, ScalarType};
+    use mz_repr::{GlobalId, RelationDesc, RelationType, ScalarType};
     use mz_sql::catalog::CatalogDatabase;
     use mz_sql::names::{
         ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
@@ -1893,7 +1823,6 @@ mod builtin_migration_tests {
     use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
     use mz_sql_parser::ast::Expr;
 
-    use crate::catalog::RelationDesc;
     use crate::catalog::{
         Catalog, CatalogItem, Index, MaterializedView, Op, OptimizedMirRelationExpr,
         DEFAULT_SCHEMA, SYSTEM_CONN_ID,
@@ -2089,10 +2018,25 @@ mod builtin_migration_tests {
                 // We don't use the new fingerprint in this test, so we can just hard code it
                 .map(|(_name, id)| (*id, "".to_string()))
                 .collect();
-            let migration_metadata = catalog
-                .generate_builtin_migration_metadata(migrated_ids, id_fingerprint_map)
-                .await
-                .expect("failed to generate builtin migration metadata");
+
+            let migration_metadata = {
+                // This cloning is a hacky way to appease the borrow checker. It doesn't really
+                // matter because we never look at catalog again. We could probably rewrite this
+                // test to not even need a `Catalog` which would significantly speed it up.
+                let state = catalog.state.clone();
+                let mut storage = catalog.storage().await;
+                let mut txn = storage
+                    .transaction()
+                    .await
+                    .expect("failed to create transaction");
+                Catalog::generate_builtin_migration_metadata(
+                    &state,
+                    &mut txn,
+                    migrated_ids,
+                    id_fingerprint_map,
+                )
+                .expect("failed to generate builtin migration metadata")
+            };
 
             assert_eq!(
                 convert_id_vec_to_name_vec(migration_metadata.previous_sink_ids, &name_mapping),

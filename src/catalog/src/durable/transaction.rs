@@ -39,8 +39,9 @@ use crate::durable::objects::{
     SystemPrivilegesKey, SystemPrivilegesValue, TimestampKey, TimestampValue,
 };
 use crate::durable::{
-    CatalogError, DefaultPrivilege, DurableCatalogState, Snapshot, TimelineTimestamp,
-    DATABASE_ID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
+    CatalogError, Comment, DefaultPrivilege, DurableCatalogState, Snapshot, SystemConfiguration,
+    TimelineTimestamp, CATALOG_CONTENT_VERSION_KEY, DATABASE_ID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY,
+    SYSTEM_ITEM_ALLOC_KEY, USER_ITEM_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
 
 /// A [`Transaction`] batches multiple catalog operations together and commits them atomically.
@@ -527,6 +528,22 @@ impl<'a> Transaction<'a> {
         Ok((current_id..next_id).collect())
     }
 
+    pub fn allocate_system_item_ids(&mut self, amount: u64) -> Result<Vec<GlobalId>, CatalogError> {
+        Ok(self
+            .get_and_increment_id_by(SYSTEM_ITEM_ALLOC_KEY.to_string(), amount)?
+            .into_iter()
+            .map(GlobalId::System)
+            .collect())
+    }
+
+    pub fn allocate_user_item_ids(&mut self, amount: u64) -> Result<Vec<GlobalId>, CatalogError> {
+        Ok(self
+            .get_and_increment_id_by(USER_ITEM_ALLOC_KEY.to_string(), amount)?
+            .into_iter()
+            .map(GlobalId::User)
+            .collect())
+    }
+
     pub(crate) fn insert_id_allocator(
         &mut self,
         name: String,
@@ -942,8 +959,12 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
+    pub fn set_catalog_content_version(&mut self, version: String) -> Result<(), CatalogError> {
+        self.set_setting(CATALOG_CONTENT_VERSION_KEY.to_string(), Some(version))
+    }
+
     /// Set persisted introspection source index.
-    pub(crate) fn set_introspection_source_indexes(
+    pub fn set_introspection_source_indexes(
         &mut self,
         introspection_source_indexes: Vec<IntrospectionSourceIndex>,
     ) -> Result<(), CatalogError> {
@@ -958,7 +979,7 @@ impl<'a> Transaction<'a> {
     }
 
     /// Set persisted system object mappings.
-    pub(crate) fn set_system_object_mappings(
+    pub fn set_system_object_mappings(
         &mut self,
         mappings: Vec<SystemObjectMapping>,
     ) -> Result<(), CatalogError> {
@@ -972,7 +993,7 @@ impl<'a> Transaction<'a> {
     }
 
     /// Set persisted timestamp.
-    pub(crate) fn set_timestamp(
+    pub fn set_timestamp(
         &mut self,
         timeline: Timeline,
         ts: mz_repr::Timestamp,
@@ -984,23 +1005,13 @@ impl<'a> Transaction<'a> {
     }
 
     /// Set persisted replica.
-    pub(crate) fn set_replica(
-        &mut self,
-        replica_id: ReplicaId,
-        cluster_id: ClusterId,
-        name: String,
-        config: ReplicaConfig,
-        owner_id: RoleId,
-    ) -> Result<(), CatalogError> {
-        let replica = ClusterReplica {
-            cluster_id,
-            replica_id,
-            name,
-            config,
-            owner_id,
-        };
-        let (key, value) = replica.into_key_value();
-        self.cluster_replicas.set(key, Some(value))?;
+    pub fn set_replicas(&mut self, replicas: Vec<ClusterReplica>) -> Result<(), CatalogError> {
+        let replicas = replicas
+            .into_iter()
+            .map(DurableType::into_key_value)
+            .map(|(k, v)| (k, Some(v)))
+            .collect();
+        self.cluster_replicas.set_many(replicas)?;
         Ok(())
     }
 
@@ -1098,6 +1109,98 @@ impl<'a> Transaction<'a> {
             .clone()
             .into_iter()
             .map(|(k, v)| DurableType::from_key_value(k, v))
+    }
+
+    pub fn get_databases(&self) -> impl Iterator<Item = Database> {
+        self.databases
+            .items()
+            .clone()
+            .into_iter()
+            .map(|(k, v)| DurableType::from_key_value(k, v))
+    }
+
+    pub fn get_schemas(&self) -> impl Iterator<Item = Schema> {
+        self.schemas
+            .items()
+            .clone()
+            .into_iter()
+            .map(|(k, v)| DurableType::from_key_value(k, v))
+    }
+
+    pub fn get_roles(&self) -> impl Iterator<Item = Role> {
+        self.roles
+            .items()
+            .clone()
+            .into_iter()
+            .map(|(k, v)| DurableType::from_key_value(k, v))
+    }
+
+    pub fn get_default_privileges(&self) -> impl Iterator<Item = DefaultPrivilege> {
+        self.default_privileges
+            .items()
+            .clone()
+            .into_iter()
+            .map(|(k, v)| DurableType::from_key_value(k, v))
+    }
+
+    pub fn get_system_privileges(&self) -> impl Iterator<Item = MzAclItem> {
+        self.system_privileges
+            .items()
+            .clone()
+            .into_iter()
+            .map(|(k, v)| DurableType::from_key_value(k, v))
+    }
+
+    pub fn get_comments(&self) -> impl Iterator<Item = Comment> {
+        self.comments
+            .items()
+            .clone()
+            .into_iter()
+            .map(|(k, v)| DurableType::from_key_value(k, v))
+    }
+
+    pub fn get_system_configurations(&self) -> impl Iterator<Item = SystemConfiguration> {
+        self.system_configurations
+            .items()
+            .clone()
+            .into_iter()
+            .map(|(k, v)| DurableType::from_key_value(k, v))
+    }
+
+    pub fn get_system_items(&self) -> impl Iterator<Item = SystemObjectMapping> {
+        self.system_gid_mapping
+            .items()
+            .clone()
+            .into_iter()
+            .map(|(k, v)| DurableType::from_key_value(k, v))
+    }
+
+    pub fn get_timestamp(&self, timeline: &Timeline) -> Option<mz_repr::Timestamp> {
+        self.timestamps
+            .get(&TimestampKey {
+                id: timeline.to_string(),
+            })
+            .map(|value| value.ts)
+    }
+
+    pub fn get_introspection_source_indexes(
+        &mut self,
+        cluster_id: ClusterId,
+    ) -> BTreeMap<String, GlobalId> {
+        self.introspection_sources
+            .items()
+            .into_iter()
+            .filter(|(k, _v)| k.cluster_id == cluster_id)
+            .map(|(k, v)| (k.name, GlobalId::System(v.index_id)))
+            .collect()
+    }
+
+    pub fn get_catalog_content_version(&self) -> Option<String> {
+        self.settings
+            .get(&SettingKey {
+                name: CATALOG_CONTENT_VERSION_KEY.to_string(),
+            })
+            .map(|value| value.value.clone())
     }
 
     pub(crate) fn into_parts(self) -> (TransactionBatch, &'a mut dyn DurableCatalogState) {

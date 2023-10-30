@@ -304,11 +304,12 @@ async fn test_open_savepoint(
         txn.commit().await.unwrap();
         // Read back write.
         let db = state
-            .get_databases()
+            .snapshot()
             .await
             .unwrap()
+            .databases
             .into_iter()
-            .find(|db| db.name == "db");
+            .find(|(_k, v)| v.name == "db");
         assert!(db.is_some(), "database should exist");
 
         Box::new(state).expire().await;
@@ -322,11 +323,12 @@ async fn test_open_savepoint(
             .unwrap();
         // Write should not have persisted.
         let db = state
-            .get_databases()
+            .snapshot()
             .await
             .unwrap()
+            .databases
             .into_iter()
-            .find(|db| db.name == "db");
+            .find(|(_k, v)| v.name == "db");
         assert!(db.is_none(), "database should not exist");
         Box::new(state).expire().await;
     }
@@ -409,7 +411,7 @@ async fn test_open_read_only(
         .unwrap();
     // Read-only catalogs do not increment the epoch.
     assert_eq!(state.epoch(), Epoch::new(2).expect("known to be non-zero"));
-    let err = state.set_deploy_generation(42).await.unwrap_err();
+    let err = state.allocate_user_id().await.unwrap_err();
     match err {
         CatalogError::Catalog(_) => panic!("unexpected catalog error"),
         CatalogError::Durable(e) => assert!(

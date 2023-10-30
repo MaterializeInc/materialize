@@ -17,7 +17,7 @@ use std::time::Duration;
 use futures::Future;
 use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
-use tokio::sync::mpsc::{self, UnboundedSender};
+use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::MutexGuard;
 use tracing::{info, trace};
 
@@ -33,8 +33,7 @@ use mz_catalog::durable::{
 };
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller::clusters::{
-    ClusterEvent, ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaAllocation,
-    ReplicaConfig, ReplicaLocation, UnmanagedReplicaLocation,
+    ClusterEvent, ManagedReplicaLocation, ReplicaConfig, ReplicaLocation,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::OptimizedMirRelationExpr;
@@ -49,7 +48,7 @@ use mz_repr::adt::mz_acl_item::{merge_mz_acl_items, AclMode, MzAclItem, Privileg
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::namespaces::MZ_TEMP_SCHEMA;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Diff, GlobalId, RelationDesc, ScalarType};
+use mz_repr::{Diff, GlobalId, ScalarType};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::catalog::{
@@ -65,13 +64,10 @@ use mz_sql::names::{
     SchemaSpecifier, SystemObjectId, PUBLIC_ROLE_NAME,
 };
 use mz_sql::plan::{
-    CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
-    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
-    Plan, PlanContext, PlanNotice, SourceSinkClusterConfig as PlanStorageClusterConfig,
-    StatementDesc,
+    PlanContext, PlanNotice, SourceSinkClusterConfig as PlanStorageClusterConfig, StatementDesc,
 };
 use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
-use mz_sql::session::vars::{ConnectionCounter, OwnedVarInput, SystemVars};
+use mz_sql::session::vars::{ConnectionCounter, OwnedVarInput, SystemVars, VarInput};
 use mz_sql::{plan, rbac, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::{
     CreateSinkOption, CreateSourceOption, QualifiedReplica, Statement, WithOptionValue,
@@ -80,7 +76,6 @@ use mz_stash::{DebugStashFactory, StashFactory};
 use mz_storage_types::connections::inline::{ConnectionResolver, InlinedConnection};
 use mz_storage_types::sources::Timeline;
 use mz_transform::dataflow::DataflowMetainfo;
-use mz_transform::Optimizer;
 
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap, Config};
@@ -89,7 +84,7 @@ pub use crate::catalog::open::BuiltinMigrationMetadata;
 pub use crate::catalog::state::CatalogState;
 use crate::command::CatalogDump;
 use crate::coord::{ConnMeta, TargetCluster};
-use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
+use crate::session::{PreparedStatement, Session};
 use crate::util::ResultExt;
 use crate::{AdapterError, AdapterNotice, ExecuteResponse};
 pub use mz_catalog::memory::objects::{
@@ -553,58 +548,15 @@ impl Catalog {
     }
 
     pub fn for_session<'a>(&'a self, session: &'a Session) -> ConnCatalog<'a> {
-        Self::for_session_state(&self.state, session)
-    }
-
-    pub fn for_session_state<'a>(state: &'a CatalogState, session: &'a Session) -> ConnCatalog<'a> {
-        let search_path = state.resolve_search_path(session);
-        let database = state
-            .database_by_name
-            .get(session.vars().database())
-            .map(|id| id.clone());
-        ConnCatalog {
-            state: Cow::Borrowed(state),
-            unresolvable_ids: BTreeSet::new(),
-            conn_id: session.conn_id().clone(),
-            cluster: session.vars().cluster().into(),
-            database,
-            search_path,
-            role_id: session.current_role_id().clone(),
-            prepared_statements: Some(session.prepared_statements()),
-            notices_tx: session.retain_notice_transmitter(),
-        }
+        self.state.for_session(session)
     }
 
     pub fn for_sessionless_user(&self, role_id: RoleId) -> ConnCatalog {
-        Self::for_sessionless_user_state(&self.state, role_id)
-    }
-
-    pub fn for_sessionless_user_state(state: &CatalogState, role_id: RoleId) -> ConnCatalog {
-        let (notices_tx, _notices_rx) = mpsc::unbounded_channel();
-        ConnCatalog {
-            state: Cow::Borrowed(state),
-            unresolvable_ids: BTreeSet::new(),
-            conn_id: SYSTEM_CONN_ID.clone(),
-            cluster: "default".into(),
-            database: state
-                .resolve_database(DEFAULT_DATABASE_NAME)
-                .ok()
-                .map(|db| db.id()),
-            // Leaving the system's search path empty allows us to catch issues
-            // where catalog object names have not been normalized correctly.
-            search_path: Vec::new(),
-            role_id,
-            prepared_statements: None,
-            notices_tx,
-        }
+        self.state.for_sessionless_user(role_id)
     }
 
     pub fn for_system_session(&self) -> ConnCatalog {
-        Self::for_system_session_state(&self.state)
-    }
-
-    pub fn for_system_session_state(state: &CatalogState) -> ConnCatalog {
-        Self::for_sessionless_user_state(state, MZ_SYSTEM_ROLE_ID)
+        self.state.for_system_session()
     }
 
     async fn storage<'a>(
@@ -914,26 +866,7 @@ impl Catalog {
         conn_id: &ConnectionId,
         owner_id: RoleId,
     ) -> Result<(), Error> {
-        let oid = self.allocate_oid()?;
-        self.state.temporary_schemas.insert(
-            conn_id.clone(),
-            Schema {
-                name: QualifiedSchemaName {
-                    database: ResolvedDatabaseSpecifier::Ambient,
-                    schema: MZ_TEMP_SCHEMA.into(),
-                },
-                id: SchemaSpecifier::Temporary,
-                oid,
-                items: BTreeMap::new(),
-                functions: BTreeMap::new(),
-                owner_id,
-                privileges: PrivilegeMap::from_mz_acl_items(vec![rbac::owner_privilege(
-                    mz_sql::catalog::ObjectType::Schema,
-                    owner_id,
-                )]),
-            },
-        );
-        Ok(())
+        self.state.create_temporary_schema(conn_id, owner_id)
     }
 
     fn item_exists_in_temp_schemas(&self, conn_id: &ConnectionId, item_name: &str) -> bool {
@@ -1072,68 +1005,8 @@ impl Catalog {
         allowed_sizes: &Vec<String>,
         allowed_availability_zones: Option<&[String]>,
     ) -> Result<ReplicaLocation, AdapterError> {
-        let location = match location {
-            mz_catalog::durable::ReplicaLocation::Unmanaged {
-                storagectl_addrs,
-                storage_addrs,
-                computectl_addrs,
-                compute_addrs,
-                workers,
-            } => {
-                if allowed_availability_zones.is_some() {
-                    coord_bail!(
-                        "internal error: tried concretize unmanaged replica \
-                        with specific availability_zones"
-                    );
-                }
-                ReplicaLocation::Unmanaged(UnmanagedReplicaLocation {
-                    storagectl_addrs,
-                    storage_addrs,
-                    computectl_addrs,
-                    compute_addrs,
-                    workers,
-                })
-            }
-            mz_catalog::durable::ReplicaLocation::Managed {
-                size,
-                availability_zone,
-                disk,
-                billed_as,
-                internal,
-            } => {
-                if allowed_availability_zones.is_some() && availability_zone.is_some() {
-                    coord_bail!(
-                        "internal error: tried concretize managed replica with \
-                        specific availability zones and availability zone"
-                    );
-                }
-                self.ensure_valid_replica_size(allowed_sizes, &size)?;
-                let cluster_replica_sizes = &self.state.cluster_replica_sizes;
-
-                ReplicaLocation::Managed(ManagedReplicaLocation {
-                    allocation: cluster_replica_sizes
-                        .0
-                        .get(&size)
-                        .expect("catalog out of sync")
-                        .clone(),
-                    availability_zones: match (availability_zone, allowed_availability_zones) {
-                        (Some(az), _) => ManagedReplicaAvailabilityZones::FromReplica(Some(az)),
-                        (None, Some(azs)) if azs.is_empty() => {
-                            ManagedReplicaAvailabilityZones::FromCluster(None)
-                        }
-                        (None, Some(azs)) => {
-                            ManagedReplicaAvailabilityZones::FromCluster(Some(azs.to_vec()))
-                        }
-                        (None, None) => ManagedReplicaAvailabilityZones::FromReplica(None),
-                    },
-                    size,
-                    disk,
-                    billed_as,
-                    internal,
-                })
-            }
-        };
-        Ok(location)
+        self.state
+            .concretize_replica_location(location, allowed_sizes, allowed_availability_zones)
     }
 
     pub(crate) fn ensure_valid_replica_size(
@@ -1141,37 +1014,7 @@ impl Catalog {
         allowed_sizes: &[String],
         size: &String,
     ) -> Result<(), AdapterError> {
-        let cluster_replica_sizes = &self.state.cluster_replica_sizes;
-
-        if !cluster_replica_sizes.0.contains_key(size)
-            || (!allowed_sizes.is_empty() && !allowed_sizes.contains(size))
-            || cluster_replica_sizes.0[size].disabled
-        {
-            let mut entries = cluster_replica_sizes
-                .enabled_allocations()
-                .collect::<Vec<_>>();
-
-            if !allowed_sizes.is_empty() {
-                let allowed_sizes = BTreeSet::<&String>::from_iter(allowed_sizes.iter());
-                entries.retain(|(name, _)| allowed_sizes.contains(name));
-            }
-
-            entries.sort_by_key(
-                |(
-                    _name,
-                    ReplicaAllocation {
-                        scale, cpu_limit, ..
-                    },
-                )| (scale, cpu_limit),
-            );
-
-            Err(AdapterError::InvalidClusterReplicaSize {
-                size: size.to_owned(),
-                expected: entries.into_iter().map(|(name, _)| name.clone()).collect(),
-            })
-        } else {
-            Ok(())
-        }
+        self.state.ensure_valid_replica_size(allowed_sizes, size)
     }
 
     pub fn cluster_replica_sizes(&self) -> &ClusterReplicaSizeMap {
@@ -3235,9 +3078,7 @@ impl Catalog {
                     )?;
                 }
                 Op::UpdateSystemConfiguration { name, value } => {
-                    state.insert_system_configuration(&name, value.borrow())?;
-                    let var = state.get_system_configuration(&name)?;
-                    tx.upsert_system_config(&name, var.value())?;
+                    Self::update_system_configuration(state, tx, &name, value.borrow())?;
                 }
                 Op::ResetSystemConfiguration { name } => {
                     state.remove_system_configuration(&name)?;
@@ -3366,6 +3207,18 @@ impl Catalog {
         Ok(())
     }
 
+    pub(crate) fn update_system_configuration(
+        state: &mut CatalogState,
+        tx: &mut Transaction,
+        name: &str,
+        value: VarInput,
+    ) -> Result<(), AdapterError> {
+        state.insert_system_configuration(name, value)?;
+        let var = state.get_system_configuration(name)?;
+        tx.upsert_system_config(name, var.value())?;
+        Ok(())
+    }
+
     fn create_schema(
         state: &mut CatalogState,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
@@ -3475,17 +3328,7 @@ impl Catalog {
         Ok(self.storage().await.confirm_leadership().await?)
     }
 
-    fn deserialize_item(
-        &self,
-        id: GlobalId,
-        create_sql: String,
-    ) -> Result<CatalogItem, AdapterError> {
-        // TODO - The `None` needs to be changed if we ever allow custom
-        // logical compaction windows in user-defined objects.
-        self.parse_item(id, create_sql, Some(&PlanContext::zero()), false, None)
-    }
-
-    // Parses the given SQL string into a `CatalogItem`.
+    /// Parses the given SQL string into a `CatalogItem`.
     #[tracing::instrument(level = "info", skip(self, pcx))]
     fn parse_item(
         &self,
@@ -3495,177 +3338,13 @@ impl Catalog {
         is_retained_metrics_object: bool,
         custom_logical_compaction_window: Option<Duration>,
     ) -> Result<CatalogItem, AdapterError> {
-        let mut session_catalog = self.for_system_session();
-        // Enable catalog features that might be required during planning in
-        // [Catalog::open]. Existing catalog items might have been created while
-        // a specific feature flag was turned on, so we need to ensure that this
-        // is also the case during catalog rehydration in order to avoid panics.
-        //
-        // WARNING / CONTRACT:
-        // 1. Features used in this method that related to parsing / planning
-        //    should be `enable_for_item_parsing` set to `true`.
-        // 2. After this step, feature flag configuration must not be
-        //    overridden.
-        session_catalog.system_vars_mut().enable_for_item_parsing();
-
-        let stmt = mz_sql::parse::parse(&create_sql)?.into_element().ast;
-        let (stmt, resolved_ids) = mz_sql::names::resolve(&session_catalog, stmt)?;
-        let plan =
-            mz_sql::plan::plan(pcx, &session_catalog, stmt, &Params::empty(), &resolved_ids)?;
-        Ok(match plan {
-            Plan::CreateTable(CreateTablePlan { table, .. }) => CatalogItem::Table(Table {
-                create_sql: table.create_sql,
-                desc: table.desc,
-                defaults: table.defaults,
-                conn_id: None,
-                resolved_ids,
-                custom_logical_compaction_window,
-                is_retained_metrics_object,
-            }),
-            Plan::CreateSource(CreateSourcePlan {
-                source,
-                timeline,
-                cluster_config,
-                ..
-            }) => CatalogItem::Source(Source {
-                create_sql: source.create_sql,
-                data_source: match source.data_source {
-                    mz_sql::plan::DataSourceDesc::Ingestion(ingestion) => {
-                        DataSourceDesc::ingestion(
-                            id,
-                            ingestion,
-                            match cluster_config {
-                                plan::SourceSinkClusterConfig::Existing { id } => id,
-                                plan::SourceSinkClusterConfig::Linked { .. }
-                                | plan::SourceSinkClusterConfig::Undefined => {
-                                    self.state.clusters_by_linked_object_id[&id]
-                                }
-                            },
-                        )
-                    }
-                    mz_sql::plan::DataSourceDesc::Progress => DataSourceDesc::Progress,
-                    mz_sql::plan::DataSourceDesc::Source => DataSourceDesc::Source,
-                    mz_sql::plan::DataSourceDesc::Webhook {
-                        validate_using,
-                        headers,
-                    } => {
-                        let plan::SourceSinkClusterConfig::Existing { id } = cluster_config else {
-                            unreachable!("webhook sources must use an existing cluster");
-                        };
-                        DataSourceDesc::Webhook {
-                            validate_using,
-                            headers,
-                            cluster_id: id,
-                        }
-                    }
-                },
-                desc: source.desc,
-                timeline,
-                resolved_ids,
-                custom_logical_compaction_window,
-                is_retained_metrics_object,
-            }),
-            Plan::CreateView(CreateViewPlan { view, .. }) => {
-                let optimizer =
-                    Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
-                let raw_expr = view.expr;
-                let decorrelated_expr = raw_expr.clone().lower(session_catalog.system_vars())?;
-                let optimized_expr = optimizer.optimize(decorrelated_expr)?;
-                let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
-                CatalogItem::View(View {
-                    create_sql: view.create_sql,
-                    raw_expr,
-                    optimized_expr,
-                    desc,
-                    conn_id: None,
-                    resolved_ids,
-                })
-            }
-            Plan::CreateMaterializedView(CreateMaterializedViewPlan {
-                materialized_view, ..
-            }) => {
-                let optimizer =
-                    Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
-                let raw_expr = materialized_view.expr;
-                let decorrelated_expr = raw_expr.clone().lower(session_catalog.system_vars())?;
-                let optimized_expr = optimizer.optimize(decorrelated_expr)?;
-                let mut typ = optimized_expr.typ();
-                for &i in &materialized_view.non_null_assertions {
-                    typ.column_types[i].nullable = false;
-                }
-                let desc = RelationDesc::new(typ, materialized_view.column_names);
-                CatalogItem::MaterializedView(MaterializedView {
-                    create_sql: materialized_view.create_sql,
-                    raw_expr,
-                    optimized_expr,
-                    desc,
-                    resolved_ids,
-                    cluster_id: materialized_view.cluster_id,
-                    non_null_assertions: materialized_view.non_null_assertions,
-                })
-            }
-            Plan::CreateIndex(CreateIndexPlan { index, .. }) => CatalogItem::Index(Index {
-                create_sql: index.create_sql,
-                on: index.on,
-                keys: index.keys,
-                conn_id: None,
-                resolved_ids,
-                cluster_id: index.cluster_id,
-                custom_logical_compaction_window,
-                is_retained_metrics_object,
-            }),
-            Plan::CreateSink(CreateSinkPlan {
-                sink,
-                with_snapshot,
-                cluster_config,
-                ..
-            }) => CatalogItem::Sink(Sink {
-                create_sql: sink.create_sql,
-                from: sink.from,
-                connection: sink.connection,
-                envelope: sink.envelope,
-                with_snapshot,
-                resolved_ids,
-                cluster_id: match cluster_config {
-                    plan::SourceSinkClusterConfig::Existing { id } => id,
-                    plan::SourceSinkClusterConfig::Linked { .. }
-                    | plan::SourceSinkClusterConfig::Undefined => {
-                        self.state.clusters_by_linked_object_id[&id]
-                    }
-                },
-            }),
-            Plan::CreateType(CreateTypePlan { typ, .. }) => CatalogItem::Type(Type {
-                create_sql: typ.create_sql,
-                desc: typ.inner.desc(&session_catalog)?,
-                details: CatalogTypeDetails {
-                    array_id: None,
-                    typ: typ.inner,
-                    typreceive_oid: None,
-                },
-                resolved_ids,
-            }),
-            Plan::CreateSecret(CreateSecretPlan { secret, .. }) => CatalogItem::Secret(Secret {
-                create_sql: secret.create_sql,
-            }),
-            Plan::CreateConnection(CreateConnectionPlan {
-                connection:
-                    mz_sql::plan::Connection {
-                        create_sql,
-                        connection,
-                    },
-                ..
-            }) => CatalogItem::Connection(Connection {
-                create_sql,
-                connection,
-                resolved_ids,
-            }),
-            _ => {
-                return Err(Error::new(ErrorKind::Corruption {
-                    detail: "catalog entry generated inappropriate plan".to_string(),
-                })
-                .into())
-            }
-        })
+        self.state.parse_item(
+            id,
+            create_sql,
+            pcx,
+            is_retained_metrics_object,
+            custom_logical_compaction_window,
+        )
     }
 
     pub fn uses_tables(&self, id: GlobalId) -> bool {
