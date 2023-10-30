@@ -113,9 +113,8 @@ impl AppendWebhookValidator {
 
             // Append all of our header columns, re-using Row packings.
             //
-            // TODO(parkmycar): Use `std::cell::OnceCell` when #20779 merges.
-            let headers_byte = once_cell::unsync::OnceCell::new();
-            let headers_text = once_cell::unsync::OnceCell::new();
+            let headers_byte = std::cell::OnceCell::new();
+            let headers_text = std::cell::OnceCell::new();
             for (column_idx, use_bytes) in header_columns {
                 assert_eq!(column_idx, datums.len(), "index and datums mismatch!");
 

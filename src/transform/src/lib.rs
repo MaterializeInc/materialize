@@ -387,11 +387,6 @@ impl Default for FuseAndCollapse {
                 // Removes redundant inputs from joins.
                 // Note that this eliminates one redundant input per join,
                 // so it is necessary to run this section in a loop.
-                // TODO: (#6748) Predicate pushdown unlocks the ability to
-                // remove some redundant joins but also prevents other
-                // redundant joins from being removed. When predicate pushdown
-                // no longer works against redundant join, check if it is still
-                // necessary to run RedundantJoin here.
                 Box::new(crate::redundant_join::RedundantJoin::default()),
                 // As a final logical action, convert any constant expression to a constant.
                 // Some optimizations fight against this, and we want to be sure to end as a

@@ -4175,7 +4175,7 @@ impl Coordinator {
                     future: batch,
                     span: _,
                 } => {
-                    // TODO: This timeout should be removed once #11782 lands;
+                    // TODO(jkosh44): This timeout should be removed;
                     // we should instead periodically ensure clusters are
                     // healthy and actively cancel any work waiting on unhealthy
                     // clusters.
