@@ -75,11 +75,25 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-fn main() -> Result<(), anyhow::Error> {
-    std::env::set_var("PROTOC", protobuf_src::protoc());
-    prost_build::Config::new()
-        .btree_map(["."])
-        .compile_protos(&["prof/src/pprof_types.proto"], &[".."])?;
+use askama::Template;
+use mz_build_info::build_info;
+use mz_prof_http::FlamegraphTemplate;
 
-    Ok(())
+fn main() {
+    let bi = build_info!();
+    let mzfg = std::env::args()
+        .nth(1)
+        .map(|path| {
+            let bytes = std::fs::read(path).expect("Failed to read supplied file");
+            String::from_utf8(bytes).expect("Supplied file was not utf-8")
+        })
+        .unwrap_or_else(|| "".into());
+    let rendered = FlamegraphTemplate {
+        version: &bi.human_version(),
+        title: "Flamegraph Visualizer",
+        mzfg: &mzfg,
+    }
+    .render()
+    .expect("template rendering cannot fail");
+    print!("{}", rendered);
 }

@@ -889,7 +889,7 @@ fn base_router(BaseRouterConfig { profiling }: BaseRouterConfig) -> Router {
         .route("/static/*path", routing::get(root::handle_static));
 
     if profiling {
-        router = router.nest("/prof/", mz_prof::http::router(&BUILD_INFO));
+        router = router.nest("/prof/", mz_prof_http::router(&BUILD_INFO));
     }
 
     router

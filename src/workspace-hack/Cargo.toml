@@ -34,6 +34,7 @@ crossbeam-deque = { version = "0.8.2" }
 crossbeam-epoch = { version = "0.9.13" }
 crossbeam-utils = { version = "0.8.7" }
 crypto-common = { version = "0.1.3", default-features = false, features = ["std"] }
+debugid = { version = "0.8.0", default-features = false, features = ["serde"] }
 dec = { version = "0.4.8", default-features = false, features = ["serde"] }
 digest = { version = "0.10.6", features = ["mac", "std"] }
 either = { version = "1.8.0", features = ["serde"] }
@@ -138,6 +139,7 @@ crossbeam-deque = { version = "0.8.2" }
 crossbeam-epoch = { version = "0.9.13" }
 crossbeam-utils = { version = "0.8.7" }
 crypto-common = { version = "0.1.3", default-features = false, features = ["std"] }
+debugid = { version = "0.8.0", default-features = false, features = ["serde"] }
 dec = { version = "0.4.8", default-features = false, features = ["serde"] }
 digest = { version = "0.10.6", features = ["mac", "std"] }
 either = { version = "1.8.0", features = ["serde"] }
