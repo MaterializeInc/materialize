@@ -17,9 +17,12 @@
 # still tries to parse the constraint, which leads to a confusing error for
 # users.
 {% macro materialize__get_table_columns_and_constraints() -%}
-  {{ exceptions.warn(
-        """
-        Materialize does not support constraints.
-        """
-    )}}
+  {% set assertions = materialize__nullability_assertions() %}
+  {% if not assertions %}
+    {{ exceptions.warn(
+          """
+          Materialize does not support constraints.
+          """
+      )}}
+  {% endif %}
 {%- endmacro %}

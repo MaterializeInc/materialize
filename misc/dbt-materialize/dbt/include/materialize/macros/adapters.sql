@@ -17,6 +17,21 @@
 -- Most of these macros are direct copies of their PostgreSQL counterparts.
 -- See: https://github.com/dbt-labs/dbt-core/blob/13b18654f/plugins/postgres/dbt/include/postgres/macros/adapters.sql
 
+{% macro materialize__nullability_assertions() %}
+  {% set nullability_assertions = [] %}
+  {% set user_provided_columns = model['columns'] %}
+  {% for i in user_provided_columns %}
+    {% set col = user_provided_columns[i] %}
+    {% for c in col['constraints'] %}
+      {% set constraint_type = c['type'] %}
+      {% if constraint_type == 'not_null' %}
+        {% do nullability_assertions.append(col['name']) %}
+      {% endif %}
+    {% endfor %}
+  {% endfor %}
+  {{ return(nullability_assertions) }}
+{% endmacro %}
+
 {% macro materialize__create_view_as(relation, sql) -%}
 
   create view {{ relation }}
@@ -39,30 +54,17 @@
 
   {% set contract_config = config.get('contract') %}
   {% if contract_config.enforced %}
-    {% set nullability_assertions = [] %}
-    {% set user_provided_columns = model['columns'] %}
-    {% for i in user_provided_columns %}
-      {% set col = user_provided_columns[i] %}
-      {% for c in col['constraints'] %}
-        {% set constraint_type = c['type'] %}
-        {% if constraint_type == 'not_null' %}
-          {% do nullability_assertions.append(col['name']) %}
-        {% endif %}
-      {% endfor %}
-    {% endfor %}
-
     {{ get_assert_columns_equivalent(sql) }}
     -- Explicitly throw a warning rather than silently ignore configured
     -- constraints for tables and materialized views.
     -- See /relations/columns_spec_ddl.sql for details.
-    {% if not nullability_assertions %}
-      {{ get_table_columns_and_constraints(nullability_assertions) }}
-    {% endif %}
+    {{ get_table_columns_and_constraints() }}
   {%- endif %}
 
-  {% if nullability_assertions %}
+  {% set assertions = materialize__nullability_assertions() %}
+  {% if assertions %}
     with (
-      {% for col in nullability_assertions %}
+      {% for col in assertions %}
         assert not null {{ col }} {{ "," if not loop.last }}
       {% endfor %}
     )
