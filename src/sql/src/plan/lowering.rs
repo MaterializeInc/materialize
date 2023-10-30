@@ -43,12 +43,14 @@ use itertools::Itertools;
 use mz_expr::{AccessStrategy, AggregateFunc, MirRelationExpr, MirScalarExpr};
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack::maybe_grow;
+use mz_repr::explain::ExplainConfig;
 use mz_repr::*;
 
 use crate::plan::expr::{
     AggregateExpr, ColumnOrder, ColumnRef, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType,
 };
 use crate::plan::{transform_expr, PlanError};
+use crate::session::vars::SystemVars;
 
 /// Maps a leveled column reference to a specific column.
 ///
@@ -132,11 +134,23 @@ pub struct Config {
     pub enable_new_outer_join_lowering: bool,
 }
 
-impl From<&crate::session::vars::SystemVars> for Config {
-    fn from(vars: &crate::session::vars::SystemVars) -> Self {
+impl From<&SystemVars> for Config {
+    fn from(vars: &SystemVars) -> Self {
         Self {
             enable_new_outer_join_lowering: vars.enable_new_outer_join_lowering(),
         }
+    }
+}
+
+// TODO(aalexandrov): Remove this after we roll out all `Optimize` structs.
+impl From<(&SystemVars, &ExplainConfig)> for Config {
+    fn from((vars, explain_config): (&SystemVars, &ExplainConfig)) -> Self {
+        // Construct base config from vars.
+        let mut config = Self::from(vars);
+        // Override feature flags that can be enabled in the EXPLAIN config.
+        config.enable_new_outer_join_lowering |= explain_config.enable_new_outer_join_lowering;
+        // Return final result.
+        config
     }
 }
 

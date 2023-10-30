@@ -111,7 +111,7 @@ use crate::error::AdapterError;
 use crate::explain::explain_dataflow;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::notice::{AdapterNotice, DroppedInUseIndex};
-use crate::optimize::{self, Optimize};
+use crate::optimize::{self, Optimize, OptimizerConfig};
 use crate::session::{EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp};
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{viewable_variables, ClientTransmitter, ComputeSinkId, ResultExt};
@@ -886,11 +886,12 @@ impl Coordinator {
         let view_id = self.catalog_mut().allocate_user_id().await?;
         let view_oid = self.catalog_mut().allocate_oid()?;
         let raw_expr = view.expr.clone();
-        let decorrelated_expr = raw_expr.lower(self.catalog().system_config())?;
+        let decorrelated_expr = raw_expr.clone().lower(self.catalog().system_config())?;
         let optimized_expr = self.view_optimizer.optimize(decorrelated_expr)?;
         let desc = RelationDesc::new(optimized_expr.typ(), view.column_names.clone());
         let view = catalog::View {
             create_sql: view.create_sql.clone(),
+            raw_expr,
             optimized_expr,
             desc,
             conn_id: if view.temporary {
@@ -981,7 +982,7 @@ impl Coordinator {
         );
 
         // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
-        let local_mir_plan = optimizer.optimize(raw_expr)?;
+        let local_mir_plan = optimizer.optimize(raw_expr.clone())?;
         let global_mir_plan = optimizer.optimize(local_mir_plan.clone())?;
         // Timestamp selection
         let since = self.least_valid_read(&global_mir_plan.id_bundle());
@@ -1001,6 +1002,7 @@ impl Coordinator {
             name: name.clone(),
             item: CatalogItem::MaterializedView(catalog::MaterializedView {
                 create_sql,
+                raw_expr,
                 optimized_expr: local_mir_plan.expr(),
                 desc: global_lir_plan.desc(),
                 resolved_ids,
@@ -3134,6 +3136,7 @@ impl Coordinator {
                     target_cluster,
                     ctx.session_mut(),
                     &row_set_finishing,
+                    &config,
                     root_dispatch,
                 )
                 .with_subscriber(&optimizer_trace)
@@ -3155,6 +3158,7 @@ impl Coordinator {
                     cluster_id,
                     broken,
                     non_null_assertions,
+                    &config,
                     root_dispatch,
                 )
                 .with_subscriber(&optimizer_trace)
@@ -3167,9 +3171,15 @@ impl Coordinator {
             } => {
                 if enable_unified_optimizer_api {
                     // Please see the docs on `explain_query_optimizer_pipeline` above.
-                    self.explain_create_index_optimizer_pipeline(name, index, broken, root_dispatch)
-                        .with_subscriber(&optimizer_trace)
-                        .await
+                    self.explain_create_index_optimizer_pipeline(
+                        name,
+                        index,
+                        broken,
+                        &config,
+                        root_dispatch,
+                    )
+                    .with_subscriber(&optimizer_trace)
+                    .await
                 } else {
                     // Allow while the introduction of the new optimizer API in
                     // #20569 is in progress.
@@ -3179,6 +3189,7 @@ impl Coordinator {
                         name,
                         index,
                         broken,
+                        &config,
                         root_dispatch,
                     )
                     .with_subscriber(&optimizer_trace)
@@ -3297,6 +3308,7 @@ impl Coordinator {
         target_cluster: TargetCluster,
         session: &mut Session,
         finishing: &Option<RowSetFinishing>,
+        explain_config: &mz_repr::explain::ExplainConfig,
         root_dispatch: tracing::Dispatch,
     ) -> Result<
         (
@@ -3315,6 +3327,8 @@ impl Coordinator {
 
         let catalog = self.catalog();
         let target_cluster_id = catalog.resolve_target_cluster(target_cluster, session)?.id;
+        let system_config = catalog.system_config();
+        let optimizer_config = OptimizerConfig::from((system_config, explain_config));
 
         // Execute the various stages of the optimization pipeline
         // -------------------------------------------------------
@@ -3326,7 +3340,7 @@ impl Coordinator {
 
         // Execute the `optimize/hir_to_mir` stage.
         let decorrelated_plan = catch_unwind(broken, "hir_to_mir", || {
-            raw_plan.lower(catalog.system_config())
+            raw_plan.lower((system_config, explain_config))
         })?;
 
         let mut timeline_context =
@@ -3381,6 +3395,7 @@ impl Coordinator {
 
             let mut df = DataflowDesc::new("explanation".to_string());
             df_builder.import_view_into_dataflow(&GlobalId::Explain, &optimized_plan, &mut df)?;
+            df_builder.reoptimize_imported_views(&mut df, &optimizer_config)?;
 
             // Resolve all unmaterializable function calls except mz_now(),
             // because in line with the `sequence_~` method we pretend that we
@@ -3483,6 +3498,7 @@ impl Coordinator {
         target_cluster_id: ClusterId,
         broken: bool,
         non_null_assertions: Vec<usize>,
+        explain_config: &mz_repr::explain::ExplainConfig,
         _root_dispatch: tracing::Dispatch,
     ) -> Result<
         (
@@ -3511,7 +3527,8 @@ impl Coordinator {
         let exported_sink_id = self.allocate_transient_id()?;
         let internal_view_id = self.allocate_transient_id()?;
         let debug_name = full_name.to_string();
-        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
+        let system_config = self.catalog().system_config();
+        let optimizer_config = optimize::OptimizerConfig::from((system_config, explain_config));
 
         // Build a MATERIALIZED VIEW optimizer for this view.
         let mut optimizer = optimize::OptimizeMaterializedView::new(
@@ -3602,6 +3619,7 @@ impl Coordinator {
         name: QualifiedItemName,
         index: Index,
         broken: bool,
+        explain_config: &mz_repr::explain::ExplainConfig,
         _root_dispatch: tracing::Dispatch,
     ) -> Result<
         (
@@ -3620,14 +3638,14 @@ impl Coordinator {
 
         // Initialize optimizer context
         // ----------------------------
-
         let compute_instance = self
             .instance_snapshot(index.cluster_id)
             .expect("compute instance does not exist");
         let exported_index_id = self.allocate_transient_id()?;
-        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
+        let system_config = self.catalog().system_config();
+        let optimizer_config = optimize::OptimizerConfig::from((system_config, explain_config));
 
-        // Build a MATERIALIZED VIEW optimizer for this view.
+        // Build an INDEX optimizer for this index.
         let mut optimizer = optimize::OptimizeIndex::new(
             self.owned_catalog(),
             compute_instance,

@@ -52,18 +52,24 @@
 
 mod index;
 mod materialized_view;
+mod view;
 
 // Re-export optimzier structs
 pub use index::{Index, OptimizeIndex};
 pub use materialized_view::OptimizeMaterializedView;
+pub use view::OptimizeView;
 
+use mz_catalog::memory::objects::CatalogItem;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
 use mz_expr::OptimizedMirRelationExpr;
+use mz_repr::explain::ExplainConfig;
+use mz_repr::GlobalId;
 use mz_sql::plan::PlanError;
 use mz_sql::session::vars::SystemVars;
 use mz_transform::TransformError;
 
+use crate::coord::dataflows::DataflowBuilder;
 use crate::AdapterError;
 
 /// A trait that represents an optimization stage.
@@ -104,7 +110,10 @@ where
 }
 
 // Feature flags for the optimizer.
+#[derive(Clone)]
 pub struct OptimizerConfig {
+    /// The mode in which the optimizer runs.
+    pub mode: OptimizeMode,
     /// Enable consolidation of unions that happen immediately after negate.
     ///
     /// The refinement happens in the LIR ⇒ LIR phase.
@@ -121,14 +130,36 @@ pub struct OptimizerConfig {
     pub enable_new_outer_join_lowering: bool,
 }
 
+#[derive(Clone, PartialEq, Eq)]
+pub enum OptimizeMode {
+    /// A mode where the optimized statement is executed.
+    Execute,
+    /// A mode where the optimized statement is explained.
+    Explain,
+}
+
 impl From<&SystemVars> for OptimizerConfig {
     fn from(vars: &SystemVars) -> Self {
         Self {
+            mode: OptimizeMode::Execute,
             enable_consolidate_after_union_negate: vars.enable_consolidate_after_union_negate(),
             enable_specialized_arrangements: vars.enable_specialized_arrangements(),
             persist_fast_path_limit: vars.persist_fast_path_limit(),
             enable_new_outer_join_lowering: vars.enable_new_outer_join_lowering(),
         }
+    }
+}
+
+impl From<(&SystemVars, &ExplainConfig)> for OptimizerConfig {
+    fn from((vars, explain_config): (&SystemVars, &ExplainConfig)) -> Self {
+        // Construct base config from vars.
+        let mut config = Self::from(vars);
+        // We are calling this constructor from an 'Explain' mode context.
+        config.mode = OptimizeMode::Explain;
+        // Override feature flags that can be enabled in the EXPLAIN config.
+        config.enable_new_outer_join_lowering |= explain_config.enable_new_outer_join_lowering;
+        // Return final result.
+        config
     }
 }
 
@@ -168,5 +199,38 @@ impl From<OptimizerError> for AdapterError {
             OptimizerError::AdapterError(err) => err,
             err => AdapterError::Internal(err.to_string()),
         }
+    }
+}
+
+impl<'a> DataflowBuilder<'a> {
+    // Re-optimize the imported view plans using the current optimizer
+    // configuration if we are running in `EXPLAIN`.
+    pub fn reoptimize_imported_views(
+        &self,
+        df_desc: &mut MirDataflowDescription,
+        config: &OptimizerConfig,
+    ) -> Result<(), OptimizerError> {
+        if config.mode == OptimizeMode::Explain {
+            for desc in df_desc.objects_to_build.iter_mut().rev() {
+                if matches!(desc.id, GlobalId::Explain | GlobalId::Transient(_)) {
+                    // Skip descriptions that do not reference proper views.
+                    continue;
+                }
+                if let CatalogItem::View(view) = &self.catalog.get_entry(&desc.id).item {
+                    let span = tracing::span!(
+                        target: "optimizer",
+                        tracing::Level::TRACE,
+                        "view",
+                        path.segment = desc.id.to_string()
+                    );
+                    desc.plan = span.in_scope(|| {
+                        let mut view_optimizer = OptimizeView::new(config.clone());
+                        view_optimizer.optimize(view.raw_expr.clone())
+                    })?;
+                }
+            }
+        }
+
+        Ok(())
     }
 }
