@@ -194,8 +194,9 @@ impl TimestampProvider for Frontiers {
         &self.storage.get(&id).unwrap().write
     }
 
-    async fn oracle_read_ts(&self, timeline: &Timeline) -> Option<Timestamp> {
-        matches!(timeline, Timeline::EpochMilliseconds).then(|| self.oracle)
+    async fn oracle_read_ts(&self, timeline: &Timeline) -> Timestamp {
+        assert_eq!(timeline, &Timeline::EpochMilliseconds);
+        self.oracle
     }
 }
 

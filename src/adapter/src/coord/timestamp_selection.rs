@@ -109,9 +109,9 @@ impl<T: TimestampManipulation> TimestampContext<T> {
 
 #[async_trait(?Send)]
 impl TimestampProvider for Coordinator {
-    async fn oracle_read_ts(&self, timeline: &Timeline) -> Option<Timestamp> {
+    async fn oracle_read_ts(&self, timeline: &Timeline) -> Timestamp {
         let timestamp_oracle = self.get_timestamp_oracle(timeline);
-        Some(timestamp_oracle.read_ts().await)
+        timestamp_oracle.read_ts().await
     }
 
     /// Reports a collection's current read frontier.
@@ -206,7 +206,7 @@ pub trait TimestampProvider {
     fn storage_implied_capability<'a>(&'a self, id: GlobalId) -> &'a Antichain<Timestamp>;
     fn storage_write_frontier<'a>(&'a self, id: GlobalId) -> &'a Antichain<Timestamp>;
 
-    async fn oracle_read_ts(&self, timeline: &Timeline) -> Option<Timestamp>;
+    async fn oracle_read_ts(&self, timeline: &Timeline) -> Timestamp;
 
     /// Determines the timestamp for a query.
     ///
@@ -260,7 +260,7 @@ pub trait TimestampProvider {
                     || (when.can_advance_to_timeline_ts()
                         && isolation_level == &IsolationLevel::StrictSerializable) =>
             {
-                self.oracle_read_ts(timeline).await
+                Some(self.oracle_read_ts(timeline).await)
             }
             _ => None,
         };
@@ -269,7 +269,9 @@ pub trait TimestampProvider {
         let mut candidate = Timestamp::minimum();
 
         if let Some(timestamp) = when.advance_to_timestamp() {
-            let ts = Coordinator::evaluate_when(catalog, timestamp, session)?;
+            let ts = self
+                .evaluate_when(catalog, timestamp, session, timeline.as_ref())
+                .await?;
             candidate.join_assign(&ts);
         }
 
@@ -340,6 +342,56 @@ pub trait TimestampProvider {
             upper,
             largest_not_in_advance_of_upper,
             oracle_read_ts,
+        })
+    }
+
+    async fn evaluate_when(
+        &self,
+        catalog: &CatalogState,
+        mut timestamp: MirScalarExpr,
+        session: &Session,
+        timeline: Option<&Timeline>,
+    ) -> Result<mz_repr::Timestamp, AdapterError> {
+        let temp_storage = RowArena::new();
+        prep_scalar_expr(catalog, &mut timestamp, ExprPrepStyle::AsOfUpTo)?;
+        let evaled = timestamp.eval(&[], &temp_storage)?;
+        if evaled.is_null() {
+            coord_bail!("can't use {} as a mz_timestamp for AS OF or UP TO", evaled);
+        }
+        let ty = timestamp.typ(&[]);
+        Ok(match ty.scalar_type {
+            ScalarType::MzTimestamp => evaled.unwrap_mz_timestamp(),
+            ScalarType::Numeric { .. } => {
+                let n = evaled.unwrap_numeric().0;
+                n.try_into()?
+            }
+            ScalarType::Int16 => i64::from(evaled.unwrap_int16()).try_into()?,
+            ScalarType::Int32 => i64::from(evaled.unwrap_int32()).try_into()?,
+            ScalarType::Int64 => evaled.unwrap_int64().try_into()?,
+            ScalarType::UInt16 => u64::from(evaled.unwrap_uint16()).into(),
+            ScalarType::UInt32 => u64::from(evaled.unwrap_uint32()).into(),
+            ScalarType::UInt64 => evaled.unwrap_uint64().into(),
+            ScalarType::TimestampTz { .. } => {
+                evaled.unwrap_timestamptz().timestamp_millis().try_into()?
+            }
+            ScalarType::Timestamp { .. } => {
+                evaled.unwrap_timestamp().timestamp_millis().try_into()?
+            }
+            ScalarType::Interval => {
+                let timeline = if matches!(timeline, Some(Timeline::EpochMilliseconds)) {
+                    Timeline::EpochMilliseconds
+                } else {
+                    coord_bail!("can't use interval in AS OF on timeline {timeline:?}");
+                };
+                let oracle_ts = self.oracle_read_ts(&timeline).await;
+                let interval = evaled.unwrap_interval();
+                let interval = Timestamp::try_from(interval.duration()?)?;
+                oracle_ts.saturating_add(interval)
+            }
+            _ => coord_bail!(
+                "can't use {} as a mz_timestamp for AS OF or UP TO",
+                Catalog::for_session_state(catalog, session).humanize_column_type(&ty)
+            ),
         })
     }
 
@@ -508,43 +560,6 @@ impl Coordinator {
             // are known to have completed (non-tailed files for example).
             Timestamp::MAX
         }
-    }
-
-    pub(crate) fn evaluate_when(
-        catalog: &CatalogState,
-        mut timestamp: MirScalarExpr,
-        session: &Session,
-    ) -> Result<mz_repr::Timestamp, AdapterError> {
-        let temp_storage = RowArena::new();
-        prep_scalar_expr(catalog, &mut timestamp, ExprPrepStyle::AsOfUpTo)?;
-        let evaled = timestamp.eval(&[], &temp_storage)?;
-        if evaled.is_null() {
-            coord_bail!("can't use {} as a mz_timestamp for AS OF or UP TO", evaled);
-        }
-        let ty = timestamp.typ(&[]);
-        Ok(match ty.scalar_type {
-            ScalarType::MzTimestamp => evaled.unwrap_mz_timestamp(),
-            ScalarType::Numeric { .. } => {
-                let n = evaled.unwrap_numeric().0;
-                n.try_into()?
-            }
-            ScalarType::Int16 => i64::from(evaled.unwrap_int16()).try_into()?,
-            ScalarType::Int32 => i64::from(evaled.unwrap_int32()).try_into()?,
-            ScalarType::Int64 => evaled.unwrap_int64().try_into()?,
-            ScalarType::UInt16 => u64::from(evaled.unwrap_uint16()).into(),
-            ScalarType::UInt32 => u64::from(evaled.unwrap_uint32()).into(),
-            ScalarType::UInt64 => evaled.unwrap_uint64().into(),
-            ScalarType::TimestampTz { .. } => {
-                evaled.unwrap_timestamptz().timestamp_millis().try_into()?
-            }
-            ScalarType::Timestamp { .. } => {
-                evaled.unwrap_timestamp().timestamp_millis().try_into()?
-            }
-            _ => coord_bail!(
-                "can't use {} as a mz_timestamp for AS OF or UP TO",
-                Catalog::for_session_state(catalog, session).humanize_column_type(&ty)
-            ),
-        })
     }
 }
 

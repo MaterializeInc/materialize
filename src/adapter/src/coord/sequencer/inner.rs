@@ -2801,9 +2801,18 @@ impl Coordinator {
             self.set_statement_execution_timestamp(id, as_of);
         }
 
-        let up_to = up_to
-            .map(|expr| Coordinator::evaluate_when(self.catalog().state(), expr, ctx.session_mut()))
-            .transpose()?;
+        let up_to = match up_to {
+            Some(expr) => Some(
+                self.evaluate_when(
+                    self.catalog().state(),
+                    expr,
+                    ctx.session_mut(),
+                    timeline.timeline(),
+                )
+                .await?,
+            ),
+            None => None,
+        };
         if let Some(up_to) = up_to {
             if as_of == up_to {
                 ctx.session_mut()
