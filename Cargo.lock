@@ -4948,6 +4948,7 @@ dependencies = [
  "once_cell",
  "serde",
  "tokio",
+ "tracing",
  "workspace-hack",
 ]
 
