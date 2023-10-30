@@ -32,7 +32,7 @@ use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::Scheduler;
 use timely::worker::Worker;
 use timely::{Data, WorkerConfig};
-use tracing::debug;
+use tracing::{debug, trace};
 
 use crate::txn_read::{DataListenNext, TxnsCache};
 use crate::{TxnsCodec, TxnsCodecDefault};
@@ -109,17 +109,7 @@ where
     let shutdown_button = builder.build(move |capabilities| async move {
         let [mut cap]: [_; 1] = capabilities.try_into().expect("one capability per output");
         let client = client.await;
-        let (txns_key_schema, txns_val_schema) = C::schemas();
-        let txns_read = client
-            .open_leased_reader::<C::Key, C::Val, _, _>(
-                txns_id,
-                Arc::new(txns_key_schema),
-                Arc::new(txns_val_schema),
-                Diagnostics::from_purpose("txns_progress"),
-            )
-            .await
-            .expect("schema shouldn't change");
-        let mut txns_cache = TxnsCache::<T, C>::open(txns_read).await;
+        let mut txns_cache = TxnsCache::<T, C>::open(&client, txns_id).await;
 
         txns_cache.update_gt(&as_of).await;
         let snap = txns_cache.data_snapshot(data_id, as_of.clone());
@@ -132,12 +122,19 @@ where
             )
             .await
             .expect("schema shouldn't change");
-        let () = snap.unblock_read(data_write).await;
+        let empty_to = snap.unblock_read(data_write).await;
+        debug!(
+            "txns_progress({}) {:.9} starting as_of={:?} empty_to={:?}",
+            name,
+            data_id.to_string(),
+            as_of,
+            empty_to.elements()
+        );
 
         // We've ensured that the data shard's physical upper is past as_of, so
         // start by passing through data and frontier updates from the input
         // until it is past the as_of.
-        let mut read_data_to = as_of.step_forward();
+        let mut read_data_to = empty_to;
         let mut output_progress_exclusive = T::minimum();
         loop {
             // TODO(txn): Do something more specific when the input returns None
@@ -151,6 +148,12 @@ where
                     // disconnected.
                     Event::Data(_data_cap, data) => {
                         for data in data.drain(..) {
+                            trace!(
+                                "txns_progress({}) {:.9} emitting data {:?}",
+                                name,
+                                data_id.to_string(),
+                                data
+                            );
                             passthrough_output.give(&cap, data).await;
                         }
                     }
@@ -166,9 +169,15 @@ where
                         // frontier updates too.
                         if &output_progress_exclusive < input_progress_exclusive {
                             output_progress_exclusive.clone_from(input_progress_exclusive);
+                            trace!(
+                                "txns_progress({}) {:.9} downgrading cap to {:?}",
+                                name,
+                                data_id.to_string(),
+                                output_progress_exclusive
+                            );
                             cap.downgrade(&output_progress_exclusive);
                         }
-                        if read_data_to <= output_progress_exclusive {
+                        if read_data_to.less_equal(&output_progress_exclusive) {
                             break;
                         }
                     }
@@ -180,14 +189,16 @@ where
             // find out what to do next given our current progress.
             loop {
                 txns_cache.update_ge(&output_progress_exclusive).await;
+                txns_cache.compact_to(&output_progress_exclusive);
                 let data_listen_next =
                     txns_cache.data_listen_next(&data_id, output_progress_exclusive.clone());
                 debug!(
-                    "txns_progress({}): data_listen_next {:.9} at {:?}: {:?}",
+                    "txns_progress({}) {:.9} data_listen_next at {:?}({:?}): {:?}",
                     name,
                     data_id.to_string(),
-                    output_progress_exclusive,
-                    data_listen_next
+                    read_data_to,
+                    txns_cache.progress_exclusive,
+                    data_listen_next,
                 );
                 match data_listen_next {
                     // We've caught up to the txns upper and we have to wait for
@@ -204,7 +215,7 @@ where
                     // The data shard got a write! Loop back above and pass
                     // through data until we see it.
                     DataListenNext::ReadDataTo(new_target) => {
-                        read_data_to = new_target;
+                        read_data_to = Antichain::from_elem(new_target);
                         break;
                     }
                     // We know there are no writes in
@@ -213,8 +224,20 @@ where
                     DataListenNext::EmitLogicalProgress(new_progress) => {
                         assert!(output_progress_exclusive < new_progress);
                         output_progress_exclusive = new_progress;
+                        trace!(
+                            "txns_progress({}) {:.9} downgrading cap to {:?}",
+                            name,
+                            data_id.to_string(),
+                            output_progress_exclusive
+                        );
                         cap.downgrade(&output_progress_exclusive);
                         continue;
+                    }
+                    DataListenNext::CompactedTo(since_ts) => {
+                        unreachable!(
+                            "internal logic error: {} unexpectedly compacted past {:?} to {:?}",
+                            data_id, output_progress_exclusive, since_ts
+                        )
                     }
                 }
             }
@@ -287,7 +310,7 @@ impl DataSubscribe {
                     false.then_some(|_, _: &_, _| unreachable!()),
                     Arc::new(StringSchema),
                     Arc::new(UnitSchema),
-                    |_| true,
+                    |_, _| true,
                 );
                 (data_stream.leave(), token)
             });
@@ -365,6 +388,10 @@ impl DataSubscribe {
     #[cfg(test)]
     pub async fn step_past(&mut self, ts: u64) {
         while self.txns.less_equal(&ts) {
+            trace!(
+                "progress at {:?}",
+                self.txns.with_frontier(|x| x.to_owned()).elements()
+            );
             self.step();
             tokio::task::yield_now().await;
         }
@@ -447,5 +474,60 @@ mod tests {
             sub.step_past(7).await;
             log.assert_eq(d0, 5, 8, sub.output().clone());
         }
+    }
+
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn subscribe_shard_finalize() {
+        let client = PersistClient::new_for_tests().await;
+        let mut txns = TxnsHandle::expect_open(client.clone()).await;
+        let log = txns.new_log();
+        let d0 = txns.expect_register(1).await;
+
+        // Start the operator as_of the register ts.
+        let mut sub = txns.read_cache().expect_subscribe(&client, d0, 1);
+        sub.step_past(1).await;
+
+        // Write to it via txns.
+        txns.expect_commit_at(2, d0, &["foo"], &log).await;
+        sub.step_past(2).await;
+
+        // Unregister it.
+        txns.forget(3, d0).await.unwrap();
+        sub.step_past(3).await;
+
+        // TODO: Hard mode, see if we can get the rest of this test to work even
+        // _without_ the txns shard advancing.
+        txns.begin().commit_at(&mut txns, 7).await.unwrap();
+
+        // The operator should continue to emit data written directly even
+        // though it's no longer in the txns set.
+        let mut d0_write = writer(&client, d0).await;
+        let key = "bar".to_owned();
+        crate::small_caa(|| "test", &mut d0_write, &[((&key, &()), &5, 1)], 4, 6)
+            .await
+            .unwrap();
+        log.record((d0, key, 5, 1));
+        sub.step_past(4).await;
+
+        // Now finalize the shard to writes.
+        let () = d0_write
+            .compare_and_append_batch(&mut [], Antichain::from_elem(6), Antichain::new())
+            .await
+            .unwrap()
+            .unwrap();
+        while sub.txns.less_than(&u64::MAX) {
+            sub.step();
+            tokio::task::yield_now().await;
+        }
+
+        // Make sure we read the correct things.
+        log.assert_eq(d0, 1, u64::MAX, sub.output().clone());
+
+        // Also make sure that we can read the right things if we start up after
+        // the forget but before the direct write and ditto after the direct
+        // write.
+        log.assert_subscribe(d0, 4, u64::MAX).await;
+        log.assert_subscribe(d0, 6, u64::MAX).await;
     }
 }

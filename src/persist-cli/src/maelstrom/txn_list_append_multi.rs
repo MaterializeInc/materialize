@@ -116,6 +116,11 @@ impl Transactor {
                 txn.tidy(std::mem::take(&mut self.tidy));
                 match txn.commit_at(&mut self.txns, write_ts).await {
                     Ok(maintenance) => {
+                        // Aggressively allow the txns shard to compact. To
+                        // exercise more edge cases, do it before we apply the
+                        // newly committed txn.
+                        self.txns.compact_to(write_ts).await;
+
                         debug!("req committed at read_ts={} write_ts={}", read_ts, write_ts);
                         let tidy = maintenance.apply(&mut self.txns).await;
                         self.tidy.merge(tidy);

@@ -625,3 +625,220 @@ With
       Get materialize.left_joins.outer // { arity: 2 }
 
 EOF
+
+# The following tests are for the EXPLAIN override of this
+# feature flag, so we want to disable it.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_new_outer_join_lowering TO false;
+----
+COMPLETE 0
+
+# EXPLAIN a SELECT with the feature turned in the EXPLAIN config.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(enable_new_outer_join_lowering, humanized_exprs, arity) FOR
+SELECT
+  facts.facts_k01,
+  facts.facts_d01,
+  facts.facts_d02,
+  dim01.dim01_k01,
+  dim01.dim01_d01,
+  dim01.dim01_d02
+FROM
+  left_joins_raw.facts LEFT JOIN
+  left_joins_raw.dim01 ON(
+    coalesce(facts.dim01_k01, 5) = coalesce(dim01.dim01_k01, 5) AND
+    facts_d01 > 42 AND dim01_d02 < 24
+  );
+----
+Explained Query:
+  Return // { arity: 6 }
+    Union // { arity: 6 }
+      Map (null, null, null) // { arity: 6 }
+        Union // { arity: 3 }
+          Negate // { arity: 3 }
+            Project (#0, #2, #3) // { arity: 3 }
+              Join on=(#4 = coalesce(dim01_k01, 5)) type=differential // { arity: 5 }
+                Get l0 // { arity: 4 }
+                ArrangeBy keys=[[#0]] // { arity: 1 }
+                  Distinct group_by=[coalesce(dim01_k01, 5)] // { arity: 1 }
+                    Project (#1) // { arity: 1 }
+                      Get l1 // { arity: 7 }
+          Project (#0, #4, #5) // { arity: 3 }
+            ReadStorage materialize.left_joins_raw.facts // { arity: 9 }
+      Project (#0, #2..=#6) // { arity: 6 }
+        Get l1 // { arity: 7 }
+  With
+    cte l1 =
+      Join on=(coalesce(dim01_k01, 5) = coalesce(dim01_k01, 5)) type=differential // { arity: 7 }
+        Get l0 // { arity: 4 }
+        ArrangeBy keys=[[coalesce(dim01_k01, 5)]] // { arity: 3 }
+          Project (#0..=#2) // { arity: 3 }
+            Filter (dim01_d02 < 24) // { arity: 6 }
+              ReadStorage materialize.left_joins_raw.dim01 // { arity: 6 }
+    cte l0 =
+      ArrangeBy keys=[[coalesce(dim01_k01, 5)]] // { arity: 4 }
+        Project (#0, #1, #4, #5) // { arity: 4 }
+          Filter (facts_d01 > 42) // { arity: 9 }
+            ReadStorage materialize.left_joins_raw.facts // { arity: 9 }
+
+Source materialize.left_joins_raw.dim01
+  filter=((dim01_d02 < 24))
+
+EOF
+
+# Define the above statement as a view.
+statement ok
+CREATE VIEW v AS
+SELECT
+  facts.facts_k01,
+  facts.facts_d01,
+  facts.facts_d02,
+  dim01.dim01_k01,
+  dim01.dim01_d01,
+  dim01.dim01_d02
+FROM
+  left_joins_raw.facts LEFT JOIN
+  left_joins_raw.dim01 ON(
+    coalesce(facts.dim01_k01, 5) = coalesce(dim01.dim01_k01, 5) AND
+    facts_d01 > 42 AND dim01_d02 < 24
+  );
+
+# EXPLAIN a SELECT * FROM <view> with the feature turned in the EXPLAIN config.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(enable_new_outer_join_lowering, humanized_exprs, arity) FOR
+SELECT * FROM v;
+----
+Explained Query:
+  Return // { arity: 6 }
+    Union // { arity: 6 }
+      Map (null, null, null) // { arity: 6 }
+        Union // { arity: 3 }
+          Negate // { arity: 3 }
+            Project (#0, #2, #3) // { arity: 3 }
+              Join on=(#4 = coalesce(dim01_k01, 5)) type=differential // { arity: 5 }
+                Get l0 // { arity: 4 }
+                ArrangeBy keys=[[#0]] // { arity: 1 }
+                  Distinct group_by=[coalesce(dim01_k01, 5)] // { arity: 1 }
+                    Project (#1) // { arity: 1 }
+                      Get l1 // { arity: 7 }
+          Project (#0, #4, #5) // { arity: 3 }
+            ReadStorage materialize.left_joins_raw.facts // { arity: 9 }
+      Project (#0, #2..=#6) // { arity: 6 }
+        Get l1 // { arity: 7 }
+  With
+    cte l1 =
+      Join on=(coalesce(dim01_k01, 5) = coalesce(dim01_k01, 5)) type=differential // { arity: 7 }
+        Get l0 // { arity: 4 }
+        ArrangeBy keys=[[coalesce(dim01_k01, 5)]] // { arity: 3 }
+          Project (#0..=#2) // { arity: 3 }
+            Filter (dim01_d02 < 24) // { arity: 6 }
+              ReadStorage materialize.left_joins_raw.dim01 // { arity: 6 }
+    cte l0 =
+      ArrangeBy keys=[[coalesce(dim01_k01, 5)]] // { arity: 4 }
+        Project (#0, #1, #4, #5) // { arity: 4 }
+          Filter (facts_d01 > 42) // { arity: 9 }
+            ReadStorage materialize.left_joins_raw.facts // { arity: 9 }
+
+Source materialize.left_joins_raw.dim01
+  filter=((dim01_d02 < 24))
+
+EOF
+
+# EXPLAIN a CREATE INDEX with the feature turned in the EXPLAIN config.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(enable_new_outer_join_lowering, humanized_exprs, arity) FOR
+CREATE INDEX ON v(facts_k01);
+----
+materialize.public.v_facts_k01_idx:
+  ArrangeBy keys=[[facts_k01]] // { arity: 6 }
+    ReadGlobalFromSameDataflow materialize.public.v // { arity: 6 }
+
+materialize.public.v:
+  Return // { arity: 6 }
+    Union // { arity: 6 }
+      Map (null, null, null) // { arity: 6 }
+        Union // { arity: 3 }
+          Negate // { arity: 3 }
+            Project (#0, #2, #3) // { arity: 3 }
+              Join on=(#4 = coalesce(dim01_k01, 5)) type=differential // { arity: 5 }
+                Get l0 // { arity: 4 }
+                ArrangeBy keys=[[#0]] // { arity: 1 }
+                  Distinct group_by=[coalesce(dim01_k01, 5)] // { arity: 1 }
+                    Project (#1) // { arity: 1 }
+                      Get l1 // { arity: 7 }
+          Project (#0, #4, #5) // { arity: 3 }
+            ReadStorage materialize.left_joins_raw.facts // { arity: 9 }
+      Project (#0, #2..=#6) // { arity: 6 }
+        Get l1 // { arity: 7 }
+  With
+    cte l1 =
+      Join on=(coalesce(dim01_k01, 5) = coalesce(dim01_k01, 5)) type=differential // { arity: 7 }
+        Get l0 // { arity: 4 }
+        ArrangeBy keys=[[coalesce(dim01_k01, 5)]] // { arity: 3 }
+          Project (#0..=#2) // { arity: 3 }
+            Filter (dim01_d02 < 24) // { arity: 6 }
+              ReadStorage materialize.left_joins_raw.dim01 // { arity: 6 }
+    cte l0 =
+      ArrangeBy keys=[[coalesce(dim01_k01, 5)]] // { arity: 4 }
+        Project (#0, #1, #4, #5) // { arity: 4 }
+          Filter (facts_d01 > 42) // { arity: 9 }
+            ReadStorage materialize.left_joins_raw.facts // { arity: 9 }
+
+Source materialize.left_joins_raw.dim01
+  filter=((dim01_d02 < 24))
+
+EOF
+
+# EXPLAIN a CREATE MATERIALIZED VIEW with the feature turned in the EXPLAIN config.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(enable_new_outer_join_lowering, humanized_exprs, arity) FOR
+CREATE MATERIALIZED VIEW mv AS
+SELECT
+  facts.facts_k01,
+  facts.facts_d01,
+  facts.facts_d02,
+  dim01.dim01_k01,
+  dim01.dim01_d01,
+  dim01.dim01_d02
+FROM
+  left_joins_raw.facts LEFT JOIN
+  left_joins_raw.dim01 ON(
+    coalesce(facts.dim01_k01, 5) = coalesce(dim01.dim01_k01, 5) AND
+    facts_d01 > 42 AND dim01_d02 < 24
+  );
+----
+materialize.public.mv:
+  Return // { arity: 6 }
+    Union // { arity: 6 }
+      Map (null, null, null) // { arity: 6 }
+        Union // { arity: 3 }
+          Negate // { arity: 3 }
+            Project (#0, #2, #3) // { arity: 3 }
+              Join on=(#4 = coalesce(dim01_k01, 5)) type=differential // { arity: 5 }
+                Get l0 // { arity: 4 }
+                ArrangeBy keys=[[#0]] // { arity: 1 }
+                  Distinct group_by=[coalesce(dim01_k01, 5)] // { arity: 1 }
+                    Project (#1) // { arity: 1 }
+                      Get l1 // { arity: 7 }
+          Project (#0, #4, #5) // { arity: 3 }
+            ReadStorage materialize.left_joins_raw.facts // { arity: 9 }
+      Project (#0, #2..=#6) // { arity: 6 }
+        Get l1 // { arity: 7 }
+  With
+    cte l1 =
+      Join on=(coalesce(dim01_k01, 5) = coalesce(dim01_k01, 5)) type=differential // { arity: 7 }
+        Get l0 // { arity: 4 }
+        ArrangeBy keys=[[coalesce(dim01_k01, 5)]] // { arity: 3 }
+          Project (#0..=#2) // { arity: 3 }
+            Filter (dim01_d02 < 24) // { arity: 6 }
+              ReadStorage materialize.left_joins_raw.dim01 // { arity: 6 }
+    cte l0 =
+      ArrangeBy keys=[[coalesce(dim01_k01, 5)]] // { arity: 4 }
+        Project (#0, #1, #4, #5) // { arity: 4 }
+          Filter (facts_d01 > 42) // { arity: 9 }
+            ReadStorage materialize.left_joins_raw.facts // { arity: 9 }
+
+Source materialize.left_joins_raw.dim01
+  filter=((dim01_d02 < 24))
+
+EOF

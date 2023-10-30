@@ -40,6 +40,7 @@ pub trait TimestampManipulation:
     + timely::order::TotalOrder
     + differential_dataflow::lattice::Lattice
     + std::fmt::Debug
+    + mz_persist_types::StepForward
 {
     /// Advance a timestamp by the least amount possible such that
     /// `ts.less_than(ts.step_forward())` is true. Panic if unable to do so.
@@ -72,6 +73,12 @@ impl TimestampManipulation for Timestamp {
 
     fn maximum() -> Self {
         Self::MAX
+    }
+}
+
+impl mz_persist_types::StepForward for Timestamp {
+    fn step_forward(&self) -> Self {
+        self.step_forward()
     }
 }
 

@@ -7,10 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import os
 from pathlib import Path
 
 from materialize import MZ_ROOT
-from materialize.scalability.workload import Workload
 
 RESULTS_DIR = MZ_ROOT / "test" / "scalability" / "results"
 
@@ -19,16 +19,16 @@ def endpoint_dir(endpoint_name: str) -> Path:
     return RESULTS_DIR / endpoint_name
 
 
-def df_totals_csv(endpoint_name: str, workload: Workload) -> Path:
-    return RESULTS_DIR / endpoint_name / f"{type(workload).__name__}.csv"
+def df_totals_csv(endpoint_name: str, workload_name: str) -> Path:
+    return RESULTS_DIR / endpoint_name / f"{workload_name}.csv"
 
 
 def workloads_csv() -> Path:
     return RESULTS_DIR / "workloads.csv"
 
 
-def df_details_csv(endpoint_name: str, workload: Workload) -> Path:
-    return RESULTS_DIR / endpoint_name / f"{type(workload).__name__}_details.csv"
+def df_details_csv(endpoint_name: str, workload_name: str) -> Path:
+    return RESULTS_DIR / endpoint_name / f"{workload_name}_details.csv"
 
 
 def regressions_csv_name() -> str:
@@ -45,3 +45,9 @@ def results_csv_rel_path(endpoint_name: str) -> Path:
 
 def results_csv(endpoint_name: str) -> Path:
     return RESULTS_DIR / results_csv_rel_path(endpoint_name)
+
+
+def get_endpoint_names_from_results_dir() -> list[str]:
+    directories = next(os.walk(RESULTS_DIR))[1]
+    endpoints = [entry for entry in directories if not entry.startswith(".")]
+    return endpoints

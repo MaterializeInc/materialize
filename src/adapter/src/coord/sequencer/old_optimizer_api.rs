@@ -36,6 +36,7 @@ use crate::coord::dataflows::{
 use crate::coord::peek::FastPathPlan;
 use crate::coord::sequencer::inner::catch_unwind;
 use crate::coord::Coordinator;
+use crate::optimize::OptimizerConfig;
 use crate::session::Session;
 use crate::{catalog, AdapterError, AdapterNotice, ExecuteResponse};
 
@@ -147,6 +148,7 @@ impl Coordinator {
         name: QualifiedItemName,
         index: Index,
         broken: bool,
+        explain_config: &mz_repr::explain::ExplainConfig,
         _root_dispatch: tracing::Dispatch,
     ) -> Result<
         (
@@ -177,6 +179,8 @@ impl Coordinator {
         let on_desc = on_entry
             .desc(&full_name)
             .expect("can only create indexes on items with a valid description");
+        let system_config = self.catalog.system_config();
+        let optimizer_config = OptimizerConfig::from((system_config, explain_config));
 
         // Create a transient catalog item
         // -------------------------------
@@ -203,6 +207,7 @@ impl Coordinator {
             let mut df = DataflowDesc::new(full_name.to_string());
 
             df_builder.import_into_dataflow(&index.on, &mut df)?;
+            df_builder.reoptimize_imported_views(&mut df, &optimizer_config)?;
 
             for desc in df.objects_to_build.iter_mut() {
                 prep_relation_expr(state, &mut desc.plan, ExprPrepStyle::Index)?;

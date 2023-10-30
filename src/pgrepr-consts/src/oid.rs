@@ -102,6 +102,10 @@ pub const FIRST_USER_OID: u32 = 20_000;
 // Postgres builtins in the "unpinned" OID range. We get to choose whatever OIDs
 // we like for these builtins.
 pub const FUNC_PG_EXPAND_ARRAY: u32 = 12000;
+pub const FUNC_PG_DIGEST_STRING: u32 = 12001;
+pub const FUNC_PG_DIGEST_BYTES: u32 = 12002;
+pub const FUNC_PG_HMAC_STRING: u32 = 12003;
+pub const FUNC_PG_HMAC_BYTES: u32 = 12004;
 
 // Materialize-specific builtin OIDs.
 pub const TYPE_LIST_OID: u32 = 16_384;
@@ -305,7 +309,7 @@ pub const FUNC_DATABASE_OID_OID: u32 = 16_585;
 pub const FUNC_SCHEMA_OID_OID: u32 = 16_586;
 pub const FUNC_HAS_CLUSTER_PRIVILEGE_TEXT_TEXT_TEXT_OID: u32 = 16_587;
 pub const FUNC_HAS_CLUSTER_PRIVILEGE_OID_TEXT_TEXT_OID: u32 = 16_588;
-pub const FUNC_HAS_CLUSTER_PRIVILEGE_TEXT_TEXT_OID: u32 = 16_5890;
+pub const FUNC_HAS_CLUSTER_PRIVILEGE_TEXT_TEXT_OID: u32 = 16_589;
 pub const FUNC_HAS_CONNECTION_PRIVILEGE_TEXT_TEXT_TEXT_OID: u32 = 16_591;
 pub const FUNC_HAS_CONNECTION_PRIVILEGE_TEXT_OID_TEXT_OID: u32 = 16_592;
 pub const FUNC_HAS_CONNECTION_PRIVILEGE_OID_TEXT_TEXT_OID: u32 = 16_593;

@@ -2,7 +2,7 @@
 name = "mz-lsp-server"
 description = "The Materialize Language Server Protocol (LSP) Server implementation."
 license = "Apache-2.0"
-version = "0.1.0"
+version = "0.2.0"
 edition.workspace = true
 rust-version.workspace = true
 
@@ -19,6 +19,7 @@ mz-sql-parser = { path = "../sql-parser", default-features = false  }
 mz-sql-lexer = { path = "../sql-lexer", default-features = false }
 mz-ore = { path = "../ore", default-features = false, features = ["async", "test"] }
 regex = "1.7.0"
+mz-sql-pretty = { path = "../sql-pretty" }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [dev-dependencies]

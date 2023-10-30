@@ -25,6 +25,7 @@ from pg8000.native import identifier
 
 from materialize.data_ingest.data_type import Backend
 from materialize.data_ingest.field import Field, formatted_value
+from materialize.data_ingest.query_error import QueryError
 from materialize.data_ingest.row import Operation
 from materialize.data_ingest.transaction import Transaction
 
@@ -76,9 +77,9 @@ class Executor:
             self.reconnect()
             with self.mz_conn.cursor() as cur:
                 self.execute(cur, query)
-        except:
-            print(f"Query failed: {query}")
-            raise
+        except Exception as e:
+            print(f"Query failed: {query} {e}")
+            raise QueryError(str(e), query)
 
     def execute_with_retry_on_error(
         self,
@@ -217,10 +218,10 @@ class KafkaExecutor(Executor):
         with self.mz_conn.cursor() as cur:
             self.execute(
                 cur,
-                f"""CREATE SOURCE {identifier(self.schema)}.{identifier(self.table)}
-                    FROM KAFKA CONNECTION kafka_conn (TOPIC '{self.topic}')
+                f"""CREATE SOURCE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.table)}
+                    FROM KAFKA CONNECTION materialize.public.kafka_conn (TOPIC '{self.topic}')
                     FORMAT AVRO
-                    USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                    USING CONFLUENT SCHEMA REGISTRY CONNECTION materialize.public.csr_conn
                     ENVELOPE UPSERT""",
             )
         self.mz_conn.autocommit = False
@@ -333,7 +334,7 @@ class PgExecutor(Executor):
             )
             self.execute(
                 cur,
-                f"""CREATE SOURCE {identifier(self.schema)}.{identifier(self.source)}
+                f"""CREATE SOURCE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.source)}
                     FROM POSTGRES CONNECTION pg{self.num} (PUBLICATION 'postgres_source')
                     FOR TABLES ({identifier(self.table)} AS {identifier(self.table)})""",
             )
@@ -425,13 +426,13 @@ class KafkaRoundtripExecutor(Executor):
             self.execute(cur, f"DROP TABLE IF EXISTS {identifier(self.table_original)}")
             self.execute(
                 cur,
-                f"""CREATE TABLE {identifier(self.schema)}.{identifier(self.table_original)} (
+                f"""CREATE TABLE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.table_original)} (
                         {", ".join(values)},
                         PRIMARY KEY ({", ".join(keys)}));""",
             )
             self.execute(
                 cur,
-                f"""CREATE SINK {identifier(self.schema)}.sink{self.num} FROM {identifier(self.table_original)}
+                f"""CREATE SINK {identifier(self.database)}.{identifier(self.schema)}.sink{self.num} FROM {identifier(self.table_original)}
                     INTO KAFKA CONNECTION kafka_conn (TOPIC '{self.topic}')
                     KEY ({", ".join([identifier(key) for key in keys])})
                     FORMAT AVRO
@@ -440,7 +441,7 @@ class KafkaRoundtripExecutor(Executor):
             )
             self.execute_with_retry_on_error(
                 cur,
-                f"""CREATE SOURCE {identifier(self.schema)}.{identifier(self.table)}
+                f"""CREATE SOURCE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.table)}
                     FROM KAFKA CONNECTION kafka_conn (TOPIC '{self.topic}')
                     FORMAT AVRO
                     USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -466,7 +467,7 @@ class KafkaRoundtripExecutor(Executor):
                         )
                         self.execute(
                             cur,
-                            f"""INSERT INTO {identifier(self.schema)}.{identifier(self.table_original)}
+                            f"""INSERT INTO {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.table_original)}
                                 VALUES ({values_str})
                             """,
                         )
@@ -492,7 +493,7 @@ class KafkaRoundtripExecutor(Executor):
                                 self.mz_conn.autocommit = True
                                 self.execute(
                                     cur,
-                                    f"""UPDATE {identifier(self.schema)}.{identifier(self.table_original)}
+                                    f"""UPDATE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.table_original)}
                                         SET {set_str}
                                         WHERE {cond_str}
                                     """,
@@ -504,7 +505,7 @@ class KafkaRoundtripExecutor(Executor):
                             )
                             self.execute(
                                 cur,
-                                f"""INSERT INTO {identifier(self.schema)}.{identifier(self.table_original)}
+                                f"""INSERT INTO {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.table_original)}
                                     VALUES ({values_str})
                                 """,
                             )
@@ -518,7 +519,7 @@ class KafkaRoundtripExecutor(Executor):
                         self.mz_conn.autocommit = True
                         self.execute(
                             cur,
-                            f"""DELETE FROM {identifier(self.schema)}.{identifier(self.table_original)}
+                            f"""DELETE FROM {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.table_original)}
                                 WHERE {cond_str}
                             """,
                         )

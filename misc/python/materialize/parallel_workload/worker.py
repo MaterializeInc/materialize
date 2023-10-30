@@ -14,8 +14,10 @@ from collections import Counter, defaultdict
 
 import pg8000
 
+from materialize.data_ingest.query_error import QueryError
 from materialize.parallel_workload.action import Action, ReconnectAction
-from materialize.parallel_workload.executor import Executor, QueryError
+from materialize.parallel_workload.database import Database
+from materialize.parallel_workload.executor import Executor
 
 
 class Worker:
@@ -48,21 +50,22 @@ class Worker:
         self.ignored_errors = defaultdict(Counter)
         self.exe = None
 
-    def run(self, host: str, port: int, user: str, database: str) -> None:
-        self.conn = pg8000.connect(host=host, port=port, user=user, database=database)
+    def run(self, host: str, port: int, user: str, database: Database) -> None:
+        self.conn = pg8000.connect(
+            host=host, port=port, user=user, database="materialize"
+        )
         self.conn.autocommit = self.autocommit
         cur = self.conn.cursor()
-        self.exe = Executor(self.rng, cur)
+        self.exe = Executor(self.rng, cur, database)
         self.exe.set_isolation("SERIALIZABLE")
         cur.execute("SELECT pg_backend_pid()")
         self.exe.pg_pid = cur.fetchall()[0][0]
-        rollback_next = True
-        reconnect_next = True
+
         while time.time() < self.end_time:
             action = self.rng.choices(self.actions, self.weights)[0]
             self.num_queries += 1
             try:
-                if rollback_next:
+                if self.exe.rollback_next:
                     try:
                         self.exe.rollback()
                     except QueryError as e:
@@ -72,18 +75,16 @@ class Worker:
                             or "Can't create a connection to host" in e.msg
                             or "Connection refused" in e.msg
                         ):
-                            reconnect_next = True
-                            rollback_next = False
+                            self.exe.reconnect_next = True
+                            self.exe.rollback_next = False
                             continue
-                    rollback_next = False
-                if reconnect_next:
-                    ReconnectAction(self.rng, action.db, random_role=False).run(
-                        self.exe
-                    )
-                    reconnect_next = False
+                    self.exe.rollback_next = False
+                if self.exe.reconnect_next:
+                    ReconnectAction(self.rng, random_role=False).run(self.exe)
+                    self.exe.reconnect_next = False
                 action.run(self.exe)
             except QueryError as e:
-                for error in action.errors_to_ignore():
+                for error in action.errors_to_ignore(self.exe):
                     if error in e.msg:
                         self.ignored_errors[error][type(action)] += 1
                         if (
@@ -92,11 +93,11 @@ class Worker:
                             or "Can't create a connection to host" in e.msg
                             or "Connection refused" in e.msg
                         ):
-                            reconnect_next = True
+                            self.exe.reconnect_next = True
                         else:
-                            rollback_next = True
+                            self.exe.rollback_next = True
                         break
                 else:
                     thread_name = threading.current_thread().getName()
-                    print(f"{thread_name} Query failed: {e.query} {e.msg}")
+                    print(f"[{thread_name}] Query failed: {e.query} {e.msg}")
                     raise

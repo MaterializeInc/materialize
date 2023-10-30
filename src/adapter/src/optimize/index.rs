@@ -133,6 +133,7 @@ impl<'ctx> Optimize<'ctx, Index> for OptimizeIndex {
         let mut df_desc = MirDataflowDescription::new(full_name.to_string());
 
         df_builder.import_into_dataflow(&index.on, &mut df_desc)?;
+        df_builder.reoptimize_imported_views(&mut df_desc, &self.config)?;
 
         for desc in df_desc.objects_to_build.iter_mut() {
             prep_relation_expr(state, &mut desc.plan, ExprPrepStyle::Index)?;
@@ -236,7 +237,6 @@ impl<'ctx> Optimize<'ctx, GlobalMirPlan<Resolved>> for OptimizeIndex {
         let df_desc = Plan::finalize_dataflow(
             df_desc,
             self.config.enable_consolidate_after_union_negate,
-            false, // we are not in a monotonic context here
             self.config.enable_specialized_arrangements,
         )
         .map_err(OptimizerError::Internal)?;

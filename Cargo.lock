@@ -4394,7 +4394,7 @@ dependencies = [
 
 [[package]]
 name = "mz-lsp-server"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "assert_cmd",
  "httparse",
@@ -4402,6 +4402,7 @@ dependencies = [
  "mz-ore",
  "mz-sql-lexer",
  "mz-sql-parser",
+ "mz-sql-pretty",
  "once_cell",
  "regex",
  "ropey",
@@ -5646,6 +5647,7 @@ dependencies = [
  "mz-kafka-util",
  "mz-ore",
  "mz-persist-client",
+ "mz-persist-txn",
  "mz-persist-types",
  "mz-postgres-util",
  "mz-proto",

@@ -44,7 +44,8 @@ use mz_sql::names::{
     ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier,
 };
 use mz_sql::plan::{
-    CreateSourcePlan, Ingestion as PlanIngestion, WebhookHeaders, WebhookValidation,
+    CreateSourcePlan, HirRelationExpr, Ingestion as PlanIngestion, WebhookHeaders,
+    WebhookValidation,
 };
 use mz_sql::rbac;
 use mz_sql::session::vars::OwnedVarInput;
@@ -667,6 +668,7 @@ pub enum StorageSinkConnectionState {
 #[derive(Debug, Clone, Serialize)]
 pub struct View {
     pub create_sql: String,
+    pub raw_expr: HirRelationExpr,
     pub optimized_expr: OptimizedMirRelationExpr,
     pub desc: RelationDesc,
     pub conn_id: Option<ConnectionId>,
@@ -676,6 +678,7 @@ pub struct View {
 #[derive(Debug, Clone, Serialize)]
 pub struct MaterializedView {
     pub create_sql: String,
+    pub raw_expr: HirRelationExpr,
     pub optimized_expr: OptimizedMirRelationExpr,
     pub desc: RelationDesc,
     pub resolved_ids: ResolvedIds,

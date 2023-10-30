@@ -22,7 +22,7 @@ use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW_TS;
 use mz_compute_client::controller::error::InstanceMissing;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDesc, DataflowDescription, IndexDesc};
 use mz_compute_types::plan::Plan;
-use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
+use mz_compute_types::sinks::ComputeSinkDesc;
 use mz_compute_types::ComputeInstanceId;
 use mz_controller::Controller;
 use mz_expr::visit::Visit;
@@ -34,7 +34,7 @@ use mz_ore::cast::ReinterpretCast;
 use mz_ore::stack::{maybe_grow, CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Datum, GlobalId, RelationDesc, Row, Timestamp};
+use mz_repr::{Datum, GlobalId, Row, Timestamp};
 use mz_sql::catalog::{CatalogRole, SessionCatalog};
 use mz_sql::rbac;
 use mz_transform::dataflow::DataflowMetainfo;
@@ -294,9 +294,6 @@ impl Coordinator {
                 .enable_consolidate_after_union_negate(),
             self.catalog()
                 .system_config()
-                .enable_monotonic_oneshot_selects(),
-            self.catalog()
-                .system_config()
                 .enable_specialized_arrangements(),
         )
         .map_err(AdapterError::Internal)
@@ -506,47 +503,6 @@ impl<'a> DataflowBuilder<'a> {
             mz_transform::optimize_dataflow(dataflow, self, &mz_transform::EmptyStatisticsOracle)?;
 
         Ok(dataflow_metainfo)
-    }
-
-    /// Builds a dataflow description for a materialized view.
-    ///
-    /// For this, we first build a dataflow for the view expression, then we add
-    /// a sink that writes that dataflow's output to storage. `internal_view_id`
-    /// is the ID we assign to the view dataflow internally, so we can connect
-    /// the sink to it.
-    pub fn build_materialized_view(
-        &mut self,
-        exported_sink_id: GlobalId,
-        internal_view_id: GlobalId,
-        debug_name: String,
-        optimized_expr: &OptimizedMirRelationExpr,
-        desc: &RelationDesc,
-        non_null_assertions: &[usize],
-    ) -> Result<(DataflowDesc, DataflowMetainfo), AdapterError> {
-        let mut dataflow = DataflowDesc::new(debug_name);
-
-        self.import_view_into_dataflow(&internal_view_id, optimized_expr, &mut dataflow)?;
-
-        for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
-            prep_relation_expr(self.catalog, plan, ExprPrepStyle::Index)?;
-        }
-
-        let sink_description = ComputeSinkDesc {
-            from: internal_view_id,
-            from_desc: desc.clone(),
-            connection: ComputeSinkConnection::Persist(PersistSinkConnection {
-                value_desc: desc.clone(),
-                storage_metadata: (),
-            }),
-            with_snapshot: true,
-            up_to: Antichain::default(),
-            non_null_assertions: non_null_assertions.to_vec(),
-        };
-
-        let dataflow_metainfo =
-            self.build_sink_dataflow_into(&mut dataflow, exported_sink_id, sink_description)?;
-
-        Ok((dataflow, dataflow_metainfo))
     }
 
     /// Determine the given source's monotonicity.

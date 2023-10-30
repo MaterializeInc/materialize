@@ -9,9 +9,14 @@
 
 import random
 import threading
-from typing import TextIO
+from typing import TYPE_CHECKING, TextIO
 
 import pg8000
+
+from materialize.data_ingest.query_error import QueryError
+
+if TYPE_CHECKING:
+    from materialize.parallel_workload.database import Database
 
 logging: TextIO | None
 lock: threading.Lock
@@ -23,27 +28,26 @@ def initialize_logging() -> None:
     lock = threading.Lock()
 
 
-class QueryError(Exception):
-    msg: str
-    query: str
-
-    def __init__(self, msg: str, query: str):
-        self.msg = msg
-        self.query = query
-
-
 class Executor:
     rng: random.Random
     cur: pg8000.Cursor
     pg_pid: int
     # Used by INSERT action to prevent writing into different tables in the same transaction
     insert_table: int | None
+    db: "Database"
+    reconnect_next: bool
+    rollback_next: bool
+    last_log: str
 
-    def __init__(self, rng: random.Random, cur: pg8000.Cursor):
+    def __init__(self, rng: random.Random, cur: pg8000.Cursor, db: "Database"):
         self.rng = rng
         self.cur = cur
+        self.db = db
         self.pg_pid = -1
         self.insert_table = None
+        self.reconnect_next = True
+        self.rollback_next = True
+        self.last_log = ""
 
     def set_isolation(self, level: str) -> None:
         self.execute(f"SET TRANSACTION_ISOLATION TO '{level}'")
@@ -69,6 +73,7 @@ class Executor:
             return
 
         thread_name = threading.current_thread().getName()
+        self.last_log = msg
 
         with lock:
             print(f"[{thread_name}] {msg}", file=logging)

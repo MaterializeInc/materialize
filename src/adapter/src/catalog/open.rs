@@ -1872,6 +1872,13 @@ mod builtin_migration_tests {
                         create_sql: format!(
                             "CREATE MATERIALIZED VIEW mv AS SELECT * FROM {table_list}"
                         ),
+                        raw_expr: mz_sql::plan::HirRelationExpr::Constant {
+                            rows: Vec::new(),
+                            typ: RelationType {
+                                column_types: Vec::new(),
+                                keys: Vec::new(),
+                            },
+                        },
                         optimized_expr: OptimizedMirRelationExpr(MirRelationExpr::Constant {
                             rows: Ok(Vec::new()),
                             typ: RelationType {

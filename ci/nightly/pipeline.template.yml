@@ -797,7 +797,7 @@ steps:
       - id: parallel-workload-dml
         label: "Parallel Workload (DML)"
         artifact_paths: [junit_*.xml, parallel-workload-queries.log.zst]
-        timeout_in_minutes: 40
+        timeout_in_minutes: 60
         agents:
           queue: builder-linux-x86_64
         plugins:
@@ -808,7 +808,7 @@ steps:
       - id: parallel-workload-ddl
         label: "Parallel Workload (DDL)"
         artifact_paths: [junit_*.xml, parallel-workload-queries.log.zst]
-        timeout_in_minutes: 40
+        timeout_in_minutes: 60
         agents:
           queue: builder-linux-x86_64
         plugins:
@@ -819,19 +819,18 @@ steps:
       - id: parallel-workload-100-threads
         label: "Parallel Workload (100 threads)"
         artifact_paths: [junit_*.xml, parallel-workload-queries.log.zst]
-        timeout_in_minutes: 40
+        timeout_in_minutes: 60
         agents:
           queue: builder-linux-x86_64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
               args: [--runtime=1500, --threads=100]
-        skip: "TODO(def-): Reenable when #21954 is fixed"
 
       - id: parallel-workload-rename-naughty
         label: "Parallel Workload (rename + naughty identifiers)"
         artifact_paths: [junit_*.xml, parallel-workload-queries.log.zst]
-        timeout_in_minutes: 40
+        timeout_in_minutes: 60
         agents:
           queue: builder-linux-x86_64
         plugins:
@@ -842,7 +841,7 @@ steps:
       - id: parallel-workload-rename
         label: "Parallel Workload (rename)"
         artifact_paths: [junit_*.xml, parallel-workload-queries.log.zst]
-        timeout_in_minutes: 40
+        timeout_in_minutes: 60
         agents:
           queue: builder-linux-x86_64
         plugins:
@@ -853,7 +852,7 @@ steps:
       - id: parallel-workload-cancel
         label: "Parallel Workload (cancel)"
         artifact_paths: [junit_*.xml, parallel-workload-queries.log.zst]
-        timeout_in_minutes: 40
+        timeout_in_minutes: 60
         agents:
           queue: builder-linux-x86_64
         plugins:
@@ -864,14 +863,24 @@ steps:
       - id: parallel-workload-kill
         label: "Parallel Workload (kill)"
         artifact_paths: [junit_*.xml, parallel-workload-queries.log.zst]
-        timeout_in_minutes: 40
+        timeout_in_minutes: 60
         agents:
           queue: builder-linux-x86_64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
               args: [--runtime=1500, --scenario=kill]
-        skip: "TODO(def-) Enable after figuring out restoring catalog"
+
+      - id: parallel-workload-backup-restore
+        label: "Parallel Workload (backup & restore)"
+        artifact_paths: [junit_*.xml, parallel-workload-queries.log.zst]
+        timeout_in_minutes: 60
+        agents:
+          queue: builder-linux-x86_64
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: parallel-workload
+              args: [--runtime=1500, --scenario=backup-restore, --naughty-identifiers]
 
   - id: incident-70
     label: "Test for incident 70"

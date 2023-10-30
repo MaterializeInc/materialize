@@ -13,7 +13,9 @@ use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
 use maplit::btreemap;
+use mz_compute_types::dataflows::BuildDesc;
 use mz_compute_types::plan::Plan;
+use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_ore::soft_assert_or_log;
@@ -28,7 +30,9 @@ use timely::progress::Antichain;
 use tracing::{span, Level};
 
 use crate::catalog::Catalog;
-use crate::coord::dataflows::{ComputeInstanceSnapshot, DataflowBuilder};
+use crate::coord::dataflows::{
+    prep_relation_expr, ComputeInstanceSnapshot, DataflowBuilder, ExprPrepStyle,
+};
 use crate::optimize::{
     LirDataflowDescription, MirDataflowDescription, Optimize, OptimizerConfig, OptimizerError,
 };
@@ -170,7 +174,7 @@ impl<'ctx> Optimize<'ctx, LocalMirPlan> for OptimizeMaterializedView {
     type To = GlobalMirPlan<Unresolved>;
 
     fn optimize<'s: 'ctx>(&'s mut self, plan: LocalMirPlan) -> Result<Self::To, OptimizerError> {
-        let LocalMirPlan { expr } = plan;
+        let expr = OptimizedMirRelationExpr(plan.expr);
 
         let mut rel_typ = expr.typ();
         for &i in self.non_null_assertions.iter() {
@@ -180,14 +184,31 @@ impl<'ctx> Optimize<'ctx, LocalMirPlan> for OptimizeMaterializedView {
 
         let mut df_builder =
             DataflowBuilder::new(self.catalog.state(), self.compute_instance.clone());
+        let mut df_desc = MirDataflowDescription::new(self.debug_name.clone());
 
-        let (df_desc, df_meta) = df_builder.build_materialized_view(
+        df_builder.import_view_into_dataflow(&self.internal_view_id, &expr, &mut df_desc)?;
+        df_builder.reoptimize_imported_views(&mut df_desc, &self.config)?;
+
+        for BuildDesc { plan, .. } in &mut df_desc.objects_to_build {
+            prep_relation_expr(self.catalog.state(), plan, ExprPrepStyle::Index)?;
+        }
+
+        let sink_description = ComputeSinkDesc {
+            from: self.internal_view_id,
+            from_desc: rel_desc.clone(),
+            connection: ComputeSinkConnection::Persist(PersistSinkConnection {
+                value_desc: rel_desc,
+                storage_metadata: (),
+            }),
+            with_snapshot: true,
+            up_to: Antichain::default(),
+            non_null_assertions: self.non_null_assertions.clone(),
+        };
+
+        let df_meta = df_builder.build_sink_dataflow_into(
+            &mut df_desc,
             self.exported_sink_id,
-            self.internal_view_id,
-            self.debug_name.clone(),
-            &OptimizedMirRelationExpr(expr),
-            &rel_desc,
-            &self.non_null_assertions,
+            sink_description,
         )?;
 
         // Return the (sealed) plan at the end of this optimization step.
@@ -279,7 +300,6 @@ impl<'ctx> Optimize<'ctx, GlobalMirPlan<Resolved>> for OptimizeMaterializedView 
         let df_desc = Plan::finalize_dataflow(
             df_desc,
             self.config.enable_consolidate_after_union_negate,
-            false, // we are not in a monotonic context here
             self.config.enable_specialized_arrangements,
         )
         .map_err(OptimizerError::Internal)?;
