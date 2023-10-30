@@ -526,8 +526,7 @@ true
 2 two_two
 5 five
 
-# TODO: should only be 'running' w/ resolution of #20666
-> SELECT status = 'starting' OR status = 'running' FROM mz_internal.mz_source_statuses WHERE name = 'large_cluster_pk_table';
+> SELECT status = 'running' FROM mz_internal.mz_source_statuses WHERE name = 'large_cluster_pk_table';
 true
 
 > DROP SOURCE large_cluster;

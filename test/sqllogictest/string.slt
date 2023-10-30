@@ -31,7 +31,7 @@ column1
 statement ok
 CREATE TABLE asciitest (strcol CHAR(15), vccol VARCHAR(15))
 
-# TODO: materialize#589 Add two tests:
+# TODO: Add two tests:
 # 1: empty string to each column
 # 2: single space in each column
 statement ok
@@ -120,7 +120,17 @@ SELECT substr('hello', 0/0, 3)
 
 # standard tests
 
-# TODO: materialize#589 SELECT strcol FROM substrtest
+query T colnames
+SELECT to_jsonb(strcol) as strcol FROM substrtest
+----
+strcol
+null
+"               "
+"24.31          "
+"Mg             "
+"magnesium      "
+"长久不见           "
+
 query T colnames
 SELECT substr(vccol, 1, 3) AS vcres FROM substrtest ORDER BY vcres
 ----
@@ -1064,7 +1074,16 @@ SELECT position('str' IN 42, 172)
 
 # standard tests
 
-#TODO: materialize#589 select position(strcol1 IN strcol2) from positiontest
+query I rowsort
+select position(strcol1 IN strcol2) from positiontest;
+----
+0
+0
+1
+3
+3
+NULL
+NULL
 
 query I rowsort
 SELECT position(vccol1 IN vccol2) FROM positiontest
@@ -1125,7 +1144,15 @@ SELECT left('str', 42, 17)
 
 # standard tests
 
-#TODO: materialize#589 select left(strcol, foo) from lefttest
+query T rowsort
+select left(strcol, 3) from lefttest
+----
+(empty)
+24.
+Mg
+NULL
+mag
+长久不
 
 # edge case
 query T rowsort
@@ -1247,7 +1274,15 @@ SELECT right('str', 42, 17)
 
 # standard tests
 
-#TODO: materialize#589 select right(strcol, foo) from righttest
+query T rowsort
+select right(strcol, 3) from righttest
+----
+(empty)
+.31
+Mg
+NULL
+ium
+久不见
 
 # edge case
 query T rowsort

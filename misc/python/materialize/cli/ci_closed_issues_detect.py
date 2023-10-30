@@ -19,19 +19,22 @@ import requests
 
 from materialize import buildkite, spawn
 
-ISSUE_RE = re.compile(r"\#([0-9]+) | materialize/issues/([0-9]+)", re.VERBOSE)
+ISSUE_RE = re.compile(
+    r"""
+    ( TimelyDataflow/timely-dataflow\#(?P<timelydataflow>[0-9]+)
+    | ( materialize\# | materialize/issues/ | \# ) (?P<materialize>[0-9]+)
+    )
+    """,
+    re.VERBOSE,
+)
 
-FILE_ENDINGS = [".py", ".rs", ".yml", ".td", ".slt", ".md"]
+GROUP_REPO = {
+    "timelydataflow": "TimelyDataflow/timely-dataflow",
+    "materialize": "MaterializeInc/materialize",
+}
 
 REFERENCE_RE = re.compile(
     r"""
-    # This block contains expected references, don't report them
-    ^((?!.*
-    # Only track issues in Materialize repo
-    ( timely-dataflow\#
-    ))
-    .)*
-    # This block contains unexpected references to issues, report them
     ( reenable
     | TODO
     # Used in Buildkite pipeline config files
@@ -45,9 +48,32 @@ REFERENCE_RE = re.compile(
     re.VERBOSE | re.IGNORECASE,
 )
 
+IGNORE_RE = re.compile(
+    r"""
+    # is_null_propagation.slt
+    ( isnull\(\#0\)
+    # src/transform/tests/test_transforms/column_knowledge.spec
+    | \(\#1\)\ IS\ NULL
+    # test/sqllogictest/cockroach/*.slt
+    | cockroach\#
+    )
+    """,
+    re.VERBOSE | re.IGNORECASE,
+)
+
+IGNORE_FILE_NAME_RE = re.compile(
+    r"""
+    ( .*\.(svg|png|jpg|jpeg|avro|ico)
+    | doc/developer/design/20230223_stabilize_with_mutually_recursive.md
+    )
+    """,
+    re.VERBOSE,
+)
+
 
 @dataclass
 class IssueRef:
+    repository: str
     issue_id: int
     filename: str
     line_number: int
@@ -59,11 +85,24 @@ def detect_closed_issues(filename: str) -> list[IssueRef]:
 
     with open(filename) as file:
         for line_number, line in enumerate(file):
-            if REFERENCE_RE.search(line):
+            if REFERENCE_RE.search(line) and not IGNORE_RE.search(line):
                 if issue_match := ISSUE_RE.search(line):
+                    groups = [
+                        (key, value)
+                        for key, value in issue_match.groupdict().items()
+                        if value
+                    ]
+                    assert len(groups) == 1, f"Expected only 1 element in {groups}"
+                    group, issue_id = groups[0]
+                    (
+                        "TimelyDataflow/timely-dataflow"
+                        if issue_match.group("timelydataflow")
+                        else "MaterializeInc/materialize"
+                    )
                     issue_refs.append(
                         IssueRef(
-                            int(issue_match.group(1) or issue_match.group(2)),
+                            GROUP_REPO[group],
+                            int(issue_id),
                             filename,
                             line_number + 1,
                             line.strip(),
@@ -73,7 +112,7 @@ def detect_closed_issues(filename: str) -> list[IssueRef]:
     return issue_refs
 
 
-def is_issue_closed_on_github(issue_id: int) -> bool:
+def is_issue_closed_on_github(repository: str, issue_id: int) -> bool:
     headers = {
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
@@ -81,14 +120,12 @@ def is_issue_closed_on_github(issue_id: int) -> bool:
     if token := os.getenv("GITHUB_TOKEN"):
         headers["Authorization"] = f"Bearer {token}"
 
-    response = requests.get(
-        f"https://api.github.com/repos/MaterializeInc/materialize/issues/{issue_id}",
-        headers=headers,
-    )
+    url = f"https://api.github.com/repos/{repository}/issues/{issue_id}"
+    response = requests.get(url, headers=headers)
 
     if response.status_code != 200:
         raise ValueError(
-            f"Bad return code from GitHub: {response.status_code}: {response.text}"
+            f"Bad return code from GitHub on {url}: {response.status_code}: {response.text}"
         )
 
     issue_json = response.json()
@@ -98,31 +135,8 @@ def is_issue_closed_on_github(issue_id: int) -> bool:
     return issue_json["state"] == "closed"
 
 
-def filter_changed(issue_refs: list[IssueRef]) -> list[IssueRef]:
-    merge_base = buildkite.get_merge_base()
-    print(f"Merge base: {merge_base}")
-    result = spawn.capture(["git", "diff", "-U0", merge_base])
-    file_path = None
-    changed_lines = set()
-
-    for line in result.splitlines():
-        # +++ b/src/adapter/src/coord/command_handler.rs
-        if line.startswith("+++"):
-            file_path = line.removeprefix("+++ b/")
-        # @@ -641,7 +640,6 @@ impl Coordinator {
-        elif line.startswith("@@ "):
-            # We only care about the second value ("+640,6" in the example),
-            # which contains the line number and length of the modified block
-            # in new code state.
-            parts = line.split(" ")[2]
-            if "," in parts:
-                start, length = map(int, parts.split(","))
-            else:
-                start = int(parts)
-                length = 1
-            for line_nr in range(start, start + length):
-                changed_lines.add((file_path, line_nr))
-
+def filter_changed_lines(issue_refs: list[IssueRef]) -> list[IssueRef]:
+    changed_lines = buildkite.find_modified_lines()
     return [
         issue_ref
         for issue_ref in issue_refs
@@ -130,11 +144,17 @@ def filter_changed(issue_refs: list[IssueRef]) -> list[IssueRef]:
     ]
 
 
-def filter_closed(issue_refs: list[IssueRef]) -> list[IssueRef]:
-    issues = {issue_ref.issue_id for issue_ref in issue_refs}
-    closed_issues = {issue for issue in issues if is_issue_closed_on_github(issue)}
+def filter_closed_issues(issue_refs: list[IssueRef]) -> list[IssueRef]:
+    issues = {(issue_ref.repository, issue_ref.issue_id) for issue_ref in issue_refs}
+    closed_issues = {
+        (repository, issue)
+        for repository, issue in issues
+        if is_issue_closed_on_github(repository, issue)
+    }
     return [
-        issue_ref for issue_ref in issue_refs if issue_ref.issue_id in closed_issues
+        issue_ref
+        for issue_ref in issue_refs
+        if (issue_ref.repository, issue_ref.issue_id) in closed_issues
     ]
 
 
@@ -161,23 +181,20 @@ def main() -> int:
     for filename in filenames.splitlines():
         # Files without any ending can be interesting datadriven test files
         if (
-            any([filename.endswith(ending) for ending in FILE_ENDINGS])
-            or "." not in filename
-        ) and os.path.isfile(filename):
-            try:
-                issue_refs.extend(detect_closed_issues(filename))
-            except UnicodeDecodeError:
-                # Not all files are source code
-                pass
+            not IGNORE_FILE_NAME_RE.match(filename)
+            and not os.path.isdir(filename)
+            and not os.path.islink(filename)
+        ):
+            issue_refs.extend(detect_closed_issues(filename))
 
     if args.changed_lines_only:
-        issue_refs = filter_changed(issue_refs)
+        issue_refs = filter_changed_lines(issue_refs)
 
-    issue_refs = filter_closed(issue_refs)
+    issue_refs = filter_closed_issues(issue_refs)
 
     for issue_ref in issue_refs:
         url = buildkite.inline_link(
-            f"https://github.com/MaterializeInc/materialize/issues/{issue_ref.issue_id}",
+            f"https://github.com/{issue_ref.repository}/issues/{issue_ref.issue_id}",
             f"#{issue_ref.issue_id}",
         )
         print(f"--- Issue is referenced in comment but already closed: {url}")
