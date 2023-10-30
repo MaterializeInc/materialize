@@ -243,7 +243,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         );
         let listener = Listener::bind(args.internal_http_listen_addr).await?;
         axum::Server::builder(listener).serve(
-            mz_prof::http::router(&BUILD_INFO)
+            mz_prof_http::router(&BUILD_INFO)
                 .route(
                     "/api/livez",
                     routing::get(mz_http_util::handle_liveness_check),

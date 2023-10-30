@@ -58,7 +58,7 @@ mz-persist-client = { path = "../persist-client" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-pgwire = { path = "../pgwire" }
 mz-pgwire-common = { path = "../pgwire-common" }
-mz-prof = { path = "../prof" }
+mz-prof-http = { path = "../prof-http" }
 mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
 mz-segment = { path = "../segment" }

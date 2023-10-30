@@ -3556,6 +3556,7 @@ version = "0.0.0"
 dependencies = [
  "mz-ore",
  "mz-prof",
+ "mz-prof-http",
  "tikv-jemallocator",
  "workspace-hack",
 ]
@@ -3869,7 +3870,7 @@ dependencies = [
  "mz-ore",
  "mz-persist-client",
  "mz-pid-file",
- "mz-prof",
+ "mz-prof-http",
  "mz-service",
  "mz-storage",
  "mz-storage-client",
@@ -4100,7 +4101,7 @@ dependencies = [
  "mz-pgtest",
  "mz-pgwire",
  "mz-pgwire-common",
- "mz-prof",
+ "mz-prof-http",
  "mz-repr",
  "mz-secrets",
  "mz-segment",
@@ -4909,20 +4910,9 @@ name = "mz-prof"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "askama",
- "axum",
  "backtrace",
- "bytesize",
- "cfg-if",
  "flate2",
- "headers",
- "http",
- "include_dir",
  "libc",
- "mime",
- "mz-build-info",
- "mz-http-util",
- "mz-npm",
  "mz-ore",
  "mz-proc",
  "once_cell",
@@ -4930,11 +4920,34 @@ dependencies = [
  "prost",
  "prost-build",
  "protobuf-src",
- "serde",
  "tempfile",
  "tikv-jemalloc-ctl",
  "tokio",
  "tracing",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-prof-http"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "askama",
+ "axum",
+ "bytesize",
+ "cfg-if",
+ "headers",
+ "http",
+ "include_dir",
+ "mime",
+ "mz-build-info",
+ "mz-http-util",
+ "mz-npm",
+ "mz-ore",
+ "mz-prof",
+ "once_cell",
+ "serde",
+ "tokio",
  "workspace-hack",
 ]
 
