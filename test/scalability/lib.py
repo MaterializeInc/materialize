@@ -12,37 +12,41 @@ import os
 import pandas as pd
 from matplotlib import pyplot as plt  # type: ignore
 
-from materialize import MZ_ROOT
+from materialize.scalability.df import df_details_cols, df_totals_cols, paths
 from materialize.scalability.endpoints import endpoint_name_to_description
 
-RESULTS_DIR = MZ_ROOT / "test" / "scalability" / "results"
 
-
-def plotit(csv_file_name: str) -> None:
-    endpoints = get_endpoints_from_results_dir()
+def plotit(workload_name: str) -> None:
+    endpoint_names = paths.get_endpoint_names_from_results_dir()
     legend = []
     plt.rcParams["figure.figsize"] = (16, 10)
     fig, (summary_subplot, details_subplot) = plt.subplots(2, 1)
-    for i, endpoint in enumerate(endpoints):
-        aggregated_data_path = RESULTS_DIR / endpoint / f"{csv_file_name}.csv"
-        details_data_path = RESULTS_DIR / endpoint / f"{csv_file_name}_details.csv"
+    for i, endpoint_name in enumerate(endpoint_names):
+        totals_data_path = paths.df_totals_csv(endpoint_name, workload_name)
+        details_data_path = paths.df_details_csv(endpoint_name, workload_name)
 
-        if not os.path.exists(aggregated_data_path):
+        if not os.path.exists(totals_data_path):
             print(
-                f"Skipping {csv_file_name} for endpoint {endpoint} (data not present)"
+                f"Skipping {workload_name} for endpoint {endpoint_name} (data not present)"
             )
             continue
 
         assert os.path.exists(details_data_path)
 
-        legend.append(endpoint_name_to_description(endpoint))
+        legend.append(endpoint_name_to_description(endpoint_name))
 
-        df = pd.read_csv(aggregated_data_path)
-        summary_subplot.scatter(df["concurrency"], df["tps"], label="tps")
+        df = pd.read_csv(totals_data_path)
+        summary_subplot.scatter(
+            df[df_totals_cols.CONCURRENCY],
+            df[df_totals_cols.TPS],
+            label=df_totals_cols.TPS,
+        )
 
         df_details = pd.read_csv(details_data_path)
         details_subplot.scatter(
-            df_details["concurrency"] + i, df_details["wallclock"], alpha=0.25
+            df_details[df_details_cols.CONCURRENCY] + i,
+            df_details[df_details_cols.WALLCLOCK],
+            alpha=0.25,
         )
 
     summary_subplot.set_ylabel("Transactions Per Second")
@@ -52,9 +56,3 @@ def plotit(csv_file_name: str) -> None:
     details_subplot.set_ylabel("Latency in Seconds")
     details_subplot.set_xlabel("Concurrent SQL Connections")
     details_subplot.legend(legend)
-
-
-def get_endpoints_from_results_dir() -> list[str]:
-    directories = next(os.walk(RESULTS_DIR))[1]
-    endpoints = [entry for entry in directories if not entry.startswith(".")]
-    return endpoints
