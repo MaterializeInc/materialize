@@ -9,11 +9,13 @@
 from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import Check, disabled
+from materialize.checks.checks import Check
 
 
-@disabled("due to #20743")
 class PeekCancellation(Check):
+    def _is_enabled(self) -> tuple[bool, str | None]:
+        return False, "Disabled due to #20743"
+
     def initialize(self) -> Testdrive:
         return Testdrive(
             dedent(

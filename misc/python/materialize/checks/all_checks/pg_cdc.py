@@ -12,7 +12,7 @@ from textwrap import dedent
 from typing import Any
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import Check, disabled
+from materialize.checks.checks import Check
 from materialize.util import MzVersion
 
 
@@ -220,10 +220,12 @@ class PgCdc(PgCdcBase, Check):
         super().__init__(wait=True, base_version=base_version, rng=rng)
 
 
-@disabled("requires #18940 to be fixed")
 class PgCdcNoWait(PgCdcBase, Check):
     def __init__(self, base_version: MzVersion, rng: Random | None) -> None:
         super().__init__(wait=False, base_version=base_version, rng=rng)
+
+    def _is_enabled(self) -> tuple[bool, str | None]:
+        return False, "Disabled due to #18940"
 
 
 class PgCdcMzNow(Check):

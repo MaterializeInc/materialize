@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 from random import Random
-from typing import Any
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.executors import Executor
@@ -21,10 +20,19 @@ class Check:
     def __init__(self, base_version: MzVersion, rng: Random | None) -> None:
         self.base_version = base_version
         self.rng = rng
-        self.enabled = True
+        self.enabled = self._is_enabled()[0]
 
     def _can_run(self, e: Executor) -> bool:
         return True
+
+    def _is_enabled(self) -> tuple[bool, str | None]:
+        """
+        Whether this check shall be executed.
+        :return:
+        bool: enabled
+        str: reason if not enabled
+        """
+        return True, None
 
     def initialize(self) -> Testdrive:
         return Testdrive(TESTDRIVE_NOP)
@@ -67,17 +75,3 @@ class Check:
     def join_validate(self, e: Executor) -> None:
         if self._can_run(e) and self.enabled:
             self._validate.join(e)
-
-
-def disabled(ignore_reason: str):
-    class ClassWrapper:
-        def __init__(self, cls: type[Check]):
-            assert issubclass(cls, Check)
-            self.check_class = cls
-
-        def __call__(self, *cls_ars: Any):
-            check = self.check_class(*cls_ars)
-            check.enabled = False
-            return check
-
-    return ClassWrapper
