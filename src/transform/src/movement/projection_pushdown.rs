@@ -234,36 +234,39 @@ impl ProjectionPushdown {
                 // There may be other examples with known output counts, but I don't know them.
                 // The timestamp-based `generate_series` functions seemingly lack a division method.
                 if !output_columns_used {
-                    use mz_expr::{BinaryFunc, TableFunc, VariadicFunc};
+                    use mz_expr::{BinaryFunc, TableFunc, UnaryFunc, VariadicFunc};
 
                     match func {
                         TableFunc::GenerateSeriesInt32 => {
                             // The arguments in `exprs` are `[start, stop, step]`.
                             // Per Brennan, the number of elements seems likely to be max (0, (stop - start + 1) / step)
-                            let expr = MirScalarExpr::CallVariadic {
-                                func: VariadicFunc::Greatest,
-                                exprs: vec![
-                                    MirScalarExpr::literal_ok(
-                                        mz_repr::Datum::Int32(0),
-                                        mz_repr::ScalarType::Int32,
-                                    ),
-                                    MirScalarExpr::CallBinary {
-                                        func: BinaryFunc::DivInt32,
-                                        expr1: Box::new(MirScalarExpr::CallBinary {
-                                            func: BinaryFunc::SubInt32,
+                            let expr = MirScalarExpr::CallUnary {
+                                func: UnaryFunc::CastInt32ToInt64(mz_expr::func::CastInt32ToInt64),
+                                expr: Box::new(MirScalarExpr::CallVariadic {
+                                    func: VariadicFunc::Greatest,
+                                    exprs: vec![
+                                        MirScalarExpr::literal_ok(
+                                            mz_repr::Datum::Int32(0),
+                                            mz_repr::ScalarType::Int32,
+                                        ),
+                                        MirScalarExpr::CallBinary {
+                                            func: BinaryFunc::DivInt32,
                                             expr1: Box::new(MirScalarExpr::CallBinary {
-                                                func: BinaryFunc::AddInt32,
-                                                expr1: Box::new(exprs[1].clone()),
-                                                expr2: Box::new(MirScalarExpr::literal_ok(
-                                                    mz_repr::Datum::Int32(1),
-                                                    mz_repr::ScalarType::Int32,
-                                                )),
+                                                func: BinaryFunc::SubInt32,
+                                                expr1: Box::new(MirScalarExpr::CallBinary {
+                                                    func: BinaryFunc::AddInt32,
+                                                    expr1: Box::new(exprs[1].clone()),
+                                                    expr2: Box::new(MirScalarExpr::literal_ok(
+                                                        mz_repr::Datum::Int32(1),
+                                                        mz_repr::ScalarType::Int32,
+                                                    )),
+                                                }),
+                                                expr2: Box::new(exprs[0].clone()),
                                             }),
-                                            expr2: Box::new(exprs[0].clone()),
-                                        }),
-                                        expr2: Box::new(exprs[2].clone()),
-                                    },
-                                ],
+                                            expr2: Box::new(exprs[2].clone()),
+                                        },
+                                    ],
+                                }),
                             };
 
                             *func = TableFunc::Repeat;
