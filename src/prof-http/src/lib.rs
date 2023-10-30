@@ -228,7 +228,7 @@ mod disabled {
     use mz_build_info::BuildInfo;
     use serde::Deserialize;
 
-    use crate::ever_symbolized;
+    use mz_prof::ever_symbolized;
 
     use super::{time_prof, MemProfilingStatus, ProfTemplate};
 
