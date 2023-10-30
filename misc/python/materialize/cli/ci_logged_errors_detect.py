@@ -72,6 +72,7 @@ ERROR_RE = re.compile(
     | clusterd:\ fatal: # startup failure
     | error:\ Found\ argument\ '.*'\ which\ wasn't\ expected,\ or\ isn't\ valid\ in\ this\ context
     | unrecognized\ configuration\ parameter
+    | Coordinator is stuck
     )
     """,
     re.VERBOSE,
