@@ -2019,8 +2019,8 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(Float64) => UnaryFunc::Degrees(func::Degrees) => Float64, 1608;
         },
         "digest" => Scalar {
-            params!(String, String) => BinaryFunc::DigestString => Bytes, 44154;
-            params!(Bytes, String) => BinaryFunc::DigestBytes => Bytes, 44155;
+            params!(String, String) => BinaryFunc::DigestString => Bytes, oid::FUNC_PG_DIGEST_STRING;
+            params!(Bytes, String) => BinaryFunc::DigestBytes => Bytes, oid::FUNC_PG_DIGEST_BYTES;
         },
         "exp" => Scalar {
             params!(Float64) => UnaryFunc::Exp(func::Exp) => Float64, 1347;
@@ -2076,8 +2076,8 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(Oid, String) => sql_impl_func("has_table_privilege(current_user, $1, $2)") => Bool, 1927;
         },
         "hmac" => Scalar {
-            params!(String, String, String) => VariadicFunc::HmacString => Bytes, 44156;
-            params!(Bytes, Bytes, String) => VariadicFunc::HmacBytes => Bytes, 44157;
+            params!(String, String, String) => VariadicFunc::HmacString => Bytes, oid::FUNC_PG_HMAC_STRING;
+            params!(Bytes, Bytes, String) => VariadicFunc::HmacBytes => Bytes, oid::FUNC_PG_HMAC_BYTES;
         },
         "int4range" => Scalar {
             params!(Int32, Int32) => Operation::variadic(|_ecx, mut exprs| {
