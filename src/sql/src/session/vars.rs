@@ -1968,7 +1968,7 @@ feature_flags!(
         desc: "use the new unified optimizer API in bootstrap() and coordinator methods",
         default: true,
         internal: true,
-        enable_for_item_parsing: true,
+        enable_for_item_parsing: false,
     },
     {
         name: enable_assert_not_null,

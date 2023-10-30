@@ -878,36 +878,67 @@ impl Coordinator {
 
         let mut ops = vec![];
 
+        let enable_unified_optimizer_api = self
+            .catalog()
+            .system_config()
+            .enable_unified_optimizer_api();
+
         ops.extend(
             drop_ids
                 .iter()
                 .map(|id| catalog::Op::DropObject(ObjectId::Item(*id))),
         );
+
         let view_id = self.catalog_mut().allocate_user_id().await?;
         let view_oid = self.catalog_mut().allocate_oid()?;
         let raw_expr = view.expr.clone();
-        let decorrelated_expr = raw_expr.clone().lower(self.catalog().system_config())?;
-        let optimized_expr = self.view_optimizer.optimize(decorrelated_expr)?;
-        let desc = RelationDesc::new(optimized_expr.typ(), view.column_names.clone());
-        let view = catalog::View {
-            create_sql: view.create_sql.clone(),
-            raw_expr,
-            optimized_expr,
-            desc,
-            conn_id: if view.temporary {
-                Some(session.conn_id().clone())
-            } else {
-                None
-            },
-            resolved_ids,
-        };
-        ops.push(catalog::Op::CreateItem {
-            id: view_id,
-            oid: view_oid,
-            name: name.clone(),
-            item: CatalogItem::View(view),
-            owner_id: *session.current_role_id(),
-        });
+        if enable_unified_optimizer_api {
+            let decorrelated_expr = raw_expr.clone().lower(self.catalog().system_config())?;
+            let optimized_expr = self.view_optimizer.optimize(decorrelated_expr)?;
+            let desc = RelationDesc::new(optimized_expr.typ(), view.column_names.clone());
+            let view = catalog::View {
+                create_sql: view.create_sql.clone(),
+                raw_expr,
+                optimized_expr,
+                desc,
+                conn_id: if view.temporary {
+                    Some(session.conn_id().clone())
+                } else {
+                    None
+                },
+                resolved_ids,
+            };
+            ops.push(catalog::Op::CreateItem {
+                id: view_id,
+                oid: view_oid,
+                name: name.clone(),
+                item: CatalogItem::View(view),
+                owner_id: *session.current_role_id(),
+            });
+        } else {
+            let decorrelated_expr = raw_expr.clone().lower(self.catalog().system_config())?;
+            let optimized_expr = self.view_optimizer.optimize(decorrelated_expr)?;
+            let desc = RelationDesc::new(optimized_expr.typ(), view.column_names.clone());
+            let view = catalog::View {
+                create_sql: view.create_sql.clone(),
+                raw_expr,
+                optimized_expr,
+                desc,
+                conn_id: if view.temporary {
+                    Some(session.conn_id().clone())
+                } else {
+                    None
+                },
+                resolved_ids,
+            };
+            ops.push(catalog::Op::CreateItem {
+                id: view_id,
+                oid: view_oid,
+                name: name.clone(),
+                item: CatalogItem::View(view),
+                owner_id: *session.current_role_id(),
+            });
+        }
 
         Ok(ops)
     }
@@ -3791,8 +3822,19 @@ impl Coordinator {
     > {
         let plan::ExplainTimestampPlan { format, raw_plan } = plan;
 
-        let decorrelated_plan = raw_plan.lower(self.catalog().system_config())?;
-        let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
+        let enable_unified_optimizer_api = self
+            .catalog()
+            .system_config()
+            .enable_unified_optimizer_api();
+
+        let optimized_plan = if enable_unified_optimizer_api {
+            let decorrelated_plan = raw_plan.lower(self.catalog().system_config())?;
+            self.view_optimizer.optimize(decorrelated_plan)?
+        } else {
+            let decorrelated_plan = raw_plan.lower(self.catalog().system_config())?;
+            self.view_optimizer.optimize(decorrelated_plan)?
+        };
+
         let source_ids = optimized_plan.depends_on();
         let cluster = self
             .catalog()
@@ -3916,11 +3958,19 @@ impl Coordinator {
         mut ctx: ExecuteContext,
         plan: plan::InsertPlan,
     ) {
+        let enable_unified_optimizer_api = self
+            .catalog()
+            .system_config()
+            .enable_unified_optimizer_api();
+
         let optimized_mir = if let Some(..) = &plan.values.as_const() {
             // We don't perform any optimizations on an expression that is already
             // a constant for writes, as we want to maximize bulk-insert throughput.
             let expr = return_if_err!(plan.values.lower(self.catalog().system_config()), ctx);
             OptimizedMirRelationExpr(expr)
+        } else if enable_unified_optimizer_api {
+            let expr = return_if_err!(plan.values.lower(self.catalog().system_config()), ctx);
+            return_if_err!(self.view_optimizer.optimize(expr), ctx)
         } else {
             let expr = return_if_err!(plan.values.lower(self.catalog().system_config()), ctx);
             return_if_err!(self.view_optimizer.optimize(expr), ctx)
