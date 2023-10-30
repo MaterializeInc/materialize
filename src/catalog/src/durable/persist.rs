@@ -338,7 +338,7 @@ impl PersistHandle {
         let current_epoch = Epoch::new(current_epoch).expect("known to be non-zero");
 
         debug!(
-            "open_inner is_initialized={:?} upper={:?} user_version={:?} prev_epoch={:?} current_epoch={:?}", 
+            "open_inner is_initialized={:?} upper={:?} user_version={:?} prev_epoch={:?} current_epoch={:?}",
             is_initialized,
             upper,
             user_version,
