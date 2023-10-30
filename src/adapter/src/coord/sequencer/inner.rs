@@ -893,14 +893,20 @@ impl Coordinator {
         let view_oid = self.catalog_mut().allocate_oid()?;
         let raw_expr = view.expr.clone();
         if enable_unified_optimizer_api {
-            let decorrelated_expr = raw_expr.clone().lower(self.catalog().system_config())?;
-            let optimized_expr = self.view_optimizer.optimize(decorrelated_expr)?;
-            let desc = RelationDesc::new(optimized_expr.typ(), view.column_names.clone());
+            // Collect optimizer parameters
+            let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
+
+            // Build a VIEW optimizer for this view.
+            let mut optimizer = optimize::OptimizeView::new(optimizer_config);
+
+            // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
+            let optimized_expr = optimizer.optimize(raw_expr.clone())?;
+
             let view = catalog::View {
                 create_sql: view.create_sql.clone(),
                 raw_expr,
+                desc: RelationDesc::new(optimized_expr.typ(), view.column_names.clone()),
                 optimized_expr,
-                desc,
                 conn_id: if view.temporary {
                     Some(session.conn_id().clone())
                 } else {
@@ -3828,8 +3834,14 @@ impl Coordinator {
             .enable_unified_optimizer_api();
 
         let optimized_plan = if enable_unified_optimizer_api {
-            let decorrelated_plan = raw_plan.lower(self.catalog().system_config())?;
-            self.view_optimizer.optimize(decorrelated_plan)?
+            // Collect optimizer parameters
+            let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
+
+            // Build a VIEW optimizer for this view.
+            let mut optimizer = optimize::OptimizeView::new(optimizer_config);
+
+            // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
+            optimizer.optimize(raw_plan)?
         } else {
             let decorrelated_plan = raw_plan.lower(self.catalog().system_config())?;
             self.view_optimizer.optimize(decorrelated_plan)?
@@ -3969,8 +3981,14 @@ impl Coordinator {
             let expr = return_if_err!(plan.values.lower(self.catalog().system_config()), ctx);
             OptimizedMirRelationExpr(expr)
         } else if enable_unified_optimizer_api {
-            let expr = return_if_err!(plan.values.lower(self.catalog().system_config()), ctx);
-            return_if_err!(self.view_optimizer.optimize(expr), ctx)
+            // Collect optimizer parameters
+            let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
+
+            // Build a VIEW optimizer for the values part.
+            let mut optimizer = optimize::OptimizeView::new(optimizer_config);
+
+            // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
+            return_if_err!(optimizer.optimize(plan.values), ctx)
         } else {
             let expr = return_if_err!(plan.values.lower(self.catalog().system_config()), ctx);
             return_if_err!(self.view_optimizer.optimize(expr), ctx)
