@@ -18,18 +18,18 @@ import subprocess
 import sys
 import venv
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 logger = logging.getLogger("bootstrap")
 
 
-def main(args: List[str]) -> int:
+def main(args: list[str]) -> int:
     logging.basicConfig(level=os.environ.get("MZ_DEV_LOG", "WARNING").upper())
     logger.debug("args=%s", args)
 
     # Validate Python version.
-    if sys.hexversion < 0x03090000:
-        print("fatal: python v3.9.0+ required", file=sys.stderr)
+    if sys.hexversion < 0x030b0000:
+        print("fatal: python v3.11.0+ required", file=sys.stderr)
         print(
             " hint: you have v{}.{}.{}".format(
                 sys.version_info.major, sys.version_info.minor, sys.version_info.micro
