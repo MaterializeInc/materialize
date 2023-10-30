@@ -658,7 +658,12 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                     []
                   ]
                 ],
-                "types": null
+                "types": [
+                  {
+                    "scalar_type": "Int32",
+                    "nullable": true
+                  }
+                ]
               },
               "input_key": null,
               "input_mfp": {
@@ -931,7 +936,12 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                         []
                       ]
                     ],
-                    "types": null
+                    "types": [
+                      {
+                        "scalar_type": "Int32",
+                        "nullable": true
+                      }
+                    ]
                   },
                   "input_key": null,
                   "input_mfp": {
@@ -984,7 +994,12 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                           []
                         ]
                       ],
-                      "types": null
+                      "types": [
+                        {
+                          "scalar_type": "Int32",
+                          "nullable": true
+                        }
+                      ]
                     },
                     "plan": {
                       "Arrangement": [
@@ -1051,7 +1066,12 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                           []
                         ]
                       ],
-                      "types": null
+                      "types": [
+                        {
+                          "scalar_type": "Int32",
+                          "nullable": true
+                        }
+                      ]
                     },
                     "plan": {
                       "Arrangement": [
@@ -1329,7 +1349,12 @@ SELECT x * 5 FROM cte WHERE x = 5
                         []
                       ]
                     ],
-                    "types": null
+                    "types": [
+                      {
+                        "scalar_type": "Int32",
+                        "nullable": false
+                      }
+                    ]
                   },
                   "input_key": null,
                   "input_mfp": {

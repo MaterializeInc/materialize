@@ -27,6 +27,7 @@ use std::collections::BTreeMap;
 
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
+use mz_repr::ColumnType;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -103,15 +104,17 @@ impl RustType<ProtoArrangement> for (Vec<MirScalarExpr>, BTreeMap<usize, usize>,
 }
 
 impl ThresholdPlan {
-    /// Reports all keys of produced arrangements.
+    /// Reports all keys of produced arrangements, with optionally
+    /// given types describing the rows that would be in the raw
+    /// form of the collection.
     ///
     /// This is likely either an empty vector, for no arrangement,
     /// or a singleton vector containing the list of expressions
     /// that key a single arrangement.
-    pub fn keys(&self) -> AvailableCollections {
+    pub fn keys(&self, types: Option<Vec<ColumnType>>) -> AvailableCollections {
         match self {
             ThresholdPlan::Basic(plan) => {
-                AvailableCollections::new_arranged(vec![plan.ensure_arrangement.clone()])
+                AvailableCollections::new_arranged(vec![plan.ensure_arrangement.clone()], types)
             }
         }
     }

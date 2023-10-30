@@ -1114,6 +1114,95 @@ def workflow_test_github_19610(c: Composition) -> None:
         )
 
 
+def workflow_test_github_22778(c: Composition) -> None:
+    """
+    Regression test to ensure that a panic is not triggered if type capture in
+    environmentd falls out-of-sync with type usage for specialization in clusterd.
+    """
+
+    c.down(destroy_volumes=True)
+    with c.override(
+        Testdrive(no_reset=True),
+    ):
+        c.up("materialized")
+        c.up("clusterd1")
+        c.up("testdrive", persistent=True)
+
+        c.sql(
+            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.sql(
+            "ALTER SYSTEM SET enable_specialized_arrangements = false;",
+            port=6877,
+            user="mz_system",
+        )
+
+        # Set up scenario where empty-value specialization kicks in.
+        c.sql(
+            """
+            CREATE CLUSTER cluster1 REPLICAS (replica1 (
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                COMPUTE ADDRESSES ['clusterd1:2102'],
+                WORKERS 1
+            ));
+            SET cluster = cluster1;
+            -- table for fast-path peeks
+            CREATE TABLE t (a int);
+            CREATE VIEW v AS SELECT a + 1 AS a FROM t;
+            CREATE INDEX i ON v (a);
+            """
+        )
+
+        # Change the flag and cycle clusterd.
+        c.sql(
+            "ALTER SYSTEM SET enable_specialized_arrangements = true;",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.kill("clusterd1")
+        c.up("clusterd1")
+
+        # Verify that no arrangement specialization took place.
+        c.testdrive(
+            dedent(
+                """
+            > SET cluster = cluster1;
+
+            > SELECT name
+              FROM mz_internal.mz_arrangement_sizes
+                   JOIN mz_internal.mz_dataflow_operator_dataflows ON operator_id = id
+              WHERE name LIKE '%ArrangeBy%]';
+            ArrangeBy[[Column(0)]]
+            """
+            )
+        )
+
+        # Now, cycle environmentd.
+        c.kill("materialized")
+        c.up("materialized")
+
+        # Verify that arrangement specialization now took place.
+        c.testdrive(
+            dedent(
+                """
+            > SET cluster = cluster1;
+
+            > SELECT name
+              FROM mz_internal.mz_arrangement_sizes
+                   JOIN mz_internal.mz_dataflow_operator_dataflows ON operator_id = id
+              WHERE name LIKE '%ArrangeBy%]';
+            "ArrangeBy[[Column(0)]] [val: empty]"
+            """
+            )
+        )
+
+
 def workflow_test_single_time_monotonicity_enforcers(c: Composition) -> None:
     """
     Test that a monotonic one-shot SELECT where a single-time monotonicity enforcer is present

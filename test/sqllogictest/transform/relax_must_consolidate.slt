@@ -332,6 +332,7 @@ Explained Query:
           ArrangeBy
             raw=false
             arrangements[0]={ key=[#0, #1], permutation=id, thinning=() }
+            types=[integer, integer?]
             Union consolidate_output=true
               Get::Collection materialize.public.t
                 filter=((1 = (#0 % 2)))
