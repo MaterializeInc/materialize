@@ -7,18 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from enum import Enum
 
+class QueryError(Exception):
+    msg: str
+    query: str
 
-class Complexity(Enum):
-    Read = "read"
-    DML = "dml"
-    DDL = "ddl"
-
-
-class Scenario(Enum):
-    Regression = "regression"
-    Cancel = "cancel"
-    Kill = "kill"
-    Rename = "rename"
-    BackupRestore = "backup-restore"
+    def __init__(self, msg: str, query: str):
+        self.msg = msg
+        self.query = query

@@ -9,9 +9,11 @@
 
 
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.zookeeper import Zookeeper
@@ -32,10 +34,17 @@ SERVICES = [
         ],
     ),
     SchemaRegistry(),
+    Minio(setup_materialize=True),
+    Mc(),
     Materialized(
         external_cockroach=True,
         restart="on-failure",
+        external_minio=True,
         ports=["6975:6875", "6976:6876", "6977:6877"],
+    ),
+    Service(
+        name="persistcli",
+        config={"mzbuild": "jobs"},
     ),
 ]
 
@@ -51,9 +60,22 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "zookeeper",
         "kafka",
         "schema-registry",
+        "minio",
         "materialized",
     ]
     c.up(*service_names)
+    c.up("mc", persistent=True)
+    c.exec(
+        "mc",
+        "mc",
+        "alias",
+        "set",
+        "persist",
+        "http://minio:9000/",
+        "minioadmin",
+        "minioadmin",
+    )
+    c.exec("mc", "mc", "version", "enable", "persist/persist")
 
     ports = {s: c.default_port(s) for s in service_names}
     ports["http"] = c.port("materialized", 6876)

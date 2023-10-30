@@ -22,6 +22,7 @@ from materialize.mzcompose import DEFAULT_SYSTEM_PARAMETERS
 from materialize.mzcompose.composition import Composition
 from materialize.parallel_workload.action import (
     Action,
+    BackupRestoreAction,
     CancelAction,
     KillAction,
     ddl_action_list,
@@ -30,7 +31,19 @@ from materialize.parallel_workload.action import (
     read_action_list,
     write_action_list,
 )
-from materialize.parallel_workload.database import Database
+from materialize.parallel_workload.database import (
+    MAX_CLUSTER_REPLICAS,
+    MAX_CLUSTERS,
+    MAX_KAFKA_SINKS,
+    MAX_KAFKA_SOURCES,
+    MAX_POSTGRES_SOURCES,
+    MAX_ROLES,
+    MAX_SCHEMAS,
+    MAX_TABLES,
+    MAX_VIEWS,
+    MAX_WEBHOOK_SOURCES,
+    Database,
+)
 from materialize.parallel_workload.executor import Executor, initialize_logging
 from materialize.parallel_workload.settings import Complexity, Scenario
 from materialize.parallel_workload.worker import Worker
@@ -54,25 +67,9 @@ def run(
     random.seed(seed)
 
     print(
-        f"--- Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity.value} --scenario={scenario.value} --naughty_identifiers={naughty_identifiers} (--host={host})"
+        f"+++ Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity.value} --scenario={scenario.value} {'--naughty-identifiers ' if naughty_identifiers else ''}(--host={host})"
     )
     initialize_logging()
-
-    system_conn = pg8000.connect(
-        host=host, port=ports["mz_system"], user="mz_system", database="materialize"
-    )
-    system_conn.autocommit = True
-    with system_conn.cursor() as cur:
-        cur.execute("ALTER SYSTEM SET enable_webhook_sources TO true")
-        cur.execute("ALTER SYSTEM SET max_schemas_per_database = 105")
-        # The presence of ALTER TABLE RENAME can cause the total number of tables to exceed MAX_TABLES
-        cur.execute("ALTER SYSTEM SET max_tables = 200")
-        cur.execute("ALTER SYSTEM SET max_materialized_views = 105")
-        cur.execute("ALTER SYSTEM SET max_sources = 105")
-        cur.execute("ALTER SYSTEM SET max_roles = 105")
-        cur.execute("ALTER SYSTEM SET max_clusters = 105")
-        cur.execute("ALTER SYSTEM SET max_replicas_per_cluster = 105")
-    system_conn.close()
 
     end_time = (
         datetime.datetime.now() + datetime.timedelta(seconds=runtime)
@@ -82,26 +79,56 @@ def run(
     database = Database(
         rng, seed, host, ports, complexity, scenario, naughty_identifiers
     )
-    conn = pg8000.connect(host=host, port=ports["materialized"], user="materialize")
-    conn.autocommit = True
-    with conn.cursor() as cur:
-        database.create(Executor(rng, cur))
-    conn.close()
 
-    conn = pg8000.connect(
-        host=host,
-        port=ports["materialized"],
-        user="materialize",
-        database=database.name(),
+    system_conn = pg8000.connect(
+        host=host, port=ports["mz_system"], user="mz_system", database="materialize"
     )
-    conn.autocommit = True
-    with conn.cursor() as cur:
-        database.create_relations(Executor(rng, cur))
-    conn.close()
+    system_conn.autocommit = True
+    with system_conn.cursor() as system_cur:
+        system_exe = Executor(rng, system_cur, database)
+        system_exe.execute("ALTER SYSTEM SET enable_webhook_sources TO true")
+        system_exe.execute(
+            f"ALTER SYSTEM SET max_schemas_per_database = {MAX_SCHEMAS * 2}"
+        )
+        # The presence of ALTER TABLE RENAME can cause the total number of tables to exceed MAX_TABLES
+        system_exe.execute(f"ALTER SYSTEM SET max_tables = {MAX_TABLES * 2}")
+        system_exe.execute(f"ALTER SYSTEM SET max_materialized_views = {MAX_VIEWS * 2}")
+        system_exe.execute(
+            f"ALTER SYSTEM SET max_sources = {(MAX_WEBHOOK_SOURCES + MAX_KAFKA_SOURCES + MAX_POSTGRES_SOURCES) * 2}"
+        )
+        system_exe.execute(f"ALTER SYSTEM SET max_sinks = {MAX_KAFKA_SINKS * 2}")
+        system_exe.execute(f"ALTER SYSTEM SET max_roles = {MAX_ROLES * 2}")
+        system_exe.execute(f"ALTER SYSTEM SET max_clusters = {MAX_CLUSTERS * 2}")
+        system_exe.execute(
+            f"ALTER SYSTEM SET max_replicas_per_cluster = {MAX_CLUSTER_REPLICAS * 2}"
+        )
+        # Most queries should not fail because of privileges
+        for object_type in [
+            "TABLES",
+            "TYPES",
+            "SECRETS",
+            "CONNECTIONS",
+            "DATABASES",
+            "SCHEMAS",
+            "CLUSTERS",
+        ]:
+            system_exe.execute(
+                f"ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL PRIVILEGES ON {object_type} TO PUBLIC"
+            )
+        system_conn.close()
+        conn = pg8000.connect(
+            host=host,
+            port=ports["materialized"],
+            user="materialize",
+            database="materialize",
+        )
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            database.create(Executor(rng, cur, database))
+        conn.close()
 
     workers = []
     threads = []
-    worker_rng = random.Random(rng.randrange(SEED_RANGE))
     for i in range(num_threads):
         weights: list[float]
         if complexity == Complexity.DDL:
@@ -112,6 +139,7 @@ def run(
             weights = [60, 30, 0, 0, 0]
         else:
             raise ValueError(f"Unknown complexity {complexity}")
+        worker_rng = random.Random(rng.randrange(SEED_RANGE))
         action_list = worker_rng.choices(
             [
                 read_action_list,
@@ -123,8 +151,7 @@ def run(
             weights,
         )[0]
         actions = [
-            action_class(worker_rng, database)
-            for action_class in action_list.action_classes
+            action_class(worker_rng) for action_class in action_list.action_classes
         ]
         worker = Worker(
             worker_rng,
@@ -143,15 +170,16 @@ def run(
         thread = threading.Thread(
             name=thread_name,
             target=worker.run,
-            args=(host, ports["materialized"], "materialize", database.name()),
+            args=(host, ports["materialized"], "materialize", database),
         )
         thread.start()
         threads.append(thread)
 
     if scenario == Scenario.Cancel:
+        worker_rng = random.Random(rng.randrange(SEED_RANGE))
         worker = Worker(
             worker_rng,
-            [CancelAction(worker_rng, database, workers)],
+            [CancelAction(worker_rng, workers)],
             [1],
             end_time,
             autocommit=False,
@@ -161,15 +189,16 @@ def run(
         thread = threading.Thread(
             name="cancel",
             target=worker.run,
-            args=(host, ports["mz_system"], "mz_system", str(database)),
+            args=(host, ports["mz_system"], "mz_system", database),
         )
         thread.start()
         threads.append(thread)
     elif scenario == Scenario.Kill:
+        worker_rng = random.Random(rng.randrange(SEED_RANGE))
         assert composition, "Kill scenario only works in mzcompose"
         worker = Worker(
             worker_rng,
-            [KillAction(worker_rng, database, composition)],
+            [KillAction(worker_rng, composition)],
             [1],
             end_time,
             autocommit=False,
@@ -179,7 +208,26 @@ def run(
         thread = threading.Thread(
             name="kill",
             target=worker.run,
-            args=(host, ports["materialized"], "materialize", str(database)),
+            args=(host, ports["materialized"], "materialize", database),
+        )
+        thread.start()
+        threads.append(thread)
+    elif scenario == Scenario.BackupRestore:
+        worker_rng = random.Random(rng.randrange(SEED_RANGE))
+        assert composition, "Backup & Restore scenario only works in mzcompose"
+        worker = Worker(
+            worker_rng,
+            [BackupRestoreAction(worker_rng, composition, database)],
+            [1],
+            end_time,
+            autocommit=False,
+            system=False,
+        )
+        workers.append(worker)
+        thread = threading.Thread(
+            name="kill",
+            target=worker.run,
+            args=(host, ports["materialized"], "materialize", database),
         )
         thread.start()
         threads.append(thread)
@@ -211,14 +259,29 @@ def run(
         for worker in workers:
             worker.end_time = time.time()
 
-    for thread in threads:
-        thread.join()
+    stopping_time = (
+        datetime.datetime.now() + datetime.timedelta(seconds=300)
+    ).timestamp()
+    while time.time() < stopping_time:
+        for thread in threads:
+            thread.join(timeout=1)
+        if all([not thread.is_alive() for thread in threads]):
+            break
+    else:
+        for worker, thread in zip(workers, threads):
+            if thread.is_alive():
+                print(f"{thread.name} still running: {worker.exe.last_log}")
+        print("Threads have not stopped within 5 minutes, exiting hard")
+        # TODO(def-): Switch to failing exit code when https://github.com/MaterializeInc/materialize/issues/22717 is fixed
+        os._exit(0)
 
     conn = pg8000.connect(host=host, port=ports["materialized"], user="materialize")
     conn.autocommit = True
     with conn.cursor() as cur:
+        exe = Executor(rng, cur, database)
         print(f"Dropping database {database}")
-        database.drop(Executor(rng, cur))
+        for db in database.dbs:
+            db.drop(exe)
     conn.close()
 
     ignored_errors: defaultdict[str, Counter[type[Action]]] = defaultdict(Counter)
