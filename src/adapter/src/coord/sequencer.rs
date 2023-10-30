@@ -339,7 +339,7 @@ impl Coordinator {
             Plan::ExplainPlan(plan) => {
                 self.sequence_explain_plan(ctx, plan, target_cluster).await;
             }
-            Plan::ExplainSchema(plan) => {
+            Plan::ExplainSinkSchema(plan) => {
                 let result = self.sequence_explain_schema(plan);
                 ctx.retire(result);
             }

@@ -54,7 +54,7 @@ use mz_sql::names::{
 use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW_TS;
 use mz_adapter_types::connection::ConnectionId;
 use mz_sql::plan::{
-    AlterOptionParameter, ExplainSchemaPlan, Explainee, Index, IndexOption, MaterializedView,
+    AlterOptionParameter, ExplainSinkSchemaPlan, Explainee, Index, IndexOption, MaterializedView,
     MutationKind, Params, Plan, PlannedAlterRoleOption, PlannedRoleVariable, QueryWhen,
     SideEffectingFunc, SourceSinkClusterConfig, UpdatePrivilege, VariableValue,
 };
@@ -1721,7 +1721,7 @@ impl Coordinator {
 
     pub(super) fn sequence_explain_schema(
         &mut self,
-        ExplainSchemaPlan { json_schema, .. }: ExplainSchemaPlan,
+        ExplainSinkSchemaPlan { json_schema, .. }: ExplainSinkSchemaPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let jsonb = Jsonb::from_str(&json_schema)?;
         Ok(Self::send_immediate_rows(vec![jsonb.into_row()]))

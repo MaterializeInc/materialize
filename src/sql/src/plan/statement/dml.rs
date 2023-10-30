@@ -22,8 +22,8 @@ use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::{RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
-    ExplainSchemaFor, ExplainSchemaStatement, ExplainTimestampStatement, Expr, IfExistsBehavior,
-    OrderByExpr, SubscribeOutput,
+    ExplainSinkSchemaFor, ExplainSinkSchemaStatement, ExplainTimestampStatement, Expr,
+    IfExistsBehavior, OrderByExpr, SubscribeOutput,
 };
 use mz_storage_types::sinks::{
     KafkaSinkAvroFormatState, KafkaSinkConnection, KafkaSinkFormat, StorageSinkConnection,
@@ -44,7 +44,7 @@ use crate::plan::scope::Scope;
 use crate::plan::statement::{ddl, StatementContext, StatementDesc};
 use crate::plan::with_options::TryFromValue;
 use crate::plan::{
-    self, side_effecting_func, CreateSinkPlan, ExplainSchemaPlan, ExplainTimestampPlan,
+    self, side_effecting_func, CreateSinkPlan, ExplainSinkSchemaPlan, ExplainTimestampPlan,
 };
 use crate::plan::{
     query, CopyFormat, CopyFromPlan, ExplainPlanPlan, InsertPlan, MutationKind, Params, Plan,
@@ -264,7 +264,7 @@ pub fn describe_explain_timestamp(
 
 pub fn describe_explain_schema(
     _: &StatementContext,
-    ExplainSchemaStatement { .. }: ExplainSchemaStatement<Aug>,
+    ExplainSinkSchemaStatement { .. }: ExplainSinkSchemaStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     let mut relation_desc = RelationDesc::empty();
     relation_desc = relation_desc.with_column("Schema", ScalarType::Jsonb.nullable(false));
@@ -430,9 +430,9 @@ pub fn plan_explain_plan(
 
 pub fn plan_explain_schema(
     scx: &StatementContext,
-    explain_schema: ExplainSchemaStatement<Aug>,
+    explain_schema: ExplainSinkSchemaStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let ExplainSchemaStatement {
+    let ExplainSinkSchemaStatement {
         schema_for,
         format,
         mut statement,
@@ -456,13 +456,13 @@ pub fn plan_explain_schema(
         }) = sink.connection
         {
             let schema = match schema_for {
-                ExplainSchemaFor::Key => {
+                ExplainSinkSchemaFor::Key => {
                     key_schema.ok_or_else(|| sql_err!("CREATE SINK does not have a key"))?
                 }
-                ExplainSchemaFor::Value => value_schema,
+                ExplainSinkSchemaFor::Value => value_schema,
             };
 
-            Ok(Plan::ExplainSchema(ExplainSchemaPlan {
+            Ok(Plan::ExplainSinkSchema(ExplainSinkSchemaPlan {
                 format,
                 sink_from: sink.from,
                 json_schema: schema,

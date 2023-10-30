@@ -134,7 +134,7 @@ pub enum Plan {
     CopyFrom(CopyFromPlan),
     ExplainPlan(ExplainPlanPlan),
     ExplainTimestamp(ExplainTimestampPlan),
-    ExplainSchema(ExplainSchemaPlan),
+    ExplainSinkSchema(ExplainSinkSchemaPlan),
     Insert(InsertPlan),
     AlterCluster(AlterClusterPlan),
     AlterClusterSwap(AlterClusterSwapPlan),
@@ -259,7 +259,7 @@ impl Plan {
             StatementKind::Execute => vec![PlanKind::Execute],
             StatementKind::ExplainPlan => vec![PlanKind::ExplainPlan],
             StatementKind::ExplainTimestamp => vec![PlanKind::ExplainTimestamp],
-            StatementKind::ExplainSchema => vec![PlanKind::ExplainSchema],
+            StatementKind::ExplainSinkSchema => vec![PlanKind::ExplainSinkSchema],
             StatementKind::Fetch => vec![PlanKind::Fetch],
             StatementKind::GrantPrivileges => vec![PlanKind::GrantPrivileges],
             StatementKind::GrantRole => vec![PlanKind::GrantRole],
@@ -345,7 +345,7 @@ impl Plan {
             Plan::CopyFrom(_) => "copy from",
             Plan::ExplainPlan(_) => "explain plan",
             Plan::ExplainTimestamp(_) => "explain timestamp",
-            Plan::ExplainSchema(_) => "explain schema",
+            Plan::ExplainSinkSchema(_) => "explain schema",
             Plan::Insert(_) => "insert",
             Plan::AlterNoop(plan) => match plan.object_type {
                 ObjectType::Table => "alter table",
@@ -945,7 +945,7 @@ pub struct ExplainTimestampPlan {
 }
 
 #[derive(Debug)]
-pub struct ExplainSchemaPlan {
+pub struct ExplainSinkSchemaPlan {
     pub format: ExplainFormat,
     pub sink_from: GlobalId,
     pub json_schema: String,

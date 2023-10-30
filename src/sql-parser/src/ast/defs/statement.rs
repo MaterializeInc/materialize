@@ -85,7 +85,7 @@ pub enum Statement<T: AstInfo> {
     Subscribe(SubscribeStatement<T>),
     ExplainPlan(ExplainPlanStatement<T>),
     ExplainTimestamp(ExplainTimestampStatement<T>),
-    ExplainSchema(ExplainSchemaStatement<T>),
+    ExplainSinkSchema(ExplainSinkSchemaStatement<T>),
     Declare(DeclareStatement<T>),
     Fetch(FetchStatement<T>),
     Close(CloseStatement),
@@ -154,7 +154,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::Subscribe(stmt) => f.write_node(stmt),
             Statement::ExplainPlan(stmt) => f.write_node(stmt),
             Statement::ExplainTimestamp(stmt) => f.write_node(stmt),
-            Statement::ExplainSchema(stmt) => f.write_node(stmt),
+            Statement::ExplainSinkSchema(stmt) => f.write_node(stmt),
             Statement::Declare(stmt) => f.write_node(stmt),
             Statement::Close(stmt) => f.write_node(stmt),
             Statement::Fetch(stmt) => f.write_node(stmt),
@@ -226,7 +226,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::Subscribe => "subscribe",
         StatementKind::ExplainPlan => "explain_plan",
         StatementKind::ExplainTimestamp => "explain_timestamp",
-        StatementKind::ExplainSchema => "explain_schema",
+        StatementKind::ExplainSinkSchema => "explain_sink_schema",
         StatementKind::Declare => "declare",
         StatementKind::Fetch => "fetch",
         StatementKind::Close => "close",
@@ -2882,23 +2882,23 @@ impl<T: AstInfo> AstDisplay for ExplainPlanStatement<T> {
 impl_display_t!(ExplainPlanStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ExplainSchemaFor {
+pub enum ExplainSinkSchemaFor {
     Key,
     Value,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ExplainSchemaStatement<T: AstInfo> {
-    pub schema_for: ExplainSchemaFor,
+pub struct ExplainSinkSchemaStatement<T: AstInfo> {
+    pub schema_for: ExplainSinkSchemaFor,
     pub format: ExplainFormat,
     pub statement: CreateSinkStatement<T>,
 }
 
-impl<T: AstInfo> AstDisplay for ExplainSchemaStatement<T> {
+impl<T: AstInfo> AstDisplay for ExplainSinkSchemaStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("EXPLAIN ");
         match &self.schema_for {
-            ExplainSchemaFor::Key => f.write_str("KEY"),
-            ExplainSchemaFor::Value => f.write_str("VALUE"),
+            ExplainSinkSchemaFor::Key => f.write_str("KEY"),
+            ExplainSinkSchemaFor::Value => f.write_str("VALUE"),
         }
         f.write_str(" SCHEMA AS ");
         f.write_node(&self.format);
@@ -2906,7 +2906,7 @@ impl<T: AstInfo> AstDisplay for ExplainSchemaStatement<T> {
         f.write_node(&self.statement);
     }
 }
-impl_display_t!(ExplainSchemaStatement);
+impl_display_t!(ExplainSinkSchemaStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ExplainTimestampStatement<T: AstInfo> {

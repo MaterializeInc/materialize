@@ -6995,7 +6995,7 @@ impl<'a> Parser<'a> {
                 .map_parser_err(StatementKind::ExplainTimestamp)
         } else if self.peek_keyword(KEY) || self.peek_keyword(VALUE) {
             self.parse_explain_schema()
-                .map_parser_err(StatementKind::ExplainSchema)
+                .map_parser_err(StatementKind::ExplainSinkSchema)
         } else {
             self.parse_explain_plan()
                 .map_parser_err(StatementKind::ExplainPlan)
@@ -7146,8 +7146,8 @@ impl<'a> Parser<'a> {
     /// have already been consumed
     fn parse_explain_schema(&mut self) -> Result<Statement<Raw>, ParserError> {
         let schema_for = match self.expect_one_of_keywords(&[KEY, VALUE])? {
-            KEY => ExplainSchemaFor::Key,
-            VALUE => ExplainSchemaFor::Value,
+            KEY => ExplainSinkSchemaFor::Key,
+            VALUE => ExplainSinkSchemaFor::Value,
             _ => unreachable!(),
         };
 
@@ -7171,7 +7171,7 @@ impl<'a> Parser<'a> {
         self.expect_keywords(&[FOR, CREATE])?;
 
         if let Statement::CreateSink(statement) = self.parse_create_sink()? {
-            Ok(Statement::ExplainSchema(ExplainSchemaStatement {
+            Ok(Statement::ExplainSinkSchema(ExplainSinkSchemaStatement {
                 schema_for,
                 format,
                 statement,

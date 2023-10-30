@@ -97,7 +97,7 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::AbortTransaction(_)
         | Plan::CopyFrom(_)
         | Plan::ExplainPlan(_)
-        | Plan::ExplainSchema(_)
+        | Plan::ExplainSinkSchema(_)
         | Plan::Insert(_)
         | Plan::AlterNoop(_)
         | Plan::AlterClusterRename(_)
