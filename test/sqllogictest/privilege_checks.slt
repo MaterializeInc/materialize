@@ -1765,10 +1765,36 @@ GRANT USAGE on CONNECTION csr_conn TO joe;
 ----
 COMPLETE 0
 
-simple conn=joe,user=joe
+simple multiline,conn=joe,user=joe
 EXPLAIN VALUE SCHEMA FOR CREATE SINK sink FROM t INTO KAFKA CONNECTION kafka_conn (TOPIC 'topic') KEY (a) NOT ENFORCED FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT;
 ----
-{"fields":[{"name":"a","type":["null",{"fields":[{"name":"a","type":["null","string"]}],"name":"record0","namespace":"com.materialize.sink","type":"record"}]}],"name":"envelope","type":"record"}
+{
+  "type": "record",
+  "name": "envelope",
+  "fields": [
+    {
+      "name": "a",
+      "type": [
+        "null",
+        {
+          "type": "record",
+          "name": "record0",
+          "namespace": "com.materialize.sink",
+          "fields": [
+            {
+              "name": "a",
+              "type": [
+                "null",
+                "string"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+EOF
 COMPLETE 1
 
 simple conn=mz_system,user=mz_system

@@ -12,7 +12,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::iter;
 use std::num::{NonZeroI64, NonZeroUsize};
 use std::panic::AssertUnwindSafe;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -33,6 +32,7 @@ use mz_ore::vec::VecExt;
 use mz_ore::{soft_assert, task};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
+use mz_repr::explain::json::json_string;
 use mz_repr::explain::{
     ExplainFormat, ExprHumanizer, ExprHumanizerExt, TransientItem, UsedIndexes,
 };
@@ -1723,8 +1723,14 @@ impl Coordinator {
         &mut self,
         ExplainSinkSchemaPlan { json_schema, .. }: ExplainSinkSchemaPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let jsonb = Jsonb::from_str(&json_schema)?;
-        Ok(Self::send_immediate_rows(vec![jsonb.into_row()]))
+        let json_value: serde_json::Value = serde_json::from_str(&json_schema).map_err(|e| {
+            AdapterError::Explain(mz_repr::explain::ExplainError::SerdeJsonError(e))
+        })?;
+
+        let json_string = json_string(&json_value);
+        Ok(Self::send_immediate_rows(vec![Row::pack_slice(&[
+            Datum::String(&json_string),
+        ])]))
     }
 
     pub(super) fn sequence_show_all_variables(

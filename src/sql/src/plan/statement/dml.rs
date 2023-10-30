@@ -267,7 +267,7 @@ pub fn describe_explain_schema(
     ExplainSinkSchemaStatement { .. }: ExplainSinkSchemaStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     let mut relation_desc = RelationDesc::empty();
-    relation_desc = relation_desc.with_column("Schema", ScalarType::Jsonb.nullable(false));
+    relation_desc = relation_desc.with_column("Schema", ScalarType::String.nullable(false));
     Ok(StatementDesc::new(Some(relation_desc)))
 }
 
