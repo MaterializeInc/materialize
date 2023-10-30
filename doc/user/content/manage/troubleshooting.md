@@ -183,6 +183,32 @@ ORDER BY elapsed_ns DESC
 From the results of this query we can see that most of the elapsed time of the dataflow is caused by the time it takes to maintain the updates in one of the arrangements of the dataflow of the materialized view.
 
 ## Why is Materialize unresponsive or slow?
+Slow responses can be the result of a number of factors, which we can help you understand and address.
+
+If you haven't already, you should consider an [index](https://materialize.com/docs/sql/create-index/) for your query, and check out the [optimizations](https://materialize.com/docs/transform-data/optimization/) on how to optimize query performance in Materialize.
+
+You can also consider changing your isolation level, depending on the [consistency guarantees](https://materialize.com/docs/get-started/isolation-level) that you need.
+
+### Transactions
+
+Transactions are a database concept for bundling multiple query steps into a single, all-or-nothing operation. You can read more about them in the [transactions](https://materialize.com/docs/sql/begin) section of our docs.
+
+In Materialize, `BEGIN` starts a transaction block. All statements in a transaction block will be executed in a single transaction until an explicit `COMMIT` or `ROLLBACK` is given. All statements in that transaction happen at the same timestamp.
+
+Because Materialize does not know which objects (sources, indexes, or materialized views) will be queried during the transaction, the objects in the first `SELECT` and any other object in the same schemas are assumed to be possible query targets. As a result, during that first query, a timestamp for the transaction is chosen that is valid for all of the objects in that same schema.
+
+What this means for latency: even in serializable isolation level, some queries made within a transaction may not be able return immediately. For example, if a materialized view is lagging or a source is stalled out, a query on that object in a transaction will block until the object catches up to the current time.
+
+What you can do:
+
+- Avoid using transactions where you don’t need them, if you’re only executing single statements at a time, for example.
+- Double check whether your SQL library or ORM is wrapping all queries in transactions on your behalf, and disable that setting, only using transactions explicitly when you want them.
+
+### Client-side latency
+
+To reduce the roundtrip latency associated with making requests from your client to Materialize, make your requests as physically close to your Materialize region as possible. E.g. if you use the AWS us-east-1 region for Materialize, ideally your client server would also be running in AWS us-east-1. The closer geographically to the region, the lesser the network latency.
+
+### Debugging expensive dataflows and operators
 
 A large class of problems can be identified by using [`elapsed_time`](#identifying-expensive-operators-in-a-dataflow) to estimate the most expensive dataflows and operators.
 However, `elapsed_time` contains all work since the operator or dataflow was first created.
