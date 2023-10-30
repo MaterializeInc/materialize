@@ -2889,7 +2889,6 @@ pub enum ExplainSinkSchemaFor {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ExplainSinkSchemaStatement<T: AstInfo> {
     pub schema_for: ExplainSinkSchemaFor,
-    pub format: ExplainFormat,
     pub statement: CreateSinkStatement<T>,
 }
 
@@ -2900,9 +2899,7 @@ impl<T: AstInfo> AstDisplay for ExplainSinkSchemaStatement<T> {
             ExplainSinkSchemaFor::Key => f.write_str("KEY"),
             ExplainSinkSchemaFor::Value => f.write_str("VALUE"),
         }
-        f.write_str(" SCHEMA AS ");
-        f.write_node(&self.format);
-        f.write_str(" FOR ");
+        f.write_str(" SCHEMA AS JSON FOR ");
         f.write_node(&self.statement);
     }
 }

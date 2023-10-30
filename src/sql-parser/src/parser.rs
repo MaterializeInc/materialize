@@ -7153,27 +7153,16 @@ impl<'a> Parser<'a> {
 
         self.expect_keyword(SCHEMA)?;
 
-        let format = if self.parse_keyword(AS) {
-            match self.parse_one_of_keywords(&[JSON]) {
-                Some(JSON) => ExplainFormat::Json,
-                None => {
-                    return Err(ParserError::new(
-                        self.index,
-                        "only json format is supported",
-                    ))
-                }
-                _ => unreachable!(),
-            }
-        } else {
-            ExplainFormat::Json
-        };
+        if self.parse_keyword(AS) {
+            // only json format is supported
+            self.expect_keyword(JSON)?;
+        }
 
         self.expect_keywords(&[FOR, CREATE])?;
 
         if let Statement::CreateSink(statement) = self.parse_create_sink()? {
             Ok(Statement::ExplainSinkSchema(ExplainSinkSchemaStatement {
                 schema_for,
-                format,
                 statement,
             }))
         } else {

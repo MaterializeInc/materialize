@@ -434,14 +434,9 @@ pub fn plan_explain_schema(
 ) -> Result<Plan, PlanError> {
     let ExplainSinkSchemaStatement {
         schema_for,
-        format,
         mut statement,
     } = explain_schema;
-    let format = match format {
-        mz_sql_parser::ast::ExplainFormat::Text => ExplainFormat::Text,
-        mz_sql_parser::ast::ExplainFormat::Json => ExplainFormat::Json,
-        mz_sql_parser::ast::ExplainFormat::Dot => ExplainFormat::Dot,
-    };
+
     crate::pure::add_materialize_comments(scx.catalog, &mut statement)?;
 
     if let Plan::CreateSink(CreateSinkPlan { sink, .. }) = ddl::plan_create_sink(scx, statement)? {
@@ -463,7 +458,6 @@ pub fn plan_explain_schema(
             };
 
             Ok(Plan::ExplainSinkSchema(ExplainSinkSchemaPlan {
-                format,
                 sink_from: sink.from,
                 json_schema: schema,
             }))
