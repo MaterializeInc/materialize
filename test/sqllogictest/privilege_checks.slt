@@ -1746,19 +1746,24 @@ EXPLAIN VALUE SCHEMA FOR CREATE SINK sink FROM t INTO KAFKA CONNECTION kafka_con
 db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=mz_system,user=mz_system
-GRANT USAGE ON TYPE ty TO joe;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
 GRANT USAGE ON SCHEMA materialize.public TO joe;
 ----
 COMPLETE 0
+
+simple conn=joe,user=joe
+EXPLAIN VALUE SCHEMA FOR CREATE SINK sink FROM t INTO KAFKA CONNECTION kafka_conn (TOPIC 'topic') KEY (a) NOT ENFORCED FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT;
+----
+db error: ERROR: permission denied for CONNECTION "materialize.public.kafka_conn"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE on CONNECTION kafka_conn TO joe;
 ----
 COMPLETE 0
+
+simple conn=joe,user=joe
+EXPLAIN VALUE SCHEMA FOR CREATE SINK sink FROM t INTO KAFKA CONNECTION kafka_conn (TOPIC 'topic') KEY (a) NOT ENFORCED FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT;
+----
+db error: ERROR: permission denied for CONNECTION "materialize.public.csr_conn"
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE on CONNECTION csr_conn TO joe;
@@ -1796,11 +1801,6 @@ EXPLAIN VALUE SCHEMA FOR CREATE SINK sink FROM t INTO KAFKA CONNECTION kafka_con
 }
 EOF
 COMPLETE 1
-
-simple conn=mz_system,user=mz_system
-REVOKE USAGE ON TYPE ty FROM joe;
-----
-COMPLETE 0
 
 simple conn=mz_system,user=mz_system
 REVOKE USAGE ON SCHEMA materialize.public FROM joe;
