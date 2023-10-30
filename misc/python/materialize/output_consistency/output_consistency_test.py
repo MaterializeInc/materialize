@@ -186,7 +186,9 @@ class OutputConsistencyTest:
         connection: Connection,
         output_printer: OutputPrinter,
     ) -> SqlExecutors:
-        return SqlExecutors(create_sql_executor(config, connection, output_printer))
+        return SqlExecutors(
+            create_sql_executor(config, connection, output_printer, "mz")
+        )
 
     def get_scenario(self) -> EvaluationScenario:
         return EvaluationScenario.OUTPUT_CONSISTENCY

@@ -59,8 +59,8 @@ class VersionConsistencyTest(OutputConsistencyTest):
         assert self.mz2_connection is not None, "Second connection is not initialized"
 
         return MultiVersionSqlExecutors(
-            create_sql_executor(config, connection, output_printer),
-            create_sql_executor(config, self.mz2_connection, output_printer),
+            create_sql_executor(config, connection, output_printer, "mz1"),
+            create_sql_executor(config, self.mz2_connection, output_printer, "mz2"),
         )
 
     def create_result_comparator(

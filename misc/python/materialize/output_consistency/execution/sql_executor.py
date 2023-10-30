@@ -56,11 +56,13 @@ class PgWireDatabaseSqlExecutor(SqlExecutor):
         connection: Connection,
         use_autocommit: bool,
         output_printer: OutputPrinter,
+        name: str,
     ):
         connection.autocommit = use_autocommit
         self.cursor = connection.cursor()
         self.output_printer = output_printer
         self.last_statements = deque[str](maxlen=5)
+        self.name = name
 
     def ddl(self, sql: str) -> None:
         self._execute_with_cursor(sql)
@@ -150,10 +152,11 @@ def create_sql_executor(
     config: ConsistencyTestConfiguration,
     connection: Connection,
     output_printer: OutputPrinter,
+    name: str,
 ) -> SqlExecutor:
     if config.dry_run:
         return DryRunSqlExecutor(output_printer)
     else:
         return PgWireDatabaseSqlExecutor(
-            connection, config.use_autocommit, output_printer
+            connection, config.use_autocommit, output_printer, name
         )
