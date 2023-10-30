@@ -140,8 +140,12 @@ class WorkloadExecutor:
                 parents=True, exist_ok=True
             )
 
-            df_totals.to_csv(paths.df_totals_csv(endpoint_version_name, workload))
-            df_details.to_csv(paths.df_details_csv(endpoint_version_name, workload))
+            df_totals.to_csv(
+                paths.df_totals_csv(endpoint_version_name, workload.name())
+            )
+            df_details.to_csv(
+                paths.df_details_csv(endpoint_version_name, workload.name())
+            )
 
         self._record_results(endpoint, df_totals)
         return WorkloadResult(workload, df_totals, df_details)
