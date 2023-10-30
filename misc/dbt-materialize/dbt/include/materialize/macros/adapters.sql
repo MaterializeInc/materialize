@@ -39,12 +39,6 @@
 
   {% set contract_config = config.get('contract') %}
   {% if contract_config.enforced %}
-    {{ get_assert_columns_equivalent(sql) }}
-    -- Explicitly throw a warning rather than silently ignore configured
-    -- constraints for tables and materialized views.
-    -- See /relations/columns_spec_ddl.sql for details.
-    {{ get_table_columns_and_constraints() }}
-
     {% set nullability_assertions = [] %}
     {% set user_provided_columns = model['columns'] %}
     {% for i in user_provided_columns %}
@@ -56,6 +50,14 @@
         {% endif %}
       {% endfor %}
     {% endfor %}
+
+    {{ get_assert_columns_equivalent(sql) }}
+    -- Explicitly throw a warning rather than silently ignore configured
+    -- constraints for tables and materialized views.
+    -- See /relations/columns_spec_ddl.sql for details.
+    {% if not nullability_assertions %}
+      {{ get_table_columns_and_constraints(nullability_assertions) }}
+    {% endif %}
   {%- endif %}
 
   {% if nullability_assertions %}
