@@ -911,8 +911,6 @@ impl Coordinator {
         Ok(ops)
     }
 
-    /// This should mirror the operational semantics of
-    /// `Coordinator::sequence_create_materialized_view_deprecated`.
     #[tracing::instrument(level = "debug", skip(self))]
     pub(super) async fn sequence_create_materialized_view(
         &mut self,
@@ -3468,9 +3466,6 @@ impl Coordinator {
     /// Run the MV optimization explanation pipeline. This function must be called with
     /// an `OptimizerTrace` `tracing` subscriber, using `.with_subscriber(...)`.
     /// The `root_dispatch` should be the global `tracing::Dispatch`.
-    ///
-    /// This should mirror the operational semantics of
-    /// `Coordinator::explain_create_materialized_view_optimizer_pipeline_deprecated`.
     ///
     /// WARNING, ENTERING SPOOKY ZONE 3.0
     ///
