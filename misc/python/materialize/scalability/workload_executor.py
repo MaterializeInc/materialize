@@ -224,7 +224,7 @@ class WorkloadExecutor:
                 {
                     df_totals_cols.CONCURRENCY: concurrency,
                     df_totals_cols.WALLCLOCK: wallclock_total,
-                    df_totals_cols.WORKLOAD: type(workload).__name__,
+                    df_totals_cols.WORKLOAD: workload.name(),
                     df_totals_cols.COUNT: count,
                     df_totals_cols.TPS: count / wallclock_total,
                     df_totals_cols.MEAN_TX_DURATION: df_detail[
@@ -262,7 +262,7 @@ class WorkloadExecutor:
             df_details_cols.CONCURRENCY: concurrency,
             df_details_cols.WALLCLOCK: wallclock,
             df_details_cols.OPERATION: type(operation).__name__,
-            df_details_cols.WORKLOAD: type(workload).__name__,
+            df_details_cols.WORKLOAD: workload.name(),
         }
 
     def initialize_worker(self, local: threading.local, lock: threading.Lock):
