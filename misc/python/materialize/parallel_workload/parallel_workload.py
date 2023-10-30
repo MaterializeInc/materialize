@@ -86,7 +86,6 @@ def run(
     system_conn.autocommit = True
     with system_conn.cursor() as system_cur:
         system_exe = Executor(rng, system_cur, database)
-        system_exe.execute("ALTER SYSTEM SET enable_webhook_sources TO true")
         system_exe.execute(
             f"ALTER SYSTEM SET max_schemas_per_database = {MAX_SCHEMAS * 2}"
         )

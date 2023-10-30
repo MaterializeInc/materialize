@@ -401,9 +401,6 @@ pub fn plan_create_webhook_source(
     scx: &StatementContext,
     stmt: CreateWebhookSourceStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    // Make sure the LaunchDarkly flag is enabled.
-    scx.require_feature_flag(&vars::ENABLE_WEBHOOK_SOURCES)?;
-
     let create_sql =
         normalize::create_statement(scx, Statement::CreateWebhookSource(stmt.clone()))?;
 

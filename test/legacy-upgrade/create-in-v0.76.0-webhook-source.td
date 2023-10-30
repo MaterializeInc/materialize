@@ -8,10 +8,7 @@
 # by the Apache License, Version 2.0.
 
 $ skip-if
-SELECT mz_version_num() >= 7600;
-
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_webhook_sources = true
+SELECT mz_version_num() < 7600;
 
 > CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));
 
