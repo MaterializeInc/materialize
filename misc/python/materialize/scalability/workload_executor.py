@@ -153,8 +153,9 @@ class WorkloadExecutor:
                 paths.df_details_csv(endpoint_version_name, workload.name())
             )
 
-        self._record_results(endpoint, df_totals)
-        return WorkloadResult(workload, df_totals, df_details)
+        result = WorkloadResult(workload, endpoint, df_totals, df_details)
+        self._record_results(result)
+        return result
 
     def run_workload_for_endpoint_with_concurrency(
         self,
@@ -298,16 +299,19 @@ class WorkloadExecutor:
 
         return cursor_pool
 
-    def _record_results(self, endpoint: Endpoint, df_totals: pd.DataFrame) -> None:
-        endpoint_version_info = endpoint.try_load_version()
+    def _record_results(self, result: WorkloadResult) -> None:
+        endpoint_version_info = result.endpoint.try_load_version()
         print(
-            f"Collecting results of endpoint {endpoint} with name {endpoint_version_info}"
+            f"Collecting results of endpoint {result.endpoint} with name {endpoint_version_info}"
         )
 
         if endpoint_version_info not in self.df_total_by_endpoint_name:
-            self.df_total_by_endpoint_name[endpoint_version_info] = df_totals
+            self.df_total_by_endpoint_name[endpoint_version_info] = result.df_totals
         else:
             self.df_total_by_endpoint_name[endpoint_version_info] = pd.concat(
-                [self.df_total_by_endpoint_name[endpoint_version_info], df_totals],
+                [
+                    self.df_total_by_endpoint_name[endpoint_version_info],
+                    result.df_totals,
+                ],
                 ignore_index=True,
             )
