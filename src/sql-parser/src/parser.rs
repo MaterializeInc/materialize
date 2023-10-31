@@ -3621,13 +3621,13 @@ impl<'a> Parser<'a> {
         if self.parse_keyword(INCLUDE) {
             self.parse_comma_separated(|parser| {
                 let ty = match parser
-                    .expect_one_of_keywords(&[KEY, TIMESTAMP, PARTITION, OFFSET, HEADERS, HEADER])?
+                    .expect_one_of_keywords(&[KEY, TIMESTAMP, PARTITION, OFFSET, HEADER, HEADERS])?
                 {
                     KEY => SourceIncludeMetadataType::Key,
                     TIMESTAMP => SourceIncludeMetadataType::Timestamp,
                     PARTITION => SourceIncludeMetadataType::Partition,
                     OFFSET => SourceIncludeMetadataType::Offset,
-                    HEADER => return parser.parse_kafka_header(),
+                    HEADER => return parser.parse_kafka_include_header(),
                     HEADERS => SourceIncludeMetadataType::Headers,
                     _ => unreachable!("only explicitly allowed items can be parsed"),
                 };
@@ -3643,7 +3643,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_kafka_header(&mut self) -> Result<SourceIncludeMetadata, ParserError> {
+    fn parse_kafka_include_header(&mut self) -> Result<SourceIncludeMetadata, ParserError> {
         let key = self.parse_literal_string()?;
         let alias = self
             .parse_keyword(AS)
