@@ -261,7 +261,7 @@ impl PersistHandle {
     pub(crate) async fn new(persist_client: PersistClient, organization_id: Uuid) -> PersistHandle {
         const SEED: usize = 1;
         let shard_id = Self::shard_id(organization_id, SEED);
-        debug!("new shard_id={shard_id:?}");
+        debug!(?shard_id, "new persist backed catalog state");
         let (write_handle, read_handle) = persist_client
             .open(
                 shard_id,
@@ -338,12 +338,12 @@ impl PersistHandle {
         let current_epoch = Epoch::new(current_epoch).expect("known to be non-zero");
 
         debug!(
-            "open_inner is_initialized={:?} upper={:?} user_version={:?} prev_epoch={:?} current_epoch={:?}",
-            is_initialized,
-            upper,
-            user_version,
-            prev_epoch,
-            current_epoch,
+            ?is_initialized,
+            ?upper,
+            ?user_version,
+            ?prev_epoch,
+            ?current_epoch,
+            "open inner"
         );
 
         let mut catalog = PersistCatalogState {
