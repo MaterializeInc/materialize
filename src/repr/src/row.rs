@@ -17,6 +17,7 @@ use std::str;
 use std::sync::atomic::{self, AtomicBool};
 
 use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
+use compact_bytes::CompactBytes;
 use mz_ore::cast::{CastFrom, ReinterpretCast};
 use mz_ore::soft_assert;
 use mz_ore::vec::Vector;
@@ -26,7 +27,6 @@ use ordered_float::OrderedFloat;
 use proptest::prelude::*;
 use proptest::strategy::{BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
-use smallvec::SmallVec;
 use uuid::Uuid;
 
 use crate::adt::array::{
@@ -110,10 +110,13 @@ pub static VARIABLE_LENGTH_ENCODING: AtomicBool = AtomicBool::new(false);
 /// Rows are dynamically sized, but up to a fixed size their data is stored in-line.
 /// It is best to re-use a `Row` across multiple `Row` creation calls, as this
 /// avoids the allocations involved in `Row::new()`.
-#[derive(Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct Row {
-    data: SmallVec<[u8; Self::SIZE]>,
+    data: CompactBytes,
 }
+
+// Nothing depends on Row being exactly 24, we just want to add visibility to the size.
+static_assertions::const_assert_eq!(std::mem::size_of::<Row>(), 24);
 
 impl Arbitrary for Row {
     type Parameters = prop::collection::SizeRange;
@@ -134,18 +137,8 @@ impl Arbitrary for Row {
     }
 }
 
-// Implement Clone manually to use SmallVec's more efficient from_slice.
-// TODO: Revisit once Rust supports specialization: https://github.com/rust-lang/rust/issues/31844
-impl Clone for Row {
-    fn clone(&self) -> Self {
-        Self {
-            data: SmallVec::from_slice(self.data.as_slice()),
-        }
-    }
-}
-
 impl Row {
-    const SIZE: usize = 24;
+    const SIZE: usize = CompactBytes::MAX_INLINE;
 }
 
 /// These implementations order first by length, and then by slice contents.
@@ -211,7 +204,7 @@ mod columnation {
             if item.data.spilled() {
                 let bytes = self.region.copy_slice(&item.data[..]);
                 Row {
-                    data: smallvec::SmallVec::from_raw_parts(
+                    data: compact_bytes::CompactBytes::from_raw_parts(
                         bytes.as_mut_ptr(),
                         item.data.len(),
                         item.data.capacity(),
@@ -1513,7 +1506,7 @@ impl Row {
     #[inline]
     pub fn with_capacity(cap: usize) -> Self {
         Self {
-            data: SmallVec::with_capacity(cap),
+            data: CompactBytes::with_capacity(cap),
         }
     }
 
@@ -1658,7 +1651,7 @@ impl RowPacker<'_> {
 
     /// Appends the datums of an entire `Row`.
     pub fn extend_by_row(&mut self, row: &Row) {
-        self.row.data.extend(row.data.iter().copied());
+        self.row.data.extend_from_slice(row.data.as_slice());
     }
 
     /// Pushes a [`DatumList`] that is built from a closure.
@@ -2775,15 +2768,5 @@ mod tests {
 
         let e = test_range_errors_inner(vec![vec![Datum::Int32(2)], vec![Datum::Int32(1)]]);
         assert_eq!(e, Err(InvalidRangeError::MisorderedRangeBounds));
-    }
-}
-
-#[cfg(test)]
-mod test {
-    #[mz_ore::test]
-    fn row_size_is_stable() {
-        // nothing depends on this being exactly 32, we just want it to be an active decision if we
-        // change it
-        assert_eq!(std::mem::size_of::<super::Row>(), 32);
     }
 }

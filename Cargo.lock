@@ -1199,6 +1199,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "compact_bytes"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2396576e22796b9f74443e7d70900052ab718791d9800ec487f6ff78fe1cced"
+dependencies = [
+ "serde",
+ "static_assertions",
+]
+
+[[package]]
 name = "compile-time-run"
 version = "0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4642,6 +4652,7 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
+ "compact_bytes",
  "console-subscriber",
  "ctor",
  "either",
@@ -5095,6 +5106,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "columnation",
+ "compact_bytes",
  "criterion",
  "dec",
  "differential-dataflow",
@@ -5125,6 +5137,7 @@ dependencies = [
  "serde",
  "serde_json",
  "smallvec",
+ "static_assertions",
  "thiserror",
  "timely",
  "tokio-postgres",

@@ -78,6 +78,17 @@ where
     }
 }
 
+#[cfg(feature = "compact_bytes")]
+impl Vector<u8> for compact_bytes::CompactBytes {
+    fn push(&mut self, value: u8) {
+        self.push(value)
+    }
+
+    fn extend_from_slice(&mut self, other: &[u8]) {
+        self.extend_from_slice(other)
+    }
+}
+
 /// Extension methods for `std::vec::Vec`
 pub trait VecExt<T> {
     /// Creates an iterator which uses a closure to determine if an element should be removed.
