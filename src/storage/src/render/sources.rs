@@ -481,6 +481,7 @@ where
                                         Antichain::new(),
                                         None,
                                         flow_control,
+                                        false.then_some(|| unreachable!()),
                                     );
                                     (
                                         stream.as_collection(),

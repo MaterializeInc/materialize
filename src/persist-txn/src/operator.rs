@@ -116,8 +116,8 @@ where
         let data_write = client
             .open_writer::<K, V, T, D>(
                 data_id,
-                data_key_schema,
-                data_val_schema,
+                Arc::clone(&data_key_schema),
+                Arc::clone(&data_val_schema),
                 Diagnostics::from_purpose("data read physical upper"),
             )
             .await
@@ -216,6 +216,16 @@ where
                     // through data until we see it.
                     DataListenNext::ReadDataTo(new_target) => {
                         read_data_to = Antichain::from_elem(new_target);
+                        // TODO: This is a very strong hint that the data shard
+                        // is about to be written to. Because the data shard's
+                        // upper advances sparsely (on write, but not on passage
+                        // of time) which invalidates the "every 1s" assumption
+                        // of the default tuning, we've had to de-tune the
+                        // listen sleeps on the paired persist_source. Maybe we
+                        // use "one state" to wake it up in case pubsub doesn't
+                        // and remove the listen polling entirely? (NB: This
+                        // would have to happen in each worker so that it's
+                        // guaranteed to happen in each process.)
                         break;
                     }
                     // We know there are no writes in
@@ -311,6 +321,7 @@ impl DataSubscribe {
                     Arc::new(StringSchema),
                     Arc::new(UnitSchema),
                     |_, _| true,
+                    false.then_some(|| unreachable!()),
                 );
                 (data_stream.leave(), token)
             });
