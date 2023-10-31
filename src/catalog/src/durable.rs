@@ -263,7 +263,8 @@ pub async fn persist_backed_catalog_state(
 }
 
 /// Creates an openable durable catalog state implemented using both the stash and persist, that
-/// compares the results.
+/// compares the results. The stash results is used as the source of truth when there's a
+/// discrepancy.
 pub async fn shadow_catalog_state(
     stash_config: StashConfig,
     persist_client: PersistClient,
