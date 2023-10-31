@@ -893,10 +893,10 @@ impl Coordinator {
         let view_oid = self.catalog_mut().allocate_oid()?;
         let raw_expr = view.expr.clone();
         if enable_unified_optimizer_api {
-            // Collect optimizer parameters
+            // Collect optimizer parameters.
             let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
 
-            // Build a VIEW optimizer for this view.
+            // Build an optimizer for this VIEW.
             let mut optimizer = optimize::OptimizeView::new(optimizer_config);
 
             // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
@@ -997,7 +997,7 @@ impl Coordinator {
             });
         }
 
-        // Collect optimizer parameters
+        // Collect optimizer parameters.
         let compute_instance = self
             .instance_snapshot(cluster_id)
             .expect("compute instance does not exist");
@@ -1006,7 +1006,7 @@ impl Coordinator {
         let debug_name = self.catalog().resolve_full_name(&name, None).to_string();
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
 
-        // Build a MATERIALIZED VIEW optimizer for this view.
+        // Build an optimizer for this MATERIALIZED VIEW.
         let mut optimizer = optimize::OptimizeMaterializedView::new(
             self.owned_catalog(),
             compute_instance,
@@ -1129,14 +1129,14 @@ impl Coordinator {
 
         self.ensure_cluster_can_host_compute_item(&name, cluster_id)?;
 
-        // Collect optimizer parameters
+        // Collect optimizer parameters.
         let compute_instance = self
             .instance_snapshot(cluster_id)
             .expect("compute instance does not exist");
         let id = self.catalog_mut().allocate_user_id().await?;
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
 
-        // Build an INDEX optimizer.
+        // Build an optimizer for this INDEX.
         let mut optimizer = optimize::OptimizeIndex::new(
             self.owned_catalog(),
             compute_instance,
@@ -3557,7 +3557,7 @@ impl Coordinator {
         // Initialize optimizer context
         // ----------------------------
 
-        // Collect optimizer parameters
+        // Collect optimizer parameters.
         let compute_instance = self
             .instance_snapshot(target_cluster_id)
             .expect("compute instance does not exist");
@@ -3567,7 +3567,7 @@ impl Coordinator {
         let system_config = self.catalog().system_config();
         let optimizer_config = optimize::OptimizerConfig::from((system_config, explain_config));
 
-        // Build a MATERIALIZED VIEW optimizer for this view.
+        // Build an optimizer for this MATERIALIZED VIEW.
         let mut optimizer = optimize::OptimizeMaterializedView::new(
             self.owned_catalog(),
             compute_instance,
@@ -3682,7 +3682,7 @@ impl Coordinator {
         let system_config = self.catalog().system_config();
         let optimizer_config = optimize::OptimizerConfig::from((system_config, explain_config));
 
-        // Build an INDEX optimizer for this index.
+        // Build an optimizer for this INDEX.
         let mut optimizer = optimize::OptimizeIndex::new(
             self.owned_catalog(),
             compute_instance,
@@ -3834,10 +3834,10 @@ impl Coordinator {
             .enable_unified_optimizer_api();
 
         let optimized_plan = if enable_unified_optimizer_api {
-            // Collect optimizer parameters
+            // Collect optimizer parameters.
             let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
 
-            // Build a VIEW optimizer for this view.
+            // Build an optimizer for this VIEW.
             let mut optimizer = optimize::OptimizeView::new(optimizer_config);
 
             // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
@@ -3981,10 +3981,10 @@ impl Coordinator {
             let expr = return_if_err!(plan.values.lower(self.catalog().system_config()), ctx);
             OptimizedMirRelationExpr(expr)
         } else if enable_unified_optimizer_api {
-            // Collect optimizer parameters
+            // Collect optimizer parameters.
             let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
 
-            // Build a VIEW optimizer for the values part.
+            // Build an optimizer for this VIEW.
             let mut optimizer = optimize::OptimizeView::new(optimizer_config);
 
             // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)

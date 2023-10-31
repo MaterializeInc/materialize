@@ -37,7 +37,7 @@ impl OptimizeView {
 impl<'ctx> Optimize<'ctx, HirRelationExpr> for OptimizeView {
     type To = OptimizedMirRelationExpr;
 
-    fn optimize<'a: 'ctx>(&'a mut self, expr: HirRelationExpr) -> Result<Self::To, OptimizerError> {
+    fn optimize<'s: 'ctx>(&'s mut self, expr: HirRelationExpr) -> Result<Self::To, OptimizerError> {
         // HIR ⇒ MIR lowering and decorrelation
         let expr = expr.lower(&self.config)?;
 
