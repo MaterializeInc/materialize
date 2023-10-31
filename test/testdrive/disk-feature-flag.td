@@ -19,6 +19,7 @@ exact:`WITH (DISK)` for cluster replicas is not supported
 ! ALTER CLUSTER no SET (REPLICATION FACTOR 1, DISK);
 exact:`WITH (DISK)` for cluster replicas is not supported
 
+> DROP CLUSTER no;
 
 # Test that with `enable_create_source_denylist_with_options` off, if
 # `enable_disk_cluster_replicas` is on, we can use `WITH(DISK)`.
