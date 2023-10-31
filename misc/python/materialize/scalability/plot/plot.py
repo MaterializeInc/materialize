@@ -9,16 +9,18 @@
 
 
 import pandas as pd
-from matplotlib.axes._axes import Axes  # type: ignore
+from matplotlib.axes import Axes  # type: ignore
+from matplotlib.figure import SubFigure  # type: ignore
 
 from materialize.scalability.df import df_details_cols, df_totals_cols
 from materialize.scalability.endpoints import endpoint_name_to_description
 
 
 def plot_tps_per_connections(
-    plot: Axes, df_totals_by_endpoint_name: dict[str, pd.DataFrame]
+    figure: SubFigure, df_totals_by_endpoint_name: dict[str, pd.DataFrame]
 ) -> None:
     legend = []
+    plot: Axes = figure.subplots(1, 1)
 
     for endpoint_name, df_totals in df_totals_by_endpoint_name.items():
         legend.append(endpoint_name_to_description(endpoint_name))
@@ -35,9 +37,10 @@ def plot_tps_per_connections(
 
 
 def plot_latency_per_connections(
-    plot: Axes, df_details_by_endpoint_name: dict[str, pd.DataFrame]
+    figure: SubFigure, df_details_by_endpoint_name: dict[str, pd.DataFrame]
 ) -> None:
     legend = []
+    plot: Axes = figure.subplots(1, 1)
 
     i = 0
     for endpoint_name, df_details in df_details_by_endpoint_name.items():

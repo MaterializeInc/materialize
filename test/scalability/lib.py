@@ -20,15 +20,15 @@ from materialize.scalability.plot.plot import (
 
 
 def plotit(workload_name: str) -> None:
-    plt.rcParams["figure.figsize"] = (16, 10)
-    fig, (summary_subplot, details_subplot) = plt.subplots(2, 1)
+    fig = plt.figure(layout="constrained", figsize=(16, 10))
+    (summary_figure, details_figure) = fig.subfigures(2, 1)
 
     df_totals_by_endpoint_name, df_details_by_endpoint_name = load_data_from_filesystem(
         workload_name
     )
 
-    plot_tps_per_connections(summary_subplot, df_totals_by_endpoint_name)
-    plot_latency_per_connections(details_subplot, df_details_by_endpoint_name)
+    plot_tps_per_connections(summary_figure, df_totals_by_endpoint_name)
+    plot_latency_per_connections(details_figure, df_details_by_endpoint_name)
 
 
 def load_data_from_filesystem(
