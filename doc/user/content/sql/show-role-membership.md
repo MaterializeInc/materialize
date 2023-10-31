@@ -1,13 +1,14 @@
 ---
 title: "SHOW ROLE MEMBERSHIP"
-description: "`SHOW ROLE MEMBERSHIP` lists the role memberships in Materialize."
+description: "SHOW ROLE MEMBERSHIP lists the members of each role granted via role-based access control (RBAC)."
 menu:
   main:
     parent: 'commands'
 
 ---
 
-`SHOW ROLE MEMBERSHIP` lists the role memberships as part of [access control](/manage/access-control/) in Materialize.
+`SHOW ROLE MEMBERSHIP` lists the members of each role granted via
+[role-based access control](/manage/access-control/#role-based-access-control-rbac) (RBAC).
 
 ## Syntax
 
@@ -16,6 +17,8 @@ menu:
 Field                                               | Use
 ----------------------------------------------------|--------------------------------------------------
 _role_name_                                         | Only shows role memberships granted directly or indirectly to _role_name_.
+
+[//]: # "TODO(morsapaes) Improve examples."
 
 ## Examples
 
@@ -48,4 +51,4 @@ SHOW ROLE MEMBERSHIP FOR r2;
 
 - [GRANT ROLE](../grant-role)
 - [REVOKE ROLE](../revoke-role)
-- [access control](/manage/access-control/)
+- [Access control](/manage/access-control/#role-based-access-control-rbac)
