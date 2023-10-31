@@ -17,7 +17,7 @@ use mz_build_info::BuildInfo;
 use mz_catalog;
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_controller::clusters::ReplicaAllocation;
-use mz_orchestrator::{CpuLimit, MemoryLimit};
+use mz_orchestrator::MemoryLimit;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_repr::GlobalId;
@@ -121,14 +121,6 @@ impl Default for ClusterReplicaSizeMap {
         //     ...
         //     "mem-16": { "memory_limit": 16Gb },
         // }
-
-        /// Calculate the cpu limit based on the number of Timely workers.
-        ///
-        /// Returns a cpu limit for the number of Timely workers plus one additional core.
-        fn cpu_limit(workers: usize) -> Option<CpuLimit> {
-            Some(CpuLimit::from_millicpus(1000 * (workers + 1)))
-        }
-
         let mut inner = (0..=5)
             .flat_map(|i| {
                 let workers: u8 = 1 << i;
@@ -144,7 +136,7 @@ impl Default for ClusterReplicaSizeMap {
                         name,
                         ReplicaAllocation {
                             memory_limit: memory_limit.map(|gib| MemoryLimit(ByteSize::gib(gib))),
-                            cpu_limit: cpu_limit(workers.into()),
+                            cpu_limit: None,
                             disk_limit: None,
                             scale: 1,
                             workers: workers.into(),
@@ -162,7 +154,7 @@ impl Default for ClusterReplicaSizeMap {
                 format!("{scale}-1"),
                 ReplicaAllocation {
                     memory_limit: None,
-                    cpu_limit: cpu_limit(1),
+                    cpu_limit: None,
                     disk_limit: None,
                     scale,
                     workers: 1,
@@ -175,7 +167,7 @@ impl Default for ClusterReplicaSizeMap {
                 format!("{scale}-{scale}"),
                 ReplicaAllocation {
                     memory_limit: None,
-                    cpu_limit: cpu_limit(scale.into()),
+                    cpu_limit: None,
                     disk_limit: None,
                     scale,
                     workers: scale.into(),
@@ -188,7 +180,7 @@ impl Default for ClusterReplicaSizeMap {
                 format!("mem-{scale}"),
                 ReplicaAllocation {
                     memory_limit: Some(MemoryLimit(ByteSize(u64::cast_from(scale) * (1 << 30)))),
-                    cpu_limit: cpu_limit(8),
+                    cpu_limit: None,
                     disk_limit: None,
                     scale: 1,
                     workers: 8,
@@ -202,7 +194,7 @@ impl Default for ClusterReplicaSizeMap {
             "2-4".to_string(),
             ReplicaAllocation {
                 memory_limit: None,
-                cpu_limit: cpu_limit(4),
+                cpu_limit: None,
                 disk_limit: None,
                 scale: 2,
                 workers: 4,
