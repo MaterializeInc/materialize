@@ -9,7 +9,7 @@
 from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import Check
+from materialize.checks.checks import Check, externally_idempotent
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
 from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
@@ -42,6 +42,7 @@ def schemas_null() -> str:
     )
 
 
+@externally_idempotent(False)
 class SinkUpsert(Check):
     """Basic Check on sinks from an upsert source"""
 
@@ -203,6 +204,7 @@ class SinkUpsert(Check):
         )
 
 
+@externally_idempotent(False)
 class SinkTables(Check):
     """Sink and re-ingest a large transaction from a table source"""
 
@@ -298,6 +300,7 @@ class SinkTables(Check):
         )
 
 
+@externally_idempotent(False)
 class SinkNullDefaults(Check):
     """Check on an Avro sink with NULL DEFAULTS"""
 
@@ -546,6 +549,7 @@ class SinkNullDefaults(Check):
         )
 
 
+@externally_idempotent(False)
 class SinkComments(Check):
     """Check on an Avro sink with comments"""
 

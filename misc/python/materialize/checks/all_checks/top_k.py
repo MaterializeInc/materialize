@@ -9,7 +9,7 @@
 from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import Check
+from materialize.checks.checks import Check, externally_idempotent
 
 
 def schema() -> str:
@@ -26,6 +26,7 @@ def schema() -> str:
     )
 
 
+@externally_idempotent(False)
 class BasicTopK(Check):
     def initialize(self) -> Testdrive:
         return Testdrive(
@@ -76,6 +77,7 @@ class BasicTopK(Check):
         )
 
 
+@externally_idempotent(False)
 class MonotonicTopK(Check):
     def initialize(self) -> Testdrive:
         return Testdrive(
@@ -138,6 +140,7 @@ class MonotonicTopK(Check):
         )
 
 
+@externally_idempotent(False)
 class MonotonicTop1(Check):
     def initialize(self) -> Testdrive:
         return Testdrive(

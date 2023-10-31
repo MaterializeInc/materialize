@@ -47,10 +47,21 @@ class Scenario:
         self.executor = executor
         self.rng = None if seed is None else Random(seed)
         self._base_version = MzVersion.parse_cargo()
+
+        check_classes = []
+
+        for check_class in self.checks():
+            if (
+                self.requires_external_idempotence()
+                and not check_class.externally_idempotent
+            ):
+                continue
+            check_classes.append(check_class)
+
         # Use base_version() here instead of _base_version so that overwriting
         # upgrade scenarios can specify another base version.
         self.check_objects = [
-            check_class(self.base_version(), self.rng) for check_class in self.checks()
+            check_class(self.base_version(), self.rng) for check_class in check_classes
         ]
 
     def checks(self) -> list[type[Check]]:
@@ -80,6 +91,9 @@ class Scenario:
         for action in actions:
             action.execute(self.executor)
             action.join(self.executor)
+
+    def requires_external_idempotence(self) -> bool:
+        return False
 
 
 class NoRestartNoUpgrade(Scenario):

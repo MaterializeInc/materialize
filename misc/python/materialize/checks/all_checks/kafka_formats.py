@@ -87,6 +87,7 @@ class KafkaFormats(Check):
                   KEY FORMAT PROTOBUF MESSAGE '.Key' USING SCHEMA '${test-schema}'
                   VALUE FORMAT PROTOBUF MESSAGE '.Value' USING SCHEMA '${test-schema}'
                   INCLUDE KEY
+                  ENVELOPE UPSERT
             """
             )
         )
@@ -132,6 +133,7 @@ class KafkaFormats(Check):
                   KEY FORMAT PROTOBUF MESSAGE '.Key' USING SCHEMA '${test-schema}'
                   VALUE FORMAT PROTOBUF MESSAGE '.Value' USING SCHEMA '${test-schema}'
                   INCLUDE KEY
+                  ENVELOPE UPSERT
 
                 $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=format-bytes
                 key2A,key2B:value2A,value2B

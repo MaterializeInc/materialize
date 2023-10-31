@@ -9,7 +9,7 @@
 from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import Check
+from materialize.checks.checks import Check, externally_idempotent
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
 
 
@@ -17,6 +17,7 @@ def schemas() -> str:
     return dedent(KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD)
 
 
+@externally_idempotent(False)
 class SshPg(Check):
     """
     Testing Postgres CDC source with SSH tunnel
@@ -123,6 +124,7 @@ class SshPg(Check):
         )
 
 
+@externally_idempotent(False)
 class SshKafka(Check):
     """
     Testing Kafka source with SSH tunnel

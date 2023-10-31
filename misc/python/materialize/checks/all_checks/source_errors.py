@@ -10,9 +10,10 @@
 from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import Check
+from materialize.checks.checks import Check, externally_idempotent
 
 
+@externally_idempotent(False)
 class SourceErrors(Check):
     def initialize(self) -> Testdrive:
         return Testdrive(
@@ -72,12 +73,12 @@ class SourceErrors(Check):
             for s in [
                 """
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                DROP PUBLICATION source_errors_publicationA;
+                DROP PUBLICATION IF EXISTS source_errors_publicationA;
                 INSERT INTO source_errors_table VALUES (3);
                 """,
                 """
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                DROP PUBLICATION source_errors_publicationB;
+                DROP PUBLICATION IF EXISTS source_errors_publicationB;
                 INSERT INTO source_errors_table VALUES (4);
                 """,
             ]
