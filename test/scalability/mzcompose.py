@@ -18,6 +18,7 @@ from materialize.mzcompose.composition import Composition, WorkflowArgumentParse
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.scalability.benchmark_config import BenchmarkConfiguration
+from materialize.scalability.benchmark_executor import BenchmarkExecutor
 from materialize.scalability.df import paths
 from materialize.scalability.endpoint import Endpoint
 from materialize.scalability.endpoints import (
@@ -32,7 +33,6 @@ from materialize.scalability.result_analyzer import ResultAnalyzer
 from materialize.scalability.result_analyzers import DefaultResultAnalyzer
 from materialize.scalability.schema import Schema, TransactionIsolation
 from materialize.scalability.workload import Workload, WorkloadSelfTest
-from materialize.scalability.workload_executor import WorkloadExecutor
 from materialize.scalability.workloads import *  # noqa: F401 F403
 from materialize.scalability.workloads_test import *  # noqa: F401 F403
 from materialize.util import all_subclasses
@@ -165,7 +165,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         count=args.count,
     )
 
-    executor = WorkloadExecutor(
+    executor = BenchmarkExecutor(
         config, schema, baseline_endpoint, other_endpoints, result_analyzer
     )
 
