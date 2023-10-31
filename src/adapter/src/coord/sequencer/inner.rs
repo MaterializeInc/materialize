@@ -2759,6 +2759,8 @@ impl Coordinator {
         }
     }
 
+    /// This should mirror the operational semantics of
+    /// `Coordinator::sequence_subscribe_deprecated`.
     pub(super) async fn sequence_subscribe(
         &mut self,
         ctx: &mut ExecuteContext,
@@ -5763,7 +5765,7 @@ impl Coordinator {
 /// return a list of associated notices (today: we always emit exactly
 /// one notice if there are any per-replica log dependencies and if
 /// `emit_introspection_query_notice` is set, and none otherwise.)
-fn check_log_reads(
+pub(super) fn check_log_reads(
     catalog: &Catalog,
     cluster: &Cluster,
     source_ids: &BTreeSet<GlobalId>,
