@@ -1293,6 +1293,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "const_format"
+version = "0.2.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e3a214c7af3d04997541b18d432afaff4c455e79e2029079647e72fc2bd27673"
+dependencies = [
+ "const_format_proc_macros",
+]
+
+[[package]]
+name = "const_format_proc_macros"
+version = "0.2.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7f6ff08fd20f4f299298a28e2dfa8a8ba1036e6cd2460ac1de7b425d76f2500"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unicode-xid",
+]
+
+[[package]]
 name = "core-foundation"
 version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3690,6 +3710,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "chrono",
+ "const_format",
  "derivative",
  "differential-dataflow",
  "futures",
@@ -3705,6 +3726,7 @@ dependencies = [
  "mz-persist-client",
  "mz-persist-types",
  "mz-pgrepr",
+ "mz-pgtz",
  "mz-postgres-util",
  "mz-proto",
  "mz-repr",
@@ -4798,6 +4820,15 @@ dependencies = [
  "postgres-protocol",
  "serde",
  "serde_json",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-pgtz"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "mz-ore",
  "workspace-hack",
 ]
 

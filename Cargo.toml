@@ -51,6 +51,7 @@ members = [
     "src/pgrepr",
     "src/pgrepr-consts",
     "src/pgtest",
+    "src/pgtz",
     "src/pgwire",
     "src/pgwire-common",
     "src/pid-file",
