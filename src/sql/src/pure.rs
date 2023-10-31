@@ -566,10 +566,10 @@ async fn purify_create_source(
                 .await?;
 
             let publication_tables = mz_postgres_util::publication_info(
+                &connection_context.ssh_tunnel_manager,
                 &config,
                 &publication,
                 None,
-                &connection_context.ssh_tunnel_manager,
             )
             .await?;
 
@@ -602,8 +602,8 @@ async fn purify_create_source(
                 }
                 ReferencedSubsources::SubsetSchemas(schemas) => {
                     let available_schemas: BTreeSet<_> = mz_postgres_util::get_schemas(
-                        &config,
                         &connection_context.ssh_tunnel_manager,
+                        &config,
                     )
                     .await?
                     .into_iter()
@@ -941,10 +941,10 @@ async fn purify_alter_source(
         .await?;
 
     let mut publication_tables = mz_postgres_util::publication_info(
+        &connection_context.ssh_tunnel_manager,
         &config,
         &pg_source_connection.publication,
         None,
-        &connection_context.ssh_tunnel_manager,
     )
     .await?;
 

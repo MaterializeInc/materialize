@@ -317,10 +317,10 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             *rewind_cap = None;
 
             let upstream_info = mz_postgres_util::publication_info(
+                &context.ssh_tunnel_manager,
                 &connection_config,
                 &connection.publication,
                 None,
-                &context.ssh_tunnel_manager,
             )
             .await?;
             let upstream_info = upstream_info.into_iter().map(|t| (t.oid, t)).collect();

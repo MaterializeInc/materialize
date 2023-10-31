@@ -24,9 +24,9 @@ use tracing::{info, warn};
 use crate::PostgresError;
 
 pub async fn drop_replication_slots(
+    ssh_tunnel_manager: &SshTunnelManager,
     config: Config,
     slots: &[&str],
-    ssh_tunnel_manager: &SshTunnelManager,
 ) -> Result<(), PostgresError> {
     let client = config
         .connect("postgres_drop_replication_slots", ssh_tunnel_manager)
@@ -161,7 +161,7 @@ impl Config {
         task_name: &str,
         ssh_tunnel_manager: &SshTunnelManager,
     ) -> Result<Client, PostgresError> {
-        self.connect_traced(task_name, |_| (), ssh_tunnel_manager)
+        self.connect_traced(task_name, ssh_tunnel_manager, |_| ())
             .await
     }
 
@@ -172,10 +172,10 @@ impl Config {
     ) -> Result<Client, PostgresError> {
         self.connect_traced(
             "postgres_connect_replication",
+            ssh_tunnel_manager,
             |config| {
                 config.replication_mode(ReplicationMode::Logical);
             },
-            ssh_tunnel_manager,
         )
         .await
     }
@@ -190,8 +190,8 @@ impl Config {
     async fn connect_traced<F>(
         &self,
         task_name: &str,
-        configure: F,
         ssh_tunnel_manager: &SshTunnelManager,
+        configure: F,
     ) -> Result<Client, PostgresError>
     where
         F: FnOnce(&mut tokio_postgres::Config),
@@ -206,7 +206,7 @@ impl Config {
         );
         info!(%task_name, %address, "connecting");
         match self
-            .connect_internal(task_name, configure, ssh_tunnel_manager)
+            .connect_internal(task_name, ssh_tunnel_manager, configure)
             .await
         {
             Ok(t) => {
@@ -223,8 +223,8 @@ impl Config {
     async fn connect_internal<F>(
         &self,
         task_name: &str,
-        configure: F,
         ssh_tunnel_manager: &SshTunnelManager,
+        configure: F,
     ) -> Result<Client, PostgresError>
     where
         F: FnOnce(&mut tokio_postgres::Config),
