@@ -73,6 +73,9 @@ generate_extracted_config!(
 /// Options which cannot be changed using ALTER CONNECTION.
 pub(crate) const INALTERABLE_OPTIONS: &[ConnectionOptionName] = &[ProgressTopic];
 
+/// Options of which only one may be specified.
+pub(crate) const MUTUALLY_EXCLUSIVE_SETS: &[&[ConnectionOptionName]] = &[&[Broker, Brokers]];
+
 pub(super) fn validate_options_per_connection_type(
     t: CreateConnectionType,
     mut options: BTreeSet<ConnectionOptionName>,
