@@ -575,6 +575,11 @@ impl DurableCatalogState for Connection {
         let txn_batch = Arc::new(txn_batch);
         let is_initialized = self.stash.is_initialized().await?;
 
+        // Before doing anything else, set the connection timeout if it changed.
+        if let Some(connection_timeout) = txn_batch.connection_timeout {
+            self.stash.set_connect_timeout(connection_timeout).await;
+        }
+
         self.stash
             .with_transaction(move |tx| {
                 Box::pin(async move {
@@ -737,10 +742,6 @@ impl DurableCatalogState for Connection {
     #[tracing::instrument(level = "debug", skip(self))]
     async fn confirm_leadership(&mut self) -> Result<(), CatalogError> {
         Ok(self.stash.confirm_leadership().await?)
-    }
-
-    async fn set_connect_timeout(&mut self, connect_timeout: Duration) {
-        self.stash.set_connect_timeout(connect_timeout).await;
     }
 
     #[tracing::instrument(level = "info", skip_all)]
