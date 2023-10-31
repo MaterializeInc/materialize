@@ -152,11 +152,12 @@ As mentioned in the [scoping section](#out-of-scope), an alternative implementat
 
 ### Special Clusters for `REFRESH EVERY` MVs
 
-I'm still thinking about how exactly to tie a `REFRESH EVERY` MV to the cluster whose replicas will be managed by the MV. I can see two approaches:
+I'm still thinking about how exactly to tie a `REFRESH EVERY` MV to the cluster whose replicas will be managed by the MV. There are several approaches:
 - These MVs would automatically manage not just replicas, but even their cluster. That is, the system would create a cluster when creating the MV, and drop the cluster when dropping the MV. (And this cluster could not be used for anything else.) The problem with this approach is that then certain cluster creation options (e.g, size) would have to be copied from `CREATE CLUSTER` to `CREATE MATERIALIZED VIEW`. I'm not sure how big of an issue this would be.
 - Another approach would be to create `REFRESH EVERY` MVs simply on the active cluster (as other, normal MVs), and the user would be expected to separately create a cluster manually. A further tweak could be to let the user specify a special option at cluster creation, which would make the system let only `REFRESH EVERY` MVs be created on this cluster (possibly only with the exact same refresh settings). This would avoid situations where a user accidentally creates some other, normal object on a cluster whose replicas are being managed by a `REFRESH EVERY` MV, and then this other object would unexpectedly also stop refreshing.
 - Alternatively (from Jan): Install `REFRESH EVERY` MVs on existing clusters like regular MVs, but automatically spin down cluster replicas only when the cluster has only idle `REFRESH EVERY` MVs. This also ties in well to a possible future auto-scaling feature where the controller would check if a replica has any work to do and spin it down otherwise.
 To prevent users from accidentally keeping their expensive refresh replica running, we could produce a notice when one creates a `REFRESH EVERY` MV on a cluster with other dataflows, or vice versa.
+- (from Nikhil) You don't specify `REFRESH EVERY` on materialized views. You instead specify a `MATERIALIZED VIEW REFRESH INTERVAL` on clusters, and that option automatically applies to all materialized views installed on that cluster.
 
 ## Rollout
 
