@@ -87,7 +87,7 @@ ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT SELECT ON TABLES TO managers;
 
 The privileges required to execute this statement are:
 
-- Superuser user status.
+- _superuser_ status.
 
 ## Useful views
 

@@ -253,7 +253,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             let task_name = format!("timely-{worker_id} PG snapshotter");
 
             let client = if is_snapshot_leader {
-                let client = connection_config.connect_replication().await?;
+                let client = connection_config.connect_replication(&context.ssh_tunnel_manager).await?;
                 // The main slot must be created *before* we start snapshotting so that we can be
                 // certain that the temporarly slot created for the snapshot start at an LSN that
                 // is greater than or equal to that of the main slot.
@@ -267,7 +267,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 client
             } else {
                 // Only the snapshot leader needs a replication connection.
-                connection_config.connect(&task_name).await?
+                connection_config.connect(&task_name, &context.ssh_tunnel_manager).await?
             };
 
             // Configure statement_timeout based on param. We want to be able to
@@ -317,6 +317,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             *rewind_cap = None;
 
             let upstream_info = mz_postgres_util::publication_info(
+                &context.ssh_tunnel_manager,
                 &connection_config,
                 &connection.publication,
                 None,

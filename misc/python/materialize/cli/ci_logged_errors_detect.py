@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 #
 # ci_logged_errors_detect.py - Detect errors in log files during CI and find
-# associated open Github issues in Materialize repository.
+# associated open GitHub issues in Materialize repository.
 
 import argparse
 import os
@@ -99,7 +99,7 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description="""
 ci-logged-errors-detect detects errors in log files during CI and finds
-associated open Github issues in Materialize repository.""",
+associated open GitHub issues in Materialize repository.""",
     )
 
     parser.add_argument("log_files", nargs="+", help="log files to search in")
@@ -249,8 +249,7 @@ def get_known_issues_from_github_page(page: int = 1) -> Any:
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    token = os.getenv("GITHUB_TOKEN")
-    if token:
+    if token := os.getenv("GITHUB_TOKEN"):
         headers["Authorization"] = f"Bearer {token}"
 
     response = requests.get(
@@ -259,7 +258,7 @@ def get_known_issues_from_github_page(page: int = 1) -> Any:
     )
 
     if response.status_code != 200:
-        raise ValueError(f"Bad return code from Github: {response.status_code}")
+        raise ValueError(f"Bad return code from GitHub: {response.status_code}")
 
     issues_json = response.json()
     assert issues_json["incomplete_results"] == False

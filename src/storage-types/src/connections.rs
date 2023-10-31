@@ -26,8 +26,9 @@ use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::url::any_url;
 use mz_repr::GlobalId;
 use mz_secrets::SecretsReader;
-use mz_ssh_util::keys::SshKeyPairSet;
+use mz_ssh_util::keys::SshKeyPair;
 use mz_ssh_util::tunnel::SshTunnelConfig;
+use mz_ssh_util::tunnel_manager::{ManagedSshTunnelHandle, SshTunnelManager};
 use mz_tracing::CloneableEnvFilter;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
@@ -41,7 +42,6 @@ use tokio_postgres::config::SslMode;
 use url::Url;
 
 use crate::connections::aws::AwsConfig;
-use crate::ssh_tunnels::{ManagedSshTunnelHandle, SshTunnelManager};
 
 pub mod aws;
 pub mod inline;
@@ -817,7 +817,8 @@ impl CsrConnection {
         _id: GlobalId,
         connection_context: &ConnectionContext,
     ) -> Result<(), anyhow::Error> {
-        self.connect(connection_context).await?;
+        let client = self.connect(connection_context).await?;
+        client.list_subjects().await?;
         Ok(())
     }
 }
@@ -1017,14 +1018,15 @@ impl PostgresConnection<InlinedConnection> {
                 connection,
             }) => {
                 let secret = secrets_reader.read(*connection_id).await?;
-                let key_set = SshKeyPairSet::from_bytes(&secret)?;
-                let key_pair = key_set.primary().clone();
-                mz_postgres_util::TunnelConfig::Ssh(SshTunnelConfig {
-                    host: connection.host.clone(),
-                    port: connection.port,
-                    user: connection.user.clone(),
-                    key_pair,
-                })
+                let key_pair = SshKeyPair::from_bytes(&secret)?;
+                mz_postgres_util::TunnelConfig::Ssh {
+                    config: SshTunnelConfig {
+                        host: connection.host.clone(),
+                        port: connection.port,
+                        user: connection.user.clone(),
+                        key_pair,
+                    },
+                }
             }
             Tunnel::AwsPrivatelink(connection) => {
                 assert!(connection.port.is_none());
@@ -1043,7 +1045,12 @@ impl PostgresConnection<InlinedConnection> {
         connection_context: &ConnectionContext,
     ) -> Result<(), anyhow::Error> {
         let config = self.config(&*connection_context.secrets_reader).await?;
-        config.connect("connection validation").await?;
+        config
+            .connect(
+                "connection validation",
+                &connection_context.ssh_tunnel_manager,
+            )
+            .await?;
         Ok(())
     }
 }
@@ -1309,8 +1316,17 @@ impl SshTunnel<InlinedConnection> {
         connection_context
             .ssh_tunnel_manager
             .connect(
-                &*connection_context.secrets_reader,
-                self,
+                SshTunnelConfig {
+                    host: self.connection.host.clone(),
+                    port: self.connection.port,
+                    user: self.connection.user.clone(),
+                    key_pair: SshKeyPair::from_bytes(
+                        &connection_context
+                            .secrets_reader
+                            .read(self.connection_id)
+                            .await?,
+                    )?,
+                },
                 remote_host,
                 remote_port,
             )
@@ -1325,8 +1341,7 @@ impl SshConnection {
         connection_context: &ConnectionContext,
     ) -> Result<(), anyhow::Error> {
         let secret = connection_context.secrets_reader.read(id).await?;
-        let key_set = SshKeyPairSet::from_bytes(&secret)?;
-        let key_pair = key_set.primary().clone();
+        let key_pair = SshKeyPair::from_bytes(&secret)?;
         let config = SshTunnelConfig {
             host: self.host.clone(),
             port: self.port,

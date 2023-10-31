@@ -100,33 +100,21 @@ $ kafka-verify-data format=avro sink=materialize.public.snk sort-messages=true
 {"before": null, "after": {"row":{"a": 1}}}
 {"before": null, "after": {"row":{"a": 2}}}
 
-> CREATE CONNECTION no_basic_auth_conn
+! CREATE CONNECTION no_basic_auth_conn
   FOR CONFLUENT SCHEMA REGISTRY
     URL '${testdrive.schema-registry-url}',
     SSL KEY = SECRET ssl_key_csr,
     SSL CERTIFICATE = '${arg.materialized-schema-registry-crt}',
     SSL CERTIFICATE AUTHORITY = '${arg.ca-crt}';
+contains:server error 401: Unauthorized
 
-# not basic_auth
-! CREATE SINK no_basic_auth FROM data
-  INTO KAFKA CONNECTION kafka_ssl (TOPIC 'snk')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION no_basic_auth_conn
-  ENVELOPE DEBEZIUM
-contains:CONFLUENT SCHEMA REGISTRY validation: client errored
-detail:server error 401: Unauthorized
-
-> CREATE CONNECTION csr_without_ssl
+# Ensure that we get an ssl error if we forget to set certs
+! CREATE CONNECTION csr_without_ssl
   FOR CONFLUENT SCHEMA REGISTRY
     URL '${testdrive.schema-registry-url}',
     USERNAME = 'materialize',
     PASSWORD = SECRET password_csr;
-
-# Ensure that we get an ssl error if we forget to set certs
-! CREATE SOURCE data
-  FROM KAFKA CONNECTION kafka_ssl (TOPIC 'testdrive-data-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_without_ssl
-contains:failed to fetch schema subject
-detail:self signed certificate in certificate chain
+contains:self signed certificate in certificate chain
 
 # missing config
 ! CREATE CONNECTION m TO KAFKA (

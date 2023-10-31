@@ -308,7 +308,7 @@ a  b  c
 statement ok
 INSERT INTO return AS r VALUES (5, 6)
 
-# TODO(knz) after #6092 is fixed
+# TODO(knz) after cockroach#6092 is fixed
 # statement ok
 # INSERT INTO return AS r VALUES (5, 6) RETURNING r.a
 

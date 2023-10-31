@@ -66,8 +66,7 @@ EOF
 
 # Outer joins
 
-# TODO (#6748): the second join should be removed as redundant and replaced with
-# `Get(l1)`.
+# TODO the second join should be removed as redundant and replaced with `Get(l1)`.
 query T multiline
 EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 LEFT JOIN t2 ON (t1.f1 = t2.f1) WHERE t1.f1 = 123;
 ----

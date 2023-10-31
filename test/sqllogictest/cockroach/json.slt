@@ -194,7 +194,7 @@ SELECT bar FROM foo WHERE bar ?| ARRAY['a',null]
 ----
 {"a":"b"}
 
-# TODO(justin):#29355
+# TODO(justin):cockroach#29355
 # query T
 # SELECT bar FROM foo WHERE bar ?| ARRAY[null,null]::STRING[]
 # ----

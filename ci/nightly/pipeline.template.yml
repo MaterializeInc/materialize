@@ -26,6 +26,12 @@ steps:
 
   - wait: ~
 
+  - id: closed-issues-detect
+    label: Detect references to already closed issues
+    command: bin/ci-builder run stable bin/ci-closed-issues-detect
+    agents:
+      queue: linux-x86_64
+
   - id: miri-test
     label: Miri test (full)
     timeout_in_minutes: 600

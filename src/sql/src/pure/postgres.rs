@@ -22,6 +22,7 @@ use mz_sql_parser::ast::{
     DeferredItemName, Ident, Value, WithOptionValue,
 };
 use mz_sql_parser::ast::{CreateSourceSubsource, UnresolvedItemName};
+use mz_ssh_util::tunnel_manager::SshTunnelManager;
 
 use crate::catalog::ErsatzCatalog;
 use crate::names::{Aug, PartialItemName};
@@ -52,6 +53,7 @@ pub(super) fn derive_catalog_from_publication_tables<'a>(
 pub(super) async fn validate_requested_subsources(
     config: &Config,
     requested_subsources: &[(UnresolvedItemName, UnresolvedItemName, &PostgresTableDesc)],
+    ssh_tunnel_manager: &SshTunnelManager,
 ) -> Result<(), PlanError> {
     // This condition would get caught during the catalog transaction, but produces a
     // vague, non-contextual error. Instead, error here so we can suggest to the user
@@ -103,14 +105,15 @@ pub(super) async fn validate_requested_subsources(
         .map(|(UnresolvedItemName(inner), _, _)| [inner[1].as_str(), inner[2].as_str()])
         .collect();
 
-    privileges::check_table_privileges(config, tables_to_check_permissions).await?;
+    privileges::check_table_privileges(config, tables_to_check_permissions, ssh_tunnel_manager)
+        .await?;
 
     let oids: Vec<_> = requested_subsources
         .iter()
         .map(|(_, _, table_desc)| table_desc.oid)
         .collect();
 
-    replica_identity::check_replica_identity_full(config, oids).await?;
+    replica_identity::check_replica_identity_full(config, oids, ssh_tunnel_manager).await?;
 
     Ok(())
 }
@@ -359,11 +362,18 @@ mod privileges {
 
     use mz_postgres_util::{Config, PostgresError};
 
+    use super::SshTunnelManager;
     use crate::plan::PlanError;
     use crate::pure::PgSourcePurificationError;
 
-    async fn check_schema_privileges(config: &Config, schemas: Vec<&str>) -> Result<(), PlanError> {
-        let client = config.connect("check_schema_privileges").await?;
+    async fn check_schema_privileges(
+        config: &Config,
+        schemas: Vec<&str>,
+        ssh_tunnel_manager: &SshTunnelManager,
+    ) -> Result<(), PlanError> {
+        let client = config
+            .connect("check_schema_privileges", ssh_tunnel_manager)
+            .await?;
 
         let schemas_len = schemas.len();
 
@@ -427,11 +437,14 @@ mod privileges {
     pub async fn check_table_privileges(
         config: &Config,
         tables: Vec<[&str; 2]>,
+        ssh_tunnel_manager: &SshTunnelManager,
     ) -> Result<(), PlanError> {
         let schemas = tables.iter().map(|t| t[0]).collect();
-        check_schema_privileges(config, schemas).await?;
+        check_schema_privileges(config, schemas, ssh_tunnel_manager).await?;
 
-        let client = config.connect("check_table_privileges").await?;
+        let client = config
+            .connect("check_table_privileges", ssh_tunnel_manager)
+            .await?;
 
         let tables_len = tables.len();
 
@@ -504,6 +517,7 @@ mod replica_identity {
 
     use mz_postgres_util::{Config, PostgresError};
 
+    use super::SshTunnelManager;
     use crate::plan::PlanError;
     use crate::pure::PgSourcePurificationError;
 
@@ -511,8 +525,11 @@ mod replica_identity {
     pub async fn check_replica_identity_full(
         config: &Config,
         oids: Vec<Oid>,
+        ssh_tunnel_manager: &SshTunnelManager,
     ) -> Result<(), PlanError> {
-        let client = config.connect("check_replica_identity_full").await?;
+        let client = config
+            .connect("check_replica_identity_full", ssh_tunnel_manager)
+            .await?;
 
         let oids_len = oids.len();
 

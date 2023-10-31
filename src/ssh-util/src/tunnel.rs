@@ -45,7 +45,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const KEEPALIVE_IDLE: Duration = Duration::from_secs(10);
 
 /// Specifies an SSH tunnel.
-#[derive(PartialEq, Clone)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SshTunnelConfig {
     /// The hostname of the SSH bastion server.
     pub host: String,

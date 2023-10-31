@@ -259,9 +259,11 @@ impl PersistHandle {
     }
 
     /// Create a new [`PersistHandle`] to the catalog state associated with `organization_id`.
+    #[tracing::instrument(level = "debug", skip(persist_client))]
     pub(crate) async fn new(persist_client: PersistClient, organization_id: Uuid) -> PersistHandle {
         const SEED: usize = 1;
         let shard_id = Self::shard_id(organization_id, SEED);
+        debug!(?shard_id, "new persist backed catalog state");
         let (write_handle, read_handle) = persist_client
             .open(
                 shard_id,
@@ -280,6 +282,7 @@ impl PersistHandle {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip(self, now))]
     async fn open_inner(
         mut self,
         mode: Mode,
@@ -295,7 +298,7 @@ impl PersistHandle {
             )));
         }
 
-        let version = self.get_user_version(upper).await;
+        let user_version = self.get_user_version(upper).await;
         let read_only = matches!(mode, Mode::Readonly);
 
         // Grab the current catalog contents from persist.
@@ -336,6 +339,15 @@ impl PersistHandle {
         }
         let current_epoch = Epoch::new(current_epoch).expect("known to be non-zero");
 
+        debug!(
+            ?is_initialized,
+            ?upper,
+            ?user_version,
+            ?prev_epoch,
+            ?current_epoch,
+            "open inner"
+        );
+
         let mut catalog = PersistCatalogState {
             mode,
             persist_handle: self,
@@ -348,13 +360,15 @@ impl PersistHandle {
 
         let txn = if is_initialized {
             if !read_only {
-                let version =
-                    version.ok_or(CatalogError::Durable(DurableCatalogError::Uninitialized))?;
-                if version != STASH_VERSION {
+                let user_version = user_version
+                    .ok_or(CatalogError::Durable(DurableCatalogError::Uninitialized))?;
+                if user_version != STASH_VERSION {
                     // TODO(jkosh44) Implement migrations.
                     panic!("the persist catalog does not know how to perform migrations yet");
                 }
             }
+
+            debug!("initial snapshot: {initial_snapshot:?}");
 
             // Update in-memory contents with with persist snapshot.
             catalog.apply_updates(initial_snapshot.into_iter())?;
@@ -365,6 +379,11 @@ impl PersistHandle {
             }
             txn
         } else {
+            soft_assert_eq!(
+                initial_snapshot,
+                Vec::new(),
+                "snapshot should not contain anything for an uninitialized catalog"
+            );
             let mut txn = catalog.transaction().await?;
             initialize::initialize(&mut txn, bootstrap_args, boot_ts, deploy_generation).await?;
             txn
@@ -404,6 +423,7 @@ impl PersistHandle {
     /// state up to, but not including, `upper`.
     ///
     /// The output is consolidated and sorted by timestamp in ascending order.
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn snapshot(
         &mut self,
         upper: Timestamp,
@@ -462,6 +482,7 @@ impl PersistHandle {
     /// Get the user version of this instance.
     ///
     /// The user version is used to determine if a migration is needed.
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn get_user_version(&mut self, upper: Timestamp) -> Option<u64> {
         self.get_config(USER_VERSION_KEY, upper).await
     }
@@ -469,6 +490,7 @@ impl PersistHandle {
 
 #[async_trait]
 impl OpenableDurableCatalogState for PersistHandle {
+    #[tracing::instrument(level = "debug", skip(self, now))]
     async fn open_savepoint(
         mut self: Box<Self>,
         boot_ts: EpochMillis,
@@ -479,6 +501,7 @@ impl OpenableDurableCatalogState for PersistHandle {
             .await
     }
 
+    #[tracing::instrument(level = "debug", skip(self, now))]
     async fn open_read_only(
         mut self: Box<Self>,
         boot_ts: EpochMillis,
@@ -488,6 +511,7 @@ impl OpenableDurableCatalogState for PersistHandle {
             .await
     }
 
+    #[tracing::instrument(level = "debug", skip(self, now))]
     async fn open(
         mut self: Box<Self>,
         boot_ts: EpochMillis,
@@ -498,15 +522,18 @@ impl OpenableDurableCatalogState for PersistHandle {
             .await
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn is_initialized(&mut self) -> Result<bool, CatalogError> {
         Ok(self.is_initialized_inner().await.0)
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError> {
         let upper = self.current_upper().await;
         Ok(self.get_config(DEPLOY_GENERATION, upper).await)
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn expire(self) {
         self.read_handle.expire().await;
         self.write_handle.expire().await;
@@ -533,6 +560,7 @@ pub struct PersistCatalogState {
 
 impl PersistCatalogState {
     /// Applies [`StateUpdate`]s to the in memory catalog cache.
+    #[tracing::instrument(level = "debug", skip_all)]
     fn apply_updates(
         &mut self,
         updates: impl Iterator<Item = StateUpdate>,
@@ -637,10 +665,12 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
         self.epoch
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn expire(self: Box<Self>) {
         self.persist_handle.expire().await
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn get_timestamps(&mut self) -> Result<Vec<TimelineTimestamp>, CatalogError> {
         self.with_snapshot(|snapshot| {
             Ok(snapshot
@@ -654,6 +684,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
         .await
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn get_audit_logs(&mut self) -> Result<Vec<VersionedEvent>, CatalogError> {
         self.confirm_leadership().await?;
         // This is only called during bootstrapping and we don't want to cache all
@@ -678,6 +709,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
             .collect::<Result<_, _>>()?)
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn get_next_id(&mut self, id_type: &str) -> Result<u64, CatalogError> {
         let key = proto::IdAllocKey {
             name: id_type.to_string(),
@@ -688,6 +720,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
         .await
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError> {
         self.with_snapshot(|snapshot| Ok(snapshot.clone())).await
     }
@@ -699,11 +732,13 @@ impl DurableCatalogState for PersistCatalogState {
         matches!(self.mode, Mode::Readonly)
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn transaction(&mut self) -> Result<Transaction, CatalogError> {
         let snapshot = self.snapshot().await?;
         Transaction::new(self, snapshot)
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn commit_transaction(
         &mut self,
         txn_batch: TransactionBatch,
@@ -719,6 +754,7 @@ impl DurableCatalogState for PersistCatalogState {
         let next_upper = current_upper.step_forward();
 
         let updates = StateUpdate::from_txn_batch(txn_batch, current_upper);
+        debug!("committing updates: {updates:?}");
         self.apply_updates(updates.clone().into_iter())?;
 
         if matches!(self.mode, Mode::Writable) {
@@ -735,6 +771,10 @@ impl DurableCatalogState for PersistCatalogState {
             }
             // If we haven't fenced the previous catalog state, do that now.
             if let Some(Fence { prev_epoch }) = self.fence.take() {
+                debug!(
+                    "fencing previous catalogs prev_epoch={:?} current_epoch={:?}",
+                    prev_epoch, self.epoch
+                );
                 if let Some(prev_epoch) = prev_epoch {
                     batch_builder
                         .add(
@@ -772,6 +812,13 @@ impl DurableCatalogState for PersistCatalogState {
                         .downgrade_since(&Antichain::from_elem(current_upper))
                         .await;
                     self.upper = next_upper;
+                    debug!(
+                        "commit successful, upper advance from {:?} to {:?}, since advanced from {:?} to {:?}",
+                        current_upper,
+                        next_upper,
+                        self.persist_handle.read_handle.since(),
+                        current_upper
+                    );
                 }
                 Err(upper_mismatch) => {
                     return Err(DurableCatalogError::Fence(format!(
@@ -786,6 +833,7 @@ impl DurableCatalogState for PersistCatalogState {
         Ok(())
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn confirm_leadership(&mut self) -> Result<(), CatalogError> {
         let upper = self.persist_handle.current_upper().await;
         if upper == self.upper {
@@ -804,6 +852,7 @@ impl DurableCatalogState for PersistCatalogState {
     // only need one part of the snapshot. A Potential mitigation against these performance hits is
     // to utilize `CoW`s in `Transaction`s to avoid cloning unnecessary state.
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn get_and_prune_storage_usage(
         &mut self,
         retention_period: Option<Duration>,
@@ -839,6 +888,7 @@ impl DurableCatalogState for PersistCatalogState {
             if u128::from(event.timestamp()) >= cutoff_ts {
                 events.push(event);
             } else if retention_period.is_some() {
+                debug!("pruning storage event {event:?}");
                 expired.push(event);
             }
         }
@@ -854,6 +904,7 @@ impl DurableCatalogState for PersistCatalogState {
         Ok(events)
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn set_timestamp(
         &mut self,
         timeline: &Timeline,
@@ -864,6 +915,7 @@ impl DurableCatalogState for PersistCatalogState {
         txn.commit().await
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn allocate_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, CatalogError> {
         if amount == 0 {
             return Ok(Vec::new());

@@ -122,20 +122,29 @@ impl Default for ClusterReplicaSizeMap {
         //     "mem-16": { "memory_limit": 16Gb },
         // }
         let mut inner = (0..=5)
-            .map(|i| {
+            .flat_map(|i| {
                 let workers: u8 = 1 << i;
-                (
-                    workers.to_string(),
-                    ReplicaAllocation {
-                        memory_limit: None,
-                        cpu_limit: None,
-                        disk_limit: None,
-                        scale: 1,
-                        workers: workers.into(),
-                        credits_per_hour: 1.into(),
-                        disabled: false,
-                    },
-                )
+                [
+                    (workers.to_string(), None),
+                    (format!("{workers}-4G"), Some(4)),
+                    (format!("{workers}-8G"), Some(8)),
+                    (format!("{workers}-16G"), Some(16)),
+                    (format!("{workers}-32G"), Some(32)),
+                ]
+                .map(|(name, memory_limit)| {
+                    (
+                        name,
+                        ReplicaAllocation {
+                            memory_limit: memory_limit.map(|gib| MemoryLimit(ByteSize::gib(gib))),
+                            cpu_limit: None,
+                            disk_limit: None,
+                            scale: 1,
+                            workers: workers.into(),
+                            credits_per_hour: 1.into(),
+                            disabled: false,
+                        },
+                    )
+                })
             })
             .collect::<BTreeMap<_, _>>();
 

@@ -31,10 +31,21 @@ impl Identity {
     pub fn from_pem(pem: &[u8]) -> Result<Self, openssl::error::ErrorStack> {
         let pkey = PKey::private_key_from_pem(pem)?;
         let mut certs = Stack::new()?;
+
+        // `X509::stack_from_pem` in openssl as of at least versions <= 0.10.48
+        // does not guarantee that it will either error or return at least 1
+        // element; in fact, it doesn't if the `pem` is not a well-formed
+        // representation of a PEM file. For example, if the represented file
+        // contains a well-formed key but a malformed certificate.
+        //
+        // To circumvent this issue, if `X509::stack_from_pem` returns no
+        // certificates, rely on getting the error message from
+        // `X509::from_pem`.
         let mut cert_iter = X509::stack_from_pem(pem)?.into_iter();
-        let cert = cert_iter
-            .next()
-            .expect("X509::stack_from_pem always returns at least one certificate");
+        let cert = match cert_iter.next() {
+            Some(cert) => cert,
+            None => X509::from_pem(pem)?,
+        };
         for cert in cert_iter {
             certs.push(cert)?;
         }

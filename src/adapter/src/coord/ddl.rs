@@ -474,6 +474,7 @@ impl Coordinator {
             // slot won't bubble up to the user as an error message. However, even if it
             // did (and how the code previously worked), mz has already dropped it from our
             // catalog, and so we wouldn't be able to retry anyway.
+            let ssh_tunnel_manager = self.connection_context.ssh_tunnel_manager.clone();
             if !replication_slots_to_drop.is_empty() {
                 // TODO(guswynn): see if there is more relevant info to add to this name
                 task::spawn(|| "drop_replication_slots", async move {
@@ -483,6 +484,7 @@ impl Coordinator {
                             .max_duration(Duration::from_secs(30))
                             .retry_async(|_state| async {
                                 mz_postgres_util::drop_replication_slots(
+                                    &ssh_tunnel_manager,
                                     config.clone(),
                                     &[&slot_name],
                                 )

@@ -91,7 +91,7 @@ use serde::Serialize;
 use uncased::UncasedStr;
 
 use crate::ast::Ident;
-use crate::session::user::{User, SYSTEM_USER};
+use crate::session::user::{User, SUPPORT_USER, SYSTEM_USER};
 use crate::{DEFAULT_SCHEMA, WEBHOOK_CONCURRENCY_LIMIT};
 
 /// The action to take during end_transaction.
@@ -3608,7 +3608,7 @@ where
     }
 
     fn visible(&self, user: &User, system_vars: Option<&SystemVars>) -> Result<(), VarError> {
-        if self.internal && user != &*SYSTEM_USER {
+        if self.internal && user != &*SYSTEM_USER && user != &*SUPPORT_USER {
             Err(VarError::UnknownParameter(self.name().to_string()))
         } else if self.name().starts_with("unsafe")
             && match system_vars {

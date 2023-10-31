@@ -7,13 +7,19 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use mz_ssh_util::tunnel_manager::SshTunnelManager;
 use tokio_postgres::types::Oid;
 
 use crate::desc::{PostgresColumnDesc, PostgresKeyDesc, PostgresSchemaDesc, PostgresTableDesc};
 use crate::{Config, PostgresError};
 
-pub async fn get_schemas(config: &Config) -> Result<Vec<PostgresSchemaDesc>, PostgresError> {
-    let client = config.connect("postgres_schemas").await?;
+pub async fn get_schemas(
+    ssh_tunnel_manager: &SshTunnelManager,
+    config: &Config,
+) -> Result<Vec<PostgresSchemaDesc>, PostgresError> {
+    let client = config
+        .connect("postgres_schemas", ssh_tunnel_manager)
+        .await?;
 
     Ok(client
         .query("SELECT oid, nspname, nspowner FROM pg_namespace", &[])
@@ -40,11 +46,14 @@ pub async fn get_schemas(config: &Config) -> Result<Vec<PostgresSchemaDesc>, Pos
 /// - Invalid connection string, user information, or user permissions.
 /// - Upstream publication does not exist or contains invalid values.
 pub async fn publication_info(
+    ssh_tunnel_manager: &SshTunnelManager,
     config: &Config,
     publication: &str,
     oid_filter: Option<u32>,
 ) -> Result<Vec<PostgresTableDesc>, PostgresError> {
-    let client = config.connect("postgres_publication_info").await?;
+    let client = config
+        .connect("postgres_publication_info", ssh_tunnel_manager)
+        .await?;
 
     client
         .query(

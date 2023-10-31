@@ -52,7 +52,7 @@ false
 
 subtest unlabeled_tuple
 
-# TODO(bram): We don't pretty print tuples the same way as postgres. See #25522.
+# TODO(bram): We don't pretty print tuples the same way as postgres. See cockroach#25522.
 query TT colnames
 SELECT (1, 2, 'hello', NULL, NULL) AS t, (true, NULL, (false, 6.6, false)) AS u FROM tb
 ----

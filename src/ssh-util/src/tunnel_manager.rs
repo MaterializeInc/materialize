@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! SSH tunnel management for the storage layer.
+//! SSH tunnel management.
 
 // NOTE(benesch): The synchronization in this module is tricky because SSH
 // tunnels 1) require an async `connect` method that can return errors and 2)
@@ -23,15 +23,11 @@ use std::collections::{btree_map, BTreeMap};
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 
-use mz_repr::GlobalId;
-use mz_secrets::SecretsReader;
-use mz_ssh_util::keys::SshKeyPairSet;
-use mz_ssh_util::tunnel::{SshTunnelConfig, SshTunnelHandle};
 use scopeguard::ScopeGuard;
 use tokio::sync::watch;
 use tracing::info;
 
-use crate::connections::SshTunnel;
+use crate::tunnel::{SshTunnelConfig, SshTunnelHandle};
 
 /// Thread-safe manager of SSH tunnel connections.
 #[derive(Debug, Clone, Default)]
@@ -51,16 +47,14 @@ impl SshTunnelManager {
     /// concurrently from multiple threads.
     pub async fn connect(
         &self,
-        secrets_reader: &dyn SecretsReader,
-        tunnel: &SshTunnel,
+        config: SshTunnelConfig,
         remote_host: &str,
         remote_port: u16,
     ) -> Result<ManagedSshTunnelHandle, anyhow::Error> {
-        // An SSH tunnel connection is uniquely identified by the ID of the
-        // Materialize connection (in the `CREATE CONNECTION` sense) and the
-        // remote address.
+        // An SSH tunnel connection is uniquely identified by the SSH tunnel
+        // configuration and the remote address.
         let key = SshTunnelKey {
-            connection_id: tunnel.connection_id,
+            config: config.clone(),
             remote_host: remote_host.to_string(),
             remote_port,
         };
@@ -106,11 +100,7 @@ impl SshTunnelManager {
                 Action::Return(handle) => {
                     info!(
                         "reusing existing ssh tunnel ({}:{} via {}@{}:{})",
-                        remote_host,
-                        remote_port,
-                        tunnel.connection.user,
-                        tunnel.connection.host,
-                        tunnel.connection.port,
+                        remote_host, remote_port, config.user, config.host, config.port,
                     );
                     return Ok(handle);
                 }
@@ -133,21 +123,8 @@ impl SshTunnelManager {
                     // Try to connect.
                     info!(
                         "initiating new ssh tunnel ({}:{} via {}@{}:{})",
-                        remote_host,
-                        remote_port,
-                        tunnel.connection.user,
-                        tunnel.connection.host,
-                        tunnel.connection.port,
+                        remote_host, remote_port, config.user, config.host, config.port,
                     );
-                    let secret = secrets_reader.read(tunnel.connection_id).await?;
-                    let key_set = SshKeyPairSet::from_bytes(&secret)?;
-                    let key_pair = key_set.primary().clone();
-                    let config = SshTunnelConfig {
-                        host: tunnel.connection.host.clone(),
-                        port: tunnel.connection.port,
-                        user: tunnel.connection.user.clone(),
-                        key_pair,
-                    };
                     let handle = config.connect(remote_host, remote_port).await?;
 
                     // Successful connection, so defuse the scope guard.
@@ -173,7 +150,7 @@ impl SshTunnelManager {
 /// Identifies a connection to a remote host via an SSH tunnel.
 #[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord)]
 struct SshTunnelKey {
-    connection_id: GlobalId,
+    config: SshTunnelConfig,
     remote_host: String,
     remote_port: u16,
 }
