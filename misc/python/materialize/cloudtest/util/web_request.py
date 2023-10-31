@@ -14,6 +14,7 @@ from textwrap import dedent
 from typing import Any
 
 import requests
+from requests.adapters import HTTPAdapter, Retry
 
 from materialize.cloudtest.util.authentication import AuthConfig
 
@@ -62,7 +63,9 @@ class WebRequests:
         def try_get() -> requests.Response:
             with verbose_http_errors():
                 headers = self._create_headers(self.auth)
-                response = requests.get(
+                s = requests.Session()
+                s.mount(self.base_url, HTTPAdapter(max_retries=Retry(3)))
+                response = s.get(
                     f"{self.base_url}{path}",
                     headers=headers,
                     timeout=self._timeout_or_default(timeout_in_sec),
