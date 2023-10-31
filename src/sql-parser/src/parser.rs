@@ -7142,7 +7142,7 @@ impl<'a> Parser<'a> {
             query,
         }))
     }
-    /// Parse an `EXPLAIN [KEY|VALUE] SCHEMA` statement assuming that the `EXPLAIN [KEY|VALUE]` tokens
+    /// Parse an `EXPLAIN [KEY|VALUE] SCHEMA` statement assuming that the `EXPLAIN` token
     /// have already been consumed
     fn parse_explain_schema(&mut self) -> Result<Statement<Raw>, ParserError> {
         let schema_for = match self.expect_one_of_keywords(&[KEY, VALUE])? {
