@@ -1019,9 +1019,7 @@ impl PostgresConnection<InlinedConnection> {
             }) => {
                 let secret = secrets_reader.read(*connection_id).await?;
                 let key_pair = SshKeyPair::from_bytes(&secret)?;
-
                 mz_postgres_util::TunnelConfig::Ssh {
-                    connection_id: *connection_id,
                     config: SshTunnelConfig {
                         host: connection.host.clone(),
                         port: connection.port,
@@ -1318,7 +1316,6 @@ impl SshTunnel<InlinedConnection> {
         connection_context
             .ssh_tunnel_manager
             .connect(
-                self.connection_id,
                 SshTunnelConfig {
                     host: self.connection.host.clone(),
                     port: self.connection.port,
