@@ -38,4 +38,9 @@ default = ["workspace-hack"]
 jemalloc = ["tikv-jemallocator", "mz-prof/jemalloc", "mz-prof-http/jemalloc"]
 
 [package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+# The only reason we depend on mz-prof-http
+# from this package is so that we can force its `jemalloc`
+# option to be enabled when this package's is, which
+# makes all the Materialize binaries correctly
+# serve heap profiling tools at the `/prof` endpoints.
+normal = ["workspace-hack", "mz-prof-http"]
