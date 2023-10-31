@@ -1737,6 +1737,15 @@ impl Coordinator {
         let write_frontier = self.least_valid_write(&id_bundle);
         // Things go wrong if we try to create a dataflow with `as_of = []`, so avoid that.
         if write_frontier.is_empty() {
+            tracing::info!(
+                export_ids = dataflow.format_export_ids(),
+                %cluster_id,
+                min_as_of = ?min_as_of.elements(),
+                write_frontier = ?write_frontier.elements(),
+                "selecting index `as_of` as {:?}",
+                min_as_of.elements(),
+            );
+
             return min_as_of;
         }
 
@@ -1757,11 +1766,23 @@ impl Coordinator {
             DEFAULT_LOGICAL_COMPACTION_WINDOW_TS
         };
 
-        let time = write_frontier.into_option().expect("checked above");
+        let time = write_frontier.clone().into_option().expect("checked above");
         let time = time.saturating_sub(lag);
         let max_as_of = Antichain::from_elem(time);
 
-        min_as_of.join(&max_as_of)
+        let as_of = min_as_of.join(&max_as_of);
+
+        tracing::info!(
+            export_ids = %dataflow.format_export_ids(),
+            %cluster_id,
+            min_as_of = ?min_as_of.elements(),
+            write_frontier = ?write_frontier.elements(),
+            %lag,
+            "selecting index `as_of` as {:?}",
+            as_of.elements(),
+        );
+
+        as_of
     }
 
     /// Returns an `as_of` suitable for bootstrapping the given materialized view dataflow.
@@ -1773,7 +1794,7 @@ impl Coordinator {
         // All inputs must be readable at the chosen `as_of`, so it must be at least the join of
         // the `since`s of all dependencies.
         let id_bundle = dataflow_import_id_bundle(dataflow, cluster_id);
-        let mut as_of = self.least_valid_read(&id_bundle);
+        let min_as_of = self.least_valid_read(&id_bundle);
 
         // For compute reconciliation to recognize that an existing dataflow can be reused, we want
         // to advance the `as_of` as far as possible. If a storage collection for the MV already
@@ -1785,10 +1806,22 @@ impl Coordinator {
             .exactly_one()
             .expect("MV dataflow must export a sink");
         let write_frontier = self.storage_write_frontier(*sink_id);
+
         // Things go wrong if we try to create a dataflow with `as_of = []`, so avoid that.
-        if !write_frontier.is_empty() {
-            as_of.join_assign(write_frontier);
-        }
+        let as_of = if write_frontier.is_empty() {
+            min_as_of.clone()
+        } else {
+            min_as_of.join(write_frontier)
+        };
+
+        tracing::info!(
+            export_ids = %dataflow.format_export_ids(),
+            %cluster_id,
+            min_as_of = ?min_as_of.elements(),
+            write_frontier = ?write_frontier.elements(),
+            "selecting materialized view `as_of` as {:?}",
+            as_of.elements(),
+        );
 
         as_of
     }

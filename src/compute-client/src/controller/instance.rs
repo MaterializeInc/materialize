@@ -837,6 +837,26 @@ where
             debug_name: dataflow.debug_name,
         };
 
+        if augmented_dataflow.is_transient() {
+            tracing::debug!(
+                name = %augmented_dataflow.debug_name,
+                import_ids = %augmented_dataflow.format_import_ids(),
+                export_ids = %augmented_dataflow.format_export_ids(),
+                as_of = ?augmented_dataflow.as_of.as_ref().unwrap().elements(),
+                until = ?augmented_dataflow.until.elements(),
+                "creating dataflow",
+            );
+        } else {
+            tracing::info!(
+                name = %augmented_dataflow.debug_name,
+                import_ids = %augmented_dataflow.format_import_ids(),
+                export_ids = %augmented_dataflow.format_export_ids(),
+                as_of = ?augmented_dataflow.as_of.as_ref().unwrap().elements(),
+                until = ?augmented_dataflow.until.elements(),
+                "creating dataflow",
+            );
+        }
+
         self.compute
             .send(ComputeCommand::CreateDataflow(augmented_dataflow));
 
