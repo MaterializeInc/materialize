@@ -479,9 +479,10 @@ pub struct SourceIncludeMetadata {
 
 impl AstDisplay for SourceIncludeMetadata {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.ty);
+
         match &self.ty {
             SourceIncludeMetadataType::Header(KafkaHeader { key, use_bytes }) => {
-                f.write_node(&self.ty);
                 f.write_str(" '");
                 f.write_str(&display::escape_single_quote_string(key));
                 f.write_str("'");
@@ -494,7 +495,6 @@ impl AstDisplay for SourceIncludeMetadata {
                 }
             }
             _ => {
-                f.write_node(&self.ty);
                 if let Some(alias) = &self.alias {
                     f.write_str(" AS ");
                     f.write_node(alias);

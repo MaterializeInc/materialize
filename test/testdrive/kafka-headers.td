@@ -164,3 +164,69 @@ $ kafka-ingest format=avro topic=headers_conflict key-format=avro key-schema=${k
 key     headers  gus
 ------------------------
 fish    value    gusfive
+
+
+# test extracting individual headers with INCLUDE HEADER
+$ kafka-create-topic topic=individual_headers
+
+$ kafka-ingest format=avro topic=individual_headers key-format=avro key-schema=${keyschema} schema=${schema}
+{"key": "message_0"} {"f1": "fishval", "f2": 1000}
+
+$ kafka-ingest format=avro topic=individual_headers key-format=avro key-schema=${keyschema} schema=${schema} headers={"header1": "message_1_header_1"}
+{"key": "message_1"} {"f1": "fishval", "f2": 1000}
+
+$ kafka-ingest format=avro topic=individual_headers key-format=avro key-schema=${keyschema} schema=${schema} headers={"header1": "message_2_header_1", "header2": "message_2_header_2"}
+{"key": "message_2"} {"f1": "fishval", "f2": 1000}
+
+> CREATE SOURCE individual_headers
+  FROM KAFKA CONNECTION kafka_conn (TOPIC
+  'testdrive-individual_headers-${testdrive.seed}')
+  KEY FORMAT AVRO USING SCHEMA '${keyschema}'
+  VALUE FORMAT AVRO USING SCHEMA '${schema}'
+  INCLUDE HEADER 'header1', HEADER 'header2'
+  ENVELOPE UPSERT
+
+> SELECT key, header1, header2 from individual_headers
+key          header1               header2
+----------------------------------------------
+message_0    <null>                <null>
+message_1    message_1_header_1    <null>
+message_2    message_2_header_1    message_2_header_2
+
+
+# test aliasing individual headers with INCLUDE HEADER
+> CREATE SOURCE individual_headers_alias
+  FROM KAFKA CONNECTION kafka_conn (TOPIC
+  'testdrive-individual_headers-${testdrive.seed}')
+  KEY FORMAT AVRO USING SCHEMA '${keyschema}'
+  VALUE FORMAT AVRO USING SCHEMA '${schema}'
+  INCLUDE HEADER 'header1' AS one, HEADER 'header2' AS two
+  ENVELOPE UPSERT
+
+> SELECT key, header1, header2 from individual_headers_alias
+key          one                   two
+----------------------------------------------
+message_0    <null>                <null>
+message_1    message_1_header_1    <null>
+message_2    message_2_header_1    message_2_header_2
+
+
+# When there are multiple headers with identical names, verify that only the first header is included
+$ kafka-create-topic topic=duplicate_individual_headers
+
+$ kafka-ingest format=avro topic=duplicate_individual_headers key-format=avro key-schema=${keyschema} schema=${schema} headers={"header3": "message_3_header_3_first", "header3": "message_3_header_3_second"}
+{"key": "message_3"} {"f1": "fishval", "f2": 1000}
+
+> CREATE SOURCE duplicate_individual_headers
+  FROM KAFKA CONNECTION kafka_conn (TOPIC
+  'testdrive-duplicate_individual_headers-${testdrive.seed}')
+  KEY FORMAT AVRO USING SCHEMA '${keyschema}'
+  VALUE FORMAT AVRO USING SCHEMA '${schema}'
+  INCLUDE HEADER 'header3' AS duplicates
+  ENVELOPE UPSERT
+
+
+> SELECT key, duplicates from duplicate_individual_headers
+key          duplicates
+-------------------------------------
+message_3    message_3_header_3_first
