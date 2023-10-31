@@ -44,10 +44,11 @@ def plot_latency_per_connections(
 
     i = 0
     for endpoint_name, df_details in df_details_by_endpoint_name.items():
+        endpoint_offset = i / 40.0
         legend.append(endpoint_name_to_description(endpoint_name))
 
         plot.scatter(
-            df_details[df_details_cols.CONCURRENCY] + i,
+            df_details[df_details_cols.CONCURRENCY] + endpoint_offset,
             df_details[df_details_cols.WALLCLOCK],
             alpha=0.25,
         )
