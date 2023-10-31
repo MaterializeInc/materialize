@@ -25,7 +25,7 @@
 # A notification is sent when all of these conditions are true:
 #   * A ready-to-review PR is (re-)opened, or a PR is moved from draft
 #     to ready-to-review.
-#   * The PR modifies the 'src/sql-parser/src/parser.rs' file.
+#   * The PR modifies a file in 'src/sql-parser/' or 'src/sql-lexer/'.
 
 name: Slack SQL Parser Notifications
 
@@ -36,7 +36,8 @@ on:
       - reopened
       - ready_for_review
     paths:
-      - "src/sql-parser/src/parser.rs"
+      - 'src/sql-parser/**'
+      - 'src/sql-lexer/**'  
 
 jobs:
   notify:
@@ -50,9 +51,11 @@ jobs:
         with:
           filters: |
             parser-change:
-              - 'src/sql-parser/src/parser.rs'
+              - 'src/sql-parser/**'
+            lexer-change:
+              - 'src/sql-lexer/**'  
       - name: "Push to Slack"
-        if: steps.filter.outputs.parser-change == 'true'
+        if: steps.filter.outputs.parser-change == 'true' || steps.filter.outputs.lexer-change == 'true'
         uses: actions-ecosystem/action-slack-notifier@fc778468d09c43a6f4d1b8cccaca59766656996a
         with:
           slack_token: ${{ secrets.SLACK_TOKEN }}
