@@ -222,10 +222,10 @@ $ kafka-ingest format=avro topic=duplicate_individual_headers key-format=avro ke
   'testdrive-duplicate_individual_headers-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
-  INCLUDE HEADER 'duplicates'
+  INCLUDE HEADERS, HEADER 'duplicates'
   ENVELOPE UPSERT
 
 > SELECT key, duplicates from duplicate_individual_headers
-key          duplicates
+key          headers       duplicates
 -------------------------------------
-message_3    message_3_header_3_first
+message_3    ???           message_3_header_3_first

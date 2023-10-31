@@ -706,14 +706,14 @@ pub fn plan_create_source(
                         Some((name, KafkaMetadataKind::Offset))
                     }
                     SourceIncludeMetadataType::Headers => {
-                        let name: String = match item.alias.as_ref() {
+                        let name = match item.alias.as_ref() {
                             Some(name) => name.to_string(),
                             None => "headers".to_owned(),
                         };
                         Some((name, KafkaMetadataKind::Headers))
                     }
                     SourceIncludeMetadataType::Header(KafkaHeader { key, use_bytes }) => {
-                        let name: String = match item.alias.as_ref() {
+                        let name = match item.alias.as_ref() {
                             Some(name) => name.to_string(),
                             None => key.clone(),
                         };
