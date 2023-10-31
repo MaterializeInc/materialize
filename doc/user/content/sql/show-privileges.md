@@ -1,13 +1,14 @@
 ---
 title: "SHOW PRIVILEGES"
-description: "`SHOW PRIVILEGES` lists the privileges granted in Materialize."
+description: "SHOW PRIVILEGES lists the privileges granted on all objects via role-based access control (RBAC)."
 menu:
   main:
     parent: 'commands'
 
 ---
 
-`SHOW PRIVILEGES` lists the privileges granted as part of [access control](/manage/access-control/) in Materialize.
+`SHOW PRIVILEGES` lists the privileges granted on all objects via
+[role-based access control](/manage/access-control/#role-based-access-control-rbac) (RBAC).
 
 ## Syntax
 
@@ -17,6 +18,8 @@ Field                                               | Use
 ----------------------------------------------------|--------------------------------------------------
 _object_name_                                       | Only shows privileges for a specific object type.
 _role_name_                                         | Only shows privileges granted directly or indirectly to _role_name_.
+
+[//]: # "TODO(morsapaes) Improve examples."
 
 ## Examples
 
@@ -75,4 +78,4 @@ SHOW PRIVILEGES FOR materialize;
 
 - [GRANT PRIVILEGE](../grant-privilege)
 - [REVOKE PRIVILEGE](../revoke-privilege)
-- [access control](/manage/access-control/)
+- [Access control](/manage/access-control/#role-based-access-control-rbac)
