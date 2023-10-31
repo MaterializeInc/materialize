@@ -16,7 +16,7 @@ from materialize.scalability.df import df_details_cols, df_totals_cols
 from materialize.scalability.endpoints import endpoint_name_to_description
 
 
-def plot_tps_per_connections(
+def scatterplot_tps_per_connections(
     figure: SubFigure, df_totals_by_endpoint_name: dict[str, pd.DataFrame]
 ) -> None:
     legend = []
@@ -36,7 +36,7 @@ def plot_tps_per_connections(
     plot.legend(legend)
 
 
-def plot_latency_per_connections(
+def scatterplot_latency_per_connections(
     figure: SubFigure, df_details_by_endpoint_name: dict[str, pd.DataFrame]
 ) -> None:
     legend = []
