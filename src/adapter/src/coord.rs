@@ -1412,7 +1412,8 @@ impl Coordinator {
                         );
 
                         // MIR ⇒ MIR optimization (global)
-                        let index_plan = optimize::Index::new(entry.name(), &idx.on, &idx.keys);
+                        let index_plan =
+                            optimize::index::Index::new(entry.name(), &idx.on, &idx.keys);
                         let global_mir_plan = optimizer.optimize(index_plan)?;
                         // Timestamp selection
                         let as_of = self.bootstrap_index_as_of(

@@ -1160,7 +1160,7 @@ impl Coordinator {
         );
 
         // MIR ⇒ MIR optimization (global)
-        let index_plan = optimize::Index::new(&name, &on, &keys);
+        let index_plan = optimize::index::Index::new(&name, &on, &keys);
         let global_mir_plan = optimizer.optimize(index_plan)?;
         // Timestamp selection
         let since = self.least_valid_read(&global_mir_plan.id_bundle());
@@ -3705,7 +3705,7 @@ impl Coordinator {
 
         let (df_desc, df_meta, used_indexes) = catch_unwind(broken, "optimize", || {
             // MIR ⇒ MIR optimization (global)
-            let index_plan = optimize::Index::new(&name, &index.on, &index.keys);
+            let index_plan = optimize::index::Index::new(&name, &index.on, &index.keys);
             let global_mir_plan = optimizer.optimize(index_plan)?;
 
             // Collect the list of indexes used by the dataflow at this point
