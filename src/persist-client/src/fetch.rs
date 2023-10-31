@@ -34,6 +34,7 @@ use crate::internal::machine::retry_external;
 use crate::internal::metrics::{Metrics, ReadMetrics, ShardMetrics};
 use crate::internal::paths::PartialBatchKey;
 use crate::read::{LeasedReaderId, ReadHandle};
+use crate::stats::PartStats;
 use crate::ShardId;
 
 /// Capable of fetching [`LeasedBatchPart`] while not holding any capabilities.
@@ -437,6 +438,11 @@ where
     /// then something has gone horribly wrong.
     pub fn request_filter_pushdown_audit(&mut self) {
         self.filter_pushdown_audit = true;
+    }
+
+    /// Returns the pushdown stats for this part.
+    pub fn stats(&self) -> Option<PartStats> {
+        self.stats.as_ref().map(|x| x.decode())
     }
 }
 
