@@ -48,6 +48,48 @@ CREATE VIEW vv AS SELECT 66
 ----
 db error: ERROR: permission denied for SCHEMA "materialize.public"
 
+# The mz_support user can SHOW public system vars.
+simple conn=mz_support,user=mz_support
+SHOW max_tables;
+----
+100
+COMPLETE 1
+
+# The mz_support user can SHOW internal system vars.
+simple conn=mz_support,user=mz_support
+SHOW log_filter;
+----
+warn
+COMPLETE 1
+
+# The mz_support user cannot ALTER SYSTEM SET public system vars.
+simple conn=mz_support,user=mz_support
+ALTER SYSTEM SET max_tables = 1234;
+----
+db error: ERROR: permission denied to alter system
+DETAIL: You must be the 'mz_system' role
+
+# The mz_support user cannot ALTER SYSTEM SET internal system vars.
+simple conn=mz_support,user=mz_support
+ALTER SYSTEM SET log_filter = 'error';
+----
+db error: ERROR: permission denied to alter system
+DETAIL: You must be the 'mz_system' role
+
+# The mz_support user cannot ALTER SYSTEM RESET public system vars.
+simple conn=mz_support,user=mz_support
+ALTER SYSTEM RESET max_tables;
+----
+db error: ERROR: permission denied to alter system
+DETAIL: You must be the 'mz_system' role
+
+# The mz_support user cannot ALTER SYSTEM RESET internal system vars.
+simple conn=mz_support,user=mz_support
+ALTER SYSTEM RESET log_filter;
+----
+db error: ERROR: permission denied to alter system
+DETAIL: You must be the 'mz_system' role
+
 # The mz_support user cannot query the un-redacted statement log tables
 simple conn=mz_support,user=mz_support
 SELECT count(*) >= 0 FROM mz_internal.mz_statement_execution_history
