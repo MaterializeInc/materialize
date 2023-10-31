@@ -23,7 +23,6 @@ use std::collections::{btree_map, BTreeMap};
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 
-use mz_repr::GlobalId;
 use scopeguard::ScopeGuard;
 use tokio::sync::watch;
 use tracing::info;
@@ -48,18 +47,14 @@ impl SshTunnelManager {
     /// concurrently from multiple threads.
     pub async fn connect(
         &self,
-        // This connection is used to uniquely identify the tunnel being connected to
-        // and possibly shared.
-        connection_id: GlobalId,
         config: SshTunnelConfig,
         remote_host: &str,
         remote_port: u16,
     ) -> Result<ManagedSshTunnelHandle, anyhow::Error> {
-        // An SSH tunnel connection is uniquely identified by the ID of the
-        // Materialize connection (in the `CREATE CONNECTION` sense) and the
-        // remote address.
+        // An SSH tunnel connection is uniquely identified by the SSH tunnel
+        // configuration and the remote address.
         let key = SshTunnelKey {
-            connection_id,
+            config: config.clone(),
             remote_host: remote_host.to_string(),
             remote_port,
         };
@@ -155,7 +150,7 @@ impl SshTunnelManager {
 /// Identifies a connection to a remote host via an SSH tunnel.
 #[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord)]
 struct SshTunnelKey {
-    connection_id: GlobalId,
+    config: SshTunnelConfig,
     remote_host: String,
     remote_port: u16,
 }

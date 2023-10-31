@@ -72,10 +72,7 @@ pub enum TunnelConfig {
     /// and then opening a separate connection from that host to the database.
     /// This is commonly referred by vendors as a "direct SSH tunnel", in
     /// opposition to "reverse SSH tunnel", which is currently unsupported.
-    Ssh {
-        connection_id: GlobalId,
-        config: SshTunnelConfig,
-    },
+    Ssh { config: SshTunnelConfig },
     /// Establish a TCP connection to the database via an AWS PrivateLink
     /// service.
     AwsPrivatelink {
@@ -246,13 +243,10 @@ impl Config {
                 task::spawn(|| task_name, connection);
                 Ok(client)
             }
-            TunnelConfig::Ssh {
-                connection_id,
-                config,
-            } => {
+            TunnelConfig::Ssh { config } => {
                 let (host, port) = self.address()?;
                 let tunnel = ssh_tunnel_manager
-                    .connect(*connection_id, config.clone(), host, port)
+                    .connect(config.clone(), host, port)
                     .await?;
                 let tls = MakeTlsConnect::<TokioTcpStream>::make_tls_connect(&mut tls, host)?;
                 let tcp_stream = TokioTcpStream::connect(tunnel.local_addr()).await?;

@@ -9,6 +9,7 @@
 
 //! Utilities for generating and managing SSH keys.
 
+use std::cmp::Ordering;
 use std::fmt;
 
 use openssl::pkey::{PKey, Private};
@@ -83,6 +84,22 @@ impl PartialEq for SshKeyPair {
 }
 
 impl Eq for SshKeyPair {}
+
+impl PartialOrd for SshKeyPair {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.key_pair
+            .fingerprint(HashAlg::default())
+            .partial_cmp(&other.key_pair.fingerprint(HashAlg::default()))
+    }
+}
+
+impl Ord for SshKeyPair {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.key_pair
+            .fingerprint(HashAlg::default())
+            .cmp(&other.key_pair.fingerprint(HashAlg::default()))
+    }
+}
 
 impl Serialize for SshKeyPair {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
