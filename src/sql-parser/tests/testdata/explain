@@ -145,14 +145,14 @@ EXPLAIN WITH (humanized_exprs) CREATE MATERIALIZED VIEW mv AS SELECT 665
 ----
 EXPLAIN OPTIMIZED PLAN WITH(humanized_exprs) AS TEXT FOR CREATE MATERIALIZED VIEW mv AS SELECT 665
 =>
-ExplainPlan(ExplainPlanStatement { stage: OptimizedPlan, config_flags: [Ident("humanized_exprs")], format: Text, explainee: CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("mv")]), columns: [], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, non_null_assertions: [] }, false) })
+ExplainPlan(ExplainPlanStatement { stage: OptimizedPlan, config_flags: [Ident("humanized_exprs")], format: Text, explainee: CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("mv")]), columns: [], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, with_options: [] }, false) })
 
 parse-statement
 EXPLAIN BROKEN CREATE MATERIALIZED VIEW mv AS SELECT 665
 ----
 EXPLAIN OPTIMIZED PLAN AS TEXT FOR BROKEN CREATE MATERIALIZED VIEW mv AS SELECT 665
 =>
-ExplainPlan(ExplainPlanStatement { stage: OptimizedPlan, config_flags: [], format: Text, explainee: CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("mv")]), columns: [], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, non_null_assertions: [] }, true) })
+ExplainPlan(ExplainPlanStatement { stage: OptimizedPlan, config_flags: [], format: Text, explainee: CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("mv")]), columns: [], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, with_options: [] }, true) })
 
 parse-statement
 EXPLAIN BROKEN CREATE DEFAULT INDEX ON q1

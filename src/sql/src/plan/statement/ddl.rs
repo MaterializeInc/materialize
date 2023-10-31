@@ -37,8 +37,9 @@ use mz_sql_parser::ast::{
     AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement,
     CommentObjectType, CommentStatement, CreateConnectionOption, CreateConnectionOptionName,
     CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
-    DeferredItemName, DocOnIdentifier, DocOnSchema, DropOwnedStatement, SetRoleVar,
-    UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
+    DeferredItemName, DocOnIdentifier, DocOnSchema, DropOwnedStatement, MaterializedViewOption,
+    MaterializedViewOptionName, SetRoleVar, UnresolvedItemName, UnresolvedObjectName,
+    UnresolvedSchemaName, Value,
 };
 use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnection};
 use mz_storage_types::connections::Connection;
@@ -2052,11 +2053,16 @@ pub fn plan_create_materialized_view(
         &stmt.columns,
     )?;
     let column_names: Vec<ColumnName> = desc.iter_names().cloned().collect();
-    if !stmt.non_null_assertions.is_empty() {
+
+    let MaterializedViewOptionExtracted {
+        assert_not_null,
+        seen: _,
+    }: MaterializedViewOptionExtracted = stmt.with_options.try_into()?;
+
+    if !assert_not_null.is_empty() {
         scx.require_feature_flag(&crate::session::vars::ENABLE_ASSERT_NOT_NULL)?;
     }
-    let mut non_null_assertions = stmt
-        .non_null_assertions
+    let mut non_null_assertions = assert_not_null
         .into_iter()
         .map(normalize::column_name)
         .map(|assertion_name| {
@@ -2148,6 +2154,11 @@ pub fn plan_create_materialized_view(
         ambiguous_columns: *scx.ambiguous_columns.borrow(),
     }))
 }
+
+generate_extracted_config!(
+    MaterializedViewOption,
+    (AssertNotNull, Ident, AllowMultiple)
+);
 
 pub fn describe_create_sink(
     _: &StatementContext,

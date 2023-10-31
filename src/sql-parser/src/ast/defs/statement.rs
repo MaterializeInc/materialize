@@ -27,10 +27,10 @@ use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
     AstInfo, ColumnDef, ConnectionOption, CreateConnectionOption, CreateConnectionType,
     CreateSinkConnection, CreateSourceConnection, CreateSourceFormat, CreateSourceOption,
-    CreateSourceOptionName, DeferredItemName, Envelope, Expr, Format, Ident, KeyConstraint, Query,
-    SelectItem, SourceIncludeMetadata, SubscribeOutput, TableAlias, TableConstraint,
-    TableWithJoins, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
-    UnresolvedSchemaName, Value,
+    CreateSourceOptionName, DeferredItemName, Envelope, Expr, Format, Ident, KeyConstraint,
+    MaterializedViewOption, Query, SelectItem, SourceIncludeMetadata, SubscribeOutput, TableAlias,
+    TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedItemName,
+    UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -1244,7 +1244,7 @@ pub struct CreateMaterializedViewStatement<T: AstInfo> {
     pub columns: Vec<Ident>,
     pub in_cluster: Option<T::ClusterName>,
     pub query: Query<T>,
-    pub non_null_assertions: Vec<Ident>,
+    pub with_options: Vec<MaterializedViewOption<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {
@@ -1274,15 +1274,9 @@ impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {
             f.write_node(cluster);
         }
 
-        if !self.non_null_assertions.is_empty() {
+        if !self.with_options.is_empty() {
             f.write_str(" WITH (");
-            for (i, nna) in self.non_null_assertions.iter().enumerate() {
-                f.write_str("ASSERT NOT NULL ");
-                f.write_node(nna);
-                if i + 1 != self.non_null_assertions.len() {
-                    f.write_str(", ")
-                }
-            }
+            f.write_node(&display::comma_separated(&self.with_options));
             f.write_str(")");
         }
 
