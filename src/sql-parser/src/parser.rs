@@ -20,6 +20,8 @@
 
 //! SQL Parser
 
+// Dummy comment
+
 use std::error::Error;
 use std::fmt;
 
