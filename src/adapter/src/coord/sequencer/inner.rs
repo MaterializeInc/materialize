@@ -21,7 +21,6 @@ use itertools::Itertools;
 use maplit::btreeset;
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_compute_types::dataflows::{DataflowDesc, DataflowDescription, IndexDesc};
-use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, MirScalarExpr, OptimizedMirRelationExpr,
@@ -56,7 +55,7 @@ use mz_adapter_types::connection::ConnectionId;
 use mz_sql::plan::{
     AlterOptionParameter, Explainee, Index, IndexOption, MaterializedView, MutationKind, Params,
     Plan, PlannedAlterRoleOption, PlannedRoleVariable, QueryWhen, SideEffectingFunc,
-    SourceSinkClusterConfig, SubscribeFrom, UpdatePrivilege, VariableValue,
+    SourceSinkClusterConfig, UpdatePrivilege, VariableValue,
 };
 use mz_sql::session::vars::{
     IsolationLevel, OwnedVarInput, SessionVars, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
@@ -2803,9 +2802,9 @@ impl Coordinator {
                 .add_transaction_ops(TransactionOps::Subscribe)?;
         }
 
-        // Determine the frontier of updates to subscribe *from*.
-        // Updates greater or equal to this frontier will be produced.
         let depends_on = from.depends_on();
+
+        // Run `check_log_reads` and emit notices.
         let notices = check_log_reads(
             self.catalog(),
             cluster,
@@ -2815,19 +2814,43 @@ impl Coordinator {
         )?;
         ctx.session_mut().add_notices(notices);
 
-        let id_bundle = self
-            .index_oracle(cluster_id)
-            .sufficient_collections(&depends_on);
+        // Determine timeline.
         let mut timeline = self.validate_timeline_context(depends_on.clone())?;
         if matches!(timeline, TimelineContext::TimestampIndependent) && from.contains_temporal() {
             // If the from IDs are timestamp independent but the query contains temporal functions
             // then the timeline context needs to be upgraded to timestamp dependent.
             timeline = TimelineContext::TimestampDependent;
         }
+
+        // Collect optimizer parameters.
+        let compute_instance = self
+            .instance_snapshot(cluster_id)
+            .expect("compute instance does not exist");
+        let id = self.allocate_transient_id()?;
+        let conn_id = ctx.session().conn_id().clone();
+        let up_to = up_to
+            .map(|expr| Coordinator::evaluate_when(self.catalog().state(), expr, ctx.session_mut()))
+            .transpose()?;
+        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
+
+        // Build an optimizer for this SUBSCRIBE.
+        let mut optimizer = optimize::OptimizeSubscribe::new(
+            self.owned_catalog(),
+            compute_instance,
+            id,
+            conn_id,
+            with_snapshot,
+            up_to,
+            optimizer_config,
+        );
+
+        // MIR ⇒ MIR optimization (global)
+        let global_mir_plan = optimizer.optimize(from)?;
+        // Timestamp selection
         let as_of = self
             .determine_timestamp(
                 ctx.session(),
-                &id_bundle,
+                &global_mir_plan.id_bundle(),
                 &when,
                 cluster_id,
                 &timeline,
@@ -2839,10 +2862,6 @@ impl Coordinator {
         if let Some(id) = ctx.extra().contents() {
             self.set_statement_execution_timestamp(id, as_of);
         }
-
-        let up_to = up_to
-            .map(|expr| Coordinator::evaluate_when(self.catalog().state(), expr, ctx.session_mut()))
-            .transpose()?;
         if let Some(up_to) = up_to {
             if as_of == up_to {
                 ctx.session_mut()
@@ -2851,64 +2870,23 @@ impl Coordinator {
                 return Err(AdapterError::AbsurdSubscribeBounds { as_of, up_to });
             }
         }
-        let up_to = up_to.map(Antichain::from_elem).unwrap_or_default();
+        let global_mir_plan = global_mir_plan.resolve(Antichain::from_elem(as_of));
+        // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+        let global_lir_plan = optimizer.optimize(global_mir_plan.clone())?;
 
-        let (mut dataflow, dataflow_metainfo) = match from {
-            SubscribeFrom::Id(from_id) => {
-                let from = self.catalog().get_entry(&from_id);
-                let from_desc = from
-                    .desc(
-                        &self
-                            .catalog()
-                            .resolve_full_name(from.name(), Some(ctx.session().conn_id())),
-                    )
-                    .expect("subscribes can only be run on items with descs")
-                    .into_owned();
-                let sink_id = self.allocate_transient_id()?;
-                let sink_desc = ComputeSinkDesc {
-                    from: from_id,
-                    from_desc,
-                    connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection::default()),
-                    with_snapshot,
-                    up_to,
-                    // No `FORCE NOT NULL` for subscribes
-                    non_null_assertions: vec![],
-                };
-                let sink_name = format!("subscribe-{}", sink_id);
-                self.dataflow_builder(cluster_id)
-                    .build_sink_dataflow(sink_name, sink_id, sink_desc)?
-            }
-            SubscribeFrom::Query { expr, desc } => {
-                let id = self.allocate_transient_id()?;
-                let expr = self.view_optimizer.optimize(expr)?;
-                let desc = RelationDesc::new(expr.typ(), desc.iter_names());
-                let sink_desc = ComputeSinkDesc {
-                    from: id,
-                    from_desc: desc,
-                    connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection::default()),
-                    with_snapshot,
-                    up_to,
-                    // No `FORCE NOT NULL` for subscribes
-                    non_null_assertions: vec![],
-                };
-                let mut dataflow = DataflowDesc::new(format!("subscribe-{}", id));
-                let mut dataflow_builder = self.dataflow_builder(cluster_id);
-                dataflow_builder.import_view_into_dataflow(&id, &expr, &mut dataflow)?;
-                let dataflow_metainfo =
-                    dataflow_builder.build_sink_dataflow_into(&mut dataflow, id, sink_desc)?;
-                (dataflow, dataflow_metainfo)
-            }
-        };
+        // Save plan structures.
+        self.catalog_mut()
+            .set_optimized_plan(id, global_mir_plan.df_desc().clone());
+        self.catalog_mut()
+            .set_physical_plan(id, global_lir_plan.df_desc().clone());
+        self.catalog_mut()
+            .set_dataflow_metainfo(id, global_lir_plan.df_meta().clone());
 
-        self.emit_optimizer_notices(ctx.session(), &dataflow_metainfo.optimizer_notices);
+        // Emit notices.
+        self.emit_optimizer_notices(ctx.session(), &global_lir_plan.df_meta().optimizer_notices);
 
-        dataflow.set_as_of(Antichain::from_elem(as_of));
+        let sink_id = global_lir_plan.sink_id();
 
-        let (&sink_id, sink_desc) = dataflow
-            .sink_exports
-            .iter()
-            .next()
-            .expect("subscribes have a single sink export");
         let (tx, rx) = mpsc::unbounded_channel();
         let active_subscribe = ActiveSubscribe {
             user: ctx.session().user().clone(),
@@ -2916,7 +2894,7 @@ impl Coordinator {
             channel: tx,
             emit_progress,
             as_of,
-            arity: sink_desc.from_desc.arity(),
+            arity: global_lir_plan.sink_desc().from_desc.arity(),
             cluster_id,
             depends_on: depends_on.into_iter().collect(),
             start_time: self.now(),
@@ -2926,16 +2904,10 @@ impl Coordinator {
         active_subscribe.initialize();
         self.add_active_subscribe(sink_id, active_subscribe).await;
 
-        // Allow while the introduction of the new optimizer API in
-        // #20569 is in progress.
-        #[allow(deprecated)]
-        match self.ship_dataflow(dataflow, cluster_id).await {
-            Ok(_) => {}
-            Err(e) => {
-                self.remove_active_subscribe(sink_id).await;
-                return Err(e);
-            }
-        };
+        let (df_desc, _df_meta) = global_lir_plan.unapply();
+
+        self.ship_dataflow_new(df_desc, cluster_id).await;
+
         if let Some(target) = target_replica {
             self.controller
                 .compute

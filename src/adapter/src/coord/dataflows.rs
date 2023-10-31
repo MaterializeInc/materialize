@@ -172,7 +172,7 @@ impl Coordinator {
         .await;
     }
 
-    #[deprecated = "This is being replaced by ship_dataflow1 (see #20569)."]
+    #[deprecated = "This is being replaced by ship_dataflow_new (see #20569)."]
     /// Finalizes a dataflow and then broadcasts it to all workers.
     ///
     /// Returns an error on failure. DO NOT call this for DDL. Instead, use the non-fallible version
