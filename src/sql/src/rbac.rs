@@ -13,7 +13,7 @@ use std::iter;
 use itertools::Itertools;
 use maplit::btreeset;
 use mz_controller_types::ClusterId;
-use mz_expr::{CollectionPlan, MirRelationExpr};
+use mz_expr::CollectionPlan;
 use mz_ore::str::StrExt;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
@@ -691,9 +691,11 @@ fn generate_rbac_requirements(
         }) => {
             let mut privileges =
                 generate_read_privileges(catalog, source.depends_on().into_iter(), role_id);
-            if let Some(privilege) =
-                generate_cluster_usage_privileges(source, target_cluster_id, role_id)
-            {
+            if let Some(privilege) = generate_cluster_usage_privileges(
+                source.as_const().is_some(),
+                target_cluster_id,
+                role_id,
+            ) {
                 privileges.push(privilege);
             }
             RbacRequirements {
@@ -815,9 +817,11 @@ fn generate_rbac_requirements(
                 &mut seen,
             ));
 
-            if let Some(privilege) =
-                generate_cluster_usage_privileges(values, target_cluster_id, role_id)
-            {
+            if let Some(privilege) = generate_cluster_usage_privileges(
+                values.as_const().is_some(),
+                target_cluster_id,
+                role_id,
+            ) {
                 privileges.push(privilege);
             } else if !returning.is_empty() {
                 // TODO(jkosh44) returning may be a constant, but for now we are overly protective
@@ -1119,9 +1123,11 @@ fn generate_rbac_requirements(
                 &mut seen,
             ));
 
-            if let Some(privilege) =
-                generate_cluster_usage_privileges(selection, target_cluster_id, role_id)
-            {
+            if let Some(privilege) = generate_cluster_usage_privileges(
+                selection.as_const().is_some(),
+                target_cluster_id,
+                role_id,
+            ) {
                 privileges.push(privilege);
             }
             RbacRequirements {
@@ -1503,13 +1509,13 @@ fn generate_usage_privileges(
 }
 
 fn generate_cluster_usage_privileges(
-    expr: &MirRelationExpr,
+    expr_is_const: bool,
     target_cluster_id: Option<ClusterId>,
     role_id: RoleId,
 ) -> Option<(SystemObjectId, AclMode, RoleId)> {
     // TODO(jkosh44) expr hasn't been fully optimized yet, so it might actually be a constant,
     //  but we mistakenly think that it's not. For now it's ok to be overly protective.
-    if expr.as_const().is_none() {
+    if !expr_is_const {
         if let Some(cluster_id) = target_cluster_id {
             return Some((
                 SystemObjectId::Object(cluster_id.into()),

@@ -83,7 +83,6 @@ pub fn plan_insert(
     let (id, mut expr, returning) =
         query::plan_insert_query(scx, table_name, columns, source, returning)?;
     expr.bind_parameters(params)?;
-    let expr = expr.lower(scx.catalog.system_vars())?;
     let returning = returning
         .expr
         .into_iter()
