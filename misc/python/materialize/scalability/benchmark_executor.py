@@ -17,6 +17,7 @@ import pandas as pd
 from psycopg import Cursor
 
 from materialize.scalability.benchmark_config import BenchmarkConfiguration
+from materialize.scalability.benchmark_result import BenchmarkResult
 from materialize.scalability.df import df_details_cols, df_totals_cols, paths
 from materialize.scalability.endpoint import Endpoint
 from materialize.scalability.operation import Operation
@@ -46,12 +47,11 @@ class BenchmarkExecutor:
         self.baseline_endpoint = baseline_endpoint
         self.other_endpoints = other_endpoints
         self.result_analyzer = result_analyzer
-        self.df_total_by_endpoint_name: dict[str, pd.DataFrame] = dict()
+        self.result = BenchmarkResult()
 
     def run_workloads(
         self,
-    ) -> RegressionOutcome:
-        overall_regression_outcome = RegressionOutcome()
+    ) -> BenchmarkResult:
 
         for workload_cls in self.config.workload_classes:
             assert issubclass(
@@ -59,15 +59,13 @@ class BenchmarkExecutor:
             ), f"{workload_cls} is not a Workload"
             self.run_workload_for_all_endpoints(
                 workload_cls,
-                overall_regression_outcome,
             )
 
-        return overall_regression_outcome
+        return self.result
 
     def run_workload_for_all_endpoints(
         self,
         workload_cls: type[Workload],
-        overall_regression_outcome: RegressionOutcome,
     ):
         if self.baseline_endpoint is not None:
             baseline_result = self.run_workload_for_endpoint(
@@ -81,8 +79,7 @@ class BenchmarkExecutor:
                 workload_cls, other_endpoint, baseline_result, try_count=0
             )
 
-            if regression_outcome is not None:
-                overall_regression_outcome.merge(regression_outcome)
+            self.result.add_regression(regression_outcome)
 
     def run_and_evaluate_workload_for_endpoint(
         self,
@@ -305,13 +302,4 @@ class BenchmarkExecutor:
             f"Collecting results of endpoint {result.endpoint} with name {endpoint_version_info}"
         )
 
-        if endpoint_version_info not in self.df_total_by_endpoint_name:
-            self.df_total_by_endpoint_name[endpoint_version_info] = result.df_totals
-        else:
-            self.df_total_by_endpoint_name[endpoint_version_info] = pd.concat(
-                [
-                    self.df_total_by_endpoint_name[endpoint_version_info],
-                    result.df_totals,
-                ],
-                ignore_index=True,
-            )
+        self.result.append_workload_result(endpoint_version_info, result)

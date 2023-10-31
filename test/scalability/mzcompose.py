@@ -19,6 +19,7 @@ from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.scalability.benchmark_config import BenchmarkConfiguration
 from materialize.scalability.benchmark_executor import BenchmarkExecutor
+from materialize.scalability.benchmark_result import BenchmarkResult
 from materialize.scalability.df import paths
 from materialize.scalability.endpoint import Endpoint
 from materialize.scalability.endpoints import (
@@ -169,10 +170,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         config, schema, baseline_endpoint, other_endpoints, result_analyzer
     )
 
-    overall_regression_outcome = executor.run_workloads()
-    store_and_upload_results_to_buildkite(executor.df_total_by_endpoint_name)
+    result = executor.run_workloads()
+    store_and_upload_results_to_buildkite(result)
 
-    report_regression_result(baseline_endpoint, overall_regression_outcome)
+    report_regression_result(baseline_endpoint, result.overall_regression_outcome)
 
 
 def validate_and_adjust_targets(
@@ -282,14 +283,13 @@ def upload_regressions_to_buildkite(outcome: RegressionOutcome) -> None:
     )
 
 
-def store_and_upload_results_to_buildkite(
-    df_total_by_endpoint_name: dict[str, pd.DataFrame]
-) -> None:
-    for (endpoint_name, results) in df_total_by_endpoint_name.items():
+def store_and_upload_results_to_buildkite(result: BenchmarkResult) -> None:
+    for endpoint_name in result.get_endpoint_names():
         print(
             f"Writing results of {endpoint_name} to {paths.results_csv(endpoint_name)}"
         )
-        results.to_csv(paths.results_csv(endpoint_name))
+        df_total = result.get_df_total_by_endpoint_name(endpoint_name)
+        df_total.to_csv(paths.results_csv(endpoint_name))
 
         if buildkite.is_in_buildkite():
             spawn.runv(
