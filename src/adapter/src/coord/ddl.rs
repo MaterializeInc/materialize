@@ -484,9 +484,9 @@ impl Coordinator {
                             .max_duration(Duration::from_secs(30))
                             .retry_async(|_state| async {
                                 mz_postgres_util::drop_replication_slots(
+                                    &ssh_tunnel_manager,
                                     config.clone(),
                                     &[&slot_name],
-                                    &ssh_tunnel_manager,
                                 )
                                 .await
                             })

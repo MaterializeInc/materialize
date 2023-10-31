@@ -14,8 +14,8 @@ use crate::desc::{PostgresColumnDesc, PostgresKeyDesc, PostgresSchemaDesc, Postg
 use crate::{Config, PostgresError};
 
 pub async fn get_schemas(
-    config: &Config,
     ssh_tunnel_manager: &SshTunnelManager,
+    config: &Config,
 ) -> Result<Vec<PostgresSchemaDesc>, PostgresError> {
     let client = config
         .connect("postgres_schemas", ssh_tunnel_manager)
@@ -46,10 +46,10 @@ pub async fn get_schemas(
 /// - Invalid connection string, user information, or user permissions.
 /// - Upstream publication does not exist or contains invalid values.
 pub async fn publication_info(
+    ssh_tunnel_manager: &SshTunnelManager,
     config: &Config,
     publication: &str,
     oid_filter: Option<u32>,
-    ssh_tunnel_manager: &SshTunnelManager,
 ) -> Result<Vec<PostgresTableDesc>, PostgresError> {
     let client = config
         .connect("postgres_publication_info", ssh_tunnel_manager)
