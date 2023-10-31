@@ -64,13 +64,12 @@ class MaterializeAdapter(PostgresAdapter):
 
     AdapterSpecificConfigs = MaterializeConfig
 
-    # NOTE(morsapaes): Materialize supports enforcing the NOT NULL constraint,
-    # but only for tables. In dbt-materialize, table models are materialized as
-    # static materialized views (see #5266), so we're marking all constraints
-    # as not supported.
+    # NOTE(morsapaes): Materialize supports enforcing the NOT NULL constraint
+    # for materialized views (via the ASSERT NOT NULL clause) and tables. As a
+    # reminder, tables are modeled as static materialized views (see #5266).
     CONSTRAINT_SUPPORT = {
         ConstraintType.check: ConstraintSupport.NOT_SUPPORTED,
-        ConstraintType.not_null: ConstraintSupport.NOT_SUPPORTED,
+        ConstraintType.not_null: ConstraintSupport.ENFORCED,
         ConstraintType.unique: ConstraintSupport.NOT_SUPPORTED,
         ConstraintType.primary_key: ConstraintSupport.NOT_SUPPORTED,
         ConstraintType.foreign_key: ConstraintSupport.NOT_SUPPORTED,
