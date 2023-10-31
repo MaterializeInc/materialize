@@ -70,3 +70,34 @@ class BenchmarkResult:
             self.df_total_by_endpoint_name_and_workload[endpoint_name].values(),
             ignore_index=True,
         )
+
+    def get_df_total_by_workload_and_endpoint(
+        self,
+    ) -> dict[str, dict[str, pd.DataFrame]]:
+        return self._swap_endpoint_and_workload_grouping(
+            self.df_total_by_endpoint_name_and_workload
+        )
+
+    def get_df_details_by_workload_and_endpoint(
+        self,
+    ) -> dict[str, dict[str, pd.DataFrame]]:
+        return self._swap_endpoint_and_workload_grouping(
+            self.df_details_by_endpoint_name_and_workload
+        )
+
+    def _swap_endpoint_and_workload_grouping(
+        self, result_by_endpoint_and_workload: dict[str, dict[str, pd.DataFrame]]
+    ) -> dict[str, dict[str, pd.DataFrame]]:
+        result: dict[str, dict[str, pd.DataFrame]] = dict()
+
+        for (
+            endpoint_name,
+            data_by_workload,
+        ) in result_by_endpoint_and_workload.items():
+            for workload_name, data in data_by_workload.items():
+                if workload_name not in result.keys():
+                    result[workload_name] = dict()
+
+                result[workload_name][endpoint_name] = data
+
+        return result
