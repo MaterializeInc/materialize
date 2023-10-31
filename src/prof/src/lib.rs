@@ -89,9 +89,8 @@ use mz_proc::BuildId;
 use prost::Message;
 
 mod pprof_types;
-mod time;
+pub mod time;
 
-pub mod http;
 #[cfg(feature = "jemalloc")]
 pub mod jemalloc;
 

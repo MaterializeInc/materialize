@@ -26,7 +26,6 @@ pub struct OptimizeView {
 }
 
 impl OptimizeView {
-    #[allow(unused)]
     pub fn new(config: OptimizerConfig) -> Self {
         Self {
             typecheck_ctx: empty_context(),

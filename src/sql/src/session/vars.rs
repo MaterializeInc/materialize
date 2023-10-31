@@ -1873,13 +1873,6 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_webhook_sources,
-        desc: "creating or pushing data to webhook sources",
-        default: false,
-        internal: true,
-        enable_for_item_parsing: true,
-    },
-    {
         name: enable_try_parse_monotonic_iso8601_timestamp,
         desc: "the try_parse_monotonic_iso8601_timestamp function",
         default: false,
@@ -1975,7 +1968,7 @@ feature_flags!(
         desc: "use the new unified optimizer API in bootstrap() and coordinator methods",
         default: true,
         internal: true,
-        enable_for_item_parsing: true,
+        enable_for_item_parsing: false,
     },
     {
         name: enable_assert_not_null,

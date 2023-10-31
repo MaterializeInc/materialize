@@ -953,7 +953,7 @@ pub struct SendDiffsPlan {
 #[derive(Debug)]
 pub struct InsertPlan {
     pub id: GlobalId,
-    pub values: mz_expr::MirRelationExpr,
+    pub values: HirRelationExpr,
     pub returning: Vec<mz_expr::MirScalarExpr>,
 }
 

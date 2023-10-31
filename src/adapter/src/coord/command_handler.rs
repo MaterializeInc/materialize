@@ -810,13 +810,6 @@ impl Coordinator {
         conn_id: ConnectionId,
         tx: oneshot::Sender<Result<AppendWebhookResponse, AdapterError>>,
     ) {
-        // Make sure the feature is enabled before doing anything else.
-        if !self.catalog().system_config().enable_webhook_sources() {
-            // We don't care if the listener went away.
-            let _ = tx.send(Err(AdapterError::Unsupported("enable_webhook_sources")));
-            return;
-        }
-
         /// Attempts to resolve a Webhook source from a provided `database.schema.name` path.
         ///
         /// Returns a struct that can be used to append data to the underlying storate collection, and the

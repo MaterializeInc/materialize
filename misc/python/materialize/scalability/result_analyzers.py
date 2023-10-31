@@ -20,8 +20,8 @@ from materialize.scalability.workload_result import WorkloadResult
 
 
 class DefaultResultAnalyzer(ResultAnalyzer):
-    def __init__(self, max_deviation_in_percent: float):
-        self.max_deviation_in_percent = max_deviation_in_percent
+    def __init__(self, max_deviation_as_percent_decimal: float):
+        self.max_deviation_as_percent_decimal = max_deviation_as_percent_decimal
 
     def determine_regression_in_workload(
         self,
@@ -97,7 +97,7 @@ class DefaultResultAnalyzer(ResultAnalyzer):
         return tps_per_endpoint.loc[
             # keep entries x% worse than the baseline
             tps_per_endpoint[df_totals_ext_cols.TPS_DIFF_PERC] * (-1)
-            > self.max_deviation_in_percent
+            > self.max_deviation_as_percent_decimal
         ]
 
     def collect_regressions(

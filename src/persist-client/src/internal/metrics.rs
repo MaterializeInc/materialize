@@ -1989,6 +1989,7 @@ pub struct PushdownMetrics {
     pub(crate) parts_audited_bytes: IntCounter,
     pub(crate) parts_stats_trimmed_count: IntCounter,
     pub(crate) parts_stats_trimmed_bytes: IntCounter,
+    pub parts_mismatched_stats_count: IntCounter,
 }
 
 impl PushdownMetrics {
@@ -2025,6 +2026,10 @@ impl PushdownMetrics {
             parts_stats_trimmed_bytes: registry.register(metric!(
                 name: "mz_persist_pushdown_parts_stats_trimmed_bytes",
                 help: "total bytes trimmed from part stats",
+            )),
+            parts_mismatched_stats_count: registry.register(metric!(
+                name: "mz_persist_pushdown_parts_mismatched_stats_count",
+                help: "number of parts read with unexpectedly the incorrect type of stats",
             )),
         }
     }

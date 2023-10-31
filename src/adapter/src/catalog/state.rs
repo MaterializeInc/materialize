@@ -75,6 +75,7 @@ use crate::catalog::{
     LINKED_CLUSTER_REPLICA_NAME, SYSTEM_CONN_ID,
 };
 use crate::coord::ConnMeta;
+use crate::optimize::{self, Optimize};
 use crate::session::Session;
 use crate::util::{index_sql, ResultExt};
 use crate::AdapterError;
@@ -752,6 +753,9 @@ impl CatalogState {
         //    overridden.
         session_catalog.system_vars_mut().enable_for_item_parsing();
 
+        let enable_unified_optimizer_api =
+            session_catalog.system_vars().enable_unified_optimizer_api();
+
         let stmt = mz_sql::parse::parse(&create_sql)?.into_element().ast;
         let (stmt, resolved_ids) = mz_sql::names::resolve(&session_catalog, stmt)?;
         let plan = mz_sql::plan::plan(
@@ -763,20 +767,43 @@ impl CatalogState {
         )?;
         Ok(match plan {
             Plan::CreateView(CreateViewPlan { view, .. }) => {
-                let optimizer =
-                    Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
-                let raw_expr = view.expr;
-                let decorrelated_expr = raw_expr.clone().lower(session_catalog.system_vars())?;
-                let optimized_expr = optimizer.optimize(decorrelated_expr)?;
-                let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
-                CatalogItem::View(View {
-                    create_sql: view.create_sql,
-                    raw_expr,
-                    optimized_expr,
-                    desc,
-                    conn_id: None,
-                    resolved_ids,
-                })
+                if enable_unified_optimizer_api {
+                    // Collect optimizer parameters
+                    let optimizer_config =
+                        optimize::OptimizerConfig::from(session_catalog.system_vars());
+
+                    // Build a VIEW optimizer for this view.
+                    let mut optimizer = optimize::OptimizeView::new(optimizer_config);
+
+                    // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
+                    let raw_expr = view.expr;
+                    let optimized_expr = optimizer.optimize(raw_expr.clone())?;
+
+                    CatalogItem::View(View {
+                        create_sql: view.create_sql,
+                        raw_expr,
+                        desc: RelationDesc::new(optimized_expr.typ(), view.column_names),
+                        optimized_expr,
+                        conn_id: None,
+                        resolved_ids,
+                    })
+                } else {
+                    let optimizer =
+                        Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
+                    let raw_expr = view.expr;
+                    let decorrelated_expr =
+                        raw_expr.clone().lower(session_catalog.system_vars())?;
+                    let optimized_expr = optimizer.optimize(decorrelated_expr)?;
+                    let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
+                    CatalogItem::View(View {
+                        create_sql: view.create_sql,
+                        raw_expr,
+                        optimized_expr,
+                        desc,
+                        conn_id: None,
+                        resolved_ids,
+                    })
+                }
             }
             _ => bail!("Expected valid CREATE VIEW statement"),
         })
@@ -814,6 +841,9 @@ impl CatalogState {
         // 2. After this step, feature flag configuration must not be
         //    overridden.
         session_catalog.system_vars_mut().enable_for_item_parsing();
+
+        let enable_unified_optimizer_api =
+            session_catalog.system_vars().enable_unified_optimizer_api();
 
         let stmt = mz_sql::parse::parse(&create_sql)?.into_element().ast;
         let (stmt, resolved_ids) = mz_sql::names::resolve(&session_catalog, stmt)?;
@@ -873,20 +903,43 @@ impl CatalogState {
                 is_retained_metrics_object,
             }),
             Plan::CreateView(CreateViewPlan { view, .. }) => {
-                let optimizer =
-                    Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
-                let raw_expr = view.expr;
-                let decorrelated_expr = raw_expr.clone().lower(session_catalog.system_vars())?;
-                let optimized_expr = optimizer.optimize(decorrelated_expr)?;
-                let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
-                CatalogItem::View(View {
-                    create_sql: view.create_sql,
-                    raw_expr,
-                    optimized_expr,
-                    desc,
-                    conn_id: None,
-                    resolved_ids,
-                })
+                if enable_unified_optimizer_api {
+                    // Collect optimizer parameters
+                    let optimizer_config =
+                        optimize::OptimizerConfig::from(session_catalog.system_vars());
+
+                    // Build a VIEW optimizer for this view.
+                    let mut optimizer = optimize::OptimizeView::new(optimizer_config);
+
+                    // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
+                    let raw_expr = view.expr;
+                    let optimized_expr = optimizer.optimize(raw_expr.clone())?;
+
+                    CatalogItem::View(View {
+                        create_sql: view.create_sql,
+                        raw_expr,
+                        desc: RelationDesc::new(optimized_expr.typ(), view.column_names),
+                        optimized_expr,
+                        conn_id: None,
+                        resolved_ids,
+                    })
+                } else {
+                    let optimizer =
+                        Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
+                    let raw_expr = view.expr;
+                    let decorrelated_expr =
+                        raw_expr.clone().lower(session_catalog.system_vars())?;
+                    let optimized_expr = optimizer.optimize(decorrelated_expr)?;
+                    let desc = RelationDesc::new(optimized_expr.typ(), view.column_names);
+                    CatalogItem::View(View {
+                        create_sql: view.create_sql,
+                        raw_expr,
+                        optimized_expr,
+                        desc,
+                        conn_id: None,
+                        resolved_ids,
+                    })
+                }
             }
             Plan::CreateMaterializedView(CreateMaterializedViewPlan {
                 materialized_view, ..

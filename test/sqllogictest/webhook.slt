@@ -16,16 +16,6 @@ reset-server
 statement ok
 CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));
 
-# We shouldn't be able to create a webhook source unless the feature is enabled.
-statement error creating or pushing data to webhook sources is not supported
-CREATE SOURCE webhook_bytes IN CLUSTER webhook_cluster FROM WEBHOOK
-    BODY FORMAT BYTES
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_webhook_sources = true
-----
-COMPLETE 0
-
 #
 # Happy Path, valid WEBHOOK sources
 #

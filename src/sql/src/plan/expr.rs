@@ -1269,6 +1269,14 @@ impl HirRelationExpr {
         }
     }
 
+    /// If self is a constant, return the value and the type, otherwise `None`.
+    pub fn as_const(&self) -> Option<(&Vec<Row>, &RelationType)> {
+        match self {
+            Self::Constant { rows, typ } => Some((rows, typ)),
+            _ => None,
+        }
+    }
+
     /// Reports whether this expression contains a column reference to its
     /// direct parent scope.
     pub fn is_correlated(&self) -> bool {

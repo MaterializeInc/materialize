@@ -26,6 +26,7 @@ use mz_stash::TableTransaction;
 use mz_stash_types::objects::proto;
 use mz_storage_types::sources::Timeline;
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Duration;
 
 use crate::builtin::BuiltinLog;
 use crate::durable::objects::ClusterConfig;
@@ -73,6 +74,7 @@ pub struct Transaction<'a> {
     // memory cache.
     audit_log_updates: Vec<(proto::AuditLogKey, (), i64)>,
     storage_usage_updates: Vec<(proto::StorageUsageKey, (), i64)>,
+    connection_timeout: Option<Duration>,
 }
 
 impl<'a> Transaction<'a> {
@@ -124,6 +126,7 @@ impl<'a> Transaction<'a> {
             system_privileges: TableTransaction::new(system_privileges, |_a, _b| false)?,
             audit_log_updates: Vec::new(),
             storage_usage_updates: Vec::new(),
+            connection_timeout: None,
         })
     }
 
@@ -1208,6 +1211,10 @@ impl<'a> Transaction<'a> {
             .map(|value| value.value.clone())
     }
 
+    pub fn set_connection_timeout(&mut self, timeout: Duration) {
+        self.connection_timeout = Some(timeout);
+    }
+
     pub(crate) fn into_parts(self) -> (TransactionBatch, &'a mut dyn DurableCatalogState) {
         let txn_batch = TransactionBatch {
             databases: self.databases.pending(),
@@ -1228,6 +1235,7 @@ impl<'a> Transaction<'a> {
             system_privileges: self.system_privileges.pending(),
             audit_log_updates: self.audit_log_updates,
             storage_usage_updates: self.storage_usage_updates,
+            connection_timeout: self.connection_timeout,
         };
         (txn_batch, self.durable_catalog)
     }
@@ -1280,4 +1288,5 @@ pub struct TransactionBatch {
     )>,
     pub(crate) audit_log_updates: Vec<(proto::AuditLogKey, (), Diff)>,
     pub(crate) storage_usage_updates: Vec<(proto::StorageUsageKey, (), Diff)>,
+    pub(crate) connection_timeout: Option<Duration>,
 }

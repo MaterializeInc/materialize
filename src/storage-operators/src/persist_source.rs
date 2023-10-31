@@ -25,6 +25,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::fetch::FetchedPart;
 use mz_persist_client::fetch::SerdeLeasedBatchPart;
+use mz_persist_client::metrics::Metrics;
 use mz_persist_client::operators::shard_source::shard_source;
 use mz_persist_client::stats::PartStats;
 use mz_persist_types::codec_impls::UnitSchema;
@@ -60,8 +61,7 @@ use timely::progress::Timestamp as TimelyTimestamp;
 use timely::scheduling::Activator;
 use timely::PartialOrder;
 use tokio::sync::mpsc::UnboundedSender;
-use tracing::error;
-use tracing::trace;
+use tracing::{trace, warn};
 
 use crate::metrics::BackpressureMetrics;
 
@@ -207,6 +207,8 @@ where
         None => None,
     };
 
+    let metrics = Arc::clone(persist_clients.metrics());
+    let filter_name = name.clone();
     // The `until` gives us an upper bound on the possible values of `mz_now` this query may see.
     // Ranges are inclusive, so it's safe to use the maximum timestamp as the upper bound when
     // `until ` is the empty antichain.
@@ -234,7 +236,12 @@ where
                 ResultSpec::nothing()
             };
             if let Some(plan) = &filter_plan {
-                let stats = PersistSourceDataStats { desc: &desc, stats };
+                let stats = PersistSourceDataStats {
+                    name: &filter_name,
+                    metrics: &metrics,
+                    desc: &desc,
+                    stats,
+                };
                 filter_may_match(desc.typ(), time_range, stats, plan)
             } else {
                 true
@@ -466,19 +473,33 @@ impl PendingWork {
 
 #[derive(Debug)]
 pub(crate) struct PersistSourceDataStats<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) metrics: &'a Metrics,
     pub(crate) desc: &'a RelationDesc,
     pub(crate) stats: &'a PartStats,
 }
 
-fn downcast_stats<'a, T: Data>(stats: &'a dyn DynStats) -> Option<&'a T::Stats> {
+fn downcast_stats<'a, T: Data>(
+    metrics: &Metrics,
+    name: &str,
+    col_name: &str,
+    stats: &'a dyn DynStats,
+) -> Option<&'a T::Stats> {
     match stats.as_any().downcast_ref::<T::Stats>() {
         Some(x) => Some(x),
         None => {
-            error!(
-                "unexpected stats type for {}: {}",
+            // TODO: There is a known instance of this #22680. While we look
+            // into it, log at warn instead of error to avoid spamming Sentry.
+            // Once we fix it, flip this back to error.
+            warn!(
+                "unexpected stats type for {} {} {}: expected {} got {}",
+                name,
+                col_name,
                 std::any::type_name::<T>(),
+                std::any::type_name::<T::Stats>(),
                 stats.type_name()
             );
+            metrics.pushdown.parts_mismatched_stats_count.inc();
             None
         }
     }
@@ -542,7 +563,8 @@ impl PersistSourceDataStats<'_> {
                 scalar_type: ScalarType::Jsonb,
                 nullable: false,
             } => {
-                let byte_stats = downcast_stats::<Vec<u8>>(&**stats)?;
+                let byte_stats =
+                    downcast_stats::<Vec<u8>>(self.metrics, self.name, name.as_str(), &**stats)?;
                 let value_range = match byte_stats {
                     BytesStats::Json(json_stats) => {
                         Self::json_spec(ok_stats.some.len, json_stats, arena)
@@ -555,7 +577,12 @@ impl PersistSourceDataStats<'_> {
                 scalar_type: ScalarType::Jsonb,
                 nullable: true,
             } => {
-                let option_stats = downcast_stats::<Option<Vec<u8>>>(&**stats)?;
+                let option_stats = downcast_stats::<Option<Vec<u8>>>(
+                    self.metrics,
+                    self.name,
+                    name.as_str(),
+                    &**stats,
+                )?;
                 let null_range = match option_stats.none {
                     0 => ResultSpec::nothing(),
                     _ => ResultSpec::null(),
@@ -592,11 +619,18 @@ impl PersistSourceDataStats<'_> {
     }
 
     fn col_values<'a>(&'a self, idx: usize, arena: &'a RowArena) -> Option<ResultSpec> {
-        struct ColValues<'a>(&'a dyn DynStats, &'a RowArena, Option<usize>);
+        struct ColValues<'a>(
+            &'a Metrics,
+            &'a str,
+            &'a str,
+            &'a dyn DynStats,
+            &'a RowArena,
+            Option<usize>,
+        );
         impl<'a> DatumToPersistFn<Option<ResultSpec<'a>>> for ColValues<'a> {
             fn call<T: DatumToPersist>(self) -> Option<ResultSpec<'a>> {
-                let ColValues(stats, arena, total_count) = self;
-                let stats = downcast_stats::<T::Data>(stats)?;
+                let ColValues(metrics, name, col_name, stats, arena, total_count) = self;
+                let stats = downcast_stats::<T::Data>(metrics, name, col_name, stats)?;
                 let make_datum = |lower| arena.make_datum(|packer| T::decode(lower, packer));
                 let min = stats.lower().map(make_datum);
                 let max = stats.upper().map(make_datum);
@@ -623,7 +657,14 @@ impl PersistSourceDataStats<'_> {
             .col::<Option<DynStruct>>("ok")
             .expect("ok column should be a struct")?;
         let stats = ok_stats.some.cols.get(name.as_str())?;
-        typ.to_persist(ColValues(stats.as_ref(), arena, self.len()))?
+        typ.to_persist(ColValues(
+            self.metrics,
+            self.name,
+            name.as_str(),
+            stats.as_ref(),
+            arena,
+            self.len(),
+        ))?
     }
 }
 
@@ -930,6 +971,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::metrics::MetricsRegistry;
     use mz_persist_client::stats::PartStats;
     use mz_persist_types::codec_impls::UnitSchema;
     use mz_persist_types::columnar::{PartEncoder, Schema};
@@ -978,7 +1020,10 @@ mod tests {
             let part = part.finish()?;
             let stats = part.key_stats()?;
 
+            let metrics = Metrics::new(&PersistConfig::new_for_tests(), &MetricsRegistry::new());
             let stats = PersistSourceDataStats {
+                name: "test",
+                metrics: &metrics,
                 stats: &PartStats { key: stats },
                 desc: &schema,
             };

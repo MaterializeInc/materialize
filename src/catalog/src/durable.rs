@@ -187,9 +187,6 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     /// NB: We may remove this in later iterations of Pv2.
     async fn confirm_leadership(&mut self) -> Result<(), CatalogError>;
 
-    /// Set's the connection timeout for the underlying durable store.
-    async fn set_connect_timeout(&mut self, connect_timeout: Duration);
-
     /// Gets all storage usage events and permanently deletes from the catalog those
     /// that happened more than the retention period ago from boot_ts.
     async fn get_and_prune_storage_usage(

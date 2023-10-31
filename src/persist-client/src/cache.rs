@@ -115,6 +115,11 @@ impl PersistClientCache {
         &self.cfg
     }
 
+    /// Returns persist `Metrics`.
+    pub fn metrics(&self) -> &Arc<Metrics> {
+        &self.metrics
+    }
+
     /// Returns `ShardMetrics` for the given shard.
     pub fn shard_metrics(&self, shard_id: &ShardId, name: &str) -> Arc<ShardMetrics> {
         self.metrics.shards.shard(shard_id, name)

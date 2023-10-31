@@ -23,14 +23,23 @@ class Webhook(Check):
     def _can_run(self, e: Executor) -> bool:
         return self.base_version >= MzVersion.parse("0.62.0-dev")
 
-    def initialize(self) -> Testdrive:
-        return Testdrive(
-            schemas()
-            + dedent(
+    def enable(self) -> str:
+        if self.base_version < MzVersion.parse("0.76.0-dev"):
+            return dedent(
                 """
                 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
                 ALTER SYSTEM SET enable_webhook_sources = true
+                """
+            )
+        else:
+            return ""
 
+    def initialize(self) -> Testdrive:
+        return Testdrive(
+            schemas()
+            + self.enable()
+            + dedent(
+                """
                 > CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));
 
                 > CREATE SOURCE webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT TEXT;
