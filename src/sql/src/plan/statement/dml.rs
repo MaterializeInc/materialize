@@ -439,33 +439,34 @@ pub fn plan_explain_schema(
 
     crate::pure::add_materialize_comments(scx.catalog, &mut statement)?;
 
-    if let Plan::CreateSink(CreateSinkPlan { sink, .. }) = ddl::plan_create_sink(scx, statement)? {
-        if let StorageSinkConnection::Kafka(KafkaSinkConnection {
-            format:
-                KafkaSinkFormat::Avro(KafkaSinkAvroFormatState::UnpublishedMaybe {
-                    key_schema,
-                    value_schema,
-                    ..
-                }),
-            ..
-        }) = sink.connection
-        {
-            let schema = match schema_for {
-                ExplainSinkSchemaFor::Key => {
-                    key_schema.ok_or_else(|| sql_err!("CREATE SINK does not have a key"))?
-                }
-                ExplainSinkSchemaFor::Value => value_schema,
-            };
+    match ddl::plan_create_sink(scx, statement)? {
+        Plan::CreateSink(CreateSinkPlan { sink, .. }) => match sink.connection {
+            StorageSinkConnection::Kafka(KafkaSinkConnection {
+                format:
+                    KafkaSinkFormat::Avro(KafkaSinkAvroFormatState::UnpublishedMaybe {
+                        key_schema,
+                        value_schema,
+                        ..
+                    }),
+                ..
+            }) => {
+                let schema = match schema_for {
+                    ExplainSinkSchemaFor::Key => {
+                        key_schema.ok_or_else(|| sql_err!("CREATE SINK does not have a key"))?
+                    }
+                    ExplainSinkSchemaFor::Value => value_schema,
+                };
 
-            Ok(Plan::ExplainSinkSchema(ExplainSinkSchemaPlan {
-                sink_from: sink.from,
-                json_schema: schema,
-            }))
-        } else {
-            bail_unsupported!("EXPLAIN SCHEMA is only available for Kafka sinks with Avro schemas");
-        }
-    } else {
-        unreachable!("plan_create_sink returns a CreateSinkPlan");
+                Ok(Plan::ExplainSinkSchema(ExplainSinkSchemaPlan {
+                    sink_from: sink.from,
+                    json_schema: schema,
+                }))
+            }
+            _ => bail_unsupported!(
+                "EXPLAIN SCHEMA is only available for Kafka sinks with Avro schemas"
+            ),
+        },
+        _ => unreachable!("plan_create_sink returns a CreateSinkPlan"),
     }
 }
 
