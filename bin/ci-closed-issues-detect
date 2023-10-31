@@ -9,19 +9,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# lint-slow.sh — slow linters that require building code.
+# ci-closed-issues-detect - Detect references to already closed issues.
 
-set -euo pipefail
-
-. misc/shlib/shlib.bash
-
-try cargo clippy --all-targets -- -D warnings
-
-try bin/doc
-try bin/doc --document-private-items
-
-try bin/xcompile cargo test --locked --doc
-
-try bin/ci-closed-issues-detect --changed-lines-only
-
-try_status_report
+exec "$(dirname "$0")"/pyactivate -m materialize.cli.ci_closed_issues_detect "$@"

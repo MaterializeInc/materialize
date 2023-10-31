@@ -70,14 +70,14 @@ $ kafka-verify-data format=avro sink=materialize.public.snk sort-messages=true
 {"before": null, "after": {"row":{"a": 1}}}
 {"before": null, "after": {"row":{"a": 2}}}
 
-# todo: re-enable this as part of #13453
 # Ensure that our test infra correctly sets up certs by failing when CSR is not
 # specifically configured, AND we are specifically setting certs
-# > CREATE CONNECTION unknown_cert
-#   FOR CONFLUENT SCHEMA REGISTRY
-#     URL '${testdrive.schema-registry-url}',
-#     SSL KEY = SECRET ssl_key_kafka,
-#     SSL CERTIFICATE = '${arg.materialized-schema-registry-crt}',
-#     SSL CERTIFICATE AUTHORITY = '${arg.ca-crt}',
-#     USERNAME = 'materialize',
-#     PASSWORD = SECRET password_csr;
+! CREATE CONNECTION unknown_cert
+  FOR CONFLUENT SCHEMA REGISTRY
+    URL '${testdrive.schema-registry-url}',
+    SSL KEY = SECRET ssl_key_kafka,
+    SSL CERTIFICATE = '${arg.materialized-schema-registry-crt}',
+    SSL CERTIFICATE AUTHORITY = '${arg.ca-crt}',
+    USERNAME = 'materialize',
+    PASSWORD = SECRET password_csr;
+contains: X509_check_private_key:key values mismatch

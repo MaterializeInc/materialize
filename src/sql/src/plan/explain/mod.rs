@@ -99,7 +99,7 @@ pub fn normalize_subqueries<'a>(expr: &'a mut HirRelationExpr) -> Result<(), Rec
                         // generate a `Get(local_id)` to be used as a subquery replacement
                         let mut subquery = Get {
                             id: Id::Local(local_id.clone()),
-                            typ: RelationType::empty(), // TODO (#13732)
+                            typ: RelationType::empty(), // TODO (aalexandrov)
                         };
                         // swap the current subquery with the replacement
                         std::mem::swap(expr, &mut subquery);
