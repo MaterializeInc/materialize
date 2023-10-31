@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
 use maplit::btreemap;
+use mz_catalog::memory::objects::CollectionIdBundle;
 use mz_compute_types::dataflows::BuildDesc;
 use mz_compute_types::plan::Plan;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
@@ -36,7 +37,6 @@ use crate::coord::dataflows::{
 use crate::optimize::{
     LirDataflowDescription, MirDataflowDescription, Optimize, OptimizerConfig, OptimizerError,
 };
-use crate::CollectionIdBundle;
 
 pub struct OptimizeMaterializedView {
     /// A typechecking context to use throughout the optimizer pipeline.

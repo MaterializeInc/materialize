@@ -19,6 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use differential_dataflow::lattice::Lattice;
 use maplit::{btreemap, btreeset};
 use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW_TS;
+use mz_catalog::memory::objects::CollectionIdBundle;
 use mz_compute_client::controller::error::InstanceMissing;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDesc, DataflowDescription, IndexDesc};
 use mz_compute_types::plan::Plan;
@@ -43,7 +44,6 @@ use timely::PartialOrder;
 use tracing::warn;
 
 use crate::catalog::{CatalogItem, CatalogState, DataSourceDesc, MaterializedView, Source, View};
-use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timestamp_selection::TimestampProvider;
 use crate::coord::Coordinator;
 use crate::session::{Session, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};

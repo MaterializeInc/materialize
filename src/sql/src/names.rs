@@ -1210,6 +1210,7 @@ impl From<CommentObjectId> for ObjectId {
             | CommentObjectId::Func(global_id)
             | CommentObjectId::Connection(global_id)
             | CommentObjectId::Type(global_id)
+            | CommentObjectId::Hold(global_id)
             | CommentObjectId::Secret(global_id) => ObjectId::Item(global_id),
             CommentObjectId::Role(id) => ObjectId::Role(id),
             CommentObjectId::Database(id) => ObjectId::Database(id),
@@ -1268,6 +1269,7 @@ pub enum CommentObjectId {
     Schema((ResolvedDatabaseSpecifier, SchemaSpecifier)),
     Cluster(ClusterId),
     ClusterReplica((ClusterId, ReplicaId)),
+    Hold(GlobalId),
 }
 
 impl RustType<proto::comment_key::Object> for CommentObjectId {
@@ -1324,6 +1326,9 @@ impl RustType<proto::comment_key::Object> for CommentObjectId {
                     replica_id: Some(replica_id.into_proto()),
                 };
                 proto::comment_key::Object::ClusterReplica(cluster_replica_id)
+            }
+            CommentObjectId::Hold(global_id) => {
+                proto::comment_key::Object::Hold(global_id.into_proto())
             }
         }
     }

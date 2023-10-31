@@ -112,6 +112,7 @@ pub enum Plan {
     CreateMaterializedView(CreateMaterializedViewPlan),
     CreateIndex(CreateIndexPlan),
     CreateType(CreateTypePlan),
+    CreateHold(CreateHoldPlan),
     Comment(CommentPlan),
     DiscardTemp,
     DiscardAll,
@@ -286,6 +287,7 @@ impl Plan {
             StatementKind::Subscribe => vec![PlanKind::Subscribe],
             StatementKind::Update => vec![PlanKind::ReadThenWrite],
             StatementKind::ValidateConnection => vec![PlanKind::ValidateConnection],
+            StatementKind::CreateHold => vec![PlanKind::CreateHold],
         }
     }
 
@@ -307,6 +309,7 @@ impl Plan {
             Plan::CreateMaterializedView(_) => "create materialized view",
             Plan::CreateIndex(_) => "create index",
             Plan::CreateType(_) => "create type",
+            Plan::CreateHold(_) => "create hold",
             Plan::Comment(_) => "comment",
             Plan::DiscardTemp => "discard temp",
             Plan::DiscardAll => "discard all",
@@ -398,6 +401,7 @@ impl Plan {
                 ObjectType::Database => "alter database owner",
                 ObjectType::Schema => "alter schema owner",
                 ObjectType::Func => "alter function owner",
+                ObjectType::Hold => "alter hold owner",
             },
             Plan::Declare(_) => "declare",
             Plan::Fetch(_) => "fetch",
@@ -681,6 +685,13 @@ pub struct CreateIndexPlan {
 pub struct CreateTypePlan {
     pub name: QualifiedItemName,
     pub typ: Type,
+}
+
+#[derive(Debug)]
+pub struct CreateHoldPlan {
+    pub name: QualifiedItemName,
+    pub on: Vec<GlobalId>,
+    pub at: Option<MirScalarExpr>,
 }
 
 #[derive(Debug)]

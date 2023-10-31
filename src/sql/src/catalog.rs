@@ -704,6 +704,8 @@ pub enum CatalogItemType {
     Secret,
     /// A connection.
     Connection,
+    /// A hold.
+    Hold,
 }
 
 impl fmt::Display for CatalogItemType {
@@ -719,6 +721,7 @@ impl fmt::Display for CatalogItemType {
             CatalogItemType::Func => f.write_str("func"),
             CatalogItemType::Secret => f.write_str("secret"),
             CatalogItemType::Connection => f.write_str("connection"),
+            CatalogItemType::Hold => f.write_str("hold"),
         }
     }
 }
@@ -736,6 +739,7 @@ impl From<CatalogItemType> for ObjectType {
             CatalogItemType::Func => ObjectType::Func,
             CatalogItemType::Secret => ObjectType::Secret,
             CatalogItemType::Connection => ObjectType::Connection,
+            CatalogItemType::Hold => ObjectType::Hold,
         }
     }
 }
@@ -753,6 +757,7 @@ impl RustType<proto::CatalogItemType> for CatalogItemType {
             CatalogItemType::Func => proto::CatalogItemType::Func,
             CatalogItemType::Secret => proto::CatalogItemType::Secret,
             CatalogItemType::Connection => proto::CatalogItemType::Connection,
+            CatalogItemType::Hold => proto::CatalogItemType::Hold,
         }
     }
 
@@ -768,6 +773,7 @@ impl RustType<proto::CatalogItemType> for CatalogItemType {
             proto::CatalogItemType::Func => CatalogItemType::Func,
             proto::CatalogItemType::Secret => CatalogItemType::Secret,
             proto::CatalogItemType::Connection => CatalogItemType::Connection,
+            proto::CatalogItemType::Hold => CatalogItemType::Hold,
             proto::CatalogItemType::Unknown => {
                 return Err(TryFromProtoError::unknown_enum_variant("CatalogItemType"))
             }
@@ -1359,6 +1365,7 @@ pub enum ObjectType {
     Database,
     Schema,
     Func,
+    Hold,
 }
 
 impl ObjectType {
@@ -1379,6 +1386,7 @@ impl ObjectType {
             | ObjectType::Schema
             | ObjectType::Cluster
             | ObjectType::ClusterReplica
+            | ObjectType::Hold
             | ObjectType::Role => false,
         }
     }
@@ -1403,6 +1411,7 @@ impl From<mz_sql_parser::ast::ObjectType> for ObjectType {
             mz_sql_parser::ast::ObjectType::Database => ObjectType::Database,
             mz_sql_parser::ast::ObjectType::Schema => ObjectType::Schema,
             mz_sql_parser::ast::ObjectType::Func => ObjectType::Func,
+            mz_sql_parser::ast::ObjectType::Hold => ObjectType::Hold,
         }
     }
 }
@@ -1425,6 +1434,7 @@ impl From<CommentObjectId> for ObjectType {
             CommentObjectId::Schema(_) => ObjectType::Schema,
             CommentObjectId::Cluster(_) => ObjectType::Cluster,
             CommentObjectId::ClusterReplica(_) => ObjectType::ClusterReplica,
+            CommentObjectId::Hold(_) => ObjectType::Hold,
         }
     }
 }
@@ -1447,6 +1457,7 @@ impl Display for ObjectType {
             ObjectType::Database => "DATABASE",
             ObjectType::Schema => "SCHEMA",
             ObjectType::Func => "FUNCTION",
+            ObjectType::Hold => "HOLD",
         })
     }
 }
@@ -1469,6 +1480,7 @@ impl RustType<proto::ObjectType> for ObjectType {
             ObjectType::Database => proto::ObjectType::Database,
             ObjectType::Schema => proto::ObjectType::Schema,
             ObjectType::Func => proto::ObjectType::Func,
+            ObjectType::Hold => proto::ObjectType::Hold,
         }
     }
 
@@ -1489,6 +1501,7 @@ impl RustType<proto::ObjectType> for ObjectType {
             proto::ObjectType::Database => Ok(ObjectType::Database),
             proto::ObjectType::Schema => Ok(ObjectType::Schema),
             proto::ObjectType::Func => Ok(ObjectType::Func),
+            proto::ObjectType::Hold => Ok(ObjectType::Hold),
             proto::ObjectType::Unknown => Err(TryFromProtoError::unknown_enum_variant(
                 "ObjectType::Unknown",
             )),

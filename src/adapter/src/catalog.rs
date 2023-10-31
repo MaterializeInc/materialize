@@ -91,8 +91,8 @@ use crate::{AdapterError, AdapterNotice, ExecuteResponse};
 pub use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterConfig, ClusterReplica, ClusterReplicaProcessStatus,
     ClusterVariant, ClusterVariantManaged, CommentsMap, Connection, DataSourceDesc, Database,
-    DefaultPrivileges, Func, Index, Log, MaterializedView, Role, Schema, Secret, Sink, Source,
-    Table, Type, View,
+    DefaultPrivileges, Func, Hold, Index, Log, MaterializedView, Role, Schema, Secret, Sink,
+    Source, Table, Type, View,
 };
 
 mod builtin_table_updates;
@@ -3579,6 +3579,7 @@ pub(crate) fn system_object_type_to_audit_object_type(
             mz_sql::catalog::ObjectType::Database => ObjectType::Database,
             mz_sql::catalog::ObjectType::Schema => ObjectType::Schema,
             mz_sql::catalog::ObjectType::Func => ObjectType::Func,
+            mz_sql::catalog::ObjectType::Hold => ObjectType::Hold,
         },
         SystemObjectType::System => ObjectType::System,
     }

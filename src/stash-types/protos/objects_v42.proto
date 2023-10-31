@@ -19,7 +19,7 @@
 
 syntax = "proto3";
 
-package objects;
+package objects_v42;
 
 message ConfigKey {
     string key = 1;
@@ -70,7 +70,6 @@ message ClusterValue {
 
 message ClusterIntrospectionSourceIndexKey {
     ClusterId cluster_id = 1;
-
     string name = 2;
 }
 
@@ -202,7 +201,6 @@ message CommentKey {
         ResolvedSchema schema = 14;
         ClusterId cluster = 15;
         ClusterReplicaId cluster_replica = 16;
-        GlobalId hold = 17;
     }
     oneof sub_component {
         uint64 column_pos = 3;
@@ -252,7 +250,6 @@ enum CatalogItemType {
     CATALOG_ITEM_TYPE_FUNC = 8;
     CATALOG_ITEM_TYPE_SECRET = 9;
     CATALOG_ITEM_TYPE_CONNECTION = 10;
-    CATALOG_ITEM_TYPE_HOLD = 11;
 }
 
 message CatalogItem {
@@ -445,7 +442,6 @@ enum ObjectType {
     OBJECT_TYPE_DATABASE = 13;
     OBJECT_TYPE_SCHEMA = 14;
     OBJECT_TYPE_FUNC = 15;
-    OBJECT_TYPE_HOLD = 16;
 }
 
 message DefaultPrivilegesKey {

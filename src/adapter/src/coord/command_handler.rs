@@ -553,6 +553,7 @@ impl Coordinator {
                     | Statement::CreateClusterReplica(_)
                     | Statement::CreateConnection(_)
                     | Statement::CreateDatabase(_)
+                    | Statement::CreateHold(_)
                     | Statement::CreateIndex(_)
                     | Statement::CreateMaterializedView(_)
                     | Statement::CreateRole(_)
