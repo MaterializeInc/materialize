@@ -47,6 +47,14 @@ def results_csv(endpoint_name: str) -> Path:
     return RESULTS_DIR / results_csv_rel_path(endpoint_name)
 
 
+def plot_dir() -> Path:
+    return RESULTS_DIR / "plots"
+
+
+def plot_png(plot_type: str, workload_name: str) -> Path:
+    return plot_dir() / f"{plot_type}_{workload_name}.png"
+
+
 def get_endpoint_names_from_results_dir() -> list[str]:
     directories = next(os.walk(RESULTS_DIR))[1]
     endpoints = [entry for entry in directories if not entry.startswith(".")]

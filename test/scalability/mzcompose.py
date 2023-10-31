@@ -12,6 +12,7 @@ import sys
 
 import pandas as pd
 from jupyter_core.command import main as jupyter_core_command_main
+from matplotlib import pyplot as plt
 
 from materialize import benchmark_utils, buildkite, spawn
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
@@ -29,6 +30,10 @@ from materialize.scalability.endpoints import (
     endpoint_name_to_description,
 )
 from materialize.scalability.io import paths
+from materialize.scalability.plot.plot import (
+    boxplot_latency_per_connections,
+    scatterplot_tps_per_connections,
+)
 from materialize.scalability.regression import RegressionOutcome
 from materialize.scalability.result_analyzer import ResultAnalyzer
 from materialize.scalability.result_analyzers import DefaultResultAnalyzer
@@ -167,10 +172,15 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         config, schema, baseline_endpoint, other_endpoints, result_analyzer
     )
 
-    result = executor.run_workloads()
-    store_and_upload_results_to_buildkite(result)
+    benchmark_result = executor.run_workloads()
+    store_and_upload_results_to_buildkite(benchmark_result)
 
-    report_regression_result(baseline_endpoint, result.overall_regression_outcome)
+    create_plots(benchmark_result)
+    upload_plots_to_buildkite()
+
+    report_regression_result(
+        baseline_endpoint, benchmark_result.overall_regression_outcome
+    )
 
 
 def validate_and_adjust_targets(
@@ -269,6 +279,30 @@ def create_result_analyzer(_args: argparse.Namespace) -> ResultAnalyzer:
     )
 
 
+def create_plots(result: BenchmarkResult) -> None:
+    paths.plot_dir().mkdir(parents=True, exist_ok=True)
+
+    for (
+        workload_name,
+        results_by_endpoint,
+    ) in result.get_df_total_by_workload_and_endpoint().items():
+        fig = plt.figure(layout="constrained", figsize=(16, 5))
+        (subfigure) = fig.subfigures(1, 1)
+        scatterplot_tps_per_connections(subfigure, results_by_endpoint)
+        plt.savefig(paths.plot_png("tps", workload_name), bbox_inches="tight", dpi=300)
+
+    for (
+        workload_name,
+        results_by_endpoint,
+    ) in result.get_df_details_by_workload_and_endpoint().items():
+        fig = plt.figure(layout="constrained", figsize=(16, 5))
+        (subfigure) = fig.subfigures(1, 1)
+        boxplot_latency_per_connections(subfigure, results_by_endpoint)
+        plt.savefig(
+            paths.plot_png("latency", workload_name), bbox_inches="tight", dpi=300
+        )
+
+
 def upload_regressions_to_buildkite(outcome: RegressionOutcome) -> None:
     if not outcome.has_regressions():
         return
@@ -298,6 +332,10 @@ def store_and_upload_results_to_buildkite(result: BenchmarkResult) -> None:
                 ],
                 cwd=paths.RESULTS_DIR,
             )
+
+
+def upload_plots_to_buildkite() -> None:
+    pass
 
 
 def workflow_lab(c: Composition) -> None:
