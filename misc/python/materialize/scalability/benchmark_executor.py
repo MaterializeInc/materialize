@@ -18,8 +18,9 @@ from psycopg import Cursor
 
 from materialize.scalability.benchmark_config import BenchmarkConfiguration
 from materialize.scalability.benchmark_result import BenchmarkResult
-from materialize.scalability.df import df_details_cols, df_totals_cols, paths
+from materialize.scalability.df import df_details_cols, df_totals_cols
 from materialize.scalability.endpoint import Endpoint
+from materialize.scalability.io import paths
 from materialize.scalability.operation import Operation
 from materialize.scalability.regression import RegressionOutcome
 from materialize.scalability.result_analyzer import ResultAnalyzer

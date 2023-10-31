@@ -12,7 +12,7 @@ import os
 import pandas as pd
 from matplotlib import pyplot as plt  # type: ignore
 
-from materialize.scalability.df import paths
+from materialize.scalability.io import paths
 from materialize.scalability.plot.plot import (
     boxplot_latency_per_connections,
     scatterplot_latency_per_connections,
