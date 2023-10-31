@@ -91,6 +91,7 @@ class WorkloadExecutor:
         baseline_result: WorkloadResult | None,
         try_count: int,
     ) -> RegressionOutcome | None:
+        workload_name = workload_cls.__name__
         other_endpoint_result = self.run_workload_for_endpoint(
             other_endpoint, workload_cls()
         )
@@ -99,7 +100,7 @@ class WorkloadExecutor:
             return None
 
         outcome = self.result_analyzer.determine_regression_in_workload(
-            workload_cls.__name__,
+            workload_name,
             self.baseline_endpoint,
             other_endpoint,
             baseline_result,
@@ -107,6 +108,10 @@ class WorkloadExecutor:
         )
 
         if outcome.has_regressions() and try_count < MAX_RETRIES_ON_REGRESSION:
+            print(
+                f"Potential regression in workload {workload_name} at endpoint {other_endpoint},"
+                f" triggering retry {try_count + 1} of {MAX_RETRIES_ON_REGRESSION}"
+            )
             return self.run_and_evaluate_workload_for_endpoint(
                 workload_cls, other_endpoint, baseline_result, try_count=try_count + 1
             )
