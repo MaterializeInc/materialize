@@ -97,7 +97,7 @@ use crate::plan::error::PlanError;
 use crate::plan::expr::ColumnRef;
 use crate::plan::query::{scalar_type_from_catalog, ExprContext, QueryLifetime};
 use crate::plan::scope::Scope;
-use crate::plan::statement::ddl::connection::INALTERABLE_OPTIONS;
+use crate::plan::statement::ddl::connection::{INALTERABLE_OPTIONS, MUTUALLY_EXCLUSIVE_SETS};
 use crate::plan::statement::{scl, StatementContext, StatementDesc};
 use crate::plan::typeconv::{plan_cast, CastContext};
 use crate::plan::with_options::{OptionalInterval, TryFromValue};
@@ -4832,6 +4832,7 @@ pub fn plan_alter_connection(
         Connection::Ssh(_) => CreateConnectionType::Ssh,
     };
 
+    // Collect all options irrespective of action taken on them.
     let specified_options: BTreeSet<_> = actions
         .iter()
         .map(|action: &AlterConnectionAction<Aug>| match action {
@@ -4849,6 +4850,7 @@ pub fn plan_alter_connection(
 
     connection::validate_options_per_connection_type(connection_type, specified_options)?;
 
+    // Partition operations into set and drop
     let (set_options_vec, mut drop_options): (Vec<_>, BTreeSet<_>) =
         actions.into_iter().partition_map(|action| match action {
             AlterConnectionAction::SetOption(option) => Either::Left(option),
@@ -4883,15 +4885,38 @@ pub fn plan_alter_connection(
         )
     }
 
-    // Handle any mutually exclusive options.
-    //
-    // e.g. if we're setting BROKER or BROKERS, we need to ensure we clear out
-    // the previous definition of BROKER or BROKERS.
-    if set_options.contains_key(&ConnectionOptionName::Broker)
-        || set_options.contains_key(&ConnectionOptionName::Brokers)
-    {
-        drop_options.insert(ConnectionOptionName::Broker);
-        drop_options.insert(ConnectionOptionName::Brokers);
+    for mutually_exclusive_options in MUTUALLY_EXCLUSIVE_SETS {
+        let set_options_count = mutually_exclusive_options
+            .iter()
+            .filter(|o| set_options.contains_key(o))
+            .count();
+        let drop_options_count = mutually_exclusive_options
+            .iter()
+            .filter(|o| drop_options.contains(o))
+            .count();
+
+        // Disallow setting _and_ resetting mutually exclusive options
+        if set_options_count > 0 && drop_options_count > 0 {
+            sql_bail!(
+                "cannot both SET and DROP/RESET mutually exclusive {} options {}",
+                connection_type,
+                mutually_exclusive_options
+                    .iter()
+                    .map(|option| option.to_string())
+                    .join(", ")
+            )
+        }
+
+        // If any option is either set or dropped, ensure all mutually exclusive
+        // options are dropped. We do this "behind the scenes", even though we
+        // disallow users from performing the same action because this is the
+        // mechanism by which we overwrite values elsewhere in the code.
+        if set_options_count > 0 || drop_options_count > 0 {
+            drop_options.extend(mutually_exclusive_options.iter().cloned());
+        }
+
+        // n.b. if mutually exclusive options are set, those will error when we
+        // try to replan the connection.
     }
 
     Ok(Plan::AlterConnection(AlterConnectionPlan {
