@@ -1013,27 +1013,29 @@ fn construct_source_message(
                 packer.push(d)
             }
             KafkaMetadataKind::Header { key, use_bytes } => {
-                if let Some(headers) = msg.headers() {
-                    let d = headers
-                        .iter()
-                        //match the first header (FIXME: according to which order?)
-                        .find(|header| header.key == key)
-                        .map(|header| match header.value {
-                            Some(v) => {
-                                if *use_bytes {
-                                    Datum::Bytes(v)
-                                } else {
-                                    match str::from_utf8(v) {
-                                        Ok(str) => Datum::String(str),
-                                        Err(_) => Datum::Null,
+                match msg.headers() {
+                    Some(headers) => {
+                        let d = headers
+                            .iter()
+                            .find(|header| header.key == key)
+                            .map(|header| match header.value {
+                                Some(v) => {
+                                    if *use_bytes {
+                                        Datum::Bytes(v)
+                                    } else {
+                                        match str::from_utf8(v) {
+                                            Ok(str) => Datum::String(str),
+                                            Err(_) => Datum::Null, //FIXME(steffen): should an debug warning be emitted?
+                                        }
                                     }
                                 }
-                            }
-                            None => Datum::Null,
-                        })
-                        //if header is not found, default to null
-                        .unwrap_or(Datum::Null);
-                    packer.push(d);
+                                None => Datum::Null,
+                            })
+                            //if header is not found, default to null
+                            .unwrap_or(Datum::Null);
+                        packer.push(d);
+                    }
+                    None => packer.push(Datum::Null),
                 }
             }
             KafkaMetadataKind::Headers => {
