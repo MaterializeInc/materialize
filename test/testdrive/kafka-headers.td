@@ -203,7 +203,7 @@ message_2    message_2_header_1    message_2_header_2
   INCLUDE HEADER 'header1' AS one, HEADER 'header2' AS two
   ENVELOPE UPSERT
 
-> SELECT key, header1, header2 from individual_headers_alias
+> SELECT key, one, two from individual_headers_alias
 key          one                   two
 ----------------------------------------------
 message_0    <null>                <null>
@@ -224,7 +224,6 @@ $ kafka-ingest format=avro topic=duplicate_individual_headers key-format=avro ke
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE HEADER 'header3' AS duplicates
   ENVELOPE UPSERT
-
 
 > SELECT key, duplicates from duplicate_individual_headers
 key          duplicates
