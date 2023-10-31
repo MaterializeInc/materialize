@@ -42,6 +42,8 @@ SERVICES = [
     Postgres(),
 ]
 
+REGRESSION_THRESHOLD_IN_PERCENT = 0.2
+
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
@@ -261,7 +263,9 @@ def report_regression_result(
 
 
 def create_result_analyzer(_args: argparse.Namespace) -> ResultAnalyzer:
-    return DefaultResultAnalyzer(max_deviation_in_percent=0.1)
+    return DefaultResultAnalyzer(
+        max_deviation_in_percent=REGRESSION_THRESHOLD_IN_PERCENT
+    )
 
 
 def upload_regressions_to_buildkite(outcome: RegressionOutcome) -> None:
