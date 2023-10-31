@@ -42,7 +42,7 @@ SERVICES = [
     Postgres(),
 ]
 
-REGRESSION_THRESHOLD_IN_PERCENT = 0.2
+REGRESSION_THRESHOLD_AS_PERCENT_DECIMAL = 0.2
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -264,7 +264,7 @@ def report_regression_result(
 
 def create_result_analyzer(_args: argparse.Namespace) -> ResultAnalyzer:
     return DefaultResultAnalyzer(
-        max_deviation_in_percent=REGRESSION_THRESHOLD_IN_PERCENT
+        max_deviation_as_percent_decimal=REGRESSION_THRESHOLD_AS_PERCENT_DECIMAL
     )
 
 
