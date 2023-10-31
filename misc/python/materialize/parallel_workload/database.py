@@ -28,6 +28,7 @@ from materialize.data_ingest.executor import KafkaExecutor, PgExecutor
 from materialize.data_ingest.field import Field
 from materialize.data_ingest.transaction import Transaction
 from materialize.data_ingest.workload import WORKLOADS
+from materialize.mzcompose.composition import Composition
 from materialize.parallel_workload.executor import Executor
 from materialize.parallel_workload.settings import Complexity, Scenario
 from materialize.util import naughty_strings
@@ -711,6 +712,7 @@ class Database:
     kafka_sink_id: int
     lock: threading.Lock
     seed: str
+    sqlsmith_state: str
 
     def __init__(
         self,
@@ -807,6 +809,7 @@ class Database:
         ]
         self.kafka_sink_id = len(self.kafka_sinks)
         self.lock = threading.Lock()
+        self.sqlsmith_state = ""
 
     def db_objects(
         self,
@@ -832,7 +835,7 @@ class Database:
             self.schemas + self.clusters + self.roles + self.db_objects()
         ).__iter__()
 
-    def create(self, exe: Executor) -> None:
+    def create(self, exe: Executor, composition: Composition) -> None:
         for db in self.dbs:
             db.drop(exe)
             db.create(exe)
@@ -860,3 +863,28 @@ class Database:
 
         for relation in self:
             relation.create(exe)
+
+        result = composition.run(
+            "sqlsmith",
+            "--target=host=materialized port=6875 dbname=materialize user=materialize",
+            "--exclude-catalog",
+            "--dump-state",
+            capture=True,
+            capture_stderr=True,
+            rm=True,
+        )
+        self.sqlsmith_state = result.stdout
+
+    def update_sqlsmith_state(self, composition: Composition) -> None:
+        result = composition.run(
+            "sqlsmith",
+            "--target=host=materialized port=6875 dbname=materialize user=materialize",
+            "--exclude-catalog",
+            "--read-state",
+            "--dump-state",
+            stdin=self.sqlsmith_state,
+            capture=True,
+            capture_stderr=True,
+            rm=True,
+        )
+        self.sqlsmith_state = result.stdout

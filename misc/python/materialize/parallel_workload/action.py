@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import json
 import random
 import time
 from typing import TYPE_CHECKING
@@ -49,6 +50,7 @@ from materialize.parallel_workload.database import (
 )
 from materialize.parallel_workload.executor import Executor
 from materialize.parallel_workload.settings import Complexity, Scenario
+from materialize.sqlsmith import known_errors
 
 if TYPE_CHECKING:
     from materialize.parallel_workload.worker import Worker
@@ -56,9 +58,11 @@ if TYPE_CHECKING:
 # TODO: CASCADE in DROPs, keep track of what will be deleted
 class Action:
     rng: random.Random
+    composition: Composition | None
 
-    def __init__(self, rng: random.Random):
+    def __init__(self, rng: random.Random, composition: Composition | None):
         self.rng = rng
+        self.composition = composition
 
     def run(self, exe: Executor) -> None:
         raise NotImplementedError
@@ -196,6 +200,65 @@ class SelectAction(Action):
         exe.cur.fetchall()
 
 
+class SQLsmithAction(Action):
+    composition: Composition
+    queries: list[str]
+
+    def __init__(self, rng: random.Random, composition: Composition | None):
+        super().__init__(rng, composition)
+        self.queries = []
+        assert self.composition
+
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        result = super().errors_to_ignore(exe)
+        result.extend(known_errors)
+
+        if exe.db.complexity in (Complexity.DML, Complexity.DDL):
+            result.extend(
+                [
+                    "in the same timedomain",
+                ]
+            )
+        if exe.db.complexity == Complexity.DDL:
+            result.extend(
+                [
+                    "does not exist",
+                ]
+            )
+        return result
+
+    def run(self, exe: Executor) -> None:
+        if not self.queries:
+            with exe.db.lock:
+                self.composition.silent = True
+                try:
+                    result = self.composition.run(
+                        "sqlsmith",
+                        "--max-joins=1",
+                        "--target=host=materialized port=6875 dbname=materialize user=materialize",
+                        "--read-state",
+                        "--dry-run",
+                        "--max-queries=100",
+                        stdin=exe.db.sqlsmith_state,
+                        capture=True,
+                        capture_stderr=True,
+                        rm=True,
+                    )
+                    data = json.loads(result.stdout)
+                    self.queries.extend(data["queries"])
+                except:
+                    if exe.db.scenario not in (Scenario.Kill, Scenario.BackupRestore):
+                        raise
+                    else:
+                        return
+                finally:
+                    self.composition.silent = False
+
+        query = self.queries.pop()
+        exe.execute(query, explainable=True)
+        exe.cur.fetchall()
+
+
 class InsertAction(Action):
     def run(self, exe: Executor) -> None:
         table = None
@@ -302,6 +365,11 @@ class CommentAction(Action):
             query = f"COMMENT ON TABLE {table} IS '{Text.random_value(self.rng)}'"
 
         exe.execute(query)
+
+
+class SleepAction(Action):
+    def run(self, exe: Executor) -> None:
+        time.sleep(1)
 
 
 class CreateIndexAction(Action):
@@ -809,9 +877,10 @@ class ReconnectAction(Action):
     def __init__(
         self,
         rng: random.Random,
+        composition: Composition | None,
         random_role: bool = True,
     ):
-        super().__init__(rng)
+        super().__init__(rng, composition)
         self.random_role = random_role
 
     def run(self, exe: Executor) -> None:
@@ -872,9 +941,10 @@ class CancelAction(Action):
     def __init__(
         self,
         rng: random.Random,
+        composition: Composition | None,
         workers: list["Worker"],
     ):
-        super().__init__(rng)
+        super().__init__(rng, composition)
         self.workers = workers
 
     def run(self, exe: Executor) -> None:
@@ -896,17 +966,15 @@ class CancelAction(Action):
 
 
 class KillAction(Action):
-    composition: Composition
-
     def __init__(
         self,
         rng: random.Random,
-        composition: Composition,
+        composition: Composition | None,
     ):
-        super().__init__(rng)
-        self.composition = composition
+        super().__init__(rng, composition)
 
     def run(self, exe: Executor) -> None:
+        assert self.composition
         self.composition.kill("materialized")
         # Otherwise getting failure on "up" locally
         time.sleep(1)
@@ -921,12 +989,12 @@ class BackupRestoreAction(Action):
     num: int
 
     def __init__(
-        self, rng: random.Random, composition: Composition, db: Database
+        self, rng: random.Random, composition: Composition | None, db: Database
     ) -> None:
-        super().__init__(rng)
-        self.composition = composition
+        super().__init__(rng, composition)
         self.db = db
         self.num = 0
+        assert self.composition
 
     def run(self, exe: Executor) -> None:
         self.num += 1
@@ -1244,6 +1312,7 @@ class ActionList:
 read_action_list = ActionList(
     [
         (SelectAction, 100),
+        (SQLsmithAction, 30),
         # (SetClusterAction, 1),  # SET cluster cannot be called in an active transaction
         (CommitRollbackAction, 1),
         (ReconnectAction, 1),
@@ -1286,6 +1355,7 @@ dml_nontrans_action_list = ActionList(
 
 ddl_action_list = ActionList(
     [
+        (SleepAction, 100),  # DDLs easily starve Mz, don't run them too often
         (CreateIndexAction, 2),
         (DropIndexAction, 1),
         (CreateTableAction, 2),

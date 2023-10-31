@@ -15,6 +15,7 @@ from collections import Counter, defaultdict
 import pg8000
 
 from materialize.data_ingest.query_error import QueryError
+from materialize.mzcompose.composition import Composition
 from materialize.parallel_workload.action import Action, ReconnectAction
 from materialize.parallel_workload.database import Database
 from materialize.parallel_workload.executor import Executor
@@ -30,6 +31,7 @@ class Worker:
     system: bool
     exe: Executor | None
     ignored_errors: defaultdict[str, Counter[type[Action]]]
+    composition: Composition | None
 
     def __init__(
         self,
@@ -39,6 +41,7 @@ class Worker:
         end_time: float,
         autocommit: bool,
         system: bool,
+        composition: Composition | None,
     ):
         self.rng = rng
         self.actions = actions
@@ -48,6 +51,7 @@ class Worker:
         self.autocommit = autocommit
         self.system = system
         self.ignored_errors = defaultdict(Counter)
+        self.composition = composition
         self.exe = None
 
     def run(self, host: str, port: int, user: str, database: Database) -> None:
@@ -80,7 +84,9 @@ class Worker:
                             continue
                     self.exe.rollback_next = False
                 if self.exe.reconnect_next:
-                    ReconnectAction(self.rng, random_role=False).run(self.exe)
+                    ReconnectAction(self.rng, self.composition, random_role=False).run(
+                        self.exe
+                    )
                     self.exe.reconnect_next = False
                 action.run(self.exe)
             except QueryError as e:
