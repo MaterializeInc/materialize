@@ -24,6 +24,7 @@
 /src/adapter-types                  @MaterializeInc/adapter
 /src/adapter/src/optimizer          @MaterializeInc/compute
 /src/adapter/src/coord/dataflows.rs @MaterializeInc/compute
+/src/adapter/src/coord/ddl.rs       @MaterializeInc/testing
 /src/adapter/src/flags.rs           @MaterializeInc/testing
 /src/alloc                          @benesch
 /src/audit-log                      @MaterializeInc/adapter
