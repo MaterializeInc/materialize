@@ -4815,27 +4815,19 @@ pub fn plan_alter_connection(
 
     let connection = entry.connection()?;
 
-    let options = AlterConnectionOptionExtracted::try_from(with_options)?;
-    if options.validate.is_some() {
-        scx.require_feature_flag(&vars::ENABLE_CONNECTION_VALIDATION_SYNTAX)?;
-    }
-
-    let validate = match options.validate {
-        Some(val) => val,
-        None => {
-            scx.catalog
-                .system_vars()
-                .enable_default_connection_validation()
-                && connection.validate_by_default()
-        }
-    };
-
     if actions
         .iter()
         .any(|action| matches!(action, AlterConnectionAction::RotateKeys))
     {
         if actions.len() > 1 {
             sql_bail!("cannot specify any other actions alongside ALTER CONNECTION...ROTATE KEYS");
+        }
+
+        if !with_options.is_empty() {
+            sql_bail!(
+                "ALTER CONNECTION...ROTATE KEYS does not support WITH ({})",
+                with_options.iter().map(|o| o.to_ast_string()).join(", ")
+            );
         }
 
         if !matches!(connection, Connection::Ssh(_)) {
@@ -4850,6 +4842,21 @@ pub fn plan_alter_connection(
             action: crate::plan::AlterConnectionAction::RotateKeys,
         }));
     }
+
+    let options = AlterConnectionOptionExtracted::try_from(with_options)?;
+    if options.validate.is_some() {
+        scx.require_feature_flag(&vars::ENABLE_CONNECTION_VALIDATION_SYNTAX)?;
+    }
+
+    let validate = match options.validate {
+        Some(val) => val,
+        None => {
+            scx.catalog
+                .system_vars()
+                .enable_default_connection_validation()
+                && connection.validate_by_default()
+        }
+    };
 
     let connection_type = match connection {
         Connection::Aws(_) => CreateConnectionType::Aws,
