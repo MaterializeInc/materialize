@@ -30,8 +30,8 @@ Output type | Description
 **JSON** | Format the explanation output as a JSON object.
 
 ## Details
-When creating a `SINK` with `AVRO` format using `CONFLUENT SCHEMA REGISTRY`, Materialize generates avro schemas to publish to the said registry.
-This command shows what the generated schema would look like without having to create the sink.
+When creating a an Avro-formatted Kafka sink, Materialize automatically generates Avro schemas for the message key and value and publishes them to a schema registry.
+This command shows what the generated schemas would look like, without creating the sink.
 
 ## Examples
 
@@ -80,5 +80,4 @@ EXPLAIN VALUE SCHEMA FOR
 
 The privileges required to execute this statement are:
 
-- `USAGE` privileges on the schemas that all relations and types in the query are contained in.
-- `USAGE` privileges on the relation used in the `CREATE SINK` statement.
+- `USAGE` privileges on the schemas that all items in the query are contained in.
