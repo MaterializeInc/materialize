@@ -20,7 +20,6 @@ from materialize.mzcompose.services.postgres import Postgres
 from materialize.scalability.benchmark_config import BenchmarkConfiguration
 from materialize.scalability.benchmark_executor import BenchmarkExecutor
 from materialize.scalability.benchmark_result import BenchmarkResult
-from materialize.scalability.df import paths
 from materialize.scalability.endpoint import Endpoint
 from materialize.scalability.endpoints import (
     MaterializeContainer,
@@ -29,6 +28,7 @@ from materialize.scalability.endpoints import (
     PostgresContainer,
     endpoint_name_to_description,
 )
+from materialize.scalability.io import paths
 from materialize.scalability.regression import RegressionOutcome
 from materialize.scalability.result_analyzer import ResultAnalyzer
 from materialize.scalability.result_analyzers import DefaultResultAnalyzer
