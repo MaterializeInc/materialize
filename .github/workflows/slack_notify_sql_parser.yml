@@ -37,7 +37,7 @@ on:
       - ready_for_review
     paths:
       - 'src/sql-parser/**'
-      - 'src/sql-lexer/**'  
+      - 'src/sql-lexer/**'
 
 jobs:
   notify:
@@ -53,7 +53,7 @@ jobs:
             parser-change:
               - 'src/sql-parser/**'
             lexer-change:
-              - 'src/sql-lexer/**'  
+              - 'src/sql-lexer/**'
       - name: "Push to Slack"
         if: steps.filter.outputs.parser-change == 'true' || steps.filter.outputs.lexer-change == 'true'
         uses: actions-ecosystem/action-slack-notifier@fc778468d09c43a6f4d1b8cccaca59766656996a
