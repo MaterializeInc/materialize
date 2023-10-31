@@ -58,3 +58,40 @@ def plot_latency_per_connections(
     plot.set_ylabel("Latency in Seconds")
     plot.set_xlabel("Concurrent SQL Connections")
     plot.legend(legend)
+
+
+def boxplot_latency_per_connections(
+    figure: SubFigure, df_details_by_endpoint_name: dict[str, pd.DataFrame]
+) -> None:
+    if len(df_details_by_endpoint_name) == 0:
+        return
+
+    concurrencies = next(iter(df_details_by_endpoint_name.values()))[
+        df_details_cols.CONCURRENCY
+    ].unique()
+
+    subplots = figure.subplots(1, len(concurrencies), sharey=True)
+
+    for concurrency_index, concurrency in enumerate(concurrencies):
+        plot: Axes = subplots[concurrency_index]
+        legend = []
+
+        wallclocks_of_endpoints: list[list[float]] = []
+
+        for endpoint_name, df_details in df_details_by_endpoint_name.items():
+            legend.append(endpoint_name)
+
+            df_details_of_concurrency = df_details.loc[
+                df_details[df_details_cols.CONCURRENCY] == concurrency
+            ]
+            wallclocks_of_concurrency = df_details_of_concurrency[
+                df_details_cols.WALLCLOCK
+            ]
+            wallclocks_of_endpoints.append(wallclocks_of_concurrency)
+
+        plot.boxplot(wallclocks_of_endpoints, labels=legend)
+
+        if concurrency_index == 0:
+            plot.set_ylabel("Latency in Seconds")
+
+        plot.set_title(f"Concurrent SQL Connections: {concurrency}")
