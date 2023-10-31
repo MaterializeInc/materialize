@@ -14,6 +14,7 @@ use async_trait::async_trait;
 
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_ore::now::EpochMillis;
+use mz_ore::soft_assert_eq_or_log;
 use mz_repr::Timestamp;
 use mz_storage_types::sources::Timeline;
 
@@ -28,7 +29,7 @@ macro_rules! compare_and_return {
     ($shadow:expr, $method:ident $(, $arg:expr)*) => {{
         let stash = $shadow.stash.$method($($arg.clone()),*);
         let persist = $shadow.persist.$method($($arg),*);
-        assert_eq!(stash, persist);
+        soft_assert_eq_or_log!(stash, persist);
         stash
     }};
 }
@@ -38,14 +39,14 @@ macro_rules! compare_and_return_async {
         let stash = $shadow.stash.$method($($arg),*);
         let persist = $shadow.persist.$method($($arg),*);
         let (stash, persist) = futures::future::join(stash, persist).await;
-        assert_eq!(
+        soft_assert_eq_or_log!(
             stash.is_ok(),
             persist.is_ok(),
             "stash and persist result variant do not match. stash: {stash:?}. persist: {persist:?}"
         );
         let stash = stash?;
         let persist = persist?;
-        assert_eq!(stash, persist);
+        soft_assert_eq_or_log!(stash, persist);
         Ok(stash)
     }};
 }
@@ -79,7 +80,7 @@ where
             .persist
             .open_savepoint(boot_ts, bootstrap_args, deploy_generation);
         let (stash, persist) = futures::future::join(stash, persist).await;
-        assert_eq!(
+        soft_assert_eq_or_log!(
             stash.is_ok(),
             persist.is_ok(),
             "stash and persist result variant do not match. stash: {stash:?}. persist: {persist:?}"
@@ -97,7 +98,7 @@ where
         let stash = self.stash.open_read_only(boot_ts.clone(), bootstrap_args);
         let persist = self.persist.open_read_only(boot_ts, bootstrap_args);
         let (stash, persist) = futures::future::join(stash, persist).await;
-        assert_eq!(
+        soft_assert_eq_or_log!(
             stash.is_ok(),
             persist.is_ok(),
             "stash and persist result variant do not match. stash: {stash:?}. persist: {persist:?}"
@@ -120,7 +121,7 @@ where
             .persist
             .open(boot_ts, bootstrap_args, deploy_generation);
         let (stash, persist) = futures::future::join(stash, persist).await;
-        assert_eq!(
+        soft_assert_eq_or_log!(
             stash.is_ok(),
             persist.is_ok(),
             "stash and persist result variant do not match. stash: {stash:?}. persist: {persist:?}"
@@ -206,14 +207,6 @@ impl DurableCatalogState for ShadowCatalogState {
 
     async fn confirm_leadership(&mut self) -> Result<(), CatalogError> {
         compare_and_return_async!(self, confirm_leadership)
-    }
-
-    async fn set_connect_timeout(&mut self, connect_timeout: Duration) {
-        futures::future::join(
-            self.stash.set_connect_timeout(connect_timeout.clone()),
-            self.persist.set_connect_timeout(connect_timeout),
-        )
-        .await;
     }
 
     async fn get_and_prune_storage_usage(

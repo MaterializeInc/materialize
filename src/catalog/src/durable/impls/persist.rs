@@ -282,7 +282,7 @@ impl PersistHandle {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip(self, now))]
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn open_inner(
         mut self,
         mode: Mode,
@@ -490,7 +490,7 @@ impl PersistHandle {
 
 #[async_trait]
 impl OpenableDurableCatalogState for PersistHandle {
-    #[tracing::instrument(level = "debug", skip(self, now))]
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn open_savepoint(
         mut self: Box<Self>,
         boot_ts: EpochMillis,
@@ -501,7 +501,7 @@ impl OpenableDurableCatalogState for PersistHandle {
             .await
     }
 
-    #[tracing::instrument(level = "debug", skip(self, now))]
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn open_read_only(
         mut self: Box<Self>,
         boot_ts: EpochMillis,
@@ -511,7 +511,7 @@ impl OpenableDurableCatalogState for PersistHandle {
             .await
     }
 
-    #[tracing::instrument(level = "debug", skip(self, now))]
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn open(
         mut self: Box<Self>,
         boot_ts: EpochMillis,
