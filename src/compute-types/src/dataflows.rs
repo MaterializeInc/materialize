@@ -247,12 +247,20 @@ impl<P, S, T> DataflowDescription<P, S, T>
 where
     P: CollectionPlan,
 {
+    /// Identifiers of imported objects (indexes and sources).
+    pub fn import_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.index_imports
+            .keys()
+            .chain(self.source_imports.keys())
+            .copied()
+    }
+
     /// Identifiers of exported objects (indexes and sinks).
     pub fn export_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
         self.index_exports
             .keys()
             .chain(self.sink_exports.keys())
-            .cloned()
+            .copied()
     }
 
     /// Identifiers of exported subscribe sinks.
@@ -263,6 +271,21 @@ where
                 ComputeSinkConnection::Subscribe(_) => Some(*id),
                 _ => None,
             })
+    }
+
+    /// Produce a readable string containing the import IDs of this dataflow.
+    pub fn format_import_ids(&self) -> String {
+        format_id_list(self.import_ids())
+    }
+
+    /// Produce a readable string containing the export IDs of this dataflow.
+    pub fn format_export_ids(&self) -> String {
+        format_id_list(self.export_ids())
+    }
+
+    /// Whether this dataflow installs transient collections.
+    pub fn is_transient(&self) -> bool {
+        self.export_ids().all(|id| id.is_transient())
     }
 
     /// Returns the description of the object to build with the specified
@@ -343,6 +366,21 @@ where
         let deps = self.depends_on(collection_id);
         deps.into_iter().filter(is_import).collect()
     }
+}
+
+fn format_id_list<I>(ids: I) -> String
+where
+    I: Iterator<Item = GlobalId>,
+{
+    let mut s = '['.to_string();
+    for id in ids {
+        if s.len() > 1 {
+            s.push_str(", ");
+        }
+        s.push_str(&id.to_string());
+    }
+    s.push(']');
+    s
 }
 
 impl<P: PartialEq, S: PartialEq, T: timely::PartialOrder> DataflowDescription<P, S, T> {

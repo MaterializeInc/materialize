@@ -248,13 +248,35 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         // Collect the exported object identifiers, paired with their associated "collection" identifier.
         // The latter is used to extract dependency information, which is in terms of collections ids.
         let dataflow_index = self.timely_worker.next_dataflow_index();
+        let as_of = dataflow.as_of.clone().unwrap();
+
+        if dataflow.is_transient() {
+            tracing::debug!(
+                name = %dataflow.debug_name,
+                import_ids = %dataflow.format_import_ids(),
+                export_ids = %dataflow.format_export_ids(),
+                as_of = ?as_of.elements(),
+                until = ?dataflow.until.elements(),
+                "creating dataflow",
+            );
+        } else {
+            tracing::info!(
+                name = %dataflow.debug_name,
+                import_ids = %dataflow.format_import_ids(),
+                export_ids = %dataflow.format_export_ids(),
+                as_of = ?as_of.elements(),
+                until = ?dataflow.until.elements(),
+                "creating dataflow",
+            );
+        };
 
         // Initialize compute and logging state for each object.
         for object_id in dataflow.export_ids() {
             let mut collection = CollectionState::new();
 
-            let as_of = dataflow.as_of.clone().unwrap();
-            collection.reported_frontier = ReportedFrontier::NotReported { lower: as_of };
+            collection.reported_frontier = ReportedFrontier::NotReported {
+                lower: as_of.clone(),
+            };
 
             let existing = self.compute_state.collections.insert(object_id, collection);
             if existing.is_some() {
