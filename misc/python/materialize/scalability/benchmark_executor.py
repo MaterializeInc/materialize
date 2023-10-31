@@ -32,7 +32,7 @@ from materialize.scalability.workloads_test import *  # noqa: F401 F403
 MAX_RETRIES_ON_REGRESSION = 2
 
 
-class WorkloadExecutor:
+class BenchmarkExecutor:
     def __init__(
         self,
         config: BenchmarkConfiguration,
