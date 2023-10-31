@@ -127,10 +127,10 @@ impl OptimizeMaterializedView {
     }
 }
 
-impl<'ctx> Optimize<'ctx, HirRelationExpr> for OptimizeMaterializedView {
+impl Optimize<HirRelationExpr> for OptimizeMaterializedView {
     type To = LocalMirPlan;
 
-    fn optimize<'s: 'ctx>(&'s mut self, expr: HirRelationExpr) -> Result<Self::To, OptimizerError> {
+    fn optimize(&mut self, expr: HirRelationExpr) -> Result<Self::To, OptimizerError> {
         // HIR ⇒ MIR lowering and decorrelation
         let expr = expr.lower(&self.config)?;
 
@@ -158,22 +158,19 @@ impl LocalMirPlan {
 
 /// This is needed only because the pipeline in the bootstrap code starts from an
 /// [`OptimizedMirRelationExpr`] attached to a [`crate::catalog::CatalogItem`].
-impl<'ctx> Optimize<'ctx, OptimizedMirRelationExpr> for OptimizeMaterializedView {
+impl Optimize<OptimizedMirRelationExpr> for OptimizeMaterializedView {
     type To = GlobalMirPlan<Unresolved>;
 
-    fn optimize<'s: 'ctx>(
-        &'s mut self,
-        expr: OptimizedMirRelationExpr,
-    ) -> Result<Self::To, OptimizerError> {
+    fn optimize(&mut self, expr: OptimizedMirRelationExpr) -> Result<Self::To, OptimizerError> {
         let expr = expr.into_inner();
         self.optimize(LocalMirPlan { expr })
     }
 }
 
-impl<'ctx> Optimize<'ctx, LocalMirPlan> for OptimizeMaterializedView {
+impl Optimize<LocalMirPlan> for OptimizeMaterializedView {
     type To = GlobalMirPlan<Unresolved>;
 
-    fn optimize<'s: 'ctx>(&'s mut self, plan: LocalMirPlan) -> Result<Self::To, OptimizerError> {
+    fn optimize(&mut self, plan: LocalMirPlan) -> Result<Self::To, OptimizerError> {
         let expr = OptimizedMirRelationExpr(plan.expr);
 
         let mut rel_typ = expr.typ();
@@ -276,13 +273,10 @@ impl GlobalMirPlan<Unresolved> {
     }
 }
 
-impl<'ctx> Optimize<'ctx, GlobalMirPlan<Resolved>> for OptimizeMaterializedView {
+impl Optimize<GlobalMirPlan<Resolved>> for OptimizeMaterializedView {
     type To = GlobalLirPlan;
 
-    fn optimize<'s: 'ctx>(
-        &'s mut self,
-        plan: GlobalMirPlan<Resolved>,
-    ) -> Result<Self::To, OptimizerError> {
+    fn optimize(&mut self, plan: GlobalMirPlan<Resolved>) -> Result<Self::To, OptimizerError> {
         let GlobalMirPlan {
             mut df_desc,
             df_meta,

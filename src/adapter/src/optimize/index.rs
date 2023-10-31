@@ -118,10 +118,10 @@ impl OptimizeIndex {
     }
 }
 
-impl<'ctx> Optimize<'ctx, Index> for OptimizeIndex {
+impl Optimize<Index> for OptimizeIndex {
     type To = GlobalMirPlan<Unresolved>;
 
-    fn optimize<'s: 'ctx>(&'s mut self, index: Index) -> Result<Self::To, OptimizerError> {
+    fn optimize(&mut self, index: Index) -> Result<Self::To, OptimizerError> {
         let state = self.catalog.state();
         let on_entry = state.get_entry(&index.on);
         let full_name = state.resolve_full_name(&index.name, on_entry.conn_id());
@@ -213,13 +213,10 @@ impl GlobalMirPlan<Unresolved> {
     }
 }
 
-impl<'ctx> Optimize<'ctx, GlobalMirPlan<Resolved>> for OptimizeIndex {
+impl Optimize<GlobalMirPlan<Resolved>> for OptimizeIndex {
     type To = GlobalLirPlan;
 
-    fn optimize<'s: 'ctx>(
-        &'s mut self,
-        plan: GlobalMirPlan<Resolved>,
-    ) -> Result<Self::To, OptimizerError> {
+    fn optimize(&mut self, plan: GlobalMirPlan<Resolved>) -> Result<Self::To, OptimizerError> {
         let GlobalMirPlan {
             mut df_desc,
             df_meta,

@@ -88,20 +88,20 @@ use crate::AdapterError;
 /// The `'s: 'ctx` bound in the `optimize` method call ensures that an optimizer
 /// instance can run an optimization stage that produces a `Self::To` with
 /// `&'ctx` references.
-pub trait Optimize<'ctx, From>: Send + Sync
+pub trait Optimize<From>: Send + Sync
 where
     From: Send + Sync,
 {
-    type To: Send + Sync + 'ctx;
+    type To: Send + Sync;
 
     /// Execute the optimization stage, transforming the input plan of type
     /// `From` to an output plan of type `To`.
-    fn optimize<'s: 'ctx>(&'s mut self, plan: From) -> Result<Self::To, OptimizerError>;
+    fn optimize(&mut self, plan: From) -> Result<Self::To, OptimizerError>;
 
     /// Execute the optimization stage and panic if an error occurs.
     ///
     /// See [`Optimize::optimize`].
-    fn must_optimize<'s: 'ctx>(&'s mut self, expr: From) -> Self::To {
+    fn must_optimize(&mut self, expr: From) -> Self::To {
         match self.optimize(expr) {
             Ok(ok) => ok,
             Err(err) => panic!("must_optimize call failed: {err}"),
