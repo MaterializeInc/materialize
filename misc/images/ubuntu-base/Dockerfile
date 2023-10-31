@@ -7,7 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM ubuntu:jammy-20230126
+# Ubuntu version policy: track the latest LTS version.
+# If you update this, update it in ci/builder/Dockerfile too.
+FROM ubuntu:jammy-20231004
 
 # Ensure any Rust binaries that crash print a backtrace.
 ENV RUST_BACKTRACE=1

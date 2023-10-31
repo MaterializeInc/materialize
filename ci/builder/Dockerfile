@@ -10,7 +10,10 @@
 # Build a cross-compiling toolchain that targets the oldest version of Linux
 # that we support.
 
-FROM ubuntu:lunar-20230731 as crosstool
+# Ubuntu version policy: track the latest LTS version.
+# If you update this, update it in all `FROM` directives in this file, and also
+# in misc/images/ubuntu-base/Dockerfile.
+FROM ubuntu:jammy-20231004 as crosstool
 ARG ARCH_GCC
 ARG ARCH_GO
 
@@ -68,7 +71,9 @@ RUN DEFCONFIG=crosstool-$ARCH_GCC.defconfig ct-ng defconfig \
 # Import the cross-compiling toolchain into a fresh image, omitting the
 # dependencies that we needed to actually build the toolchain.
 
-FROM ubuntu:lunar-20230731
+# If you update this, update it in all `FROM` directives in this file, and also
+# in misc/images/ubuntu-base/Dockerfile.
+FROM ubuntu:jammy-20231004
 ARG ARCH_GCC
 ARG ARCH_GO
 
@@ -101,7 +106,7 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     make \
     openssh-client \
     pkg-config \
-    postgresql-client \
+    postgresql-client-14 \
     python3 \
     python3-dev \
     python3-pip \
@@ -116,8 +121,14 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
 
 # Install Node.js LTS, for our Python typechecker. This is up here because we don't
 # expect it to change often.
-RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
-    apt-get install -y nodejs
+
+COPY nodesource.asc .
+
+RUN gpg --dearmor < nodesource.asc > /etc/apt/keyrings/nodesource.gpg \
+    && rm nodesource.asc \
+    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_18.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends nodejs
 
 RUN curl -fsSL https://github.com/benesch/autouseradd/releases/download/1.3.0/autouseradd-1.3.0-$ARCH_GO.tar.gz \
     | tar xz -C / --strip-components 1 \
@@ -207,7 +218,7 @@ RUN npx pyright@$(sh /workdir/pyright-version.sh) --help
 
 COPY requirements.txt /workdir/
 
-RUN pip3 install --break-system-packages -r /workdir/requirements.txt && rm /workdir/requirements*.txt
+RUN pip3 install -r /workdir/requirements.txt && rm /workdir/requirements*.txt
 
 # Install APT repo generator.
 
@@ -296,10 +307,6 @@ ENV RUST_BACKTRACE=1
 
 # Make the image as small as possible.
 RUN find /workdir /root -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-
-# remove Ubuntu user causing UID collisions
-# https://bugs.launchpad.net/cloud-images/+bug/2005129
-RUN userdel -r ubuntu
 
 # Ensure that all python output is unbuffered, otherwise it is not
 # logged properly in Buildkite
