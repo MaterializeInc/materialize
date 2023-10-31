@@ -18,10 +18,12 @@ from materialize.scalability.workload_result import WorkloadResult
 class BenchmarkResult:
     overall_regression_outcome: RegressionOutcome
     df_total_by_endpoint_name_and_workload: dict[str, dict[str, pd.DataFrame]]
+    df_details_by_endpoint_name_and_workload: dict[str, dict[str, pd.DataFrame]]
 
     def __init__(self):
         self.overall_regression_outcome = RegressionOutcome()
         self.df_total_by_endpoint_name_and_workload = dict()
+        self.df_details_by_endpoint_name_and_workload = dict()
 
     def add_regression(self, regression_outcome: RegressionOutcome | None) -> None:
         if regression_outcome is not None:
@@ -38,6 +40,9 @@ class BenchmarkResult:
             not in self.df_total_by_endpoint_name_and_workload.keys()
         ):
             self.df_total_by_endpoint_name_and_workload[endpoint_version_info] = dict()
+            self.df_details_by_endpoint_name_and_workload[
+                endpoint_version_info
+            ] = dict()
 
         workload_name = result.workload.name()
         assert (
@@ -46,10 +51,19 @@ class BenchmarkResult:
                 endpoint_version_info
             ].keys()
         ), f"Results already contain an entry for this endpoint ({endpoint_version_info}) and workload {workload_name}"
+        assert (
+            workload_name
+            not in self.df_details_by_endpoint_name_and_workload[
+                endpoint_version_info
+            ].keys()
+        ), f"Results already contain an entry for this endpoint ({endpoint_version_info}) and workload {workload_name}"
 
         self.df_total_by_endpoint_name_and_workload[endpoint_version_info][
             workload_name
         ] = result.df_totals
+        self.df_details_by_endpoint_name_and_workload[endpoint_version_info][
+            workload_name
+        ] = result.df_details
 
     def get_df_total_by_endpoint_name(self, endpoint_name: str) -> pd.DataFrame:
         return pd.concat(
