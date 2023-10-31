@@ -211,10 +211,10 @@ message_1    message_1_header_1    <null>
 message_2    message_2_header_1    message_2_header_2
 
 
-# When there are multiple headers with identical names, verify that only the first header is included
+# When there are multiple headers with identical names, verify that the first header is included
 $ kafka-create-topic topic=duplicate_individual_headers
 
-$ kafka-ingest format=avro topic=duplicate_individual_headers key-format=avro key-schema=${keyschema} schema=${schema} headers={"header3": "message_3_header_3_first", "header3": "message_3_header_3_second"}
+$ kafka-ingest format=avro topic=duplicate_individual_headers key-format=avro key-schema=${keyschema} schema=${schema} headers={"duplicates": "message_3_header_3_first", "duplicates": "message_3_header_3_second"}
 {"key": "message_3"} {"f1": "fishval", "f2": 1000}
 
 > CREATE SOURCE duplicate_individual_headers
@@ -222,7 +222,7 @@ $ kafka-ingest format=avro topic=duplicate_individual_headers key-format=avro ke
   'testdrive-duplicate_individual_headers-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
-  INCLUDE HEADER 'header3' AS duplicates
+  INCLUDE HEADER 'duplicates'
   ENVELOPE UPSERT
 
 > SELECT key, duplicates from duplicate_individual_headers
