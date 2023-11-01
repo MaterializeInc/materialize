@@ -13,6 +13,8 @@ use mz_proto::TryFromProtoError;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_stash_types::{InternalStashError, StashError, MIN_STASH_VERSION, STASH_VERSION};
 
+use crate::durable::TransientRevision;
+
 #[derive(Debug, thiserror::Error)]
 pub enum CatalogError {
     #[error(transparent)]
@@ -53,6 +55,12 @@ pub enum DurableCatalogError {
     /// Unable to serialize/deserialize Protobuf message.
     #[error("proto: {0}")]
     Proto(TryFromProtoError),
+    #[error("expected revision {expected}, durable catalog revision was {current}")]
+    /// The expected transient revision changed.
+    RaceDetected {
+        expected: TransientRevision,
+        current: TransientRevision,
+    },
     /// Misc errors from the Stash implementation.
     ///
     /// Once the Stash implementation is removed we can remove this variant.

@@ -25,21 +25,18 @@ use mz_ore::retry::Retry;
 use mz_ore::soft_assert_eq;
 use mz_proto::{ProtoType, RustType};
 use mz_repr::Timestamp;
-use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_stash::{AppendBatch, DebugStashFactory, Stash, StashFactory, TypedCollection};
 use mz_stash_types::objects::proto;
 use mz_stash_types::StashError;
-use mz_storage_types::sources::Timeline;
 
 use crate::durable::initialize::DEPLOY_GENERATION;
 use crate::durable::objects::{
-    AuditLogKey, DurableType, IdAllocKey, IdAllocValue, Snapshot, StorageUsageKey,
-    TimelineTimestamp, TimestampValue,
+    AuditLogKey, DurableType, IdAllocKey, Snapshot, StorageUsageKey, TimelineTimestamp,
 };
 use crate::durable::transaction::{Transaction, TransactionBatch};
 use crate::durable::{
     initialize, BootstrapArgs, CatalogError, DurableCatalogState, Epoch,
-    OpenableDurableCatalogState, ReadOnlyDurableCatalogState,
+    OpenableDurableCatalogState, OwnedTransaction, ReadOnlyDurableCatalogState, TransientRevision,
 };
 
 pub const SETTING_COLLECTION: TypedCollection<proto::SettingKey, proto::SettingValue> =
@@ -299,7 +296,10 @@ async fn open_inner(
     let conn = if !is_init {
         // Initialize the Stash
         let args = bootstrap_args.clone();
-        let mut conn = Connection { stash };
+        let mut conn = Connection {
+            stash,
+            transient_revision: TransientRevision::default(),
+        };
         let mut tx = match Transaction::new(&mut conn, Snapshot::empty()) {
             Ok(txn) => txn,
             Err(e) => return Err((conn.stash, e)),
@@ -325,7 +325,10 @@ async fn open_inner(
             };
         }
 
-        let mut conn = Connection { stash };
+        let mut conn = Connection {
+            stash,
+            transient_revision: TransientRevision::default(),
+        };
 
         if let Some(deploy_generation) = deploy_generation {
             match conn.set_deploy_generation(deploy_generation).await {
@@ -348,6 +351,7 @@ async fn open_inner(
 #[derive(Debug)]
 pub struct Connection {
     stash: Stash,
+    transient_revision: TransientRevision,
 }
 
 impl Connection {
@@ -512,6 +516,10 @@ impl ReadOnlyDurableCatalogState for Connection {
             system_privileges,
         })
     }
+
+    fn transient_revision(&self) -> TransientRevision {
+        self.transient_revision
+    }
 }
 
 #[async_trait]
@@ -526,7 +534,13 @@ impl DurableCatalogState for Connection {
         Transaction::new(self, snapshot)
     }
 
-    #[tracing::instrument(name = "storage::transaction", level = "debug", skip_all)]
+    #[tracing::instrument(name = "storage::owned_transaction", level = "debug", skip_all)]
+    async fn owned_transaction(&mut self) -> Result<OwnedTransaction, CatalogError> {
+        let snapshot = self.snapshot().await?;
+        OwnedTransaction::new(self, snapshot)
+    }
+
+    #[tracing::instrument(name = "storage::commit_transaction", level = "debug", skip_all)]
     async fn commit_transaction(
         &mut self,
         txn_batch: TransactionBatch,
@@ -731,6 +745,9 @@ impl DurableCatalogState for Connection {
             })
             .await?;
 
+        // IMPORTANT: We're modifying the Catalog so we need to bump the transient_revision.
+        self.transient_revision.bump();
+
         Ok(())
     }
 
@@ -778,48 +795,6 @@ impl DurableCatalogState for Connection {
                 })
             })
             .await?)
-    }
-
-    #[tracing::instrument(level = "debug", skip(self))]
-    async fn set_timestamp(
-        &mut self,
-        timeline: &Timeline,
-        timestamp: Timestamp,
-    ) -> Result<(), CatalogError> {
-        let key = proto::TimestampKey {
-            id: timeline.to_string(),
-        };
-        let (prev, next) = TIMESTAMP_COLLECTION
-            .upsert_key(&mut self.stash, key, move |_| {
-                Ok::<_, CatalogError>(TimestampValue { ts: timestamp }.into_proto())
-            })
-            .await??;
-        if let Some(prev) = prev {
-            assert!(next >= prev, "global timestamp must always go up");
-        }
-        Ok(())
-    }
-
-    #[tracing::instrument(level = "debug", skip(self))]
-    async fn allocate_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, CatalogError> {
-        if amount == 0 {
-            return Ok(Vec::new());
-        }
-        let key = IdAllocKey {
-            name: id_type.to_string(),
-        }
-        .into_proto();
-        let (prev, next) = ID_ALLOCATOR_COLLECTION
-            .upsert_key(&mut self.stash, key, move |prev| {
-                let id = prev.expect("must exist").next_id;
-                match id.checked_add(amount) {
-                    Some(next_gid) => Ok(IdAllocValue { next_id: next_gid }.into_proto()),
-                    None => Err(CatalogError::from(SqlCatalogError::IdExhaustion)),
-                }
-            })
-            .await??;
-        let id = prev.expect("must exist").next_id;
-        Ok((id..next.next_id).collect())
     }
 }
 

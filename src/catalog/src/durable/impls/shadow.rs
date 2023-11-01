@@ -16,13 +16,12 @@ use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_ore::now::EpochMillis;
 use mz_ore::soft_assert_eq_or_log;
 use mz_repr::Timestamp;
-use mz_storage_types::sources::Timeline;
 
 use crate::durable::objects::{Snapshot, TimelineTimestamp};
 use crate::durable::transaction::TransactionBatch;
 use crate::durable::{
     BootstrapArgs, CatalogError, DurableCatalogState, Epoch, OpenableDurableCatalogState,
-    ReadOnlyDurableCatalogState, Transaction,
+    OwnedTransaction, ReadOnlyDurableCatalogState, Transaction, TransientRevision,
 };
 
 macro_rules! compare_and_return {
@@ -175,6 +174,10 @@ impl ReadOnlyDurableCatalogState for ShadowCatalogState {
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError> {
         compare_and_return_async!(self, snapshot)
     }
+
+    fn transient_revision(&self) -> TransientRevision {
+        compare_and_return!(self, transient_revision)
+    }
 }
 
 #[async_trait]
@@ -192,6 +195,12 @@ impl DurableCatalogState for ShadowCatalogState {
         // Return a transaction with a reference to the shadow catalog so the commit is applied to
         // both implementations.
         Transaction::new(self, snapshot)
+    }
+
+    async fn owned_transaction(&mut self) -> Result<OwnedTransaction, CatalogError> {
+        // Note: This is safe to return since an OwnedTransaction doesn't hold either Stash nor
+        // Persist specific resources.
+        compare_and_return_async!(self, owned_transaction)
     }
 
     async fn commit_transaction(
@@ -215,17 +224,5 @@ impl DurableCatalogState for ShadowCatalogState {
         boot_ts: Timestamp,
     ) -> Result<Vec<VersionedStorageUsage>, CatalogError> {
         compare_and_return_async!(self, get_and_prune_storage_usage, retention_period, boot_ts)
-    }
-
-    async fn set_timestamp(
-        &mut self,
-        timeline: &Timeline,
-        timestamp: Timestamp,
-    ) -> Result<(), CatalogError> {
-        compare_and_return_async!(self, set_timestamp, timeline, timestamp)
-    }
-
-    async fn allocate_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, CatalogError> {
-        compare_and_return_async!(self, allocate_id, id_type, amount)
     }
 }

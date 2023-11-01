@@ -77,7 +77,8 @@
 
 use mz_catalog::durable::{
     debug_bootstrap_args, debug_stash_backed_catalog_state, persist_backed_catalog_state,
-    stash_backed_catalog_state, CatalogError, Epoch, OpenableDurableCatalogState, StashConfig,
+    stash_backed_catalog_state, CatalogError, DurableCatalogStateExt, Epoch,
+    OpenableDurableCatalogState, StashConfig,
 };
 use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
 use mz_persist_client::PersistClient;

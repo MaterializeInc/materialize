@@ -10,7 +10,7 @@
 //! This crate is responsible for durably storing and modifying the catalog contents.
 
 use async_trait::async_trait;
-use std::fmt::Debug;
+use std::fmt::{self, Debug};
 use std::num::NonZeroI64;
 use std::time::Duration;
 use uuid::Uuid;
@@ -29,13 +29,13 @@ pub use crate::durable::impls::stash::{
     SETTING_COLLECTION, STORAGE_USAGE_COLLECTION, SYSTEM_CONFIGURATION_COLLECTION,
     SYSTEM_GID_MAPPING_COLLECTION, SYSTEM_PRIVILEGES_COLLECTION, TIMESTAMP_COLLECTION,
 };
-use crate::durable::objects::Snapshot;
 pub use crate::durable::objects::{
     Cluster, ClusterConfig, ClusterReplica, ClusterVariant, ClusterVariantManaged, Comment,
-    Database, DefaultPrivilege, Item, ReplicaConfig, ReplicaLocation, Role, Schema,
+    Database, DefaultPrivilege, Item, ReplicaConfig, ReplicaLocation, Role, Schema, Snapshot,
     SystemConfiguration, SystemObjectMapping, TimelineTimestamp,
 };
-pub use crate::durable::transaction::Transaction;
+pub use crate::durable::transaction::{OwnedTransaction, Transaction};
+
 use crate::durable::transaction::TransactionBatch;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -68,6 +68,21 @@ pub(crate) const CATALOG_CONTENT_VERSION_KEY: &str = "catalog_content_version";
 pub struct BootstrapArgs {
     pub default_cluster_replica_size: String,
     pub bootstrap_role: Option<String>,
+}
+
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub struct TransientRevision(u64);
+
+impl fmt::Display for TransientRevision {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl TransientRevision {
+    pub fn bump(&mut self) {
+        self.0 += 1;
+    }
 }
 
 pub type Epoch = NonZeroI64;
@@ -164,6 +179,9 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
     /// Get a snapshot of the catalog.
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError>;
 
+    /// Returns the current transient (i.e. not durably persisted) revision of the Catalog.
+    fn transient_revision(&self) -> TransientRevision;
+
     // TODO(jkosh44) Implement this for the catalog debug tool.
     /*    /// Dumps the entire catalog contents in human readable JSON.
     async fn dump(&self) -> Result<String, Error>;*/
@@ -177,6 +195,12 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
 
     /// Creates a new durable catalog state transaction.
     async fn transaction(&mut self) -> Result<Transaction, CatalogError>;
+
+    /// Creates a new owned durable catalog state transaction.
+    ///
+    /// Note: It is possible for an [`OwnedTransaction`] to fail if interleaved with other catalog
+    /// operations. Prefer using [`DurableCatalogState::transaction`] if possible.
+    async fn owned_transaction(&mut self) -> Result<OwnedTransaction, CatalogError>;
 
     /// Commits a durable catalog state transaction.
     async fn commit_transaction(&mut self, txn_batch: TransactionBatch)
@@ -194,16 +218,40 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         retention_period: Option<Duration>,
         boot_ts: mz_repr::Timestamp,
     ) -> Result<Vec<VersionedStorageUsage>, CatalogError>;
+}
 
+/// This trait exists to add convenience methods to types that implement [`DurableCatalogState`].
+///
+/// Normally you could add concrete methods onto the trait definition itself, but that allows their
+/// implementations to be overriden, which we do not want. To make sure we're properly tracking the
+/// transient revision of the durable catalog, we need to make sure all modifications go through
+/// transactions. By constraining all convenience methods to this trait we can assert just that,
+/// since the transaction interface is the only one exposed.
+#[async_trait]
+pub trait DurableCatalogStateExt: DurableCatalogState {
     /// Persist new global timestamp for a timeline.
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn set_timestamp(
         &mut self,
         timeline: &Timeline,
         timestamp: mz_repr::Timestamp,
-    ) -> Result<(), CatalogError>;
+    ) -> Result<(), CatalogError> {
+        let mut txn = self.transaction().await?;
+        txn.set_timestamp(timeline.clone(), timestamp)?;
+        txn.commit().await
+    }
 
     /// Allocates and returns `amount` IDs of `id_type`.
-    async fn allocate_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, CatalogError>;
+    #[tracing::instrument(level = "debug", skip(self))]
+    async fn allocate_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, CatalogError> {
+        if amount == 0 {
+            return Ok(Vec::new());
+        }
+        let mut txn = self.transaction().await?;
+        let ids = txn.get_and_increment_id_by(id_type.to_string(), amount)?;
+        txn.commit().await?;
+        Ok(ids)
+    }
 
     /// Allocates and returns `amount` system [`GlobalId`]s.
     async fn allocate_system_ids(&mut self, amount: u64) -> Result<Vec<GlobalId>, CatalogError> {
@@ -240,6 +288,8 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         Ok(ReplicaId::User(id))
     }
 }
+
+impl<T: DurableCatalogState + ?Sized> DurableCatalogStateExt for T {}
 
 /// Creates a openable durable catalog state implemented using the stash.
 pub fn stash_backed_catalog_state(config: StashConfig) -> OpenableConnection {

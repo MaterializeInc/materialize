@@ -83,8 +83,8 @@ use mz_audit_log::{
 use mz_catalog::durable::objects::{DurableType, IdAlloc};
 use mz_catalog::durable::{
     debug_bootstrap_args, debug_stash_backed_catalog_state, persist_backed_catalog_state,
-    CatalogError, DurableCatalogError, Item, OpenableDurableCatalogState, TimelineTimestamp,
-    USER_ITEM_ALLOC_KEY,
+    CatalogError, DurableCatalogError, DurableCatalogStateExt, Item, OpenableDurableCatalogState,
+    TimelineTimestamp, USER_ITEM_ALLOC_KEY,
 };
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::SYSTEM_TIME;

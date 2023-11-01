@@ -8,6 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use derivative::Derivative;
+use std::ops::{Deref, DerefMut};
+
 use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -29,30 +31,140 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use crate::builtin::BuiltinLog;
-use crate::durable::objects::ClusterConfig;
 use crate::durable::objects::{
-    AuditLogKey, Cluster, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
-    ClusterKey, ClusterReplica, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, CommentKey,
-    CommentValue, Config, ConfigKey, ConfigValue, Database, DatabaseKey, DatabaseValue,
-    DefaultPrivilegesKey, DefaultPrivilegesValue, DurableType, GidMappingKey, GidMappingValue,
-    IdAllocKey, IdAllocValue, IntrospectionSourceIndex, Item, ItemKey, ItemValue, ReplicaConfig,
-    Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue, ServerConfigurationKey,
-    ServerConfigurationValue, SettingKey, SettingValue, StorageUsageKey, SystemObjectMapping,
-    SystemPrivilegesKey, SystemPrivilegesValue, TimestampKey, TimestampValue,
+    AuditLogKey, Cluster, ClusterConfig, ClusterIntrospectionSourceIndexKey,
+    ClusterIntrospectionSourceIndexValue, ClusterKey, ClusterReplica, ClusterReplicaKey,
+    ClusterReplicaValue, ClusterValue, CommentKey, CommentValue, Config, ConfigKey, ConfigValue,
+    Database, DatabaseKey, DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue,
+    DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
+    IntrospectionSourceIndex, Item, ItemKey, ItemValue, ReplicaConfig, Role, RoleKey, RoleValue,
+    Schema, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey,
+    SettingValue, StorageUsageKey, SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue,
+    TimestampKey, TimestampValue,
 };
 use crate::durable::{
-    CatalogError, Comment, DefaultPrivilege, DurableCatalogState, Snapshot, SystemConfiguration,
-    TimelineTimestamp, CATALOG_CONTENT_VERSION_KEY, DATABASE_ID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY,
-    SYSTEM_ITEM_ALLOC_KEY, USER_ITEM_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
+    CatalogError, Comment, DefaultPrivilege, DurableCatalogError, DurableCatalogState, Snapshot,
+    SystemConfiguration, TimelineTimestamp, TransientRevision, CATALOG_CONTENT_VERSION_KEY,
+    DATABASE_ID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY, USER_CLUSTER_ID_ALLOC_KEY,
+    USER_ITEM_ALLOC_KEY, USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
 
-/// A [`Transaction`] batches multiple catalog operations together and commits them atomically.
+/// A Catalog Transaction that holds a lock to the underlying durable storage.
+///
+/// Note: if you need to run a Catalog Transaction that spans multiple "operations", e.g. over the
+/// span of a SQL transaction, use [`OwnedTransaction`].
 #[derive(Derivative)]
 #[derivative(Debug, PartialEq)]
 pub struct Transaction<'a> {
+    inner: TransactionInner,
     #[derivative(Debug = "ignore")]
     #[derivative(PartialEq = "ignore")]
     durable_catalog: &'a mut dyn DurableCatalogState,
+}
+
+impl<'a> Deref for Transaction<'a> {
+    type Target = TransactionInner;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl<'a> DerefMut for Transaction<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
+impl<'a> Transaction<'a> {
+    pub fn new(
+        durable_catalog: &'a mut dyn DurableCatalogState,
+        snapshot: Snapshot,
+    ) -> Result<Self, CatalogError> {
+        Ok(Transaction {
+            inner: TransactionInner::new(snapshot)?,
+            durable_catalog,
+        })
+    }
+
+    pub fn into_batch(self) -> TransactionBatch {
+        self.inner.into_batch()
+    }
+
+    /// Commits the storage transaction to the stash. Any error returned indicates the stash may be
+    /// in an indeterminate state and needs to be fully re-read before proceeding. In general, this
+    /// must be fatal to the calling process. We do not panic/halt inside this function itself so
+    /// that errors can bubble up during initialization.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn commit(self) -> Result<(), CatalogError> {
+        let txn_batch = self.inner.into_batch();
+        tracing::debug!(?txn_batch, "committing");
+
+        self.durable_catalog.commit_transaction(txn_batch).await
+    }
+}
+
+/// An owned Catalog Transaction that can be held open across multiple operations.
+///
+/// Note: if you need to run a Catalog Transaction that spans a single "operation", use
+/// [`Transaction`], which holds a lock over the underlying durable storage.
+///
+/// Internally an [`OwnedTransaction`] keeps track of a catalog revision, at the time of commit we
+/// assert that our expected revision matches the current revision of the catalog.
+#[derive(Debug, PartialEq, Eq)]
+pub struct OwnedTransaction {
+    inner: TransactionInner,
+    expected_revision: TransientRevision,
+}
+
+impl Deref for OwnedTransaction {
+    type Target = TransactionInner;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl DerefMut for OwnedTransaction {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
+impl OwnedTransaction {
+    pub fn new(
+        durable_catalog: &dyn DurableCatalogState,
+        snapshot: Snapshot,
+    ) -> Result<Self, CatalogError> {
+        Ok(OwnedTransaction {
+            inner: TransactionInner::new(snapshot)?,
+            expected_revision: durable_catalog.transient_revision(),
+        })
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub async fn commit(
+        self,
+        durable_catalog: &mut dyn DurableCatalogState,
+    ) -> Result<(), CatalogError> {
+        if self.expected_revision != durable_catalog.transient_revision() {
+            return Err(CatalogError::Durable(DurableCatalogError::RaceDetected {
+                expected: self.expected_revision,
+                current: durable_catalog.transient_revision(),
+            }));
+        }
+
+        let txn_batch = self.inner.into_batch();
+        tracing::debug!(?txn_batch, "committing");
+
+        durable_catalog.commit_transaction(txn_batch).await
+    }
+}
+
+/// A [`TransactionInner`] maintains a snapshot of the Catalog and batches multiple operations
+/// together. These operations can then
+#[derive(Debug, PartialEq, Eq)]
+pub struct TransactionInner {
     databases: TableTransaction<DatabaseKey, DatabaseValue>,
     schemas: TableTransaction<SchemaKey, SchemaValue>,
     items: TableTransaction<ItemKey, ItemValue>,
@@ -77,9 +189,8 @@ pub struct Transaction<'a> {
     connection_timeout: Option<Duration>,
 }
 
-impl<'a> Transaction<'a> {
+impl TransactionInner {
     pub fn new(
-        durable_catalog: &'a mut dyn DurableCatalogState,
         Snapshot {
             databases,
             schemas,
@@ -98,9 +209,8 @@ impl<'a> Transaction<'a> {
             default_privileges,
             system_privileges,
         }: Snapshot,
-    ) -> Result<Transaction, CatalogError> {
-        Ok(Transaction {
-            durable_catalog,
+    ) -> Result<TransactionInner, CatalogError> {
+        Ok(TransactionInner {
             databases: TableTransaction::new(databases, |a: &DatabaseValue, b| a.name == b.name)?,
             schemas: TableTransaction::new(schemas, |a: &SchemaValue, b| {
                 a.database_id == b.database_id && a.name == b.name
@@ -536,6 +646,16 @@ impl<'a> Transaction<'a> {
         Ok((current_id..next_id).collect())
     }
 
+    pub fn allocate_system_id(&mut self) -> Result<GlobalId, CatalogError> {
+        let ids = self.allocate_system_item_ids(1)?;
+        let [id] = &ids[..] else {
+            // TODO(parkmycar): Probably return an error here instead of panicking.
+            unreachable!("programming error");
+        };
+
+        Ok(*id)
+    }
+
     pub fn allocate_system_item_ids(&mut self, amount: u64) -> Result<Vec<GlobalId>, CatalogError> {
         Ok(self
             .get_and_increment_id_by(SYSTEM_ITEM_ALLOC_KEY.to_string(), amount)?
@@ -544,11 +664,63 @@ impl<'a> Transaction<'a> {
             .collect())
     }
 
+    pub fn allocate_user_id(&mut self) -> Result<GlobalId, CatalogError> {
+        let ids = self.allocate_user_item_ids(1)?;
+        let [id] = &ids[..] else {
+            // TODO(parkmycar): Probably return an error here instead of panicking.
+            unreachable!("programming error");
+        };
+
+        Ok(*id)
+    }
+
     pub fn allocate_user_item_ids(&mut self, amount: u64) -> Result<Vec<GlobalId>, CatalogError> {
         Ok(self
             .get_and_increment_id_by(USER_ITEM_ALLOC_KEY.to_string(), amount)?
             .into_iter()
             .map(GlobalId::User)
+            .collect())
+    }
+
+    pub fn allocate_user_cluster_id(&mut self) -> Result<ClusterId, CatalogError> {
+        let ids = self.allocate_user_cluser_ids(1)?;
+        let [id] = &ids[..] else {
+            // TODO(parkmycar): Probably return an error here instead of panicking.
+            unreachable!("programming error");
+        };
+
+        Ok(*id)
+    }
+
+    pub fn allocate_user_cluser_ids(
+        &mut self,
+        amount: u64,
+    ) -> Result<Vec<ClusterId>, CatalogError> {
+        Ok(self
+            .get_and_increment_id_by(USER_CLUSTER_ID_ALLOC_KEY.to_string(), amount)?
+            .into_iter()
+            .map(ClusterId::User)
+            .collect())
+    }
+
+    pub fn allocate_user_replica_id(&mut self) -> Result<ReplicaId, CatalogError> {
+        let ids = self.allocate_user_replica_ids(1)?;
+        let [id] = &ids[..] else {
+            // TODO(parkmycar): Probably return an error here instead of panicking.
+            unreachable!("programming error");
+        };
+
+        Ok(*id)
+    }
+
+    pub fn allocate_user_replica_ids(
+        &mut self,
+        amount: u64,
+    ) -> Result<Vec<ReplicaId>, CatalogError> {
+        Ok(self
+            .get_and_increment_id_by(USER_REPLICA_ID_ALLOC_KEY.to_string(), amount)?
+            .into_iter()
+            .map(ReplicaId::User)
             .collect())
     }
 
@@ -1215,8 +1387,8 @@ impl<'a> Transaction<'a> {
         self.connection_timeout = Some(timeout);
     }
 
-    pub(crate) fn into_parts(self) -> (TransactionBatch, &'a mut dyn DurableCatalogState) {
-        let txn_batch = TransactionBatch {
+    pub fn into_batch(self) -> TransactionBatch {
+        TransactionBatch {
             databases: self.databases.pending(),
             schemas: self.schemas.pending(),
             items: self.items.pending(),
@@ -1236,18 +1408,7 @@ impl<'a> Transaction<'a> {
             audit_log_updates: self.audit_log_updates,
             storage_usage_updates: self.storage_usage_updates,
             connection_timeout: self.connection_timeout,
-        };
-        (txn_batch, self.durable_catalog)
-    }
-
-    /// Commits the storage transaction to the stash. Any error returned indicates the stash may be
-    /// in an indeterminate state and needs to be fully re-read before proceeding. In general, this
-    /// must be fatal to the calling process. We do not panic/halt inside this function itself so
-    /// that errors can bubble up during initialization.
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn commit(self) -> Result<(), CatalogError> {
-        let (txn_batch, durable_catalog) = self.into_parts();
-        durable_catalog.commit_transaction(txn_batch).await
+        }
     }
 }
 

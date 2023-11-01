@@ -29,8 +29,8 @@ use mz_catalog::builtin::{
     BUILTIN_PREFIXES, MZ_INTROSPECTION_CLUSTER,
 };
 use mz_catalog::durable::{
-    debug_bootstrap_args, DurableCatalogState, OpenableDurableCatalogState, StashConfig,
-    Transaction,
+    debug_bootstrap_args, DurableCatalogState, DurableCatalogStateExt, OpenableDurableCatalogState,
+    StashConfig, Transaction,
 };
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller::clusters::{

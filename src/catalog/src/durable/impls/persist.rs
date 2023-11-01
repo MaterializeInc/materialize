@@ -28,7 +28,6 @@ use mz_repr::Diff;
 use mz_stash::USER_VERSION_KEY;
 use mz_stash_types::objects::proto;
 use mz_stash_types::STASH_VERSION;
-use mz_storage_types::sources::Timeline;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use std::collections::BTreeMap;
@@ -43,7 +42,8 @@ use crate::durable::objects::{AuditLogKey, DurableType, Snapshot, StorageUsageKe
 use crate::durable::transaction::TransactionBatch;
 use crate::durable::{
     initialize, BootstrapArgs, CatalogError, DurableCatalogError, DurableCatalogState, Epoch,
-    OpenableDurableCatalogState, ReadOnlyDurableCatalogState, TimelineTimestamp, Transaction,
+    OpenableDurableCatalogState, OwnedTransaction, ReadOnlyDurableCatalogState, TimelineTimestamp,
+    Transaction, TransientRevision,
 };
 
 /// New-type used to represent timestamps in persist.
@@ -356,6 +356,7 @@ impl PersistHandle {
             // Initialize empty in-memory state.
             snapshot: Snapshot::empty(),
             fence: Some(Fence { prev_epoch }),
+            transient_revision: TransientRevision::default(),
         };
 
         let txn = if is_initialized {
@@ -390,7 +391,7 @@ impl PersistHandle {
         };
 
         if read_only {
-            let (txn_batch, _) = txn.into_parts();
+            let txn_batch = txn.into_batch();
             // The upper here doesn't matter because we are only apply the updates in memory.
             let updates = StateUpdate::from_txn_batch(txn_batch, catalog.upper);
             catalog.apply_updates(updates.into_iter())?;
@@ -556,6 +557,8 @@ pub struct PersistCatalogState {
     /// `Some` indicates that we need to fence the previous catalog, None indicates that we've
     /// already fenced the previous catalog.
     fence: Option<Fence>,
+    /// Tracks whenever a change is made to the catalog state.
+    transient_revision: TransientRevision,
 }
 
 impl PersistCatalogState {
@@ -644,6 +647,9 @@ impl PersistCatalogState {
             }
         }
 
+        // IMPORTANT: We're modifying the catalog so we need to bump the transient revision.
+        self.transient_revision.bump();
+
         Ok(())
     }
 
@@ -724,6 +730,10 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError> {
         self.with_snapshot(|snapshot| Ok(snapshot.clone())).await
     }
+
+    fn transient_revision(&self) -> TransientRevision {
+        self.transient_revision
+    }
 }
 
 #[async_trait]
@@ -736,6 +746,12 @@ impl DurableCatalogState for PersistCatalogState {
     async fn transaction(&mut self) -> Result<Transaction, CatalogError> {
         let snapshot = self.snapshot().await?;
         Transaction::new(self, snapshot)
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    async fn owned_transaction(&mut self) -> Result<OwnedTransaction, CatalogError> {
+        let snapshot = self.snapshot().await?;
+        OwnedTransaction::new(self, snapshot)
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
@@ -902,28 +918,6 @@ impl DurableCatalogState for PersistCatalogState {
         }
 
         Ok(events)
-    }
-
-    #[tracing::instrument(level = "debug", skip(self))]
-    async fn set_timestamp(
-        &mut self,
-        timeline: &Timeline,
-        timestamp: mz_repr::Timestamp,
-    ) -> Result<(), CatalogError> {
-        let mut txn = self.transaction().await?;
-        txn.set_timestamp(timeline.clone(), timestamp)?;
-        txn.commit().await
-    }
-
-    #[tracing::instrument(level = "debug", skip(self))]
-    async fn allocate_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, CatalogError> {
-        if amount == 0 {
-            return Ok(Vec::new());
-        }
-        let mut txn = self.transaction().await?;
-        let ids = txn.get_and_increment_id_by(id_type.to_string(), amount)?;
-        txn.commit().await?;
-        Ok(ids)
     }
 }
 
