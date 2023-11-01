@@ -535,7 +535,7 @@ async fn apply_caa<K, V, T, D>(
 }
 
 #[instrument(level = "debug", skip_all, fields(shard=%txns_since.shard_id(), ts=?new_since_ts))]
-pub(crate) async fn maybe_cads<T, O, C>(
+pub(crate) async fn cads<T, O, C>(
     txns_since: &mut SinceHandle<C::Key, C::Val, T, i64, O>,
     new_since_ts: T,
 ) where
@@ -550,15 +550,13 @@ pub(crate) async fn maybe_cads<T, O, C>(
     }
     let token = txns_since.opaque().clone();
     let res = txns_since
-        .maybe_compare_and_downgrade_since(&token, (&token, &Antichain::from_elem(new_since_ts)))
+        .compare_and_downgrade_since(&token, (&token, &Antichain::from_elem(new_since_ts)))
         .await;
     match res {
-        Some(Ok(_)) => {}
-        Some(Err(actual)) => {
+        Ok(_) => {}
+        Err(actual) => {
             mz_ore::halt!("fenced by another process @ {actual:?}. ours = {token:?}")
         }
-        // We got rate-limited. No-op.
-        None => {}
     }
 }
 

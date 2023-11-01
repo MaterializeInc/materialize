@@ -491,7 +491,7 @@ where
         if min_unapplied_ts < &since_ts {
             since_ts.clone_from(min_unapplied_ts);
         }
-        crate::maybe_cads::<T, O, C>(&mut self.txns_since, since_ts).await;
+        crate::cads::<T, O, C>(&mut self.txns_since, since_ts).await;
     }
 
     /// Returns the [ShardId] of the txns shard.
