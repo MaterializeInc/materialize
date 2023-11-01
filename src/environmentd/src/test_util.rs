@@ -533,7 +533,7 @@ impl Listeners {
                 http_host_name: Some(host_name),
                 internal_console_redirect_url: config.internal_console_redirect_url,
                 // TODO(txn): Get this flipped to true before turning anything on in prod.
-                enable_persist_txn_tables_cli: None,
+                enable_persist_txn_tables_cli: Some(true),
             })
             .await?;
 

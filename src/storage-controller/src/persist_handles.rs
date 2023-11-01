@@ -582,6 +582,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
         match res {
             Ok(_ts) => {
                 self.send_new_uppers(new_uppers);
+                self.txns.apply_le(&register_ts).await;
             }
             Err(current) => {
                 panic!(
