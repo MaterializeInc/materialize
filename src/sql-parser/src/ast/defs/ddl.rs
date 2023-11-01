@@ -491,7 +491,7 @@ impl AstDisplay for SourceIncludeMetadata {
                     f.write_node(alias);
                 }
                 if *use_bytes {
-                    f.write_str("BYTES");
+                    f.write_str(" BYTES");
                 }
             }
             _ => {
