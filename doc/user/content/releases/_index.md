@@ -57,8 +57,8 @@ SELECT mz_version();
 ```
 
 Scheduled weekly releases increase the middle component of the version number
-and reset the final component to zero (e.g., v0.26.2 -> v0.27.0). Unscheduled
-releases increase the final component of the version number (e.g., v0.27.0 -> v0.27.1).
+and may change the final component to any number (e.g., v0.26.2 -> v0.27.0 or v0.26.2 -> v0.27.5).
+Unscheduled releases increase the final component of the version number (e.g., v0.27.0 -> v0.27.1).
 
 ## Backwards compatibility
 
