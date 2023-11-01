@@ -337,7 +337,6 @@ impl SourceRender for KafkaSourceConnection {
 
                 let status_report = Arc::clone(&health_status);
 
-                let tokio_handle = tokio::runtime::Handle::current();
                 thread::Builder::new()
                     .name("kafka-metadata".to_string())
                     .spawn(move || {
@@ -381,8 +380,7 @@ impl SourceRender for KafkaSourceConnection {
                                         None,
                                     ));
 
-                                    let ssh_status = tokio_handle
-                                        .block_on(consumer.client().context().tunnel_statuses());
+                                    let ssh_status = consumer.client().context().tunnel_status();
                                     let ssh_status = match ssh_status {
                                         SshTunnelStatus::Running => {
                                             Some(HealthStatusUpdate::running())

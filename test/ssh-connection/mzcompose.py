@@ -404,9 +404,7 @@ def workflow_default(c: Composition) -> None:
     #
     # These tests core functionality related to kafka with ssh and error reporting.
     for workflow in [
-        workflow_basic_ssh_features,
         workflow_kafka,
-        workflow_kafka_restart_replica,
         workflow_hidden_hosts,
     ]:
         workflow(c, redpanda=False)
@@ -416,7 +414,9 @@ def workflow_default(c: Composition) -> None:
 
     # These tests core functionality related to pg with ssh and error reporting.
     for workflow in [
+        workflow_basic_ssh_features,
         workflow_pg,
+        workflow_kafka_restart_replica,
     ]:
         workflow(c)
         c.sanity_restart_mz()

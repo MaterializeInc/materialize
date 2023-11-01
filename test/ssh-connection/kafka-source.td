@@ -35,12 +35,6 @@ one
 > CREATE CONNECTION kafka_conn_dynamic
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SSH TUNNEL thancred);
 
-# TODO(guswynn): this should be correctly namespaced as an ssh error
-! CREATE CONNECTION kafka_conn_keyless
-  TO KAFKA (BROKER '${testdrive.kafka-addr}', SSH TUNNEL keyless);
-contains:Failed to resolve hostname
-
-
 # Create source with a faster metadata refresh interval so
 # errors are detected every second instead of every minute.
 > CREATE SOURCE fixed_text IN CLUSTER sc

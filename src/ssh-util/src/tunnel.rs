@@ -13,7 +13,7 @@ use std::io::Write;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::os::unix::fs::PermissionsExt;
 use std::sync::atomic::{AtomicU16, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::bail;
@@ -22,8 +22,6 @@ use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
 use openssh::{ForwardType, Session};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-use tokio::sync::oneshot::{Receiver, Sender};
 use tokio::time;
 use tracing::{info, warn};
 
@@ -47,7 +45,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const KEEPALIVE_IDLE: Duration = Duration::from_secs(10);
 
 /// Specifies an SSH tunnel.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SshTunnelConfig {
     /// The hostname of the SSH bastion server.
     pub host: String,
@@ -70,13 +68,14 @@ impl fmt::Debug for SshTunnelConfig {
     }
 }
 
-#[derive(Clone)]
+/// The status of a running ssh tunnel.
+#[derive(Clone, Debug)]
 pub enum SshTunnelStatus {
+    /// The ssh tunnel is healthy.
     Running,
+    /// The ssh tunnel is broken, with the given error
     Errored(String),
 }
-
-pub type SshStatusChannel = Receiver<SshTunnelStatus>;
 
 impl SshTunnelConfig {
     /// Establishes a connection to the specified host and port via the
@@ -93,9 +92,6 @@ impl SshTunnelConfig {
             "{}:{} via {}@{}:{}",
             remote_host, remote_port, self.user, self.host, self.port,
         );
-
-        let (status_tx, mut status_rx): (_, UnboundedReceiver<Sender<SshTunnelStatus>>) =
-            unbounded_channel();
 
         // N.B.
         //
@@ -119,6 +115,9 @@ impl SshTunnelConfig {
         info!(%tunnel_id, %local_port, "connected to ssh tunnel");
         let local_port = Arc::new(AtomicU16::new(local_port));
 
+        let status = Arc::new(Mutex::new(SshTunnelStatus::Running));
+        let task_status = Arc::clone(&status);
+
         let join_handle = task::spawn(|| format!("ssh_session_{remote_host}:{remote_port}"), {
             let config = self.clone();
             let remote_host = remote_host.to_string();
@@ -133,21 +132,7 @@ impl SshTunnelConfig {
                 // The first tick happens immediately.
                 interval.tick().await;
                 loop {
-                    let closed = matches!(
-                        status_rx.try_recv(),
-                        Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)
-                    );
-
-                    use mz_ore::channel::ReceiverExt;
-                    let interested_in_status = tokio::select! {
-                        _ = interval.tick() => {
-                            Vec::new()
-                        }
-                        Some(senders) = status_rx.recv_many(100), if !closed => {
-                            senders
-                        }
-                    };
-
+                    interval.tick().await;
                     if let Err(e) = session.check().await {
                         warn!(%tunnel_id, "ssh tunnel unhealthy: {}", e.display_with_causes());
                         let s = match connect(&config).await {
@@ -155,10 +140,8 @@ impl SshTunnelConfig {
                             Err(e) => {
                                 warn!(%tunnel_id, "reconnection to ssh tunnel failed: {}", e.display_with_causes());
 
-                                for interested in interested_in_status {
-                                    let _ = interested
-                                        .send(SshTunnelStatus::Errored(e.to_string_with_causes()));
-                                }
+                                *task_status.lock().expect("poisoned") =
+                                    SshTunnelStatus::Errored(e.to_string_with_causes());
 
                                 continue;
                             }
@@ -167,26 +150,22 @@ impl SshTunnelConfig {
                             Ok(lp) => lp,
                             Err(e) => {
                                 warn!(%tunnel_id, "reconnection to ssh tunnel failed: {}", e.display_with_causes());
-                                for interested in interested_in_status {
-                                    let _ = interested
-                                        .send(SshTunnelStatus::Errored(e.to_string_with_causes()));
-                                }
+                                *task_status.lock().expect("poisoned") =
+                                    SshTunnelStatus::Errored(e.to_string_with_causes());
                                 continue;
                             }
                         };
                         session = s;
                         local_port.store(lp, Ordering::SeqCst);
                     }
-                    for interested in interested_in_status {
-                        let _ = interested.send(SshTunnelStatus::Running);
-                    }
+                    *task_status.lock().expect("poisoned") = SshTunnelStatus::Running;
                 }
             }
         });
 
         Ok(SshTunnelHandle {
             local_port,
-            status_request_sender: status_tx,
+            status,
             _join_handle: join_handle.abort_on_drop(),
         })
     }
@@ -203,7 +182,7 @@ impl SshTunnelConfig {
 #[derive(Debug)]
 pub struct SshTunnelHandle {
     local_port: Arc<AtomicU16>,
-    pub(crate) status_request_sender: UnboundedSender<Sender<SshTunnelStatus>>,
+    pub(crate) status: Arc<Mutex<SshTunnelStatus>>,
     _join_handle: AbortOnDropHandle<()>,
 }
 

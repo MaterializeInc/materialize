@@ -119,7 +119,7 @@ pub const DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT: Duration = Duration::ZERO;
 ///
 /// This wraps [`tokio_postgres::Config`] to allow the configuration of a
 /// tunnel via a [`TunnelConfig`].
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Config {
     inner: tokio_postgres::Config,
     tunnel: TunnelConfig,
