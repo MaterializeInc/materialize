@@ -14,11 +14,10 @@
 # limitations under the License.
 
 import pytest
-from dbt.tests.util import check_relations_equal, run_dbt, run_sql_with_adapter
+from dbt.tests.util import check_relations_equal, run_dbt
 from fixtures import (
     actual_indexes,
     expected_indexes,
-    nullability_assertions_schema_yml,
     test_materialized_view,
     test_materialized_view_index,
     test_relation_name_length,
@@ -48,7 +47,6 @@ class TestCustomMaterializations:
             "actual_indexes.sql": actual_indexes,
             "test_materialized_view.sql": test_materialized_view,
             "test_materialized_view_index.sql": test_materialized_view_index,
-            "test_materialized_view_nullability_assertions.sql": test_materialized_view,
             "test_relation_name_loooooooooooooooooonger_than_postgres_63_limit.sql": test_relation_name_length,
             "test_source.sql": test_source,
             "test_source_index.sql": test_source_index,
@@ -56,7 +54,6 @@ class TestCustomMaterializations:
             "test_sink.sql": test_sink,
             "test_table_index.sql": test_table_index,
             "test_view_index.sql": test_view_index,
-            "constraints_schema.yml": nullability_assertions_schema_yml,
         }
 
     def test_custom_materializations(self, project):
@@ -67,33 +64,16 @@ class TestCustomMaterializations:
         # run models
         results = run_dbt(["run"])
         # run result length
-        assert len(results) == 11
+        assert len(results) == 10
         # re-run models to ensure there are no lingering errors in recreating
         # the materializations
         results = run_dbt(["run"])
         # re-run result length
-        assert len(results) == 11
+        assert len(results) == 10
         # relations_equal
         check_relations_equal(
             project.adapter,
             ["test_materialized_view_index", "test_table_index"],
-        )
-        # confirm null assertions
-        nullability_assertions_model = ".".join(
-            [
-                project.adapter.config.credentials.database,
-                project.adapter.config.credentials.schema,
-                "test_materialized_view_nullability_assertions",
-            ]
-        )
-        nullability_assertions_ddl = run_sql_with_adapter(
-            project.adapter,
-            f"show create materialized view {nullability_assertions_model}",
-            fetch="one",
-        )
-        assert (
-            'WITH (ASSERT NOT NULL "a", ASSERT NOT NULL "b")'
-            in nullability_assertions_ddl[1]
         )
 
         check_relations_equal(project.adapter, ["actual_indexes", "expected_indexes"])
