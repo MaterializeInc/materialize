@@ -143,9 +143,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     print(f"Targets: {args.target}")
     print(f"Checking regression against: {regression_against_target}")
-    print(f"Workloads: {workload_classes}")
+    print("Workloads:")
+    for workload_cls in workload_classes:
+        print(f"* {workload_cls.__name__}")
     print(f"Baseline: {baseline_endpoint}")
-    print(f"Other endpoints: {other_endpoints}")
+    print("Other endpoints:")
+    for other_endpoint in other_endpoints:
+        print(f"* {other_endpoint}")
 
     # fetch git tags so that the commit messages of version tags can be resolved
     git.fetch(include_tags=True)
