@@ -10,6 +10,7 @@
 use mz_controller_types::ClusterId;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
+use mz_repr::GlobalId;
 use uuid::Uuid;
 
 use crate::session::TransactionId;
@@ -30,6 +31,7 @@ pub struct StatementBeganExecutionRecord {
     pub transaction_isolation: String,
     pub execution_timestamp: Option<EpochMillis>,
     pub transaction_id: TransactionId,
+    pub transient_index_id: Option<GlobalId>,
 }
 
 #[derive(Clone, Copy, Debug)]
