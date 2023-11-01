@@ -17,7 +17,7 @@ from typing import Any
 
 import yaml
 
-from materialize import MZ_ROOT, spawn
+from materialize import MZ_ROOT, buildkite, spawn
 
 
 def permit_rerunning_successful_steps(pipeline: Any) -> None:
@@ -83,7 +83,7 @@ def main() -> int:
     # Upload a dummy JUnit report so that the "Analyze tests" step doesn't fail
     # if we trim away all the JUnit report-generating steps.
     Path("junit_dummy.xml").write_text("")
-    spawn.runv(["buildkite-agent", "artifact", "upload", "junit_dummy.xml"])
+    buildkite.upload_artifact("junit_dummy.xml")
 
     return 0
 

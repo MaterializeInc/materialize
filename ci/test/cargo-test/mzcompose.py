@@ -9,7 +9,7 @@
 
 import os
 
-from materialize import MZ_ROOT, spawn, ui
+from materialize import MZ_ROOT, buildkite, spawn, ui
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
@@ -103,14 +103,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             spawn.runv(cmd + args.args, env=env)
         finally:
             spawn.runv(["zstd", "coverage/cargotest.lcov"])
-            spawn.runv(
-                [
-                    "buildkite-agent",
-                    "artifact",
-                    "upload",
-                    "coverage/cargotest.lcov.zst",
-                ]
-            )
+            buildkite.upload_artifact("coverage/cargotest.lcov.zst")
     else:
         if args.miri_full:
             spawn.runv(

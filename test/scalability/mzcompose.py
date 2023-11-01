@@ -14,7 +14,7 @@ import pandas as pd
 from jupyter_core.command import main as jupyter_core_command_main
 from matplotlib import pyplot as plt
 
-from materialize import benchmark_utils, buildkite, git, spawn
+from materialize import benchmark_utils, buildkite, git
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
@@ -315,8 +315,8 @@ def upload_regressions_to_buildkite(outcome: RegressionOutcome) -> None:
         return
 
     outcome.raw_regression_data.to_csv(paths.regressions_csv())
-    spawn.runv(
-        ["buildkite-agent", "artifact", "upload", paths.regressions_csv_name()],
+    buildkite.upload_artifact(
+        paths.regressions_csv_name(),
         cwd=paths.RESULTS_DIR,
     )
 
@@ -330,13 +330,8 @@ def store_and_upload_results_to_buildkite(result: BenchmarkResult) -> None:
         df_total.to_csv(paths.results_csv(endpoint_name))
 
         if buildkite.is_in_buildkite():
-            spawn.runv(
-                [
-                    "buildkite-agent",
-                    "artifact",
-                    "upload",
-                    paths.results_csv_rel_path(endpoint_name),
-                ],
+            buildkite.upload_artifact(
+                paths.results_csv_rel_path(endpoint_name),
                 cwd=paths.RESULTS_DIR,
             )
 
