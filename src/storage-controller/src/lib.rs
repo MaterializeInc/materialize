@@ -1216,6 +1216,16 @@ where
                 // We _are_ using persist-txn for tables. It advances the physical upper of the
                 // shard lazily, so we need to ask it for the snapshot to ensure the read is
                 // unblocked.
+                //
+                // Consider the following scenario:
+                // - Table A is written to via txns at time 5
+                // - Tables other than A are written to via txns consuming timestamps up to 10
+                // - We'd like to read A at 7
+                // - The application process of A's txn has advanced the upper to 5+1, but we need
+                //   it to be past 7, but the txns shard knows that (5,10) is empty of writes to A
+                // - This branch allows it to handle that advancing the physical upper of Table A to
+                //   10 (NB but only once we see it get past the write at 5!)
+                // - Then we can read it normally.
                 txns_cache.update_gt(&as_of).await;
                 let data_snapshot = txns_cache.data_snapshot(data_shard, as_of.clone());
                 let mut read_handle = self.read_handle_for_snapshot(id).await?;
