@@ -10,7 +10,7 @@
 import os
 
 import pandas as pd
-from matplotlib import pyplot as plt  # type: ignore
+from matplotlib import pyplot as plt
 
 from materialize.scalability.df import paths
 from materialize.scalability.plot.plot import (
