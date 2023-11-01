@@ -4799,21 +4799,37 @@ impl Coordinator {
         &mut self,
         session: &mut Session,
         id: GlobalId,
-        connection: catalog::Connection,
+        mut connection: catalog::Connection,
     ) -> Result<ExecuteResponse, AdapterError> {
-        if let mz_storage_types::connections::Connection::AwsPrivatelink(ref privatelink) =
-            connection.connection
-        {
-            let spec = VpcEndpointConfig {
-                aws_service_name: privatelink.service_name.to_owned(),
-                availability_zone_ids: privatelink.availability_zones.to_owned(),
-            };
-            self.cloud_resource_controller
-                .as_ref()
-                .ok_or(AdapterError::Unsupported("AWS PrivateLink connections"))?
-                .ensure_vpc_endpoint(id, spec)
-                .await?;
-        }
+        match &mut connection.connection {
+            mz_storage_types::connections::Connection::AwsPrivatelink(ref privatelink) => {
+                let spec = VpcEndpointConfig {
+                    aws_service_name: privatelink.service_name.to_owned(),
+                    availability_zone_ids: privatelink.availability_zones.to_owned(),
+                };
+                self.cloud_resource_controller
+                    .as_ref()
+                    .ok_or(AdapterError::Unsupported("AWS PrivateLink connections"))?
+                    .ensure_vpc_endpoint(id, spec)
+                    .await?;
+            }
+            mz_storage_types::connections::Connection::Ssh(ref mut ssh) => {
+                // Retain the connection's current SSH keys
+                let current_ssh = match &self
+                    .catalog
+                    .get_entry(&id)
+                    .connection()
+                    .expect("known to be Connection")
+                    .connection
+                {
+                    mz_storage_types::connections::Connection::Ssh(ssh) => ssh,
+                    _ => unreachable!(),
+                };
+
+                ssh.public_keys = current_ssh.public_keys.clone();
+            }
+            _ => {}
+        };
 
         let ops = vec![catalog::Op::UpdateItem {
             id,
