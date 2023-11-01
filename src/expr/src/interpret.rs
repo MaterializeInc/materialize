@@ -1530,7 +1530,7 @@ mod tests {
                 func: BinaryFunc::AddInt64,
                 expr1: Box::new(MirScalarExpr::Column(1)),
                 expr2: Box::new(MirScalarExpr::CallUnary {
-                    func: UnaryFunc::AbsInt64(AbsInt64),
+                    func: UnaryFunc::NegInt64(NegInt64),
                     expr: Box::new(MirScalarExpr::Column(3)),
                 }),
             }),
