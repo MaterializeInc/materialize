@@ -30,6 +30,30 @@ statement ok
 CREATE INDEX objects_idx ON objects(schema, object)
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_activity_log' ORDER BY position
+----
+1  execution_id  uuid
+2  sample_rate  double␠precision
+3  cluster_id  text
+4  application_name  text
+5  cluster_name  text
+6  transaction_isolation  text
+7  execution_timestamp  uint8
+8  params  list
+9  began_at  timestamp␠with␠time␠zone
+10  finished_at  timestamp␠with␠time␠zone
+11  finished_status  text
+12  error_message  text
+13  rows_returned  bigint
+14  execution_strategy  text
+15  transaction_id  uint8
+16  prepared_statement_id  uuid
+17  sql  text
+18  prepared_statement_name  text
+19  session_id  uuid
+20  redacted_sql  text
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_frontiers' ORDER BY position
 ----
 1  object_id  text
