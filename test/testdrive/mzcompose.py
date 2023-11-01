@@ -58,8 +58,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     parser.add_argument(
         "--default-timeout",
-        type=int,
-        help="set the default timeout for Testdrive, in seconds",
+        type=str,
+        help="set the default timeout for Testdrive",
     )
 
     parser.add_argument(
