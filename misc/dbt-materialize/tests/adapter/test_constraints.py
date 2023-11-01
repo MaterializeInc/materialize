@@ -103,7 +103,6 @@ class TestModelConstraintsRuntimeEnforcementMaterialize(
 
 
 class TestNullabilityAssertions:
-
     @pytest.fixture(scope="class")
     def models(self):
         return {
@@ -121,7 +120,7 @@ class TestNullabilityAssertions:
             ]
         )
 
-        results = run_dbt(["run"])
+        run_dbt(["run"])
 
         # confirm that the correct constraint DDL is generated
         nullability_assertions_ddl = run_sql_with_adapter(
