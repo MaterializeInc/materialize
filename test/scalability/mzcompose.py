@@ -14,7 +14,7 @@ import pandas as pd
 from jupyter_core.command import main as jupyter_core_command_main
 from matplotlib import pyplot as plt
 
-from materialize import benchmark_utils, buildkite, spawn
+from materialize import benchmark_utils, buildkite, git, spawn
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
@@ -150,6 +150,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     print("Other endpoints:")
     for other_endpoint in other_endpoints:
         print(f"* {other_endpoint}")
+
+    # fetch git tags so that the commit messages of version tags can be resolved
+    git.fetch(include_tags=True)
 
     schema = Schema(
         create_index=args.create_index,
