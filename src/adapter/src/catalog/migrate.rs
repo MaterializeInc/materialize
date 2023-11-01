@@ -73,9 +73,10 @@ pub(crate) async fn migrate(
     // you are really certain you want one of these crazy migrations.
     let state = Catalog::load_catalog_items(txn, state)?;
     let conn_cat = state.for_system_session();
-    rewrite_items(txn, Some(&conn_cat), |_tx, cat, _item| {
+    rewrite_items(txn, Some(&conn_cat), |_tx, cat, item| {
         Box::pin(async move {
             let _conn_cat = cat.expect("must provide access to conn catalog");
+            ast_rewrite_create_connection_options_0_77_0(item)?;
             Ok(())
         })
     })
@@ -108,6 +109,33 @@ pub(crate) async fn migrate(
 // ****************************************************************************
 // AST migrations -- Basic AST -> AST transformations
 // ****************************************************************************
+
+/// Remove any durably recorded `WITH (VALIDATE = true|false)` from `CREATE
+/// CONNECTION` statements.
+///
+/// This `WITH` option only has an effect when creating the connection, and the
+/// fact that it was persisted in the item's definition is unclear, especially
+/// in light of `ALTER CONNECTION`, which also offers a `WITH (VALIDATE =
+/// true|false)` option, but cannot alter the `VALIDATE` clause on the `CREATE
+/// CONNECTION` statement.
+fn ast_rewrite_create_connection_options_0_77_0(
+    stmt: &mut mz_sql::ast::Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    use mz_sql::ast::visit_mut::VisitMut;
+    struct CreateConnectionRewriter;
+    impl<'ast> VisitMut<'ast, Raw> for CreateConnectionRewriter {
+        fn visit_create_connection_statement_mut(
+            &mut self,
+            node: &'ast mut mz_sql::ast::CreateConnectionStatement<Raw>,
+        ) {
+            node.with_options
+                .retain(|o| o.name != mz_sql::ast::CreateConnectionOptionName::Validate);
+        }
+    }
+
+    CreateConnectionRewriter.visit_statement_mut(stmt);
+    Ok(())
+}
 
 // ****************************************************************************
 // Semantic migrations -- Weird migrations that require access to the catalog
