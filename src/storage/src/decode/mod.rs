@@ -100,8 +100,9 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
                     None => continue,
                 };
                 let (mut data, schema, _) = match resolver.resolve(&*value).await {
-                    Ok(ok) => ok,
-                    Err(e) => {
+                    Ok(Ok(ok)) => ok,
+                    // TODO: restart the dataflow on transient errors
+                    Ok(Err(e)) | Err(e) => {
                         error!("Failed to get schema info for CDCv2 record: {}", e);
                         continue;
                     }
@@ -213,34 +214,41 @@ struct DataDecoder {
 }
 
 impl DataDecoder {
-    pub async fn next(&mut self, bytes: &mut &[u8]) -> Result<Option<Row>, DecodeErrorKind> {
-        match &mut self.inner {
+    pub async fn next(
+        &mut self,
+        bytes: &mut &[u8],
+    ) -> Result<Result<Option<Row>, DecodeErrorKind>, anyhow::Error> {
+        let result = match &mut self.inner {
             DataDecoderInner::DelimitedBytes { delimiter, format } => {
-                let delimiter = *delimiter;
-                let chunk_idx = match bytes.iter().position(move |&byte| byte == delimiter) {
-                    None => return Ok(None),
-                    Some(i) => i,
-                };
-                let data = &bytes[0..chunk_idx];
-                *bytes = &bytes[chunk_idx + 1..];
-                format.decode(data)
+                match bytes.iter().position(|&byte| byte == *delimiter) {
+                    Some(chunk_idx) => {
+                        let data = &bytes[0..chunk_idx];
+                        *bytes = &bytes[chunk_idx + 1..];
+                        format.decode(data)
+                    }
+                    None => Ok(None),
+                }
             }
-            DataDecoderInner::Avro(avro) => avro.decode(bytes).await,
+            DataDecoderInner::Avro(avro) => avro.decode(bytes).await?,
             DataDecoderInner::Csv(csv) => csv.decode(bytes),
             DataDecoderInner::PreDelimited(format) => {
                 let result = format.decode(*bytes);
                 *bytes = &[];
                 result
             }
-        }
+        };
+        Ok(result)
     }
 
     /// Get the next record if it exists, assuming an EOF has occurred.
     ///
     /// This is distinct from `next` because, for example, a CSV record should be returned even if it
     /// does not end in a newline.
-    pub fn eof(&mut self, bytes: &mut &[u8]) -> Result<Option<Row>, DecodeErrorKind> {
-        match &mut self.inner {
+    pub fn eof(
+        &mut self,
+        bytes: &mut &[u8],
+    ) -> Result<Result<Option<Row>, DecodeErrorKind>, anyhow::Error> {
+        let result = match &mut self.inner {
             DataDecoderInner::Csv(csv) => {
                 let result = csv.decode(bytes);
                 csv.reset_for_new_object();
@@ -257,7 +265,8 @@ impl DataDecoder {
                 }
             }
             _ => Ok(None),
-        }
+        };
+        Ok(result)
     }
 
     pub fn log_errors(&self, n: usize) {
@@ -348,25 +357,30 @@ async fn get_decoder(
 async fn decode_delimited(
     decoder: &mut DataDecoder,
     buf: &[u8],
-) -> Result<Option<Row>, DecodeError> {
-    async fn inner(
-        decoder: &mut DataDecoder,
-        mut buf: &[u8],
-    ) -> Result<Option<Row>, DecodeErrorKind> {
-        let value = decoder.next(&mut buf).await?;
-        if !buf.is_empty() {
-            let err = format!("Unexpected bytes remaining for decoded value: {buf:?}");
-            return Err(DecodeErrorKind::Text(err));
+) -> Result<Result<Option<Row>, DecodeError>, anyhow::Error> {
+    let mut remaining_buf = buf;
+    let value = decoder.next(&mut remaining_buf).await?;
+
+    let result = match value {
+        Ok(value) => {
+            if remaining_buf.is_empty() {
+                match value {
+                    Some(value) => Ok(Some(value)),
+                    None => decoder.eof(&mut remaining_buf)?,
+                }
+            } else {
+                Err(DecodeErrorKind::Text(format!(
+                    "Unexpected bytes remaining for decoded value: {remaining_buf:?}"
+                )))
+            }
         }
-        match value {
-            Some(value) => Ok(Some(value)),
-            None => Ok(decoder.eof(&mut buf)?),
-        }
-    }
-    inner(decoder, buf).await.map_err(|inner| DecodeError {
+        Err(err) => Err(err),
+    };
+
+    Ok(result.map_err(|inner| DecodeError {
         kind: inner,
         raw: buf.to_vec(),
-    })
+    }))
 }
 
 /// Decode already delimited records of data.
@@ -458,12 +472,12 @@ where
                     } = output;
 
                     let key = match key_decoder.as_mut().zip(key.as_ref()) {
-                        Some((decoder, buf)) => decode_delimited(decoder, buf).await.transpose(),
+                        Some((decoder, buf)) => decode_delimited(decoder, buf).await?.transpose(),
                         None => None,
                     };
 
                     let value = match value.as_ref() {
-                        Some(buf) => decode_delimited(&mut value_decoder, buf).await.transpose(),
+                        Some(buf) => decode_delimited(&mut value_decoder, buf).await?.transpose(),
                         None => None,
                     };
 
