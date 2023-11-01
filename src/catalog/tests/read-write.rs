@@ -124,13 +124,13 @@ async fn test_confirm_leadership(
     openable_state2: impl OpenableDurableCatalogState,
 ) {
     let mut state1 = Box::new(openable_state1)
-        .open(SYSTEM_TIME.clone(), &debug_bootstrap_args(), None)
+        .open(SYSTEM_TIME(), &debug_bootstrap_args(), None)
         .await
         .unwrap();
     assert!(state1.confirm_leadership().await.is_ok());
 
     let mut state2 = Box::new(openable_state2)
-        .open(SYSTEM_TIME.clone(), &debug_bootstrap_args(), None)
+        .open(SYSTEM_TIME(), &debug_bootstrap_args(), None)
         .await
         .unwrap();
     assert!(state2.confirm_leadership().await.is_ok());
@@ -189,7 +189,7 @@ async fn test_get_and_prune_storage_usage(openable_state: impl OpenableDurableCa
     let boot_ts = mz_repr::Timestamp::new(23);
 
     let mut state = Box::new(openable_state)
-        .open(SYSTEM_TIME.clone(), &debug_bootstrap_args(), None)
+        .open(SYSTEM_TIME(), &debug_bootstrap_args(), None)
         .await
         .unwrap();
     let mut txn = state.transaction().await.unwrap();
@@ -241,7 +241,7 @@ async fn test_timestamps(openable_state: impl OpenableDurableCatalogState) {
         ts: mz_repr::Timestamp::new(42),
     };
     let mut state = Box::new(openable_state)
-        .open(SYSTEM_TIME.clone(), &debug_bootstrap_args(), None)
+        .open(SYSTEM_TIME(), &debug_bootstrap_args(), None)
         .await
         .unwrap();
 
@@ -288,7 +288,7 @@ async fn test_persist_allocate_id() {
 async fn test_allocate_id(openable_state: impl OpenableDurableCatalogState) {
     let id_type = USER_ITEM_ALLOC_KEY;
     let mut state = Box::new(openable_state)
-        .open(SYSTEM_TIME.clone(), &debug_bootstrap_args(), None)
+        .open(SYSTEM_TIME(), &debug_bootstrap_args(), None)
         .await
         .unwrap();
 
@@ -365,7 +365,7 @@ async fn test_audit_logs(openable_state: impl OpenableDurableCatalogState) {
     ];
 
     let mut state = Box::new(openable_state)
-        .open(SYSTEM_TIME.clone(), &debug_bootstrap_args(), None)
+        .open(SYSTEM_TIME(), &debug_bootstrap_args(), None)
         .await
         .unwrap();
     let mut txn = state.transaction().await.unwrap();
@@ -421,7 +421,7 @@ async fn test_items(openable_state: impl OpenableDurableCatalogState) {
     ];
 
     let mut state = Box::new(openable_state)
-        .open(SYSTEM_TIME.clone(), &debug_bootstrap_args(), None)
+        .open(SYSTEM_TIME(), &debug_bootstrap_args(), None)
         .await
         .unwrap();
     let mut txn = state.transaction().await.unwrap();

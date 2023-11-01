@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
-use mz_ore::now::NowFn;
+use mz_ore::now::EpochMillis;
 use mz_ore::{soft_assert, soft_assert_eq};
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::write::WriteHandle;
@@ -282,11 +282,11 @@ impl PersistHandle {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip(self, now))]
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn open_inner(
         mut self,
         mode: Mode,
-        now: NowFn,
+        boot_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
@@ -384,12 +384,6 @@ impl PersistHandle {
                 Vec::new(),
                 "snapshot should not contain anything for an uninitialized catalog"
             );
-
-            // Get the current timestamp so we can record when we booted. We don't have to worry
-            // about `boot_ts` being less than a previously used timestamp because the catalog is
-            // uninitialized and there are no previous timestamps.
-            let boot_ts = now();
-
             let mut txn = catalog.transaction().await?;
             initialize::initialize(&mut txn, bootstrap_args, boot_ts, deploy_generation).await?;
             txn
@@ -496,35 +490,35 @@ impl PersistHandle {
 
 #[async_trait]
 impl OpenableDurableCatalogState for PersistHandle {
-    #[tracing::instrument(level = "debug", skip(self, now))]
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn open_savepoint(
         mut self: Box<Self>,
-        now: NowFn,
+        boot_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
-        self.open_inner(Mode::Savepoint, now, bootstrap_args, deploy_generation)
+        self.open_inner(Mode::Savepoint, boot_ts, bootstrap_args, deploy_generation)
             .await
     }
 
-    #[tracing::instrument(level = "debug", skip(self, now))]
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn open_read_only(
         mut self: Box<Self>,
-        now: NowFn,
+        boot_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
-        self.open_inner(Mode::Readonly, now, bootstrap_args, None)
+        self.open_inner(Mode::Readonly, boot_ts, bootstrap_args, None)
             .await
     }
 
-    #[tracing::instrument(level = "debug", skip(self, now))]
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn open(
         mut self: Box<Self>,
-        now: NowFn,
+        boot_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
-        self.open_inner(Mode::Writable, now, bootstrap_args, deploy_generation)
+        self.open_inner(Mode::Writable, boot_ts, bootstrap_args, deploy_generation)
             .await
     }
 
