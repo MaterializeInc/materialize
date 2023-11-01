@@ -21,7 +21,6 @@ def scatterplot_tps_per_connections(
 ) -> None:
     legend = []
     plot: Axes = figure.subplots(1, 1)
-    max_concurrency = 1
 
     for endpoint_name, df_totals in df_totals_by_endpoint_name.items():
         legend.append(endpoint_name_to_description(endpoint_name))
@@ -32,11 +31,6 @@ def scatterplot_tps_per_connections(
             label=df_totals_cols.TPS,
         )
 
-        max_concurrency = max(
-            max_concurrency, df_totals[df_totals_cols.CONCURRENCY].max()
-        )
-
-    plot.set_xticks(range(0, max_concurrency + 1))
     plot.set_ylabel("Transactions Per Second")
     plot.set_xlabel("Concurrent SQL Connections")
     plot.legend(legend)
