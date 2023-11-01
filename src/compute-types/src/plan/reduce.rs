@@ -755,7 +755,7 @@ impl ReducePlan {
             .map(mz_expr::MirScalarExpr::Column)
             .collect::<Vec<_>>();
         let (permutation, thinning) = permutation_for_arrangement(&key, arity);
-        AvailableCollections::new_arranged(vec![(key, permutation, thinning)])
+        AvailableCollections::new_arranged(vec![(key, permutation, thinning)], None)
     }
 }
 

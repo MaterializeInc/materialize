@@ -1018,10 +1018,10 @@ where
                 // TODO: Consider allowing more expressive names.
                 let name = format!("ArrangeBy[{:?}]", key);
 
-                let (key_types, val_types) = if enable_specialized_arrangements {
+                let key_val_types = if enable_specialized_arrangements {
                     derive_key_val_types(&key, &thinning, collections.types.as_ref())
                 } else {
-                    (Default::default(), Default::default())
+                    None
                 };
 
                 let (oks, errs) = self
@@ -1033,8 +1033,7 @@ where
                     oks,
                     &key,
                     &thinning,
-                    key_types,
-                    val_types,
+                    key_val_types,
                     enable_specialized_arrangements,
                 );
                 let errs: KeyCollection<_, _, _> = errs.concat(&errs_keyed).into();
@@ -1054,28 +1053,39 @@ where
         oks: Collection<S, Row, i64>,
         key: &Vec<MirScalarExpr>,
         thinning: &Vec<usize>,
-        _key_types: Vec<ColumnType>,
-        val_types: Vec<ColumnType>,
+        key_val_types: Option<(Vec<ColumnType>, Vec<ColumnType>)>,
         enable_specialized_arrangements: bool,
     ) -> (SpecializedArrangement<S>, Collection<S, DataflowError, i64>) {
-        if enable_specialized_arrangements && val_types.is_empty() {
-            // Emtpy value specialization.
-            let (oks, errs) = oks.map_fallible(
-                "FormArrangementKey [val: empty]",
-                specialized_arrangement_key(key.clone(), thinning.clone(), None, Some(vec![])),
-            );
-            let name = &format!("{} [val: empty]", name);
-            let oks = oks.mz_arrange::<RowSpine<Row, (), _, _>>(name);
-            (SpecializedArrangement::RowUnit(oks), errs)
-        } else {
-            // Catch-all: Just use RowRow.
-            let (oks, errs) = oks.map_fallible(
-                "FormArrangementKey",
-                specialized_arrangement_key(key.clone(), thinning.clone(), None, None),
-            );
-            let oks = oks.mz_arrange::<RowSpine<Row, Row, _, _>>(name);
-            (SpecializedArrangement::RowRow(oks), errs)
+        if enable_specialized_arrangements {
+            // We must have captured types if the flag is on. However, if the flag value
+            // and the available types fell out-of-sync, we will just skip specialization
+            // and use the RowRow catch-all below.
+            if let Some((_key_types, val_types)) = key_val_types {
+                if val_types.is_empty() {
+                    // Emtpy value specialization.
+                    let (oks, errs) = oks.map_fallible(
+                        "FormArrangementKey [val: empty]",
+                        specialized_arrangement_key(
+                            key.clone(),
+                            thinning.clone(),
+                            None,
+                            Some(vec![]),
+                        ),
+                    );
+                    let name = &format!("{} [val: empty]", name);
+                    let oks = oks.mz_arrange::<RowSpine<Row, (), _, _>>(name);
+                    return (SpecializedArrangement::RowUnit(oks), errs);
+                }
+            }
         }
+
+        // Catch-all: Just use RowRow.
+        let (oks, errs) = oks.map_fallible(
+            "FormArrangementKey",
+            specialized_arrangement_key(key.clone(), thinning.clone(), None, None),
+        );
+        let oks = oks.mz_arrange::<RowSpine<Row, Row, _, _>>(name);
+        (SpecializedArrangement::RowRow(oks), errs)
     }
 }
 
@@ -1085,18 +1095,21 @@ fn derive_key_val_types(
     key: &Vec<MirScalarExpr>,
     thinning: &Vec<usize>,
     types: Option<&Vec<ColumnType>>,
-) -> (Vec<ColumnType>, Vec<ColumnType>) {
-    let mut key_types = Vec::new();
-    let mut val_types = Vec::new();
+) -> Option<(Vec<ColumnType>, Vec<ColumnType>)> {
     if let Some(types) = types {
+        let mut key_types = Vec::new();
+        let mut val_types = Vec::new();
+
         for i in 0..key.len() {
             key_types.push(key[i].typ(types).clone());
         }
         for c in thinning.iter() {
             val_types.push(types[*c].clone());
         }
+        Some((key_types, val_types))
+    } else {
+        None
     }
-    (key_types, val_types)
 }
 
 /// Obtains a function that maps input rows to (key, value) pairs according to
