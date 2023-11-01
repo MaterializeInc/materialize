@@ -26,7 +26,7 @@ use mz_interchange::avro::ConfluentAvroResolver;
 use mz_ore::error::ErrorExt;
 use mz_repr::{Datum, Diff, Row, Timestamp};
 use mz_storage_types::connections::{ConnectionContext, CsrConnection};
-use mz_storage_types::errors::{DecodeError, DecodeErrorKind};
+use mz_storage_types::errors::{CsrConnectError, DecodeError, DecodeErrorKind};
 use mz_storage_types::sources::encoding::{
     AvroEncoding, DataEncoding, DataEncodingInner, RegexEncoding,
 };
@@ -42,8 +42,7 @@ use crate::decode::avro::AvroDecoderState;
 use crate::decode::csv::CsvDecoderState;
 use crate::decode::metrics::DecodeMetrics;
 use crate::decode::protobuf::ProtobufDecoderState;
-use crate::healthcheck::HealthStatusUpdate;
-use crate::render::sources::OutputIndex;
+use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::source::types::{DecodeResult, SourceOutput};
 
 mod avro;
@@ -79,6 +78,8 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
         let registry = match csr_connection {
             None => None,
             Some(conn) => Some(
+                // This also panics on connections errors. cdc_v2 is unused so we don't handle
+                // errors right now.
                 conn.connect(&connection_context)
                     .await
                     .expect("CSR connection unexpectedly missing secrets"),
@@ -217,7 +218,7 @@ impl DataDecoder {
     pub async fn next(
         &mut self,
         bytes: &mut &[u8],
-    ) -> Result<Result<Option<Row>, DecodeErrorKind>, anyhow::Error> {
+    ) -> Result<Result<Option<Row>, DecodeErrorKind>, CsrConnectError> {
         let result = match &mut self.inner {
             DataDecoderInner::DelimitedBytes { delimiter, format } => {
                 match bytes.iter().position(|&byte| byte == *delimiter) {
@@ -247,7 +248,7 @@ impl DataDecoder {
     pub fn eof(
         &mut self,
         bytes: &mut &[u8],
-    ) -> Result<Result<Option<Row>, DecodeErrorKind>, anyhow::Error> {
+    ) -> Result<Result<Option<Row>, DecodeErrorKind>, CsrConnectError> {
         let result = match &mut self.inner {
             DataDecoderInner::Csv(csv) => {
                 let result = csv.decode(bytes);
@@ -287,7 +288,7 @@ async fn get_decoder(
     is_connection_delimited: bool,
     metrics: DecodeMetrics,
     connection_context: &ConnectionContext,
-) -> Result<DataDecoder, anyhow::Error> {
+) -> Result<DataDecoder, CsrConnectError> {
     let decoder = match encoding.inner {
         DataEncodingInner::Avro(AvroEncoding {
             schema,
@@ -357,7 +358,7 @@ async fn get_decoder(
 async fn decode_delimited(
     decoder: &mut DataDecoder,
     buf: &[u8],
-) -> Result<Result<Option<Row>, DecodeError>, anyhow::Error> {
+) -> Result<Result<Option<Row>, DecodeError>, CsrConnectError> {
     let mut remaining_buf = buf;
     let value = decoder.next(&mut remaining_buf).await?;
 
@@ -404,7 +405,7 @@ pub fn render_decode_delimited<G>(
     connection_context: ConnectionContext,
 ) -> (
     Collection<G, DecodeResult, Diff>,
-    Stream<G, (OutputIndex, HealthStatusUpdate)>,
+    Stream<G, HealthStatusMessage>,
     Option<Box<dyn Any + Send + Sync>>,
 )
 where
@@ -513,9 +514,17 @@ where
         })
     });
 
-    let health = transient_errors.map(|err: Rc<anyhow::Error>| {
+    let health = transient_errors.map(|err: Rc<CsrConnectError>| {
         let halt_status = HealthStatusUpdate::halting(err.display_with_causes().to_string(), None);
-        (0, halt_status)
+        HealthStatusMessage {
+            index: 0,
+            namespace: if matches!(&*err, CsrConnectError::Ssh(_)) {
+                StatusNamespace::Ssh
+            } else {
+                StatusNamespace::Decode
+            },
+            update: halt_status,
+        }
     });
 
     (output.as_collection(), health, None)

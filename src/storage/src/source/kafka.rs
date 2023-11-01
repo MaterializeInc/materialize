@@ -31,6 +31,7 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{adt::jsonb::Jsonb, Datum, Diff, GlobalId, Row};
 use mz_ssh_util::tunnel::SshTunnelStatus;
 use mz_storage_types::connections::{ConnectionContext, StringOrSecret};
+use mz_storage_types::errors::ContextCreationError;
 use mz_storage_types::sources::{
     KafkaMetadataKind, KafkaSourceConnection, MzOffset, SourceTimestamp,
 };
@@ -288,7 +289,11 @@ impl SourceRender for KafkaSourceConnection {
                             &health_cap,
                             HealthStatusMessage {
                                 index: 0,
-                                namespace: Self::STATUS_NAMESPACE.clone(),
+                                namespace: if matches!(e, ContextCreationError::Ssh(_)) {
+                                    StatusNamespace::Ssh
+                                } else {
+                                    Self::STATUS_NAMESPACE.clone()
+                                },
                                 update,
                             },
                         )

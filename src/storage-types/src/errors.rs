@@ -16,6 +16,7 @@ use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, Row};
 use proptest_derive::Arbitrary;
 use prost::Message;
+use rdkafka::error::KafkaError;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
@@ -986,6 +987,45 @@ impl From<EnvelopeError> for DataflowError {
     fn from(e: EnvelopeError) -> Self {
         Self::EnvelopeError(Box::new(e))
     }
+}
+
+/// An error returned by `KafkaConnection::create_with_context`.
+#[derive(thiserror::Error, Debug)]
+pub enum ContextCreationError {
+    // This ends up double-printing `ssh:` in status tables, but makes for
+    // a better experience during ddl.
+    #[error("ssh: {0}")]
+    Ssh(#[source] anyhow::Error),
+    #[error(transparent)]
+    KafkaError(#[from] KafkaError),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
+impl From<CsrConnectError> for ContextCreationError {
+    fn from(csr: CsrConnectError) -> ContextCreationError {
+        use ContextCreationError::*;
+
+        match csr {
+            CsrConnectError::Ssh(e) => Ssh(e),
+            other => Other(anyhow::anyhow!(other)),
+        }
+    }
+}
+
+/// An error returned by `CsrConnection::connect`.
+#[derive(thiserror::Error, Debug)]
+pub enum CsrConnectError {
+    // This ends up double-printing `ssh:` in status tables, but makes for
+    // a better experience during ddl.
+    #[error("ssh: {0}")]
+    Ssh(#[source] anyhow::Error),
+    #[error(transparent)]
+    NativeTls(#[from] native_tls::Error),
+    #[error(transparent)]
+    Openssl(#[from] openssl::error::ErrorStack),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
 }
 
 #[cfg(test)]
