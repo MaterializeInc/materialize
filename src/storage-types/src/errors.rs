@@ -7,13 +7,16 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use anyhow::anyhow;
 use std::error::Error;
 use std::fmt::Display;
 
 use bytes::BufMut;
 use mz_expr::EvalError;
+use mz_kafka_util::client::TunnelingClientContext;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, Row};
+use mz_ssh_util::tunnel::SshTunnelStatus;
 use proptest_derive::Arbitrary;
 use prost::Message;
 use rdkafka::error::KafkaError;
@@ -1000,6 +1003,50 @@ pub enum ContextCreationError {
     KafkaError(#[from] KafkaError),
     #[error(transparent)]
     Other(#[from] anyhow::Error),
+}
+
+/// An extension trait for `Result<T, E>` that makes producing `ContextCreationError`s easier.
+pub trait ContextCreationErrorExt<T> {
+    /// Override the error case with an ssh error from `cx`, if there is one.
+    fn check_ssh_status<C>(self, cx: &TunnelingClientContext<C>)
+        -> Result<T, ContextCreationError>;
+    /// Add context to the errors within the variants of `ContextCreationError`, without
+    /// altering the `Ssh` variant.
+    fn add_context(self, msg: &'static str) -> Result<T, ContextCreationError>;
+}
+
+impl<T, E> ContextCreationErrorExt<T> for Result<T, E>
+where
+    ContextCreationError: From<E>,
+{
+    fn check_ssh_status<C>(
+        self,
+        cx: &TunnelingClientContext<C>,
+    ) -> Result<T, ContextCreationError> {
+        self.map_err(|e| {
+            if let SshTunnelStatus::Errored(e) = cx.tunnel_status() {
+                ContextCreationError::Ssh(anyhow!(e))
+            } else {
+                ContextCreationError::from(e)
+            }
+        })
+    }
+
+    fn add_context(self, msg: &'static str) -> Result<T, ContextCreationError> {
+        self.map_err(|e| {
+            let e = ContextCreationError::from(e);
+            match e {
+                // We need to preserve the `Ssh` variant here, so we add the context inside of it.
+                ContextCreationError::Ssh(e) => ContextCreationError::Ssh(anyhow!(e.context(msg))),
+                ContextCreationError::Other(e) => {
+                    ContextCreationError::Other(anyhow!(e.context(msg)))
+                }
+                ContextCreationError::KafkaError(e) => {
+                    ContextCreationError::Other(anyhow!(anyhow!(e).context(msg)))
+                }
+            }
+        })
+    }
 }
 
 impl From<CsrConnectError> for ContextCreationError {

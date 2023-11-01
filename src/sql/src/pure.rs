@@ -36,6 +36,7 @@ use mz_sql_parser::ast::{
 };
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::connections::{Connection, ConnectionContext};
+use mz_storage_types::errors::ContextCreationError;
 use mz_storage_types::sources::{
     GenericSourceConnection, PostgresSourcePublicationDetails, SourceConnection,
 };
@@ -320,18 +321,16 @@ async fn purify_create_sink(
                 .await
                 .map_err(|e| {
                     // anyhow doesn't support Clone, so not trivial to move into PlanError
-                    KafkaSinkPurificationError::AdminClientError(
-                        e.display_with_causes().to_string(),
-                    )
+                    KafkaSinkPurificationError::AdminClientError(Arc::new(e))
                 })?;
 
             let metadata = client
                 .inner()
                 .fetch_metadata(None, DEFAULT_FETCH_METADATA_TIMEOUT)
                 .map_err(|e| {
-                    KafkaSinkPurificationError::AdminClientError(
-                        e.display_with_causes().to_string(),
-                    )
+                    KafkaSinkPurificationError::AdminClientError(Arc::new(
+                        ContextCreationError::KafkaError(e),
+                    ))
                 })?;
 
             if metadata.brokers().len() == 0 {
@@ -365,11 +364,12 @@ async fn purify_create_sink(
                 let client = connection
                     .connect(&connection_context)
                     .await
-                    .map_err(|e| CsrPurificationError::ClientError(e.to_string_with_causes()))?;
+                    .map_err(|e| CsrPurificationError::ClientError(Arc::new(e)))?;
 
-                client.list_subjects().await.map_err(|e| {
-                    CsrPurificationError::ListSubjectsError(e.to_string_with_causes())
-                })?;
+                client
+                    .list_subjects()
+                    .await
+                    .map_err(|e| CsrPurificationError::ListSubjectsError(Arc::new(e)))?;
             }
             Format::Avro(AvroSchema::InlineSchema { .. })
             | Format::Bytes
@@ -1201,7 +1201,7 @@ async fn purify_csr_connection_proto(
             let ccsr_client = ccsr_connection
                 .connect(connection_context)
                 .await
-                .map_err(|e| CsrPurificationError::ClientError(e.to_string_with_causes()))?;
+                .map_err(|e| CsrPurificationError::ClientError(Arc::new(e)))?;
 
             let value = compile_proto(&format!("{}-value", topic), &ccsr_client).await?;
             let key = compile_proto(&format!("{}-key", topic), &ccsr_client)
@@ -1256,7 +1256,7 @@ async fn purify_csr_connection_avro(
         let ccsr_client = csr_connection
             .connect(connection_context)
             .await
-            .map_err(|e| CsrPurificationError::ClientError(e.to_string_with_causes()))?;
+            .map_err(|e| CsrPurificationError::ClientError(Arc::new(e)))?;
 
         let Schema {
             key_schema,

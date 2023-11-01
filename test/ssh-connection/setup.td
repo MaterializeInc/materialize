@@ -11,6 +11,7 @@
 # Done here instead of in the workflow to ensure the state is reset.
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true
 ALTER SYSTEM SET enable_connection_validation_syntax = true
 ALTER SYSTEM SET enable_default_kafka_ssh_tunnel = true
 

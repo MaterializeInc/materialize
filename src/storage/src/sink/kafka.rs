@@ -31,6 +31,7 @@ use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, Gau
 use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::task;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_ssh_util::tunnel::SshTunnelStatus;
 use mz_storage_client::client::SinkStatisticsUpdate;
 use mz_storage_client::sink::ProgressRecord;
 use mz_storage_types::connections::ConnectionContext;
@@ -475,6 +476,7 @@ impl KafkaSinkState {
                     .await
             })()
             .await,
+            None,
         )
         .await;
 
@@ -500,6 +502,7 @@ impl KafkaSinkState {
                     },
                 )
                 .await,
+            None,
         )
         .await;
 
@@ -725,9 +728,13 @@ impl KafkaSinkState {
 
     /// Report a stalled HealthStatusUpdate and then halt with the same message.
     pub async fn halt_on_err<T>(&self, result: Result<T, anyhow::Error>) -> T {
+        // We may not get an up-to-date ssh status here, but on restart we will.
+        let ssh_status = self.producer.inner.client().context().tunnel_status();
+
         halt_on_err(
             &self.healthchecker,
             result.map_err(ContextCreationError::Other),
+            Some(ssh_status),
         )
         .await
     }
@@ -760,6 +767,8 @@ async fn halt_on_err<T>(
     // `create_with_context` calls, or an `anyhow::Error` for transient failures during operation.
     // In the future we could probably also use the `KafkaError` variant as well.
     result: Result<T, ContextCreationError>,
+    // The status of the ssh tunnel, if it already exists.
+    ssh_status: Option<SshTunnelStatus>,
 ) -> T {
     match result {
         Ok(t) => t,
@@ -785,6 +794,17 @@ async fn halt_on_err<T>(
             } else {
                 None
             };
+
+            // Update the ssh status. This could be overridden below, but this ensures the
+            // user gets a useful error if the kafka error is a result of this status.
+            if let Some(SshTunnelStatus::Errored(e)) = ssh_status {
+                update_status(
+                    healthchecker,
+                    HealthStatusUpdate::stalled(e, None),
+                    StatusNamespace::Ssh,
+                )
+                .await;
+            }
 
             update_status(
                 healthchecker,
@@ -1221,6 +1241,7 @@ where
             &healthchecker,
             mz_storage_client::sink::build_kafka(sink_id, &mut connection, &connection_context)
                 .await,
+            None,
         )
         .await;
 
