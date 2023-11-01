@@ -45,18 +45,14 @@ class BenchmarkResult:
             ] = dict()
 
         workload_name = result.workload.name()
-        assert (
+        if (
             workload_name
-            not in self.df_total_by_endpoint_name_and_workload[
-                endpoint_version_info
-            ].keys()
-        ), f"Results already contain an entry for this endpoint ({endpoint_version_info}) and workload {workload_name}"
-        assert (
-            workload_name
-            not in self.df_details_by_endpoint_name_and_workload[
-                endpoint_version_info
-            ].keys()
-        ), f"Results already contain an entry for this endpoint ({endpoint_version_info}) and workload {workload_name}"
+            in self.df_total_by_endpoint_name_and_workload[endpoint_version_info].keys()
+        ):
+            # Entry already exists, this happens in case of retries
+            print(
+                f"Replacing result entry for endpoint ({endpoint_version_info}) and workload {workload_name}"
+            )
 
         self.df_total_by_endpoint_name_and_workload[endpoint_version_info][
             workload_name
