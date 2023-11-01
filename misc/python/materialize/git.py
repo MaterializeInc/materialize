@@ -177,6 +177,27 @@ def fetch(
 _fetch = fetch  # renamed because an argument shadows the fetch name in get_tags
 
 
+def try_get_remote_name_by_url(url: str) -> str | None:
+    result = spawn.capture(["git", "remote", "--verbose"])
+    for line in result.splitlines():
+        remote, desc = line.split("\t")
+        if desc.lower() == f"{url} (fetch)".lower():
+            return remote
+    return None
+
+
+def get_remote(url: str, default_remote_name: str = "origin") -> str:
+    # Alternative syntax
+    remote = try_get_remote_name_by_url(url) or try_get_remote_name_by_url(
+        url.replace("https://github.com/", "git@github.com:")
+    )
+    if not remote:
+        remote = default_remote_name
+        print(f"Remote for URL {url} not found, using {remote}")
+
+    return remote
+
+
 def get_common_ancestor_commit(remote: str, branch: str, fetch_branch: bool) -> str:
     if fetch_branch:
         fetch(remote=remote, branch=branch)
