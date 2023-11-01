@@ -41,7 +41,7 @@ def workflow_with_otel(c: Composition) -> None:
 
     # update the stderr config
     c.sql(
-        "ALTER SYSTEM SET log_filter = 'debug'",
+        "ALTER SYSTEM SET log_filter = 'foo=debug,info'",
         user="mz_system",
         port=6877,
         print_statement=False,
@@ -51,7 +51,7 @@ def workflow_with_otel(c: Composition) -> None:
 
     # update the otel config
     c.sql(
-        "ALTER SYSTEM SET opentelemetry_filter = 'trace'",
+        "ALTER SYSTEM SET opentelemetry_filter = 'foo=trace,info'",
         user="mz_system",
         port=6877,
         print_statement=False,
@@ -91,7 +91,7 @@ def workflow_without_otel(c: Composition) -> None:
 
         # update the stderr config
         c.sql(
-            "ALTER SYSTEM SET log_filter = 'debug'",
+            "ALTER SYSTEM SET log_filter = 'foo=debug,info'",
             user="mz_system",
             port=6877,
             print_statement=False,
@@ -133,7 +133,7 @@ def workflow_clusterd(c: Composition) -> None:
     )
 
     c.sql(
-        "ALTER SYSTEM SET log_filter = 'debug'",
+        "ALTER SYSTEM SET log_filter = 'foo=debug,info'",
         user="mz_system",
         port=6877,
         print_statement=False,
