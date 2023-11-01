@@ -873,7 +873,7 @@ impl Snapshot {
     }
 }
 
-#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct SettingKey {
     pub(crate) name: String,
 }
@@ -890,7 +890,7 @@ impl RustType<proto::SettingKey> for SettingKey {
     }
 }
 
-#[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct SettingValue {
     pub(crate) value: String,
 }
@@ -907,7 +907,7 @@ impl RustType<proto::SettingValue> for SettingValue {
     }
 }
 
-#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct IdAllocKey {
     pub(crate) name: String,
 }
@@ -943,7 +943,7 @@ impl RustType<proto::IdAllocValue> for IdAllocValue {
     }
 }
 
-#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct GidMappingKey {
     pub(crate) schema_name: String,
     pub(crate) object_type: CatalogItemType,
@@ -970,7 +970,7 @@ impl RustType<proto::GidMappingKey> for GidMappingKey {
     }
 }
 
-#[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct GidMappingValue {
     pub(crate) id: u64,
     pub(crate) fingerprint: String,
@@ -992,7 +992,7 @@ impl RustType<proto::GidMappingValue> for GidMappingValue {
     }
 }
 
-#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct ClusterKey {
     pub(crate) id: ClusterId,
 }
@@ -1011,7 +1011,7 @@ impl RustType<proto::ClusterKey> for ClusterKey {
     }
 }
 
-#[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ClusterValue {
     pub(crate) name: String,
     pub(crate) linked_object_id: Option<GlobalId>,
@@ -1042,7 +1042,7 @@ impl RustType<proto::ClusterValue> for ClusterValue {
     }
 }
 
-#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct ClusterIntrospectionSourceIndexKey {
     pub(crate) cluster_id: ClusterId,
     pub(crate) name: String,
@@ -1068,7 +1068,7 @@ impl RustType<proto::ClusterIntrospectionSourceIndexKey> for ClusterIntrospectio
     }
 }
 
-#[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ClusterIntrospectionSourceIndexValue {
     pub(crate) index_id: u64,
 }
@@ -1091,7 +1091,7 @@ impl RustType<proto::ClusterIntrospectionSourceIndexValue>
     }
 }
 
-#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct ClusterReplicaKey {
     pub(crate) id: ReplicaId,
 }
@@ -1110,7 +1110,7 @@ impl RustType<proto::ClusterReplicaKey> for ClusterReplicaKey {
     }
 }
 
-#[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ClusterReplicaValue {
     pub(crate) cluster_id: ClusterId,
     pub(crate) name: String,
@@ -1423,7 +1423,7 @@ impl RustType<proto::ConfigKey> for ConfigKey {
     }
 }
 
-#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct ConfigValue {
     pub(crate) value: u64,
 }
@@ -1438,7 +1438,7 @@ impl RustType<proto::ConfigValue> for ConfigValue {
     }
 }
 
-#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct AuditLogKey {
     pub(crate) event: VersionedEvent,
 }
@@ -1457,7 +1457,7 @@ impl RustType<proto::AuditLogKey> for AuditLogKey {
     }
 }
 
-#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct StorageUsageKey {
     pub(crate) metric: VersionedStorageUsage,
 }
@@ -1476,7 +1476,7 @@ impl RustType<proto::StorageUsageKey> for StorageUsageKey {
     }
 }
 
-#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct TimestampKey {
     pub(crate) id: String,
 }
@@ -1493,7 +1493,7 @@ impl RustType<proto::TimestampKey> for TimestampKey {
     }
 }
 
-#[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct TimestampValue {
     pub(crate) ts: mz_repr::Timestamp,
 }
@@ -1512,7 +1512,7 @@ impl RustType<proto::TimestampValue> for TimestampValue {
     }
 }
 
-#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct ServerConfigurationKey {
     pub(crate) name: String,
 }
@@ -1529,7 +1529,7 @@ impl RustType<proto::ServerConfigurationKey> for ServerConfigurationKey {
     }
 }
 
-#[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ServerConfigurationValue {
     pub(crate) value: String,
 }
@@ -1546,7 +1546,7 @@ impl RustType<proto::ServerConfigurationValue> for ServerConfigurationValue {
     }
 }
 
-#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct DefaultPrivilegesKey {
     pub(crate) role_id: RoleId,
     pub(crate) database_id: Option<DatabaseId>,
@@ -1583,7 +1583,7 @@ impl RustType<proto::DefaultPrivilegesKey> for DefaultPrivilegesKey {
     }
 }
 
-#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct DefaultPrivilegesValue {
     pub(crate) privileges: AclMode,
 }
@@ -1604,7 +1604,7 @@ impl RustType<proto::DefaultPrivilegesValue> for DefaultPrivilegesValue {
     }
 }
 
-#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct SystemPrivilegesKey {
     pub(crate) grantee: RoleId,
     pub(crate) grantor: RoleId,
@@ -1630,7 +1630,7 @@ impl RustType<proto::SystemPrivilegesKey> for SystemPrivilegesKey {
     }
 }
 
-#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct SystemPrivilegesValue {
     pub(crate) acl_mode: AclMode,
 }

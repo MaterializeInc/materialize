@@ -606,6 +606,7 @@ where
 ///
 /// To finalize, add the results of [`TableTransaction::pending()`] to an
 /// [`AppendBatch`].
+#[derive(Debug, PartialEq, Eq)]
 pub struct TableTransaction<K, V> {
     initial: BTreeMap<K, V>,
     // The desired state of keys after commit. `None` means the value will be

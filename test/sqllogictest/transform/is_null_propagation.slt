@@ -56,7 +56,7 @@ Explained Query:
         ArrangeBy keys=[[#0]] // { arity: 1 }
           Get l0 // { arity: 1 }
         ArrangeBy keys=[[#0]] // { arity: 1 }
-          Distinct group_by=[#0] // { arity: 1 }
+          Distinct project=[#0] // { arity: 1 }
             Union // { arity: 1 }
               Project (#0) // { arity: 1 }
                 Filter (#0 = bigint_to_double(#1)) // { arity: 2 }
@@ -92,7 +92,7 @@ Explained Query:
               ArrangeBy keys=[[]] // { arity: 1 }
                 Get l0 // { arity: 1 }
     cte l1 =
-      Distinct group_by=[#0] // { arity: 1 }
+      Distinct project=[#0] // { arity: 1 }
         Get l0 // { arity: 1 }
     cte l0 =
       Project (#1) // { arity: 1 }

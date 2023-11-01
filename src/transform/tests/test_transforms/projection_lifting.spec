@@ -153,7 +153,7 @@ With Mutually Recursive
       Project (#1, #1)
         Get t1
   cte l1 = // { types: "(bigint, bigint?)" }
-    Distinct group_by=[#0, #1]
+    Distinct project=[#0, #1]
       Union
         Get t0
         Get l0
@@ -173,7 +173,7 @@ With Mutually Recursive
     Filter (#1) IS NOT NULL
       Get t1
   cte l1 =
-    Distinct group_by=[#0, #1]
+    Distinct project=[#0, #1]
       Union
         Get t0
         Project (#1, #1)

@@ -434,7 +434,7 @@ Explained Query:
               Project (#0..=#2, #4, #6) // { arity: 5 }
                 Get l0 // { arity: 9 }
             ArrangeBy keys=[[#0..=#3]] // { arity: 4 }
-              Distinct group_by=[#0..=#3] // { arity: 4 }
+              Distinct project=[#0..=#3] // { arity: 4 }
                 Project (#0..=#3) // { arity: 4 }
                   Filter (#10 >= #3) // { arity: 14 }
                     Join on=(#0 = #4 AND #1 = #5 AND #2 = #6) type=differential // { arity: 14 }
@@ -949,7 +949,7 @@ Explained Query:
                 Union // { arity: 1 }
                   Negate // { arity: 1 }
                     Project (#0) // { arity: 1 }
-                      Distinct group_by=[#0..=#21] // { arity: 22 }
+                      Distinct project=[#0..=#21] // { arity: 22 }
                         Project (#0..=#21) // { arity: 22 }
                           Get l0 // { arity: 23 }
                   Project (#0) // { arity: 1 }
@@ -1129,7 +1129,7 @@ Explained Query:
                 Get l1 // { arity: 1 }
     With
       cte l1 =
-        Distinct group_by=[#0] // { arity: 1 }
+        Distinct project=[#0] // { arity: 1 }
           Project (#0) // { arity: 1 }
             Get l0 // { arity: 4 }
       cte l0 =
@@ -1353,7 +1353,7 @@ Explained Query:
           ArrangeBy keys=[[#0]] // { arity: 3 }
             Get l0 // { arity: 3 }
           ArrangeBy keys=[[#0]] // { arity: 1 }
-            Distinct group_by=[#0] // { arity: 1 }
+            Distinct project=[#0] // { arity: 1 }
               Project (#0) // { arity: 1 }
                 Filter (integer_to_bigint((2 * #3)) > #4) // { arity: 5 }
                   Reduce group_by=[#0..=#3] aggregates=[sum(#4)] // { arity: 5 }
@@ -1437,7 +1437,7 @@ Explained Query:
             ArrangeBy keys=[[#0..=#3]] // { arity: 4 }
               Union // { arity: 4 }
                 Negate // { arity: 4 }
-                  Distinct group_by=[#0..=#3] // { arity: 4 }
+                  Distinct project=[#0..=#3] // { arity: 4 }
                     Project (#0..=#3) // { arity: 4 }
                       Filter (#10 > #3) // { arity: 14 }
                         Join on=(#0 = #4 AND #1 = #5 AND #2 = #6) type=differential // { arity: 14 }
@@ -1449,7 +1449,7 @@ Explained Query:
                 Get l2 // { arity: 4 }
     With
       cte l2 =
-        Distinct group_by=[#0..=#3] // { arity: 4 }
+        Distinct project=[#0..=#3] // { arity: 4 }
           Project (#1..=#4) // { arity: 4 }
             Get l1 // { arity: 5 }
       cte l1 =
@@ -1528,7 +1528,7 @@ Explained Query:
                       ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
                         Get l2 // { arity: 3 }
                       ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
-                        Distinct group_by=[#2, #0, #1] // { arity: 3 }
+                        Distinct project=[#2, #0, #1] // { arity: 3 }
                           Project (#1..=#3) // { arity: 3 }
                             Filter (#3) IS NOT NULL // { arity: 8 }
                               ReadIndex on=order fk_order_customer=[*** full scan ***] // { arity: 8 }

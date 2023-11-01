@@ -70,10 +70,10 @@ build apply=ThresholdElision
       (reduce (filter (get x) [(call_binary lt #0 (7 Int64))]) [#1 #2] [])) ]))
 ----
 Union
-  Distinct group_by=[#1, #2]
+  Distinct project=[#1, #2]
     Get x
   Negate
-    Distinct group_by=[#1, #2]
+    Distinct project=[#1, #2]
       Filter (#0 < 7)
         Get x
 
@@ -118,10 +118,10 @@ build apply=ThresholdElision
 ----
 Threshold
   Union
-    Distinct group_by=[#1, #2]
+    Distinct project=[#1, #2]
       Get x
     Negate
-      Distinct group_by=[#1, #2]
+      Distinct project=[#1, #2]
         Filter (#0 < 7)
           Get y
 

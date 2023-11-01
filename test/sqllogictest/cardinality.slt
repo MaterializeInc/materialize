@@ -46,7 +46,7 @@ query T multiline
 EXPLAIN WITH(cardinality) SELECT DISTINCT x FROM t
 ----
 Explained Query:
-  Distinct group_by=[#0] // { cardinality: "materialize.public.t" }
+  Distinct project=[#0] // { cardinality: "materialize.public.t" }
     Project (#0) // { cardinality: "materialize.public.t" }
       ReadIndex on=t t_x=[*** full scan ***] // { cardinality: "materialize.public.t" }
 
@@ -253,9 +253,9 @@ Explained Query:
     Get l4
   With Mutually Recursive
     cte l4 =
-      Distinct group_by=[#0, #1]
+      Distinct project=[#0, #1]
         Union
-          Distinct group_by=[#0, #1]
+          Distinct project=[#0, #1]
             Union
               Project (#1, #0)
                 CrossJoin type=differential
@@ -274,7 +274,7 @@ Explained Query:
             - (1, true)
             - (2, false)
     cte l3 =
-      Distinct
+      Distinct project=[]
         Project ()
           Join on=(#0 = #1) type=differential
             ArrangeBy keys=[[#0]]
@@ -304,9 +304,9 @@ Explained Query:
                   ArrangeBy keys=[[#0..=#2]]
                     Union
                       Negate
-                        Distinct group_by=[#0..=#2]
+                        Distinct project=[#0..=#2]
                           Get l0
-                      Distinct group_by=[#0..=#2]
+                      Distinct project=[#0..=#2]
                         ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
                   ArrangeBy keys=[[#0..=#2]]
                     ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
@@ -366,9 +366,9 @@ Explained Query:
     Get l4
   With Mutually Recursive
     cte l4 =
-      Distinct group_by=[#0, #1]
+      Distinct project=[#0, #1]
         Union
-          Distinct group_by=[#0, #1]
+          Distinct project=[#0, #1]
             Union
               Project (#1, #0)
                 CrossJoin type=differential
@@ -387,7 +387,7 @@ Explained Query:
             - (1, true)
             - (2, false)
     cte l3 =
-      Distinct
+      Distinct project=[]
         Project ()
           Join on=(#0 = #1) type=differential
             ArrangeBy keys=[[#0]]
@@ -417,9 +417,9 @@ Explained Query:
                   ArrangeBy keys=[[#0..=#2]]
                     Union
                       Negate
-                        Distinct group_by=[#0..=#2]
+                        Distinct project=[#0..=#2]
                           Get l0
-                      Distinct group_by=[#0..=#2]
+                      Distinct project=[#0..=#2]
                         ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
                   ArrangeBy keys=[[#0..=#2]]
                     ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]

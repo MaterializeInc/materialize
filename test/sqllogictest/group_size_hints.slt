@@ -235,7 +235,7 @@ materialize.public.sections_of_top_3_courses_per_teacher:
             Project (#0, #1, #3)
               Join on=(#0 = #2) type=differential
                 ArrangeBy keys=[[#0]]
-                  Distinct group_by=[#0]
+                  Distinct project=[#0]
                     Project (#0)
                       Filter (#0) IS NOT NULL
                         ReadStorage materialize.public.teachers
@@ -282,7 +282,7 @@ materialize.public.max_sections_of_top_3_courses_per_teacher:
               Project (#0, #1, #3)
                 Join on=(#0 = #2) type=differential
                   ArrangeBy keys=[[#0]]
-                    Distinct group_by=[#0]
+                    Distinct project=[#0]
                       Project (#0)
                         Filter (#0) IS NOT NULL
                           ReadStorage materialize.public.teachers

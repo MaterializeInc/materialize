@@ -417,7 +417,7 @@ Explained Query:
                 Join on=(#0 = #11) type=differential
                   Get l0
                   ArrangeBy keys=[[#0]]
-                    Distinct group_by=[#0]
+                    Distinct project=[#0]
                       Project (#0)
                         Get l1
           Project (#0, #1, #3, #4, #6)

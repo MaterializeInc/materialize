@@ -23,7 +23,7 @@ Explained Query:
     cte l0 =
       Project (#1)
         Map (1)
-          Distinct group_by=[#0] monotonic
+          Distinct project=[#0] monotonic
             Union
               Project (#1)
                 Map (7)
@@ -128,7 +128,7 @@ Explained Query:
     Get l0
   With Mutually Recursive
     cte l0 =
-      Distinct group_by=[#0]
+      Reduce group_by=[#0]
         Union
           Filter (#0 < 27)
             ReadStorage materialize.public.t1
@@ -185,10 +185,10 @@ Explained Query:
       Get l1
   With Mutually Recursive
     cte l1 =
-      Distinct group_by=[#0] monotonic
+      Distinct project=[#0] monotonic
         Get l1
     cte l0 =
-      Distinct group_by=[#0] monotonic
+      Distinct project=[#0] monotonic
         Get l0
 
 EOF
@@ -282,7 +282,7 @@ Explained Query:
     Get l0
   With Mutually Recursive [recursion_limit=10]
     cte l0 =
-      Distinct group_by=[#0] monotonic
+      Distinct project=[#0] monotonic
         Union
           Project (#1)
             Map ((#0 + 1))
@@ -307,7 +307,7 @@ Explained Query:
     Get l0
   With Mutually Recursive [recursion_limit=10, return_at_limit]
     cte l0 =
-      Distinct group_by=[#0] monotonic
+      Distinct project=[#0] monotonic
         Union
           Project (#1)
             Map ((#0 + 1))
@@ -332,7 +332,7 @@ Explained Query:
     Get l0
   With Mutually Recursive [recursion_limit=10]
     cte l0 =
-      Distinct group_by=[#0] monotonic
+      Distinct project=[#0] monotonic
         Union
           Project (#1)
             Map ((#0 + 1))
@@ -364,10 +364,10 @@ Explained Query:
       Get l1
   With Mutually Recursive
     cte [recursion_limit=7] l1 =
-      Distinct group_by=[(#0 - 2)] monotonic
+      Distinct project=[(#0 - 2)] monotonic
         Get l1
     cte [recursion_limit=5] l0 =
-      Distinct group_by=[#0] monotonic
+      Distinct project=[#0] monotonic
         Get l0
 
 EOF
@@ -395,10 +395,10 @@ Explained Query:
       Get l1
   With Mutually Recursive [recursion_limit=27]
     cte l1 =
-      Distinct group_by=[(#0 - 2)] monotonic
+      Distinct project=[(#0 - 2)] monotonic
         Get l1
     cte l0 =
-      Distinct group_by=[#0] monotonic
+      Distinct project=[#0] monotonic
         Get l0
 
 EOF

@@ -329,7 +329,7 @@ Explained Query:
     Get l0
   With Mutually Recursive
     cte l0 =
-      Distinct group_by=[#0..=#3]
+      Distinct project=[#0..=#3]
         Union
           Project (#0..=#2, #0)
             Join on=(#0 = #3) type=differential
@@ -372,14 +372,14 @@ Explained Query:
     Get l0 // { keys: "([0, 1, 2, 3])" }
   With Mutually Recursive
     cte l0 =
-      Distinct group_by=[#0..=#3] // { keys: "([0, 1, 2, 3])" }
+      Distinct project=[#0..=#3] // { keys: "([0, 1, 2, 3])" }
         Union // { keys: "()" }
           Project (#0..=#2, #0) // { keys: "()" }
             Join on=(#0 = #3) type=differential // { keys: "()" }
               ArrangeBy keys=[[#0]] // { keys: "()" }
                 ReadStorage materialize.public.foo // { keys: "()" }
               ArrangeBy keys=[[#0]] // { keys: "([0])" }
-                Distinct group_by=[#0] // { keys: "([0])" }
+                Distinct project=[#0] // { keys: "([0])" }
                   Project (#0) // { keys: "()" }
                     Get l0 // { keys: "()" }
           Get l0 // { keys: "()" }
@@ -410,7 +410,7 @@ Explained Query:
     Get l0
   With Mutually Recursive
     cte l0 =
-      Distinct group_by=[#0..=#3]
+      Distinct project=[#0..=#3]
         Union
           Project (#0..=#3)
             Join on=(#0 = #4) type=differential
@@ -448,7 +448,7 @@ Explained Query:
     Get l0
   With Mutually Recursive
     cte l0 =
-      Distinct group_by=[#0..=#3]
+      Distinct project=[#0..=#3]
         Union
           Project (#0..=#3)
             Join on=(#0 = #4) type=differential
@@ -492,7 +492,7 @@ Explained Query:
     Get l0
   With Mutually Recursive
     cte l0 =
-      Distinct group_by=[#0..=#3]
+      Distinct project=[#0..=#3]
         Union
           Project (#0..=#3)
             Join on=(#0 = #4) type=differential
@@ -501,7 +501,7 @@ Explained Query:
               ArrangeBy keys=[[#0]]
                 TopK group_by=[#0] limit=1
                   Project (#0)
-                    Distinct group_by=[#0, #1]
+                    Distinct project=[#0, #1]
                       Union
                         Filter (#0) IS NOT NULL
                           ReadStorage materialize.public.bar
@@ -542,7 +542,7 @@ Explained Query:
     Get l2 // { keys: "([0, 1, 2, 3])" }
   With Mutually Recursive
     cte l2 =
-      Distinct group_by=[#0..=#3] // { keys: "([0, 1, 2, 3])" }
+      Distinct project=[#0..=#3] // { keys: "([0, 1, 2, 3])" }
         Union // { keys: "()" }
           Project (#0..=#3) // { keys: "()" }
             Join on=(#0 = #4) type=differential // { keys: "()" }
@@ -552,7 +552,7 @@ Explained Query:
                 Get l0 // { keys: "([0])" }
           Get l2 // { keys: "()" }
     cte l1 =
-      Distinct group_by=[#0, #1] // { keys: "([0, 1])" }
+      Distinct project=[#0, #1] // { keys: "([0, 1])" }
         Union // { keys: "()" }
           ReadStorage materialize.public.bar // { keys: "([0])" }
           Project (#0, #2) // { keys: "()" }
@@ -561,7 +561,7 @@ Explained Query:
       Project (#0) // { keys: "([0])" }
         Join on=(#0 = #1) type=differential // { keys: "([0])" }
           ArrangeBy keys=[[#0]] // { keys: "([0])" }
-            Distinct group_by=[#0] // { keys: "([0])" }
+            Distinct project=[#0] // { keys: "([0])" }
               Project (#0) // { keys: "()" }
                 Get l2 // { keys: "()" }
           ArrangeBy keys=[[#0]] // { keys: "([0])" }
@@ -610,7 +610,7 @@ Explained Query:
           Get l1
   With Mutually Recursive
     cte l2 =
-      Distinct group_by=[#0..=#3]
+      Distinct project=[#0..=#3]
         Union
           Project (#0..=#3)
             Join on=(#0 = #4) type=differential
@@ -626,7 +626,7 @@ Explained Query:
       Project (#0)
         Join on=(#0 = #1) type=differential
           ArrangeBy keys=[[#0]]
-            Distinct group_by=[#0]
+            Distinct project=[#0]
               Project (#0)
                 Get l2
           ArrangeBy keys=[[#0]]
@@ -635,7 +635,7 @@ Explained Query:
                 Filter (#0) IS NOT NULL
                   Get l0
     cte l0 =
-      Distinct group_by=[#0, #1]
+      Distinct project=[#0, #1]
         Union
           ReadStorage materialize.public.bar
           Project (#0, #2)
@@ -662,7 +662,7 @@ Explained Query:
     Get l1 // { keys: "([0, 1, 2, 3, 4])" }
   With Mutually Recursive
     cte l1 =
-      Distinct group_by=[#0..=#4] // { keys: "([0, 1, 2, 3, 4])" }
+      Distinct project=[#0..=#4] // { keys: "([0, 1, 2, 3, 4])" }
         Union // { keys: "()" }
           Map (null, null) // { keys: "()" }
             Union // { keys: "()" }
@@ -672,7 +672,7 @@ Explained Query:
                     ArrangeBy keys=[[#0]] // { keys: "()" }
                       ReadStorage materialize.public.foo_raw // { keys: "()" }
                     ArrangeBy keys=[[#0]] // { keys: "([0])" }
-                      Distinct group_by=[#0] // { keys: "([0])" }
+                      Distinct project=[#0] // { keys: "([0])" }
                         Project (#0) // { keys: "()" }
                           Get l0 // { keys: "()" }
               ReadStorage materialize.public.foo_raw // { keys: "()" }
@@ -714,7 +714,7 @@ Explained Query:
     Get l1
   With Mutually Recursive
     cte l1 =
-      Distinct group_by=[#0..=#4]
+      Distinct project=[#0..=#4]
         Union
           Map (null, null)
             Union
@@ -763,7 +763,7 @@ Explained Query:
     Get l1
   With Mutually Recursive
     cte l1 =
-      Distinct group_by=[#0..=#4]
+      Distinct project=[#0..=#4]
         Union
           Map (null, null)
             Union
@@ -810,7 +810,7 @@ Explained Query:
     Get l5
   With Mutually Recursive
     cte l5 =
-      Distinct group_by=[#0..=#2]
+      Distinct project=[#0..=#2]
         Union
           Project (#7..=#9)
             Map ((#0 + #3), (#1 + #4), (#2 || smallint_to_text((#5 + #6))))
@@ -899,7 +899,7 @@ Explained Query:
     Get l1 // { arity: 3 }
   With Mutually Recursive
     cte l1 =
-      Distinct group_by=[#0..=#2] // { arity: 3 }
+      Distinct project=[#0..=#2] // { arity: 3 }
         Union // { arity: 3 }
           Project (#0..=#2) // { arity: 3 }
             Union // { arity: 4 }

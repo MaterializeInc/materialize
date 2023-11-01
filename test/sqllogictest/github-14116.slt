@@ -43,7 +43,7 @@ Explained Query:
           Map (null) // { arity: 1 }
             Union // { arity: 0 }
               Negate // { arity: 0 }
-                Distinct // { arity: 0 }
+                Distinct project=[] // { arity: 0 }
                   Project () // { arity: 0 }
                     Get l1 // { arity: 1 }
               Constant // { arity: 0 }

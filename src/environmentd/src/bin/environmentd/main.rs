@@ -425,7 +425,8 @@ pub struct Args {
         long,
         env = "ADAPTER_STASH_URL",
         value_name = "POSTGRES_URL",
-        required_if_eq("catalog-store", "stash")
+        required_if_eq("catalog-store", "stash"),
+        required_if_eq("catalog-store", "shadow")
     )]
     adapter_stash_url: Option<String>,
     /// The backing durable store of the catalog.
@@ -591,6 +592,7 @@ enum OrchestratorKind {
 enum CatalogKind {
     Stash,
     Persist,
+    Shadow,
 }
 
 // TODO [Alex Hunt] move this to a shared function that can be imported by the
@@ -929,6 +931,10 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 url: args.adapter_stash_url.expect("required for stash catalog"),
             },
             CatalogKind::Persist => CatalogConfig::Persist { persist_clients },
+            CatalogKind::Shadow => CatalogConfig::Shadow {
+                url: args.adapter_stash_url.expect("required for shadow catalog"),
+                persist_clients,
+            },
         };
         listeners
             .serve(mz_environmentd::Config {

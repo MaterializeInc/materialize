@@ -422,7 +422,7 @@ Explained Query:
                     Project (#4, #11) // { arity: 2 }
                       Get l1 // { arity: 16 }
                   ArrangeBy keys=[[#0]] // { arity: 1 }
-                    Distinct group_by=[#0] // { arity: 1 }
+                    Distinct project=[#0] // { arity: 1 }
                       Project (#2) // { arity: 1 }
                         Get l0 // { arity: 5 }
             Project (#4) // { arity: 1 }

@@ -281,7 +281,7 @@ Explained Query:
               Map (null) // { arity: 1 }
                 Union // { arity: 0 }
                   Negate // { arity: 0 }
-                    Distinct // { arity: 0 }
+                    Distinct project=[] // { arity: 0 }
                       Project () // { arity: 0 }
                         Get l0 // { arity: 1 }
                   Constant // { arity: 0 }
@@ -595,7 +595,7 @@ Explained Query:
   With Mutually Recursive
     cte l0 =
       Map (3, 5) // { arity: 2, types: "(integer, integer)" }
-        Distinct // { arity: 0, types: "()" }
+        Distinct project=[] // { arity: 0, types: "()" }
           Union // { arity: 0, types: "()" }
             Project () // { arity: 0, types: "()" }
               Filter (#0 = 3) AND (#1 = 5) // { arity: 2, types: "(integer, integer)" }
@@ -629,7 +629,7 @@ Explained Query:
   With Mutually Recursive [recursion_limit=1]
     cte l0 =
       Map (3, 5) // { arity: 2, types: "(integer, integer)" }
-        Distinct // { arity: 0, types: "()" }
+        Distinct project=[] // { arity: 0, types: "()" }
           Union // { arity: 0, types: "()" }
             Project () // { arity: 0, types: "()" }
               Filter (#0 = 3) AND (#1 = 5) // { arity: 2, types: "(integer, integer)" }
@@ -662,7 +662,7 @@ Explained Query:
       Get l0 // { arity: 2, types: "(integer?, integer?)" }
   With Mutually Recursive
     cte l0 =
-      Distinct group_by=[#0, #1] // { arity: 2, types: "(integer?, integer?)" }
+      Distinct project=[#0, #1] // { arity: 2, types: "(integer?, integer?)" }
         Union // { arity: 2, types: "(integer?, integer?)" }
           Filter (#1) IS NOT NULL // { arity: 2, types: "(integer, integer)" }
             ReadStorage materialize.public.t1 // { arity: 2, types: "(integer, integer?)" }
@@ -693,7 +693,7 @@ Explained Query:
         Get l0 // { arity: 2, types: "(integer?, integer?)" }
   With Mutually Recursive
     cte l0 =
-      Distinct group_by=[#0, #1] // { arity: 2, types: "(integer?, integer?)" }
+      Distinct project=[#0, #1] // { arity: 2, types: "(integer?, integer?)" }
         Union // { arity: 2, types: "(integer?, integer?)" }
           ReadStorage materialize.public.t1 // { arity: 2, types: "(integer, integer?)" }
           Filter (#1) IS NOT NULL // { arity: 2, types: "(integer?, integer)" }
@@ -724,7 +724,7 @@ Explained Query:
     cte l1 =
       Project (#2, #0, #1) // { arity: 3, types: "(integer, integer?, integer?)" }
         Map (2) // { arity: 3, types: "(integer?, integer?, integer)" }
-          Distinct group_by=[#0, #1] // { arity: 2, types: "(integer?, integer?)" }
+          Distinct project=[#0, #1] // { arity: 2, types: "(integer?, integer?)" }
             Union // { arity: 2, types: "(integer?, integer?)" }
               CrossJoin type=differential // { arity: 2, types: "(integer, integer?)" }
                 ArrangeBy keys=[[]] // { arity: 0, types: "()" }
@@ -736,7 +736,7 @@ Explained Query:
                 Get l1 // { arity: 3, types: "(integer?, integer?, integer?)" }
     cte l0 =
       Map (1) // { arity: 1, types: "(integer)" }
-        Distinct monotonic // { arity: 0, types: "()" }
+        Distinct project=[] monotonic // { arity: 0, types: "()" }
           Union // { arity: 0, types: "()" }
             Project () // { arity: 0, types: "()" }
               Get l0 // { arity: 1, types: "(integer?)" }
@@ -773,7 +773,7 @@ Explained Query:
     cte l1 =
       Project (#2, #0, #1) // { arity: 3, types: "(boolean, integer?, integer?)" }
         Map (false) // { arity: 3, types: "(integer?, integer?, boolean)" }
-          Distinct group_by=[#0, #1] // { arity: 2, types: "(integer?, integer?)" }
+          Distinct project=[#0, #1] // { arity: 2, types: "(integer?, integer?)" }
             Union // { arity: 2, types: "(integer?, integer?)" }
               CrossJoin type=differential // { arity: 2, types: "(integer, integer?)" }
                 ArrangeBy keys=[[]] // { arity: 0, types: "()" }
@@ -785,7 +785,7 @@ Explained Query:
                 Get l1 // { arity: 3, types: "(boolean?, integer?, integer?)" }
     cte l0 =
       Map (1) // { arity: 1, types: "(integer)" }
-        Distinct monotonic // { arity: 0, types: "()" }
+        Distinct project=[] monotonic // { arity: 0, types: "()" }
           Union // { arity: 0, types: "()" }
             Project () // { arity: 0, types: "()" }
               Get l0 // { arity: 1, types: "(integer?)" }

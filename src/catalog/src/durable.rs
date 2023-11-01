@@ -19,15 +19,10 @@ use mz_stash::DebugStashFactory;
 
 use crate::durable::debug::{DebugCatalogState, Trace};
 pub use crate::durable::error::{CatalogError, DurableCatalogError};
-use crate::durable::objects::Snapshot;
-pub use crate::durable::objects::{
-    Cluster, ClusterConfig, ClusterReplica, ClusterVariant, ClusterVariantManaged, Comment,
-    Database, DefaultPrivilege, Item, ReplicaConfig, ReplicaLocation, Role, Schema,
-    SystemConfiguration, SystemObjectMapping, TimelineTimestamp,
-};
-use crate::durable::persist::PersistHandle;
-use crate::durable::stash::{OpenableConnection, TestOpenableConnection};
-pub use crate::durable::stash::{
+use crate::durable::impls::persist::PersistHandle;
+use crate::durable::impls::shadow::OpenableShadowCatalogState;
+use crate::durable::impls::stash::{OpenableConnection, TestOpenableConnection};
+pub use crate::durable::impls::stash::{
     StashConfig, ALL_COLLECTIONS, AUDIT_LOG_COLLECTION, CLUSTER_COLLECTION,
     CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION, CLUSTER_REPLICA_COLLECTION, COMMENTS_COLLECTION,
     CONFIG_COLLECTION, DATABASES_COLLECTION, DEFAULT_PRIVILEGES_COLLECTION,
@@ -35,22 +30,27 @@ pub use crate::durable::stash::{
     SETTING_COLLECTION, STORAGE_USAGE_COLLECTION, SYSTEM_CONFIGURATION_COLLECTION,
     SYSTEM_GID_MAPPING_COLLECTION, SYSTEM_PRIVILEGES_COLLECTION, TIMESTAMP_COLLECTION,
 };
+use crate::durable::objects::Snapshot;
+pub use crate::durable::objects::{
+    Cluster, ClusterConfig, ClusterReplica, ClusterVariant, ClusterVariantManaged, Comment,
+    Database, DefaultPrivilege, Item, ReplicaConfig, ReplicaLocation, Role, Schema,
+    SystemConfiguration, SystemObjectMapping, TimelineTimestamp,
+};
 pub use crate::durable::transaction::Transaction;
 use crate::durable::transaction::TransactionBatch;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::CollectionExt;
-use mz_ore::now::NowFn;
+use mz_ore::now::EpochMillis;
 use mz_persist_client::PersistClient;
 use mz_repr::GlobalId;
 use mz_storage_types::sources::Timeline;
 
 pub mod debug;
 mod error;
+mod impls;
 pub mod initialize;
 pub mod objects;
-mod persist;
-mod stash;
 mod transaction;
 
 pub const DATABASE_ID_ALLOC_KEY: &str = "database";
@@ -89,7 +89,7 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     ///   - Catalog migrations fail.
     async fn open_savepoint(
         mut self: Box<Self>,
-        now: NowFn,
+        boot_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError>;
@@ -101,7 +101,7 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     /// it will fail to open in read only mode.
     async fn open_read_only(
         mut self: Box<Self>,
-        now: NowFn,
+        boot_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError>;
 
@@ -110,7 +110,7 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     /// needed.
     async fn open(
         mut self: Box<Self>,
-        now: NowFn,
+        boot_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError>;
@@ -265,6 +265,19 @@ pub async fn persist_backed_catalog_state(
     organization_id: Uuid,
 ) -> PersistHandle {
     PersistHandle::new(persist_client, organization_id).await
+}
+
+/// Creates an openable durable catalog state implemented using both the stash and persist, that
+/// compares the results. The stash results is used as the source of truth when there's a
+/// discrepancy.
+pub async fn shadow_catalog_state(
+    stash_config: StashConfig,
+    persist_client: PersistClient,
+    organization_id: Uuid,
+) -> impl OpenableDurableCatalogState {
+    let stash = Box::new(stash_backed_catalog_state(stash_config));
+    let persist = Box::new(persist_backed_catalog_state(persist_client, organization_id).await);
+    OpenableShadowCatalogState { stash, persist }
 }
 
 pub fn test_bootstrap_args() -> BootstrapArgs {

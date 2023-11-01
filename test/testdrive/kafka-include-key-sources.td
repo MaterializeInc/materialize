@@ -323,11 +323,11 @@ Used Indexes:
   ENVELOPE NONE
 
 # For ENVELOPE NONE with INCLUDE KEY, uniqueness is not guaranteed,
-# so we expect that query plans will contain an explicit Distinct group_by
+# so we expect that query plans will contain an explicit Distinct on
 
 ? EXPLAIN SELECT DISTINCT named FROM envelope_none_with_key;
 Explained Query:
-  Distinct group_by=[#0] monotonic
+  Distinct project=[#0] monotonic
     Project (#0)
       ReadStorage materialize.public.envelope_none_with_key
 
@@ -335,7 +335,7 @@ Explained Query:
 
 ? EXPLAIN SELECT DISTINCT named FROM envelope_none_with_key;
 Explained Query:
-  Distinct group_by=[#0] monotonic
+  Distinct project=[#0] monotonic
     Project (#0)
       ReadIndex on=envelope_none_with_key envelope_none_with_key_primary_idx=[*** full scan ***]
 

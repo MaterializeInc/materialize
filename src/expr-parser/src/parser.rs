@@ -386,7 +386,7 @@ mod relation {
     fn parse_distinct(ctx: CtxRef, input: ParseStream) -> Result {
         let reduce = input.parse::<kw::Distinct>()?;
 
-        let group_key = if input.eat(kw::group_by) {
+        let group_key = if input.eat(kw::project) {
             input.parse::<syn::Token![=]>()?;
             let inner;
             syn::bracketed!(inner in input);
@@ -1491,6 +1491,7 @@ mod kw {
     syn::custom_keyword!(on);
     syn::custom_keyword!(OR);
     syn::custom_keyword!(order_by);
+    syn::custom_keyword!(project);
     syn::custom_keyword!(Project);
     syn::custom_keyword!(Recursive);
     syn::custom_keyword!(Reduce);
