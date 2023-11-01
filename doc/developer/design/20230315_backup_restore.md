@@ -2,18 +2,11 @@
 - Feature name: backup/restore
 - Associated: [#17605](https://github.com/MaterializeInc/materialize/issues/17605)
 
-# Summary
+# The Problem
 
-> 👉 **This is not a complete design** — while it uses the standard design doc template, it does not include an implementation plan, and various details are subject to change. These will be flagged with callouts like this one.
->
-> **Why do the design work at all, if we’re not ready to implement it?** The current doc is intended to sketch out the rough scope of a backup system, discuss the various options, and identify systemic risks or important foundational work we have not done. For example: we’ve identified S3 versioning as necessary for the most plausible approaches to backing up our S3 data, and it’ll be much easier to adopt soon than in six months as Materialize grows. We’re glad we figured this out sooner than later!
+Materialize stores data in S3 and metadata in CRDB. When restoring from backup, it's important that the data and the metadata stay consistent, but it's impossible to take a consistent snapshot across both. Historically, restoring an environment to a historical state would involve a significant amount of manual or error-prone work.
 
-
-# Motivation
-
-Materialize does not currently back up its persistent state: if we accidentally delete or corrupt something, it’s gone forever. This is a long-term risk for Materialize, especially as we grow to enable higher-value use cases for our users.
-
-## Scope
+## Success criteria
 
 Reasons one might want backup/restore, and whether they’re in scope for this design —
 
@@ -28,25 +21,22 @@ Reasons one might want backup/restore, and whether they’re in scope for this d
 
 Motivated by the above and [some other feedback](https://github.com/MaterializeInc/materialize/issues/17605), this design doc focuses on infrastructure-level backups (without no product surface area) that optimize for disaster recovery. For other possible approaches or extensions to backup/restore, see the [section on future work](#future-work).
 
-## Goals
-
-Our primary goal is to periodically back up all of the state in every environment. In particular:
-
-- High frequency: at most one hour between restore points. (Point-in-time is great, but not required.)
+This means backups should be:
+- High frequency: at most one hour between restore points. (Point-in-time would be cool, but is not required.)
 - Moderate duration: backups retained for about a month. (Long enough to be useful even for long-running incidents; short enough to avoid GDPR concerns.)
 - Allow restoring an environment to a particular backup, ad-hoc.
 - Backups should be isolated: it should be impossible for ordinary code to mess with historical backups.
 
 It’s helpful if we’re also able to use backups for investigations and debugging historical state, but this is secondary to the goals above.
 
-## Non-goals
+# Out of Scope
 
 - User-facing API, whether in SQL or in the dashboard. If users need to request a restore, they can write to support.
 - Long-term backups. It seems unlikely that users will want to restore an entire environment to a months-old state, and we want to avoid any GDPR or other compliance concerns.
 - Partial backups. Backups will happen for a full environment.
 - Restoring a backup while an environment is up: it’s fine to assume the environment is shut down during a restore.
 
-# Explanation
+# Solution proposal
 
 The state of a Materialize environment is held in a set of Persist shards. (Along with some other CRDB state like the stash.) From Persist’s perspective, each shard is totally independent of the others; `environmentd` is responsible for coordinating across shards in a way that presents a consistent state to the user.
 
@@ -67,15 +57,12 @@ Persist is already a persistent datastructure: the full state of a shard is uniq
 
 We plan to take advantage of features built into our infrastructure:
 
-- [CRBC changefeeds](https://www.cockroachlabs.com/docs/v22.2/change-data-capture-overview) allow capturing all the changes to your data in CRDB and exporting it as a stream. We already record these changefeeds to S3.
+- [CRBC backups](https://www.cockroachlabs.com/docs/v22.2/change-data-capture-overview) capture the full state of the CRDB cluster as of a particular point in time.
 - [S3 Versioning](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Versioning.html) permits keeping around old versions of the objects written to S3. (Deletes are translated into tombstones.) This is usually used in concert with an [S3 lifecycle policy](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lifecycle-mgmt.html), to avoid retaining data forever.
 
-We’d configure both systems to keep around this fine-grained change data around for the last month, after which it can be deleted.
+To restore a shard at a particular time, we can:
 
-To restore a shard at a particular time, we would:
-
-- Choose a CRDB timestamp that corresponds to the requested wall-clock time.
-- Replay the changefeed back into CRDB until the corresponding timestamp.
+- Choose a CRDB backup for the desired wall-clock time, and restore it to the environments CRDB database.
 - This CRDB data will hold references to objects in S3, some of which will reference yet other objects. Recursively walk the DAG of references; when we encounter a reference to a since-deleted blob, undelete that blob by removing the tombstone.
 
 While this imposes some additional cost, it’s modest both in absolute terms and relative to our other options. See [the appendix](#appendix-a-s3-costs) for more details.
@@ -95,20 +82,16 @@ In a running environment, property 1 is carefully enforced by the various contro
 
 ### Implementation
 
-Our proposed approach to restore relies on the ordering properties guaranteed by CRDB:
+Our proposed restore implementation relies on the ordering properties guaranteed by CRDB:
 
-- Choose a CRDB timestamp that corresponds to the desired time.
-- For every shard in the environment, identify the seqno corresponding to that CRDB timestamp, and run the per-shard restore process described above.
+- Restore the entire CRDB backup for an environment, including the Persist-shard metadata and the catalog/stash.
+- For every shard in the environment, run the per-shard restore process described above.
 
-This is straightforward to implement, and does not require any significant changes to the running Materialize environment. It also easily extends to handle non-shard state that’s also kept in CRDB, like the stash.
+This is straightforward to implement, and does not require any significant changes to the running Materialize environment.
 
-This is also not strictly safe, since CRDB is not a strictly serializable store; in particular, the docs [describe the risk of a causal reverse](https://www.cockroachlabs.com/blog/consistency-model/#as-of-system-timequeries-and-backups), where a read concurrent with updates A and B may observe B but not A, even if B is a real-time consequence of A. In the context of Materialize, if A is a compare-and-append and B is a compare-and-append on some downstream shard, a causal reverse could cause our backup of B to contain newer data than our backup of A, breaking correctness requirement 2.
+This is not _strictly_ safe, since CRDB is not a strictly serializable store; in particular, the docs [describe the risk of a causal reverse](https://www.cockroachlabs.com/blog/consistency-model/#as-of-system-timequeries-and-backups), where a read concurrent with updates A and B may observe B but not A, even if B is a real-time consequence of A. In the context of Materialize, if A is a compare-and-append and B is a compare-and-append on some downstream shard, a causal reverse could cause our backup of B to contain newer data than our backup of A, breaking correctness requirement 2.
 
-A causal reverse is expected to be generally quite rare, and if encountered we can just try a restore at a nearby timestamp. However, [see below for a discussion of the alternatives](#conclusion-and-alternatives).
-
-# Reference explanation
-
-> 👉 **Not yet!** We'll return to this when we're closer to starting work.
+A causal reverse is expected to be very rare, and if encountered we can just try restoring another backup. However, [see below for a discussion of the alternatives](#conclusion-and-alternatives).
 
 # Rollout
 
@@ -130,17 +113,11 @@ Configuration changes like enabling S3 versioning apply bucket-wide, so they can
 
 The restore process does not run in a user’s environment, so it does not go through the usual deployment lifecycle. However, any periodic restore testing we choose to run will need resources provisioned somewhere.
 
-# Drawbacks
-
-Backups are widely considered to be a good idea, though any particular approach we choose will have its own drawbacks.
+# Alternatives
 
 The proposed approach to backups leans pretty heavily on the specific choices of our blob and consensus stores, otherwise well-abstracted in the code. This means that any change in the stores we use would involve substantial rework of the approach to backup/restore. We consider this to be fairly low likelihood.
 
 The proposed CRDB backup strategy may lead to an unrestorable backup as of a particular CRDB timestamp if we experience a causal reverse. However, we expect this to be rare and easy to work around when it does occur.
-
-# Conclusion and alternatives
-
-A few other options we’ve discussed for per-shard and per-environment backups, with a discussion of the tradeoffs.
 
 ## Alternatives to single-shard backups
 
@@ -189,7 +166,7 @@ Correctness property 2 is guaranteed by processing shards in reverse dependency 
 - The fictional controller setup described here only vaguely resembles how the controller is set up today. (The catalog is not a persist shard; no single controller or domain of responsibility understands all the dependency relationships between shards.) Changing the system to behave in a way where this sort of backup was possible would be a significant cross-team lift, and it’s unclear if the necessary changes would be considered a net positive.
 - This gives extra work to `environmentd`. For our favoured per-shard backup approach, the performance cost should be pretty marginal. However, it does introduce complexity into an already very challenging to reason about codepath.
 
-> 👉 This approach to backups provides stronger correctness guarantees than the proposed CRDB approach. From an engineering perspective I’m not sure the significant additional complexity is justified, though. (And if we did prefer this option, we may want to start with the proposed approach regardless to reduce risk as we build it out.)
+While this approach is believed to work, it's much more invasive and complex to implement, and the issues it's working around are expected to be vanishingly rare.
 
 ### AWS Backup
 
@@ -205,15 +182,20 @@ Doing nothing is always an option, and maybe a fine one: we’re explicit with o
 - Materialize contains a great deal of state that may not be easy to recreate: the exact definition of sources and views; the state of external systems like sources and sinks; the contents of internal tables. Losing Materialize state could result in days or weeks of recovery week for a user.
 - As we start thinking about taking on more business-critical use-cases, being able to recover our user’s data after some incident will become increasingly important.
 
-# Unresolved questions
+# Open questions
 
 ## External state
 
-Materialize’s sources and sinks also store data in the systems they connect to. In general, we’re unable to back up and restore this data fully. (If we restore to a week-old backup, the data our Kafka source had ingested since then might be compacted away.) **How will sources and sinks recover from a restore? If they can’t, is there a good way to signal this to a user?**
+Materialize’s sources and sinks also store data in the systems they connect to. In general, we’re unable to back up and restore this data fully. (If we restore to a week-old backup, the data our Kafka source had ingested since then might be compacted away.)
 
-## Non-persist state
+How sources and sinks handle snapshots is expected to vary:
+- Sources that do not need to store external state may not be affected.
+- Some sources may be able to recover by "re-snapshotting" their data from the external source.
+- Sinks will have irrevocably written data out to an external system. This is unavoidable, but we should try to signal this effectively to a user.
 
-This document focusses on Persist state, but the stash is not stored in Persist. **Do we want to move the stash to Persist? Can we rely on stash being stored in the same CRDB cluster as Persist’s consensus state indefinitely?**
+We expect to tackle the "low-hanging fruit" during the original epic,
+but generally this is something that individual sources and sinks will need to handle
+and may require some ongoing work.
 
 # Future work
 
