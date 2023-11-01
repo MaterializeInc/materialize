@@ -11,7 +11,7 @@
 //! fixing a corrupt catalog.
 
 use crate::durable;
-use crate::durable::persist::{PersistHandle, StateUpdateKind};
+use crate::durable::impls::persist::{PersistHandle, StateUpdateKind};
 use crate::durable::{
     CatalogError, AUDIT_LOG_COLLECTION, CLUSTER_COLLECTION,
     CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION, CLUSTER_REPLICA_COLLECTION, COMMENTS_COLLECTION,
@@ -434,7 +434,7 @@ impl DebugCatalogState {
     {
         match self {
             DebugCatalogState::Stash(stash) => {
-                durable::stash::debug_edit::<T>(stash, key, value).await
+                durable::impls::stash::debug_edit::<T>(stash, key, value).await
             }
             DebugCatalogState::Persist(handle) => handle.debug_edit::<T>(key, value).await,
         }
@@ -447,7 +447,9 @@ impl DebugCatalogState {
         T::Value: mz_stash::Data + Clone,
     {
         match self {
-            DebugCatalogState::Stash(stash) => durable::stash::debug_delete::<T>(stash, key).await,
+            DebugCatalogState::Stash(stash) => {
+                durable::impls::stash::debug_delete::<T>(stash, key).await
+            }
             DebugCatalogState::Persist(handle) => handle.debug_delete::<T>(key).await,
         }
     }
