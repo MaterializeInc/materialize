@@ -97,6 +97,9 @@ use crate::coord::dataflows::{
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::{FastPathPlan, PeekDataflowPlan, PlannedPeek};
 use crate::coord::read_policy::SINCE_GRANULARITY;
+use crate::coord::sequencer::old_optimizer_api::{
+    PeekStageDeprecated, PeekStageValidateDeprecated,
+};
 use crate::coord::timeline::TimelineContext;
 use crate::coord::timestamp_selection::{
     TimestampContext, TimestampDetermination, TimestampProvider, TimestampSource,
@@ -2132,17 +2135,40 @@ impl Coordinator {
     ) {
         event!(Level::TRACE, plan = format!("{:?}", plan));
 
-        self.sequence_peek_stage(
-            ctx,
-            PeekStage::Validate(PeekStageValidate {
-                plan,
-                target_cluster,
-            }),
-        )
-        .await;
+        let enable_unified_optimizer_api = self
+            .catalog()
+            .system_config()
+            .enable_unified_optimizer_api();
+
+        if enable_unified_optimizer_api {
+            self.sequence_peek_stage(
+                ctx,
+                PeekStage::Validate(PeekStageValidate {
+                    plan,
+                    target_cluster,
+                }),
+            )
+            .await;
+        } else {
+            // Allow while the introduction of the new optimizer API in
+            // #20569 is in progress.
+            #[allow(deprecated)]
+            self.sequence_peek_stage_deprecated(
+                ctx,
+                PeekStageDeprecated::Validate(PeekStageValidateDeprecated {
+                    plan,
+                    target_cluster,
+                }),
+            )
+            .await;
+        }
     }
 
     /// Processes as many peek stages as possible.
+    ///
+    /// WARNING! This should mirror the semantics of `sequence_peek_stage_deprecated`.
+    ///
+    /// See ./doc/developer/design/20230714_optimizer_interface.md#minimal-viable-prototype
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn sequence_peek_stage(
         &mut self,
@@ -2185,7 +2211,11 @@ impl Coordinator {
         }
     }
 
-    // Do some simple validation. We must defer most of it until after any off-thread work.
+    /// Do some simple validation. We must defer most of it until after any off-thread work.
+    ///
+    /// WARNING! This should mirror the semantics of `peek_stage_validate_deprecated`.
+    ///
+    /// See ./doc/developer/design/20230714_optimizer_interface.md#minimal-viable-prototype
     fn peek_stage_validate(
         &mut self,
         session: &Session,
@@ -2273,6 +2303,9 @@ impl Coordinator {
         })
     }
 
+    /// WARNING! This should mirror the semantics of `peek_stage_optimize_deprecated`.
+    ///
+    /// See ./doc/developer/design/20230714_optimizer_interface.md#minimal-viable-prototype
     async fn peek_stage_optimize(&mut self, ctx: ExecuteContext, mut stage: PeekStageOptimize) {
         // Generate data structures that can be moved to another task where we will perform possibly
         // expensive optimizations.
@@ -2335,6 +2368,9 @@ impl Coordinator {
         );
     }
 
+    /// WARNING! This should mirror the semantics of `optimize_peek_deprecated`.
+    ///
+    /// See ./doc/developer/design/20230714_optimizer_interface.md#minimal-viable-prototype
     fn optimize_peek(
         catalog: &CatalogState,
         compute: ComputeInstanceSnapshot,
@@ -2416,6 +2452,9 @@ impl Coordinator {
         })
     }
 
+    /// WARNING! This should mirror the semantics of `peek_stage_timestamp_deprecated`.
+    ///
+    /// See ./doc/developer/design/20230714_optimizer_interface.md#minimal-viable-prototype
     #[tracing::instrument(level = "debug", skip_all)]
     fn peek_stage_timestamp(
         &mut self,
@@ -2501,6 +2540,9 @@ impl Coordinator {
         }
     }
 
+    /// WARNING! This should mirror the semantics of `peek_stage_finish_deprecated`.
+    ///
+    /// See ./doc/developer/design/20230714_optimizer_interface.md#minimal-viable-prototype
     #[tracing::instrument(level = "debug", skip_all)]
     async fn peek_stage_finish(
         &mut self,
@@ -2591,6 +2633,10 @@ impl Coordinator {
 
     /// Determines the query timestamp and acquires read holds on dependent sources
     /// if necessary.
+    ///
+    /// WARNING! This should mirror the semantics of `sequence_peek_timestamp_deprecated`.
+    ///
+    /// See ./doc/developer/design/20230714_optimizer_interface.md#minimal-viable-prototype
     async fn sequence_peek_timestamp(
         &mut self,
         session: &mut Session,
@@ -2711,6 +2757,9 @@ impl Coordinator {
         Ok(determination)
     }
 
+    /// WARNING! This should mirror the semantics of `plan_peek_deprecated`.
+    ///
+    /// See ./doc/developer/design/20230714_optimizer_interface.md#minimal-viable-prototype
     async fn plan_peek(
         &mut self,
         mut dataflow: DataflowDescription<OptimizedMirRelationExpr>,
@@ -2778,7 +2827,7 @@ impl Coordinator {
 
     /// Checks to see if the session needs a real time recency timestamp and if so returns
     /// a future that will return the timestamp.
-    fn recent_timestamp(
+    pub(super) fn recent_timestamp(
         &self,
         session: &Session,
         source_ids: impl Iterator<Item = GlobalId>,
@@ -5709,7 +5758,7 @@ impl mz_transform::StatisticsOracle for CachedStatisticsOracle {
 }
 
 impl Coordinator {
-    async fn statistics_oracle(
+    pub(super) async fn statistics_oracle(
         &self,
         session: &Session,
         source_ids: &BTreeSet<GlobalId>,

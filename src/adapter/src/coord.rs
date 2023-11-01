@@ -134,6 +134,7 @@ use crate::coord::dataflows::dataflow_import_id_bundle;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
 use crate::coord::read_policy::ReadCapability;
+use crate::coord::sequencer::old_optimizer_api::PeekStageDeprecated;
 use crate::coord::timeline::{TimelineContext, TimelineState, WriteTimestamp};
 use crate::coord::timestamp_oracle::catalog_oracle::CatalogTimestampPersistence;
 use crate::coord::timestamp_selection::TimestampContext;
@@ -225,6 +226,10 @@ pub enum Message<T = mz_repr::Timestamp> {
         ctx: ExecuteContext,
         stage: PeekStage,
     },
+    PeekStageDeprecatedReady {
+        ctx: ExecuteContext,
+        stage: PeekStageDeprecated,
+    },
     DrainStatementLog,
 }
 
@@ -264,6 +269,7 @@ impl Message {
                 "execute_single_statement_transaction"
             }
             Message::PeekStageReady { .. } => "peek_stage_ready",
+            Message::PeekStageDeprecatedReady { .. } => "peek_stage_ready",
             Message::DrainStatementLog => "drain_statement_log",
         }
     }
@@ -323,6 +329,23 @@ pub enum RealTimeRecencyContext {
         typ: RelationType,
         dataflow_metainfo: DataflowMetainfo,
     },
+    PeekDeprecated {
+        ctx: ExecuteContext,
+        finishing: RowSetFinishing,
+        copy_to: Option<CopyFormat>,
+        dataflow: DataflowDescription<OptimizedMirRelationExpr>,
+        cluster_id: ClusterId,
+        when: QueryWhen,
+        target_replica: Option<ReplicaId>,
+        view_id: GlobalId,
+        index_id: GlobalId,
+        timeline_context: TimelineContext,
+        source_ids: BTreeSet<GlobalId>,
+        in_immediate_multi_stmt_txn: bool,
+        key: Vec<MirScalarExpr>,
+        typ: RelationType,
+        dataflow_metainfo: DataflowMetainfo,
+    },
 }
 
 impl RealTimeRecencyContext {
@@ -330,6 +353,7 @@ impl RealTimeRecencyContext {
         match self {
             RealTimeRecencyContext::ExplainTimestamp { ctx, .. }
             | RealTimeRecencyContext::Peek { ctx, .. } => ctx,
+            RealTimeRecencyContext::PeekDeprecated { ctx, .. } => ctx,
         }
     }
 }
