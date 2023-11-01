@@ -34,7 +34,7 @@ use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::client::SinkStatisticsUpdate;
 use mz_storage_client::sink::ProgressRecord;
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::errors::DataflowError;
+use mz_storage_types::errors::{ContextCreationError, DataflowError};
 use mz_storage_types::sinks::{
     KafkaConsistencyConfig, KafkaSinkAvroFormatState, KafkaSinkConnection, KafkaSinkFormat,
     MetadataFilled, SinkAsOf, SinkEnvelope, StorageSinkDesc,
@@ -435,9 +435,9 @@ impl KafkaSinkState {
             &healthchecker,
             #[allow(clippy::redundant_closure_call)]
             (|| async {
-                fail::fail_point!("kafka_sink_creation_error", |_| Err(anyhow::anyhow!(
-                    "synthetic error"
-                )));
+                fail::fail_point!("kafka_sink_creation_error", |_| Err(
+                    ContextCreationError::Other(anyhow::anyhow!("synthetic error"))
+                ));
 
                 connection
                     .connection
@@ -719,17 +719,25 @@ impl KafkaSinkState {
         progress_emitted
     }
 
-    async fn update_status(&self, status: HealthStatusUpdate) {
-        update_status(&self.healthchecker, status).await;
+    async fn update_status(&self, status: HealthStatusUpdate, namespace: StatusNamespace) {
+        update_status(&self.healthchecker, status, namespace).await;
     }
 
     /// Report a stalled HealthStatusUpdate and then halt with the same message.
     pub async fn halt_on_err<T>(&self, result: Result<T, anyhow::Error>) -> T {
-        halt_on_err(&self.healthchecker, result).await
+        halt_on_err(
+            &self.healthchecker,
+            result.map_err(ContextCreationError::Other),
+        )
+        .await
     }
 }
 
-async fn update_status(healthchecker: &HealthOutputHandle, status: HealthStatusUpdate) {
+async fn update_status(
+    healthchecker: &HealthOutputHandle,
+    status: HealthStatusUpdate,
+    namespace: StatusNamespace,
+) {
     healthchecker
         .handle
         .lock()
@@ -739,18 +747,24 @@ async fn update_status(healthchecker: &HealthOutputHandle, status: HealthStatusU
             HealthStatusMessage {
                 // sinks only have 1 logical object.
                 index: 0,
-                namespace: StatusNamespace::Kafka,
+                namespace,
                 update: status,
             },
         )
         .await;
 }
 
-async fn halt_on_err<T>(healthchecker: &HealthOutputHandle, result: Result<T, anyhow::Error>) -> T {
+async fn halt_on_err<T>(
+    healthchecker: &HealthOutputHandle,
+    // We use a `ContextCreationError` for convenience here because it can be an ssh error during
+    // `create_with_context` calls, or an `anyhow::Error` for transient failures during operation.
+    // In the future we could probably also use the `KafkaError` variant as well.
+    result: Result<T, ContextCreationError>,
+) -> T {
     match result {
         Ok(t) => t,
         Err(error) => {
-            let hint: Option<String> =
+            let hint: Option<String> = if let ContextCreationError::Other(error) = &error {
                 error
                     .downcast_ref::<RDKafkaError>()
                     .and_then(|kafka_error| {
@@ -767,11 +781,19 @@ async fn halt_on_err<T>(healthchecker: &HealthOutputHandle, result: Result<T, an
                         } else {
                             None
                         }
-                    });
+                    })
+            } else {
+                None
+            };
 
             update_status(
                 healthchecker,
                 HealthStatusUpdate::halting(format!("{}", error.display_with_causes()), hint),
+                if matches!(error, ContextCreationError::Ssh(_)) {
+                    StatusNamespace::Ssh
+                } else {
+                    StatusNamespace::Kafka
+                },
             )
             .await;
 
@@ -946,7 +968,8 @@ where
             s.maybe_update_progress(&gate);
         }
 
-        s.update_status(HealthStatusUpdate::running()).await;
+        s.update_status(HealthStatusUpdate::running(), StatusNamespace::Kafka)
+            .await;
 
         while let Some(event) = input.next_mut().await {
             match event {

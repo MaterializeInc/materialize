@@ -12,23 +12,11 @@
 > DROP CLUSTER REPLICA sc.r1
 > CREATE CLUSTER REPLICA sc.r1 SIZE '32'
 
-# TODO(guswynn): these should be correctly namespaced as ssh errors
-> SELECT status FROM mz_internal.mz_source_statuses st
-  JOIN mz_sources s ON st.id = s.id
-  WHERE error LIKE 'kafka:%'
-  AND s.name in ('fixed_text')
-stalled
-
-> SELECT status FROM mz_internal.mz_source_statuses st
-  JOIN mz_sources s ON st.id = s.id
-  WHERE error LIKE 'decode:%'
-  AND s.name in ('fixed_plus_csr', 'dynamic_plus_csr')
-stalled
-stalled
-
-# top-level ssh sources that don't use ssh in decoding work correctly already
 > SELECT status FROM mz_internal.mz_source_statuses st
   JOIN mz_sources s ON st.id = s.id
   WHERE error LIKE 'ssh:%'
-  AND s.name in ('dynamic_text')
+  AND s.name in ('dynamic_text', 'fixed_text', 'fixed_plus_csr', 'dynamic_plus_csr')
+stalled
+stalled
+stalled
 stalled

@@ -21,6 +21,7 @@ use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_repr::{GlobalId, Timestamp};
 use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::errors::ContextCreationError;
 use mz_storage_types::sinks::{
     KafkaConsistencyConfig, KafkaSinkAvroFormatState, KafkaSinkConnection,
     KafkaSinkConnectionRetention, KafkaSinkFormat,
@@ -243,12 +244,24 @@ pub async fn build_kafka(
     sink_id: mz_repr::GlobalId,
     connection: &mut KafkaSinkConnection,
     connection_cx: &ConnectionContext,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), ContextCreationError> {
     let client: AdminClient<_> = connection
         .connection
         .create_with_context(connection_cx, MzClientContext::default(), &BTreeMap::new())
         .await
-        .context("creating admin client failed")?;
+        .map_err(|e| {
+            let msg = "creating admin client failed";
+            match e {
+                // We need to preserve the `Ssh` variant here, so we add the context inside of it.
+                ContextCreationError::Ssh(e) => ContextCreationError::Ssh(anyhow!(e.context(msg))),
+                ContextCreationError::Other(e) => {
+                    ContextCreationError::Other(anyhow!(e.context(msg)))
+                }
+                ContextCreationError::KafkaError(e) => {
+                    ContextCreationError::Other(anyhow!(anyhow!(e).context(msg)))
+                }
+            }
+        })?;
 
     // Check for existence of progress topic; if it exists and contains data for
     // this sink, we expect the data topic to exist, as well. Note that we don't
@@ -294,7 +307,9 @@ pub async fn build_kafka(
         // If we have progress data, we should have the topic listed in the
         // broker's metadata. If we don't, error.
         if latest_ts.is_some() && !meta.topics().iter().any(|t| t.name() == connection.topic) {
-            bail!("sink progress data exists, but sink data topic is missing");
+            Err(anyhow::anyhow!(
+                "sink progress data exists, but sink data topic is missing"
+            ))?
         }
     }
 

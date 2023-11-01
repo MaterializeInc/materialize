@@ -578,13 +578,7 @@ where
             (
                 envelope_ok,
                 envelope_err,
-                decode_health
-                    .map(|(index, update)| HealthStatusMessage {
-                        index,
-                        namespace: StatusNamespace::Decode,
-                        update,
-                    })
-                    .concat(&envelope_health),
+                decode_health.concat(&envelope_health),
             )
         }
     };

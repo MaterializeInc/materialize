@@ -43,6 +43,7 @@ use tokio_postgres::config::SslMode;
 use url::Url;
 
 use crate::connections::aws::AwsConfig;
+use crate::errors::{ContextCreationError, CsrConnectError};
 
 pub mod aws;
 pub mod inline;
@@ -404,7 +405,7 @@ impl KafkaConnection {
         connection_context: &ConnectionContext,
         context: C,
         extra_options: &BTreeMap<&str, String>,
-    ) -> Result<T, anyhow::Error>
+    ) -> Result<T, ContextCreationError>
     where
         C: ClientContext,
         T: FromClientConfigAndContext<TunnelingClientContext<C>>,
@@ -501,6 +502,14 @@ impl KafkaConnection {
             match &broker.tunnel {
                 Tunnel::Direct => {
                     // By default, don't override broker address lookup.
+                    //
+                    // N.B.
+                    //
+                    // We _could_ pre-setup the default ssh tunnel for all known brokers here, but
+                    // we avoid doing because:
+                    // - Its not necessary.
+                    // - Not doing so makes it easier to test the `FailedDefaultSshTunnel` path
+                    // in the `TunnelingClientContext`.
                 }
                 Tunnel::AwsPrivatelink(aws_privatelink) => {
                     let host = mz_cloud_resources::vpc_endpoint_host(
@@ -532,7 +541,8 @@ impl KafkaConnection {
                                 )?,
                             },
                         )
-                        .await?;
+                        .await
+                        .map_err(ContextCreationError::Ssh)?;
                 }
             }
         }
@@ -732,7 +742,7 @@ impl CsrConnection {
     pub async fn connect(
         &self,
         connection_context: &ConnectionContext,
-    ) -> Result<mz_ccsr::Client, anyhow::Error> {
+    ) -> Result<mz_ccsr::Client, CsrConnectError> {
         let mut client_config = mz_ccsr::ClientConfig::new(self.url.clone());
         if let Some(root_cert) = &self.tls_root_cert {
             let root_cert = root_cert
@@ -801,7 +811,8 @@ impl CsrConnection {
                         // could default to 8081...
                         self.url.port().unwrap_or(80),
                     )
-                    .await?;
+                    .await
+                    .map_err(CsrConnectError::Ssh)?;
 
                 // Carefully inject the SSH tunnel into the client
                 // configuration. This is delicate because we need TLS
@@ -858,7 +869,7 @@ impl CsrConnection {
             }
         }
 
-        client_config.build()
+        Ok(client_config.build()?)
     }
 
     async fn validate(

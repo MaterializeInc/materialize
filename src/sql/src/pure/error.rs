@@ -233,8 +233,12 @@ impl KafkaSinkPurificationError {
 pub enum CsrPurificationError {
     #[error("{0} is not a CONFLUENT SCHEMA REGISTRY CONNECTION")]
     NotCsrConnection(FullItemName),
+    // `mz_storage_types::Errors::CsrConnectError` has an `anyhow::Error` that is not cloneable.
     #[error("client errored")]
     ClientError(String),
+    // `mz_ccsr::ListError` has a `reqwest::Error` that is not cloneable.
+    #[error("list subjects failed")]
+    ListSubjectsError(String),
 }
 
 impl CsrPurificationError {

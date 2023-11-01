@@ -362,12 +362,13 @@ async fn purify_create_sink(
                     }
                 };
 
-                let client = connection.connect(&connection_context).await.map_err(|e| {
-                    CsrPurificationError::ClientError(e.display_with_causes().to_string())
-                })?;
+                let client = connection
+                    .connect(&connection_context)
+                    .await
+                    .map_err(|e| CsrPurificationError::ClientError(e.to_string_with_causes()))?;
 
                 client.list_subjects().await.map_err(|e| {
-                    CsrPurificationError::ClientError(e.display_with_causes().to_string())
+                    CsrPurificationError::ListSubjectsError(e.to_string_with_causes())
                 })?;
             }
             Format::Avro(AvroSchema::InlineSchema { .. })
@@ -1197,7 +1198,10 @@ async fn purify_csr_connection_proto(
                 _ => sql_bail!("{} is not a schema registry connection", connection),
             };
 
-            let ccsr_client = ccsr_connection.connect(connection_context).await?;
+            let ccsr_client = ccsr_connection
+                .connect(connection_context)
+                .await
+                .map_err(|e| CsrPurificationError::ClientError(e.to_string_with_causes()))?;
 
             let value = compile_proto(&format!("{}-value", topic), &ccsr_client).await?;
             let key = compile_proto(&format!("{}-key", topic), &ccsr_client)
@@ -1249,7 +1253,10 @@ async fn purify_csr_connection_avro(
             Connection::Csr(connection) => connection.clone().into_inline_connection(catalog),
             _ => sql_bail!("{} is not a schema registry connection", connection),
         };
-        let ccsr_client = csr_connection.connect(connection_context).await?;
+        let ccsr_client = csr_connection
+            .connect(connection_context)
+            .await
+            .map_err(|e| CsrPurificationError::ClientError(e.to_string_with_causes()))?;
 
         let Schema {
             key_schema,
