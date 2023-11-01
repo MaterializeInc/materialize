@@ -31,20 +31,12 @@ def df_details_csv(endpoint_name: str, workload_name: str) -> Path:
     return RESULTS_DIR / endpoint_name / f"{workload_name}_details.csv"
 
 
-def regressions_csv_name() -> str:
-    return "regressions.csv"
-
-
 def regressions_csv() -> Path:
-    return RESULTS_DIR / regressions_csv_name()
-
-
-def results_csv_rel_path(endpoint_name: str) -> Path:
-    return Path(endpoint_name) / "results.csv"
+    return RESULTS_DIR / "regressions.csv"
 
 
 def results_csv(endpoint_name: str) -> Path:
-    return RESULTS_DIR / results_csv_rel_path(endpoint_name)
+    return RESULTS_DIR / Path(endpoint_name) / "results.csv"
 
 
 def plot_dir() -> Path:

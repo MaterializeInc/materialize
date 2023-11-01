@@ -316,7 +316,7 @@ def upload_regressions_to_buildkite(outcome: RegressionOutcome) -> None:
 
     outcome.raw_regression_data.to_csv(paths.regressions_csv())
     buildkite.upload_artifact(
-        paths.regressions_csv_name(),
+        paths.regressions_csv().relative_to(paths.RESULTS_DIR),
         cwd=paths.RESULTS_DIR,
     )
 
@@ -331,7 +331,7 @@ def store_and_upload_results_to_buildkite(result: BenchmarkResult) -> None:
 
         if buildkite.is_in_buildkite():
             buildkite.upload_artifact(
-                paths.results_csv_rel_path(endpoint_name),
+                paths.results_csv(endpoint_name).relative_to(paths.RESULTS_DIR),
                 cwd=paths.RESULTS_DIR,
             )
 
