@@ -107,6 +107,7 @@ where
     ///
     /// Also waits until the `CollectionManager` has completed all outstanding work to ensure that
     /// it has stopped referencing the provided `id`.
+    #[tracing::instrument(level = "debug", skip(self))]
     pub(super) async fn unregsiter_collection(&self, id: GlobalId) -> bool {
         let prev = self
             .collections

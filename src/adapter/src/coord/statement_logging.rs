@@ -118,6 +118,7 @@ impl Coordinator {
         });
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     pub(crate) async fn drain_statement_log(&mut self) {
         let session_updates = std::mem::take(&mut self.statement_logging.pending_session_events)
             .into_iter()

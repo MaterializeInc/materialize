@@ -577,6 +577,7 @@ where
     }
 
     /// Processes the work queued by [`ComputeController::ready`].
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn process(&mut self) -> Option<ComputeControllerResponse<T>> {
         // Update controller state metrics.
         for instance in self.compute.instances.values_mut() {
@@ -620,6 +621,7 @@ where
         None
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn record_introspection_updates(&mut self) {
         for (type_, updates) in self.compute.introspection_rx.try_iter() {
             self.storage

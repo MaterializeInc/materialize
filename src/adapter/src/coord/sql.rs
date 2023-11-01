@@ -230,6 +230,7 @@ impl Coordinator {
     }
 
     /// Handle removing metadata associated with a SUBSCRIBE query.
+    #[tracing::instrument(level = "debug", skip(self))]
     pub(crate) async fn remove_active_subscribe(&mut self, id: GlobalId) {
         if let Some(active_subscribe) = self.active_subscribes.remove(&id) {
             let update = self

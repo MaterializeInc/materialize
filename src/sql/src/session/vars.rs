@@ -3410,7 +3410,7 @@ impl SystemVars {
         *self.expect_value(&*WEBHOOKS_SECRETS_CACHING_TTL_SECS)
     }
 
-    pub fn coord_slow_message_reporting_threshold_ms(&self) -> Duration {
+    pub fn coord_slow_message_reporting_threshold(&self) -> Duration {
         *self.expect_value(&COORD_SLOW_MESSAGE_REPORTING_THRESHOLD)
     }
 

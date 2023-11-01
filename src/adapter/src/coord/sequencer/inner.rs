@@ -2114,6 +2114,7 @@ impl Coordinator {
     }
 
     /// Processes as many peek stages as possible.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn sequence_peek_stage(
         &mut self,
         mut ctx: ExecuteContext,

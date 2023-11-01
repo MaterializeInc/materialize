@@ -1447,6 +1447,7 @@ where
         self.stashed_response = Some(msg);
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn process(&mut self) -> Result<(), anyhow::Error> {
         match self.stashed_response.take() {
             None => (),
@@ -2184,6 +2185,7 @@ where
     ///
     /// # Panics
     /// - If `id` is not registered as a managed collection.
+    #[tracing::instrument(level = "debug", skip(self, updates))]
     async fn append_to_managed_collection(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
         self.collection_manager
             .append_to_collection(id, updates)
@@ -2542,6 +2544,7 @@ where
     /// - If `IntrospectionType::ShardMapping`'s `GlobalId` is not registered as
     ///   a managed collection.
     /// - If diff is any value other than `1` or `-1`.
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn append_shard_mappings<I>(&self, global_ids: I, diff: i64)
     where
         I: Iterator<Item = GlobalId>,
@@ -2705,6 +2708,7 @@ where
 
     /// Attempts to close all shards marked for finalization.
     #[allow(dead_code)]
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn finalize_shards(&mut self) {
         let shards = self
             .stash
