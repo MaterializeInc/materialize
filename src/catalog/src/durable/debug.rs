@@ -23,7 +23,8 @@ use crate::durable::{
 use mz_repr::Diff;
 use mz_stash::{Stash, TypedCollection};
 use mz_stash_types::objects::proto;
-use std::str::FromStr;
+use serde::{Deserialize, Serialize};
+use serde_plain::{derive_display_from_serialize, derive_fromstr_from_deserialize};
 
 /// The contents of the catalog are logically separated into separate [`Collection`]s, which
 /// describe the category of data that the content belongs to.
@@ -35,11 +36,6 @@ pub trait Collection {
 
     /// [`CollectionType`] corresponding to [`Collection`].
     fn collection_type() -> CollectionType;
-
-    /// Name of [`Collection`].
-    fn name() -> &'static str {
-        Self::collection_type().name()
-    }
 
     /// Extract the [`CollectionTrace`] from a [`Trace`] that corresponds to [`Collection`].
     fn collection_trace(trace: Trace) -> CollectionTrace<Self>;
@@ -54,95 +50,34 @@ pub trait Collection {
 /// The type of a [`Collection`].
 ///
 /// See [`Collection`] for more details.
+///
+/// The names of each variant are used to determine the labels of each [`CollectionTrace`] when
+/// dumping a [`Trace`].
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CollectionType {
     AuditLog,
-    Cluster,
-    ClusterIntrospectionSourceIndex,
-    ClusterReplica,
-    Comment,
+    ComputeInstance,
+    ComputeIntrospectionSourceIndex,
+    ComputeReplicas,
+    Comments,
     Config,
     Database,
-    DefaultPrivilege,
-    IdAllocator,
+    DefaultPrivileges,
+    IdAlloc,
     Item,
     Role,
     Schema,
     Setting,
     StorageUsage,
     SystemConfiguration,
-    SystemItemMapping,
-    SystemPrivilege,
+    SystemGidMapping,
+    SystemPrivileges,
     Timestamp,
 }
 
-impl CollectionType {
-    pub fn name(&self) -> &'static str {
-        match self {
-            CollectionType::AuditLog => "audit_log",
-            CollectionType::Cluster => "compute_instance",
-            CollectionType::ClusterIntrospectionSourceIndex => "compute_introspection_source_index",
-            CollectionType::ClusterReplica => "compute_replicas",
-            CollectionType::Comment => "comments",
-            CollectionType::Config => "config",
-            CollectionType::Database => "database",
-            CollectionType::DefaultPrivilege => "default_privileges",
-            CollectionType::IdAllocator => "id_alloc",
-            CollectionType::Item => "item",
-            CollectionType::Role => "role",
-            CollectionType::Schema => "schema",
-            CollectionType::Setting => "setting",
-            CollectionType::StorageUsage => "storage_usage",
-            CollectionType::SystemConfiguration => "system_configuration",
-            CollectionType::SystemItemMapping => "system_gid_mapping",
-            CollectionType::SystemPrivilege => "system_privileges",
-            CollectionType::Timestamp => "timestamp",
-        }
-    }
-}
-
-impl FromStr for CollectionType {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s == CollectionType::AuditLog.name() {
-            Ok(CollectionType::AuditLog)
-        } else if s == CollectionType::Cluster.name() {
-            Ok(CollectionType::Cluster)
-        } else if s == CollectionType::ClusterIntrospectionSourceIndex.name() {
-            Ok(CollectionType::ClusterIntrospectionSourceIndex)
-        } else if s == CollectionType::ClusterReplica.name() {
-            Ok(CollectionType::ClusterReplica)
-        } else if s == CollectionType::Comment.name() {
-            Ok(CollectionType::Comment)
-        } else if s == CollectionType::Config.name() {
-            Ok(CollectionType::Config)
-        } else if s == CollectionType::Database.name() {
-            Ok(CollectionType::Database)
-        } else if s == CollectionType::DefaultPrivilege.name() {
-            Ok(CollectionType::DefaultPrivilege)
-        } else if s == CollectionType::IdAllocator.name() {
-            Ok(CollectionType::IdAllocator)
-        } else if s == CollectionType::Item.name() {
-            Ok(CollectionType::Item)
-        } else if s == CollectionType::Role.name() {
-            Ok(CollectionType::Role)
-        } else if s == CollectionType::Schema.name() {
-            Ok(CollectionType::Schema)
-        } else if s == CollectionType::Setting.name() {
-            Ok(CollectionType::Setting)
-        } else if s == CollectionType::StorageUsage.name() {
-            Ok(CollectionType::StorageUsage)
-        } else if s == CollectionType::SystemItemMapping.name() {
-            Ok(CollectionType::SystemItemMapping)
-        } else if s == CollectionType::SystemConfiguration.name() {
-            Ok(CollectionType::SystemConfiguration)
-        } else if s == CollectionType::Timestamp.name() {
-            Ok(CollectionType::Timestamp)
-        } else {
-            anyhow::bail!("unknown collection {s}")
-        }
-    }
-}
+derive_display_from_serialize!(CollectionType);
+derive_fromstr_from_deserialize!(CollectionType);
 
 /// Macro to simplify implementing [`Collection`].
 ///
@@ -203,7 +138,7 @@ collection_impl!({
     name: ClusterCollection,
     key: proto::ClusterKey,
     value: proto::ClusterValue,
-    collection_type: CollectionType::Cluster,
+    collection_type: CollectionType::ComputeInstance,
     trace_field: clusters,
     stash_collection: CLUSTER_COLLECTION,
     persist_update: StateUpdateKind::Cluster,
@@ -212,7 +147,7 @@ collection_impl!({
     name: ClusterIntrospectionSourceIndexCollection,
     key: proto::ClusterIntrospectionSourceIndexKey,
     value: proto::ClusterIntrospectionSourceIndexValue,
-    collection_type: CollectionType::ClusterIntrospectionSourceIndex,
+    collection_type: CollectionType::ComputeIntrospectionSourceIndex,
     trace_field: introspection_sources,
     stash_collection: CLUSTER_INTROSPECTION_SOURCE_INDEX_COLLECTION,
     persist_update: StateUpdateKind::IntrospectionSourceIndex,
@@ -221,7 +156,7 @@ collection_impl!({
     name: ClusterReplicaCollection,
     key: proto::ClusterReplicaKey,
     value: proto::ClusterReplicaValue,
-    collection_type: CollectionType::ClusterReplica,
+    collection_type: CollectionType::ComputeReplicas,
     trace_field: cluster_replicas,
     stash_collection: CLUSTER_REPLICA_COLLECTION,
     persist_update: StateUpdateKind::ClusterReplica,
@@ -230,7 +165,7 @@ collection_impl!({
     name: CommentCollection,
     key: proto::CommentKey,
     value: proto::CommentValue,
-    collection_type: CollectionType::Comment,
+    collection_type: CollectionType::Comments,
     trace_field: comments,
     stash_collection: COMMENTS_COLLECTION,
     persist_update: StateUpdateKind::Comment,
@@ -257,7 +192,7 @@ collection_impl!({
     name: DefaultPrivilegeCollection,
     key: proto::DefaultPrivilegesKey,
     value: proto::DefaultPrivilegesValue,
-    collection_type: CollectionType::DefaultPrivilege,
+    collection_type: CollectionType::DefaultPrivileges,
     trace_field: default_privileges,
     stash_collection: DEFAULT_PRIVILEGES_COLLECTION,
     persist_update: StateUpdateKind::DefaultPrivilege,
@@ -266,7 +201,7 @@ collection_impl!({
     name: IdAllocatorCollection,
     key: proto::IdAllocKey,
     value: proto::IdAllocValue,
-    collection_type: CollectionType::IdAllocator,
+    collection_type: CollectionType::IdAlloc,
     trace_field: id_allocator,
     stash_collection: ID_ALLOCATOR_COLLECTION,
     persist_update: StateUpdateKind::IdAllocator,
@@ -329,7 +264,7 @@ collection_impl!({
     name: SystemItemMappingCollection,
     key: proto::GidMappingKey,
     value: proto::GidMappingValue,
-    collection_type: CollectionType::SystemItemMapping,
+    collection_type: CollectionType::SystemGidMapping,
     trace_field: system_object_mappings,
     stash_collection: SYSTEM_GID_MAPPING_COLLECTION,
     persist_update: StateUpdateKind::SystemObjectMapping,
@@ -338,7 +273,7 @@ collection_impl!({
     name: SystemPrivilegeCollection,
     key: proto::SystemPrivilegesKey,
     value: proto::SystemPrivilegesValue,
-    collection_type: CollectionType::SystemPrivilege,
+    collection_type: CollectionType::SystemPrivileges,
     trace_field: system_privileges,
     stash_collection: SYSTEM_PRIVILEGES_COLLECTION,
     persist_update: StateUpdateKind::SystemPrivilege,
