@@ -16,7 +16,7 @@ use mz_ore::now::to_datetime;
 use mz_ore::task::spawn;
 use mz_ore::{cast::CastFrom, now::EpochMillis};
 use mz_repr::adt::array::ArrayDimension;
-use mz_repr::{Datum, Diff, Row, RowPacker, Timestamp, GlobalId};
+use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
 use mz_sql::plan::Params;
 use mz_storage_client::controller::IntrospectionType;
 use qcell::QCell;
@@ -439,11 +439,7 @@ impl Coordinator {
         });
     }
 
-    pub fn set_transient_index_id(
-        &mut self,
-        id: StatementLoggingId,
-        transient_index_id: GlobalId,
-    ) {
+    pub fn set_transient_index_id(&mut self, id: StatementLoggingId, transient_index_id: GlobalId) {
         self.mutate_record(id, |record| {
             record.transient_index_id = Some(transient_index_id)
         });
