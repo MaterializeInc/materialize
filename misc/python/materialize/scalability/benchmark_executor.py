@@ -121,7 +121,7 @@ class BenchmarkExecutor:
         endpoint: Endpoint,
         workload: Workload,
     ) -> WorkloadResult:
-        print(f"Running workload {workload} on {endpoint}")
+        print(f"Running workload {workload.name()} on {endpoint}")
 
         df_totals = pd.DataFrame()
         df_details = pd.DataFrame()
