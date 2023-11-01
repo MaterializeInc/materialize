@@ -688,11 +688,7 @@ impl Coordinator {
 
     fn maybe_send_rbac_notice(&self, session: &Session) {
         if !rbac::is_rbac_enabled_for_session(self.catalog.system_config(), session.vars()) {
-            if !self.catalog.system_config().enable_ld_rbac_checks() {
-                session.add_notice(AdapterNotice::RbacSystemDisabled);
-            } else {
-                session.add_notice(AdapterNotice::RbacUserDisabled);
-            }
+            session.add_notice(AdapterNotice::RbacUserDisabled);
         }
     }
 

@@ -3218,9 +3218,6 @@ fn test_pg_cancel_backend() {
         .connect(postgres::NoTls)
         .unwrap();
     mz_client
-        .batch_execute("ALTER SYSTEM SET enable_ld_rbac_checks TO true")
-        .unwrap();
-    mz_client
         .batch_execute("ALTER SYSTEM SET enable_rbac_checks TO true")
         .unwrap();
 

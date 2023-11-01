@@ -311,15 +311,12 @@ pub fn check_plan(
 
 /// Returns true if RBAC is turned on for a session, false otherwise.
 pub fn is_rbac_enabled_for_session(system_vars: &SystemVars, session_vars: &SessionVars) -> bool {
-    let ld_enabled = system_vars.enable_ld_rbac_checks();
     let server_enabled = system_vars.enable_rbac_checks();
     let session_enabled = session_vars.enable_session_rbac_checks();
 
-    // The LD flag acts as a global off switch in case we need to turn the feature off for
-    // everyone. Users will still need to turn one of the non-LD flags on to enable RBAC.
-    // The session flag allows users to turn RBAC on for just their session while the server flag
+    //The session flag allows users to turn RBAC on for just their session while the server flag
     // allows users to turn RBAC on for everyone.
-    ld_enabled && (server_enabled || session_enabled)
+    server_enabled || session_enabled
 }
 
 /// Generates all requirements needed to execute a given plan.

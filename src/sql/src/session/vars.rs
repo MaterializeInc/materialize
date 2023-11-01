@@ -1224,14 +1224,6 @@ static UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP: ServerVar<Option<mz_repr::Timestamp>> 
     internal: true,
 };
 
-pub const ENABLE_LD_RBAC_CHECKS: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("enable_ld_rbac_checks"),
-    value: &true,
-    description:
-        "LD facing global boolean flag that allows turning RBAC off for everyone (Materialize).",
-    internal: true,
-};
-
 pub const ENABLE_RBAC_CHECKS: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_rbac_checks"),
     value: &true,
@@ -2691,7 +2683,6 @@ impl SystemVars {
             .with_var(&PERSIST_ROLLUP_THRESHOLD)
             .with_var(&METRICS_RETENTION)
             .with_var(&UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP)
-            .with_var(&ENABLE_LD_RBAC_CHECKS)
             .with_var(&ENABLE_RBAC_CHECKS)
             .with_var(&PG_SOURCE_CONNECT_TIMEOUT)
             .with_var(&PG_SOURCE_KEEPALIVES_IDLE)
@@ -3338,11 +3329,6 @@ impl SystemVars {
     /// Returns the `unsafe_mock_audit_event_timestamp` configuration parameter.
     pub fn unsafe_mock_audit_event_timestamp(&self) -> Option<mz_repr::Timestamp> {
         *self.expect_value(&UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP)
-    }
-
-    /// Returns the `enable_ld_rbac_checks` configuration parameter.
-    pub fn enable_ld_rbac_checks(&self) -> bool {
-        *self.expect_value(&ENABLE_LD_RBAC_CHECKS)
     }
 
     /// Returns the `enable_rbac_checks` configuration parameter.
