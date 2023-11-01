@@ -9,13 +9,19 @@
 
 import pandas as pd
 
+from materialize.scalability.endpoint import Endpoint
 from materialize.scalability.workload import Workload
 
 
 class WorkloadResult:
     def __init__(
-        self, workload: Workload, df_totals: pd.DataFrame, df_details: pd.DataFrame
+        self,
+        workload: Workload,
+        endpoint: Endpoint,
+        df_totals: pd.DataFrame,
+        df_details: pd.DataFrame,
     ):
         self.workload = workload
+        self.endpoint = endpoint
         self.df_totals = df_totals
         self.df_details = df_details

@@ -14,21 +14,28 @@ from matplotlib import pyplot as plt
 
 from materialize.scalability.df import paths
 from materialize.scalability.plot.plot import (
-    plot_latency_per_connections,
-    plot_tps_per_connections,
+    boxplot_latency_per_connections,
+    scatterplot_latency_per_connections,
+    scatterplot_tps_per_connections,
 )
+
+USE_BOXPLOT = True
 
 
 def plotit(workload_name: str) -> None:
-    plt.rcParams["figure.figsize"] = (16, 10)
-    fig, (summary_subplot, details_subplot) = plt.subplots(2, 1)
+    fig = plt.figure(layout="constrained", figsize=(16, 10))
+    (tps_figure, latency_figure) = fig.subfigures(2, 1)
 
     df_totals_by_endpoint_name, df_details_by_endpoint_name = load_data_from_filesystem(
         workload_name
     )
 
-    plot_tps_per_connections(summary_subplot, df_totals_by_endpoint_name)
-    plot_latency_per_connections(details_subplot, df_details_by_endpoint_name)
+    scatterplot_tps_per_connections(tps_figure, df_totals_by_endpoint_name)
+
+    if USE_BOXPLOT:
+        boxplot_latency_per_connections(latency_figure, df_details_by_endpoint_name)
+    else:
+        scatterplot_latency_per_connections(latency_figure, df_details_by_endpoint_name)
 
 
 def load_data_from_filesystem(
