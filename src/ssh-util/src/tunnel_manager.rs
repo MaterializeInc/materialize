@@ -24,9 +24,8 @@ use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 
 use scopeguard::ScopeGuard;
-use tokio::sync::oneshot::channel;
 use tokio::sync::watch;
-use tracing::info;
+use tracing::{error, info};
 
 use crate::tunnel::{SshTunnelConfig, SshTunnelHandle, SshTunnelStatus};
 
@@ -99,6 +98,21 @@ impl SshTunnelManager {
 
             match action {
                 Action::Return(handle) => {
+                    if let SshTunnelStatus::Errored(e) = handle.check_status() {
+                        error!(
+                            "not using existing ssh tunnel \
+                            ({}:{} via {}@{}:{}) because its broken: {e}",
+                            remote_host, remote_port, config.user, config.host, config.port,
+                        );
+
+                        // This is bit unfortunate, as this method returns an `anyhow::Error`, but
+                        // the ssh status needs to share a cloneable `String`.
+                        // So we just package up the pre-`.to_string_with_causes()` error that
+                        // is at the bottom of the stack. In the future we can probably make ALL
+                        // ssh errors structured to avoid this.
+                        return Err(anyhow::anyhow!(e));
+                    }
+
                     info!(
                         "reusing existing ssh tunnel ({}:{} via {}@{}:{})",
                         remote_host, remote_port, config.user, config.host, config.port,
@@ -149,11 +163,11 @@ impl SshTunnelManager {
 }
 
 /// Identifies a connection to a remote host via an SSH tunnel.
-#[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord, Hash)]
-pub struct SshTunnelKey {
-    pub config: SshTunnelConfig,
-    pub remote_host: String,
-    pub remote_port: u16,
+#[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord)]
+struct SshTunnelKey {
+    config: SshTunnelConfig,
+    remote_host: String,
+    remote_port: u16,
 }
 
 /// The state of an SSH tunnel connection.
@@ -183,7 +197,7 @@ enum SshTunnelState {
 pub struct ManagedSshTunnelHandle {
     handle: Arc<SshTunnelHandle>,
     manager: SshTunnelManager,
-    pub key: SshTunnelKey,
+    key: SshTunnelKey,
 }
 
 impl Deref for ManagedSshTunnelHandle {
@@ -197,15 +211,8 @@ impl Deref for ManagedSshTunnelHandle {
 impl ManagedSshTunnelHandle {
     /// Return the current status of the `SshTunnelStatus`, by communicating with the
     /// task running the ssh session.
-    pub async fn check_status(&self) -> SshTunnelStatus {
-        let (tx, rx) = channel();
-
-        let _ = self.handle.status_request_sender.send(tx);
-
-        // We default to `Running` here for simplicity, as the existence of `self`
-        // means that the ssh tunnel task must be alive (unless it panicked, which means
-        // we are aborting anyways).
-        rx.await.unwrap_or(SshTunnelStatus::Running)
+    pub fn check_status(&self) -> SshTunnelStatus {
+        self.handle.status.lock().expect("poisoned").clone()
     }
 }
 

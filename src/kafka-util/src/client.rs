@@ -180,9 +180,6 @@ impl FromStr for MzKafkaError {
             Ok(Self::AllBrokersDown)
         } else if s.contains("Unknown topic or partition") || s.contains("Unknown partition") {
             Ok(Self::UnknownTopicOrPartition)
-        } else if s.contains("failed to connect to the remote host") {
-            // This is an error logged synthesized by `DynamicBrokerRewritingClientContext`
-            Ok(Self::Internal(s.to_string()))
         } else {
             Err(())
         }
@@ -251,7 +248,7 @@ enum BrokerRewriteHandle {
         ManagedSshTunnelHandle,
     ),
     /// For _default_ ssh tunnels, we store an error if _creation_
-    /// of the tunnel failed, so that `tunnel_statuses` can return it.
+    /// of the tunnel failed, so that `tunnel_status` can return it.
     FailedDefaultSshTunnel(String),
 }
 
@@ -332,8 +329,7 @@ impl<C> TunnelingClientContext<C> {
 
     /// Returns a _consolidated_ `SshTunnelStatus` that communicates the status
     /// of all active ssh tunnels `self` knows about.
-    pub async fn tunnel_statuses(&self) -> SshTunnelStatus {
-        // Pull out all the rewrites, temporarily.
+    pub fn tunnel_status(&self) -> SshTunnelStatus {
         let current_rewrites: Vec<_> = self
             .rewrites
             .lock()
@@ -342,43 +338,27 @@ impl<C> TunnelingClientContext<C> {
             .map(|(broker, status)| (broker.clone(), status.clone()))
             .collect();
 
-        // First, get the statuses from broken _creation_ of ssh tunnels.
-        let mut ssh_statuses: Vec<_> = current_rewrites
-            .iter()
-            .filter_map(|(_, status)| match status {
-                BrokerRewriteHandle::FailedDefaultSshTunnel(e) => {
-                    Some(SshTunnelStatus::Errored(e.clone()))
-                }
-                _ => None,
+        current_rewrites
+            .into_iter()
+            .map(|(_, handle)| match handle {
+                BrokerRewriteHandle::SshTunnel(s) => s.check_status(),
+                BrokerRewriteHandle::FailedDefaultSshTunnel(e) => SshTunnelStatus::Errored(e),
+                BrokerRewriteHandle::Simple(_) => SshTunnelStatus::Running,
             })
-            .collect();
-
-        // Then check the statuses of all the existing tunnels.
-        ssh_statuses.extend(
-            futures::future::join_all(current_rewrites.iter().filter_map(
-                |(_, status)| match status {
-                    BrokerRewriteHandle::SshTunnel(s) => Some(async { s.check_status().await }),
-                    _ => None,
-                },
-            ))
-            .await,
-        );
-
-        // Then consolidate them.
-        let mut status_to_emit = SshTunnelStatus::Running;
-        for status in ssh_statuses {
-            match (&mut status_to_emit, status) {
-                (SshTunnelStatus::Running, SshTunnelStatus::Errored(e)) => {
-                    status_to_emit = SshTunnelStatus::Errored(e);
+            .fold(SshTunnelStatus::Running, |acc, status| {
+                match (acc, status) {
+                    (SshTunnelStatus::Running, SshTunnelStatus::Errored(e))
+                    | (SshTunnelStatus::Errored(e), SshTunnelStatus::Running) => {
+                        SshTunnelStatus::Errored(e)
+                    }
+                    (SshTunnelStatus::Errored(err), SshTunnelStatus::Errored(e)) => {
+                        SshTunnelStatus::Errored(format!("{}, {}", err, e))
+                    }
+                    (SshTunnelStatus::Running, SshTunnelStatus::Running) => {
+                        SshTunnelStatus::Running
+                    }
                 }
-                (SshTunnelStatus::Errored(ref mut error), SshTunnelStatus::Errored(e)) => {
-                    error.push_str(&format!(", {}", e));
-                }
-                _ => {}
-            }
-        }
-
-        status_to_emit
+            })
     }
 }
 
