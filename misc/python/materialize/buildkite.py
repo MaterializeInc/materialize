@@ -40,26 +40,10 @@ def get_pipeline_default_branch(fallback: str = "main"):
     return os.getenv("BUILDKITE_PIPELINE_DEFAULT_BRANCH", fallback)
 
 
-def get_remote(url: str) -> str | None:
-    result = spawn.capture(["git", "remote", "--verbose"])
-    for line in result.splitlines():
-        remote, desc = line.split("\t")
-        if desc.lower() == f"{url} (fetch)".lower():
-            return remote
-    return None
-
-
 def get_merge_base(url: str = "https://github.com/MaterializeInc/materialize") -> str:
-    # Alternative syntax
-    remote = get_remote(url) or get_remote(
-        url.replace("https://github.com/", "git@github.com:")
-    )
-    if not remote:
-        print(f"Remote for URL {url} not found, using origin")
-        remote = "origin"
     base_branch = get_pull_request_base_branch() or get_pipeline_default_branch()
     merge_base = git.get_common_ancestor_commit(
-        remote, branch=base_branch, fetch_branch=True
+        remote=git.get_remote(url), branch=base_branch, fetch_branch=True
     )
     return merge_base
 
