@@ -32,7 +32,7 @@ pandas-stubs==2.1.1.230928
 parameterized==0.8.1
 paramiko==3.1.0
 pdoc3==0.10.0
-pg8000==1.29.4
+pg8000==1.30.3
 prettytable==3.5.0
 psutil==5.9.4
 psycopg==3.1.10
