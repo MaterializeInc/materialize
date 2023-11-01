@@ -464,8 +464,7 @@ impl Listeners {
                 deploy_generation: config.deploy_generation,
                 http_host_name: Some(host_name),
                 internal_console_redirect_url: config.internal_console_redirect_url,
-                // TODO(txn-lazy): Get "lazy" flipped on before turning "lazy" on in prod.
-                persist_txn_tables_cli: Some(PersistTxnTablesImpl::Eager),
+                persist_txn_tables_cli: Some(PersistTxnTablesImpl::Lazy),
             })
             .await?;
 
