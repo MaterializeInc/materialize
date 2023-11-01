@@ -349,7 +349,13 @@ def upload_results_to_buildkite(result_file_paths: list[Path]) -> None:
 
 
 def upload_plots_to_buildkite() -> None:
-    pass
+    if not buildkite.is_in_buildkite():
+        return
+
+    buildkite.upload_artifact(
+        f"{paths.plot_dir().relative_to(paths.RESULTS_DIR)}/*.png",
+        cwd=paths.RESULTS_DIR,
+    )
 
 
 def workflow_lab(c: Composition) -> None:
