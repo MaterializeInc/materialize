@@ -199,6 +199,48 @@ def workflow_kafka_restart_replica(c: Composition, redpanda: bool = False) -> No
         c.run("testdrive", "--no-reset", "kafka-source-after-ssh-restart.td")
 
 
+def workflow_kafka_sink(c: Composition, redpanda: bool = False) -> None:
+    c.down()
+    # Configure the SSH bastion host to allow only two connections to be
+    # initiated simultaneously. This is enough to establish *one* Kafka SSH
+    # tunnel and *one* Confluent Schema Registry tunnel simultaneously.
+    # Combined with using a large cluster in kafka-source.td, this ensures that
+    # we only create one SSH tunnel per Kafka broker, rather than one SSH tunnel
+    # per Kafka broker per worker.
+    with c.override(SshBastionHost(max_startups="2")):
+
+        dependencies = ["materialized", "ssh-bastion-host"]
+        if redpanda:
+            dependencies += ["redpanda"]
+        else:
+            dependencies += ["zookeeper", "kafka", "schema-registry"]
+        c.up(*dependencies)
+
+        c.run("testdrive", "setup.td")
+
+        public_key = c.sql_query(
+            """
+            select public_key_1 from mz_ssh_tunnel_connections ssh \
+            join mz_connections c on c.id = ssh.id
+            where c.name = 'thancred';
+            """
+        )[0][0]
+
+        c.exec(
+            "ssh-bastion-host",
+            "bash",
+            "-c",
+            f"echo '{public_key}' > /etc/authorized_keys/mz",
+        )
+
+        c.run("testdrive", "--no-reset", "kafka-sink.td")
+        c.kill("ssh-bastion-host")
+        c.run("testdrive", "--no-reset", "kafka-sink-after-ssh-failure.td")
+
+        c.up("ssh-bastion-host")
+        c.run("testdrive", "--no-reset", "kafka-sink-after-ssh-restart.td")
+
+
 def workflow_hidden_hosts(c: Composition, redpanda: bool = False) -> None:
     c.down()
     dependencies = ["materialized", "ssh-bastion-host"]
@@ -455,6 +497,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     for workflow in [
         workflow_pg,
         workflow_kafka_restart_replica,
+        workflow_kafka_sink,
     ]:
         workflow(c)
         c.sanity_restart_mz()
