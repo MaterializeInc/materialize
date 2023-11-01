@@ -1738,7 +1738,7 @@ impl Coordinator {
         // Things go wrong if we try to create a dataflow with `as_of = []`, so avoid that.
         if write_frontier.is_empty() {
             tracing::info!(
-                export_ids = dataflow.format_export_ids(),
+                export_ids = %dataflow.display_export_ids(),
                 %cluster_id,
                 min_as_of = ?min_as_of.elements(),
                 write_frontier = ?write_frontier.elements(),
@@ -1773,7 +1773,7 @@ impl Coordinator {
         let as_of = min_as_of.join(&max_as_of);
 
         tracing::info!(
-            export_ids = %dataflow.format_export_ids(),
+            export_ids = %dataflow.display_export_ids(),
             %cluster_id,
             min_as_of = ?min_as_of.elements(),
             write_frontier = ?write_frontier.elements(),
@@ -1815,7 +1815,7 @@ impl Coordinator {
         };
 
         tracing::info!(
-            export_ids = %dataflow.format_export_ids(),
+            export_ids = %dataflow.display_export_ids(),
             %cluster_id,
             min_as_of = ?min_as_of.elements(),
             write_frontier = ?write_frontier.elements(),
