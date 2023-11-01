@@ -225,7 +225,7 @@ $ kafka-ingest format=avro topic=duplicate_individual_headers key-format=avro ke
   INCLUDE HEADERS, HEADER 'duplicates'
   ENVELOPE UPSERT
 
-> SELECT key, duplicates, headers from duplicate_individual_headers
+> SELECT key, duplicates, headers::text from duplicate_individual_headers
 key          duplicates                 headers
 -------------------------------------------------
 message_3    message_3_header_3_first   "{\"(duplicates,\\\\x6d6573736167655f335f6865616465725f335f6669727374)\",\"(duplicates,\\\\x6d6573736167655f335f6865616465725f335f7365636f6e64)\",\"(duplicates,\\\\x6d6573736167655f335f6865616465725f335f7468697264)\"}"
