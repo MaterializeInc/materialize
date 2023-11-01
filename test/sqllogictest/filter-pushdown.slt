@@ -311,3 +311,63 @@ Source materialize.public.t
   pushdown=((timestamp_to_mz_timestamp(case when (#0 = 0) then (#1 - 1 day) else (#1 - 2 days) end) < mz_now()))
 
 EOF
+
+# Regression test: should not report pushdown when one case can't be pushed down / might throw an exception.
+# (We don't infer a range for the result of EXTRACT, so the overall expression may overflow.)
+
+statement ok
+CREATE TABLE items(id int, ship_time timestamp);
+
+query T multiline
+EXPLAIN WITH(filter_pushdown)
+SELECT * from items
+WHERE mz_now() <= date_trunc(
+    'month',
+    ship_time
+    - (
+        CASE WHEN EXTRACT(MONTH FROM ship_time) < 6 THEN EXTRACT(MONTH FROM ship_time) + 6 ELSE 0 END
+        + CASE WHEN EXTRACT(MONTH FROM ship_time) >= 6 THEN EXTRACT(MONTH FROM ship_time) - 6 ELSE 0 END
+    )
+    * INTERVAL '1 months'
+)
+----
+Explained Query:
+  Project (#0, #1)
+    Filter (mz_now() <= timestamp_to_mz_timestamp(date_trunc_month_ts((#1 - (1 month * numeric_to_double((case when (#2 < 6) then (extract_month_ts(#1) + 6) else 0 end + case when (#2 >= 6) then (extract_month_ts(#1) - 6) else 0 end)))))))
+      Map (extract_month_ts(#1))
+        ReadStorage materialize.public.items
+
+Source materialize.public.items
+  filter=((mz_now() <= timestamp_to_mz_timestamp(date_trunc_month_ts((#1 - (1 month * numeric_to_double((case when (#2 < 6) then (extract_month_ts(#1) + 6) else 0 end + case when (#2 >= 6) then (extract_month_ts(#1) - 6) else 0 end))))))))
+  map=(extract_month_ts(#1))
+
+EOF
+
+query T multiline
+explain with(filter_pushdown)
+SELECT * from items
+WHERE CASE WHEN id = 10 THEN EXTRACT(MONTH FROM ship_time) ELSE 0 END < mz_now();
+----
+Explained Query:
+  Filter (numeric_to_mz_timestamp(case when (#0 = 10) then extract_month_ts(#1) else 0 end) < mz_now())
+    ReadStorage materialize.public.items
+
+Source materialize.public.items
+  filter=((numeric_to_mz_timestamp(case when (#0 = 10) then extract_month_ts(#1) else 0 end) < mz_now()))
+
+EOF
+
+query T multiline
+explain with(filter_pushdown)
+SELECT * from items
+WHERE CASE WHEN EXTRACT(MONTH FROM ship_time) >= 6 THEN 12 ELSE 0 END < mz_now();
+----
+Explained Query:
+  Filter (integer_to_mz_timestamp(case when (extract_month_ts(#1) >= 6) then 12 else 0 end) < mz_now())
+    ReadStorage materialize.public.items
+
+Source materialize.public.items
+  filter=((integer_to_mz_timestamp(case when (extract_month_ts(#1) >= 6) then 12 else 0 end) < mz_now()))
+  pushdown=((integer_to_mz_timestamp(case when (extract_month_ts(#1) >= 6) then 12 else 0 end) < mz_now()))
+
+EOF

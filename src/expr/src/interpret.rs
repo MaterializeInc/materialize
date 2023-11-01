@@ -898,33 +898,73 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
 /// An interpreter that returns whether or not a particular expression is "pushdownable".
 /// Broadly speaking, an expression is pushdownable if the result of evaluating the expression
 /// depends on the range of possible column values in a way that `ColumnSpecs` is able to reason about.
-/// `Column` is trivially pushdownable; `Literal` and `CallUnmaterializable`
-/// are not, since their results don't depend on the range of possible values in any column.
 ///
-/// Functions are the most complex case. We say that a function is pushdownable for a particular
-/// argument if `ColumnSpecs` can determine the spec of the function's output given the input spec for
-/// that argument. (In practice, this is true when either the function is monotone in that argument
-/// or it's been special-cased in the interpreter.) And we say a function-call expression is
-/// pushdownable overall if at least one of its arguments is pushdownable, and the function is
-/// is pushdownable in that argument. For example, `3 + #0` is pushdownable (because the second
-/// argument to `+` is pushdownable and `+` is monotone) but `3 / #0` is not (because while the
-/// second argument is pushdownable, `/` is not monotone on the right-hand side).
+/// In practice, we internally need to distinguish between expressions that are trivially predicable
+/// (because they're constant) and expressions that depend on the column ranges themselves.
+/// See the [TraceSummary] variants for those distinctions, and [TraceSummary::pushdownable] for
+/// the overall assessment.
 #[derive(Debug)]
 pub struct Trace;
 
+/// A summary type for the [Trace] interpreter.
+///
+/// The ordering of this type is meaningful: the "smaller" the summary, the more information we have
+/// about the possible values of the expression. This means we can eg. use `max` in the
+/// interpreter below to find the summary for a function-call expression based on the summaries
+/// of its arguments.
+#[derive(Copy, Clone, Debug, PartialOrd, PartialEq, Ord, Eq)]
+pub enum TraceSummary {
+    /// The expression is constant: we can evaluate it without any runtime information.
+    /// This corresponds to a `ResultSpec` of a single value.
+    Constant,
+    /// The expression depends on runtime information, but in "predictable" way... ie. if we know
+    /// the range of possible values for all columns and unmaterializable functions, we can
+    /// predict the possible values of the output.
+    /// This corresponds to a `ResultSpec` of a perhaps range of values.
+    Dynamic,
+    /// The expression depends on runtime information in an unpredictable way.
+    /// This corresponds to a `ResultSpec::value_all()` or something similarly vague.
+    Unknown,
+}
+
+impl TraceSummary {
+    /// We say that a function is "pushdownable" for a particular
+    /// argument if `ColumnSpecs` can determine the spec of the function's output given the input spec for
+    /// that argument. (In practice, this is true when either the function is monotone in that argument
+    /// or it's been special-cased in the interpreter.)
+    fn apply_fn(self, pushdownable: bool) -> Self {
+        match self {
+            TraceSummary::Constant => TraceSummary::Constant,
+            TraceSummary::Dynamic => match pushdownable {
+                true => TraceSummary::Dynamic,
+                false => TraceSummary::Unknown,
+            },
+            TraceSummary::Unknown => TraceSummary::Unknown,
+        }
+    }
+
+    /// We say that an expression is "pushdownable" if it's either constant or dynamic.
+    pub fn pushdownable(self) -> bool {
+        match self {
+            TraceSummary::Constant | TraceSummary::Dynamic => true,
+            TraceSummary::Unknown => false,
+        }
+    }
+}
+
 impl Interpreter for Trace {
-    type Summary = bool;
+    type Summary = TraceSummary;
 
     fn column(&self, _id: usize) -> Self::Summary {
-        true
+        TraceSummary::Dynamic
     }
 
     fn literal(&self, _result: &Result<Row, EvalError>, _col_type: &ColumnType) -> Self::Summary {
-        false
+        TraceSummary::Constant
     }
 
     fn unmaterializable(&self, _func: &UnmaterializableFunc) -> Self::Summary {
-        false
+        TraceSummary::Dynamic
     }
 
     fn unary(&self, func: &UnaryFunc, expr: Self::Summary) -> Self::Summary {
@@ -932,7 +972,7 @@ impl Interpreter for Trace {
             None => func.is_monotone(),
             Some(special) => special.pushdownable,
         };
-        expr && pushdownable
+        expr.apply_fn(pushdownable)
     }
 
     fn binary(
@@ -941,30 +981,34 @@ impl Interpreter for Trace {
         left: Self::Summary,
         right: Self::Summary,
     ) -> Self::Summary {
-        // TODO: this is duplicative! If we have more than one or two special-cased functions
-        // we should find some way to share the list between `Trace` and `ColumnSpecs`.
         let (left_pushdownable, right_pushdownable) = match SpecialBinary::for_func(func) {
             None => func.is_monotone(),
             Some(special) => special.pushdownable,
         };
-        (left && left_pushdownable) || (right && right_pushdownable)
+        left.apply_fn(left_pushdownable)
+            .max(right.apply_fn(right_pushdownable))
     }
 
     fn variadic(&self, func: &VariadicFunc, exprs: Vec<Self::Summary>) -> Self::Summary {
         if !func.is_associative() && exprs.len() >= ColumnSpecs::MAX_EVAL_ARGS {
             // We can't efficiently evaluate functions with very large argument lists;
             // see the comment on ColumnSpecs::MAX_EVAL_ARGS for details.
-            return false;
+            return TraceSummary::Unknown;
         }
 
         let pushdownable_fn = func.is_monotone();
         exprs
             .into_iter()
-            .any(|pushdownable_arg| pushdownable_arg && pushdownable_fn)
+            .map(|pushdownable_arg| pushdownable_arg.apply_fn(pushdownable_fn))
+            .max()
+            .unwrap_or(TraceSummary::Constant)
     }
 
     fn cond(&self, cond: Self::Summary, then: Self::Summary, els: Self::Summary) -> Self::Summary {
-        cond || (then || els)
+        // We don't actually need to be able to predict the condition precisely to predict the output,
+        // since we can union the ranges of the two branches for a conservative estimate.
+        let cond = cond.min(TraceSummary::Dynamic);
+        cond.max(then).max(els)
     }
 }
 
@@ -1486,12 +1530,12 @@ mod tests {
                 func: BinaryFunc::AddInt64,
                 expr1: Box::new(MirScalarExpr::Column(1)),
                 expr2: Box::new(MirScalarExpr::CallUnary {
-                    func: UnaryFunc::AbsInt64(AbsInt64),
+                    func: UnaryFunc::NegInt64(NegInt64),
                     expr: Box::new(MirScalarExpr::Column(3)),
                 }),
             }),
         };
-        let pushdownable = Trace.expr(&expr);
-        assert!(pushdownable);
+        let summary = Trace.expr(&expr);
+        assert!(summary.pushdownable());
     }
 }
