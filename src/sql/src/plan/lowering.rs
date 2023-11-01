@@ -435,7 +435,7 @@ impl HirRelationExpr {
                                 let mut requires_nonexistent_column = false;
                                 #[allow(deprecated)]
                                 s.visit_columns(0, &mut |depth, col| {
-                                    if col.level == depth {
+                                    if col.level == 0 {
                                         requires_nonexistent_column |= col.column >= lowered_arity
                                     }
                                 });
