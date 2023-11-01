@@ -9,6 +9,7 @@
 
 import argparse
 import sys
+from pathlib import Path
 
 import pandas as pd
 from jupyter_core.command import main as jupyter_core_command_main
@@ -180,7 +181,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     benchmark_result = executor.run_workloads()
-    store_and_upload_results_to_buildkite(benchmark_result)
+    result_file_paths = store_results_in_files(benchmark_result)
+    upload_results_to_buildkite(result_file_paths)
 
     create_plots(benchmark_result)
     upload_plots_to_buildkite()
@@ -321,19 +323,29 @@ def upload_regressions_to_buildkite(outcome: RegressionOutcome) -> None:
     )
 
 
-def store_and_upload_results_to_buildkite(result: BenchmarkResult) -> None:
+def store_results_in_files(result: BenchmarkResult) -> list[Path]:
+    created_files = []
     for endpoint_name in result.get_endpoint_names():
         print(
             f"Writing results of {endpoint_name} to {paths.results_csv(endpoint_name)}"
         )
         df_total = result.get_df_total_by_endpoint_name(endpoint_name)
-        df_total.to_csv(paths.results_csv(endpoint_name))
+        file_path = paths.results_csv(endpoint_name)
+        df_total.to_csv(file_path)
+        created_files.append(file_path)
 
-        if buildkite.is_in_buildkite():
-            buildkite.upload_artifact(
-                paths.results_csv(endpoint_name).relative_to(paths.RESULTS_DIR),
-                cwd=paths.RESULTS_DIR,
-            )
+    return created_files
+
+
+def upload_results_to_buildkite(result_file_paths: list[Path]) -> None:
+    if not buildkite.is_in_buildkite():
+        return
+
+    for path in result_file_paths:
+        buildkite.upload_artifact(
+            path.relative_to(paths.RESULTS_DIR),
+            cwd=paths.RESULTS_DIR,
+        )
 
 
 def upload_plots_to_buildkite() -> None:
