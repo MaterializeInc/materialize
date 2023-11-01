@@ -253,8 +253,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         if dataflow.is_transient() {
             tracing::debug!(
                 name = %dataflow.debug_name,
-                import_ids = %dataflow.format_import_ids(),
-                export_ids = %dataflow.format_export_ids(),
+                import_ids = %dataflow.display_import_ids(),
+                export_ids = %dataflow.display_export_ids(),
                 as_of = ?as_of.elements(),
                 until = ?dataflow.until.elements(),
                 "creating dataflow",
@@ -262,8 +262,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         } else {
             tracing::info!(
                 name = %dataflow.debug_name,
-                import_ids = %dataflow.format_import_ids(),
-                export_ids = %dataflow.format_export_ids(),
+                import_ids = %dataflow.display_import_ids(),
+                export_ids = %dataflow.display_export_ids(),
                 as_of = ?as_of.elements(),
                 until = ?dataflow.until.elements(),
                 "creating dataflow",

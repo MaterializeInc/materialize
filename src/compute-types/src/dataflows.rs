@@ -10,6 +10,7 @@
 //! Types for describing dataflows.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::time::Duration;
 
 use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
@@ -248,7 +249,7 @@ where
     P: CollectionPlan,
 {
     /// Identifiers of imported objects (indexes and sources).
-    pub fn import_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+    pub fn import_ids(&self) -> impl Iterator<Item = GlobalId> + Clone + '_ {
         self.index_imports
             .keys()
             .chain(self.source_imports.keys())
@@ -256,7 +257,7 @@ where
     }
 
     /// Identifiers of exported objects (indexes and sinks).
-    pub fn export_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+    pub fn export_ids(&self) -> impl Iterator<Item = GlobalId> + Clone + '_ {
         self.index_exports
             .keys()
             .chain(self.sink_exports.keys())
@@ -273,14 +274,16 @@ where
             })
     }
 
-    /// Produce a readable string containing the import IDs of this dataflow.
-    pub fn format_import_ids(&self) -> String {
-        format_id_list(self.import_ids())
+    /// Produce a `Display`able value containing the import IDs of this dataflow.
+    pub fn display_import_ids(&self) -> impl fmt::Display + '_ {
+        use mz_ore::str::{bracketed, separated};
+        bracketed("[", "]", separated(", ", self.import_ids()))
     }
 
-    /// Produce a readable string containing the export IDs of this dataflow.
-    pub fn format_export_ids(&self) -> String {
-        format_id_list(self.export_ids())
+    /// Produce a `Display`able value containing the export IDs of this dataflow.
+    pub fn display_export_ids(&self) -> impl fmt::Display + '_ {
+        use mz_ore::str::{bracketed, separated};
+        bracketed("[", "]", separated(", ", self.export_ids()))
     }
 
     /// Whether this dataflow installs transient collections.
@@ -366,21 +369,6 @@ where
         let deps = self.depends_on(collection_id);
         deps.into_iter().filter(is_import).collect()
     }
-}
-
-fn format_id_list<I>(ids: I) -> String
-where
-    I: Iterator<Item = GlobalId>,
-{
-    let mut s = '['.to_string();
-    for id in ids {
-        if s.len() > 1 {
-            s.push_str(", ");
-        }
-        s.push_str(&id.to_string());
-    }
-    s.push(']');
-    s
 }
 
 impl<P: PartialEq, S: PartialEq, T: timely::PartialOrder> DataflowDescription<P, S, T> {
