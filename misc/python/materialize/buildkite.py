@@ -10,6 +10,7 @@
 """Buildkite utilities."""
 
 import os
+from pathlib import Path
 
 from materialize import git, spawn, ui
 
@@ -95,3 +96,15 @@ def find_modified_lines() -> set[tuple[str, int]]:
                 assert file_path
                 modified_lines.add((file_path, line_nr))
     return modified_lines
+
+
+def upload_artifact(path: Path | str, cwd: Path | None):
+    spawn.runv(
+        [
+            "buildkite-agent",
+            "artifact",
+            "upload",
+            path,
+        ],
+        cwd=cwd,
+    )
