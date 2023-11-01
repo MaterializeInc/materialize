@@ -7,7 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
+use std::fmt::Debug;
 use std::str::FromStr;
+use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
@@ -32,11 +36,7 @@ use mz_stash_types::STASH_VERSION;
 use mz_storage_types::sources::Timeline;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
-use std::collections::BTreeMap;
-use std::fmt::Debug;
-use std::sync::Arc;
-use std::time::Duration;
-use timely::progress::Antichain;
+use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tracing::debug;
 use uuid::Uuid;
 
@@ -431,7 +431,7 @@ impl PersistHandle {
         &mut self,
         upper: Timestamp,
     ) -> impl Iterator<Item = StateUpdate> + DoubleEndedIterator {
-        let snapshot = if upper > 0.into() {
+        let snapshot = if upper > Timestamp::minimum() {
             let since = self.read_handle.since().clone();
             let mut as_of = upper.saturating_sub(1);
             as_of.advance_by(since.borrow());
@@ -462,7 +462,7 @@ impl PersistHandle {
         &mut self,
         upper: Timestamp,
     ) -> impl Iterator<Item = StateUpdate> + DoubleEndedIterator {
-        let snapshot = if upper > 0.into() {
+        let snapshot = if upper > Timestamp::minimum() {
             let since = self.read_handle.since().clone();
             let mut as_of = upper.saturating_sub(1);
             as_of.advance_by(since.borrow());
@@ -531,23 +531,13 @@ impl PersistHandle {
         current_upper: Timestamp,
         next_upper: Timestamp,
     ) -> Result<(), CatalogError> {
-        let mut batch_builder = self
-            .write_handle
-            .builder(Antichain::from_elem(current_upper));
-        for StateUpdate { kind, ts, diff } in updates {
-            batch_builder
-                .add(&kind, &(), &ts, &diff)
-                .await
-                .expect("invalid usage");
-        }
-        let mut batch = batch_builder
-            .finish(Antichain::from_elem(next_upper))
-            .await
-            .expect("invalid usage");
+        let updates = updates
+            .into_iter()
+            .map(|update| ((update.kind, ()), update.ts, update.diff));
         match self
             .write_handle
-            .compare_and_append_batch(
-                &mut [&mut batch],
+            .compare_and_append(
+                updates,
                 Antichain::from_elem(current_upper),
                 Antichain::from_elem(next_upper),
             )
@@ -558,17 +548,14 @@ impl PersistHandle {
                 self.read_handle
                     .downgrade_since(&Antichain::from_elem(current_upper))
                     .await;
+                Ok(())
             }
-            Err(upper_mismatch) => {
-                return Err(DurableCatalogError::Fence(format!(
-                    "current catalog upper {:?} fenced by new catalog upper {:?}",
-                    upper_mismatch.expected, upper_mismatch.current
-                ))
-                .into())
-            }
+            Err(upper_mismatch) => Err(DurableCatalogError::Fence(format!(
+                "current catalog upper {:?} fenced by new catalog upper {:?}",
+                upper_mismatch.expected, upper_mismatch.current
+            ))
+            .into()),
         }
-
-        Ok(())
     }
 }
 
