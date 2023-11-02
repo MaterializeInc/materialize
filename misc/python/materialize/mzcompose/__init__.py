@@ -53,6 +53,8 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_try_parse_monotonic_iso8601_timestamp": "true",
     "enable_dangerous_functions": "true",
     "enable_disk_cluster_replicas": "true",
+    "disk_cluster_replicas_default": "true",
+    "enable_columnation_lgalloc": "true",
     "statement_logging_max_sample_rate": "1.0",
     "statement_logging_default_sample_rate": "1.0",
     # This needs to be kept in sync with the --variable-length-row-encoding
