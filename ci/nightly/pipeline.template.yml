@@ -230,6 +230,19 @@ steps:
     agents:
       queue: linux-x86_64
 
+  - id: ssh-connection-extended
+    label: Extended SSH connection tests
+    depends_on: build-x86_64
+    timeout_in_minutes: 45
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: ssh-connection
+          args: [--extended]
+    agents:
+      queue: linux-x86_64
+
+
   - group: Zippy
     key: zippy
     steps:
