@@ -243,6 +243,13 @@ impl Connection<InlinedConnection> {
             o => unreachable!("{o:?} is not an SSH connection"),
         }
     }
+
+    pub fn unwrap_csr(self) -> <InlinedConnection as ConnectionAccess>::Csr {
+        match self {
+            Self::Csr(conn) => conn,
+            o => unreachable!("{o:?} is not a Kafka connection"),
+        }
+    }
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]

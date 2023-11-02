@@ -18,8 +18,6 @@ use proptest::prelude::{Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use crate::connections::CsrConnection;
-
 use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
@@ -369,7 +367,7 @@ impl<C: ConnectionAccess> DataEncoding<C> {
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct AvroEncoding<C: ConnectionAccess = InlinedConnection> {
     pub schema: String,
-    pub csr_connection: Option<CsrConnection<C>>,
+    pub csr_connection: Option<C::Csr>,
     pub confluent_wire_format: bool,
 }
 
@@ -384,7 +382,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<AvroEncoding, R>
         } = self;
         AvroEncoding {
             schema,
-            csr_connection: csr_connection.map(|csr| csr.into_inline_connection(r)),
+            csr_connection: csr_connection.map(|csr| r.resolve_connection(csr).unwrap_csr()),
             confluent_wire_format,
         }
     }

@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 use timely::PartialOrder;
 
-use crate::connections::{CsrConnection, StringOrSecret};
+use crate::connections::StringOrSecret;
 use crate::controller::{CollectionMetadata, StorageError};
 
 use crate::connections::inline::{
@@ -569,7 +569,7 @@ pub enum KafkaSinkAvroFormatState<C: ConnectionAccess = InlinedConnection> {
     UnpublishedMaybe {
         key_schema: Option<String>,
         value_schema: String,
-        csr_connection: CsrConnection<C>,
+        csr_connection: C::Csr,
     },
     /// After communicating with the CSR, the IDs we've been given for the
     /// schemas.
@@ -591,7 +591,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkAvroFormatState, R>
             } => KafkaSinkAvroFormatState::UnpublishedMaybe {
                 key_schema,
                 value_schema,
-                csr_connection: csr_connection.into_inline_connection(r),
+                csr_connection: r.resolve_connection(csr_connection).unwrap_csr(),
             },
             Self::Published {
                 key_schema_id,
