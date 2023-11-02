@@ -5443,6 +5443,8 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-postgres",
+ "tracing",
+ "tracing-subscriber",
  "workspace-hack",
 ]
 
