@@ -25,7 +25,8 @@ s2 pg_catalog
 u3 public
 s4 mz_internal
 s5 information_schema
-u6 foo
+s6 mz_dangerous
+u7 foo
 
 statement ok
 DROP schema foo
@@ -44,7 +45,8 @@ s2 pg_catalog
 u3 public
 s4 mz_internal
 s5 information_schema
-u7 bar
+s6 mz_dangerous
+u8 bar
 
 statement ok
 CREATE DATABASE foo

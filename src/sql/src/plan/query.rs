@@ -70,7 +70,9 @@ use uuid::Uuid;
 
 use crate::catalog::{CatalogItemType, CatalogType, SessionCatalog};
 use crate::func::{self, Func, FuncSpec};
-use crate::names::{Aug, FullItemName, PartialItemName, ResolvedDataType, ResolvedItemName};
+use crate::names::{
+    Aug, FullItemName, PartialItemName, ResolvedDataType, ResolvedItemName, SchemaSpecifier,
+};
 use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::expr::{
@@ -3099,13 +3101,9 @@ fn invent_column_name(
                 };
 
                 if schema
-                    == ecx
-                        .qcx
-                        .scx
-                        .catalog
-                        .resolve_schema(None, mz_repr::namespaces::MZ_INTERNAL_SCHEMA)
-                        .expect("mz_internal schema must exist")
-                        .id()
+                    == &SchemaSpecifier::from(*ecx.qcx.scx.catalog.get_mz_internal_schema_id())
+                    || schema
+                        == &SchemaSpecifier::from(*ecx.qcx.scx.catalog.get_mz_dangerous_schema_id())
                 {
                     None
                 } else {

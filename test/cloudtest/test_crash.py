@@ -130,7 +130,7 @@ def test_crash_environmentd(mz: MaterializeApplication) -> None:
     before = get_replica()
 
     try:
-        mz.environmentd.sql("SELECT mz_internal.mz_panic('forced panic')")
+        mz.environmentd.sql("SELECT mz_dangerous.mz_panic('forced panic')")
     except InterfaceError:
         pass
     validate(mz, 2)
@@ -154,7 +154,7 @@ def test_crash_clusterd(mz: MaterializeApplication) -> None:
     )
     mz.environmentd.sql("CREATE TABLE crash_table (f1 TEXT)")
     mz.environmentd.sql(
-        "CREATE MATERIALIZED VIEW crash_view AS SELECT mz_internal.mz_panic(f1) FROM crash_table"
+        "CREATE MATERIALIZED VIEW crash_view AS SELECT mz_dangerous.mz_panic(f1) FROM crash_table"
     )
     mz.environmentd.sql("INSERT INTO crash_table VALUES ('forced panic')")
 

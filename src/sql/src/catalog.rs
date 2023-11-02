@@ -153,6 +153,9 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     /// Gets the mz_internal schema id.
     fn get_mz_internal_schema_id(&self) -> &SchemaId;
 
+    /// Gets the mz_dangerous schema id.
+    fn get_mz_dangerous_schema_id(&self) -> &SchemaId;
+
     /// Returns true if `schema` is an internal system schema, false otherwise
     fn is_system_schema(&self, schema: &str) -> bool;
 

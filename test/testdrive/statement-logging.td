@@ -28,7 +28,7 @@ statement_logging_sample_rate
 # Later, we need to ignore everything
 # that happened before the real test started. Sleep here,
 # so we can be sure that their `began_at` is different.
-> SELECT mz_internal.mz_sleep(1)
+> SELECT mz_dangerous.mz_sleep(1)
 <null>
 
 # Make it so we can query the tables later

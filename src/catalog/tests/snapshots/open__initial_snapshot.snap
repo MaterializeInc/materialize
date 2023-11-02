@@ -509,6 +509,106 @@ Snapshot {
             id: Some(
                 SchemaId {
                     value: Some(
+                        System(
+                            6,
+                        ),
+                    ),
+                },
+            ),
+        }: SchemaValue {
+            database_id: None,
+            name: "mz_dangerous",
+            owner_id: Some(
+                RoleId {
+                    value: Some(
+                        System(
+                            1,
+                        ),
+                    ),
+                },
+            ),
+            privileges: [
+                MzAclItem {
+                    grantee: Some(
+                        RoleId {
+                            value: Some(
+                                Public(
+                                    Empty,
+                                ),
+                            ),
+                        },
+                    ),
+                    grantor: Some(
+                        RoleId {
+                            value: Some(
+                                System(
+                                    1,
+                                ),
+                            ),
+                        },
+                    ),
+                    acl_mode: Some(
+                        AclMode {
+                            bitflags: 256,
+                        },
+                    ),
+                },
+                MzAclItem {
+                    grantee: Some(
+                        RoleId {
+                            value: Some(
+                                System(
+                                    2,
+                                ),
+                            ),
+                        },
+                    ),
+                    grantor: Some(
+                        RoleId {
+                            value: Some(
+                                System(
+                                    1,
+                                ),
+                            ),
+                        },
+                    ),
+                    acl_mode: Some(
+                        AclMode {
+                            bitflags: 256,
+                        },
+                    ),
+                },
+                MzAclItem {
+                    grantee: Some(
+                        RoleId {
+                            value: Some(
+                                System(
+                                    1,
+                                ),
+                            ),
+                        },
+                    ),
+                    grantor: Some(
+                        RoleId {
+                            value: Some(
+                                System(
+                                    1,
+                                ),
+                            ),
+                        },
+                    ),
+                    acl_mode: Some(
+                        AclMode {
+                            bitflags: 768,
+                        },
+                    ),
+                },
+            ],
+        },
+        SchemaKey {
+            id: Some(
+                SchemaId {
+                    value: Some(
                         User(
                             3,
                         ),
@@ -910,7 +1010,7 @@ Snapshot {
         IdAllocKey {
             name: "schema",
         }: IdAllocValue {
-            next_id: 6,
+            next_id: 7,
         },
         IdAllocKey {
             name: "storage_usage",

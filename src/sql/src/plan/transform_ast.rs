@@ -14,7 +14,7 @@
 //! but for now we just use the parser's AST directly.
 
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
-use mz_repr::namespaces::{MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, PG_CATALOG_SCHEMA};
+use mz_repr::namespaces::{MZ_CATALOG_SCHEMA, MZ_DANGEROUS_SCHEMA, PG_CATALOG_SCHEMA};
 use mz_sql_parser::ast::visit_mut::{self, VisitMut, VisitMutNode};
 use mz_sql_parser::ast::{
     Expr, Function, FunctionArgs, Ident, Op, OrderByExpr, Query, Select, SelectItem, TableAlias,
@@ -155,7 +155,7 @@ impl<'a> FuncRewriter<'a> {
             )
             .call_unary(
                 self.scx
-                    .dangerous_resolve_name(vec![MZ_INTERNAL_SCHEMA, "mz_avg_promotion"]),
+                    .dangerous_resolve_name(vec![MZ_DANGEROUS_SCHEMA, "mz_avg_promotion"]),
             );
         let count = self.plan_agg(
             self.scx
@@ -189,7 +189,7 @@ impl<'a> FuncRewriter<'a> {
             )
             .call_unary(
                 self.scx.dangerous_resolve_name(vec![
-                    MZ_INTERNAL_SCHEMA,
+                    MZ_DANGEROUS_SCHEMA,
                     "mz_avg_promotion_internal_v1",
                 ]),
             );
@@ -229,7 +229,7 @@ impl<'a> FuncRewriter<'a> {
         //
         let expr = expr.call_unary(
             self.scx
-                .dangerous_resolve_name(vec![MZ_INTERNAL_SCHEMA, "mz_avg_promotion"]),
+                .dangerous_resolve_name(vec![MZ_DANGEROUS_SCHEMA, "mz_avg_promotion"]),
         );
         let expr_squared = expr.clone().multiply(expr.clone());
         let sum_squares = self.plan_agg(
@@ -667,7 +667,7 @@ impl<'a> Desugarer<'a> {
 
         // `$expr = ALL ($subquery)`
         // =>
-        // `(SELECT mz_internal.mz_all($expr = $binding) FROM ($subquery) AS _ ($binding))
+        // `(SELECT mz_dangerous.mz_all($expr = $binding) FROM ($subquery) AS _ ($binding))
         //
         // and analogously for other operators and ANY.
         if let Expr::AnySubquery { left, op, right } | Expr::AllSubquery { left, op, right } = expr
@@ -711,8 +711,8 @@ impl<'a> Desugarer<'a> {
                             },
                         )
                         .call_unary(self.scx.dangerous_resolve_name(match expr {
-                            Expr::AnySubquery { .. } => vec![MZ_INTERNAL_SCHEMA, "mz_any"],
-                            Expr::AllSubquery { .. } => vec![MZ_INTERNAL_SCHEMA, "mz_all"],
+                            Expr::AnySubquery { .. } => vec![MZ_DANGEROUS_SCHEMA, "mz_any"],
+                            Expr::AllSubquery { .. } => vec![MZ_DANGEROUS_SCHEMA, "mz_all"],
                             _ => unreachable!(),
                         })),
                     alias: None,

@@ -962,7 +962,7 @@ $ kafka-ingest format=avro topic=kafka-recovery key-format=avro key-schema=${{ke
 {self.n()}
 
 # Give time for any background tasks (e.g. compaction) to settle down
-> SELECT mz_internal.mz_sleep(10)
+> SELECT mz_dangerous.mz_sleep(10)
 <null>
 """
         )

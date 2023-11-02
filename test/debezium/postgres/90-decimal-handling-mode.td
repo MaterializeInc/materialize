@@ -55,7 +55,7 @@ $ http-request method=PUT url=http://debezium:8083/connectors/psql-connector/con
 
 # PUT requests do not take effect immediately, we need to sleep
 
-> SELECT mz_internal.mz_sleep(10)
+> SELECT mz_dangerous.mz_sleep(10)
 <null>
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -95,7 +95,7 @@ $ http-request method=PUT url=http://debezium:8083/connectors/psql-connector/con
   "topic.prefix": "postgres"
 }
 
-> SELECT mz_internal.mz_sleep(10)
+> SELECT mz_dangerous.mz_sleep(10)
 <null>
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -134,5 +134,5 @@ $ http-request method=PUT url=http://debezium:8083/connectors/psql-connector/con
   "topic.prefix": "postgres"
 }
 
-> SELECT mz_internal.mz_sleep(10)
+> SELECT mz_dangerous.mz_sleep(10)
 <null>

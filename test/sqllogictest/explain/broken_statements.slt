@@ -39,27 +39,27 @@ mode cockroach
 # EXPLAIN RAW PLAN
 statement ok
 EXPLAIN RAW PLAN FOR BROKEN
-SELECT mz_internal.mz_panic('forced panic');
+SELECT mz_dangerous.mz_panic('forced panic');
 
 # EXPLAIN DECORRELATED PLAN
 statement ok
 EXPLAIN DECORRELATED PLAN FOR BROKEN
-SELECT mz_internal.mz_panic('forced panic');
+SELECT mz_dangerous.mz_panic('forced panic');
 
 # EXPLAIN OPTIMIZED PLAN
 statement error internal error: stage `optimize/global` not present
 EXPLAIN OPTIMIZED PLAN FOR BROKEN
-SELECT mz_internal.mz_panic('forced panic');
+SELECT mz_dangerous.mz_panic('forced panic');
 
 # EXPLAIN PHYSICAL PLAN
 statement error internal error: stage `optimize/finalize_dataflow` not present
 EXPLAIN PHYSICAL PLAN FOR BROKEN
-SELECT mz_internal.mz_panic('forced panic');
+SELECT mz_dangerous.mz_panic('forced panic');
 
 # EXPLAIN OPTIMIZER TRACE
 statement ok
 EXPLAIN OPTIMIZER TRACE FOR BROKEN
-SELECT mz_internal.mz_panic('forced panic');
+SELECT mz_dangerous.mz_panic('forced panic');
 
 
 # EXPLAIN ... BROKEN CREATE MATERIALIZED VIEW
@@ -69,31 +69,31 @@ SELECT mz_internal.mz_panic('forced panic');
 statement ok
 EXPLAIN RAW PLAN FOR BROKEN
 CREATE MATERIALIZED VIEW mv AS
-SELECT mz_internal.mz_panic('forced panic');
+SELECT mz_dangerous.mz_panic('forced panic');
 
 # EXPLAIN DECORRELATED PLAN
 statement ok
 EXPLAIN DECORRELATED PLAN FOR BROKEN
 CREATE MATERIALIZED VIEW mv AS
-SELECT mz_internal.mz_panic('forced panic');
+SELECT mz_dangerous.mz_panic('forced panic');
 
 # EXPLAIN OPTIMIZED PLAN
 statement error internal error: stage `optimize/global` not present
 EXPLAIN OPTIMIZED PLAN FOR BROKEN
 CREATE MATERIALIZED VIEW mv AS
-SELECT mz_internal.mz_panic('forced panic');
+SELECT mz_dangerous.mz_panic('forced panic');
 
 # EXPLAIN PHYSICAL PLAN
 statement error internal error: stage `optimize/finalize_dataflow` not present
 EXPLAIN PHYSICAL PLAN FOR BROKEN
 CREATE MATERIALIZED VIEW mv AS
-SELECT mz_internal.mz_panic('forced panic');
+SELECT mz_dangerous.mz_panic('forced panic');
 
 # EXPLAIN OPTIMIZER TRACE
 statement ok
 EXPLAIN OPTIMIZER TRACE FOR BROKEN
 CREATE MATERIALIZED VIEW mv AS
-SELECT mz_internal.mz_panic('forced panic');
+SELECT mz_dangerous.mz_panic('forced panic');
 
 
 # EXPLAIN ... BROKEN CREATE INDEX

@@ -92,8 +92,8 @@ $ set-regex match=(\s\(u\d+\)|\n|materialize\.public\.) replacement=
 # TODO (https://github.com/MaterializeInc/materialize/issues/6262):  Avoid simplifying mz_sleep.
 
 > EXPLAIN SELECT * FROM t1
-  WHERE mz_internal.mz_sleep(col_not_null) > mz_internal.mz_sleep(col_not_null)
-  AND (mz_internal.mz_sleep(col_not_null) > mz_internal.mz_sleep(col_not_null) = true);
+  WHERE mz_dangerous.mz_sleep(col_not_null) > mz_dangerous.mz_sleep(col_not_null)
+  AND (mz_dangerous.mz_sleep(col_not_null) > mz_dangerous.mz_sleep(col_not_null) = true);
 "Explained Query (fast path):  Project (#0, #1)    Filter (#2 > #2)      Map (mz_sleep(integer_to_double(#1)))        ReadIndex on=t1 t1_primary_idx=[*** full scan ***]Used Indexes:  - t1_primary_idx (*** full scan ***)"
 
 # IN list inside the expression

@@ -36,14 +36,14 @@ class StatementLogging(Check):
                 > SET statement_logging_sample_rate TO 1.0
                 > SELECT 'hello' /* Btv was here */;
                 hello
-                > SELECT mz_internal.mz_sleep(5);
+                > SELECT mz_dangerous.mz_sleep(5);
                 <null>
                 """,
                 """
                 > SET statement_logging_sample_rate TO 1.0
                 > SELECT 'goodbye' /* Btv was here */;
                 goodbye
-                > SELECT mz_internal.mz_sleep(5);
+                > SELECT mz_dangerous.mz_sleep(5);
                 <null>
                 """,
             ]
