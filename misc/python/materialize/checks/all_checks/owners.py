@@ -193,7 +193,6 @@ class Owners(Check):
             # materialize role is not allowed to drop the objects since it is
             # not the owner, verify this:
             (
-                # Requires enable_ld_rbac_checks
                 (
                     self._drop_objects("materialize", 1, success=False, expensive=True)
                     + self._drop_objects(

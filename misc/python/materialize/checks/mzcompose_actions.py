@@ -114,7 +114,9 @@ class ConfigureMz(MzcomposeAction):
         if e.current_mz_version >= MzVersion(0, 47, 0):
             system_settings.add("ALTER SYSTEM SET enable_rbac_checks TO true;")
 
-        if e.current_mz_version >= MzVersion.parse("0.51.0-dev"):
+        if e.current_mz_version >= MzVersion.parse(
+            "0.51.0-dev"
+        ) and e.current_mz_version < MzVersion.parse("0.76.0-dev"):
             system_settings.add("ALTER SYSTEM SET enable_ld_rbac_checks TO true;")
 
         if e.current_mz_version >= MzVersion.parse("0.52.0-dev"):

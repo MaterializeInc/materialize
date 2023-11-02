@@ -16,7 +16,6 @@ $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdri
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET enable_rbac_checks TO true;
-ALTER SYSTEM SET enable_ld_rbac_checks TO true;
 CREATE CONNECTION kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
 CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL '${testdrive.schema-registry-url}');
 CREATE TABLE t (a INT);
@@ -304,4 +303,3 @@ $ postgres-execute connection=mz_system
 DROP CONNECTION csr_conn;
 DROP CONNECTION kafka_conn;
 ALTER SYSTEM SET enable_rbac_checks TO false;
-ALTER SYSTEM SET enable_ld_rbac_checks TO false;

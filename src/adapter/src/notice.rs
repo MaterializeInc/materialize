@@ -88,7 +88,6 @@ pub enum AdapterNotice {
         name: String,
         reason: String,
     },
-    RbacSystemDisabled,
     RbacUserDisabled,
     RoleMembershipAlreadyExists {
         role_name: String,
@@ -164,7 +163,6 @@ impl AdapterNotice {
             AdapterNotice::UnimplementedIsolationLevel { .. } => Severity::Notice,
             AdapterNotice::DroppedSubscribe { .. } => Severity::Notice,
             AdapterNotice::BadStartupSetting { .. } => Severity::Notice,
-            AdapterNotice::RbacSystemDisabled => Severity::Notice,
             AdapterNotice::RbacUserDisabled => Severity::Notice,
             AdapterNotice::RoleMembershipAlreadyExists { .. } => Severity::Notice,
             AdapterNotice::RoleMembershipDoesNotExists { .. } => Severity::Warning,
@@ -208,7 +206,6 @@ impl AdapterNotice {
                     ServiceStatus::Ready => None,
                 }
             },
-            AdapterNotice::RbacSystemDisabled => Some("To enable RBAC please reach out to support with a request to turn RBAC on.".into()),
             AdapterNotice::RbacUserDisabled => Some("To enable RBAC globally run `ALTER SYSTEM SET enable_rbac_checks TO TRUE` as a superuser. TO enable RBAC for just this session run `SET enable_session_rbac_checks TO TRUE`.".into()),
             AdapterNotice::AlterIndexOwner {name: _} => Some("Change the ownership of the index's relation, instead.".into()),
             AdapterNotice::UnknownSessionDatabase(_) => Some(
@@ -247,7 +244,6 @@ impl AdapterNotice {
             AdapterNotice::UnimplementedIsolationLevel { .. } => SqlState::WARNING,
             AdapterNotice::DroppedSubscribe { .. } => SqlState::WARNING,
             AdapterNotice::BadStartupSetting { .. } => SqlState::WARNING,
-            AdapterNotice::RbacSystemDisabled => SqlState::WARNING,
             AdapterNotice::RbacUserDisabled => SqlState::WARNING,
             AdapterNotice::RoleMembershipAlreadyExists { .. } => SqlState::WARNING,
             AdapterNotice::RoleMembershipDoesNotExists { .. } => SqlState::WARNING,
@@ -351,13 +347,6 @@ impl fmt::Display for AdapterNotice {
             }
             AdapterNotice::BadStartupSetting { name, reason } => {
                 write!(f, "startup setting {name} not set: {reason}")
-            }
-            AdapterNotice::RbacSystemDisabled => {
-                write!(
-                    f,
-                    "RBAC is disabled so no role attributes or object ownership will be considered \
-                    when executing statements"
-                )
             }
             AdapterNotice::RbacUserDisabled => {
                 write!(

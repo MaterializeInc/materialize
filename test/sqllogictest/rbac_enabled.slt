@@ -11,12 +11,7 @@ mode cockroach
 
 reset-server
 
-# LD - false; Server - false; Session - false
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_ld_rbac_checks TO false;
-----
-COMPLETE 0
+# Server - false; Session - false
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_rbac_checks TO false;
@@ -31,32 +26,7 @@ SELECT mz_internal.is_rbac_enabled();
 ----
 false
 
-# LD - true; Server - false; Session - false
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_ld_rbac_checks TO true;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_ld_rbac_checks TO false;
-----
-COMPLETE 0
-
-statement ok
-SET enable_session_rbac_checks TO false;
-
-query B
-SELECT mz_internal.is_rbac_enabled();
-----
-false
-
-# LD - false; Server - true; Session - false
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_ld_rbac_checks TO false;
-----
-COMPLETE 0
+# Server - true; Session - false
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_rbac_checks TO true;
@@ -65,58 +35,13 @@ COMPLETE 0
 
 statement ok
 SET enable_session_rbac_checks TO false;
-
-query B
-SELECT mz_internal.is_rbac_enabled();
-----
-false
-
-# LD - false; Server - false; Session - true
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_ld_rbac_checks TO false;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_rbac_checks TO false;
-----
-COMPLETE 0
-
-statement ok
-SET enable_session_rbac_checks TO true
-
-query B
-SELECT mz_internal.is_rbac_enabled();
-----
-false
-
-# LD - true; Server - true; Session - false
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_ld_rbac_checks TO true;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_rbac_checks TO true;
-----
-COMPLETE 0
-
-statement ok
-SET enable_session_rbac_checks TO false
 
 query B
 SELECT mz_internal.is_rbac_enabled();
 ----
 true
 
-# LD - true; Server - false; Session - true
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_ld_rbac_checks TO true;
-----
-COMPLETE 0
+# Server - false; Session - true
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_rbac_checks TO false;
@@ -131,32 +56,7 @@ SELECT mz_internal.is_rbac_enabled();
 ----
 true
 
-# LD - false; Server - true; Session - true
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_ld_rbac_checks TO false;
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_rbac_checks TO true;
-----
-COMPLETE 0
-
-statement ok
-SET enable_session_rbac_checks TO true
-
-query B
-SELECT mz_internal.is_rbac_enabled();
-----
-false
-
-# LD - true; Server - true; Session - true
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_ld_rbac_checks TO true;
-----
-COMPLETE 0
+# Server - true; Session - true
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_rbac_checks TO true;
@@ -172,11 +72,6 @@ SELECT mz_internal.is_rbac_enabled();
 true
 
 # Turn everything off
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_ld_rbac_checks TO false;
-----
-COMPLETE 0
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_rbac_checks TO false;

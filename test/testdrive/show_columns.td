@@ -21,8 +21,6 @@ SHOW COLUMNS FROM t
 # enable RBAC
 
 $ postgres-execute connection=mz_system
-ALTER SYSTEM SET enable_ld_rbac_checks=true;
-$ postgres-execute connection=mz_system
 ALTER SYSTEM SET enable_rbac_checks=true;
 
 $ postgres-execute connection=mz_system
