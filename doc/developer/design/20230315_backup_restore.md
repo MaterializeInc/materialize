@@ -45,8 +45,6 @@ This design is thus roughly composed of two distinct parts:
 - Backing up and restoring an individual Persist shard.
 - Coordinating the backup and restore process for the set of shards such that the state of the overall environment remains consistent.
 
-> 👉 We’ve chosen to highlight the most promising options in this section, but see the alternatives section below for other options and the tradeoffs between them.
-
 ## Single-shard backups
 
 ### Correctness
@@ -57,7 +55,7 @@ Persist is already a persistent datastructure: the full state of a shard is uniq
 
 We plan to take advantage of features built into our infrastructure:
 
-- [CRBC backups](https://www.cockroachlabs.com/docs/v22.2/change-data-capture-overview) capture the full state of the CRDB cluster as of a particular point in time.
+- [CRDB backups](https://www.cockroachlabs.com/docs/stable/backup) capture the full state of the CRDB cluster as of a particular point in time.
 - [S3 Versioning](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Versioning.html) permits keeping around old versions of the objects written to S3. (Deletes are translated into tombstones.) This is usually used in concert with an [S3 lifecycle policy](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lifecycle-mgmt.html), to avoid retaining data forever.
 
 To restore a shard at a particular time, we can:
@@ -91,13 +89,11 @@ This is straightforward to implement, and does not require any significant chang
 
 This is not _strictly_ safe, since CRDB is not a strictly serializable store; in particular, the docs [describe the risk of a causal reverse](https://www.cockroachlabs.com/blog/consistency-model/#as-of-system-timequeries-and-backups), where a read concurrent with updates A and B may observe B but not A, even if B is a real-time consequence of A. In the context of Materialize, if A is a compare-and-append and B is a compare-and-append on some downstream shard, a causal reverse could cause our backup of B to contain newer data than our backup of A, breaking correctness requirement 2.
 
-A causal reverse is expected to be very rare, and if encountered we can just try restoring another backup. However, [see below for a discussion of the alternatives](#conclusion-and-alternatives).
+A causal reverse is expected to be very rare, and if encountered we can just try restoring another backup.
 
 # Rollout
 
-We already capture CRDB changefeeds in some environments; we’ll need to enable this everywhere, and to make sure we’re choosing our retention carefully.
-
-We’ll also need to enable versioning and a lifecycle policy. We expect no problems with this, though there is always risk when changing a whole-bucket config; we’ll want to bake any change here in staging before moving to production.
+We already back up our CRDB data, and our S3 buckets enable versioning and a lifecycle policy.
 
 Since there’s no user-facing surface area to this feature, we do not expect to add additional code to the running environment. However, we will need code that can rewrite CRDB and update data in S3 while an environment is down. `persistcli` seems like a natural place for this, and ad-hoc restores can run as ad-hoc Kubernetes jobs.
 
@@ -107,17 +103,13 @@ The code we write for the restore process should be tested to the usual standard
 
 Since backups are often the recovery option of last resort, it’s useful to be able to test that the real-world production backups are working as expected. We should consider running a periodic job that restores a production backup to some secondary environment, brings that environment back up, and checks that the restored environment is healthy and can respond to queries.
 
-## Lifecycle
-
-Configuration changes like enabling S3 versioning apply bucket-wide, so they cannot be incrementally rolled out to users. We’ll want to roll these changes out carefully through staging.
-
-The restore process does not run in a user’s environment, so it does not go through the usual deployment lifecycle. However, any periodic restore testing we choose to run will need resources provisioned somewhere.
+The restore process does not run in a user’s environment, so it does not go through the usual deployment lifecycle. However, any periodic restore testing we choose to run would need resources provisioned somewhere.
 
 # Alternatives
 
 The proposed approach to backups leans pretty heavily on the specific choices of our blob and consensus stores, otherwise well-abstracted in the code. This means that any change in the stores we use would involve substantial rework of the approach to backup/restore. We consider this to be fairly low likelihood.
 
-The proposed CRDB backup strategy may lead to an unrestorable backup as of a particular CRDB timestamp if we experience a causal reverse. However, we expect this to be rare and easy to work around when it does occur.
+The proposed CRDB backup strategy may lead to an unrestorable backup if we experience a causal reverse. However, we expect this to be rare and straightforward to work around when it does occur.
 
 ## Alternatives to single-shard backups
 
@@ -137,13 +129,6 @@ If we’ve decided we don’t want to copy data, another option would be to teac
 
 ## Alternatives to whole-environment backups
 
-### Leverage CRDB full or incremental backups
-
-While the proposed backup/restore design uses CRDB changefeeds, it could just as easy take advantage of CRDB’s built-in functionality for full or incremental backups. This would also be able to take advantage of CRDB’s built-in restore mechanism instead of requiring us to “replay” a changefeed back into the database.
-
-- CRDB suggests doing full backups overnight. A high frequency of full backups may significantly increase the load on the database, in a relatively “spiky” way.
-- Persist causes a large amount of churn in CRDB: there are a small number of rows in the database with a relatively short lifetime. Incremental backups would require us to configure CRDB to store tombstones around for much longer than they already do, which we believe would have an unacceptable impact on read latency.
-
 ### Walking the dependency graph in `environmentd`
 
 Imagine a fictional controller that:
@@ -154,7 +139,7 @@ Imagine a fictional controller that:
 
 In this world, a toy backup algorithm for a whole Materialize environment might look like:
 
-- Add the the stash to the backup.
+- Add the stash to the backup.
 - Enumerate all the shards in the environment, according to the catalog as of the moment it was backed up.
 - For every shard S, in reverse dependency order (ie. if A depends on B, process A first):
     - Stop advancing the since hold that S places on its dependencies.
