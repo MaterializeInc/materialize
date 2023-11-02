@@ -9,6 +9,7 @@
 
 
 import math
+from typing import cast
 
 import pandas as pd
 from matplotlib.axes import Axes
@@ -80,12 +81,26 @@ def boxplot_latency_per_connections(
     endpoint_names = df_details_by_endpoint_name.keys()
     use_short_names = len(endpoint_names) > 2
 
-    fig_rows = 1 if len(concurrencies) < 5 else 2
-    fig_cols = math.ceil(len(concurrencies) / fig_rows)
-    subplots = figure.subplots(fig_rows, fig_cols, sharey=False)
+    num_rows = math.ceil(len(concurrencies) / 3)
+    num_cols = math.ceil(len(concurrencies) / num_rows)
+    use_no_grid = num_rows == 1 and num_cols == 1
+    use_single_row = num_rows == 1 and num_cols > 1
+
+    subplots = figure.subplots(num_rows, num_cols, sharey=False)
 
     for concurrency_index, concurrency in enumerate(concurrencies):
-        plot: Axes = subplots[concurrency_index]
+        if use_no_grid:
+            plot: Axes = cast(Axes, subplots)
+            is_in_first_column = True
+        elif use_single_row:
+            plot: Axes = subplots[concurrency_index]
+            is_in_first_column = concurrency_index == 0
+        else:
+            row = math.floor(concurrency_index / num_cols)
+            column = concurrency_index % num_cols
+            plot: Axes = cast(list[Axes], subplots[row])[column]
+            is_in_first_column = column == 0
+
         legend = []
 
         wallclocks_of_endpoints: list[list[float]] = []
@@ -108,7 +123,7 @@ def boxplot_latency_per_connections(
 
         plot.boxplot(wallclocks_of_endpoints, labels=legend)
 
-        if concurrency_index == 0:
+        if is_in_first_column:
             plot.set_ylabel("Latency in Seconds")
 
         plot.set_title(f"# connections: {concurrency}")
