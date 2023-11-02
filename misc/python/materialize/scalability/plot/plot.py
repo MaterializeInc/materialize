@@ -8,6 +8,9 @@
 # by the Apache License, Version 2.0.
 
 
+import math
+from typing import cast
+
 import pandas as pd
 from matplotlib.axes import Axes
 from matplotlib.figure import SubFigure
@@ -36,8 +39,7 @@ def scatterplot_tps_per_connections(
             max_concurrency, df_totals[df_totals_cols.CONCURRENCY].max()
         )
 
-    plot.set_xticks(range(0, max_concurrency + 1))
-    plot.set_ylabel("Transactions Per Second")
+    plot.set_ylabel("Transactions Per Second (tps)")
     plot.set_xlabel("Concurrent SQL Connections")
     plot.legend(legend)
 
@@ -76,16 +78,41 @@ def boxplot_latency_per_connections(
         df_details_cols.CONCURRENCY
     ].unique()
 
-    subplots = figure.subplots(1, len(concurrencies), sharey=True)
+    endpoint_names = df_details_by_endpoint_name.keys()
+    use_short_names = len(endpoint_names) > 2
+
+    num_rows = math.ceil(len(concurrencies) / 3)
+    num_cols = math.ceil(len(concurrencies) / num_rows)
+    use_no_grid = num_rows == 1 and num_cols == 1
+    use_single_row = num_rows == 1 and num_cols > 1
+
+    subplots = figure.subplots(num_rows, num_cols, sharey=False)
 
     for concurrency_index, concurrency in enumerate(concurrencies):
-        plot: Axes = subplots[concurrency_index]
+        if use_no_grid:
+            plot: Axes = cast(Axes, subplots)
+            is_in_first_column = True
+        elif use_single_row:
+            plot: Axes = subplots[concurrency_index]
+            is_in_first_column = concurrency_index == 0
+        else:
+            row = math.floor(concurrency_index / num_cols)
+            column = concurrency_index % num_cols
+            plot: Axes = cast(list[Axes], subplots[row])[column]
+            is_in_first_column = column == 0
+
+        assert type(plot) == Axes
         legend = []
 
         wallclocks_of_endpoints: list[list[float]] = []
 
         for endpoint_name, df_details in df_details_by_endpoint_name.items():
-            legend.append(endpoint_name)
+            formatted_endpoint_name = (
+                endpoint_name
+                if not use_short_names
+                else shorten_endpoint_name(endpoint_name)
+            )
+            legend.append(formatted_endpoint_name)
 
             df_details_of_concurrency = df_details.loc[
                 df_details[df_details_cols.CONCURRENCY] == concurrency
@@ -97,7 +124,14 @@ def boxplot_latency_per_connections(
 
         plot.boxplot(wallclocks_of_endpoints, labels=legend)
 
-        if concurrency_index == 0:
+        if is_in_first_column:
             plot.set_ylabel("Latency in Seconds")
 
-        plot.set_title(f"Concurrent SQL Connections: {concurrency}")
+        plot.set_title(f"# connections: {concurrency}")
+
+
+def shorten_endpoint_name(endpoint_name: str) -> str:
+    if " " not in endpoint_name:
+        return endpoint_name
+
+    return endpoint_name.split(" ")[0]

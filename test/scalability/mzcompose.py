@@ -295,7 +295,7 @@ def create_plots(result: BenchmarkResult) -> None:
         workload_name,
         results_by_endpoint,
     ) in result.get_df_total_by_workload_and_endpoint().items():
-        fig = plt.figure(layout="constrained", figsize=(16, 5))
+        fig = plt.figure(layout="constrained", figsize=(16, 6))
         (subfigure) = fig.subfigures(1, 1)
         scatterplot_tps_per_connections(subfigure, results_by_endpoint)
         plt.savefig(paths.plot_png("tps", workload_name), bbox_inches="tight", dpi=300)
@@ -304,7 +304,7 @@ def create_plots(result: BenchmarkResult) -> None:
         workload_name,
         results_by_endpoint,
     ) in result.get_df_details_by_workload_and_endpoint().items():
-        fig = plt.figure(layout="constrained", figsize=(16, 5))
+        fig = plt.figure(layout="constrained", figsize=(16, 10))
         (subfigure) = fig.subfigures(1, 1)
         boxplot_latency_per_connections(subfigure, results_by_endpoint)
         plt.savefig(

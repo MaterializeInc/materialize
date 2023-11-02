@@ -23,7 +23,7 @@ USE_BOXPLOT = True
 
 
 def plotit(workload_name: str) -> None:
-    fig = plt.figure(layout="constrained", figsize=(16, 10))
+    fig = plt.figure(layout="constrained", figsize=(16, 14))
     (tps_figure, latency_figure) = fig.subfigures(2, 1)
 
     df_totals_by_endpoint_name, df_details_by_endpoint_name = load_data_from_filesystem(
@@ -42,6 +42,7 @@ def load_data_from_filesystem(
     workload_name: str,
 ) -> tuple[dict[str, pd.DataFrame], dict[str, pd.DataFrame]]:
     endpoint_names = paths.get_endpoint_names_from_results_dir()
+    endpoint_names.sort()
 
     df_totals_by_endpoint_name = dict()
     df_details_by_endpoint_name = dict()
