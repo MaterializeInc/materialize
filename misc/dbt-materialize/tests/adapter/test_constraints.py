@@ -29,6 +29,11 @@ from dbt.tests.adapter.constraints.test_constraints import (
     BaseTableContractSqlHeader,
     BaseViewConstraintsColumnsEqual,
 )
+from dbt.tests.util import run_dbt, run_sql_with_adapter
+from fixtures import (
+    nullability_assertions_schema_yml,
+    test_materialized_view,
+)
 
 # Materialize does not support time zones or materializing session variables, so
 # override the original fixture.
@@ -95,6 +100,38 @@ class TestModelConstraintsRuntimeEnforcementMaterialize(
     BaseModelConstraintsRuntimeEnforcement
 ):
     pass
+
+
+class TestNullabilityAssertions:
+    @pytest.fixture(scope="class")
+    def models(self):
+        return {
+            "nullability_assertions_schema.yml": nullability_assertions_schema_yml,
+            "test_nullability_assertions_ddl.sql": test_materialized_view,
+        }
+
+    def test_ddl_enforcement(self, project):
+
+        nullability_assertions_model = ".".join(
+            [
+                project.adapter.config.credentials.database,
+                project.adapter.config.credentials.schema,
+                "test_nullability_assertions_ddl",
+            ]
+        )
+
+        run_dbt(["run"])
+
+        # confirm that the correct constraint DDL is generated
+        nullability_assertions_ddl = run_sql_with_adapter(
+            project.adapter,
+            f"SHOW CREATE MATERIALIZED VIEW {nullability_assertions_model}",
+            fetch="one",
+        )
+        assert (
+            'WITH (ASSERT NOT NULL "a", ASSERT NOT NULL "b")'
+            in nullability_assertions_ddl[1]
+        )
 
 
 class TestTableContractSqlHeaderMaterialize(BaseTableContractSqlHeader):

@@ -18,7 +18,7 @@ from dbt.tests.adapter.hooks import test_model_hooks as core_base
 test_materialized_view = """
 {{ config(materialized='materializedview') }}
 
-    SELECT * FROM (VALUES ('chicken', 'pig'), ('cow', 'horse'), (NULL, NULL)) _ (a, b)
+    SELECT * FROM (VALUES ('chicken', 'pig', 'bird'), ('cow', 'horse', 'bird'), (NULL, NULL, NULL)) _ (a, b, c)
 """
 
 test_materialized_view_index = """
@@ -230,4 +230,24 @@ create table {schema}.on_run_hook (
     invocation_id    TEXT,
     thread_id        TEXT
 )
+"""
+
+nullability_assertions_schema_yml = """
+version: 2
+models:
+  - name: test_nullability_assertions_ddl
+    config:
+      contract:
+        enforced: true
+    columns:
+      - name: a
+        data_type: string
+        constraints:
+          - type: not_null
+      - name: b
+        data_type: string
+        constraints:
+          - type: not_null
+      - name: c
+        data_type: string
 """
