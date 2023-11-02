@@ -8,6 +8,8 @@
 # by the Apache License, Version 2.0.
 
 
+import math
+
 import pandas as pd
 from matplotlib.axes import Axes
 from matplotlib.figure import SubFigure
@@ -36,8 +38,7 @@ def scatterplot_tps_per_connections(
             max_concurrency, df_totals[df_totals_cols.CONCURRENCY].max()
         )
 
-    plot.set_xticks(range(0, max_concurrency + 1))
-    plot.set_ylabel("Transactions Per Second")
+    plot.set_ylabel("Transactions Per Second (tps)")
     plot.set_xlabel("Concurrent SQL Connections")
     plot.legend(legend)
 
@@ -76,7 +77,12 @@ def boxplot_latency_per_connections(
         df_details_cols.CONCURRENCY
     ].unique()
 
-    subplots = figure.subplots(1, len(concurrencies), sharey=True)
+    endpoint_names = df_details_by_endpoint_name.keys()
+    use_short_names = len(endpoint_names) > 2
+
+    fig_rows = 1 if len(concurrencies) < 5 else 2
+    fig_cols = math.ceil(len(concurrencies) / fig_rows)
+    subplots = figure.subplots(fig_rows, fig_cols, sharey=False)
 
     for concurrency_index, concurrency in enumerate(concurrencies):
         plot: Axes = subplots[concurrency_index]
@@ -85,7 +91,12 @@ def boxplot_latency_per_connections(
         wallclocks_of_endpoints: list[list[float]] = []
 
         for endpoint_name, df_details in df_details_by_endpoint_name.items():
-            legend.append(endpoint_name)
+            formatted_endpoint_name = (
+                endpoint_name
+                if not use_short_names
+                else shorten_endpoint_name(endpoint_name)
+            )
+            legend.append(formatted_endpoint_name)
 
             df_details_of_concurrency = df_details.loc[
                 df_details[df_details_cols.CONCURRENCY] == concurrency
@@ -100,4 +111,11 @@ def boxplot_latency_per_connections(
         if concurrency_index == 0:
             plot.set_ylabel("Latency in Seconds")
 
-        plot.set_title(f"Concurrent SQL Connections: {concurrency}")
+        plot.set_title(f"# connections: {concurrency}")
+
+
+def shorten_endpoint_name(endpoint_name: str) -> str:
+    if " " not in endpoint_name:
+        return endpoint_name
+
+    return endpoint_name.split(" ")[0]
