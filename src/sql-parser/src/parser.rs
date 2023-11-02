@@ -3631,7 +3631,6 @@ impl<'a> Parser<'a> {
                     HEADERS => SourceIncludeMetadataType::Headers,
                     _ => unreachable!("only explicitly allowed items can be parsed"),
                 };
-
                 let alias = parser
                     .parse_keyword(AS)
                     .then(|| parser.parse_identifier())
@@ -3650,7 +3649,6 @@ impl<'a> Parser<'a> {
             .then(|| self.parse_identifier())
             .transpose()?;
         let use_bytes = self.parse_keyword(BYTES);
-
         let header = KafkaHeader { key, use_bytes };
 
         Ok(SourceIncludeMetadata {

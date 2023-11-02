@@ -1025,7 +1025,7 @@ fn construct_source_message(
                                     } else {
                                         match str::from_utf8(v) {
                                             Ok(str) => Datum::String(str),
-                                            Err(_) => Datum::Null, //FIXME(steffen): should an debug warning be emitted?
+                                            Err(_) => Datum::Null,
                                         }
                                     }
                                 }
