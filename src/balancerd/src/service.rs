@@ -12,9 +12,7 @@
 use std::net::SocketAddr;
 
 use jsonwebtoken::DecodingKey;
-use mz_balancerd::{
-    BalancerConfig, BalancerService, FronteggResolver, Metrics, Resolver, BUILD_INFO,
-};
+use mz_balancerd::{BalancerConfig, BalancerService, FronteggResolver, Resolver, BUILD_INFO};
 use mz_frontegg_auth::{Authentication, AuthenticationConfig};
 use mz_ore::metrics::MetricsRegistry;
 use mz_server_core::TlsCliArgs;
@@ -28,6 +26,8 @@ pub struct Args {
     https_listen_addr: SocketAddr,
     #[clap(flatten)]
     tls: TlsCliArgs,
+    #[clap(long, value_name = "HOST:PORT")]
+    internal_http_listen_addr: SocketAddr,
 
     /// Static pgwire resolver address to use for local testing.
     #[clap(long, value_name = "HOST:PORT")]
@@ -94,14 +94,15 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
     };
     let config = BalancerConfig::new(
         &BUILD_INFO,
+        args.internal_http_listen_addr,
         args.pgwire_listen_addr,
         args.https_listen_addr,
         resolver,
         args.https_resolver_template,
         args.tls.into_config()?,
+        metrics_registry,
     );
-    let metrics = Metrics::new(&config, &metrics_registry);
-    let service = BalancerService::new(config, metrics).await?;
+    let service = BalancerService::new(config).await?;
     service.serve().await?;
     info!("balancer service safely exited");
     Ok(())

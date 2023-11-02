@@ -81,9 +81,7 @@ use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use jsonwebtoken::{DecodingKey, EncodingKey};
-use mz_balancerd::{
-    BalancerConfig, BalancerService, FronteggResolver, Metrics, Resolver, BUILD_INFO,
-};
+use mz_balancerd::{BalancerConfig, BalancerService, FronteggResolver, Resolver, BUILD_INFO};
 use mz_environmentd::test_util::{self, make_pg_tls, start_mzcloud, Ca};
 use mz_frontegg_auth::{
     Authentication as FronteggAuthentication, AuthenticationConfig as FronteggConfig,
@@ -147,7 +145,7 @@ fn test_balancer() {
         // Enable SSL on the main port. There should be a balancerd port with no SSL.
         .with_tls(server_cert.clone(), server_key.clone())
         .with_frontegg(&frontegg_auth)
-        .with_metrics_registry(metrics_registry.clone());
+        .with_metrics_registry(metrics_registry);
     let envd_server = test_util::start_server(config).unwrap();
 
     // Ensure we could connect directly to envd without SSL on the balancer port.
@@ -177,16 +175,15 @@ fn test_balancer() {
             &BUILD_INFO,
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             resolver,
             envd_server.inner.http_local_addr().to_string(),
             cert_config.clone(),
+            MetricsRegistry::new(),
         );
-        let balancer_metrics = Metrics::new(&balancer_cfg, &MetricsRegistry::new());
-        let balancer_server = envd_server.runtime.block_on(async {
-            BalancerService::new(balancer_cfg, balancer_metrics)
-                .await
-                .unwrap()
-        });
+        let balancer_server = envd_server
+            .runtime
+            .block_on(async { BalancerService::new(balancer_cfg).await.unwrap() });
         let balancer_pgwire_listen = balancer_server.pgwire.0.local_addr();
         envd_server.runtime.spawn_named(|| "balancer", async {
             balancer_server.serve().await.unwrap();
