@@ -87,6 +87,9 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
 use clap::Parser;
+use once_cell::sync::Lazy;
+use tracing_subscriber::filter::EnvFilter;
+
 use mz_adapter::catalog::{Catalog, ClusterReplicaSizeMap, Config};
 use mz_build_info::{build_info, BuildInfo};
 use mz_catalog::durable::{
@@ -101,7 +104,6 @@ use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
 use mz_stash::{Stash, StashFactory};
 use mz_storage_controller as storage;
-use once_cell::sync::Lazy;
 
 pub const BUILD_INFO: BuildInfo = build_info!();
 pub static VERSION: Lazy<String> = Lazy::new(|| BUILD_INFO.human_version());
@@ -114,6 +116,12 @@ pub struct Args {
 
     #[clap(subcommand)]
     action: Action,
+
+    /// Which log messages to emit.
+    ///
+    /// See environmentd's `--log-filter` option for details.
+    #[clap(long, env = "LOG_FILTER", value_name = "FILTER", default_value = "off")]
+    log_filter: EnvFilter,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -165,6 +173,11 @@ async fn main() {
 }
 
 async fn run(args: Args) -> Result<(), anyhow::Error> {
+    tracing_subscriber::fmt()
+        .with_env_filter(args.log_filter)
+        .with_writer(io::stdout)
+        .init();
+
     let tls = mz_tls_util::make_tls(&tokio_postgres::config::Config::from_str(
         &args.postgres_url,
     )?)?;
