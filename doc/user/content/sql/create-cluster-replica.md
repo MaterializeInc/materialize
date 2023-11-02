@@ -51,7 +51,7 @@ to the new replica.
 
 ### Disk
 
-{{< private-preview />}}
+{{< public-preview />}}
 
 {{< warning >}}
 **Pricing for this feature is likely to change.**
