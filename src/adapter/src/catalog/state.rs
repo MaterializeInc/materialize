@@ -768,11 +768,11 @@ impl CatalogState {
         Ok(match plan {
             Plan::CreateView(CreateViewPlan { view, .. }) => {
                 if enable_unified_optimizer_api {
-                    // Collect optimizer parameters
+                    // Collect optimizer parameters.
                     let optimizer_config =
                         optimize::OptimizerConfig::from(session_catalog.system_vars());
 
-                    // Build a VIEW optimizer for this view.
+                    // Build an optimizer for this VIEW.
                     let mut optimizer = optimize::OptimizeView::new(optimizer_config);
 
                     // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
@@ -904,11 +904,11 @@ impl CatalogState {
             }),
             Plan::CreateView(CreateViewPlan { view, .. }) => {
                 if enable_unified_optimizer_api {
-                    // Collect optimizer parameters
+                    // Collect optimizer parameters.
                     let optimizer_config =
                         optimize::OptimizerConfig::from(session_catalog.system_vars());
 
-                    // Build a VIEW optimizer for this view.
+                    // Build an optimizer for this VIEW.
                     let mut optimizer = optimize::OptimizeView::new(optimizer_config);
 
                     // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)

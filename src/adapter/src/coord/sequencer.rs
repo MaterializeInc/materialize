@@ -298,10 +298,20 @@ impl Coordinator {
                 self.sequence_peek(ctx, plan, target_cluster).await;
             }
             Plan::Subscribe(plan) => {
-                let result = self
-                    .sequence_subscribe(&mut ctx, plan, target_cluster)
-                    .await;
-                ctx.retire(result);
+                if enable_unified_optimizer_api {
+                    let result = self
+                        .sequence_subscribe(&mut ctx, plan, target_cluster)
+                        .await;
+                    ctx.retire(result);
+                } else {
+                    // Allow while the introduction of the new optimizer API in
+                    // #20569 is in progress.
+                    #[allow(deprecated)]
+                    let result = self
+                        .sequence_subscribe_deprecated(&mut ctx, plan, target_cluster)
+                        .await;
+                    ctx.retire(result);
+                }
             }
             Plan::SideEffectingFunc(plan) => {
                 ctx.retire(self.sequence_side_effecting_func(plan));

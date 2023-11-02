@@ -137,7 +137,7 @@ use crate::coord::timestamp_oracle::catalog_oracle::CatalogTimestampPersistence;
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
-use crate::optimize::{self, Optimize, OptimizeMaterializedView, OptimizerConfig};
+use crate::optimize::{self, Optimize, OptimizerConfig};
 use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::subscribe::ActiveSubscribe;
@@ -1399,14 +1399,14 @@ impl Coordinator {
                             .or_insert_with(BTreeSet::new)
                             .insert(entry.id());
                     } else if enable_unified_optimizer_api {
-                        // Collect optimizer parameters
+                        // Collect optimizer parameters.
                         let compute_instance = self
                             .instance_snapshot(idx.cluster_id)
                             .expect("compute instance does not exist");
                         let optimizer_config =
                             OptimizerConfig::from(self.catalog().system_config());
 
-                        // Build an INDEX optimizer.
+                        // Build an optimizer for this INDEX.
                         let mut optimizer = optimize::OptimizeIndex::new(
                             self.owned_catalog(),
                             compute_instance,
@@ -1515,7 +1515,7 @@ impl Coordinator {
                         .storage_ids
                         .insert(entry.id());
 
-                    // Collect optimizer parameters
+                    // Collect optimizer parameters.
                     let compute_instance = self
                         .instance_snapshot(mview.cluster_id)
                         .expect("compute instance does not exist");
@@ -1526,8 +1526,8 @@ impl Coordinator {
                         .to_string();
                     let optimizer_config = OptimizerConfig::from(self.catalog().system_config());
 
-                    // Build a MATERIALIZED VIEW optimizer for this view.
-                    let mut optimizer = OptimizeMaterializedView::new(
+                    // Build an optimizer for this MATERIALIZED VIEW.
+                    let mut optimizer = optimize::OptimizeMaterializedView::new(
                         self.owned_catalog(),
                         compute_instance,
                         entry.id(),
