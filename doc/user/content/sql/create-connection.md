@@ -37,6 +37,7 @@ Field                                   | Value            | Required | Descript
 `BROKER`                                | `text`           | ✓        | The Kafka bootstrap server. Exclusive with `BROKERS`.
 `BROKERS`                               | `text[]`         |          | A comma-separated list of Kafka bootstrap servers. Exclusive with `BROKER`.
 `PROGRESS TOPIC`                        | `text`           |          | The name of a topic that Kafka sinks can use to track internal consistency metadata. If this is not specified, a default topic name will be selected.
+`SSH TUNNEL`                            | object name      |          | The name of an [SSH tunnel connection](#ssh-tunnel) to route network traffic through by default.
 
 #### `WITH` options {#kafka-with-options}
 
@@ -193,9 +194,9 @@ check [this guide](/ops/network-security/privatelink/).
 ##### Syntax {#kafka-ssh-syntax}
 
 {{< warning >}}
-If your Kafka cluster advertises brokers that are not specified
-in the `BROKERS` clause, Materialize will attempt to connect to
-those brokers without any tunneling.
+If you do not specify a default [`SSH TUNNEL`](#kafka-options) and your Kafka
+cluster advertises brokers that are not listed in `BROKERS` clause, Materialize
+will attempt to connect to those brokers without any tunneling.
 {{< /warning >}}
 
 {{< diagram "create-connection-kafka-brokers.svg" >}}
@@ -215,7 +216,10 @@ Field           | Value            | Required | Description
 ----------------|------------------|:--------:|-------------------------------
 `SSH TUNNEL`    | object name      | ✓        | The name of an [SSH tunnel connection](#ssh-tunnel) through which network traffic for this broker should be routed.
 
+
 ##### Example {#kafka-ssh-example}
+
+Using a default SSH tunnel:
 
 ```sql
 CREATE CONNECTION ssh_connection TO SSH TUNNEL (
@@ -225,10 +229,23 @@ CREATE CONNECTION ssh_connection TO SSH TUNNEL (
 );
 
 CREATE CONNECTION kafka_connection TO KAFKA (
+    BROKER 'broker1:9092',
+    SSH TUNNEL ssh_connection
+);
+```
+
+Using different SSH tunnels for each broker:
+
+```sql
+CREATE CONNECTION ssh1 TO SSH TUNNEL (HOST 'ssh1', ...);
+CREATE CONNECTION ssh2 TO SSH TUNNEL (HOST 'ssh2', ...);
+
+CREATE CONNECTION kafka_connection TO KAFKA (
 BROKERS (
-    'broker1:9092' USING SSH TUNNEL ssh_connection,
-    'broker2:9092' USING SSH TUNNEL ssh_connection
-    -- Add all Kafka brokers
+    'broker1:9092' USING SSH TUNNEL ssh1,
+    'broker2:9092' USING SSH TUNNEL ssh2
+    -- Add all Kafka brokers here. Connections to advertised brokers that are
+    -- not listed here will not be tunneled.
     )
 );
 ```
