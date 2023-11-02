@@ -430,7 +430,7 @@ pub struct Args {
     )]
     adapter_stash_url: Option<String>,
     /// The backing durable store of the catalog.
-    #[clap(long, arg_enum, env = "CATALOG_STORE", default_value("stash"))]
+    #[clap(long, arg_enum, env = "CATALOG_STORE", default_value("persist"))]
     catalog_store: CatalogKind,
 
     // === Bootstrap options. ===
