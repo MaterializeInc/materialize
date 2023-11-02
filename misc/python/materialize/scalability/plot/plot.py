@@ -101,6 +101,7 @@ def boxplot_latency_per_connections(
             plot: Axes = cast(list[Axes], subplots[row])[column]
             is_in_first_column = column == 0
 
+        assert type(plot) == Axes
         legend = []
 
         wallclocks_of_endpoints: list[list[float]] = []
