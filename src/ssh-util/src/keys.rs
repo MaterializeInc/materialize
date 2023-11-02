@@ -11,7 +11,6 @@
 
 use std::cmp::Ordering;
 use std::fmt;
-use std::hash::{Hash, Hasher};
 
 use openssl::pkey::{PKey, Private};
 use serde::de::{self, Deserializer, MapAccess, SeqAccess, Visitor};
@@ -74,18 +73,6 @@ impl SshKeyPair {
         self.key_pair
             .to_openssh(LineEnding::LF)
             .expect("encoding as OpenSSH cannot fail")
-    }
-}
-
-impl Hash for SshKeyPair {
-    fn hash<H>(&self, state: &mut H)
-    where
-        H: Hasher,
-    {
-        self.key_pair
-            .fingerprint(HashAlg::default())
-            .as_ref()
-            .hash(state)
     }
 }
 

@@ -101,15 +101,16 @@ impl SshTunnelManager {
                     if let SshTunnelStatus::Errored(e) = handle.check_status() {
                         error!(
                             "not using existing ssh tunnel \
-                            ({}:{} via {}@{}:{}) because its broken: {e}",
+                            ({}:{} via {}@{}:{}) because it's broken: {e}",
                             remote_host, remote_port, config.user, config.host, config.port,
                         );
 
-                        // This is bit unfortunate, as this method returns an `anyhow::Error`, but
-                        // the ssh status needs to share a cloneable `String`.
-                        // So we just package up the pre-`.to_string_with_causes()` error that
-                        // is at the bottom of the stack. In the future we can probably make ALL
-                        // ssh errors structured to avoid this.
+                        // This is bit unfortunate, as this method returns an
+                        // `anyhow::Error`, but the SSH status needs to share a
+                        // cloneable `String`. So we just package up the
+                        // pre-`.to_string_with_causes()` error that is at the
+                        // bottom of the stack. In the future we can probably
+                        // make ALL SSH errors structured to avoid this.
                         return Err(anyhow::anyhow!(e));
                     }
 
@@ -205,14 +206,6 @@ impl Deref for ManagedSshTunnelHandle {
 
     fn deref(&self) -> &SshTunnelHandle {
         &self.handle
-    }
-}
-
-impl ManagedSshTunnelHandle {
-    /// Return the current status of the `SshTunnelStatus`, by communicating with the
-    /// task running the ssh session.
-    pub fn check_status(&self) -> SshTunnelStatus {
-        self.handle.status.lock().expect("poisoned").clone()
     }
 }
 

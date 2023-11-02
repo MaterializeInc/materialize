@@ -330,19 +330,15 @@ impl<C> TunnelingClientContext<C> {
     /// Returns a _consolidated_ `SshTunnelStatus` that communicates the status
     /// of all active ssh tunnels `self` knows about.
     pub fn tunnel_status(&self) -> SshTunnelStatus {
-        let current_rewrites: Vec<_> = self
-            .rewrites
+        self.rewrites
             .lock()
             .expect("poisoned")
-            .iter()
-            .map(|(broker, status)| (broker.clone(), status.clone()))
-            .collect();
-
-        current_rewrites
-            .into_iter()
-            .map(|(_, handle)| match handle {
+            .values()
+            .map(|handle| match handle {
                 BrokerRewriteHandle::SshTunnel(s) => s.check_status(),
-                BrokerRewriteHandle::FailedDefaultSshTunnel(e) => SshTunnelStatus::Errored(e),
+                BrokerRewriteHandle::FailedDefaultSshTunnel(e) => {
+                    SshTunnelStatus::Errored(e.clone())
+                }
                 BrokerRewriteHandle::Simple(_) => SshTunnelStatus::Running,
             })
             .fold(SshTunnelStatus::Running, |acc, status| {

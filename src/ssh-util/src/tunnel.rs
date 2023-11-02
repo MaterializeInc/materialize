@@ -68,12 +68,12 @@ impl fmt::Debug for SshTunnelConfig {
     }
 }
 
-/// The status of a running ssh tunnel.
+/// The status of a running SSH tunnel.
 #[derive(Clone, Debug)]
 pub enum SshTunnelStatus {
-    /// The ssh tunnel is healthy.
+    /// The SSH tunnel is healthy.
     Running,
-    /// The ssh tunnel is broken, with the given error
+    /// The SSH tunnel is broken, with the given error message.
     Errored(String),
 }
 
@@ -114,14 +114,13 @@ impl SshTunnelConfig {
         };
         info!(%tunnel_id, %local_port, "connected to ssh tunnel");
         let local_port = Arc::new(AtomicU16::new(local_port));
-
         let status = Arc::new(Mutex::new(SshTunnelStatus::Running));
-        let task_status = Arc::clone(&status);
 
         let join_handle = task::spawn(|| format!("ssh_session_{remote_host}:{remote_port}"), {
             let config = self.clone();
             let remote_host = remote_host.to_string();
             let local_port = Arc::clone(&local_port);
+            let status = Arc::clone(&status);
             async move {
                 scopeguard::defer! {
                     info!(%tunnel_id, "terminating ssh tunnel");
@@ -139,10 +138,8 @@ impl SshTunnelConfig {
                             Ok(s) => s,
                             Err(e) => {
                                 warn!(%tunnel_id, "reconnection to ssh tunnel failed: {}", e.display_with_causes());
-
-                                *task_status.lock().expect("poisoned") =
+                                *status.lock().expect("poisoned") =
                                     SshTunnelStatus::Errored(e.to_string_with_causes());
-
                                 continue;
                             }
                         };
@@ -150,15 +147,15 @@ impl SshTunnelConfig {
                             Ok(lp) => lp,
                             Err(e) => {
                                 warn!(%tunnel_id, "reconnection to ssh tunnel failed: {}", e.display_with_causes());
-                                *task_status.lock().expect("poisoned") =
+                                *status.lock().expect("poisoned") =
                                     SshTunnelStatus::Errored(e.to_string_with_causes());
                                 continue;
                             }
                         };
                         session = s;
                         local_port.store(lp, Ordering::SeqCst);
+                        *status.lock().expect("poisoned") = SshTunnelStatus::Running;
                     }
-                    *task_status.lock().expect("poisoned") = SshTunnelStatus::Running;
                 }
             }
         });
@@ -182,7 +179,7 @@ impl SshTunnelConfig {
 #[derive(Debug)]
 pub struct SshTunnelHandle {
     local_port: Arc<AtomicU16>,
-    pub(crate) status: Arc<Mutex<SshTunnelStatus>>,
+    status: Arc<Mutex<SshTunnelStatus>>,
     _join_handle: AbortOnDropHandle<()>,
 }
 
@@ -194,6 +191,14 @@ impl SshTunnelHandle {
         // that can resolve to IPv6, and the SSH tunnel is only listening for
         // IPv4 connections.
         SocketAddr::from((Ipv4Addr::LOCALHOST, port))
+    }
+
+    /// Returns the current status of the SSH tunnel.
+    ///
+    /// Note this status may be stale, as the health of the underlying SSH
+    /// tunnel is only checked periodically.
+    pub fn check_status(&self) -> SshTunnelStatus {
+        self.status.lock().expect("poisoned").clone()
     }
 }
 
