@@ -852,15 +852,13 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
     pub async fn snapshot_and_fetch<K, V, D>(
         &self,
         data_read: &mut ReadHandle<K, V, T, D>,
-        // TODO(txn): It's quite surprising to require a WriteHandle for reads,
-        // see what we can do about making this nicer.
-        data_write: WriteHandle<K, V, T, D>,
     ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, Since<T>>
     where
         K: Debug + Codec + Ord,
         V: Debug + Codec + Ord,
         D: Semigroup + Codec64 + Send + Sync,
     {
+        let data_write = WriteHandle::from_read(data_read, "unblock_read");
         self.unblock_read(data_write).await;
         data_read
             .snapshot_and_fetch(Antichain::from_elem(self.as_of.clone()))
@@ -914,7 +912,7 @@ mod tests {
     use DataListenNext::*;
 
     use crate::operator::DataSubscribe;
-    use crate::tests::{reader, writer};
+    use crate::tests::reader;
     use crate::txns::TxnsHandle;
 
     use super::*;
@@ -937,11 +935,10 @@ mod tests {
             as_of: u64,
         ) -> Vec<String> {
             let mut data_read = reader(client, data_id).await;
-            let data_write = writer(client, data_id).await;
             self.update_gt(&as_of).await;
             let mut snapshot = self
                 .data_snapshot(data_read.shard_id(), as_of)
-                .snapshot_and_fetch(&mut data_read, data_write)
+                .snapshot_and_fetch(&mut data_read)
                 .await
                 .unwrap();
             snapshot.sort();
@@ -1118,10 +1115,7 @@ mod tests {
         let snap = txns.txns_cache.data_snapshot(d0, 4);
         let mut data_read = reader(&client, d0).await;
         // This shouldn't deadlock.
-        let contents = snap
-            .snapshot_and_fetch(&mut data_read, writer(&client, d0).await)
-            .await
-            .unwrap();
+        let contents = snap.snapshot_and_fetch(&mut data_read).await.unwrap();
         assert_eq!(contents.len(), 1);
 
         // Sanity check that the scenario played out like we said above.

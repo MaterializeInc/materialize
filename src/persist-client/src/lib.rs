@@ -650,31 +650,16 @@ impl PersistClient {
             key: key_schema,
             val: val_schema,
         };
-        let compact = self.cfg.compaction_enabled.then(|| {
-            Compactor::new(
-                self.cfg.clone(),
-                Arc::clone(&self.metrics),
-                Arc::clone(&self.isolated_runtime),
-                writer_id.clone(),
-                schemas.clone(),
-                gc.clone(),
-            )
-        });
-        let upper = machine.applier.clone_upper();
         let writer = WriteHandle::new(
             self.cfg.clone(),
             Arc::clone(&self.metrics),
             machine,
             gc,
-            compact,
             Arc::clone(&self.blob),
-            Arc::clone(&self.isolated_runtime),
             writer_id,
             &diagnostics.handle_purpose,
             schemas,
-            upper,
-        )
-        .await;
+        );
         Ok(writer)
     }
 
