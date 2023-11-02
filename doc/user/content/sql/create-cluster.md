@@ -102,7 +102,7 @@ time. You should not rely on them for any kind of capacity planning.
 
 ### Disk
 
-{{< private-preview />}}
+{{< public-preview />}}
 
 {{< warning >}}
 **Pricing for this feature is likely to change.**
