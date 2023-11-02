@@ -505,6 +505,7 @@ impl Coordinator {
                     | Statement::Execute(_)
                     | Statement::ExplainPlan(_)
                     | Statement::ExplainTimestamp(_)
+                    | Statement::ExplainSinkSchema(_)
                     | Statement::Fetch(_)
                     | Statement::Prepare(_)
                     | Statement::Rollback(_)

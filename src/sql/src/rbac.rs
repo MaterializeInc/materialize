@@ -769,6 +769,17 @@ fn generate_rbac_requirements(
             },
             ..Default::default()
         },
+        Plan::ExplainSinkSchema(plan::ExplainSinkSchemaPlan { sink_from, .. }) => {
+            RbacRequirements {
+                privileges: {
+                    let item = catalog.get_item(sink_from);
+                    let schema_id: ObjectId = item.name().qualifiers.clone().into();
+                    vec![(SystemObjectId::Object(schema_id), AclMode::USAGE, role_id)]
+                },
+                item_usage: &EMPTY_ITEM_USAGE,
+                ..Default::default()
+            }
+        }
         Plan::ExplainTimestamp(plan::ExplainTimestampPlan {
             format: _,
             raw_plan,

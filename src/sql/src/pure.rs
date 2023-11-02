@@ -165,18 +165,12 @@ pub async fn purify_statement(
     }
 }
 
-/// Checks that the sink described in the statement can connect to its external
-/// resources.
-///
-/// We must not leave any state behind in the Kafka broker, so just ensure that
-/// we can connect. This means we don't ensure that we can create the topic and
-/// introduces TOCTOU errors, but creating an inoperable sink is infinitely
-/// preferable to leaking state in users' environments.
-async fn purify_create_sink(
-    catalog: impl SessionCatalog,
-    mut stmt: CreateSinkStatement<Aug>,
-    connection_context: ConnectionContext,
-) -> Result<Statement<Aug>, PlanError> {
+/// Updates the CREATE SINK statement with materialize comments
+/// if `enable_sink_doc_on_option` feature flag is enabled
+pub(crate) fn add_materialize_comments(
+    catalog: &dyn SessionCatalog,
+    stmt: &mut CreateSinkStatement<Aug>,
+) -> Result<(), PlanError> {
     // updating avro format with comments so that they are frozen in the `create_sql`
     // only if the feature is enabled
     if catalog.system_vars().enable_sink_doc_on_option() {
@@ -266,7 +260,22 @@ async fn purify_create_sink(
             }
         }
     }
+    Ok(())
+}
 
+/// Checks that the sink described in the statement can connect to its external
+/// resources.
+///
+/// We must not leave any state behind in the Kafka broker, so just ensure that
+/// we can connect. This means we don't ensure that we can create the topic and
+/// introduces TOCTOU errors, but creating an inoperable sink is infinitely
+/// preferable to leaking state in users' environments.
+async fn purify_create_sink(
+    catalog: impl SessionCatalog,
+    mut stmt: CreateSinkStatement<Aug>,
+    connection_context: ConnectionContext,
+) -> Result<Statement<Aug>, PlanError> {
+    add_materialize_comments(&catalog, &mut stmt)?;
     // General purification
     let CreateSinkStatement {
         connection, format, ..

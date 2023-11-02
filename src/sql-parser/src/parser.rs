@@ -6881,6 +6881,9 @@ impl<'a> Parser<'a> {
         if self.parse_keyword(TIMESTAMP) {
             self.parse_explain_timestamp()
                 .map_parser_err(StatementKind::ExplainTimestamp)
+        } else if self.peek_keyword(KEY) || self.peek_keyword(VALUE) {
+            self.parse_explain_schema()
+                .map_parser_err(StatementKind::ExplainSinkSchema)
         } else {
             self.parse_explain_plan()
                 .map_parser_err(StatementKind::ExplainPlan)
@@ -7026,6 +7029,33 @@ impl<'a> Parser<'a> {
             format,
             query,
         }))
+    }
+    /// Parse an `EXPLAIN [KEY|VALUE] SCHEMA` statement assuming that the `EXPLAIN` token
+    /// have already been consumed
+    fn parse_explain_schema(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let schema_for = match self.expect_one_of_keywords(&[KEY, VALUE])? {
+            KEY => ExplainSinkSchemaFor::Key,
+            VALUE => ExplainSinkSchemaFor::Value,
+            _ => unreachable!(),
+        };
+
+        self.expect_keyword(SCHEMA)?;
+
+        if self.parse_keyword(AS) {
+            // only json format is supported
+            self.expect_keyword(JSON)?;
+        }
+
+        self.expect_keywords(&[FOR, CREATE])?;
+
+        if let Statement::CreateSink(statement) = self.parse_create_sink()? {
+            Ok(Statement::ExplainSinkSchema(ExplainSinkSchemaStatement {
+                schema_for,
+                statement,
+            }))
+        } else {
+            unreachable!("only create sink can be returned here");
+        }
     }
 
     /// Parse a `DECLARE` statement, assuming that the `DECLARE` token

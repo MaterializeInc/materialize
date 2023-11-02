@@ -31,6 +31,12 @@ pub fn json_string<T: DisplayJson>(t: &T) -> String {
     serde_json::to_string_pretty(&value).expect("JSON string")
 }
 
+impl DisplayJson for serde_json::Value {
+    fn to_serde_value(&self) -> serde_json::Result<serde_json::Value> {
+        Ok(self.to_owned())
+    }
+}
+
 impl DisplayJson for String {
     fn to_serde_value(&self) -> serde_json::Result<serde_json::Value> {
         Ok(serde_json::Value::String(self.clone()))

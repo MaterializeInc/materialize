@@ -642,7 +642,7 @@ impl ExecuteResponse {
             DropOwned => vec![DroppedOwned],
             PlanKind::EmptyQuery => vec![ExecuteResponseKind::EmptyQuery],
             ExplainPlan | ExplainTimestamp | Select | ShowAllVariables | ShowCreate
-            | ShowColumns | ShowVariable | InspectShard => {
+            | ShowColumns | ShowVariable | InspectShard | ExplainSinkSchema => {
                 vec![CopyTo, SendingRows, SendingRowsImmediate]
             }
             Execute | ReadThenWrite => vec![

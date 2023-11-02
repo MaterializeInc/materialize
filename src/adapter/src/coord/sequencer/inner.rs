@@ -32,6 +32,7 @@ use mz_ore::vec::VecExt;
 use mz_ore::{soft_assert, task};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
+use mz_repr::explain::json::json_string;
 use mz_repr::explain::{
     ExplainFormat, ExprHumanizer, ExprHumanizerExt, TransientItem, UsedIndexes,
 };
@@ -53,9 +54,9 @@ use mz_sql::names::{
 use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW_TS;
 use mz_adapter_types::connection::ConnectionId;
 use mz_sql::plan::{
-    AlterOptionParameter, Explainee, Index, IndexOption, MaterializedView, MutationKind, Params,
-    Plan, PlannedAlterRoleOption, PlannedRoleVariable, QueryWhen, SideEffectingFunc,
-    SourceSinkClusterConfig, UpdatePrivilege, VariableValue,
+    AlterOptionParameter, ExplainSinkSchemaPlan, Explainee, Index, IndexOption, MaterializedView,
+    MutationKind, Params, Plan, PlannedAlterRoleOption, PlannedRoleVariable, QueryWhen,
+    SideEffectingFunc, SourceSinkClusterConfig, UpdatePrivilege, VariableValue,
 };
 use mz_sql::session::vars::{
     IsolationLevel, OwnedVarInput, SessionVars, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
@@ -1716,6 +1717,20 @@ impl Coordinator {
             dropped_active_cluster,
             dropped_in_use_indexes,
         })
+    }
+
+    pub(super) fn sequence_explain_schema(
+        &mut self,
+        ExplainSinkSchemaPlan { json_schema, .. }: ExplainSinkSchemaPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let json_value: serde_json::Value = serde_json::from_str(&json_schema).map_err(|e| {
+            AdapterError::Explain(mz_repr::explain::ExplainError::SerdeJsonError(e))
+        })?;
+
+        let json_string = json_string(&json_value);
+        Ok(Self::send_immediate_rows(vec![Row::pack_slice(&[
+            Datum::String(&json_string),
+        ])]))
     }
 
     pub(super) fn sequence_show_all_variables(

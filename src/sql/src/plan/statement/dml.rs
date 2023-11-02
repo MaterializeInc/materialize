@@ -22,7 +22,11 @@ use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::{RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
-    ExplainTimestampStatement, Expr, IfExistsBehavior, OrderByExpr, SubscribeOutput,
+    ExplainSinkSchemaFor, ExplainSinkSchemaStatement, ExplainTimestampStatement, Expr,
+    IfExistsBehavior, OrderByExpr, SubscribeOutput,
+};
+use mz_storage_types::sinks::{
+    KafkaSinkAvroFormatState, KafkaSinkConnection, KafkaSinkFormat, StorageSinkConnection,
 };
 
 use crate::ast::display::AstDisplay;
@@ -39,7 +43,9 @@ use crate::plan::query::{plan_up_to, ExprContext, QueryLifetime};
 use crate::plan::scope::Scope;
 use crate::plan::statement::{ddl, StatementContext, StatementDesc};
 use crate::plan::with_options::TryFromValue;
-use crate::plan::{self, side_effecting_func, ExplainTimestampPlan};
+use crate::plan::{
+    self, side_effecting_func, CreateSinkPlan, ExplainSinkSchemaPlan, ExplainTimestampPlan,
+};
 use crate::plan::{
     query, CopyFormat, CopyFromPlan, ExplainPlanPlan, InsertPlan, MutationKind, Params, Plan,
     PlanError, QueryContext, ReadThenWritePlan, SelectPlan, SubscribeFrom, SubscribePlan,
@@ -256,6 +262,15 @@ pub fn describe_explain_timestamp(
         .with_params(describe_select(scx, SelectStatement { query, as_of: None })?.param_types))
 }
 
+pub fn describe_explain_schema(
+    _: &StatementContext,
+    ExplainSinkSchemaStatement { .. }: ExplainSinkSchemaStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    let mut relation_desc = RelationDesc::empty();
+    relation_desc = relation_desc.with_column("Schema", ScalarType::String.nullable(false));
+    Ok(StatementDesc::new(Some(relation_desc)))
+}
+
 pub fn plan_explain_plan(
     scx: &StatementContext,
     ExplainPlanStatement {
@@ -411,6 +426,48 @@ pub fn plan_explain_plan(
         config,
         explainee,
     }))
+}
+
+pub fn plan_explain_schema(
+    scx: &StatementContext,
+    explain_schema: ExplainSinkSchemaStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    let ExplainSinkSchemaStatement {
+        schema_for,
+        mut statement,
+    } = explain_schema;
+
+    crate::pure::add_materialize_comments(scx.catalog, &mut statement)?;
+
+    match ddl::plan_create_sink(scx, statement)? {
+        Plan::CreateSink(CreateSinkPlan { sink, .. }) => match sink.connection {
+            StorageSinkConnection::Kafka(KafkaSinkConnection {
+                format:
+                    KafkaSinkFormat::Avro(KafkaSinkAvroFormatState::UnpublishedMaybe {
+                        key_schema,
+                        value_schema,
+                        ..
+                    }),
+                ..
+            }) => {
+                let schema = match schema_for {
+                    ExplainSinkSchemaFor::Key => {
+                        key_schema.ok_or_else(|| sql_err!("CREATE SINK does not have a key"))?
+                    }
+                    ExplainSinkSchemaFor::Value => value_schema,
+                };
+
+                Ok(Plan::ExplainSinkSchema(ExplainSinkSchemaPlan {
+                    sink_from: sink.from,
+                    json_schema: schema,
+                }))
+            }
+            _ => bail_unsupported!(
+                "EXPLAIN SCHEMA is only available for Kafka sinks with Avro schemas"
+            ),
+        },
+        _ => unreachable!("plan_create_sink returns a CreateSinkPlan"),
+    }
 }
 
 pub fn plan_explain_timestamp(

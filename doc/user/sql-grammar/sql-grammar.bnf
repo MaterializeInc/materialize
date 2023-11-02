@@ -266,6 +266,11 @@ explain_timestamp ::=
   ( 'AS' ( 'TEXT' | 'JSON' ) )?
   'FOR'
   select_stmt
+explain_schema ::=
+  'EXPLAIN' ( 'KEY' | 'VALUE' ) 'SCHEMA'
+  ( 'AS JSON' )?
+  'FOR'
+  create_sink_stmt
 fetch ::=
   'FETCH' 'FORWARD'? ('ALL' | count)? 'FROM'? cursor_name
   ( 'WITH'? '(' (option_name ('=' option_value)?) ( ',' (option_name ('=' option_value)?) )* ')' )?
