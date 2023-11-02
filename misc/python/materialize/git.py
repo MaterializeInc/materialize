@@ -186,7 +186,10 @@ def try_get_remote_name_by_url(url: str) -> str | None:
     return None
 
 
-def get_remote(url: str, default_remote_name: str = "origin") -> str:
+def get_remote(
+    url: str = "https://github.com/MaterializeInc/materialize",
+    default_remote_name: str = "origin",
+) -> str:
     # Alternative syntax
     remote = try_get_remote_name_by_url(url) or try_get_remote_name_by_url(
         url.replace("https://github.com/", "git@github.com:")

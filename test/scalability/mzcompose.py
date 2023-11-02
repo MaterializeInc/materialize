@@ -141,8 +141,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     print(f"Baseline: {baseline_endpoint}")
     print(f"Other endpoints: {other_endpoints}")
 
-    # fetch git tags so that the commit messages of version tags can be resolved
-    git.fetch(include_tags=True)
+    # fetch main branch and git tags so that their commit messages can be resolved
+    git.fetch(remote=git.get_remote(), branch="main", include_tags=True)
 
     schema = Schema(
         create_index=args.create_index,
