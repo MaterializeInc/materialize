@@ -71,6 +71,32 @@ If you can successfully connect to CockroachDB with either
 `psql postgres://root@localhost:26257` or `cockroach sql --insecure`, you're
 all set.
 
+### Python
+
+Materialize's build and test infrastructure is largely written in [Python];
+running our integration tests, in particular, requires a local Python
+environment. Most of this should be taken care of by the `bin/pyactivate`
+script, which constructs a local virtual environment and keeps necessary
+dependencies up to date.
+
+We support, as a minimum version, the default Python provided in the [most
+recent Ubuntu LTS release](https://wiki.ubuntu.com/Releases). As of October 2023
+this is Python 3.10, provided in Ubuntu "Jammy Jellyfish". Earlier versions may
+work but are not supported. Our recommended installation methods are:
+
+- macOS: [Homebrew](https://brew.sh)
+- Linux: System package manager if possible, or [community package repositories](https://launchpad.net/~deadsnakes/+archive/ubuntu/ppa) if necessary
+- Windows: [Microsoft App Store](https://apps.microsoft.com/detail/python-3-11/9NRWMJP3717K?hl=en-US&gl=US)
+- Cross-platform: [Nix] [flake](../../misc/nix)
+
+If none of the above work well for you, these are a few other methods that have
+worked for us in the past, but are not formally supported:
+
+- [pyenv](https://github.com/pyenv/pyenv)
+- [asdf](https://asdf-vm.com/)
+- [Pixi](https://github.com/prefix-dev/pixi)
+- [Conda](https://docs.conda.io/en/latest/)
+
 ### Confluent Platform
 
 The [Confluent Platform] bundles [Apache ZooKeeper] and [Apache Kafka] with
@@ -505,3 +531,5 @@ source /path/to/materialize/misc/completions/zsh/*
 [rustfmt]: https://github.com/rust-lang/rustfmt
 [rustup]: https://www.rust-lang.org/tools/install
 [sqlparser]: https://github.com/MaterializeInc/sqlparser
+[Python]: https://www.python.org
+[Nix]: https://nixos.wiki/wiki/Flakes
