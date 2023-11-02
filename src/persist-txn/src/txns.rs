@@ -180,8 +180,8 @@ where
     /// Returns a new, empty transaction that can involve the data shards
     /// registered with this handle.
     pub fn begin(&self) -> Txn<K, V, D> {
-        // TODO(txn): This is a method on the handle because we'll need
-        // WriteHandles once we start spilling to s3.
+        // TODO: This is a method on the handle because we'll need WriteHandles
+        // once we start spilling to s3.
         Txn::new()
     }
 
