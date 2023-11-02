@@ -92,7 +92,7 @@ pub use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterConfig, ClusterReplica, ClusterReplicaProcessStatus,
     ClusterVariant, ClusterVariantManaged, CommentsMap, Connection, DataSourceDesc, Database,
     DefaultPrivileges, Func, Index, Log, MaterializedView, Role, Schema, Secret, Sink, Source,
-    StorageSinkConnectionState, Table, Type, View,
+    Table, Type, View,
 };
 
 mod builtin_table_updates;

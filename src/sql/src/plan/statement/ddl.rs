@@ -2461,9 +2461,19 @@ fn kafka_sink_builder(
     sink_from: GlobalId,
 ) -> Result<StorageSinkConnection<ReferencedConnection>, PlanError> {
     let item = scx.get_item_by_resolved_name(&connection)?;
-    // Get Kafka connection
-    let mut connection = match item.connection()? {
-        Connection::Kafka(connection) => connection.clone(),
+    // Get Kafka connection + progress topic
+    //
+    // TODO: In ALTER CONNECTION, the progress topic must be immutable
+    let (connection, progress_topic) = match item.connection()? {
+        Connection::Kafka(connection) => {
+            let id = item.id();
+            let progress_topic = connection
+                .progress_topic
+                .clone()
+                .unwrap_or_else(|| scx.catalog.config().default_kafka_sink_progress_topic(id));
+
+            (id, progress_topic)
+        }
         _ => sql_bail!(
             "{} is not a kafka connection",
             scx.catalog.resolve_full_name(item.name())
@@ -2489,9 +2499,7 @@ fn kafka_sink_builder(
 
     let extracted_options: KafkaConfigOptionExtracted = options.try_into()?;
 
-    for (k, v) in kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0 {
-        connection.options.insert(k, v);
-    }
+    let connection_options = kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?;
 
     let connection_id = item.id();
     let KafkaConfigOptionExtracted {
@@ -2599,11 +2607,7 @@ fn kafka_sink_builder(
     };
 
     let consistency_config = KafkaConsistencyConfig::Progress {
-        topic: connection.progress_topic.clone().unwrap_or_else(|| {
-            scx.catalog
-                .config()
-                .default_kafka_sink_progress_topic(connection_id)
-        }),
+        topic: progress_topic,
     };
 
     if partition_count == 0 || partition_count < -1 {
@@ -2644,6 +2648,7 @@ fn kafka_sink_builder(
         key_desc_and_indices,
         value_desc,
         retention,
+        connection_options: connection_options.0,
     }))
 }
 
