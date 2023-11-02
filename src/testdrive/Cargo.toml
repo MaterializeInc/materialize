@@ -47,8 +47,9 @@ mz-pgrepr = { path = "../pgrepr" }
 mz-repr = { path = "../repr" }
 mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
-mz-storage-types = { path = "../storage-types" }
 mz-stash = { path = "../stash" }
+mz-storage-types = { path = "../storage-types" }
+mz-timely-util = { path = "../timely-util" }
 mz-tls-util = { path = "../tls-util" }
 postgres_array = { version = "0.11.0" }
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
@@ -65,6 +66,7 @@ tempfile = "3.2.0"
 termcolor = "1.1.3"
 tiberius = { version = "0.11.3", default-features = false }
 time = "0.3.17"
+timely = { version = "0.12.0", default-features = false, features = ["bincode"] }
 tracing = "0.1.37"
 tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
 tokio = { version = "1.32.0", features = ["process"] }

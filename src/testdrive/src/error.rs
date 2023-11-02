@@ -147,6 +147,7 @@ impl ErrorLocation {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct PosError {
     pub(crate) source: anyhow::Error,
     pub(crate) pos: Option<usize>,

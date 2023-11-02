@@ -25,6 +25,7 @@ use mz_adapter::session::Session;
 use mz_build_info::BuildInfo;
 use mz_catalog::durable::StashConfig;
 use mz_kafka_util::client::{create_new_client_config_simple, MzClientContext};
+use mz_ore::collections::{HashMap, HashSet};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
@@ -182,6 +183,7 @@ pub struct State {
     materialize_internal_sql_addr: String,
     materialize_internal_http_addr: String,
     materialize_user: String,
+    materialize_ec_builtins: HashSet<String>,
     pgclient: tokio_postgres::Client,
 
     // === Persist state. ===
@@ -551,8 +553,14 @@ impl Run for PosCommand {
         };
 
         let r = match self.command {
-            Command::Builtin(mut builtin, version_constraint) => {
-                handle_version!(version_constraint);
+            Command::Builtin(mut builtin, modifiers) => {
+                handle_version!(modifiers.version_constraint);
+                if modifiers.retry == Some(true) {
+                    return Err(PosError::new(
+                        anyhow!("builtin commands are not retryable"),
+                        self.pos,
+                    ));
+                }
                 for val in builtin.args.values_mut() {
                     *val = subst(val, &state.cmd_vars)?;
                 }
@@ -564,6 +572,7 @@ impl Run for PosCommand {
                     "file-delete" => file::run_delete(builtin, state).await,
                     "http-request" => http::run_request(builtin, state).await,
                     "kafka-add-partitions" => kafka::run_add_partitions(builtin, state).await,
+                    "kafka-await-ingestion" => kafka::run_await_ingestion(builtin, state).await,
                     "kafka-create-topic" => kafka::run_create_topic(builtin, state).await,
                     "kafka-delete-topic-flaky" => kafka::run_delete_topic(builtin, state).await,
                     "kafka-ingest" => kafka::run_ingest(builtin, state).await,
@@ -573,6 +582,9 @@ impl Run for PosCommand {
                     "mysql-connect" => mysql::run_connect(builtin, state).await,
                     "mysql-execute" => mysql::run_execute(builtin, state).await,
                     "nop" => nop::run_nop(),
+                    "postgres-await-ingestion" => {
+                        postgres::run_await_ingestion(builtin, state).await
+                    }
                     "postgres-connect" => postgres::run_connect(builtin, state).await,
                     "postgres-execute" => postgres::run_execute(builtin, state).await,
                     "postgres-verify-slot" => postgres::run_verify_slot(builtin, state).await,
@@ -614,8 +626,8 @@ impl Run for PosCommand {
                     }
                 }
             }
-            Command::Sql(mut sql, version_constraint) => {
-                handle_version!(version_constraint);
+            Command::Sql(mut sql, modifiers) => {
+                handle_version!(modifiers.version_constraint);
                 sql.query = subst(&sql.query, &state.cmd_vars)?;
                 if let SqlOutput::Full { expected_rows, .. } = &mut sql.expected_output {
                     for row in expected_rows {
@@ -624,10 +636,11 @@ impl Run for PosCommand {
                         }
                     }
                 }
-                sql::run_sql(sql, state).await
+
+                sql::run_sql(sql, state, modifiers.retry).await
             }
-            Command::FailSql(mut sql, version_constraint) => {
-                handle_version!(version_constraint);
+            Command::FailSql(mut sql, modifiers) => {
+                handle_version!(modifiers.version_constraint);
                 sql.query = subst(&sql.query, &state.cmd_vars)?;
                 sql.expected_error = match &sql.expected_error {
                     SqlExpectedError::Contains(s) => {
@@ -641,7 +654,7 @@ impl Run for PosCommand {
                     }
                     SqlExpectedError::Timeout => SqlExpectedError::Timeout,
                 };
-                sql::run_fail_sql(sql, state).await
+                sql::run_fail_sql(sql, state, modifiers.retry).await
             }
         };
 
@@ -684,6 +697,79 @@ fn substitute_vars(
     }
 }
 
+/// Loads the set of eventually consistent objects in Materialize. These are all the builtin
+/// sources and any builtin views that depend on them.
+async fn load_ec_builtins(
+    client: &tokio_postgres::Client,
+) -> Result<HashSet<String>, anyhow::Error> {
+    // Load all the builtin views and sources
+    let object_rows = client
+        .query(
+            "SELECT id, name, type \
+        FROM mz_objects \
+        WHERE id LIKE 's%' AND type IN ('view', 'source', 'table')",
+            &[],
+        )
+        .await?;
+    // And all the dependencies between objects
+    let dep_rows = client
+        .query(
+            "SELECT object_id, referenced_object_id \
+        FROM mz_internal.mz_object_dependencies",
+            &[],
+        )
+        .await?;
+
+    // Index inverse dependency relatioships to efficiently go from an object to the list of
+    // objects that depend on it.
+    let mut inverse_deps = HashMap::new();
+    for row in &dep_rows {
+        let object_id: &str = row.get("object_id");
+        let ref_object_id: &str = row.get("referenced_object_id");
+        inverse_deps
+            .entry(ref_object_id)
+            .or_insert_with(Vec::new)
+            .push(object_id);
+    }
+
+    // Index all the object names and create the initial set of eventually consistent objects. This
+    // set is made of all the builtin sources.
+    let mut object_names: HashMap<&str, &str> = HashMap::new();
+    #[allow(clippy::disallowed_types)]
+    let mut ec_ids: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for row in &object_rows {
+        object_names.insert(row.get("id"), row.get("name"));
+        if row.get::<_, &str>("type") == "source" {
+            ec_ids.insert(row.get("id"));
+        }
+        // Insert some incorrectly marked as table objects that are actually also eventually
+        // consistent. Remove this once #XXXX is closed
+        if matches!(
+            row.get::<_, &str>("name"),
+            "mz_cluster_replica_metrics" | "mz_cluster_replica_statuses"
+        ) {
+            ec_ids.insert(row.get("id"));
+        }
+    }
+
+    // Then compute the transitive closure of the initial ec set
+    let mut new_ec_ids = ec_ids.clone();
+    while !new_ec_ids.is_empty() {
+        for id in std::mem::take(&mut new_ec_ids) {
+            new_ec_ids.extend(inverse_deps.get(id).into_iter().flatten());
+        }
+        ec_ids.extend(new_ec_ids.iter().cloned());
+    }
+
+    // And finally resolve the names of all the identifies objects
+    let ec_names = ec_ids
+        .into_iter()
+        .flat_map(|id| object_names.get(id))
+        .map(|&name| name.to_owned())
+        .collect();
+    Ok(ec_names)
+}
+
 /// Initializes a [`State`] object by connecting to the various external
 /// services specified in `config`.
 ///
@@ -718,6 +804,7 @@ pub async fn create_state(
         materialize_internal_sql_addr,
         materialize_internal_http_addr,
         materialize_user,
+        materialize_ec_builtins,
         pgclient,
         pgconn_task,
     ) = {
@@ -745,6 +832,8 @@ pub async fn create_state(
                 .await
                 .context("setting session parameter")?;
         }
+
+        let materialize_ec_builtins = load_ec_builtins(&pgclient).await?;
 
         let materialize_user = config
             .materialize_pgconfig
@@ -778,6 +867,7 @@ pub async fn create_state(
             materialize_internal_sql_addr,
             materialize_internal_http_addr,
             materialize_user,
+            materialize_ec_builtins,
             pgclient,
             pgconn_task,
         )
@@ -871,6 +961,7 @@ pub async fn create_state(
         materialize_internal_sql_addr,
         materialize_internal_http_addr,
         materialize_user,
+        materialize_ec_builtins,
         pgclient,
 
         // === Persist state. ===
