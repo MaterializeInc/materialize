@@ -17,21 +17,6 @@
 -- Most of these macros are direct copies of their PostgreSQL counterparts.
 -- See: https://github.com/dbt-labs/dbt-core/blob/13b18654f/plugins/postgres/dbt/include/postgres/macros/adapters.sql
 
-{% macro materialize__nullability_assertions() %}
-  {% set nullability_assertions = [] %}
-  {% set user_provided_columns = model['columns'] %}
-  {% for i in user_provided_columns %}
-    {% set col = user_provided_columns[i] %}
-    {% for c in col['constraints'] %}
-      {% set constraint_type = c['type'] %}
-      {% if constraint_type == 'not_null' %}
-        {% do nullability_assertions.append(col['name']) %}
-      {% endif %}
-    {% endfor %}
-  {% endfor %}
-  {{ return(nullability_assertions) }}
-{% endmacro %}
-
 {% macro materialize__create_view_as(relation, sql) -%}
 
   create view {{ relation }}
@@ -52,23 +37,33 @@
     in cluster {{ cluster }}
   {% endif %}
 
+  -- Contracts and constraints
   {% set contract_config = config.get('contract') %}
   {% if contract_config.enforced %}
     {{ get_assert_columns_equivalent(sql) }}
-    -- Explicitly throw a warning rather than silently ignore configured
-    -- constraints for tables and materialized views.
-    -- See /relations/columns_spec_ddl.sql for details.
-    {{ get_table_columns_and_constraints() }}
-  {%- endif %}
 
-  {% set assertions = materialize__nullability_assertions() %}
-  {% if assertions %}
-    with (
-      {% for col in assertions %}
-        assert not null {{ col }} {{ "," if not loop.last }}
-      {% endfor %}
-    )
-  {% endif %}
+    {% set ns = namespace(c_constraints=False, m_constraints=False) %}
+    -- Column-level constraints
+    {% set raw_columns = model['columns'] %}
+    {% for c_id, c_details in raw_columns.items() if c_details['constraints'] != [] %}
+      {% set ns.c_constraints = True %}
+    {%- endfor %}
+
+    -- Model-level constraints
+
+    -- NOTE(morsapaes): not_null constraints are not originally supported in
+    -- dbt-core at model-level, since model-level constraints are intended for
+    -- multi-columns constraints. Any model-level constraint is ignored in
+    -- dbt-materialize, albeit silently.
+    {% if model['constraints'] != [] %}
+      {% set ns.m_constraints = True %}
+    {%- endif %}
+
+    {% if ns.c_constraints or ns.m_constraints %}
+      with
+        {{ get_table_columns_and_constraints() }}
+    {%- endif %}
+  {%- endif %}
 
   as (
     {{ sql }}
@@ -98,7 +93,7 @@
   {% call statement('drop_relation') -%}
     {% if relation.type == 'view' %}
       drop view if exists {{ relation }} cascade
-    {% elif relation.type == 'materializedview' %}
+    {% elif relation.is_materialized_view %}
       drop materialized view if exists {{ relation }} cascade
     {% elif relation.type == 'sink' %}
       drop sink if exists {{ relation }}

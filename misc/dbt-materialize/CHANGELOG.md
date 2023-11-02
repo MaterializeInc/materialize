@@ -2,15 +2,32 @@
 
 ## Unreleased
 
+* Support the [`ASSERT NOT NULL` option](https://materialize.com/docs/sql/create-materialized-view/#non-null-assertions)
+  for `materialized_view` materializations via the `not_null` column-level
+  constraint. It's important to note that other constraint types are not
+  supported, and that `not_null` constraints can only be defined at the
+  column-level (not model-level).
+
+  ```yaml
+    - name: model_with_constraints
+    config:
+      contract:
+        enforced: true
+    columns:
+      - name: col_with_constraints
+        data_type: string
+        constraints:
+          - type: not_null
+      - name: col_without_constraints
+        data_type: int
+  ```
+
 * Load seeds into tables rather than materialized views.
 
-  For historical reasons, dbt-materialize has loaded seed data by injecting the
-  values from the CSV file in a `CREATE MATERIALIZED VIEW AS ...` statement.
-  Starting with this release, dbt-materialize now creates a table and loads
-  the values from the CSV into that file, matching the behavior of other
-  dbt adapters.
-
-* Allow nullability assertions in materialized views via constraints
+  For historical reasons, `dbt-materialize` has loaded seed data by injecting
+  the values from the CSV file in a `CREATE MATERIALIZED VIEW AS ...`
+  statement. `dbt-materialize` now creates a table and loads the values from
+  the CSV into that file, matching the behavior of other dbt adapters.
 
 ## 1.6.0 - 2023-10-12
 
