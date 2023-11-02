@@ -739,6 +739,7 @@ impl PendingPeek {
         let mut datum_vec = DatumVec::new();
         let mut l_datum_vec = DatumVec::new();
         let mut r_datum_vec = DatumVec::new();
+        let mut key_buf = K::default();
 
         // We have to sort the literal constraints because cursor.seek_key can seek only forward.
         peek.literal_constraints
@@ -759,7 +760,8 @@ impl PendingPeek {
                         Some(current_literal) => {
                             // NOTE(vmarcos): We expect the extra allocations below to be manageable
                             // since we only perform as many of them as there are literals.
-                            let current_literal = K::from_row(current_literal.clone(), key_types);
+                            let current_literal =
+                                key_buf.from_row(current_literal.clone(), key_types);
                             cursor.seek_key(&storage, &current_literal);
                             if !cursor.key_valid(&storage) {
                                 return Ok(results);

@@ -1119,21 +1119,20 @@ where
     K: Columnation + Data + FromRowByTypes,
     V: Columnation + Data + FromRowByTypes,
 {
-    let mut key_buf = Row::default();
-    let mut key_datums = DatumVec::new();
+    let mut key_buf = K::default();
+    let mut val_buf = V::default();
     let mut datums = DatumVec::new();
     move |row| {
         // TODO: Consider reusing the `row` allocation; probably in *next* invocation.
         let datums = datums.borrow_with(&row);
         let temp_storage = RowArena::new();
-        key_buf
-            .packer()
-            .try_extend(key.iter().map(|k| k.eval(&datums, &temp_storage)))?;
-        let key_datums = key_datums.borrow_with(&key_buf);
         let val_datum_iter = thinning.iter().map(|c| datums[*c]);
         Ok::<(K, V), DataflowError>((
-            K::from_datum_iter(key_datums.iter(), key_types.as_deref()),
-            V::from_datum_iter(val_datum_iter, val_types.as_deref()),
+            key_buf.try_from_datum_iter(
+                key.iter().map(|k| k.eval(&datums, &temp_storage)),
+                key_types.as_deref(),
+            )?,
+            val_buf.from_datum_iter(val_datum_iter, val_types.as_deref()),
         ))
     }
 }
