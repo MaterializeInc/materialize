@@ -31,7 +31,7 @@ $ schema-registry-wait subject=postgres.public.decimal_type-value
 
 # NaN arrives as NULL
 
-> SELECT f1 FROM decimal_type;
+>[retry] SELECT f1 FROM decimal_type;
 12.345
 <null>
 <null>
@@ -42,7 +42,7 @@ UPDATE decimal_type SET f1 = NULL WHERE f1 = 'NaN';
 UPDATE decimal_type SET f1 = 0.123 WHERE f1 = 12.345;
 UPDATE decimal_type SET f1 = 'NaN' WHERE f1 IS NULL;
 
-> SELECT f1 FROM decimal_type;
+>[retry] SELECT f1 FROM decimal_type;
 <null>
 <null>
 <null>

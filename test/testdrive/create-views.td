@@ -58,6 +58,6 @@ contains:column reference "a" is ambiguous
 ! CREATE VIEW gh9376 AS SELECT 1, 2;
 contains:column "?column?" specified more than once
 
->CREATE VIEW gh9376 AS SELECT 1;
+> CREATE VIEW gh9376 AS SELECT 1;
 > SELECT name FROM mz_columns WHERE id = (SELECT id FROM mz_views WHERE name = 'gh9376');
 \?column?

@@ -50,7 +50,7 @@ $ postgres-execute connection=conn2
 INSERT INTO concurrent_update_pk VALUES (5, 50);
 COMMIT;
 
-> SELECT * FROM concurrent_update_pk;
+>[retry] SELECT * FROM concurrent_update_pk;
 4 40
 5 50
 11 20

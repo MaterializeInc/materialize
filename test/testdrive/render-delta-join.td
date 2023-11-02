@@ -48,7 +48,7 @@ count
 # In case the environment has other replicas
 > SET cluster_replica = r1
 
-> SELECT
+>[retry] SELECT
     sent
   FROM
     mz_internal.mz_dataflow_channels AS channels

@@ -1102,7 +1102,7 @@ class Unions(Generator):
         union_list = " UNION DISTINCT ".join(
             f"(SELECT f1 + {i} FROM t1 AS a{i})" for i in cls.all()
         )
-        print(f">SELECT COUNT(*) FROM ({union_list})")
+        print(f"> SELECT COUNT(*) FROM ({union_list})")
         print(f"{cls.COUNT}")
 
 

@@ -23,8 +23,8 @@ one
 > SELECT * from data
 one
 
-!ALTER SOURCE data ADD SUBSOURCE t;
+! ALTER SOURCE data ADD SUBSOURCE t;
 contains:data is a kafka source, which does not support ALTER TABLE...ADD SUBSOURCES
 
-!ALTER SOURCE data DROP SUBSOURCE t;
+! ALTER SOURCE data DROP SUBSOURCE t;
 contains:unknown catalog item 't'

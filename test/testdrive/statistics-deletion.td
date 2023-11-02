@@ -69,7 +69,7 @@ one:two
 # NOTE: These queries are slow to succeed because the default metrics scraping
 # interval is 30 seconds. Here we are just ensuring metrics were populated.
 
-> SELECT s.name, SUM(u.messages_staged), SUM(u.messages_committed), SUM(u.bytes_staged) > 0, SUM(bytes_staged) = SUM(bytes_committed)
+>[retry] SELECT s.name, SUM(u.messages_staged), SUM(u.messages_committed), SUM(u.bytes_staged) > 0, SUM(bytes_staged) = SUM(bytes_committed)
   FROM mz_sinks s
   JOIN mz_internal.mz_sink_statistics u ON s.id = u.id
   WHERE s.name IN ('sink_size', 'sink_cluster')
@@ -77,7 +77,7 @@ one:two
 sink_size 1 1 true true
 sink_cluster 1 1 true true
 
-> SELECT s.name,
+>[retry] SELECT s.name,
   SUM(u.updates_committed) > 0
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
@@ -144,35 +144,35 @@ WHERE s.name IN ('bids') AND sch.name = 'subsources_cluster'
 > DROP SOURCE subsources_size.s
 > DROP SOURCE subsources_cluster.s
 
-> SELECT COUNT(*)
+>[retry] SELECT COUNT(*)
   FROM mz_internal.mz_sink_statistics u
   WHERE u.id = '${sink-size-id}'
 0
-> SELECT COUNT(*)
+>[retry] SELECT COUNT(*)
   FROM mz_internal.mz_sink_statistics u
   WHERE u.id = '${sink-cluster-id}'
 0
-> SELECT COUNT(*)
+>[retry] SELECT COUNT(*)
   FROM mz_internal.mz_sink_statistics u
   WHERE u.id = '${upsert-size-id}'
 0
-> SELECT COUNT(*)
+>[retry] SELECT COUNT(*)
   FROM mz_internal.mz_sink_statistics u
   WHERE u.id = '${upsert-cluster-id}'
 0
-> SELECT COUNT(*)
+>[retry] SELECT COUNT(*)
   FROM mz_internal.mz_sink_statistics u
   WHERE u.id = '${subsources-size-top-level-id}'
 0
-> SELECT COUNT(*)
+>[retry] SELECT COUNT(*)
   FROM mz_internal.mz_sink_statistics u
   WHERE u.id = '${subsources-size-bids-id}'
 0
-> SELECT COUNT(*)
+>[retry] SELECT COUNT(*)
   FROM mz_internal.mz_sink_statistics u
   WHERE u.id = '${subsources-cluster-top-level-id}'
 0
-> SELECT COUNT(*)
+>[retry] SELECT COUNT(*)
   FROM mz_internal.mz_sink_statistics u
   WHERE u.id = '${subsources-cluster-bids-id}'
 0

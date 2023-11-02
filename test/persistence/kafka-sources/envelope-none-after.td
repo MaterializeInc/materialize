@@ -24,5 +24,7 @@ $ kafka-ingest format=avro topic=envelope-none schema=${schema} repeat=5000
 $ kafka-ingest format=avro topic=envelope-none key-format=avro key-schema=${schema} schema=${schema} repeat=5000
 {"f1": ${kafka-ingest.iteration}} {"f1": ${kafka-ingest.iteration}}
 
+$ kafka-await-ingestion source=envelope_none topic=envelope-none
+
 > SELECT COUNT(*), COUNT(DISTINCT f1), MIN(f1), MAX(f1) FROM envelope_none;
 20000 5000 0 4999

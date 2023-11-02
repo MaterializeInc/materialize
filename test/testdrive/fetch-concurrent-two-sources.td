@@ -50,6 +50,9 @@ $ kafka-ingest format=avro topic=fetch-concurrent-two-sources schema=${int} time
 $ kafka-ingest format=avro topic=fetch-concurrent-two-sources schema=${int} timestamp=3
 {"f1": 34}
 
+$ kafka-await-ingestion source=fetch_concurrent_two_sources1 topic=fetch-concurrent-two-sources
+$ kafka-await-ingestion source=fetch_concurrent_two_sources2 topic=fetch-concurrent-two-sources
+
 > SELECT COUNT(*) FROM fetch_concurrent_two_sources1_view;
 3
 

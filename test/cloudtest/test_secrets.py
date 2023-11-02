@@ -202,7 +202,7 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
               (TOPIC 'foo')
             contains:failed to create and connect Kafka consumer
 
-            > SELECT error like '%NotFound%'
+            >[retry] SELECT error like '%NotFound%'
               FROM mz_internal.mz_source_statuses
               WHERE name = 'source_with_deleted_secret';
             true
@@ -237,7 +237,7 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
               (TOPIC 'foo')
             contains:failed to create and connect Kafka consumer
 
-            > SELECT error like '%NotFound%'
+            >[retry] SELECT error like '%NotFound%'
               FROM mz_internal.mz_source_statuses
               WHERE name = 'source_with_deleted_secret';
             true

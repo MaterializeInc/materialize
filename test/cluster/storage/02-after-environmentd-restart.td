@@ -23,9 +23,14 @@ two
 $ kafka-ingest format=bytes topic=remote2
 two
 
+$ kafka-await-ingestion source=remote1 topic=remote1
+
 > SELECT * from remote1
 one
 two
+
+$ kafka-await-ingestion source=remote2 topic=remote2
+
 > SELECT * from remote2
 one
 two

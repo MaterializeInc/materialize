@@ -174,13 +174,13 @@ class ReplicaAnnotations(Check):
         return Testdrive(
             dedent(
                 """
-                > SELECT name
+                >[retry] SELECT name
                   FROM mz_internal.mz_internal_cluster_replicas
                   JOIN mz_cluster_replicas USING (id);
                 internal_r1
                 internal_r2
 
-                > SELECT details->>'replica_name', details->>'billed_as', details->>'internal'
+                >[retry] SELECT details->>'replica_name', details->>'billed_as', details->>'internal'
                   FROM mz_audit_events
                   WHERE event_type = 'create'
                   AND object_type = 'cluster-replica'

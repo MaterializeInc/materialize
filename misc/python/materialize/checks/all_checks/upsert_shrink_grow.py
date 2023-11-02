@@ -68,6 +68,8 @@ class ShrinkGrow:
         return Testdrive(
             dedent(
                 f"""
+                $ kafka-await-ingestion source=upsert_update_{name} topic=upsert-update-{name}
+
                 > SELECT * FROM upsert_update_{name}_view;
                 C C 10000 10000 10000 {last_pad_length+3} {last_pad_length+6}
                 """

@@ -36,7 +36,7 @@ USE test;
 DELETE FROM delete_table_pk WHERE key_col = 'key1';
 # DELETE FROM delete_table_nopk WHERE key_col = 'key2';
 
-> SELECT * FROM delete_table_pk;
+>[retry] SELECT * FROM delete_table_pk;
 key2 value2
 
 # > SELECT * FROM delete_table_nopk;

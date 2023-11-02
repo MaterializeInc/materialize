@@ -52,7 +52,7 @@ id false bigint
   FROM on_time_bids
   GROUP BY auction_id
 
-> SELECT auction_id, MAX(amount)
+>[retry] SELECT auction_id, MAX(amount)
   FROM on_time_bids
   GROUP BY auction_id
   ORDER BY auction_id LIMIT 5
@@ -75,7 +75,7 @@ id false bigint
 > CREATE MATERIALIZED VIEW winning_bids AS
   SELECT * FROM highest_bid_per_auction WHERE end_time < mz_now()
 
-> SELECT auction_id, bid_id, item, amount FROM winning_bids ORDER BY auction_id LIMIT 5
+>[retry] SELECT auction_id, bid_id, item, amount FROM winning_bids ORDER BY auction_id LIMIT 5
 1 12 "Best Pizza in Town" 97
 2 20 "Custom Art" 44
 3 31 "City Bar Crawl" 67

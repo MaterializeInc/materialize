@@ -59,6 +59,8 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 INSERT INTO t1 SELECT * FROM t1;
 INSERT INTO t2 SELECT * FROM t2;
 
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
+
 > SELECT * FROM schema1.t1;
 1
 1

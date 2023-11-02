@@ -61,12 +61,16 @@ one
 $ kafka-ingest topic=thetopic format=bytes
 two
 
+$ kafka-await-ingestion source=fixed_text topic=thetopic
+
 # Ensure both types of tunnels work
 > SELECT * FROM fixed_text
 text
 ----
 one
 two
+
+$ kafka-await-ingestion source=dynamic_text topic=thetopic
 
 > SELECT * FROM dynamic_text
 text
@@ -117,7 +121,7 @@ f1    f2
 fish  1000
 
 # ensure they all were marked as running correctly
-> SELECT status FROM mz_internal.mz_source_statuses st
+>[retry] SELECT status FROM mz_internal.mz_source_statuses st
   JOIN mz_sources s ON st.id = s.id
   WHERE s.name in ('fixed_text', 'dynamic_text', 'fixed_plus_csr', 'dynamic_plus_csr')
 running

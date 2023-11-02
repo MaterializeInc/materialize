@@ -33,7 +33,7 @@
 
 > CREATE MATERIALIZED VIEW mv1 AS SELECT * FROM t1
 
-> SELECT
+>[retry] SELECT
     mvs.name,
     replicas.name
   FROM mz_internal.mz_cluster_replica_frontiers frontiers
@@ -47,7 +47,7 @@
 mv1 r1
 mv1 r2
 
-> SELECT
+>[retry] SELECT
     mvs.name
   FROM mz_internal.mz_frontiers frontiers
   JOIN mz_materialized_views mvs
@@ -63,7 +63,7 @@ mv1
 
 > CREATE INDEX idx1 ON t1 (a)
 
-> SELECT
+>[retry] SELECT
     indexes.name,
     replicas.name
   FROM mz_internal.mz_cluster_replica_frontiers frontiers
@@ -77,7 +77,7 @@ mv1
 idx1 r1
 idx1 r2
 
-> SELECT
+>[retry] SELECT
     indexes.name
   FROM mz_internal.mz_frontiers frontiers
   JOIN mz_indexes indexes
@@ -95,7 +95,7 @@ idx1
   IN CLUSTER test_source
   FROM LOAD GENERATOR COUNTER
 
-> SELECT
+>[retry] SELECT
     sources.name,
     replicas.name
   FROM mz_internal.mz_cluster_replica_frontiers frontiers
@@ -108,7 +108,7 @@ idx1
     frontiers.write_frontier > 0
 source1 s1
 
-> SELECT
+>[retry] SELECT
     sources.name
   FROM mz_internal.mz_frontiers frontiers
   JOIN mz_sources sources
@@ -136,7 +136,7 @@ source1_progress
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-> SELECT
+>[retry] SELECT
     sinks.name,
     replicas.name
   FROM mz_internal.mz_cluster_replica_frontiers frontiers
@@ -149,7 +149,7 @@ source1_progress
     frontiers.write_frontier > 0
 sink1 s1
 
-> SELECT
+>[retry] SELECT
     sinks.name
   FROM mz_internal.mz_frontiers frontiers
   JOIN mz_sinks sinks
@@ -162,7 +162,7 @@ sink1
 
 # Test that the frontiers of introspection sources are reported.
 
-> SELECT
+>[retry] SELECT
     replicas.name
   FROM mz_internal.mz_cluster_replica_frontiers frontiers
   JOIN mz_indexes indexes
@@ -178,7 +178,7 @@ sink1
 r1
 r2
 
-> SELECT
+>[retry] SELECT
     count(*)
   FROM mz_internal.mz_frontiers frontiers
   JOIN mz_indexes indexes
@@ -194,7 +194,7 @@ r2
 
 # Test that the frontiers of tables are reported.
 
-> SELECT
+>[retry] SELECT
     tables.name
   FROM mz_internal.mz_frontiers frontiers
   JOIN mz_tables tables
@@ -207,7 +207,7 @@ t1
 
 # Test that the frontiers of storage-managed collections are reported.
 
-> SELECT
+>[retry] SELECT
     sources.name
   FROM mz_internal.mz_frontiers frontiers
   JOIN mz_sources sources
@@ -220,7 +220,7 @@ mz_frontiers
 
 # Test that frontiers are added when replicas are created.
 
-> SELECT
+>[retry] SELECT
     objects.name,
     replicas.name
   FROM mz_internal.mz_cluster_replica_frontiers frontiers
@@ -241,7 +241,7 @@ mv1  r2
 
 > CREATE CLUSTER REPLICA test.r3 SIZE '1'
 
-> SELECT
+>[retry] SELECT
     objects.name,
     replicas.name
   FROM mz_internal.mz_cluster_replica_frontiers frontiers
@@ -266,7 +266,7 @@ mv1  r3
 
 > DROP CLUSTER REPLICA test.r1
 
-> SELECT
+>[retry] SELECT
     objects.name,
     replicas.name
   FROM mz_internal.mz_cluster_replica_frontiers frontiers
@@ -289,7 +289,7 @@ mv1  r3
 
 > CREATE MATERIALIZED VIEW mv2 AS SELECT 1
 
-> SELECT
+>[retry] SELECT
     replicas.name,
     frontiers.write_frontier
   FROM mz_internal.mz_cluster_replica_frontiers frontiers
@@ -302,7 +302,7 @@ mv1  r3
 r2 <null>
 r3 <null>
 
-> SELECT
+>[retry] SELECT
     frontiers.read_frontier,
     frontiers.write_frontier
   FROM mz_internal.mz_frontiers frontiers
@@ -321,11 +321,11 @@ r3 <null>
 > DROP SINK sink1
 > DROP TABLE t1
 
-> SELECT *
+>[retry] SELECT *
   FROM mz_internal.mz_cluster_replica_frontiers frontiers
   WHERE object_id LIKE 'u%'
 
-> SELECT *
+>[retry] SELECT *
   FROM mz_internal.mz_frontiers frontiers
   WHERE object_id LIKE 'u%'
 

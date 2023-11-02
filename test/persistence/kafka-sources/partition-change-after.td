@@ -26,5 +26,7 @@ $ set schema={
 $ kafka-ingest format=avro topic=partition-change key-format=avro key-schema=${keyschema} schema=${schema} start-iteration=10000 repeat=10000
 {"f1": ${kafka-ingest.iteration}} {"f2": ${kafka-ingest.iteration}}
 
+$ kafka-await-ingestion source=partition_change topic=partition-change
+
 > SELECT COUNT(*), MIN(f1), MAX(f1), MIN(f2), MAX(f2) FROM partition_change;
 20000 0 19999 0 19999

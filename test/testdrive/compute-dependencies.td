@@ -15,7 +15,7 @@
 # are not immediately reflected there.
 
 # There should be no compute objects yet (except for system indexes).
-> SELECT * FROM mz_internal.mz_compute_dependencies WHERE object_id LIKE 'u%'
+>[retry] SELECT * FROM mz_internal.mz_compute_dependencies WHERE object_id LIKE 'u%'
 
 # Test that creating compute objects causes `mz_compute_dependencies` updates.
 
@@ -25,7 +25,7 @@
 > CREATE VIEW v1 AS SELECT * FROM t1, t2
 > CREATE MATERIALIZED VIEW mv1 AS SELECT * FROM v1
 
-> SELECT object.name, import.name
+>[retry] SELECT object.name, import.name
   FROM mz_internal.mz_compute_dependencies dep
   LEFT JOIN mz_objects object ON dep.object_id = object.id
   LEFT JOIN mz_objects import ON dep.dependency_id = import.id
@@ -35,7 +35,7 @@ mv1 t2
 
 > CREATE DEFAULT INDEX ON mv1
 
-> SELECT object.name, import.name
+>[retry] SELECT object.name, import.name
   FROM mz_internal.mz_compute_dependencies dep
   LEFT JOIN mz_objects object ON dep.object_id = object.id
   LEFT JOIN mz_objects import ON dep.dependency_id = import.id
@@ -48,7 +48,7 @@ mv1_primary_idx mv1
 
 > DROP INDEX mv1_primary_idx
 
-> SELECT object.name, import.name
+>[retry] SELECT object.name, import.name
   FROM mz_internal.mz_compute_dependencies dep
   LEFT JOIN mz_objects object ON dep.object_id = object.id
   LEFT JOIN mz_objects import ON dep.dependency_id = import.id
@@ -58,18 +58,18 @@ mv1             t2
 
 > DROP MATERIALIZED VIEW mv1
 
-> SELECT * FROM mz_internal.mz_compute_dependencies WHERE object_id LIKE 'u%'
+>[retry] SELECT * FROM mz_internal.mz_compute_dependencies WHERE object_id LIKE 'u%'
 
 # Test that compute object without dependencies don't show up in
 # `mz_compute_dependencies`.
 
 > CREATE MATERIALIZED VIEW mv2 AS SELECT 1;
 
-> SELECT * FROM mz_internal.mz_compute_dependencies WHERE object_id LIKE 'u%'
+>[retry] SELECT * FROM mz_internal.mz_compute_dependencies WHERE object_id LIKE 'u%'
 
 # Test that system indexes show up in `mz_compute_dependencies`.
 
-> SELECT count(*) > 0 FROM mz_internal.mz_compute_dependencies WHERE object_id LIKE 's%'
+>[retry] SELECT count(*) > 0 FROM mz_internal.mz_compute_dependencies WHERE object_id LIKE 's%'
 true
 
 # Test that `mz_compute_dependencies` is cleaned up when a cluster is dropped.
@@ -78,7 +78,7 @@ true
 > CREATE INDEX idx_cleanup IN CLUSTER cleanup ON t1 (a)
 > CREATE MATERIALIZED VIEW mv_cleanup IN CLUSTER cleanup AS SELECT * FROM t2
 
-> SELECT object.name, import.name
+>[retry] SELECT object.name, import.name
   FROM mz_internal.mz_compute_dependencies dep
   LEFT JOIN mz_objects object ON dep.object_id = object.id
   LEFT JOIN mz_objects import ON dep.dependency_id = import.id
@@ -88,7 +88,7 @@ mv_cleanup  t2
 
 > DROP CLUSTER cleanup CASCADE
 
-> SELECT object.name, import.name
+>[retry] SELECT object.name, import.name
   FROM mz_internal.mz_compute_dependencies dep
   LEFT JOIN mz_objects object ON dep.object_id = object.id
   LEFT JOIN mz_objects import ON dep.dependency_id = import.id

@@ -67,5 +67,5 @@ $ kafka-verify-topic sink=materialize.public.wide_data_sink await-value-schema=t
   INCLUDE KEY AS key2
   ENVELOPE UPSERT;
 
-> SELECT COUNT(*) FROM wide_data_source;
+>[retry] SELECT COUNT(*) FROM wide_data_source;
 10

@@ -52,5 +52,7 @@ $ kafka-ingest format=avro topic=int2long key-format=avro key-schema=${keyschema
 $ kafka-ingest format=avro topic=int2long key-format=avro key-schema=${keyschema-1-long-key} schema=${schema}
 {"key": 999999999999} {"nokey": "nokey1"}
 
+$ kafka-await-ingestion source=int2long topic=int2long
+
 ! SELECT * FROM int2long
 contains:Writer schema has type `Long`, but reader schema has type `Int` for field `Key.key`

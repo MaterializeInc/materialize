@@ -30,7 +30,7 @@ $ set schema={
 100000 100000 100000
 
 # We expect that we have successfully read and persisted some messages before the failpoint was activated
-> SELECT SUM(CAST(statistics->'topics'->'testdrive-failpoint-${testdrive.seed}'->'partitions'->'0'->'msgs' AS INT)) < 100000 FROM mz_kafka_source_statistics;
+>[retry] SELECT SUM(CAST(statistics->'topics'->'testdrive-failpoint-${testdrive.seed}'->'partitions'->'0'->'msgs' AS INT)) < 100000 FROM mz_kafka_source_statistics;
 true
 
 # Make sure that ingestion can continue

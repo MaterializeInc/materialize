@@ -59,6 +59,8 @@ class UpsertInsert(Check):
         return Testdrive(
             dedent(
                 """
+                $ kafka-await-ingestion source=upsert_insert topic=upsert-insert
+
                 > SELECT COUNT(*), COUNT(DISTINCT key1), COUNT(DISTINCT f1) FROM upsert_insert
                 10000 10000 10000
 
@@ -109,6 +111,8 @@ class UpsertUpdate(Check):
         return Testdrive(
             dedent(
                 """
+                $ kafka-await-ingestion source=upsert_update topic=upsert-update
+
                 > SELECT * FROM upsert_update_view;
                 C 10000 10000 10000
            """
@@ -156,6 +160,8 @@ class UpsertDelete(Check):
         return Testdrive(
             dedent(
                 """
+                $ kafka-await-ingestion source=upsert_delete topic=upsert-delete
+
                 > SELECT * FROM upsert_delete_view;
                 10000 10000 19999
            """

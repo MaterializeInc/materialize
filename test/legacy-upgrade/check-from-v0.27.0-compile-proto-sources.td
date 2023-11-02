@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> SELECT * FROM kafka_proto_source;
+>[retry] SELECT * FROM kafka_proto_source;
 id
 ---
 c
@@ -17,7 +17,7 @@ $ kafka-ingest topic=upgrade-proto-source-${arg.upgrade-from-version} format=pro
 {"id": "a"}
 {"id": "e"}
 
-> SELECT * FROM kafka_proto_source;
+>[retry] SELECT * FROM kafka_proto_source;
 id
 ---
 c

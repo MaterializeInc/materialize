@@ -65,12 +65,16 @@ class JsonSource(Check):
         return Testdrive(
             dedent(
                 """
+                $ kafka-await-ingestion source=format_jsonA topic=format-json
+
                 > SELECT * FROM format_jsonA ORDER BY key
                 "\\"array\\"" [1,2,3]
                 "\\"float\\"" 1.23
                 "\\"int\\"" 1
                 "\\"object\\"" "{\\"a\\":\\"b\\",\\"c\\":\\"d\\"}"
                 "\\"str\\"" "\\"hello\\""
+
+                $ kafka-await-ingestion source=format_jsonB topic=format-json
 
                 > SELECT * FROM format_jsonB ORDER BY key
                 "\\"array\\"" [1,2,3]

@@ -30,14 +30,14 @@ $ schema-registry-wait subject=postgres.public.char_varchar_type-value
   ENVELOPE DEBEZIUM;
 
 # Type information is not carried over as the AVRO protocol does not have CHAR/VARCHAR
-> SELECT pg_typeof(char_col), pg_typeof(varchar_col) FROM char_varchar_type;
+>[retry] SELECT pg_typeof(char_col), pg_typeof(varchar_col) FROM char_varchar_type;
 text text
 
-> SELECT char_col, varchar_col FROM char_varchar_type;
+>[retry] SELECT char_col, varchar_col FROM char_varchar_type;
 "a    " "a "
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 UPDATE char_varchar_type SET char_col = 'a  ', varchar_col = 'a  ';
 
-> SELECT char_col, varchar_col FROM char_varchar_type;
+>[retry] SELECT char_col, varchar_col FROM char_varchar_type;
 "a    " "a  "

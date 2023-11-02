@@ -175,6 +175,8 @@ class DecodeError(Check):
         return Testdrive(
             dedent(
                 """
+                $ kafka-await-ingestion source=decode_error topic=decode-error
+
                 ! SELECT * FROM decode_error
                 contains: Decode error
                 """
@@ -211,6 +213,8 @@ class DecodeErrorUpsertValue(Check):
                 $ kafka-ingest topic=decode-error-upsert-value key-format=bytes key-terminator=: format=bytes
                 key1: garbage
 
+                $ kafka-await-ingestion source=decode_error_upsert_value topic=decode-error-upsert-value
+
                 ! SELECT * FROM decode_error_upsert_value
                 contains: avro deserialization error
             """
@@ -224,6 +228,8 @@ class DecodeErrorUpsertValue(Check):
                     """
                     $ kafka-ingest topic=decode-error-upsert-value key-format=bytes key-terminator=: format=bytes
                     key2: garbage2
+
+                    $ kafka-await-ingestion source=decode_error_upsert_value topic=decode-error-upsert-value
 
                     ! SELECT * FROM decode_error_upsert_value
                     contains: avro deserialization error
@@ -245,6 +251,8 @@ class DecodeErrorUpsertValue(Check):
                     $ kafka-ingest topic=decode-error-upsert-value key-format=bytes key-terminator=: format=avro schema=${schema-string} confluent-wire-format=false
                     key3: {"f1": "garbage3"}
 
+                    $ kafka-await-ingestion source=decode_error_upsert_value topic=decode-error-upsert-value
+
                     ! SELECT * FROM decode_error_upsert_value
                     contains: avro deserialization error
                     """,
@@ -262,6 +270,8 @@ class DecodeErrorUpsertValue(Check):
                 key1:
                 key2:
                 key3:
+
+                $ kafka-await-ingestion source=decode_error_upsert_value topic=decode-error-upsert-value
 
                 > SELECT f1 FROM decode_error_upsert_value
                 1
@@ -298,6 +308,8 @@ class DecodeErrorUpsertKey(Check):
                 $ kafka-ingest topic=decode-error-upsert-key key-format=bytes key-terminator=: format=bytes
                 garbage1: value3
 
+                $ kafka-await-ingestion source=decode_error_upsert_key topic=decode-error-upsert-key
+
                 ! SELECT * FROM decode_error_upsert_key
                 contains: avro deserialization error
             """
@@ -325,6 +337,8 @@ class DecodeErrorUpsertKey(Check):
                     $ kafka-ingest topic=decode-error-upsert-key key-format=avro format=bytes key-schema=${key-schema-string} confluent-wire-format=false
                     {"f1": "garbage2"} value4
 
+                    $ kafka-await-ingestion source=decode_error_upsert_key topic=decode-error-upsert-key
+
                     ! SELECT * FROM decode_error_upsert_key
                     contains: avro deserialization error
                     """
@@ -348,6 +362,8 @@ class DecodeErrorUpsertKey(Check):
                     $ kafka-ingest topic=decode-error-upsert-key key-format=avro format=bytes key-schema=${key-schema-string} confluent-wire-format=false
                     {"f1": "garbage2"}
 
+                    $ kafka-await-ingestion source=decode_error_upsert_key topic=decode-error-upsert-key
+
                     ! SELECT * FROM decode_error_upsert_key
                     contains: avro deserialization error
                     """,
@@ -362,6 +378,8 @@ class DecodeErrorUpsertKey(Check):
                 # Retract any remaining garbage
                 $ kafka-ingest topic=decode-error-upsert-key key-format=bytes format=bytes key-terminator=:
                 garbage3:
+
+                $ kafka-await-ingestion source=decode_error_upsert_key topic=decode-error-upsert-key
 
                 # Source should return to operational status
                 > SELECT f1 FROM decode_error_upsert_key

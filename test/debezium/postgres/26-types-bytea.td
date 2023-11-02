@@ -31,7 +31,7 @@ $ schema-registry-wait subject=postgres.public.bytea_type-value
 
 # There is \\x124 below instead of \x1234 but apparently this is outside of Mz
 # as Mz returns the correct length and the correct output in the psql client
-> SELECT f1, length(f1), f1 = E'\\xABCDEF1234' FROM bytea_type;
+>[retry] SELECT f1, length(f1), f1 = E'\\xABCDEF1234' FROM bytea_type;
 "" 0 false
 <null> <null> <null>
 "\\x00" 1 false
@@ -42,7 +42,7 @@ UPDATE bytea_type SET f1 = E'\\xFFFF' WHERE f1 IS NULL;
 UPDATE bytea_type SET f1 = NULL WHERE f1 = E'\\xABCDEF1234';
 UPDATE bytea_type SET f1 = E'\\x0000' WHERE f1 = E'\\x00';
 
-> SELECT f1, length(f1) FROM bytea_type;
+>[retry] SELECT f1, length(f1) FROM bytea_type;
 "" "0"
 <null> <null>
 "\\x00\\x00" 2

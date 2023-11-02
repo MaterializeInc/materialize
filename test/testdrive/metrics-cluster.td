@@ -11,7 +11,7 @@
 > CREATE CLUSTER bar REPLICAS ()
 > CREATE CLUSTER xyzzy REPLICAS (size_4 (SIZE '4'))
 
-> SELECT
+>[retry] SELECT
       c.name,
       r.name,
       u.process_id,

@@ -16,8 +16,7 @@ $ set schema={
     ]
   }
 
-> SELECT * FROM kafka_source;
-
+>[retry] SELECT * FROM kafka_source;
 a b
 ---
 1 2
@@ -27,8 +26,7 @@ $ kafka-ingest format=avro topic=upgrade-kafka-source-${arg.upgrade-from-version
 {"a": 10, "b": 20}
 {"a": 20, "b": 30}
 
-> SELECT * FROM kafka_source;
-
+>[retry] SELECT * FROM kafka_source;
 a b
 ---
 1 2
@@ -47,7 +45,7 @@ materialize_public_kafka_source  linked
 # currently see additional `drop` and `create` events for each replica that
 # existed before the migration. Those events don't have a user attached, so we
 # can recognize them and filter them out.
-> SELECT event_type, object_type, details - 'id' - 'cluster_id' - 'replica_id' - 'billed_as' - 'internal', user
+>[retry] SELECT event_type, object_type, details - 'id' - 'cluster_id' - 'replica_id' - 'billed_as' - 'internal', user
   FROM mz_audit_events
   WHERE (
     details->>'name' = 'materialize_public_kafka_source' OR

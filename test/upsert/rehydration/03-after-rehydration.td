@@ -35,7 +35,7 @@ mammalmore    moose    2
 # Ensure that statistics are correctly updated. Note that the
 # byte count could be lower or higher than before restarting,
 # as rehydration has to store values differently.
-> SELECT
+>[retry] SELECT
     SUM(u.envelope_state_bytes) > 0,
     SUM(u.envelope_state_count),
     bool_and(u.rehydration_latency_ms IS NOT NULL)
@@ -58,6 +58,8 @@ SELECT
 $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
 {"key": "fish"} {"f1": "longerfish", "f2": 9000}
 
+$ kafka-await-ingestion source=upsert topic=upsert
+
 > SELECT * from upsert
 key           f1                  f2
 --------------------------------------
@@ -72,7 +74,7 @@ mammalmore    moose               2
 #
 # This is also != because different implementations use
 # space differently during rehydration and normal operation.
-> SELECT
+>[retry] SELECT
     SUM(u.envelope_state_bytes) != ${rehydrated-state-bytes},
     SUM(u.envelope_state_count)
   FROM mz_sources s
@@ -92,7 +94,7 @@ SELECT
 $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
 {"key": "fish"} {"f1": "MUCHMUCHMUCHLONGERVALUE", "f2": 9000}
 
-> SELECT
+>[retry] SELECT
     SUM(u.envelope_state_bytes) > ${state-bytes},
     SUM(u.envelope_state_count)
   FROM mz_sources s
@@ -107,13 +109,15 @@ true 3
 $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
 {"key": "fish"}
 
+$ kafka-await-ingestion source=upsert topic=upsert
+
 > SELECT * from upsert
 key           f1                  f2
 --------------------------------------
 birdmore      geese               56
 mammalmore    moose               2
 
-> SELECT
+>[retry] SELECT
     SUM(u.envelope_state_count)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id

@@ -65,6 +65,8 @@ $ kafka-ingest partition=1 format=avro topic=data schema=${schema} timestamp=1
 {"a": 1, "b": 3}
 {"a": 1, "b": 3}
 
+$ kafka-await-ingestion source=data_rt topic=data
+
 > SELECT * FROM view_rt
 b  sum
 ------
@@ -96,6 +98,8 @@ $ kafka-ingest partition=1 format=avro topic=data schema=${schema} timestamp=1
 
 $ kafka-ingest partition=3 format=avro topic=data schema=${schema} timestamp=1
 {"a": 1, "b": 11}
+
+$ kafka-await-ingestion source=data_rt topic=data
 
 > SELECT * FROM view_rt
 b  sum

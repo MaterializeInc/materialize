@@ -83,6 +83,8 @@ class RenameSource(Check):
         return Testdrive(
             dedent(
                 """
+                $ kafka-await-ingestion progress-subsource=rename_source1_progress topic=rename-source
+
                 > SELECT * FROM rename_source3;
                 A
                 B

@@ -40,5 +40,7 @@ GRANT CREATE, USAGE ON SCHEMA public TO materialize
 $ kafka-ingest format=bytes topic=resolution-no-publish-writer timestamp=1
 \\x00\x00\x00\x00\x01\xf6\x01
 
+$ kafka-await-ingestion source=resolution_no_publish_writer topic=resolution-no-publish-writer
+
 ! SELECT * FROM resolution_no_publish_writer;
 contains:to resolve

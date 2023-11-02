@@ -279,6 +279,9 @@ $ kafka-ingest format=avro topic=non-dbz-data-varying-partition schema=${non-dbz
 {"a": 7, "b": 8}
 {"a": 9, "b": 10}
 
+$ kafka-await-ingestion source=non_dbz_data_varying_partition topic=non-dbz-data-varying-partition
+$ kafka-await-ingestion source=non_dbz_data_varying_partition_2 topic=non-dbz-data-varying-partition
+
 # Because the start offset for any new partitions will be 0, the first record sent to the new
 # partition will be included.
 > SELECT * FROM non_dbz_data_varying_partition
@@ -308,6 +311,8 @@ $ kafka-add-partitions topic=non-dbz-data-varying-partition total-partitions=3
 
 $ kafka-ingest format=avro topic=non-dbz-data-varying-partition schema=${non-dbz-schema} timestamp=1 partition=2
 {"a": 11, "b": 12}
+
+$ kafka-await-ingestion source=non_dbz_data_varying_partition_3 topic=non-dbz-data-varying-partition
 
 # Because the start offset for any new partitions will be 0, the first record sent to the new
 # partition will be included.

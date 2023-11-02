@@ -914,6 +914,8 @@ $ kafka-ingest format=avro topic=upsert-unique key-format=avro key-schema=${{key
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
   ENVELOPE UPSERT
 
+$ kafka-await-ingestion source=s1 topic=upsert-unique
+
 > SELECT COUNT(*) FROM s1;
   /* B */
 {self.n()}
@@ -1172,7 +1174,7 @@ $ kafka-verify-topic sink=materialize.public.sink1 await-value-schema=true await
 
 > CREATE MATERIALIZED VIEW sink1_check_v AS SELECT COUNT(*) FROM sink1_check;
 
-> SELECT * FROM sink1_check_v
+>[retry] SELECT * FROM sink1_check_v
   /* B */
 """
             + str(self.n())
@@ -1294,6 +1296,8 @@ ALTER TABLE t1 REPLICA IDENTITY FULL;
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 {insertions}
+
+$ postgres-await-ingestion source=s1 connection=postgres://postgres:postgres@postgres
 
 > SELECT count(*) FROM t1
   /* B */

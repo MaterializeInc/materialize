@@ -48,5 +48,7 @@ $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} 
 $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
 {"key": "fish"} {"f1": "s", "f2": 2}
 
+$ kafka-await-ingestion source=upsert topic=upsert
+
 > SELECT f2 from upsert
 2

@@ -77,6 +77,8 @@ a data b
 $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema}
 {"b": "bdata", "a": 1} {"before": {"row": {"a": 1, "data": "fish2", "b": "bdata"}}, "after": {"row": {"a": 1, "data": "fish3", "b": "bdata"}}}
 
+$ kafka-await-ingestion source=doin_upsert topic=dbzupsert
+
 > SELECT * FROM doin_upsert
 a data b
 -----------

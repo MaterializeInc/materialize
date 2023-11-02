@@ -35,6 +35,8 @@ $ kafka-ingest format=avro topic=fetch-concurrent-same-source schema=${int} time
 {"f1": 234}
 {"f1": 345}
 
+$ kafka-await-ingestion source=fetch_concurrent_same_source topic=fetch-concurrent-same-source
+
 > SELECT COUNT(*) FROM fetch_concurrent_same_source;
 3
 

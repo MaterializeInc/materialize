@@ -27,5 +27,5 @@ INSERT INTO money_type VALUES (NULL), (12.34);
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-! SELECT * FROM money_type;
+![retry] SELECT * FROM money_type;
 decimals with precision greater than 38 are not supported

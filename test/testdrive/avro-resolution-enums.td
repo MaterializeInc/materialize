@@ -41,6 +41,8 @@ $ kafka-ingest format=avro topic=resolution-enums schema=${enum-reader} timestam
 > SHOW COLUMNS FROM resolution_enums
 f1 false text
 
+$ kafka-await-ingestion source=resolution_enums topic=resolution-enums
+
 > SELECT f1 FROM resolution_enums
 E1
 E1

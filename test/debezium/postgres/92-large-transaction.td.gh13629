@@ -80,24 +80,24 @@ $ schema-registry-wait subject=postgres.public.large_same_rows-value
   );
 
 
-> SELECT COUNT(*), COUNT(DISTINCT f1), MIN(f1), MAX(f1) FROM large_distinct_rows
+>[retry] SELECT COUNT(*), COUNT(DISTINCT f1), MIN(f1), MAX(f1) FROM large_distinct_rows
 10000 10000 1 10000
 
-> SELECT COUNT(*), COUNT(DISTINCT f1), MIN(f1), MAX(f1) FROM large_same_rows;
+>[retry] SELECT COUNT(*), COUNT(DISTINCT f1), MIN(f1), MAX(f1) FROM large_same_rows;
 10000 1 1 1
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 UPDATE large_distinct_rows SET f1 = f1 + 10000;
 UPDATE large_same_rows SET f1 = 2;
 
-> SELECT COUNT(*), COUNT(DISTINCT f1), MIN(f1), MAX(f1) FROM large_distinct_rows
+>[retry] SELECT COUNT(*), COUNT(DISTINCT f1), MIN(f1), MAX(f1) FROM large_distinct_rows
 10000 10000 10001 20000
 
-> SELECT COUNT(*), COUNT(DISTINCT f1), MIN(f1), MAX(f1) FROM large_same_rows
+>[retry] SELECT COUNT(*), COUNT(DISTINCT f1), MIN(f1), MAX(f1) FROM large_same_rows
 10000 1 2 2
 
 # Check that things are transactionally grouped as expected
-> SELECT event_count, data_collections::text FROM postgres_tx_metadata WHERE event_count > 0 AND (data_collections::text LIKE '%large_distinct_rows%' OR data_collections::text LIKE '%large_same_rows%') ORDER BY id ASC
+>[retry] SELECT event_count, data_collections::text FROM postgres_tx_metadata WHERE event_count > 0 AND (data_collections::text LIKE '%large_distinct_rows%' OR data_collections::text LIKE '%large_same_rows%') ORDER BY id ASC
 event_count data_collections
 -----------------------------
 20000       "{\"(public.large_distinct_rows,10000)\",\"(public.large_same_rows,10000)\"}"

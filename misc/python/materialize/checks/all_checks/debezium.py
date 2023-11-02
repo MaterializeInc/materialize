@@ -60,7 +60,7 @@ class DebeziumPostgres(Check):
 
                 > CREATE MATERIALIZED VIEW debezium_view1 AS SELECT f1, f3, SUM(LENGTH(f4)) FROM debezium_source1 GROUP BY f1, f3;
 
-                > SELECT * FROM debezium_view1;
+                >[retry] SELECT * FROM debezium_view1;
                 A 1 16000
                 B 1 16000
                 """
@@ -118,7 +118,7 @@ class DebeziumPostgres(Check):
         return Testdrive(
             dedent(
                 """
-                > SELECT * FROM debezium_view1;
+                >[retry] SELECT * FROM debezium_view1;
                 A 5 16000
                 B 5 16000
                 C 5 16000
@@ -126,7 +126,7 @@ class DebeziumPostgres(Check):
                 E 3 16000
                 F 2 16000
 
-                > SELECT * FROM debezium_view2;
+                >[retry] SELECT * FROM debezium_view2;
                 A 5 16000
                 B 5 16000
                 C 5 16000
@@ -134,7 +134,7 @@ class DebeziumPostgres(Check):
                 E 3 16000
                 F 2 16000
 
-                > SELECT * FROM debezium_view3;
+                >[retry] SELECT * FROM debezium_view3;
                 A 5 16000
                 B 5 16000
                 C 5 16000

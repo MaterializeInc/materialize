@@ -55,7 +55,7 @@ msg
 # utilized is using `mz_source_statistics`. Timely only supports
 # mapping workers 0,1 to process 0 and 2,3 to process 1, so we use a CTE
 # here to distinguish between processes.
-> WITH cte AS (
+>[retry] WITH cte AS (
     SELECT
       CASE WHEN u.worker_id IN (0, 1) THEN 0 ELSE 1 END as process_id,
       SUM(u.messages_received) as messages_received

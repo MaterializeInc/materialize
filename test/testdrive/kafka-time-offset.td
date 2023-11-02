@@ -168,7 +168,8 @@ $ kafka-add-partitions topic=t1 total-partitions=4
 $ kafka-ingest format=bytes topic=t1 key-format=bytes key-terminator=: timestamp=5 partition=3
 hazelnut:hazelnut
 
-$ set-sql-timeout duration=60s
+$ kafka-await-ingestion source=append_time_offset_5 topic=t1
+
 
 > SELECT * FROM append_time_offset_5
 text      offset
@@ -306,8 +307,7 @@ $ kafka-add-partitions topic=t2 total-partitions=4
 $ kafka-ingest format=bytes topic=t2 key-format=bytes key-terminator=: timestamp=5 partition=3
 hazelnut:hazelnut
 
-# It takes a while for new partitions to be consumed...
-$ set-sql-timeout duration=60s
+$ kafka-await-ingestion source=upsert_time_offset_5 topic=t2
 
 > SELECT * FROM upsert_time_offset_5
 key       text      offset

@@ -49,6 +49,8 @@ def test_disk_replica(mz: MaterializeApplication) -> None:
             $ kafka-ingest key-format=bytes format=bytes topic=test
             key1:val3
 
+            $ kafka-await-ingestion source=source1 topic=test
+
             > SELECT * FROM source1;
             key           text
             ------------------

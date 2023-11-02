@@ -35,5 +35,5 @@ $ kafka-ingest format=avro topic=upgrade-kafka-source-${arg.upgrade-from-version
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE NONE
 
-> SELECT COUNT(*) FROM kafka_source
+>[retry] SELECT COUNT(*) FROM kafka_source
 2

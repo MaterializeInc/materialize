@@ -28,7 +28,7 @@ INSERT INTO alter_extend_primary_key VALUES (123, 234), (345, 456);
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-> SELECT * FROM alter_extend_primary_key;
+>[retry] SELECT * FROM alter_extend_primary_key;
 123 234
 345 456
 
@@ -38,6 +38,6 @@ INSERT INTO alter_extend_primary_key VALUES (123, 567);
 DELETE FROM alter_extend_primary_key WHERE f1 = 345;
 
 # The updates after the ALTER TABLE are not replicated as replication has stopped
-> SELECT * FROM alter_extend_primary_key;
+>[retry] SELECT * FROM alter_extend_primary_key;
 123 234
 345 456

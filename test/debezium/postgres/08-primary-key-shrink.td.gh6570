@@ -28,7 +28,7 @@ INSERT INTO alter_shrink_primary_key VALUES (123,234),(345,456);
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-> SELECT * FROM alter_shrink_primary_key;
+>[retry] SELECT * FROM alter_shrink_primary_key;
 123 234
 345 456
 
@@ -37,6 +37,6 @@ ALTER TABLE alter_shrink_primary_key DROP COLUMN f2, ADD PRIMARY KEY (f1);
 INSERT INTO alter_shrink_primary_key VALUES (567);
 DELETE FROM alter_shrink_primary_key WHERE f1 = 123;
 
-> SELECT * FROM alter_shrink_primary_key;
+>[retry] SELECT * FROM alter_shrink_primary_key;
 345
 567

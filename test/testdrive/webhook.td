@@ -28,14 +28,14 @@ b
 $ webhook-append database=materialize schema=public name=webhook_text
 c
 
-> SELECT * FROM webhook_text;
+>[retry] SELECT * FROM webhook_text;
 a
 b
 c
 
 > CREATE VIEW webhook_text_ascii_code AS SELECT ascii(body) FROM webhook_text WHERE ascii(body) % 2 = 0;
 
-> SELECT * FROM webhook_text_ascii_code;
+>[retry] SELECT * FROM webhook_text_ascii_code;
 98
 
 > ALTER SOURCE webhook_text RENAME TO webhook_text_renamed;
@@ -46,7 +46,7 @@ contains: unknown catalog item 'webhook_text'
 $ webhook-append database=materialize schema=public name=webhook_text status=404
 d
 
-> SELECT * FROM webhook_text_renamed;
+>[retry] SELECT * FROM webhook_text_renamed;
 a
 b
 c
@@ -54,13 +54,13 @@ c
 $ webhook-append database=materialize schema=public name=webhook_text_renamed
 d
 
-> SELECT * FROM webhook_text_renamed;
+>[retry] SELECT * FROM webhook_text_renamed;
 a
 b
 c
 d
 
-> SELECT * FROM webhook_text_ascii_code;
+>[retry] SELECT * FROM webhook_text_ascii_code;
 98
 100
 
@@ -84,7 +84,7 @@ $ webhook-append database=materialize schema=public name=webhook_json_with_heade
   "goodbye": "world"
 }
 
-> SELECT body FROM webhook_json_with_headers WHERE headers -> 'app' = 'test_drive';
+>[retry] SELECT body FROM webhook_json_with_headers WHERE headers -> 'app' = 'test_drive';
 "{\"hello\":\"world\"}"
 
 $ webhook-append database=materialize schema=public name=webhook_json_with_headers content-type=application/json app=
@@ -92,28 +92,28 @@ $ webhook-append database=materialize schema=public name=webhook_json_with_heade
   "empty": "world"
 }
 
-> SELECT body FROM webhook_json_with_headers WHERE headers -> 'app' = '';
+>[retry] SELECT body FROM webhook_json_with_headers WHERE headers -> 'app' = '';
 "{\"empty\":\"world\"}"
 
 $ webhook-append database=materialize schema=public name=webhook_json_with_headers content-type=application/json app=list
 [1, 2, 3]
 
-> SELECT body FROM webhook_json_with_headers WHERE headers -> 'app' = 'list';
+>[retry] SELECT body FROM webhook_json_with_headers WHERE headers -> 'app' = 'list';
 "[1,2,3]"
 
 $ webhook-append database=materialize schema=public name=webhook_json_with_headers content-type=application/json app=list2
 { "foo": [1, 2, 3] }
 
-> SELECT body FROM webhook_json_with_headers WHERE headers -> 'app' = 'list2';
+>[retry] SELECT body FROM webhook_json_with_headers WHERE headers -> 'app' = 'list2';
 "{\"foo\":[1,2,3]}"
 
 $ webhook-append database=materialize schema=public name=webhook_json_with_headers content-type=application/json app=string
 "Hellö String"
 
-> SELECT body FROM webhook_json_with_headers WHERE headers -> 'app' = 'string';
+>[retry] SELECT body FROM webhook_json_with_headers WHERE headers -> 'app' = 'string';
 "\"Hellö String\""
 
-! SELECT * FROM webhook_json_with_headers;
+![retry] SELECT * FROM webhook_json_with_headers;
 contains: binary encoding of map types is not implemented
 
 # An invalid body should return a 400.
@@ -146,7 +146,7 @@ null
 $ webhook-append database=materialize schema=public name=webhook_bytes
 123
 
-> SELECT * FROM webhook_bytes;
+>[retry] SELECT * FROM webhook_bytes;
 "\\xe5\\x92\\x8c\\xe8\\xa3\\xbd\\xe6\\xbc\\xa2\\xe8\\xaa\\x9e"
 null
 123
@@ -180,7 +180,7 @@ another_request
 $ webhook-append name=webhook_bytes_with_hmac status=400
 did_not_include_necessary_header
 
-> SELECT * FROM webhook_bytes_with_hmac;
+>[retry] SELECT * FROM webhook_bytes_with_hmac;
 "hello world"
 "another_request"
 
@@ -196,7 +196,7 @@ did_not_include_necessary_header
 $ webhook-append name=webhook_bytes_with_secret x-signature=VNCe6bTKrlFO46GfiUYR/xFpeZ2H/KbLfR9oJKYAwkc=
 using an mz secret
 
-> SELECT * FROM webhook_bytes_with_secret;
+>[retry] SELECT * FROM webhook_bytes_with_secret;
 "using an mz secret"
 
 > CREATE SOURCE webhook_buildkite IN CLUSTER webhook_cluster FROM WEBHOOK
@@ -211,7 +211,7 @@ using an mz secret
 $ webhook-append name=webhook_buildkite x-buildkite-signature=timestamp::42,signature::b610a43432fe965eb8e2a3ce4939a6bafaad3f35583c596e2f7271125a346d95
 i hope this works
 
-> SELECT * FROM webhook_buildkite;
+>[retry] SELECT * FROM webhook_buildkite;
 "i hope this works"
 
 > CREATE SOURCE webhook_hex IN CLUSTER webhook_cluster FROM WEBHOOK
@@ -261,7 +261,7 @@ abc
 $ webhook-append name=webhook_double_validation x-signature-sha256=20460da764521c155989f9ede00d6047c459c87bca6712eef27f72ae32c62d3f x-signature-md5=c34fd128f787067796212d31fced1881
 materialize space monkey
 
-> SELECT * FROM webhook_double_validation;
+>[retry] SELECT * FROM webhook_double_validation;
 "materialize space monkey"
 
 # Webhooks should support special characters like a /
@@ -274,7 +274,7 @@ wont_work
 $ webhook-append name=webhook_with_%2F
 will_work
 
-> SELECT * FROM "webhook_with_/"
+>[retry] SELECT * FROM "webhook_with_/"
 "will_work"
 
 > CREATE SOURCE webhook_text_headers_block_list IN CLUSTER webhook_cluster FROM WEBHOOK
@@ -284,7 +284,7 @@ will_work
 $ webhook-append name=webhook_text_headers_block_list
 foo
 
-> SELECT body, headers::text FROM webhook_text_headers_block_list
+>[retry] SELECT body, headers::text FROM webhook_text_headers_block_list
 foo "{content-length=>3}"
 
 > CREATE SOURCE webhook_text_headers_allow_list IN CLUSTER webhook_cluster FROM WEBHOOK
@@ -294,7 +294,7 @@ foo "{content-length=>3}"
 $ webhook-append name=webhook_text_headers_allow_list x-random=bar
 anotha_one
 
-> SELECT body, headers::text FROM webhook_text_headers_allow_list
+>[retry] SELECT body, headers::text FROM webhook_text_headers_allow_list
 anotha_one "{x-random=>bar}"
 
 > CREATE SOURCE webhook_text_filtering_headers IN CLUSTER webhook_cluster FROM WEBHOOK
@@ -313,7 +313,7 @@ request_bad
 $ webhook-append name=webhook_text_filtering_headers x-api-key=abc123 x-random=foo
 request_missing_some_mapped_headers
 
-> SELECT body, headers::text, event_timestamp, event_id FROM webhook_text_filtering_headers
+>[retry] SELECT body, headers::text, event_timestamp, event_id FROM webhook_text_filtering_headers
 request_1 "{content-type=>text/example,x-id=>a,x-timestamp=>100}" 100 a
 request_missing_some_mapped_headers "{x-random=>foo}" <null> <null>
 
@@ -322,12 +322,12 @@ request_missing_some_mapped_headers "{x-random=>foo}" <null> <null>
 $ set-from-sql var=webhook-source-id
 SELECT id FROM mz_sources WHERE name = 'webhook_bytes';
 
-> SELECT COUNT(*) FROM mz_internal.mz_storage_shards WHERE object_id = '${webhook-source-id}';
+>[retry] SELECT COUNT(*) FROM mz_internal.mz_storage_shards WHERE object_id = '${webhook-source-id}';
 1
 
 > DROP SOURCE webhook_bytes;
 
-> SELECT COUNT(*) FROM mz_internal.mz_storage_shards WHERE object_id = '${webhook-source-id}';
+>[retry] SELECT COUNT(*) FROM mz_internal.mz_storage_shards WHERE object_id = '${webhook-source-id}';
 0
 
 # Cleanup.

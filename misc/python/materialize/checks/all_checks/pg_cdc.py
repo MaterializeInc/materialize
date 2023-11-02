@@ -90,8 +90,7 @@ class PgCdcBase:
                 + (
                     f"""
                 # Wait until Pg snapshot is complete in order to avoid #18940
-                > SELECT COUNT(*) > 0 FROM postgres_source_tableA{self.suffix}
-                true
+                $ postgres-await-ingestion source=postgres_source1{self.suffix} connection=postgres://postgres:postgres@postgres
                 """
                     if self.wait
                     else ""
@@ -142,10 +141,8 @@ class PgCdcBase:
                 + (
                     f"""
                 # Wait until Pg snapshot is complete in order to avoid #18940
-                > SELECT COUNT(*) > 0 FROM postgres_source_tableB{self.suffix}
-                true
-                > SELECT COUNT(*) > 0 FROM postgres_source_tableC{self.suffix}
-                true
+                $ postgres-await-ingestion source=postgres_source2{self.suffix} connection=postgres://postgres:postgres@postgres
+                $ postgres-await-ingestion source=postgres_source3{self.suffix} connection=postgres://postgres:postgres@postgres
                 """
                     if self.wait
                     else ""
@@ -162,6 +159,8 @@ class PgCdcBase:
                 GRANT SELECT ON postgres_source_tableB{self.suffix} TO materialize
                 GRANT SELECT ON postgres_source_tableC{self.suffix} TO materialize
 
+                $ postgres-await-ingestion source=postgres_source1{self.suffix} connection=postgres://postgres:postgres@postgres
+
                 > SELECT f1, max(f2), SUM(LENGTH(f3)) FROM postgres_source_tableA{self.suffix} GROUP BY f1;
                 A 800 {self.expects}
                 B 800 {self.expects}
@@ -172,6 +171,8 @@ class PgCdcBase:
                 G 300 {self.expects}
                 H 200 {self.expects}
 
+                $ postgres-await-ingestion source=postgres_source2{self.suffix} connection=postgres://postgres:postgres@postgres
+
                 > SELECT f1, max(f2), SUM(LENGTH(f3)) FROM postgres_source_tableB{self.suffix} GROUP BY f1;
                 A 800 {self.expects}
                 B 800 {self.expects}
@@ -181,6 +182,8 @@ class PgCdcBase:
                 F 400 {self.expects}
                 G 300 {self.expects}
                 H 200 {self.expects}
+
+                $ postgres-await-ingestion source=postgres_source3{self.suffix} connection=postgres://postgres:postgres@postgres
 
                 > SELECT f1, max(f2), SUM(LENGTH(f3)) FROM postgres_source_tableC{self.suffix} GROUP BY f1;
                 A 800 {self.expects}
@@ -301,6 +304,8 @@ class PgCdcMzNow(Check):
         return Testdrive(
             dedent(
                 """
+                $ postgres-await-ingestion source=postgres_mz_now_source connection=postgres://postgres:postgres@postgres
+
                 > SELECT COUNT(*) FROM postgres_mz_now_table;
                 13
 
@@ -312,6 +317,8 @@ class PgCdcMzNow(Check):
                 INSERT INTO postgres_mz_now_table VALUES (NOW(), 'E4');
                 DELETE FROM postgres_mz_now_table WHERE f2 = 'B3';
                 UPDATE postgres_mz_now_table SET f1 = NOW() WHERE f2 = 'E1'
+
+                $ postgres-await-ingestion source=postgres_mz_now_source connection=postgres://postgres:postgres@postgres
 
                 # Expect some rows newer than 60 seconds in view
                 > SELECT COUNT(*) >= 6 FROM postgres_mz_now_view

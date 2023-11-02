@@ -36,6 +36,8 @@ $ kafka-ingest format=avro topic=resolution-unions schema=${union-int-string} ti
 {"f1": {"int": 123 } }
 {"f1": {"string": "abc" } }
 
+$ kafka-await-ingestion source=resolution_unions topic=resolution-unions
+
 ! SELECT f1 FROM resolution_unions
 contains:Failed to match writer union variant `String` against any variant in the reader for field `schema_union.f1`
 

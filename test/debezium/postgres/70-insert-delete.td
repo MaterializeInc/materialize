@@ -35,5 +35,5 @@ INSERT INTO insert_delete VALUES (2);
 DELETE FROM insert_delete WHERE f1 = 2;
 COMMIT;
 
-> SELECT * FROM insert_delete;
+>[retry] SELECT * FROM insert_delete;
 1

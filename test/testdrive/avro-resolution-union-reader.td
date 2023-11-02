@@ -35,6 +35,8 @@ $ kafka-ingest format=avro topic=resolution-unions schema=${union-int} timestamp
 $ kafka-ingest format=avro topic=resolution-unions schema=${int} timestamp=2
 {"f1": 234 }
 
+$ kafka-await-ingestion source=resolution_unions topic=resolution-unions
+
 > SELECT f1 FROM resolution_unions
 123
 234

@@ -30,7 +30,7 @@ $ schema-registry-wait subject=postgres.public.replica_identity_default-value
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-> SELECT * FROM replica_identity_default
+>[retry] SELECT * FROM replica_identity_default
 1 1 1
 2 2 2
 3 3 3
@@ -46,7 +46,7 @@ UPDATE replica_identity_default SET f1 = 5 WHERE f1 = 4;
 # ! SELECT * FROM replica_identity_default;
 # contains:Invalid data in source, saw retractions
 
-> SELECT * FROM replica_identity_default
+>[retry] SELECT * FROM replica_identity_default
 1 5 1
 2 2 5
 5 4 4

@@ -45,6 +45,8 @@ true
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 INSERT INTO t1 SELECT * FROM t1;
 
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
+
 > SELECT pg_typeof(f1), pg_typeof(f2), pg_typeof(f3) FROM t1 LIMIT 1;
 smallint integer bigint
 

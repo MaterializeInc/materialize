@@ -67,6 +67,8 @@ fish    fishval  1000   gus     gusfive
 $ kafka-ingest format=avro topic=headers_src key-format=avro key-schema=${keyschema} schema=${schema} headers={"gus":"gusfive"}
 {"key": "fish"} {"f1": "fishval", "f2": 1000}
 
+$ kafka-await-ingestion source=headers_src topic=headers_src
+
 # empty case + has headers case
 > SELECT key, f1, f2, list_length(headers) from headers_src
 key     f1       f2     list_length
@@ -77,6 +79,8 @@ fish2   fishval  1000   0
 # Headers with the same key are both preserved
 $ kafka-ingest format=avro topic=headers_src key-format=avro key-schema=${keyschema} schema=${schema} headers=[{"gus": "a"}, {"gus": "b"}]
 {"key": "fish"} {"f1": "fishval", "f2": 1000}
+
+$ kafka-await-ingestion source=headers_src topic=headers_src
 
 > SELECT key, f1, f2, headers[1].value as gus1, headers[2].value as gus2 from headers_src
 key     f1       f2     gus1     gus2
@@ -108,6 +112,8 @@ fish    fishval  1000   1             0
 $ kafka-ingest format=avro topic=headers_also key-format=avro key-schema=${keyschema} schema=${schema} headers={"gus": "gus=five"}
 {"key": "fish"} {"f1": "fishval", "f2": 1000}
 
+$ kafka-await-ingestion source=headers_also topic=headers_also
+
 > SELECT key, f1, f2, headers[1].value as gus, partition from headers_also
 key     f1       f2     gus           partition
 -----------------------------------------------
@@ -116,6 +122,8 @@ fish    fishval  1000   gus=five      0
 # null header
 $ kafka-ingest format=avro topic=headers_also key-format=avro key-schema=${keyschema} schema=${schema} headers={"gus": null}
 {"key": "fish"} {"f1": "fishval", "f2": 1000}
+
+$ kafka-await-ingestion source=headers_also topic=headers_also
 
 > SELECT key, f1, f2, headers[1].value as gus, partition from headers_also
 key     f1       f2     gus           partition

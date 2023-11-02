@@ -18,7 +18,7 @@ materialize_public_upgrade_kafka_sink  linked
 # currently see additional `drop` and `create` events for each replica that
 # existed before the migration. Those events don't have a user attached, so we
 # can recognize them and filter them out.
-> SELECT event_type, object_type, details - 'id' - 'cluster_id' - 'replica_id' - 'billed_as' - 'internal'
+>[retry] SELECT event_type, object_type, details - 'id' - 'cluster_id' - 'replica_id' - 'billed_as' - 'internal'
   FROM mz_audit_events
   WHERE (
     details->>'name' = 'materialize_public_upgrade_kafka_sink' OR

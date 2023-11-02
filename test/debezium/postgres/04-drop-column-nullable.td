@@ -28,7 +28,7 @@ $ schema-registry-wait subject=postgres.public.alter_drop_column-value
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-> SELECT * FROM alter_drop_column;
+>[retry] SELECT * FROM alter_drop_column;
 123 234 345
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -38,6 +38,6 @@ INSERT INTO alter_drop_column VALUES (1234);
 # Prior to Debezium 1.6, NULLs would be returned for col_null_default in new rows.
 # Starting with Debezium 1.6, the 999 DEFAULT value will be returned instead.
 
-> SELECT * FROM alter_drop_column;
+>[retry] SELECT * FROM alter_drop_column;
 123 234 345
 1234 <null> 999

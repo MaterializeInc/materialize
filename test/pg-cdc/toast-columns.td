@@ -48,6 +48,8 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 UPDATE t1 SET a = 3;
 
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
+
 > SELECT a, length(b) FROM t1;
 3 32768
 3 32768

@@ -27,7 +27,7 @@ INSERT INTO alter_add_column_primary_key VALUES (123);
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-> SELECT * FROM alter_add_column_primary_key;
+>[retry] SELECT * FROM alter_add_column_primary_key;
 123
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -38,5 +38,5 @@ INSERT INTO alter_add_column_primary_key VALUES (123,2);
 UPDATE alter_add_column_primary_key SET f1 = f1 * 10 WHERE pk_column = 1;
 UPDATE alter_add_column_primary_key SET f1 = f1 * 100 WHERE pk_column = 2;
 
-> SELECT * FROM alter_add_column_primary_key;
+>[retry] SELECT * FROM alter_add_column_primary_key;
 123

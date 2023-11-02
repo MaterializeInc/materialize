@@ -46,6 +46,8 @@ true
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 INSERT INTO enum_type SELECT * FROM enum_type;
 
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
+
 > SELECT pg_typeof(f1) FROM enum_type LIMIT 1;
 text
 

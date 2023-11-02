@@ -119,7 +119,7 @@ class KafkaTransactionLogGreaterThan1:
         c.testdrive(
             dedent(
                 f"""
-                > SELECT bool_or(error ~* '{error}'), bool_or(details::json#>>'{{hints,0}}' ~* '{hint}')
+                >[retry] SELECT bool_or(error ~* '{error}'), bool_or(details::json#>>'{{hints,0}}' ~* '{hint}')
                   FROM mz_internal.mz_sink_status_history
                   JOIN mz_sinks ON mz_sinks.id = sink_id
                   WHERE name = 'kafka_sink' and status = 'stalled'
@@ -209,7 +209,7 @@ class KafkaDisruption:
         c.testdrive(
             dedent(
                 f"""
-                > SELECT status, error ~* '{error}'
+                >[retry] SELECT status, error ~* '{error}'
                   FROM mz_internal.mz_source_statuses
                   WHERE name = 'source1'
                 stalled true
@@ -224,10 +224,12 @@ class KafkaDisruption:
                 $ kafka-ingest topic=source-topic format=bytes
                 ABC
 
+                $ kafka-await-ingestion source=source1 topic=source-topic
+
                 > SELECT COUNT(*) FROM source1;
                 2
 
-                > SELECT status, error
+                >[retry] SELECT status, error
                   FROM mz_internal.mz_source_statuses
                   WHERE name = 'source1'
                 running <null>
@@ -315,7 +317,7 @@ class KafkaSinkDisruption:
                 # Sinks generally halt after receiving an error, which means that they may alternate
                 # between `stalled` and `starting`. Instead of relying on the current status, we
                 # check that there is a stalled status with the expected error.
-                > SELECT bool_or(error ~* '{error}'), bool_or(details->'namespaced'->>'kafka' ~* '{error}')
+                >[retry] SELECT bool_or(error ~* '{error}'), bool_or(details->'namespaced'->>'kafka' ~* '{error}')
                   FROM mz_internal.mz_sink_status_history
                   JOIN mz_sinks ON mz_sinks.id = sink_id
                   WHERE name = 'sink1' and status = 'stalled'
@@ -328,7 +330,7 @@ class KafkaSinkDisruption:
         c.testdrive(
             dedent(
                 """
-                > SELECT status, error
+                >[retry] SELECT status, error
                   FROM mz_internal.mz_sink_statuses
                   WHERE name = 'sink1'
                 running <null>
@@ -407,7 +409,7 @@ class PgDisruption:
                 # Postgres sources may halt after receiving an error, which means that they may alternate
                 # between `stalled` and `starting`. Instead of relying on the current status, we
                 # check that the latest stall has the error we expect.
-                > SELECT status, error ~* '{error}'
+                >[retry] SELECT status, error ~* '{error}'
                   FROM mz_internal.mz_source_status_history
                   JOIN mz_sources ON mz_sources.id = source_id
                   WHERE name = 'source1' and status = 'stalled'
@@ -424,10 +426,12 @@ class PgDisruption:
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO source1 VALUES (3);
 
-                > SELECT status, error
+                >[retry] SELECT status, error
                   FROM mz_internal.mz_source_statuses
                   WHERE name = 'source1'
                 running <null>
+
+                $ postgres-await-ingestion source=pg_source connection=postgres://postgres:postgres@postgres
 
                 > SELECT f1 FROM source1;
                 1
@@ -545,6 +549,8 @@ def delete_sink_topic(c: Composition, seed: int) -> None:
             """
             $ kafka-ingest topic=source-topic format=avro schema=${schema}
             {"f1": "B"}
+
+            $ kafka-await-ingestion source=source1 topic=source-topic
 
             > SELECT COUNT(*) FROM source1;
             2

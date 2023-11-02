@@ -54,6 +54,8 @@ def populate(mz: MaterializeApplication, seed: int) -> None:
 
             > CREATE DEFAULT INDEX ON v1;
 
+            $ kafka-await-ingestion source=s1 topic=shared-fate
+
             > SELECT COUNT(*) > 0 FROM s1;
             true
             """
@@ -75,6 +77,8 @@ def validate(mz: MaterializeApplication, seed: int) -> None:
 
             > SELECT COUNT(*) FROM t1;
             3000
+
+            $ kafka-await-ingestion source=s1 topic=shared-fate
 
             > SELECT COUNT(*) FROM s1;
             3000

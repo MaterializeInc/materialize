@@ -30,7 +30,7 @@ $ schema-registry-wait subject=postgres.public.alter_change_decimal-value
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-> SELECT f1 FROM alter_change_decimal;
+>[retry] SELECT f1 FROM alter_change_decimal;
 <null>
 0
 12.345
@@ -40,5 +40,5 @@ ALTER TABLE alter_change_decimal ALTER COLUMN f1 TYPE DECIMAL(6,4);
 INSERT INTO alter_change_decimal VALUES (23.456, 3);
 UPDATE alter_change_decimal SET f1 = 34.567 WHERE f1 = 0;
 
-! SELECT * FROM alter_change_decimal;
+![retry] SELECT * FROM alter_change_decimal;
 contains:Decimal types must match in precision, scale, and fixed size

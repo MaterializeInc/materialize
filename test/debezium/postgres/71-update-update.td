@@ -39,6 +39,6 @@ UPDATE update_update SET f1 = f1 * 10 WHERE f1 = 51;
 UPDATE update_update SET f1 = f1 + 150 WHERE f1 = 200;
 COMMIT;
 
-> SELECT * FROM update_update;
+>[retry] SELECT * FROM update_update;
 510
 350

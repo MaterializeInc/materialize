@@ -33,7 +33,7 @@ $ schema-registry-wait subject=postgres.public.toasted_full-value
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-> SELECT length(f1) = (32 * 1024) + 1, substr(f1, 1, 2), substr(f1, 32 * 1024, 2) FROM toasted_full;
+>[retry] SELECT length(f1) = (32 * 1024) + 1, substr(f1, 1, 2), substr(f1, 32 * 1024, 2) FROM toasted_full;
 <null> <null> <null>
 true aa ab
 
@@ -41,7 +41,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 UPDATE toasted_full SET f1 = (REPEAT('c', 32 * 1024) || 'd') WHERE f1 IS NULL;
 UPDATE toasted_full SET f1 = (REPEAT('e', 32 * 1024) || 'f') WHERE f1 = REPEAT('a', 32 * 1024) || 'b';
 
-> SELECT length(f1), substr(f1, 1, 2), substr(f1, 32 * 1024, 2) FROM toasted_full;
+>[retry] SELECT length(f1), substr(f1, 1, 2), substr(f1, 32 * 1024, 2) FROM toasted_full;
 32769 cc cd
 32769 ee ef
 

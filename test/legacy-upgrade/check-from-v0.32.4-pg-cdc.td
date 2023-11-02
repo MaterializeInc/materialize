@@ -14,13 +14,13 @@ INSERT INTO cdc_int_table VALUES (11),(12),(13),(14),(15);
 INSERT INTO cdc_enum_table VALUES ('var1'), ('var0');
 INSERT INTO cdc_empty_on_boot_table VALUES (1),(2),(3);
 
-> SELECT * FROM cdc_enum_table;
+>[retry] SELECT * FROM cdc_enum_table;
 var0
 var0
 var1
 var1
 
-> SELECT * FROM cdc_int_table_for_tables;
+>[retry] SELECT * FROM cdc_int_table_for_tables;
 1
 2
 3
@@ -32,7 +32,7 @@ var1
 14
 15
 
-> SELECT * FROM cdc_empty_on_boot_table;
+>[retry] SELECT * FROM cdc_empty_on_boot_table;
 1
 2
 3

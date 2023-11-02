@@ -34,6 +34,8 @@ $ kafka-ingest format=avro topic=resolution-1to2 schema=${1column} timestamp=1
 $ kafka-ingest format=avro topic=resolution-1to2 schema=${2columns} timestamp=2
 {"f1": "val_f1a", "f2": "val_f2a"}
 
+$ kafka-await-ingestion source=resolution_1to2 topic=resolution-1to2
+
 > SELECT * FROM resolution_1to2
 f1
 ---

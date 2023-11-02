@@ -89,7 +89,7 @@
   );
 4095
 
-> SELECT dataflow_name, region_name, levels, to_cut, hint
+>[retry] SELECT dataflow_name, region_name, levels, to_cut, hint
   FROM mz_internal.mz_expected_group_size_advice
   ORDER BY dataflow_name, region_name;
 "Dataflow: materialize.public.lineitem_by_orderkey" ReduceHierarchical 8 7 15
@@ -102,7 +102,7 @@
 "Dataflow: materialize.public.lineitem_by_suppkey" TopK 8 5 4095
 
 # Validate that there are positive memory savings listed for the entries above.
-> SELECT COUNT(savings > 0)
+>[retry] SELECT COUNT(savings > 0)
   FROM mz_internal.mz_expected_group_size_advice;
 8
 
@@ -133,7 +133,7 @@
   FROM lineitem l1
   GROUP BY l1.l_orderkey;
 
-> SELECT dataflow_name, region_name, levels, to_cut, hint
+>[retry] SELECT dataflow_name, region_name, levels, to_cut, hint
   FROM mz_internal.mz_expected_group_size_advice
   ORDER BY dataflow_name, region_name;
 "Dataflow: materialize.public.lineitem_by_orderkey" ReduceHierarchical 8 7 15
@@ -144,6 +144,6 @@
 "Dataflow: materialize.public.lineitem_by_suppkey" TopK 8 5 4095
 
 # Validate that there are positive memory savings listed for the entries above.
-> SELECT COUNT(savings > 0)
+>[retry] SELECT COUNT(savings > 0)
   FROM mz_internal.mz_expected_group_size_advice;
 6

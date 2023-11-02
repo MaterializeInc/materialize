@@ -164,16 +164,18 @@ a
 $ kafka-ingest format=avro topic=data key-format=avro key-schema=${valid-key-schema} schema=${schema-v2} timestamp=3
 {"a": 2} {"before": null, "after": {"row": {"a": 2, "b": -1}}, "source": {"file": "binlog2", "pos": 1, "row": 1, "snapshot": {"boolean": false}}, "op": "c"}
 
-> CREATE SOURCE data_v2
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE DEBEZIUM
+$ kafka-await-ingestion source=data_v1 topic=data
 
 > SELECT * FROM data_v1
 a
 ---
 1
 2
+
+> CREATE SOURCE data_v2
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
 
 > SELECT * FROM data_v2
 a b

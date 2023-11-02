@@ -29,7 +29,7 @@ $ schema-registry-wait subject=mysql.transaction-value
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-> SELECT * FROM t1;
+>[retry] SELECT * FROM t1;
 123 123 123
 234 234 234
 345 345 345
@@ -38,7 +38,7 @@ $ mysql-execute name=mysql
 INSERT INTO t1 VALUES (456, 456, 456);
 COMMIT;
 
-> SELECT * FROM t1;
+>[retry] SELECT * FROM t1;
 123 123 123
 234 234 234
 345 345 345
@@ -48,7 +48,7 @@ $ mysql-execute name=mysql
 UPDATE t1 SET f2 = f2 * 100
 COMMIT;
 
-> SELECT * FROM t1;
+>[retry] SELECT * FROM t1;
 123 12300 123
 234 23400 234
 345 34500 345
@@ -58,5 +58,5 @@ $ mysql-execute name=mysql
 DELETE FROM t1;
 COMMIT;
 
-> SELECT COUNT(*) FROM t1;
+>[retry] SELECT COUNT(*) FROM t1;
 0

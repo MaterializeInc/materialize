@@ -55,7 +55,7 @@ materialize.public.accounts "CREATE SUBSOURCE \"materialize\".\"public\".\"accou
 
 > CREATE SOURCE counter FROM LOAD GENERATOR COUNTER (MAX CARDINALITY 8, TICK INTERVAL '0.001s')
 
-> SELECT count(*) FROM counter
+>[retry] SELECT count(*) FROM counter
 8
 
 # Now make sure it doesn't change

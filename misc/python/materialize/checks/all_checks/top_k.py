@@ -123,6 +123,8 @@ class MonotonicTopK(Check):
                 > SHOW CREATE MATERIALIZED VIEW monotonic_topk_view1;
                 materialize.public.monotonic_topk_view1 "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"monotonic_topk_view1\\" IN CLUSTER \\"default\\" AS SELECT \\"f1\\", \\"pg_catalog\\".\\"count\\"(\\"f1\\") FROM \\"materialize\\".\\"public\\".\\"monotonic_topk_source\\" GROUP BY \\"f1\\" ORDER BY \\"f1\\" DESC NULLS LAST LIMIT 2"
 
+                $ kafka-await-ingestion source=monotonic_topk_source topic=monotonic-topk
+
                 > SELECT * FROM monotonic_topk_view1;
                 E 5
                 D 4
@@ -184,6 +186,8 @@ class MonotonicTop1(Check):
                 """
                 > SHOW CREATE MATERIALIZED VIEW monotonic_top1_view1;
                 materialize.public.monotonic_top1_view1 "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"monotonic_top1_view1\\" IN CLUSTER \\"default\\" AS SELECT \\"f1\\", \\"pg_catalog\\".\\"count\\"(\\"f1\\") FROM \\"materialize\\".\\"public\\".\\"monotonic_top1_source\\" GROUP BY \\"f1\\" ORDER BY \\"f1\\" DESC NULLS LAST LIMIT 1"
+
+                $ kafka-await-ingestion source=monotonic_top1_source topic=monotonic-top1
 
                 > SELECT * FROM monotonic_top1_view1;
                 D 5

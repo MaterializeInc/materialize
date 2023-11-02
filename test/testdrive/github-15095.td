@@ -14,7 +14,7 @@
 # Note: We rely on testdrive's retry behavior here, as it takes some time for
 # the first replica heartbeat to arrive.
 
-> SELECT count(*)
+>[retry] SELECT count(*)
   FROM mz_cluster_replicas r, mz_internal.mz_cluster_replica_heartbeats h
   WHERE r.id = h.replica_id AND r.name = 'r'
 1

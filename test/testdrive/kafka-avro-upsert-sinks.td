@@ -170,6 +170,8 @@ $ kafka-ingest format=avro topic=input schema=${schema}
 {"array":[{"data":{"a":1,"b":7},"time":3,"diff":1}]}
 {"com.materialize.cdc.progress":{"lower":[0],"upper":[4],"counts":[{"time":1,"count":2},{"time":2,"count":2}, {"time": 3, "count": 1}]}}
 
+$ kafka-await-ingestion source=input topic=input
+
 > SELECT * FROM input;
 a  b
 ------
@@ -351,7 +353,7 @@ contains:upsert key could not be validated as unique
 # in memory consumptions and should be understood before adapting the values.
 > SET cluster_replica = r1
 
-> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+>[retry] SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 "Arrange ReduceMinsMaxes"
 "Arrange ReduceMinsMaxes"
 "Arranged DistinctBy [val: empty]"

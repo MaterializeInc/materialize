@@ -50,6 +50,6 @@ $ postgres-execute connection=conn2
 UPDATE concurrent_update SET f1 = f1 * 10 WHERE f1 = 31;
 COMMIT;
 
-> SELECT f1, f2 FROM concurrent_update;
+>[retry] SELECT f1, f2 FROM concurrent_update;
 42 r1
 310 r2

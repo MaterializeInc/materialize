@@ -32,5 +32,5 @@ $ kafka-ingest format=avro topic=data schema=${schema}
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
 
-> SELECT * FROM data
+>[retry] SELECT * FROM data
 1

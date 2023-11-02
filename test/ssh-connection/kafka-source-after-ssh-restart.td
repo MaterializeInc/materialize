@@ -15,12 +15,16 @@
 $ kafka-ingest topic=thetopic format=bytes
 three
 
+$ kafka-await-ingestion source=fixed_text topic=thetopic
+
 > SELECT * FROM fixed_text
 text
 ----
 one
 two
 three
+
+$ kafka-await-ingestion source=dynamic_text topic=thetopic
 
 > SELECT * FROM dynamic_text
 text
@@ -29,10 +33,14 @@ one
 two
 three
 
+$ kafka-await-ingestion source=fixed_plus_csr topic=avroavro
+
 > SELECT * FROM fixed_plus_csr
 f1    f2
 ----------
 fish  1000
+
+$ kafka-await-ingestion source=dynamic_plus_csr topic=avroavro
 
 > SELECT * FROM dynamic_plus_csr
 f1    f2
@@ -40,7 +48,7 @@ f1    f2
 fish  1000
 
 # ensure they all were marked as running correctly
-> SELECT status FROM mz_internal.mz_source_statuses st
+>[retry] SELECT status FROM mz_internal.mz_source_statuses st
   JOIN mz_sources s ON st.id = s.id
   WHERE s.name in ('fixed_text', 'dynamic_text', 'fixed_plus_csr', 'dynamic_plus_csr')
 running

@@ -35,6 +35,8 @@ $ kafka-ingest format=avro topic=resolution-union-concrete schema=${union-int} t
 $ kafka-ingest format=avro topic=resolution-union-concrete schema=${concrete-double} timestamp=2
 {"f1": 123.456 }
 
+$ kafka-await-ingestion source=resolution_union_concrete topic=resolution-union-concrete
+
 ! SELECT f1 FROM resolution_union_concrete
 contains:No matching schema in reader union for writer type `Double` for field `schema_union.f1`
 

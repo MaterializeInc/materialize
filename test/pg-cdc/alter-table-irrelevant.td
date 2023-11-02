@@ -46,6 +46,8 @@ ALTER TABLE irrelevant_table REPLICA IDENTITY FULL;
 INSERT INTO irrelevant_table VALUES (1);
 INSERT INTO base_table VALUES (2);
 
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
+
 # A new table arriving does not prevent queries on existing views for this materialized source
 > SELECT * FROM base_table;
 1
@@ -56,6 +58,8 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE irrelevant_table ADD COLUMN f2 varchar(2);
 ALTER TABLE irrelevant_table DROP COLUMN f1;
 INSERT INTO irrelevant_table VALUES ('ab');
+
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
 
 # Query still works because the relation was ignored for being irrelevant
 > SELECT * FROM base_table;
@@ -83,6 +87,8 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE irrelevant_table ADD COLUMN f3 char(2);
 INSERT INTO irrelevant_table VALUES ('bc', 'de');
 
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
+
 > SELECT * FROM base_table;
 1
 2
@@ -96,6 +102,8 @@ bc
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE irrelevant_table DROP COLUMN f2;
 INSERT INTO irrelevant_table VALUES ('gh');
+
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
 
 > SELECT * FROM base_table;
 1

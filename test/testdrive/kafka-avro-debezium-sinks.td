@@ -164,6 +164,8 @@ $ kafka-ingest format=avro topic=input schema=${schema}
 {"array":[{"data":{"a":1,"b":7},"time":3,"diff":1}]}
 {"com.materialize.cdc.progress":{"lower":[0],"upper":[4],"counts":[{"time":1,"count":2},{"time":2,"count":2},{"time":3,"count":1}]}}
 
+$ kafka-await-ingestion source=input topic=input
+
 > SELECT * FROM input;
 a  b
 ------

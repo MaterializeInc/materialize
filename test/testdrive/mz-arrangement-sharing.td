@@ -14,7 +14,7 @@
 > CREATE VIEW v as SELECT c, d FROM u GROUP BY c, d
 > CREATE DEFAULT INDEX on v
 
-> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+>[retry] SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 "Arrange bundle err"
 "Arranged DistinctBy [val: empty]"
 "DistinctBy [val: empty]"
@@ -37,7 +37,7 @@ DistinctByErrorCheck
       )
   );
 
-> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+>[retry] SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 "ArrangeBy[[Column(0), Column(1)]] [val: empty]"
 "ArrangeBy[[Column(0)]] [val: empty]"
 "Arranged DistinctBy [val: empty]"
@@ -65,7 +65,7 @@ JoinStage
 > CREATE MATERIALIZED VIEW mv AS
   SELECT * FROM t WHERE a IS NOT NULL
 
-> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+>[retry] SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 "ArrangeBy[[Column(0), Column(1)]] [val: empty]"
 "ArrangeBy[[Column(0), Column(1)]]-errors"
 "Arranged TopK input"
@@ -94,7 +94,7 @@ JoinStage
 
 > CREATE DEFAULT INDEX ON m3
 
-> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+>[retry] SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 "ArrangeBy[[Column(0), Column(1), Column(2), Column(3), Column(4), Column(5), Column(6), Column(7), Column(8), Column(9), Column(10)]] [val: empty]"
 "ArrangeBy[[Column(0), Column(1), Column(2), Column(3), Column(4), Column(5), Column(6), Column(7), Column(8), Column(9), Column(10)]]-errors"
 
@@ -113,7 +113,7 @@ JoinStage
 #> CREATE MATERIALIZED VIEW mat_tables AS SELECT name FROM (SHOW TABLES);
 #> CREATE MATERIALIZED VIEW mat_views AS SELECT name FROM (SHOW VIEWS);
 #
-#> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+#>[retry] SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 #ArrangeBy[[Column(0)]]
 #ArrangeBy[[Column(1)]]
 #
@@ -136,7 +136,7 @@ JoinStage
   FROM intervals
   WHERE mz_now() BETWEEN a AND b;
 
-> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+>[retry] SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 
 > DROP VIEW intervals CASCADE
 
@@ -151,7 +151,7 @@ JoinStage
 > create table quux_raw (c int2, x text)
 > create materialized view quux as select distinct on (c) c, x from quux_raw where c is not null
 
-> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+>[retry] SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 "Arranged TopK input"
 "Arranged TopK input"
 "Arranged TopK input"
@@ -289,7 +289,7 @@ JoinStage
                   events.user_id, session
           );
 
-> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+>[retry] SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 AccumulableErrorCheck
 "Arrange ReduceCollation"
 "Arrange ReduceMinsMaxes"
@@ -362,7 +362,7 @@ ReduceMinsMaxes
 > CREATE TABLE t (a int)
 > CREATE MATERIALIZED VIEW v AS SELECT COUNT(*) FROM T
 
-> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+>[retry] SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 AccumulableErrorCheck
 "ArrangeAccumulable [val: empty]"
 ReduceAccumulable
@@ -378,7 +378,7 @@ ReduceAccumulable
     )
   SELECT * FROM cnt;
 
-> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+>[retry] SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 "Arrange recursive err"
 "Distinct recursive err"
 
@@ -393,7 +393,7 @@ ReduceAccumulable
   SELECT * FROM cnt;
 > CREATE DEFAULT INDEX ON v1;
 
-> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+>[retry] SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 "Arrange export iterative [val: empty]"
 "Arrange export iterative err"
 "Arrange recursive err"
@@ -405,7 +405,7 @@ ReduceAccumulable
 > CREATE TABLE t1 (f1 INTEGER)
 > CREATE DEFAULT INDEX ON t1
 
-> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+>[retry] SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 "ArrangeBy[[Column(0)]] [val: empty]"
 ArrangeBy[[Column(0)]]-errors
 
@@ -415,7 +415,7 @@ ArrangeBy[[Column(0)]]-errors
 > CREATE TABLE t1 (f1 INTEGER)
 > CREATE MATERIALIZED VIEW v1 AS SELECT count(*) FROM t1
 
-> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+>[retry] SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 AccumulableErrorCheck
 "ArrangeAccumulable [val: empty]"
 ReduceAccumulable
@@ -427,7 +427,7 @@ ReduceAccumulable
 > CREATE TABLE deletes (f1 INTEGER)
 > CREATE MATERIALIZED VIEW v1 AS SELECT * FROM inserts EXCEPT ALL SELECT * FROM deletes
 
-> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+>[retry] SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 "ArrangeBy[[Column(0)]] [val: empty]"
 "Threshold local [val: empty]"
 
@@ -452,7 +452,7 @@ ReduceAccumulable
 > CREATE TABLE t3 (c int)
 > CREATE DEFAULT INDEX ii_empty ON t3
 
-> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+>[retry] SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 AccumulableErrorCheck
 AccumulableErrorCheck
 "ArrangeAccumulable [val: empty]"
@@ -512,7 +512,7 @@ ReduceAccumulable
 > CREATE MATERIALIZED VIEW test14 (names_num, names_name, mods_num, mods_mod) AS
   SELECT * FROM names FULL OUTER JOIN mods ON 1 = 0
 
-> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+>[retry] SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 ArrangeBy[[Column(0)]]
 ArrangeBy[[Column(0)]]
 ArrangeBy[[Column(0)]]
@@ -555,7 +555,7 @@ DistinctByErrorCheck
   SELECT SUM(a1.a + a2.a * 10000) FROM t1 AS a1, t1 AS a2
 > CREATE DEFAULT INDEX ON v1
 
-> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+>[retry] SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 AccumulableErrorCheck
 "ArrangeAccumulable [val: empty]"
 "ArrangeBy[[Column(0)]] [val: empty]"
@@ -596,7 +596,7 @@ ALTER SYSTEM SET enable_repeat_row  = true
     GROUP BY data
 > CREATE DEFAULT INDEX ON collation
 
-> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+>[retry] SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 AccumulableErrorCheck
 AccumulableErrorCheck
 AccumulableErrorCheck
@@ -682,7 +682,7 @@ ReduceMinsMaxes
 > CREATE DEFAULT INDEX ON t
 > CREATE INDEX complex_index ON t (t::varchar, i::string)
 
-> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+>[retry] SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 "ArrangeBy[[CallUnary { func: CastStringToVarChar(CastStringToVarChar { length: None, fail_on_len: false }), expr: Column(1) }, CallUnary { func: CastInt64ToString(CastInt64ToString), expr: Column(0) }]]"
 "ArrangeBy[[CallUnary { func: CastStringToVarChar(CastStringToVarChar { length: None, fail_on_len: false }), expr: Column(1) }, CallUnary { func: CastInt64ToString(CastInt64ToString), expr: Column(0) }]]-errors"
 "ArrangeBy[[Column(0), Column(1)]] [val: empty]"
@@ -693,7 +693,7 @@ ReduceMinsMaxes
 # Check mz_introspection
 > SET CLUSTER TO mz_introspection
 
-> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+>[retry] SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 "AccumulableErrorCheck"
 "Arrange export iterative"
 "Arrange export iterative err"
@@ -866,7 +866,7 @@ CREATE CLUSTER REPLICA default.replica SIZE = '2', INTROSPECTION DEBUGGING = tru
 
 > SET cluster_replica = replica;
 
-> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+>[retry] SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 "Arrange Timely(Reachability)"
 "Arrange Compute(ArrangementHeapAllocations)"
 "Arrange Compute(ArrangementHeapCapacity)"

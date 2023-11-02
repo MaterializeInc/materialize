@@ -61,12 +61,12 @@ $ postgres-execute connection=conn2
 INSERT INTO insert_multi_table2 VALUES (4);
 COMMIT;
 
-> SELECT * FROM insert_multi_table1;
+>[retry] SELECT * FROM insert_multi_table1;
 0
 1
 3
 
-> SELECT * FROM insert_multi_table2;
+>[retry] SELECT * FROM insert_multi_table2;
 0
 2
 4

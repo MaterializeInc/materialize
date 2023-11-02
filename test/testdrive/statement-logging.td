@@ -91,7 +91,7 @@ contains: column "f_nonexistent" does not exist
 > DROP CLUSTER c
 
 # This will be executed on mz_introspection, due to auto-routing of introspection queries.
-> SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics
+>[retry] SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics
 true
 
 # Test that we're correctly recording transaction isolation
@@ -116,7 +116,7 @@ serializable
 #
 # When we do so, we will need to change this test to encode the improved behavior.
 
-> WITH all_stmts AS (SELECT * FROM mz_internal.mz_statement_execution_history mseh RIGHT JOIN mz_internal.mz_prepared_statement_history mpsh ON mseh.prepared_statement_id = mpsh.id),
+>[retry] WITH all_stmts AS (SELECT * FROM mz_internal.mz_statement_execution_history mseh RIGHT JOIN mz_internal.mz_prepared_statement_history mpsh ON mseh.prepared_statement_id = mpsh.id),
        test_begin AS (SELECT began_at FROM all_stmts WHERE sql = 'SELECT ''beginning real test!''' ORDER BY began_at DESC LIMIT 1)
   SELECT c.name, all_stmts.cluster_name, all_stmts.application_name, all_stmts.sample_rate, all_stmts.params, all_stmts.finished_status, all_stmts.error_message, all_stmts.rows_returned, all_stmts.execution_strategy, all_stmts.name LIKE 's%', all_stmts.sql, all_stmts.transaction_isolation, all_stmts.transient_index_id ~ '^t[0-9]+$'
   FROM all_stmts, test_begin LEFT JOIN mz_clusters c ON c.id = all_stmts.cluster_id WHERE all_stmts.began_at >= test_begin.began_at AND all_stmts.sql NOT LIKE '%sduiahsdfuoiahsdf%'
@@ -155,7 +155,7 @@ mz_introspection mz_introspection my_app 1 {} success <null> 1 standard true "SE
 
 > ROLLBACK
 
-> WITH begin_tid AS
+>[retry] WITH begin_tid AS
   (SELECT transaction_id FROM mz_internal.mz_statement_execution_history mseh, mz_internal.mz_prepared_statement_history mpsh
    WHERE mseh.prepared_statement_id = mpsh.id
    AND mpsh.sql = 'BEGIN --hello')

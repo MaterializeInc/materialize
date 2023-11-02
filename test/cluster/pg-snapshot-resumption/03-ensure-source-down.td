@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> SELECT DISTINCT mz_sources.name, error
+>[retry] SELECT DISTINCT mz_sources.name, error
   FROM
       mz_internal.mz_source_status_history
           JOIN mz_sources ON source_id = mz_sources.id

@@ -534,7 +534,7 @@ def workflow_test_github_15930(c: Composition) -> None:
             input=dedent(
                 """
             > SET cluster = cluster1;
-            > SELECT 1 FROM mz_internal.mz_compute_frontiers_per_worker LIMIT 1;
+            >[retry] SELECT 1 FROM mz_internal.mz_compute_frontiers_per_worker LIMIT 1;
             1
                 """
             )
@@ -549,7 +549,7 @@ def workflow_test_github_15930(c: Composition) -> None:
             input=dedent(
                 """
             > SET cluster = cluster1;
-            > SELECT 1 FROM mz_internal.mz_compute_frontiers_per_worker LIMIT 1;
+            >[retry] SELECT 1 FROM mz_internal.mz_compute_frontiers_per_worker LIMIT 1;
             1
                 """
             )
@@ -582,7 +582,7 @@ def workflow_test_github_15930(c: Composition) -> None:
             input=dedent(
                 """
             > SET cluster = cluster1;
-            > SELECT 1 FROM mz_internal.mz_compute_frontiers_per_worker LIMIT 1;
+            >[retry] SELECT 1 FROM mz_internal.mz_compute_frontiers_per_worker LIMIT 1;
             1
             > SELECT * FROM t;
             42
@@ -1174,7 +1174,7 @@ def workflow_test_github_22778(c: Composition) -> None:
                 """
             > SET cluster = cluster1;
 
-            > SELECT name
+            >[retry] SELECT name
               FROM mz_internal.mz_arrangement_sizes
                    JOIN mz_internal.mz_dataflow_operator_dataflows ON operator_id = id
               WHERE name LIKE '%ArrangeBy%]';
@@ -1193,7 +1193,7 @@ def workflow_test_github_22778(c: Composition) -> None:
                 """
             > SET cluster = cluster1;
 
-            > SELECT name
+            >[retry] SELECT name
               FROM mz_internal.mz_arrangement_sizes
                    JOIN mz_internal.mz_dataflow_operator_dataflows ON operator_id = id
               WHERE name LIKE '%ArrangeBy%]';

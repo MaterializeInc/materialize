@@ -62,7 +62,7 @@ mammalmore    moose    2
 # interval is 30 seconds.
 #
 # Ensure that statistics are correctly updated
-> SELECT
+>[retry] SELECT
     SUM(u.envelope_state_bytes) > 0,
     SUM(u.envelope_state_count),
     bool_and(u.rehydration_latency_ms IS NOT NULL)
@@ -76,6 +76,8 @@ true 3 true
 # Write another part to test backpressure
 $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
 {"key": "fish"} {"f1": "fish", "f2": 1001}
+
+$ kafka-await-ingestion source=upsert topic=upsert
 
 > SELECT * from upsert
 key           f1       f2

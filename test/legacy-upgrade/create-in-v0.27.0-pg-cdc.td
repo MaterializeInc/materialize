@@ -32,7 +32,7 @@ CREATE PUBLICATION upgrade_pg_cdc_publication_v_0_27_0 FOR TABLE upgrade_pg_cdc_
     upgrade_pg_cdc_table AS upgrade_pg_cdc_table_v_0_27_0
   );
 
-> SELECT * FROM upgrade_pg_cdc_table_v_0_27_0;
+>[retry] SELECT * FROM upgrade_pg_cdc_table_v_0_27_0;
 1
 2
 3

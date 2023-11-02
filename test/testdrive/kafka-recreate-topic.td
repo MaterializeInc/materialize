@@ -47,7 +47,7 @@ $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=2s
 
 $ kafka-create-topic topic=topic0 partitions=2
 
-! SELECT * FROM source0
+![retry] SELECT * FROM source0
 contains:topic was recreated: partition count regressed from 4 to 2
 
 # We can also detect that a topic got recreated by observing the high watermark regressing
@@ -82,5 +82,5 @@ $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=2s
 
 $ kafka-create-topic topic=topic1 partitions=1
 
-! SELECT * FROM source1
+![retry] SELECT * FROM source1
 contains:topic was recreated: high watermark of partition 0 regressed from 1 to 0

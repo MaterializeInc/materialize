@@ -34,6 +34,8 @@ $ kafka-ingest format=avro topic=resolution-maps schema=${map-int} timestamp=1
 $ kafka-ingest format=avro topic=resolution-maps schema=${map-double} timestamp=2
 {"f1": { "key1": 234.345 } }
 
+$ kafka-await-ingestion source=resolution_maps topic=resolution-maps
+
 ! SELECT f1 -> 'key1' FROM resolution_maps
 contains:Writer schema has type `Double`, but reader schema has type `Int` for field `schema_map.f1`
 

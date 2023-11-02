@@ -136,6 +136,8 @@ fish
 $ kafka-ingest format=avro topic=kafka-ingest-repeat schema=${kafka-ingest-repeat} repeat=2
 {"f1": "${kafka-ingest.iteration}"}
 
+$ kafka-await-ingestion source=kafka_ingest_repeat_input topic=kafka-ingest-repeat
+
 > SELECT * FROM kafka_ingest_repeat_input;
 0
 1

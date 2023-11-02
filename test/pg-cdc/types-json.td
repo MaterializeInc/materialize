@@ -46,6 +46,8 @@ true
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 INSERT INTO t1 VALUES ('{"bar": "baz", "balance": 7.77, "active": false}'::json);
 
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
+
 > SELECT pg_typeof(f1) FROM t1 LIMIT 1;
 jsonb
 

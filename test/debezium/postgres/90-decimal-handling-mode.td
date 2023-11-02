@@ -28,7 +28,7 @@ $ schema-registry-wait subject=postgres.public.decimal_handling_mode_precise-val
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-> SELECT f1, pg_typeof(f1) FROM decimal_handling_mode_precise
+>[retry] SELECT f1, pg_typeof(f1) FROM decimal_handling_mode_precise
 1234567.89 numeric
 
 #
@@ -69,7 +69,7 @@ $ schema-registry-wait subject=postgres.public.decimal_handling_mode_double-valu
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-> SELECT f1, pg_typeof(f1) FROM decimal_handling_mode_double;
+>[retry] SELECT f1, pg_typeof(f1) FROM decimal_handling_mode_double;
 2234567.89 "double precision"
 
 #
@@ -109,7 +109,7 @@ $ schema-registry-wait subject=postgres.public.decimal_handling_mode_string-valu
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-> SELECT f1, pg_typeof(f1) FROM decimal_handling_mode_string;
+>[retry] SELECT f1, pg_typeof(f1) FROM decimal_handling_mode_string;
 3234567.890 text
 
 #

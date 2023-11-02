@@ -35,6 +35,8 @@ $ kafka-ingest format=avro topic=resolution-unions schema=${null} timestamp=2
 {"f1": null }
 {"f1": {"int": 123 } }
 
+$ kafka-await-ingestion source=resolution_unions topic=resolution-unions
+
 ! SELECT f1 FROM resolution_unions
 contains:Failed to match writer union variant `Null` against any variant in the reader for field `schema_union.f1`
 

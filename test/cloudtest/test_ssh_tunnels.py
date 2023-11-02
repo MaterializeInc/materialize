@@ -85,6 +85,8 @@ def test_ssh_tunnels(mz: MaterializeApplication) -> None:
         $ postgres-execute connection=postgres://postgres:postgres@postgres
         INSERT INTO t1 VALUES (1), (2);
 
+        $ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
+
         > SELECT f1 FROM t1 ORDER BY f1 ASC;
         1
         1
@@ -116,6 +118,8 @@ def test_ssh_tunnels(mz: MaterializeApplication) -> None:
 
         $ postgres-execute connection=postgres://postgres:postgres@postgres
         INSERT INTO t1 VALUES (3), (4);
+
+        $ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
 
         > SELECT f1 FROM t1 ORDER BY f1 ASC;
         1

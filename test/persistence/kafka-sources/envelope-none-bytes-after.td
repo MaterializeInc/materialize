@@ -21,8 +21,12 @@ $ kafka-ingest topic=envelope-none-text format=bytes repeat=5000
 ABC
 XYZ
 
+$ kafka-await-ingestion source=envelope_none_bytes topic=envelope-none-bytes
+
 > SELECT COUNT(*), COUNT(DISTINCT data) FROM envelope_none_bytes;
 20000 2
+
+$ kafka-await-ingestion source=envelope_none_text topic=envelope-none-text
 
 > SELECT COUNT(*), COUNT(DISTINCT "text") FROM envelope_none_text;
 20000 2

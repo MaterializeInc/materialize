@@ -35,6 +35,8 @@ $ kafka-ingest format=avro topic=resolution-int2double schema=${int-col} timesta
 $ kafka-ingest format=avro topic=resolution-int2double schema=${double-col} timestamp=2
 {"f1": 234.456}
 
+$ kafka-await-ingestion source=resolution_int2double topic=resolution-int2double
+
 ! SELECT * FROM resolution_int2double
 contains:Writer schema has type `Double`, but reader schema has type `Int` for field `schema_int_double.f1`
 

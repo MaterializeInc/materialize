@@ -58,7 +58,7 @@ CREATE PUBLICATION upgrade_pg_cdc_text_col_pub FOR TABLE cdc_enum_table, another
   )
   FOR ALL TABLES;
 
-> SELECT * FROM cdc_enum_table;
+>[retry] SELECT * FROM cdc_enum_table;
 var1
 var0
 
@@ -78,7 +78,7 @@ var0
     cdc_int_table AS cdc_int_table_for_tables
   );
 
-> SELECT * FROM cdc_int_table_for_tables;
+>[retry] SELECT * FROM cdc_int_table_for_tables;
 1
 2
 3
@@ -104,14 +104,14 @@ SELECT mz_version_num() >= 5600;
     cdc_int_table AS cdc_int_table_one
   );
 
-> SELECT * FROM cdc_int_table_zero;
+>[retry] SELECT * FROM cdc_int_table_zero;
 1
 2
 3
 4
 5
 
-> SELECT * FROM cdc_int_table_one;
+>[retry] SELECT * FROM cdc_int_table_one;
 1
 2
 3

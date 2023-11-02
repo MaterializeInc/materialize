@@ -150,6 +150,8 @@ $ kafka-ingest format=avro topic=foo schema=${schema}
 $ kafka-ingest format=avro topic=bar schema=${schema}
 {"com.materialize.cdc.progress":{"lower":[0],"upper":[2],"counts":[{"time":1,"count":1}]}}
 
+$ kafka-await-ingestion source=data_foo topic=foo
+
 > SELECT * FROM data_foo;
 a  b
 ----
@@ -162,6 +164,8 @@ b  sum
 ------
 1  1
 2  2
+
+$ kafka-await-ingestion source=data_bar topic=bar
 
 > SELECT * FROM data_bar;
 a   b
@@ -186,11 +190,15 @@ $ kafka-ingest format=avro topic=bar schema=${schema}
 {"array":[{"data":{"a":30,"b":3},"time":2,"diff":1}]}
 {"com.materialize.cdc.progress":{"lower":[2],"upper":[3],"counts":[{"time":2,"count":1}]}}
 
+$ kafka-await-ingestion source=data_foo topic=foo
+
 > SELECT * FROM foo;
 b  sum
 ------
 1  1
 2  2
+
+$ kafka-await-ingestion source=data_bar topic=bar
 
 > SELECT * FROM bar;
 b  sum
@@ -214,6 +222,8 @@ b foo_sum bar_sum
 
 $ kafka-ingest format=avro topic=foo schema=${schema}
 {"array":[{"data":{"a":4,"b":4},"time":2,"diff":1}]}
+
+$ kafka-await-ingestion source=data_foo topic=foo
 
 > SELECT * FROM foo;
 b  sum
