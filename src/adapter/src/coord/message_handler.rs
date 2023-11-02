@@ -245,7 +245,7 @@ impl Coordinator {
         self.handle_command(cmd).await;
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn message_controller(&mut self, message: ControllerResponse) {
         event!(Level::TRACE, message = format!("{:?}", message));
         match message {
