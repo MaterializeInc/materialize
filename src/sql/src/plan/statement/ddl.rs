@@ -40,7 +40,7 @@ use mz_sql_parser::ast::{
     DeferredItemName, DocOnIdentifier, DocOnSchema, DropOwnedStatement, SetRoleVar,
     UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
-use mz_storage_types::connections::inline::ReferencedConnection;
+use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnection};
 use mz_storage_types::connections::Connection;
 use mz_storage_types::sinks::{
     KafkaConsistencyConfig, KafkaSinkAvroFormatState, KafkaSinkConnection,
@@ -1620,7 +1620,7 @@ generate_extracted_config!(AvroSchemaOption, (ConfluentWireFormat, bool, Default
 pub struct Schema {
     pub key_schema: Option<String>,
     pub value_schema: String,
-    pub csr_connection: Option<mz_storage_types::connections::CsrConnection<ReferencedConnection>>,
+    pub csr_connection: Option<<ReferencedConnection as ConnectionAccess>::Csr>,
     pub confluent_wire_format: bool,
 }
 
@@ -1667,7 +1667,7 @@ fn get_encoding_inner(
                 } => {
                     let item = scx.get_item_by_resolved_name(&connection.connection)?;
                     let csr_connection = match item.connection()? {
-                        Connection::Csr(connection) => connection.clone(),
+                        Connection::Csr(_) => item.id(),
                         _ => {
                             sql_bail!(
                                 "{} is not a schema registry connection",
@@ -2539,7 +2539,7 @@ fn kafka_sink_builder(
 
             let item = scx.get_item_by_resolved_name(&connection)?;
             let csr_connection = match item.connection()? {
-                Connection::Csr(connection) => connection.clone(),
+                Connection::Csr(_) => item.id(),
                 _ => {
                     sql_bail!(
                         "{} is not a schema registry connection",
