@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
@@ -398,9 +398,16 @@ def workflow_rotated_ssh_key_after_restart(c: Composition) -> None:
         )
 
 
-def workflow_default(c: Composition) -> None:
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    parser.add_argument(
+        "--extended",
+        action="store_true",
+        help="run additional tests",
+    )
+    args = parser.parse_args()
+
     # Test against both standard schema registry
-    # and kafka implementations.
+    # and kafka implementations, if --extended is passed
     #
     # These tests core functionality related to kafka with ssh and error reporting.
     for workflow in [
@@ -409,8 +416,9 @@ def workflow_default(c: Composition) -> None:
     ]:
         workflow(c, redpanda=False)
         c.sanity_restart_mz()
-        workflow(c, redpanda=True)
-        c.sanity_restart_mz()
+        if args.extended:
+            workflow(c, redpanda=True)
+            c.sanity_restart_mz()
 
     # These tests core functionality related to pg with ssh and error reporting.
     for workflow in [
@@ -421,13 +429,14 @@ def workflow_default(c: Composition) -> None:
         workflow(c)
         c.sanity_restart_mz()
 
-    # Various special cases related to ssh
-    for workflow in [
-        workflow_validate_connection,
-        workflow_ssh_key_after_restart,
-        workflow_rotated_ssh_key_after_restart,
-        workflow_pg_via_ssh_tunnel_with_ssl,
-        workflow_pg_restart_bastion,
-    ]:
-        workflow(c)
-        c.sanity_restart_mz()
+    if args.extended:
+        # Various special cases related to ssh
+        for workflow in [
+            workflow_validate_connection,
+            workflow_ssh_key_after_restart,
+            workflow_rotated_ssh_key_after_restart,
+            workflow_pg_via_ssh_tunnel_with_ssl,
+            workflow_pg_restart_bastion,
+        ]:
+            workflow(c)
+            c.sanity_restart_mz()
