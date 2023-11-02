@@ -125,6 +125,13 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     /// Get the deployment generation of this instance.
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError>;
 
+    /// Get the `enabled_persist_txn_tables` config value of this instance.
+    ///
+    /// This mirrors the `enabled_persist_txn_tables` "system var" so that we
+    /// can toggle the flag with Launch Darkly, but use it in boot before Launch
+    /// Darkly is available.
+    async fn get_enable_persist_txn_tables(&mut self) -> Result<Option<bool>, CatalogError>;
+
     /// Generate an unconsolidated [`Trace`] of catalog contents.
     async fn trace(&mut self) -> Result<Trace, CatalogError>;
 

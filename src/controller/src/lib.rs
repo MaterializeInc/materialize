@@ -159,9 +159,6 @@ pub struct ControllerConfig {
     pub persist_pubsub_url: String,
     /// Arguments for secrets readers.
     pub secrets_args: SecretsReaderCliArgs,
-    /// Whether to use the new persist-txn tables implementation or the legacy
-    /// one.
-    pub enable_persist_txn_tables: bool,
 }
 
 /// Responses that [`Controller`] can produce.
@@ -373,7 +370,13 @@ where
     mz_storage_controller::Controller<T>: StorageController<Timestamp = T>,
 {
     /// Creates a new controller.
-    pub async fn new(config: ControllerConfig, envd_epoch: NonZeroI64) -> Self {
+    pub async fn new(
+        config: ControllerConfig,
+        envd_epoch: NonZeroI64,
+        // Whether to use the new persist-txn tables implementation or the
+        // legacy one.
+        enable_persist_txn_tables: bool,
+    ) -> Self {
         let storage_controller = mz_storage_controller::Controller::new(
             config.build_info,
             config.storage_stash_url,
@@ -383,7 +386,7 @@ where
             config.stash_metrics,
             envd_epoch,
             config.metrics_registry.clone(),
-            config.enable_persist_txn_tables,
+            enable_persist_txn_tables,
         )
         .await;
 
@@ -409,7 +412,7 @@ where
             metrics_rx: UnboundedReceiverStream::new(metrics_rx).peekable(),
             frontiers_ticker,
             persist_pubsub_url: config.persist_pubsub_url,
-            enable_persist_txn_tables: config.enable_persist_txn_tables,
+            enable_persist_txn_tables,
             secrets_args: config.secrets_args,
         }
     }

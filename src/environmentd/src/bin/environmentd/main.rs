@@ -421,10 +421,14 @@ pub struct Args {
     /// Whether to use the new persist-txn tables implementation or the legacy
     /// one.
     ///
-    /// TODO(txn): Figure out how to configure this via LaunchDarkly instead of
-    /// a flag.
-    #[clap(long, env = "ENABLE_PERSIST_TXN_TABLES", action = clap::ArgAction::Set, default_value="false")]
-    enable_persist_txn_tables: bool,
+    /// Only takes effect on restart. Any changes will also cause clusterd
+    /// processes to restart.
+    ///
+    /// This value is also configurable via a Launch Darkly parameter of the
+    /// same name, but we keep the flag to make testing easier. If specified,
+    /// the flag takes precedence over the Launch Darkly param.
+    #[clap(long, env = "ENABLE_PERSIST_TXN_TABLES", action = clap::ArgAction::Set)]
+    enable_persist_txn_tables: Option<bool>,
 
     // === Adapter options. ===
     /// The PostgreSQL URL for the adapter stash.
@@ -903,7 +907,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             ),
             secrets_reader_aws_prefix: Some(aws_secrets_controller_prefix(&args.environment_id)),
         },
-        enable_persist_txn_tables: args.enable_persist_txn_tables,
     };
 
     let cluster_replica_sizes: ClusterReplicaSizeMap = match args.cluster_replica_sizes {
@@ -992,6 +995,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 deploy_generation: args.deploy_generation,
                 http_host_name: args.http_host_name,
                 internal_console_redirect_url: args.internal_console_redirect_url,
+                enable_persist_txn_tables_cli: args.enable_persist_txn_tables,
             })
             .await
     })?;

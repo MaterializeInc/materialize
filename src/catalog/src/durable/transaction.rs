@@ -29,6 +29,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use crate::builtin::BuiltinLog;
+use crate::durable::initialize::ENABLE_PERSIST_TXN_TABLES;
 use crate::durable::objects::ClusterConfig;
 use crate::durable::objects::{
     AuditLogKey, Cluster, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
@@ -1028,6 +1029,17 @@ impl<'a> Transaction<'a> {
         let config = Config { key, value };
         let (key, value) = config.into_key_value();
         self.configs.set(key, Some(value))?;
+        Ok(())
+    }
+
+    /// Updates the catalog stash `enable_persist_txn_tables` "config" value to
+    /// match the `enable_persist_txn_tables` "system var" value.
+    ///
+    /// These are mirrored so that we can toggle the flag with Launch Darkly,
+    /// but use it in boot before Launch Darkly is available.
+    pub fn set_enable_persist_txn_tables(&mut self, value: bool) -> Result<(), CatalogError> {
+        let value = if value { 1 } else { 0 };
+        self.set_config(ENABLE_PERSIST_TXN_TABLES.into(), value)?;
         Ok(())
     }
 

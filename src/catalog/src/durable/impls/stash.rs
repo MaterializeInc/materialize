@@ -32,7 +32,7 @@ use mz_stash_types::StashError;
 use mz_storage_types::sources::Timeline;
 
 use crate::durable::debug::{Collection, CollectionTrace, Trace};
-use crate::durable::initialize::DEPLOY_GENERATION;
+use crate::durable::initialize::{DEPLOY_GENERATION, ENABLE_PERSIST_TXN_TABLES};
 use crate::durable::objects::{
     AuditLogKey, DurableType, IdAllocKey, IdAllocValue, Snapshot, StorageUsageKey,
     TimelineTimestamp, TimestampValue,
@@ -250,6 +250,29 @@ impl OpenableDurableCatalogState for OpenableConnection {
             .map(|v| v.value);
 
         Ok(deployment_generation)
+    }
+
+    async fn get_enable_persist_txn_tables(&mut self) -> Result<Option<bool>, CatalogError> {
+        let stash = match &mut self.stash {
+            None => match self.open_stash_read_only().await {
+                Ok(stash) => stash,
+                Err(e) if e.can_recover_with_write_mode() => return Ok(None),
+                Err(e) => return Err(e.into()),
+            },
+            Some(stash) => stash,
+        };
+
+        let value = CONFIG_COLLECTION
+            .peek_key_one(
+                stash,
+                proto::ConfigKey {
+                    key: ENABLE_PERSIST_TXN_TABLES.into(),
+                },
+            )
+            .await?
+            .map(|v| v.value);
+
+        Ok(value.map(|value| value > 0))
     }
 
     #[tracing::instrument(level = "info", skip_all)]
@@ -1093,6 +1116,12 @@ impl OpenableDurableCatalogState for TestOpenableConnection<'_> {
 
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError> {
         self.openable_connection.get_deployment_generation().await
+    }
+
+    async fn get_enable_persist_txn_tables(&mut self) -> Result<Option<bool>, CatalogError> {
+        self.openable_connection
+            .get_enable_persist_txn_tables()
+            .await
     }
 
     async fn trace(&mut self) -> Result<Trace, CatalogError> {

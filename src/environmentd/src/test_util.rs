@@ -486,8 +486,6 @@ impl Listeners {
                             secrets_reader_aws_region: None,
                             secrets_reader_aws_prefix: None,
                         },
-                        // TODO(txn): Get this flipped to true before turning anything on in prod.
-                        enable_persist_txn_tables: false,
                     },
                     secrets_controller,
                     cloud_resource_controller: None,
@@ -520,6 +518,8 @@ impl Listeners {
                     deploy_generation: config.deploy_generation,
                     http_host_name: Some(host_name),
                     internal_console_redirect_url: config.internal_console_redirect_url,
+                    // TODO(txn): Get this flipped to true before turning anything on in prod.
+                    enable_persist_txn_tables_cli: None,
                 })
                 .await
         })?;
