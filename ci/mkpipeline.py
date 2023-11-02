@@ -31,7 +31,7 @@ from typing import Any
 
 import yaml
 
-from materialize import mzbuild, spawn
+from materialize import buildkite, mzbuild, spawn
 from materialize.ci_util.trim_pipeline import permit_rerunning_successful_steps
 from materialize.mzcompose.composition import Composition
 
@@ -94,7 +94,7 @@ so it is executed.""",
         # Upload a dummy JUnit report so that the "Analyze tests" step doesn't fail
         # if we trim away all the JUnit report-generating steps.
         Path("junit_dummy.xml").write_text("")
-        spawn.runv(["buildkite-agent", "artifact", "upload", "junit_dummy.xml"])
+        buildkite.upload_artifact("junit_dummy.xml")
 
     if args.coverage:
         pipeline["env"]["CI_BUILDER_SCCACHE"] = 1

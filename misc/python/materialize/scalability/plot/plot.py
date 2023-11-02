@@ -9,8 +9,8 @@
 
 
 import pandas as pd
-from matplotlib.axes import Axes  # type: ignore
-from matplotlib.figure import SubFigure  # type: ignore
+from matplotlib.axes import Axes
+from matplotlib.figure import SubFigure
 
 from materialize.scalability.df import df_details_cols, df_totals_cols
 from materialize.scalability.endpoints import endpoint_name_to_description

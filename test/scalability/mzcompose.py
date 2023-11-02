@@ -9,16 +9,19 @@
 
 import argparse
 import sys
+from pathlib import Path
 
 import pandas as pd
 from jupyter_core.command import main as jupyter_core_command_main
+from matplotlib import pyplot as plt
 
-from materialize import benchmark_utils, buildkite, git, spawn
+from materialize import benchmark_utils, buildkite, git
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.scalability.benchmark_config import BenchmarkConfiguration
-from materialize.scalability.df import paths
+from materialize.scalability.benchmark_executor import BenchmarkExecutor
+from materialize.scalability.benchmark_result import BenchmarkResult
 from materialize.scalability.endpoint import Endpoint
 from materialize.scalability.endpoints import (
     MaterializeContainer,
@@ -27,12 +30,16 @@ from materialize.scalability.endpoints import (
     PostgresContainer,
     endpoint_name_to_description,
 )
+from materialize.scalability.io import paths
+from materialize.scalability.plot.plot import (
+    boxplot_latency_per_connections,
+    scatterplot_tps_per_connections,
+)
 from materialize.scalability.regression import RegressionOutcome
 from materialize.scalability.result_analyzer import ResultAnalyzer
 from materialize.scalability.result_analyzers import DefaultResultAnalyzer
 from materialize.scalability.schema import Schema, TransactionIsolation
 from materialize.scalability.workload import Workload, WorkloadSelfTest
-from materialize.scalability.workload_executor import WorkloadExecutor
 from materialize.scalability.workloads import *  # noqa: F401 F403
 from materialize.scalability.workloads_test import *  # noqa: F401 F403
 from materialize.util import all_subclasses
@@ -137,9 +144,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     print(f"Targets: {args.target}")
     print(f"Checking regression against: {regression_against_target}")
-    print(f"Workloads: {workload_classes}")
+    print("Workloads:")
+    for workload_cls in workload_classes:
+        print(f"* {workload_cls.__name__}")
     print(f"Baseline: {baseline_endpoint}")
-    print(f"Other endpoints: {other_endpoints}")
+    print("Other endpoints:")
+    for other_endpoint in other_endpoints:
+        print(f"* {other_endpoint}")
 
     # fetch main branch and git tags so that their commit messages can be resolved
     git.fetch(remote=git.get_remote(), branch="main", include_tags=True)
@@ -165,14 +176,20 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         count=args.count,
     )
 
-    executor = WorkloadExecutor(
+    executor = BenchmarkExecutor(
         config, schema, baseline_endpoint, other_endpoints, result_analyzer
     )
 
-    overall_regression_outcome = executor.run_workloads()
-    store_and_upload_results_to_buildkite(executor.df_total_by_endpoint_name)
+    benchmark_result = executor.run_workloads()
+    result_file_paths = store_results_in_files(benchmark_result)
+    upload_results_to_buildkite(result_file_paths)
 
-    report_regression_result(baseline_endpoint, overall_regression_outcome)
+    create_plots(benchmark_result)
+    upload_plots_to_buildkite()
+
+    report_regression_result(
+        baseline_endpoint, benchmark_result.overall_regression_outcome
+    )
 
 
 def validate_and_adjust_targets(
@@ -271,36 +288,74 @@ def create_result_analyzer(_args: argparse.Namespace) -> ResultAnalyzer:
     )
 
 
+def create_plots(result: BenchmarkResult) -> None:
+    paths.plot_dir().mkdir(parents=True, exist_ok=True)
+
+    for (
+        workload_name,
+        results_by_endpoint,
+    ) in result.get_df_total_by_workload_and_endpoint().items():
+        fig = plt.figure(layout="constrained", figsize=(16, 5))
+        (subfigure) = fig.subfigures(1, 1)
+        scatterplot_tps_per_connections(subfigure, results_by_endpoint)
+        plt.savefig(paths.plot_png("tps", workload_name), bbox_inches="tight", dpi=300)
+
+    for (
+        workload_name,
+        results_by_endpoint,
+    ) in result.get_df_details_by_workload_and_endpoint().items():
+        fig = plt.figure(layout="constrained", figsize=(16, 5))
+        (subfigure) = fig.subfigures(1, 1)
+        boxplot_latency_per_connections(subfigure, results_by_endpoint)
+        plt.savefig(
+            paths.plot_png("latency", workload_name), bbox_inches="tight", dpi=300
+        )
+
+
 def upload_regressions_to_buildkite(outcome: RegressionOutcome) -> None:
     if not outcome.has_regressions():
         return
 
     outcome.raw_regression_data.to_csv(paths.regressions_csv())
-    spawn.runv(
-        ["buildkite-agent", "artifact", "upload", paths.regressions_csv_name()],
+    buildkite.upload_artifact(
+        paths.regressions_csv().relative_to(paths.RESULTS_DIR),
         cwd=paths.RESULTS_DIR,
     )
 
 
-def store_and_upload_results_to_buildkite(
-    df_total_by_endpoint_name: dict[str, pd.DataFrame]
-) -> None:
-    for (endpoint_name, results) in df_total_by_endpoint_name.items():
+def store_results_in_files(result: BenchmarkResult) -> list[Path]:
+    created_files = []
+    for endpoint_name in result.get_endpoint_names():
         print(
             f"Writing results of {endpoint_name} to {paths.results_csv(endpoint_name)}"
         )
-        results.to_csv(paths.results_csv(endpoint_name))
+        df_total = result.get_df_total_by_endpoint_name(endpoint_name)
+        file_path = paths.results_csv(endpoint_name)
+        df_total.to_csv(file_path)
+        created_files.append(file_path)
 
-        if buildkite.is_in_buildkite():
-            spawn.runv(
-                [
-                    "buildkite-agent",
-                    "artifact",
-                    "upload",
-                    paths.results_csv_rel_path(endpoint_name),
-                ],
-                cwd=paths.RESULTS_DIR,
-            )
+    return created_files
+
+
+def upload_results_to_buildkite(result_file_paths: list[Path]) -> None:
+    if not buildkite.is_in_buildkite():
+        return
+
+    for path in result_file_paths:
+        buildkite.upload_artifact(
+            path.relative_to(paths.RESULTS_DIR),
+            cwd=paths.RESULTS_DIR,
+        )
+
+
+def upload_plots_to_buildkite() -> None:
+    if not buildkite.is_in_buildkite():
+        return
+
+    buildkite.upload_artifact(
+        f"{paths.plot_dir().relative_to(paths.RESULTS_DIR)}/*.png",
+        cwd=paths.RESULTS_DIR,
+    )
 
 
 def workflow_lab(c: Composition) -> None:
