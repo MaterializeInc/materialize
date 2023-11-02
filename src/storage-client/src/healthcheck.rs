@@ -132,6 +132,7 @@ pub static MZ_STATEMENT_EXECUTION_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|
         // which is out of range.
         .with_column("execution_timestamp", ScalarType::UInt64.nullable(true))
         .with_column("transaction_id", ScalarType::UInt64.nullable(false))
+        .with_column("transient_index_id", ScalarType::String.nullable(true))
         .with_column(
             "params",
             ScalarType::Array(Box::new(ScalarType::String)).nullable(false),

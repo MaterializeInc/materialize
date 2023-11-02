@@ -94,7 +94,7 @@ use crate::coord::dataflows::{
     ExprPrepStyle,
 };
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::coord::peek::{FastPathPlan, PlannedPeek};
+use crate::coord::peek::{FastPathPlan, PeekDataflowPlan, PlannedPeek};
 use crate::coord::read_policy::SINCE_GRANULARITY;
 use crate::coord::timeline::TimelineContext;
 use crate::coord::timestamp_selection::{
@@ -2514,6 +2514,14 @@ impl Coordinator {
                 &finishing,
             )
             .await?;
+        if let Some(transient_index_id) = match &peek_plan.plan {
+            peek::PeekPlan::FastPath(_) => None,
+            peek::PeekPlan::SlowPath(PeekDataflowPlan { id, .. }) => Some(id),
+        } {
+            if let Some(statement_logging_id) = ctx.extra.contents() {
+                self.set_transient_index_id(statement_logging_id, *transient_index_id);
+            }
+        }
 
         let determination = peek_plan.determination.clone();
 

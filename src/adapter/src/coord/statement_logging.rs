@@ -16,7 +16,7 @@ use mz_ore::now::to_datetime;
 use mz_ore::task::spawn;
 use mz_ore::{cast::CastFrom, now::EpochMillis};
 use mz_repr::adt::array::ArrayDimension;
-use mz_repr::{Datum, Diff, Row, RowPacker, Timestamp};
+use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
 use mz_sql::plan::Params;
 use mz_storage_client::controller::IntrospectionType;
 use qcell::QCell;
@@ -250,9 +250,11 @@ impl Coordinator {
             transaction_isolation,
             execution_timestamp,
             transaction_id,
+            transient_index_id,
         } = record;
 
         let cluster = cluster_id.map(|id| id.to_string());
+        let transient_index_id = transient_index_id.map(|id| id.to_string());
         packer.extend([
             Datum::Uuid(*id),
             Datum::Uuid(*prepared_statement_id),
@@ -266,6 +268,10 @@ impl Coordinator {
             Datum::String(&*transaction_isolation),
             (*execution_timestamp).into(),
             Datum::UInt64(*transaction_id),
+            match &transient_index_id {
+                None => Datum::Null,
+                Some(transient_index_id) => Datum::String(transient_index_id),
+            },
         ]);
         packer
             .push_array(
@@ -430,7 +436,13 @@ impl Coordinator {
     ) {
         self.mutate_record(id, |record| {
             record.execution_timestamp = Some(u64::from(timestamp));
-        })
+        });
+    }
+
+    pub fn set_transient_index_id(&mut self, id: StatementLoggingId, transient_index_id: GlobalId) {
+        self.mutate_record(id, |record| {
+            record.transient_index_id = Some(transient_index_id)
+        });
     }
 
     /// Possibly record the beginning of statement execution, depending on a randomly-chosen value.
@@ -500,12 +512,6 @@ impl Coordinator {
             sample_rate,
             params,
             began_at: self.now(),
-            // Cluster is not known yet; we'll fill it in later
-            cluster_id: None,
-            cluster_name: None,
-            // Timetsamp is not known yet; we'll fill it in later
-            // (if any exists)
-            execution_timestamp: None,
             application_name: session.application_name().to_string(),
             transaction_isolation: session.vars().transaction_isolation().to_string(),
             transaction_id: session
@@ -513,6 +519,11 @@ impl Coordinator {
                 .inner()
                 .expect("Every statement runs in an explicit or implicit transaction")
                 .id,
+            // These are not known yet; we'll fill them in later.
+            cluster_id: None,
+            cluster_name: None,
+            execution_timestamp: None,
+            transient_index_id: None,
         };
         let mseh_update = Self::pack_statement_began_execution_update(&record);
         self.statement_logging
