@@ -42,6 +42,7 @@ def load_data_from_filesystem(
     workload_name: str,
 ) -> tuple[dict[str, pd.DataFrame], dict[str, pd.DataFrame]]:
     endpoint_names = paths.get_endpoint_names_from_results_dir()
+    endpoint_names.sort()
 
     df_totals_by_endpoint_name = dict()
     df_details_by_endpoint_name = dict()
