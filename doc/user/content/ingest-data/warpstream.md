@@ -63,7 +63,7 @@ Ensure you have the following:
                     --records '{"action": "click", "user_id": "user_0", "page_id": "home"},,{"action": "hover", "user_id": "user_0", "page_id": "home"},,{"action": "scroll", "user_id": "user_0", "page_id": "home"}'
     ```
 
-    The WarpStream CLI uses `,,` as a delimiter between JSON records.
+    > **Note:** The WarpStream CLI uses `,,` as a delimiter between JSON records.
 
 2. #### Integrate with Materialize
 
@@ -98,13 +98,13 @@ Ensure you have the following:
         WITH (SIZE = '3xsmall');
     ```
 
-    d. To verify the ingestion, you can execute an SQL query in Materialize
+    d. Verify the ingestion and query the data in Materialize:
 
     ```sql
     SELECT * FROM warpstream_click_stream_source LIMIT 10;
     ```
 
-    Furthermore, create a materialized view to aggregate the data:
+    e. Furthermore, create a materialized view to aggregate the data:
 
     ```sql
     CREATE MATERIALIZED VIEW warpstream_click_stream_aggregate AS
@@ -116,7 +116,7 @@ Ensure you have the following:
         GROUP BY user_id, page_id;
     ```
 
-    e. Produce additional records to monitor real-time updates:
+    f. Produce additional records to monitor real-time updates:
 
     ```bash
     warpstream kcmd -bootstrap-host warpstream-agent-demo.fly.dev \
@@ -127,7 +127,7 @@ Ensure you have the following:
                     --records '{"action": "click", "user_id": "user_1", "page_id": "home"}'
     ```
 
-    f. Query the materialized view to monitor the real-time updates:
+    g. Query the materialized view to monitor the real-time updates:
 
     ```sql
     SELECT * FROM warpstream_click_stream_aggregate;
