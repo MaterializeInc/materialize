@@ -21,7 +21,8 @@ use mz_ore::collections::HashMap;
 use mz_sql_parser::ast::{Raw, Statement};
 use regex::Regex;
 use ropey::Rope;
-use serde_json::Value;
+use serde::Serialize;
+use serde_json::{json, Value};
 use tokio::sync::Mutex;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
@@ -41,6 +42,13 @@ pub struct ParseResult {
     pub asts: Vec<Statement<Raw>>,
     /// Text handler for big files.
     pub rope: Rope,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Serialize)]
+/// Represents the response from the parse command.
+pub struct ExecuteCommandParseResponse {
+    /// Contains all the valid SQL statements.
+    pub sqls: Vec<String>,
 }
 
 /// The [Backend] struct implements the [LanguageServer] trait, and thus must provide implementations for its methods.
@@ -125,6 +133,12 @@ impl LanguageServer for Backend {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
                     TextDocumentSyncKind::FULL,
                 )),
+                execute_command_provider: Some(ExecuteCommandOptions {
+                    commands: vec!["parse".to_string()],
+                    work_done_progress_options: WorkDoneProgressOptions {
+                        work_done_progress: None,
+                    },
+                }),
                 workspace: Some(WorkspaceServerCapabilities {
                     workspace_folders: Some(WorkspaceFoldersServerCapabilities {
                         supported: Some(true),
@@ -165,9 +179,33 @@ impl LanguageServer for Backend {
             .await;
     }
 
-    async fn execute_command(&self, _: ExecuteCommandParams) -> Result<Option<Value>> {
+    /// Executes a single command and returns the response. Def: [workspace/executeCommand](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#workspace_executeCommand)
+    ///
+    /// Commands implemented:
+    ///
+    /// * parse: returns multiple valid statements from a single sql code.
+    async fn execute_command(&self, command_params: ExecuteCommandParams) -> Result<Option<Value>> {
+        match command_params.command.as_str() {
+            "parse" => {
+                let json_args = command_params.arguments.get(0);
+
+                if let Some(json_args) = json_args {
+                    let args: String = serde_json::from_value(json_args.clone()).unwrap();
+
+                    let statements = mz_sql_parser::parser::parse_statements(&args).unwrap();
+                    let sqls: Vec<String> = statements.iter().map(|x| x.sql.to_string()).collect();
+
+                    return Ok(Some(json!(ExecuteCommandParseResponse { sqls })));
+                }
+            }
+            _ => {}
+        }
+
         self.client
-            .log_message(MessageType::INFO, "command executed!")
+            .log_message(
+                MessageType::INFO,
+                format!("command {} executed!", command_params.command),
+            )
             .await;
 
         match self.client.apply_edit(WorkspaceEdit::default()).await {
