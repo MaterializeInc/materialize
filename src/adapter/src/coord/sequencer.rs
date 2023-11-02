@@ -510,7 +510,7 @@ impl Coordinator {
                                 session,
                                 tx: tx.take(),
                                 outer_ctx_extra: Some(extra),
-                                span: tracing::Span::none(),
+                                span: tracing::debug_span!("execute_plan"),
                             }))
                             .expect("sending to self.internal_cmd_tx cannot fail");
                     }

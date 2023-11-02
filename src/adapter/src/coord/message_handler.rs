@@ -23,8 +23,10 @@ use mz_sql::ast::Statement;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{CreateSourcePlans, Plan};
 use mz_storage_types::controller::CollectionMetadata;
+use opentelemetry::trace::TraceContextExt;
 use rand::{rngs, Rng, SeedableRng};
 use tracing::{event, warn, Instrument, Level};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::command::Command;
 use crate::coord::appends::Deferred;
@@ -60,6 +62,8 @@ impl Coordinator {
                 self.message_write_lock_grant(write_lock_guard).await;
             }
             Message::GroupCommitInitiate(span, permit) => {
+                // Add an OpenTelemetry link to our current span.
+                tracing::Span::current().add_link(span.context().span().span_context().clone());
                 self.try_group_commit(permit).instrument(span).await
             }
             Message::GroupCommitApply(timestamp, responses, write_lock_guard, notifies, permit) => {

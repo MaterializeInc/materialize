@@ -148,6 +148,7 @@ impl Coordinator {
 
     /// Peek the current timestamp used for operations on local inputs. Used to determine how much
     /// to block group commits by.
+    #[tracing::instrument(level = "debug", skip(self))]
     pub(crate) async fn apply_local_write(&mut self, timestamp: Timestamp) {
         let now = self.now().into();
 

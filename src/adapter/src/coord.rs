@@ -88,7 +88,7 @@ use mz_controller::clusters::{ClusterConfig, ClusterEvent, CreateReplicaConfig};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_orchestrator::ServiceProcessMetrics;
-use mz_ore::metrics::{MetricsFutureExt, MetricsRegistry};
+use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::stack;
 use mz_ore::task::spawn;
@@ -113,11 +113,13 @@ use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::sources::Timeline;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::Optimizer;
+use opentelemetry::trace::TraceContextExt;
 use timely::progress::Antichain;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
 use tracing::{debug, info, info_span, span, warn, Instrument, Level, Span};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
 use crate::catalog::{
@@ -1892,10 +1894,10 @@ impl Coordinator {
         flags::tracing_config(self.catalog.system_config()).apply(&self.tracing_handle);
 
         // Report if the handling of a single message takes longer than this threshold.
-        let reporting_threshold = self
+        let prometheus_threshold = self
             .catalog
             .system_config()
-            .coord_slow_message_reporting_threshold_ms();
+            .coord_slow_message_reporting_threshold();
 
         loop {
             // Before adding a branch to this select loop, please ensure that the branch is
@@ -1972,20 +1974,37 @@ impl Coordinator {
                 }
             };
 
-            // Track the wall time for each message for reporting.
-            let histogram_metric = self
-                .metrics
-                .slow_message_handling
-                .with_label_values(&[msg.kind()]);
+            let msg_kind = msg.kind();
+            let span = span!(Level::DEBUG, "coordinator processing", kind = msg_kind);
+            let otel_context = span.context().span().span_context().clone();
 
+            let start = Instant::now();
             self.handle_message(msg)
                 // All message processing functions trace. Start a parent span for them to make
                 // it easy to find slow messages.
-                .instrument(span!(Level::DEBUG, "coordinator message processing"))
-                .wall_time()
-                .observe(histogram_metric)
-                .with_filter(move |wall_time| wall_time >= reporting_threshold)
+                .instrument(span)
                 .await;
+            let duration = start.elapsed();
+
+            // Report slow messages to Prometheus.
+            if duration > prometheus_threshold {
+                self.metrics
+                    .slow_message_handling
+                    .with_label_values(&[msg_kind])
+                    .observe(duration.as_secs_f64());
+            }
+
+            // If something is _really_ slow, print a trace id for debugging, if OTEL is enabled.
+            let trace_id_threshold = Duration::from_secs(5).min(prometheus_threshold * 25);
+            if duration > trace_id_threshold && otel_context.is_valid() {
+                let trace_id = otel_context.trace_id();
+                tracing::warn!(
+                    ?msg_kind,
+                    ?trace_id,
+                    ?duration,
+                    "very slow coordinator message"
+                );
+            }
         }
         // Try and cleanup as a best effort. There may be some async tasks out there holding a
         // reference that prevents us from cleaning up.
@@ -2028,6 +2047,7 @@ impl Coordinator {
         &self.active_conns
     }
 
+    #[tracing::instrument(level = "debug", skip(self, ctx_extra))]
     pub(crate) fn retire_execution(
         &mut self,
         reason: StatementEndedExecutionReason,

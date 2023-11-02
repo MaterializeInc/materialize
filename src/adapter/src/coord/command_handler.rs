@@ -94,8 +94,8 @@ impl Coordinator {
                 outer_ctx_extra,
             } => {
                 let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
-                let span = span
-                    .in_scope(|| tracing::debug_span!("message_command (execute)").or_current());
+                let span = span.or_current();
+                tracing::Span::current().add_link(span.context().span().span_context().clone());
 
                 self.handle_execute(portal_name, session, tx, outer_ctx_extra)
                     .instrument(span)
@@ -199,8 +199,10 @@ impl Coordinator {
                 // attach the parent relationship to. If we do the TODO to swap
                 // otel_ctx in `Command::Commit` for a Span, we can downgrade
                 // this to a debug_span.
-                let span = tracing::info_span!("message_command (commit)");
+                let span = tracing::info_span!("message_command (commit)").or_current();
                 span.in_scope(|| otel_ctx.attach_as_parent());
+                tracing::Span::current().add_link(span.context().span().span_context().clone());
+
                 self.sequence_plan(ctx, plan, ResolvedIds(BTreeSet::new()))
                     .instrument(span)
                     .await;
@@ -218,6 +220,7 @@ impl Coordinator {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip(self, cancel_tx, tx, secret_key, notice_tx))]
     async fn handle_startup(
         &mut self,
         cancel_tx: Arc<watch::Sender<Canceled>>,
@@ -435,7 +438,7 @@ impl Coordinator {
         self.handle_execute_inner(stmt, params, ctx).await
     }
 
-    #[tracing::instrument(level = "trace", skip(self, ctx))]
+    #[tracing::instrument(level = "debug", skip(self, ctx))]
     pub(crate) async fn handle_execute_inner(
         &mut self,
         stmt: Statement<Raw>,
@@ -682,6 +685,7 @@ impl Coordinator {
     /// Note: Here we take a [`ConnectionIdType`] as opposed to an owned
     /// `ConnectionId` because this method gets called by external clients when
     /// they request to cancel a request.
+    #[tracing::instrument(level = "debug", skip(self, secret_key))]
     fn handle_cancel(&mut self, conn_id: ConnectionIdType, secret_key: u32) {
         if let Some((id_handle, conn_meta)) = self.active_conns.get_key_value(&conn_id) {
             // If the secret key specified by the client doesn't match the
@@ -700,6 +704,7 @@ impl Coordinator {
 
     /// Unconditionally instructs the dataflow layer to cancel any ongoing,
     /// interactive work for the named `conn_id`.
+    #[tracing::instrument(level = "debug", skip(self))]
     pub(crate) fn handle_privileged_cancel(&mut self, conn_id: ConnectionId) {
         if let Some(conn_meta) = self.active_conns.get(&conn_id) {
             // Cancel pending writes. There is at most one pending write per session.
@@ -769,6 +774,7 @@ impl Coordinator {
     /// Handle termination of a client session.
     ///
     /// This cleans up any state in the coordinator associated with the session.
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn handle_terminate(&mut self, conn_id: ConnectionId) {
         if self.active_conns.get(&conn_id).is_none() {
             // If the session doesn't exist in `active_conns`, then this method will panic later on.
@@ -802,6 +808,7 @@ impl Coordinator {
         self.send_builtin_table_updates_defer(vec![update]);
     }
 
+    #[tracing::instrument(level = "debug", skip(self, tx))]
     fn handle_append_webhook(
         &mut self,
         database: String,
