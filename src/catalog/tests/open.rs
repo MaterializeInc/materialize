@@ -76,8 +76,8 @@
 // END LINT CONFIG
 
 use mz_catalog::durable::{
-    debug_bootstrap_args, debug_stash_backed_catalog_state, persist_backed_catalog_state,
-    stash_backed_catalog_state, CatalogError, Epoch, OpenableDurableCatalogState, StashConfig,
+    persist_backed_catalog_state, stash_backed_catalog_state, test_bootstrap_args,
+    test_stash_backed_catalog_state, CatalogError, Epoch, OpenableDurableCatalogState, StashConfig,
 };
 use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
 use mz_persist_client::PersistClient;
@@ -99,8 +99,8 @@ async fn test_stash_is_initialized() {
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_debug_stash_is_initialized() {
     let debug_factory = DebugStashFactory::new().await;
-    let debug_openable_state1 = debug_stash_backed_catalog_state(&debug_factory);
-    let debug_openable_state2 = debug_stash_backed_catalog_state(&debug_factory);
+    let debug_openable_state1 = test_stash_backed_catalog_state(&debug_factory);
+    let debug_openable_state2 = test_stash_backed_catalog_state(&debug_factory);
     test_is_initialized(debug_openable_state1, debug_openable_state2).await;
     debug_factory.drop().await;
 }
@@ -127,7 +127,7 @@ async fn test_is_initialized(
     );
 
     let state = Box::new(openable_state1)
-        .open(SYSTEM_TIME(), &debug_bootstrap_args(), None)
+        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
         .await
         .unwrap();
     state.expire().await;
@@ -157,8 +157,8 @@ async fn test_stash_get_deployment_generation() {
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_debug_stash_get_deployment_generation() {
     let debug_factory = DebugStashFactory::new().await;
-    let debug_openable_state1 = debug_stash_backed_catalog_state(&debug_factory);
-    let debug_openable_state2 = debug_stash_backed_catalog_state(&debug_factory);
+    let debug_openable_state1 = test_stash_backed_catalog_state(&debug_factory);
+    let debug_openable_state2 = test_stash_backed_catalog_state(&debug_factory);
     test_get_deployment_generation(debug_openable_state1, debug_openable_state2).await;
     debug_factory.drop().await;
 }
@@ -186,7 +186,7 @@ async fn test_get_deployment_generation(
     );
 
     let state = Box::new(openable_state1)
-        .open(SYSTEM_TIME(), &debug_bootstrap_args(), Some(42))
+        .open(SYSTEM_TIME(), &test_bootstrap_args(), Some(42))
         .await
         .unwrap();
     state.expire().await;
@@ -226,10 +226,10 @@ async fn test_stash_open_savepoint() {
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_debug_stash_open_savepoint() {
     let debug_factory = DebugStashFactory::new().await;
-    let debug_openable_state1 = debug_stash_backed_catalog_state(&debug_factory);
-    let debug_openable_state2 = debug_stash_backed_catalog_state(&debug_factory);
-    let debug_openable_state3 = debug_stash_backed_catalog_state(&debug_factory);
-    let debug_openable_state4 = debug_stash_backed_catalog_state(&debug_factory);
+    let debug_openable_state1 = test_stash_backed_catalog_state(&debug_factory);
+    let debug_openable_state2 = test_stash_backed_catalog_state(&debug_factory);
+    let debug_openable_state3 = test_stash_backed_catalog_state(&debug_factory);
+    let debug_openable_state4 = test_stash_backed_catalog_state(&debug_factory);
     test_open_savepoint(
         debug_openable_state1,
         debug_openable_state2,
@@ -271,7 +271,7 @@ async fn test_open_savepoint(
     {
         // Can't open a savepoint catalog until it's been initialized.
         let err = Box::new(openable_state1)
-            .open_savepoint(SYSTEM_TIME(), &debug_bootstrap_args(), None)
+            .open_savepoint(SYSTEM_TIME(), &test_bootstrap_args(), None)
             .await
             .unwrap_err();
         match err {
@@ -282,7 +282,7 @@ async fn test_open_savepoint(
         // Initialize the stash.
         {
             let mut state = Box::new(openable_state2)
-                .open(SYSTEM_TIME(), &debug_bootstrap_args(), None)
+                .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
                 .await
                 .unwrap();
             assert_eq!(state.epoch(), Epoch::new(2).expect("known to be non-zero"));
@@ -291,7 +291,7 @@ async fn test_open_savepoint(
 
         // Open catalog in check mode.
         let mut state = Box::new(openable_state3)
-            .open_savepoint(SYSTEM_TIME(), &debug_bootstrap_args(), None)
+            .open_savepoint(SYSTEM_TIME(), &test_bootstrap_args(), None)
             .await
             .unwrap();
         // Savepoint catalogs do not increment the epoch.
@@ -318,7 +318,7 @@ async fn test_open_savepoint(
     {
         // Open catalog normally.
         let mut state = Box::new(openable_state4)
-            .open(SYSTEM_TIME(), &debug_bootstrap_args(), None)
+            .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
             .await
             .unwrap();
         // Write should not have persisted.
@@ -329,7 +329,7 @@ async fn test_open_savepoint(
             .databases
             .into_iter()
             .find(|(_k, v)| v.name == "db");
-        assert!(db.is_none(), "database should not exist");
+        assert_eq!(db, None, "database should not exist");
         Box::new(state).expire().await;
     }
 }
@@ -349,9 +349,9 @@ async fn test_stash_open_read_only() {
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_debug_stash_open_read_only() {
     let debug_factory = DebugStashFactory::new().await;
-    let debug_openable_state1 = debug_stash_backed_catalog_state(&debug_factory);
-    let debug_openable_state2 = debug_stash_backed_catalog_state(&debug_factory);
-    let debug_openable_state3 = debug_stash_backed_catalog_state(&debug_factory);
+    let debug_openable_state1 = test_stash_backed_catalog_state(&debug_factory);
+    let debug_openable_state2 = test_stash_backed_catalog_state(&debug_factory);
+    let debug_openable_state3 = test_stash_backed_catalog_state(&debug_factory);
     test_open_read_only(
         debug_openable_state1,
         debug_openable_state2,
@@ -387,7 +387,7 @@ async fn test_open_read_only(
 ) {
     // Can't open a read-only stash until it's been initialized.
     let err = Box::new(openable_state1)
-        .open_read_only(SYSTEM_TIME(), &debug_bootstrap_args())
+        .open_read_only(SYSTEM_TIME(), &test_bootstrap_args())
         .await
         .unwrap_err();
     match err {
@@ -398,7 +398,7 @@ async fn test_open_read_only(
     // Initialize the stash.
     {
         let mut state = Box::new(openable_state2)
-            .open(SYSTEM_TIME(), &debug_bootstrap_args(), None)
+            .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
             .await
             .unwrap();
         assert_eq!(state.epoch(), Epoch::new(2).expect("known to be non-zero"));
@@ -406,7 +406,7 @@ async fn test_open_read_only(
     }
 
     let mut state = Box::new(openable_state3)
-        .open_read_only(SYSTEM_TIME(), &debug_bootstrap_args())
+        .open_read_only(SYSTEM_TIME(), &test_bootstrap_args())
         .await
         .unwrap();
     // Read-only catalogs do not increment the epoch.
@@ -440,9 +440,9 @@ async fn test_stash_open() {
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_debug_stash_open() {
     let debug_factory = DebugStashFactory::new().await;
-    let debug_openable_state1 = debug_stash_backed_catalog_state(&debug_factory);
-    let debug_openable_state2 = debug_stash_backed_catalog_state(&debug_factory);
-    let debug_openable_state3 = debug_stash_backed_catalog_state(&debug_factory);
+    let debug_openable_state1 = test_stash_backed_catalog_state(&debug_factory);
+    let debug_openable_state2 = test_stash_backed_catalog_state(&debug_factory);
+    let debug_openable_state3 = test_stash_backed_catalog_state(&debug_factory);
     test_open(
         debug_openable_state1,
         debug_openable_state2,
@@ -479,7 +479,7 @@ async fn test_open(
     let (snapshot, audit_log) = {
         let mut state = Box::new(openable_state1)
             // Use `NOW_ZERO` for consistent timestamps in the snapshots.
-            .open(NOW_ZERO(), &debug_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None)
             .await
             .unwrap();
 
@@ -495,7 +495,7 @@ async fn test_open(
     // Reopening the catalog will increment the epoch, but shouldn't change the initial snapshot.
     {
         let mut state = Box::new(openable_state2)
-            .open(SYSTEM_TIME(), &debug_bootstrap_args(), None)
+            .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
             .await
             .unwrap();
 
@@ -507,7 +507,7 @@ async fn test_open(
     // Reopen the catalog a third time for good measure.
     {
         let mut state = Box::new(openable_state3)
-            .open(SYSTEM_TIME(), &debug_bootstrap_args(), None)
+            .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
             .await
             .unwrap();
 

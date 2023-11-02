@@ -18,6 +18,7 @@ use mz_ore::soft_assert_eq_or_log;
 use mz_repr::Timestamp;
 use mz_storage_types::sources::Timeline;
 
+use crate::durable::debug::{DebugCatalogState, Trace};
 use crate::durable::objects::{Snapshot, TimelineTimestamp};
 use crate::durable::transaction::TransactionBatch;
 use crate::durable::{
@@ -131,12 +132,20 @@ where
         Ok(Box::new(ShadowCatalogState { stash, persist }))
     }
 
+    async fn open_debug(mut self: Box<Self>) -> Result<DebugCatalogState, CatalogError> {
+        panic!("ShadowCatalog is not used for catalog-debug tool");
+    }
+
     async fn is_initialized(&mut self) -> Result<bool, CatalogError> {
         compare_and_return_async!(self, is_initialized)
     }
 
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError> {
         compare_and_return_async!(self, get_deployment_generation)
+    }
+
+    async fn trace(&mut self) -> Result<Trace, CatalogError> {
+        panic!("ShadowCatalog is not used for catalog-debug tool");
     }
 
     async fn expire(self) {

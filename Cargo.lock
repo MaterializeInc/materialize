@@ -3686,6 +3686,7 @@ dependencies = [
 name = "mz-catalog"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "bytes",
  "chrono",
@@ -3720,6 +3721,7 @@ dependencies = [
  "rand",
  "serde",
  "serde_json",
+ "serde_plain",
  "sha2",
  "thiserror",
  "timely",

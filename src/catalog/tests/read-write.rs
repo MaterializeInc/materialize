@@ -82,7 +82,7 @@ use mz_audit_log::{
 };
 use mz_catalog::durable::objects::{DurableType, IdAlloc};
 use mz_catalog::durable::{
-    debug_bootstrap_args, debug_stash_backed_catalog_state, persist_backed_catalog_state,
+    persist_backed_catalog_state, test_bootstrap_args, test_stash_backed_catalog_state,
     CatalogError, DurableCatalogError, Item, OpenableDurableCatalogState, TimelineTimestamp,
     USER_ITEM_ALLOC_KEY,
 };
@@ -102,8 +102,8 @@ use uuid::Uuid;
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_stash_confirm_leadership() {
     let debug_factory = DebugStashFactory::new().await;
-    let openable_state1 = debug_stash_backed_catalog_state(&debug_factory);
-    let openable_state2 = debug_stash_backed_catalog_state(&debug_factory);
+    let openable_state1 = test_stash_backed_catalog_state(&debug_factory);
+    let openable_state2 = test_stash_backed_catalog_state(&debug_factory);
     test_confirm_leadership(openable_state1, openable_state2).await;
     debug_factory.drop().await;
 }
@@ -124,13 +124,13 @@ async fn test_confirm_leadership(
     openable_state2: impl OpenableDurableCatalogState,
 ) {
     let mut state1 = Box::new(openable_state1)
-        .open(SYSTEM_TIME(), &debug_bootstrap_args(), None)
+        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
         .await
         .unwrap();
     assert!(state1.confirm_leadership().await.is_ok());
 
     let mut state2 = Box::new(openable_state2)
-        .open(SYSTEM_TIME(), &debug_bootstrap_args(), None)
+        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
         .await
         .unwrap();
     assert!(state2.confirm_leadership().await.is_ok());
@@ -158,7 +158,7 @@ async fn test_confirm_leadership(
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_stash_get_and_prune_storage_usage() {
     let debug_factory = DebugStashFactory::new().await;
-    let openable_state = debug_stash_backed_catalog_state(&debug_factory);
+    let openable_state = test_stash_backed_catalog_state(&debug_factory);
     test_get_and_prune_storage_usage(openable_state).await;
     debug_factory.drop().await;
 }
@@ -189,7 +189,7 @@ async fn test_get_and_prune_storage_usage(openable_state: impl OpenableDurableCa
     let boot_ts = mz_repr::Timestamp::new(23);
 
     let mut state = Box::new(openable_state)
-        .open(SYSTEM_TIME(), &debug_bootstrap_args(), None)
+        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
         .await
         .unwrap();
     let mut txn = state.transaction().await.unwrap();
@@ -220,7 +220,7 @@ async fn test_get_and_prune_storage_usage(openable_state: impl OpenableDurableCa
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_stash_timestamps() {
     let debug_factory = DebugStashFactory::new().await;
-    let openable_state = debug_stash_backed_catalog_state(&debug_factory);
+    let openable_state = test_stash_backed_catalog_state(&debug_factory);
     test_timestamps(openable_state).await;
     debug_factory.drop().await;
 }
@@ -241,7 +241,7 @@ async fn test_timestamps(openable_state: impl OpenableDurableCatalogState) {
         ts: mz_repr::Timestamp::new(42),
     };
     let mut state = Box::new(openable_state)
-        .open(SYSTEM_TIME(), &debug_bootstrap_args(), None)
+        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
         .await
         .unwrap();
 
@@ -270,7 +270,7 @@ async fn test_timestamps(openable_state: impl OpenableDurableCatalogState) {
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_stash_allocate_id() {
     let debug_factory = DebugStashFactory::new().await;
-    let openable_state = debug_stash_backed_catalog_state(&debug_factory);
+    let openable_state = test_stash_backed_catalog_state(&debug_factory);
     test_allocate_id(openable_state).await;
     debug_factory.drop().await;
 }
@@ -288,7 +288,7 @@ async fn test_persist_allocate_id() {
 async fn test_allocate_id(openable_state: impl OpenableDurableCatalogState) {
     let id_type = USER_ITEM_ALLOC_KEY;
     let mut state = Box::new(openable_state)
-        .open(SYSTEM_TIME(), &debug_bootstrap_args(), None)
+        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
         .await
         .unwrap();
 
@@ -317,7 +317,7 @@ async fn test_allocate_id(openable_state: impl OpenableDurableCatalogState) {
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_stash_audit_logs() {
     let debug_factory = DebugStashFactory::new().await;
-    let openable_state = debug_stash_backed_catalog_state(&debug_factory);
+    let openable_state = test_stash_backed_catalog_state(&debug_factory);
     test_audit_logs(openable_state).await;
     debug_factory.drop().await;
 }
@@ -365,7 +365,7 @@ async fn test_audit_logs(openable_state: impl OpenableDurableCatalogState) {
     ];
 
     let mut state = Box::new(openable_state)
-        .open(SYSTEM_TIME(), &debug_bootstrap_args(), None)
+        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
         .await
         .unwrap();
     let mut txn = state.transaction().await.unwrap();
@@ -385,7 +385,7 @@ async fn test_audit_logs(openable_state: impl OpenableDurableCatalogState) {
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_stash_items() {
     let debug_factory = DebugStashFactory::new().await;
-    let openable_state = debug_stash_backed_catalog_state(&debug_factory);
+    let openable_state = test_stash_backed_catalog_state(&debug_factory);
     test_items(openable_state).await;
     debug_factory.drop().await;
 }
@@ -421,7 +421,7 @@ async fn test_items(openable_state: impl OpenableDurableCatalogState) {
     ];
 
     let mut state = Box::new(openable_state)
-        .open(SYSTEM_TIME(), &debug_bootstrap_args(), None)
+        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
         .await
         .unwrap();
     let mut txn = state.transaction().await.unwrap();

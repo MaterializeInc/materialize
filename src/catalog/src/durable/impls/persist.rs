@@ -7,10 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
+use std::fmt::Debug;
 use std::str::FromStr;
+use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
+use futures::StreamExt;
 use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_ore::now::EpochMillis;
@@ -31,13 +36,11 @@ use mz_stash_types::STASH_VERSION;
 use mz_storage_types::sources::Timeline;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
-use std::collections::BTreeMap;
-use std::sync::Arc;
-use std::time::Duration;
-use timely::progress::Antichain;
+use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tracing::debug;
 use uuid::Uuid;
 
+use crate::durable::debug::{Collection, DebugCatalogState, Trace};
 use crate::durable::initialize::DEPLOY_GENERATION;
 use crate::durable::objects::{AuditLogKey, DurableType, Snapshot, StorageUsageKey};
 use crate::durable::transaction::TransactionBatch;
@@ -428,7 +431,7 @@ impl PersistHandle {
         &mut self,
         upper: Timestamp,
     ) -> impl Iterator<Item = StateUpdate> + DoubleEndedIterator {
-        let snapshot = if upper > 0.into() {
+        let snapshot = if upper > Timestamp::minimum() {
             let since = self.read_handle.since().clone();
             let mut as_of = upper.saturating_sub(1);
             as_of.advance_by(since.borrow());
@@ -451,6 +454,39 @@ impl PersistHandle {
                 diff,
             })
             .sorted_by(|a, b| Ord::cmp(&b.ts, &a.ts))
+    }
+
+    /// Generates an iterator of [`StateUpdate`] that contain all updates to the catalog
+    /// state up to, but not including, `upper`.
+    async fn snapshot_unconsolidated(
+        &mut self,
+        upper: Timestamp,
+    ) -> impl Iterator<Item = StateUpdate> + DoubleEndedIterator {
+        let snapshot = if upper > Timestamp::minimum() {
+            let since = self.read_handle.since().clone();
+            let mut as_of = upper.saturating_sub(1);
+            as_of.advance_by(since.borrow());
+            let mut snapshot = Vec::new();
+            let mut stream = Box::pin(
+                self.read_handle
+                    .snapshot_and_stream(Antichain::from_elem(as_of))
+                    .await
+                    .expect("we have advanced the restart_as_of by the since"),
+            );
+            while let Some(update) = stream.next().await {
+                snapshot.push(update)
+            }
+            snapshot
+        } else {
+            Vec::new()
+        };
+        snapshot
+            .into_iter()
+            .map(|((key, _unit), ts, diff)| StateUpdate {
+                kind: key.expect("key decoding error"),
+                ts,
+                diff,
+            })
     }
 
     /// Get value of config `key`.
@@ -485,6 +521,41 @@ impl PersistHandle {
     #[tracing::instrument(level = "debug", skip(self))]
     async fn get_user_version(&mut self, upper: Timestamp) -> Option<u64> {
         self.get_config(USER_VERSION_KEY, upper).await
+    }
+
+    /// Appends `updates` to the catalog state and downgrades the catalog's upper to `next_upper`
+    /// iff the current global upper of the catalog is `current_upper`.
+    async fn compare_and_append(
+        &mut self,
+        updates: Vec<StateUpdate>,
+        current_upper: Timestamp,
+        next_upper: Timestamp,
+    ) -> Result<(), CatalogError> {
+        let updates = updates
+            .into_iter()
+            .map(|update| ((update.kind, ()), update.ts, update.diff));
+        match self
+            .write_handle
+            .compare_and_append(
+                updates,
+                Antichain::from_elem(current_upper),
+                Antichain::from_elem(next_upper),
+            )
+            .await
+            .expect("invalid usage")
+        {
+            Ok(()) => {
+                self.read_handle
+                    .downgrade_since(&Antichain::from_elem(current_upper))
+                    .await;
+                Ok(())
+            }
+            Err(upper_mismatch) => Err(DurableCatalogError::Fence(format!(
+                "current catalog upper {:?} fenced by new catalog upper {:?}",
+                upper_mismatch.expected, upper_mismatch.current
+            ))
+            .into()),
+        }
     }
 }
 
@@ -523,6 +594,11 @@ impl OpenableDurableCatalogState for PersistHandle {
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
+    async fn open_debug(mut self: Box<Self>) -> Result<DebugCatalogState, CatalogError> {
+        Ok(DebugCatalogState::Persist(*self))
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn is_initialized(&mut self) -> Result<bool, CatalogError> {
         Ok(self.is_initialized_inner().await.0)
     }
@@ -531,6 +607,17 @@ impl OpenableDurableCatalogState for PersistHandle {
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError> {
         let upper = self.current_upper().await;
         Ok(self.get_config(DEPLOY_GENERATION, upper).await)
+    }
+
+    #[tracing::instrument(level = "info", skip_all)]
+    async fn trace(&mut self) -> Result<Trace, CatalogError> {
+        let (is_initialized, upper) = self.is_initialized_inner().await;
+        if !is_initialized {
+            Err(CatalogError::Durable(DurableCatalogError::Uninitialized))
+        } else {
+            let snapshot = self.snapshot_unconsolidated(upper).await;
+            Ok(Trace::from_snapshot(snapshot))
+        }
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
@@ -753,22 +840,11 @@ impl DurableCatalogState for PersistCatalogState {
         let current_upper = self.upper.clone();
         let next_upper = current_upper.step_forward();
 
-        let updates = StateUpdate::from_txn_batch(txn_batch, current_upper);
+        let mut updates = StateUpdate::from_txn_batch(txn_batch, current_upper);
         debug!("committing updates: {updates:?}");
         self.apply_updates(updates.clone().into_iter())?;
 
         if matches!(self.mode, Mode::Writable) {
-            let mut batch_builder = self
-                .persist_handle
-                .write_handle
-                .builder(Antichain::from_elem(current_upper));
-
-            for StateUpdate { kind, ts, diff } in updates {
-                batch_builder
-                    .add(&kind, &(), &ts, &diff)
-                    .await
-                    .expect("invalid usage");
-            }
             // If we haven't fenced the previous catalog state, do that now.
             if let Some(Fence { prev_epoch }) = self.fence.take() {
                 debug!(
@@ -776,58 +852,29 @@ impl DurableCatalogState for PersistCatalogState {
                     prev_epoch, self.epoch
                 );
                 if let Some(prev_epoch) = prev_epoch {
-                    batch_builder
-                        .add(
-                            &StateUpdateKind::Epoch(prev_epoch),
-                            &(),
-                            &current_upper,
-                            &-1,
-                        )
-                        .await
-                        .expect("invalid usage");
+                    updates.push(StateUpdate {
+                        kind: StateUpdateKind::Epoch(prev_epoch),
+                        ts: current_upper,
+                        diff: -1,
+                    });
                 }
-                batch_builder
-                    .add(&StateUpdateKind::Epoch(self.epoch), &(), &current_upper, &1)
-                    .await
-                    .expect("invalid usage");
+                updates.push(StateUpdate {
+                    kind: StateUpdateKind::Epoch(self.epoch),
+                    ts: current_upper,
+                    diff: 1,
+                });
             }
-            let mut batch = batch_builder
-                .finish(Antichain::from_elem(next_upper))
-                .await
-                .expect("invalid usage");
-            match self
-                .persist_handle
-                .write_handle
-                .compare_and_append_batch(
-                    &mut [&mut batch],
-                    Antichain::from_elem(current_upper),
-                    Antichain::from_elem(next_upper),
-                )
-                .await
-                .expect("invalid usage")
-            {
-                Ok(()) => {
-                    self.persist_handle
-                        .read_handle
-                        .downgrade_since(&Antichain::from_elem(current_upper))
-                        .await;
-                    self.upper = next_upper;
-                    debug!(
-                        "commit successful, upper advance from {:?} to {:?}, since advanced from {:?} to {:?}",
-                        current_upper,
-                        next_upper,
-                        self.persist_handle.read_handle.since(),
-                        current_upper
-                    );
-                }
-                Err(upper_mismatch) => {
-                    return Err(DurableCatalogError::Fence(format!(
-                        "current catalog upper {:?} fenced by new catalog upper {:?}",
-                        upper_mismatch.expected, upper_mismatch.current
-                    ))
-                    .into())
-                }
-            }
+            self.persist_handle
+                .compare_and_append(updates, current_upper, next_upper)
+                .await?;
+            self.upper = next_upper;
+            debug!(
+                "commit successful, upper advance from {:?} to {:?}, since advanced from {:?} to {:?}",
+                current_upper,
+                next_upper,
+                self.persist_handle.read_handle.since(),
+                current_upper
+            );
         }
 
         Ok(())
@@ -932,4 +979,175 @@ impl DurableCatalogState for PersistCatalogState {
 pub struct Fence {
     /// Previous epoch, if one existed.
     prev_epoch: Option<Epoch>,
+}
+
+// Debug methods.
+impl Trace {
+    /// Generates a [`Trace`] from snapshot.
+    fn from_snapshot(snapshot: impl Iterator<Item = StateUpdate>) -> Trace {
+        let mut trace = Trace::new();
+        for StateUpdate { kind, ts, diff } in snapshot {
+            match kind {
+                StateUpdateKind::AuditLog(k, v) => {
+                    trace.audit_log.values.push(((k, v), ts.to_string(), diff))
+                }
+                StateUpdateKind::Cluster(k, v) => {
+                    trace.clusters.values.push(((k, v), ts.to_string(), diff))
+                }
+                StateUpdateKind::ClusterReplica(k, v) => {
+                    trace
+                        .cluster_replicas
+                        .values
+                        .push(((k, v), ts.to_string(), diff))
+                }
+                StateUpdateKind::Comment(k, v) => {
+                    trace.comments.values.push(((k, v), ts.to_string(), diff))
+                }
+                StateUpdateKind::Config(k, v) => {
+                    trace.configs.values.push(((k, v), ts.to_string(), diff))
+                }
+                StateUpdateKind::Database(k, v) => {
+                    trace.databases.values.push(((k, v), ts.to_string(), diff))
+                }
+                StateUpdateKind::DefaultPrivilege(k, v) => {
+                    trace
+                        .default_privileges
+                        .values
+                        .push(((k, v), ts.to_string(), diff))
+                }
+                StateUpdateKind::Epoch(_) => {
+                    // Epoch not included in trace.
+                }
+                StateUpdateKind::IdAllocator(k, v) => {
+                    trace
+                        .id_allocator
+                        .values
+                        .push(((k, v), ts.to_string(), diff))
+                }
+                StateUpdateKind::IntrospectionSourceIndex(k, v) => trace
+                    .introspection_sources
+                    .values
+                    .push(((k, v), ts.to_string(), diff)),
+                StateUpdateKind::Item(k, v) => {
+                    trace.items.values.push(((k, v), ts.to_string(), diff))
+                }
+                StateUpdateKind::Role(k, v) => {
+                    trace.roles.values.push(((k, v), ts.to_string(), diff))
+                }
+                StateUpdateKind::Schema(k, v) => {
+                    trace.schemas.values.push(((k, v), ts.to_string(), diff))
+                }
+                StateUpdateKind::Setting(k, v) => {
+                    trace.settings.values.push(((k, v), ts.to_string(), diff))
+                }
+                StateUpdateKind::StorageUsage(k, v) => {
+                    trace
+                        .storage_usage
+                        .values
+                        .push(((k, v), ts.to_string(), diff))
+                }
+                StateUpdateKind::SystemConfiguration(k, v) => trace
+                    .system_configurations
+                    .values
+                    .push(((k, v), ts.to_string(), diff)),
+                StateUpdateKind::SystemObjectMapping(k, v) => trace
+                    .system_object_mappings
+                    .values
+                    .push(((k, v), ts.to_string(), diff)),
+                StateUpdateKind::SystemPrivilege(k, v) => {
+                    trace
+                        .system_privileges
+                        .values
+                        .push(((k, v), ts.to_string(), diff))
+                }
+                StateUpdateKind::Timestamp(k, v) => {
+                    trace.timestamps.values.push(((k, v), ts.to_string(), diff))
+                }
+            }
+        }
+        trace
+    }
+}
+
+impl PersistHandle {
+    /// Manually update value of `key` in collection `T` to `value`.
+    #[tracing::instrument(level = "info", skip(self))]
+    pub(crate) async fn debug_edit<T: Collection>(
+        &mut self,
+        key: T::Key,
+        value: T::Value,
+    ) -> Result<Option<T::Value>, CatalogError>
+    where
+        T::Key: PartialEq + Eq + Debug + Clone,
+        T::Value: Debug + Clone,
+    {
+        let current_upper = self.current_upper().await;
+        let next_upper = current_upper.step_forward();
+        let snapshot = self.snapshot(current_upper).await;
+        let trace = Trace::from_snapshot(snapshot);
+        let collection_trace = T::collection_trace(trace);
+        let prev_values: Vec<_> = collection_trace
+            .values
+            .into_iter()
+            .filter(|((k, _), _, diff)| {
+                soft_assert_eq!(*diff, 1, "trace is consolidated");
+                &key == k
+            })
+            .collect();
+
+        let prev_value = match &prev_values[..] {
+            [] => None,
+            [((_, v), _, _)] => Some(v.clone()),
+            prev_values => panic!("multiple values found for key {key:?}: {prev_values:?}"),
+        };
+
+        let mut updates: Vec<_> = prev_values
+            .into_iter()
+            .map(|((k, v), _, _)| StateUpdate {
+                kind: T::persist_update(k, v),
+                ts: current_upper,
+                diff: -1,
+            })
+            .collect();
+        updates.push(StateUpdate {
+            kind: T::persist_update(key, value),
+            ts: current_upper,
+            diff: 1,
+        });
+        self.compare_and_append(updates, current_upper, next_upper)
+            .await?;
+        Ok(prev_value)
+    }
+
+    /// Manually delete `key` from collection `T`.
+    #[tracing::instrument(level = "info", skip(self))]
+    pub(crate) async fn debug_delete<T: Collection>(
+        &mut self,
+        key: T::Key,
+    ) -> Result<(), CatalogError>
+    where
+        T::Key: PartialEq + Eq + Debug,
+    {
+        let current_upper = self.current_upper().await;
+        let next_upper = current_upper.step_forward();
+        let snapshot = self.snapshot(current_upper).await;
+        let trace = Trace::from_snapshot(snapshot);
+        let collection_trace = T::collection_trace(trace);
+        let retractions = collection_trace
+            .values
+            .into_iter()
+            .filter(|((k, _), _, diff)| {
+                soft_assert_eq!(*diff, 1, "trace is consolidated");
+                &key == k
+            })
+            .map(|((k, v), _, _)| StateUpdate {
+                kind: T::persist_update(k, v),
+                ts: current_upper,
+                diff: -1,
+            })
+            .collect();
+        self.compare_and_append(retractions, current_upper, next_upper)
+            .await?;
+        Ok(())
+    }
 }
