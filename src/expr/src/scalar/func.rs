@@ -37,7 +37,7 @@ use mz_pgrepr::Type;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::date::Date;
-use mz_repr::adt::datetime::Timezone;
+use mz_repr::adt::datetime::{Timezone, TimezoneSpec};
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::mz_acl_item::{AclItem, AclMode, MzAclItem};
@@ -1879,9 +1879,11 @@ fn date_diff_time<'a>(unit: Datum, a: Datum, b: Datum) -> Result<Datum<'a>, Eval
 }
 
 /// Parses a named timezone like `EST` or `America/New_York`, or a fixed-offset timezone like `-05:00`.
-pub(crate) fn parse_timezone(tz: &str) -> Result<Timezone, EvalError> {
-    tz.parse()
-        .map_err(|_| EvalError::InvalidTimezone(tz.to_owned()))
+///
+/// The interpretation of fixed offsets depend on whether the POSIX or ISO 8601 standard is being
+/// used.
+pub(crate) fn parse_timezone(tz: &str, spec: TimezoneSpec) -> Result<Timezone, EvalError> {
+    Timezone::parse(tz, spec).map_err(|_| EvalError::InvalidTimezone(tz.to_owned()))
 }
 
 /// Converts the time datum `b`, which is assumed to be in UTC, to the timezone that the interval datum `a` is assumed
@@ -2460,11 +2462,12 @@ impl BinaryFunc {
             BinaryFunc::DateTruncTimestamp => date_trunc(a, b.unwrap_timestamp().deref()),
             BinaryFunc::DateTruncInterval => date_trunc_interval(a, b),
             BinaryFunc::DateTruncTimestampTz => date_trunc(a, b.unwrap_timestamptz().deref()),
-            BinaryFunc::TimezoneTimestamp => parse_timezone(a.unwrap_str())
+            BinaryFunc::TimezoneTimestamp => parse_timezone(a.unwrap_str(), TimezoneSpec::POSIX)
                 .and_then(|tz| timezone_timestamp(tz, b.unwrap_timestamp().into()).map(Into::into)),
-            BinaryFunc::TimezoneTimestampTz => parse_timezone(a.unwrap_str()).and_then(|tz| {
-                Ok(timezone_timestamptz(tz, b.unwrap_timestamptz().into())?.try_into()?)
-            }),
+            BinaryFunc::TimezoneTimestampTz => parse_timezone(a.unwrap_str(), TimezoneSpec::POSIX)
+                .and_then(|tz| {
+                    Ok(timezone_timestamptz(tz, b.unwrap_timestamptz().into())?.try_into()?)
+                }),
             BinaryFunc::TimezoneIntervalTimestamp => timezone_interval_timestamp(a, b),
             BinaryFunc::TimezoneIntervalTimestampTz => timezone_interval_timestamptz(a, b),
             BinaryFunc::TimezoneIntervalTime => timezone_interval_time(a, b),
@@ -7448,14 +7451,15 @@ impl VariadicFunc {
             VariadicFunc::MakeMzAclItem => make_mz_acl_item(&ds),
             VariadicFunc::ArrayPosition => array_position(&ds),
             VariadicFunc::ArrayFill { .. } => array_fill(&ds, temp_storage),
-            VariadicFunc::TimezoneTime => parse_timezone(ds[0].unwrap_str()).map(|tz| {
-                timezone_time(
-                    tz,
-                    ds[1].unwrap_time(),
-                    &ds[2].unwrap_timestamptz().naive_utc(),
-                )
-                .into()
-            }),
+            VariadicFunc::TimezoneTime => parse_timezone(ds[0].unwrap_str(), TimezoneSpec::POSIX)
+                .map(|tz| {
+                    timezone_time(
+                        tz,
+                        ds[1].unwrap_time(),
+                        &ds[2].unwrap_timestamptz().naive_utc(),
+                    )
+                    .into()
+                }),
             VariadicFunc::RegexpSplitToArray => {
                 let flags = if ds.len() == 2 {
                     Datum::String("")

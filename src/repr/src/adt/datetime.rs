@@ -452,6 +452,12 @@ pub enum Timezone {
     Tz(#[proptest(strategy = "any_timezone()")] Tz),
 }
 
+impl Timezone {
+    pub fn parse(tz: &str, spec: TimezoneSpec) -> Result<Self, String> {
+        build_timezone_offset_second(&tokenize_timezone(tz)?, tz, spec)
+    }
+}
+
 impl RustType<ProtoTimezone> for Timezone {
     fn into_proto(&self) -> ProtoTimezone {
         use proto_timezone::Kind;
@@ -533,14 +539,6 @@ impl fmt::Display for Timezone {
             Timezone::FixedOffset(offset) => offset.fmt(f),
             Timezone::Tz(tz) => tz.fmt(f),
         }
-    }
-}
-
-impl FromStr for Timezone {
-    type Err = String;
-
-    fn from_str(value: &str) -> Result<Self, String> {
-        build_timezone_offset_second(&tokenize_timezone(value)?, value)
     }
 }
 
@@ -2065,7 +2063,19 @@ fn tokenize_timezone(value: &str) -> Result<Vec<TimeStrToken>, String> {
     Ok(toks)
 }
 
-fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<Timezone, String> {
+#[derive(Debug)]
+pub enum TimezoneSpec {
+    /// Offsets should be treated as an ISO 8601 time zone specification.
+    ISO,
+    /// Offsets should be treated as a POSIX-style time zone specification.
+    POSIX,
+}
+
+fn build_timezone_offset_second(
+    tokens: &[TimeStrToken],
+    value: &str,
+    spec: TimezoneSpec,
+) -> Result<Timezone, String> {
     use TimeStrToken::*;
     let all_formats = [
         vec![Plus, Num(0, 1), Colon, Num(0, 1), Colon, Num(0, 1)],
@@ -2187,10 +2197,13 @@ fn build_timezone_offset_second(tokens: &[TimeStrToken], value: &str) -> Result<
                 tz_offset_second += second_offset;
             }
 
-            let offset = if is_positive {
-                FixedOffset::east_opt(tz_offset_second).unwrap()
-            } else {
-                FixedOffset::west_opt(tz_offset_second).unwrap()
+            let offset = match (is_positive, spec) {
+                (true, TimezoneSpec::ISO) | (false, TimezoneSpec::POSIX) => {
+                    FixedOffset::east_opt(tz_offset_second).unwrap()
+                }
+                (false, TimezoneSpec::ISO) | (true, TimezoneSpec::POSIX) => {
+                    FixedOffset::west_opt(tz_offset_second).unwrap()
+                }
             };
 
             return Ok(Timezone::FixedOffset(offset));
@@ -3901,7 +3914,7 @@ mod tests {
         ];
 
         for (timezone, expected) in test_cases.iter() {
-            match timezone.parse::<Timezone>() {
+            match Timezone::parse(timezone, TimezoneSpec::ISO) {
                 Ok(tz) => assert_eq!(&tz, expected),
                 Err(e) => panic!(
                     "Test failed when expected to pass test case: {} error: {}",
@@ -3917,7 +3930,7 @@ mod tests {
         ];
 
         for test in failure_test_cases.iter() {
-            match test.parse::<Timezone>() {
+            match Timezone::parse(test, TimezoneSpec::ISO) {
                 Ok(t) => panic!("Test passed when expected to fail test case: {} parsed tz offset (seconds): {}", test, t),
                 Err(e) => println!("{}", e),
             }
