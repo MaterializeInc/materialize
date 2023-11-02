@@ -79,7 +79,7 @@ impl IntoRowByTypes for Row {
 /// A helper trait to construct target values from input `Row` instances based on type
 /// information that only manifests at runtime (typically originating from inferred schemas).
 /// Typically, the target type will be of fixed-length without tags per column or `Row` itself.
-pub(crate) trait FromRowByTypes: Sized + Default {
+pub trait FromRowByTypes: Sized + Default {
     /// Obtains an instance of `Self` given an instance of `Row` and a schema provided
     /// by `types`.
     ///
@@ -128,7 +128,7 @@ impl FromRowByTypes for Row {
         row
     }
 
-    /// Packs a `Row` from the given iterator of datums.
+    /// Packs into `self` the given iterator of datums and returns a clone.
     ///
     /// This implementation panics if non-empty `types` are provided. This is because
     /// `Row` is already self-describing and can use variable-length types, so we are
@@ -144,6 +144,13 @@ impl FromRowByTypes for Row {
         self.clone()
     }
 
+    /// Packs into `self` by using the packer's `try_extend` method on the given iterator
+    /// and returns a clone.
+    ///
+    /// This implementation panics if non-empty `types` are provided. This is because
+    /// `Row` is already self-describing and can use variable-length types, so we are
+    /// explicitly not validating the given schema.
+    #[inline]
     fn try_from_datum_iter<'a, I, D, E>(
         &mut self,
         datum_iter: I,
@@ -220,6 +227,11 @@ impl FromRowByTypes for () {
         ()
     }
 
+    /// Obtains a unit value from an empty iterator of results of datums.
+    ///
+    /// This implementation panics if `types` other than `Some(&[])` are provided. This is because
+    /// unit values need to have an empty schema.
+    #[inline]
     fn try_from_datum_iter<'a, I, D, E>(
         &mut self,
         datum_iter: I,
