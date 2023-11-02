@@ -78,7 +78,9 @@
 #[cfg(test)]
 mod tests {
 
-    use mz_lsp_server::backend::{ExecuteCommandParseResponse, DEFAULT_FORMATTING_WIDTH};
+    use mz_lsp_server::backend::{
+        ExecuteCommandParseResponse, ExecuteCommandParseStatement, DEFAULT_FORMATTING_WIDTH,
+    };
     use mz_lsp_server::{PKG_NAME, PKG_VERSION};
     use mz_ore::collections::HashMap;
     use once_cell::sync::Lazy;
@@ -203,15 +205,88 @@ mod tests {
             jsonrpc: "2.0".to_string(),
             id: Some(2),
             result: Some(ExecuteCommandParseResponse {
-                sqls: vec![
-                    "SELECT 100".to_string(),
-                    "SELECT 200".to_string(),
-                    "CREATE TABLE A (A INT)".to_string(),
+                statements: vec![
+                    ExecuteCommandParseStatement {
+                        sql: "SELECT 100".to_string(),
+                        kind: "select".to_string(),
+                    },
+                    ExecuteCommandParseStatement {
+                        sql: "SELECT 200".to_string(),
+                        kind: "select".to_string(),
+                    },
+                    ExecuteCommandParseStatement {
+                        sql: "CREATE TABLE A (A INT)".to_string(),
+                        kind: "create_table".to_string(),
+                    },
                 ],
             }),
             method: None,
             params: None,
             error: None,
+        }];
+
+        write_and_assert(
+            req_client,
+            resp_client,
+            &mut [0; 1024],
+            request,
+            expected_response,
+        )
+        .await;
+
+        // Test invalid statements.
+        let request = r#"{
+            "jsonrpc":"2.0",
+            "id": 2,
+            "method":"workspace/executeCommand",
+            "params": {
+                "command": "parse",
+                "arguments": ["SELECT 100; SELECT 200; CREATE ASD TABLE A (A INT);"]
+            }
+        }"#;
+        let expected_response = vec![LspMessage::<(), ExecuteCommandParseResponse> {
+            jsonrpc: "2.0".to_string(),
+            id: Some(2),
+            result: None,
+            method: None,
+            params: None,
+            error: Some(Error {
+                code: tower_lsp::jsonrpc::ErrorCode::InternalError,
+                data: None,
+                message: std::borrow::Cow::Borrowed("Error parsing the statements."),
+            }),
+        }];
+
+        write_and_assert(
+            req_client,
+            resp_client,
+            &mut [0; 1024],
+            request,
+            expected_response,
+        )
+        .await;
+
+        // Test invalid command
+        let request = r#"{
+            "jsonrpc":"2.0",
+            "id": 2,
+            "method":"workspace/executeCommand",
+            "params": {
+                "command": "undefined",
+                "arguments": []
+            }
+        }"#;
+        let expected_response = vec![LspMessage::<(), ExecuteCommandParseResponse> {
+            jsonrpc: "2.0".to_string(),
+            id: Some(2),
+            result: None,
+            method: None,
+            params: None,
+            error: Some(Error {
+                code: tower_lsp::jsonrpc::ErrorCode::InternalError,
+                data: None,
+                message: std::borrow::Cow::Borrowed("Unknown command."),
+            }),
         }];
 
         write_and_assert(

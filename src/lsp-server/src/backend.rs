@@ -18,13 +18,14 @@
 
 use ::serde::Deserialize;
 use mz_ore::collections::HashMap;
-use mz_sql_parser::ast::{Raw, Statement};
+use mz_sql_parser::ast::{statement_kind_label_value, Raw, Statement};
+use mz_sql_parser::parser::parse_statements;
 use regex::Regex;
 use ropey::Rope;
 use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
-use tower_lsp::jsonrpc::Result;
+use tower_lsp::jsonrpc::{Error, ErrorCode, Result};
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
 
@@ -45,10 +46,21 @@ pub struct ParseResult {
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Serialize)]
+/// Represents the structure a client uses to understand
+/// statement's kind and sql content.
+pub struct ExecuteCommandParseStatement {
+    /// The sql content in the statement
+    pub sql: String,
+    /// The type of statement.
+    /// Represents the String version of [Statement].
+    pub kind: String,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Serialize)]
 /// Represents the response from the parse command.
 pub struct ExecuteCommandParseResponse {
     /// Contains all the valid SQL statements.
-    pub sqls: Vec<String>,
+    pub statements: Vec<ExecuteCommandParseStatement>,
 }
 
 /// The [Backend] struct implements the [LanguageServer] trait, and thus must provide implementations for its methods.
@@ -190,31 +202,58 @@ impl LanguageServer for Backend {
                 let json_args = command_params.arguments.get(0);
 
                 if let Some(json_args) = json_args {
-                    let args: String = serde_json::from_value(json_args.clone()).unwrap();
+                    return match serde_json::from_value::<String>(json_args.clone()) {
+                        Ok(args) => match parse_statements(&args) {
+                            Ok(statements) => {
+                                // Transform raw statements to splitted statements
+                                // and infere the kind.
+                                // E.g. if it is a select or a create_table statement.
+                                let parse_statements: Vec<ExecuteCommandParseStatement> =
+                                    statements
+                                        .iter()
+                                        .map(|x| ExecuteCommandParseStatement {
+                                            kind: statement_kind_label_value(x.ast.clone().into())
+                                                .to_string(),
+                                            sql: x.sql.to_string(),
+                                        })
+                                        .collect();
 
-                    let statements = mz_sql_parser::parser::parse_statements(&args).unwrap();
-                    let sqls: Vec<String> = statements.iter().map(|x| x.sql.to_string()).collect();
-
-                    return Ok(Some(json!(ExecuteCommandParseResponse { sqls })));
+                                return Ok(Some(json!(ExecuteCommandParseResponse {
+                                    statements: parse_statements
+                                })));
+                            }
+                            Err(_) => Err(Error {
+                                code: ErrorCode::InternalError,
+                                message: std::borrow::Cow::Borrowed(
+                                    "Error parsing the statements.",
+                                ),
+                                data: None,
+                            }),
+                        },
+                        Err(_) => Err(Error {
+                            code: ErrorCode::InternalError,
+                            message: std::borrow::Cow::Borrowed(
+                                "Error deserializing parse args as String.",
+                            ),
+                            data: None,
+                        }),
+                    };
+                } else {
+                    return Err(Error {
+                        code: ErrorCode::InternalError,
+                        message: std::borrow::Cow::Borrowed("Missing command args."),
+                        data: None,
+                    });
                 }
             }
-            _ => {}
+            _ => {
+                return Err(Error {
+                    code: ErrorCode::InternalError,
+                    message: std::borrow::Cow::Borrowed("Unknown command."),
+                    data: None,
+                });
+            }
         }
-
-        self.client
-            .log_message(
-                MessageType::INFO,
-                format!("command {} executed!", command_params.command),
-            )
-            .await;
-
-        match self.client.apply_edit(WorkspaceEdit::default()).await {
-            Ok(res) if res.applied => self.client.log_message(MessageType::INFO, "applied").await,
-            Ok(_) => self.client.log_message(MessageType::INFO, "rejected").await,
-            Err(err) => self.client.log_message(MessageType::ERROR, err).await,
-        }
-
-        Ok(None)
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
