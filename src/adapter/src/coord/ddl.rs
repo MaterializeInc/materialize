@@ -29,10 +29,11 @@ use mz_repr::{GlobalId, Timestamp};
 use mz_sql::catalog::CatalogCluster;
 use mz_sql::names::{ObjectId, ResolvedDatabaseSpecifier};
 use mz_sql::session::vars::{
-    self, SystemVars, Var, MAX_AWS_PRIVATELINK_CONNECTIONS, MAX_CLUSTERS,
-    MAX_CREDIT_CONSUMPTION_RATE, MAX_DATABASES, MAX_KAFKA_CONNECTIONS, MAX_MATERIALIZED_VIEWS,
-    MAX_OBJECTS_PER_SCHEMA, MAX_POSTGRES_CONNECTIONS, MAX_REPLICAS_PER_CLUSTER, MAX_ROLES,
-    MAX_SCHEMAS_PER_DATABASE, MAX_SECRETS, MAX_SINKS, MAX_SOURCES, MAX_TABLES,
+    self, SystemVars, Var, ENABLE_PERSIST_TXN_TABLES, MAX_AWS_PRIVATELINK_CONNECTIONS,
+    MAX_CLUSTERS, MAX_CREDIT_CONSUMPTION_RATE, MAX_DATABASES, MAX_KAFKA_CONNECTIONS,
+    MAX_MATERIALIZED_VIEWS, MAX_OBJECTS_PER_SCHEMA, MAX_POSTGRES_CONNECTIONS,
+    MAX_REPLICAS_PER_CLUSTER, MAX_ROLES, MAX_SCHEMAS_PER_DATABASE, MAX_SECRETS, MAX_SINKS,
+    MAX_SOURCES, MAX_TABLES,
 };
 use mz_storage_client::controller::{ExportDescription, ReadPolicy};
 use mz_storage_types::connections::inline::IntoInlineConnection;
@@ -130,6 +131,7 @@ impl Coordinator {
         let mut update_jemalloc_profiling_config = false;
         let mut update_default_arrangement_idle_merge_effort = false;
         let mut update_http_config = false;
+        let mut update_enable_persist_txn_tables = false;
         let mut log_indexes_to_drop = Vec::new();
 
         for op in &ops {
@@ -228,6 +230,7 @@ impl Coordinator {
                     update_default_arrangement_idle_merge_effort |=
                         name == vars::DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT.name();
                     update_http_config |= vars::is_http_config_var(name);
+                    update_enable_persist_txn_tables |= name == ENABLE_PERSIST_TXN_TABLES.name();
                 }
                 catalog::Op::ResetAllSystemConfiguration => {
                     // Assume they all need to be updated.
@@ -242,6 +245,7 @@ impl Coordinator {
                     update_jemalloc_profiling_config = true;
                     update_default_arrangement_idle_merge_effort = true;
                     update_http_config = true;
+                    update_enable_persist_txn_tables = true;
                 }
                 _ => (),
             }
@@ -525,6 +529,9 @@ impl Coordinator {
             if update_http_config {
                 self.update_http_config();
             }
+            if update_enable_persist_txn_tables {
+                self.update_txns_config().await;
+            }
         }
         .await;
 
@@ -790,6 +797,11 @@ impl Coordinator {
             .collect::<Vec<_>>();
         self.update_storage_base_read_policies(storage_policies);
         self.update_compute_base_read_policies(compute_policies);
+    }
+
+    async fn update_txns_config(&mut self) {
+        let value = self.catalog().system_config().enable_persist_txn_tables();
+        self.catalog.set_enable_persist_txn_tables(value).await;
     }
 
     async fn update_jemalloc_profiling_config(&mut self) {

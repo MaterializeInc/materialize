@@ -43,7 +43,7 @@ use tracing::debug;
 use uuid::Uuid;
 
 use crate::durable::debug::{Collection, DebugCatalogState, Trace};
-use crate::durable::initialize::DEPLOY_GENERATION;
+use crate::durable::initialize::{DEPLOY_GENERATION, ENABLE_PERSIST_TXN_TABLES};
 use crate::durable::objects::{AuditLogKey, DurableType, Snapshot, StorageUsageKey};
 use crate::durable::transaction::TransactionBatch;
 use crate::durable::{
@@ -611,6 +611,13 @@ impl OpenableDurableCatalogState for PersistHandle {
         Ok(self.get_config(DEPLOY_GENERATION, upper).await)
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
+    async fn get_enable_persist_txn_tables(&mut self) -> Result<Option<bool>, CatalogError> {
+        let upper = self.current_upper().await;
+        let value = self.get_config(ENABLE_PERSIST_TXN_TABLES, upper).await;
+        Ok(value.map(|value| value > 0))
+    }
+
     #[tracing::instrument(level = "info", skip_all)]
     async fn trace(&mut self) -> Result<Trace, CatalogError> {
         let (is_initialized, upper) = self.is_initialized_inner().await;
@@ -961,6 +968,14 @@ impl DurableCatalogState for PersistCatalogState {
     ) -> Result<(), CatalogError> {
         let mut txn = self.transaction().await?;
         txn.set_timestamp(timeline.clone(), timestamp)?;
+        txn.commit().await
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    async fn set_enable_persist_txn_tables(&mut self, value: bool) -> Result<(), CatalogError> {
+        let value = if value { 1 } else { 0 };
+        let mut txn = self.transaction().await?;
+        txn.set_config(ENABLE_PERSIST_TXN_TABLES.into(), value)?;
         txn.commit().await
     }
 

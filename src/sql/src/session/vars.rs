@@ -1191,6 +1191,24 @@ pub static ENABLE_LAUNCHDARKLY: ServerVar<bool> = ServerVar {
     internal: true
 };
 
+/// Whether to use the new persist-txn tables implementation or the legacy
+/// one.
+pub static ENABLE_PERSIST_TXN_TABLES: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_persist_txn_tables"),
+    value: &false,
+    description: "\
+        Whether to use the new persist-txn tables implementation or the legacy \
+        one.
+
+        Only takes effect on restart. Any changes will also cause clusterd \
+        processes to restart.
+
+        This value is also configurable via a Launch Darkly parameter of the \
+        same name, but we keep the flag to make testing easier. If specified, \
+        the flag takes precedence over the Launch Darkly param.",
+    internal: true,
+};
+
 /// Feature flag indicating whether real time recency is enabled. Not that
 /// unlike other feature flags, this is made available at the session level, so
 /// is additionally gated by a feature flag.
@@ -2698,6 +2716,7 @@ impl SystemVars {
             .with_var(&PG_SOURCE_TCP_USER_TIMEOUT)
             .with_var(&PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT)
             .with_var(&ENABLE_LAUNCHDARKLY)
+            .with_var(&ENABLE_PERSIST_TXN_TABLES)
             .with_var(&MAX_CONNECTIONS)
             .with_var(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
             .with_var(&KEEP_N_SINK_STATUS_HISTORY_ENTRIES)
@@ -2967,6 +2986,11 @@ impl SystemVars {
     /// Returns the `config_has_synced_once` configuration parameter.
     pub fn config_has_synced_once(&self) -> bool {
         *self.expect_value(&CONFIG_HAS_SYNCED_ONCE)
+    }
+
+    /// Returns the `enable_persist_txn_tables` configuration parameter.
+    pub fn enable_persist_txn_tables(&self) -> bool {
+        *self.expect_value(&ENABLE_PERSIST_TXN_TABLES)
     }
 
     /// Returns the value of the `max_kafka_connections` configuration parameter.

@@ -206,6 +206,32 @@ impl Catalog {
         self.plans.dataflow_metainfos.insert(id, metainfo);
     }
 
+    /// Updates the catalog stash `enable_persist_txn_tables` "config" value to
+    /// match the `enable_persist_txn_tables` "system var" value.
+    ///
+    /// These are mirrored so that we can toggle the flag with Launch Darkly,
+    /// but use it in boot before Launch Darkly is available.
+    pub async fn set_enable_persist_txn_tables(&self, value: bool) {
+        let res = self
+            .storage
+            .lock()
+            .await
+            .set_enable_persist_txn_tables(value)
+            .await;
+        match res {
+            Ok(()) => {}
+            Err(err) => {
+                // This is unfortunate, but not worth crashing the process over.
+                // Log loudly.
+                tracing::error!(
+                    "unable to update catalog stash value for enable_persist_txn_tables to {}: {}",
+                    value,
+                    err
+                );
+            }
+        }
+    }
+
     /// Try to get the `DataflowMetainfo` for the item identified by `id`.
     #[tracing::instrument(level = "trace", skip(self))]
     pub fn try_get_dataflow_metainfo(&self, id: &GlobalId) -> Option<&DataflowMetainfo> {
