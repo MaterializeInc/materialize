@@ -22,7 +22,7 @@ from materialize import buildkite, spawn
 ISSUE_RE = re.compile(
     r"""
     ( TimelyDataflow/timely-dataflow\#(?P<timelydataflow>[0-9]+)
-    | ( materialize\# | materialize/issues/ | \# ) (?P<materialize>[0-9]+)
+    | ( materialize\# | materialize/issues/ | \# | gh\  ) (?P<materialize>[0-9]+)
     )
     """,
     re.VERBOSE,
@@ -43,6 +43,8 @@ REFERENCE_RE = re.compile(
     | @disabled
     # Used in pytest
     | @pytest.mark.skip
+    # Used in docs
+    | {{%\ gh\ [0-9]+\ %}}
     )
     """,
     re.VERBOSE | re.IGNORECASE,
@@ -86,7 +88,10 @@ def detect_closed_issues(filename: str) -> list[IssueRef]:
     with open(filename) as file:
         for line_number, line in enumerate(file):
             if REFERENCE_RE.search(line) and not IGNORE_RE.search(line):
-                if issue_match := ISSUE_RE.search(line):
+                pos = 0
+                # There can be multiple issues in a single line, collect all of them
+                while issue_match := ISSUE_RE.search(line, pos):
+                    pos = issue_match.span()[1]
                     groups = [
                         (key, value)
                         for key, value in issue_match.groupdict().items()
