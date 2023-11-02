@@ -430,26 +430,23 @@ where
     let (updates, errs) = updates.map_fallible("DeltaJoinKeyPreparation", {
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
+        let mut key_buf = K::default();
         let mut row_buf = Row::default();
         move |(row, time)| {
             let temp_storage = RowArena::new();
             let datums_local = datums.borrow_with(&row);
-            row_buf.packer().try_extend(
+            let key = key_buf.try_from_datum_iter(
                 prev_key
                     .iter()
                     .map(|e| e.eval(&datums_local, &temp_storage)),
+                updates_key_types.as_deref(),
             )?;
-            let row_key = row_buf.clone();
             row_buf
                 .packer()
                 .extend(prev_thinning.iter().map(|&c| datums_local[c]));
             let row_value = row_buf.clone();
 
-            Ok((
-                K::from_row(row_key, updates_key_types.as_deref()),
-                row_value,
-                time,
-            ))
+            Ok((key, row_value, time))
         }
     });
 
