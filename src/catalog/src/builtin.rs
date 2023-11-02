@@ -5455,6 +5455,15 @@ ON mz_internal.mz_object_transitive_dependencies (object_id)",
     is_retained_metrics_object: false,
 };
 
+pub const MZ_FRONTIERS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_frontiers_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "CREATE INDEX mz_frontiers_ind
+IN CLUSTER mz_introspection
+ON mz_internal.mz_frontiers (object_id)",
+    is_retained_metrics_object: false,
+};
+
 pub const MZ_SYSTEM_ROLE: BuiltinRole = BuiltinRole {
     id: MZ_SYSTEM_ROLE_ID,
     name: SYSTEM_USER_NAME,
@@ -5869,6 +5878,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Index(&MZ_OBJECT_DEPENDENCIES_IND),
         Builtin::Index(&MZ_COMPUTE_DEPENDENCIES_IND),
         Builtin::Index(&MZ_OBJECT_TRANSITIVE_DEPENDENCIES_IND),
+        Builtin::Index(&MZ_FRONTIERS_IND),
     ]);
 
     builtins

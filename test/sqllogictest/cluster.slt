@@ -409,7 +409,7 @@ CREATE CLUSTER test REPLICAS (foo (SIZE '1'));
 query I
 SELECT COUNT(name) FROM mz_indexes;
 ----
-137
+138
 
 statement ok
 DROP CLUSTER test CASCADE
@@ -417,7 +417,7 @@ DROP CLUSTER test CASCADE
 query T
 SELECT COUNT(name) FROM mz_indexes;
 ----
-112
+113
 
 simple conn=mz_system,user=mz_system
 ALTER CLUSTER default OWNER TO materialize

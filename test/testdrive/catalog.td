@@ -670,7 +670,7 @@ test_table
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-112
+113
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2
