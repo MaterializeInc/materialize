@@ -90,10 +90,10 @@ Materialize provider in the [Terraform registry](https://registry.terraform.io/p
 
 The Materialize provider supports several data source types to retrieve
 information about your existing Materialize resources. Data sources can return
-information about objects defined outside of Terraform and can be used as
+details about objects defined outside of Terraform and can be used as
 variables in your configuration with the `data` block.
 
-For example, to return information about your current clusters, you would use the
+For example, to retrieve your current clusters, you would use the
 `materialize_cluster` data source:
 
 ```hcl
