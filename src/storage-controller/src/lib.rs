@@ -104,6 +104,8 @@ use mz_persist_client::read::ReadHandle;
 use mz_persist_client::stats::SnapshotStats;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
+use mz_persist_txn::txn_read::TxnsCache;
+use mz_persist_txn::txns::TxnsHandle;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec64, Opaque};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
@@ -126,7 +128,9 @@ use mz_storage_client::healthcheck::{
     MZ_STATEMENT_EXECUTION_HISTORY_DESC,
 };
 use mz_storage_client::metrics::StorageControllerMetrics;
-use mz_storage_types::controller::{CollectionMetadata, DurableCollectionMetadata, StorageError};
+use mz_storage_types::controller::{
+    CollectionMetadata, DurableCollectionMetadata, StorageError, TxnsCodecRow,
+};
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::sinks::{ProtoDurableExportMetadata, SinkAsOf, StorageSinkDesc};
@@ -154,9 +158,13 @@ pub static METADATA_COLLECTION: TypedCollection<proto::GlobalId, proto::DurableC
 pub static METADATA_EXPORT: TypedCollection<proto::GlobalId, proto::DurableExportMetadata> =
     TypedCollection::new("storage-export-metadata-u64");
 
+pub static PERSIST_TXNS_SHARD: TypedCollection<(), String> =
+    TypedCollection::new("persist-txns-shard");
+
 pub static ALL_COLLECTIONS: &[&str] = &[
     METADATA_COLLECTION.name(),
     METADATA_EXPORT.name(),
+    PERSIST_TXNS_SHARD.name(),
     command_wals::SHARD_FINALIZATION.name(),
 ];
 
@@ -287,6 +295,9 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// These handles are on the other end of a Tokio task, so that work can be done asynchronously
     /// without blocking the storage controller.
     persist_read_handles: persist_handles::PersistReadWorker<T>,
+    /// A handle to serve reads on table shards stored in the persist-txn system. None if
+    /// persist-txn is not enabled.
+    txns_cache: Option<TxnsCache<T, TxnsCodecRow>>,
     stashed_response: Option<StorageResponse<T>>,
     /// Compaction commands to send during the next call to
     /// `StorageController::process`.
@@ -566,12 +577,29 @@ where
                     _ => None,
                 };
 
+                // If the shard is being managed by persist-txn (initially, tables), then we need to
+                // pass along the shard id for the txns shard to dataflow rendering.
+                let txns_shard = match description.data_source {
+                    DataSource::Other(DataSourceOther::TableWrites) => {
+                        // `self.txns_cache` is None if persist-txn is not enabled, which makes this
+                        // do the right thing.
+                        self.txns_cache.as_ref().map(|x| x.txns_id())
+                    }
+                    DataSource::Ingestion(_)
+                    | DataSource::Introspection(_)
+                    | DataSource::Progress
+                    | DataSource::Webhook
+                    | DataSource::Other(DataSourceOther::Compute)
+                    | DataSource::Other(DataSourceOther::Source) => None,
+                };
+
                 let metadata = CollectionMetadata {
                     persist_location: self.persist_location.clone(),
                     remap_shard,
                     data_shard: collection_shards.data_shard,
                     status_shard,
                     relation_desc: description.desc.clone(),
+                    txns_shard,
                 };
 
                 Ok((id, description, metadata))
@@ -1177,13 +1205,44 @@ where
     // actually existed. We should include the original time in the updates advanced by the as_of
     // frontier in the result and let the caller decide what to do with the information.
     async fn snapshot(
-        &self,
+        &mut self,
         id: GlobalId,
         as_of: Self::Timestamp,
     ) -> Result<Vec<(Row, Diff)>, StorageError> {
-        let as_of = Antichain::from_elem(as_of);
-        let mut read_handle = self.read_handle_for_snapshot(id).await?;
-        match read_handle.snapshot_and_fetch(as_of).await {
+        let data_shard = self.collection(id)?.collection_metadata.data_shard;
+        let contents = match self.txns_cache.as_mut() {
+            None => {
+                // We're not using persist-txn for tables, so we can take a snapshot directly.
+                let mut read_handle = self.read_handle_for_snapshot(id).await?;
+                read_handle
+                    .snapshot_and_fetch(Antichain::from_elem(as_of))
+                    .await
+            }
+            Some(txns_cache) => {
+                // We _are_ using persist-txn for tables. It advances the physical upper of the
+                // shard lazily, so we need to ask it for the snapshot to ensure the read is
+                // unblocked.
+                //
+                // Consider the following scenario:
+                // - Table A is written to via txns at time 5
+                // - Tables other than A are written to via txns consuming timestamps up to 10
+                // - We'd like to read A at 7
+                // - The application process of A's txn has advanced the upper to 5+1, but we need
+                //   it to be past 7, but the txns shard knows that (5,10) is empty of writes to A
+                // - This branch allows it to handle that advancing the physical upper of Table A to
+                //   10 (NB but only once we see it get past the write at 5!)
+                // - Then we can read it normally.
+                txns_cache.update_gt(&as_of).await;
+                let data_snapshot = txns_cache.data_snapshot(data_shard, as_of.clone());
+                let mut read_handle = self.read_handle_for_snapshot(id).await?;
+                let data_write = self.write_handle_for_snapshot(id).await?;
+                // TODO(txn): It's quite confusing that this read needs a write handle. Remove it.
+                data_snapshot
+                    .snapshot_and_fetch(&mut read_handle, data_write)
+                    .await
+            }
+        };
+        match contents {
             Ok(contents) => {
                 let mut snapshot = Vec::with_capacity(contents.len());
                 for ((data, _), _, diff) in contents {
@@ -1223,6 +1282,7 @@ where
         id: GlobalId,
         as_of: Antichain<Self::Timestamp>,
     ) -> Result<SnapshotStats<Self::Timestamp>, StorageError> {
+        // TODO(txn): Fix stats for persist-txn shards.
         self.persist_read_handles.snapshot_stats(id, as_of).await
     }
 
@@ -1875,6 +1935,7 @@ where
         stash_metrics: Arc<StashMetrics>,
         envd_epoch: NonZeroI64,
         metrics_registry: MetricsRegistry,
+        enable_persist_txn_tables: bool,
     ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
@@ -1940,7 +2001,32 @@ where
             .await
             .expect("stash operation must succeed");
 
-        let persist_table_worker = persist_handles::PersistTableWriteWorker::new(tx.clone());
+        let (persist_table_worker, txns_cache) = if enable_persist_txn_tables {
+            let client = persist_clients
+                .open(persist_location.clone())
+                .await
+                .expect("location should be valid");
+            let txns_id = PERSIST_TXNS_SHARD
+                .insert_key_without_overwrite(&mut stash, (), ShardId::new().into_proto())
+                .await
+                .expect("could not get txns shard id")
+                .parse::<ShardId>()
+                .expect("should be valid shard id");
+            let txns = TxnsHandle::open(
+                T::minimum(),
+                client.clone(),
+                txns_id,
+                Arc::new(RelationDesc::empty()),
+                Arc::new(UnitSchema),
+            )
+            .await;
+            let txns_cache = TxnsCache::open(&client, txns_id).await;
+            let worker = persist_handles::PersistTableWriteWorker::new_txns(tx.clone(), txns);
+            (worker, Some(txns_cache))
+        } else {
+            let worker = persist_handles::PersistTableWriteWorker::new_legacy(tx.clone());
+            (worker, None)
+        };
         let persist_monotonic_worker =
             persist_handles::PersistMonotonicWriteWorker::new(tx.clone());
         let collection_manager_write_handle = persist_monotonic_worker.clone();
@@ -1956,6 +2042,7 @@ where
             persist_table_worker,
             persist_monotonic_worker,
             persist_read_handles: persist_handles::PersistReadWorker::new(),
+            txns_cache,
             stashed_response: None,
             pending_compaction_commands: vec![],
             collection_manager,
@@ -2154,7 +2241,7 @@ where
     /// # Panics
     /// - If `id` does not belong to a collection or is not registered as a
     ///   managed collection.
-    async fn reconcile_managed_collection(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
+    async fn reconcile_managed_collection(&mut self, id: GlobalId, updates: Vec<(Row, Diff)>) {
         let mut reconciled_updates = BTreeMap::<Row, Diff>::new();
 
         for (row, diff) in updates.into_iter() {
@@ -3084,6 +3171,33 @@ where
             .await
             .expect("invalid persist usage");
         Ok(read_handle)
+    }
+
+    async fn write_handle_for_snapshot(
+        &self,
+        id: GlobalId,
+    ) -> Result<WriteHandle<SourceData, (), T, Diff>, StorageError> {
+        let metadata = &self.collection(id)?.collection_metadata;
+
+        let persist_client = self
+            .persist
+            .open(metadata.persist_location.clone())
+            .await
+            .unwrap();
+
+        let write_handle = persist_client
+            .open_writer::<SourceData, (), _, _>(
+                metadata.data_shard,
+                Arc::new(metadata.relation_desc.clone()),
+                Arc::new(UnitSchema),
+                Diagnostics {
+                    shard_name: id.to_string(),
+                    handle_purpose: format!("snapshot {}", id),
+                },
+            )
+            .await
+            .expect("invalid persist usage");
+        Ok(write_handle)
     }
 
     async fn snapshot_and_stream(

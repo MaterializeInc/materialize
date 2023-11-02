@@ -235,7 +235,13 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                                 // The status shard only contains non-definite status updates
                                 status_shard: _,
                                 relation_desc,
+                                txns_shard,
                             } = &export.storage_metadata;
+                            assert_eq!(
+                                txns_shard, &None,
+                                "source {} unexpectedly using persist-txn",
+                                id
+                            );
                             let client = persist_clients
                                 .open(persist_location.clone())
                                 .await

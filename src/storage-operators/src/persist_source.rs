@@ -28,6 +28,7 @@ use mz_persist_client::fetch::SerdeLeasedBatchPart;
 use mz_persist_client::metrics::Metrics;
 use mz_persist_client::operators::shard_source::shard_source;
 use mz_persist_client::stats::PartStats;
+use mz_persist_txn::operator::txns_progress;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::columnar::Data;
 use mz_persist_types::dyn_struct::DynStruct;
@@ -38,7 +39,7 @@ use mz_repr::{
     ColumnType, Datum, DatumToPersist, DatumToPersistFn, DatumVec, Diff, GlobalId, RelationDesc,
     RelationType, Row, RowArena, ScalarType, Timestamp,
 };
-use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::controller::{CollectionMetadata, TxnsCodecRow};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
 use mz_timely_util::buffer::ConsolidateBuffer;
@@ -48,8 +49,7 @@ use timely::communication::Push;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::Bundle;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::Leave;
-use timely::dataflow::operators::{Capability, OkErr};
+use timely::dataflow::operators::{Capability, Leave, OkErr};
 use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Feedback};
 use timely::dataflow::scopes::Child;
 use timely::dataflow::ScopeParent;
@@ -132,9 +132,9 @@ where
         let (stream, token) = persist_source_core(
             scope,
             source_id,
-            persist_clients,
-            metadata,
-            as_of,
+            Arc::clone(&persist_clients),
+            metadata.clone(),
+            as_of.clone(),
             until,
             map_filter_project,
             flow_control,
@@ -156,10 +156,39 @@ where
 
         (stream.leave(), token)
     });
+    // If a txns_shard was provided, then this shard is in the persist-txn
+    // system. This means the "logical" upper may be ahead of the "physical"
+    // upper. Render a dataflow operator that passes through the input and
+    // translates the progress frontiers as necessary.
+    let (stream, txns_token) = match metadata.txns_shard {
+        Some(txns_shard) => txns_progress::<SourceData, (), Timestamp, i64, _, TxnsCodecRow, _>(
+            stream,
+            &source_id.to_string(),
+            async move {
+                persist_clients
+                    .open(metadata.persist_location)
+                    .await
+                    .expect("location is valid")
+            },
+            txns_shard,
+            metadata.data_shard,
+            as_of
+                .expect("as_of is provided for table sources")
+                .into_option()
+                .expect("shard is not closed"),
+            Arc::new(metadata.relation_desc),
+            Arc::new(UnitSchema),
+        ),
+        None => {
+            let token: Rc<dyn Any> = Rc::new(());
+            (stream, token)
+        }
+    };
     let (ok_stream, err_stream) = stream.ok_err(|(d, t, r)| match d {
         Ok(row) => Ok((row, t.0, r)),
         Err(err) => Err((err, t.0, r)),
     });
+    let token = Rc::new((token, txns_token));
     (ok_stream, err_stream, token)
 }
 

@@ -486,6 +486,8 @@ impl Listeners {
                             secrets_reader_aws_region: None,
                             secrets_reader_aws_prefix: None,
                         },
+                        // TODO(txn): Get this flipped to true before turning anything on in prod.
+                        enable_persist_txn_tables: false,
                     },
                     secrets_controller,
                     cloud_resource_controller: None,

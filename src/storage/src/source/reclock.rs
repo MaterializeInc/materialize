@@ -688,6 +688,7 @@ mod tests {
             data_shard: ShardId::new(),
             status_shard: None,
             relation_desc: RelationDesc::empty(),
+            txns_shard: None,
         };
 
         let clock_stream = futures::stream::iter((0..).map(|seconds| {

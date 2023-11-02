@@ -152,6 +152,13 @@ struct Args {
         default_value = "http://localhost:6879"
     )]
     persist_pubsub_url: String,
+    /// Whether to use the new persist-txn tables implementation or the legacy
+    /// one.
+    ///
+    /// This flag is only used to force clusterd restarts when the value in
+    /// environmentd is changed.
+    #[clap(long, env = "ENABLE_PERSIST_TXN_TABLES", action = clap::ArgAction::Set, default_value="false")]
+    enable_persist_txn_tables: bool,
 
     // === Cloud options. ===
     /// An external ID to be supplied to all AWS AssumeRole operations.
