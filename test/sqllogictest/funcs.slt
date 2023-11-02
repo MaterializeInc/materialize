@@ -1613,7 +1613,7 @@ SELECT pg_stat_get_numscans('pg_views'::regclass::oid)
 ----
 -1
 
-# mz_internal functions can't be executed with the enable_dangerous_functions flag turned off
+# dangerous functions can't be executed with the enable_dangerous_functions flag turned off
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_dangerous_functions = false
@@ -1625,6 +1625,9 @@ SELECT mz_internal.mz_sleep(10)
 
 statement error executing potentially dangerous functions is not supported
 SELECT mz_internal.mz_panic('hello')
+
+statement ok
+SELECT mz_internal.is_rbac_enabled()
 
 statement ok
 CREATE TABLE dangerous_table (a INT, b TEXT)

@@ -478,6 +478,8 @@ pub struct FuncImpl<R> {
     pub params: ParamList,
     pub return_type: ReturnType,
     pub op: Operation<R>,
+    /// True if the function is potentially dangerous for a user to execute, such as `mz_panic`.
+    pub dangerous: bool,
 }
 
 /// Describes how each implementation should be represented in the catalog.
@@ -1599,12 +1601,16 @@ macro_rules! impl_def {
     //   appropriately correlate to the function itself, e.g. returning a
     //   UnaryFunc from a FuncImpl that takes two parameters.
     // - Unimplemented/catalog-only functions
-    ($params:expr, $op:expr, $return_type:expr, $oid:expr) => {{
+    ($params:expr, $op:expr, $return_type:expr, $oid:expr) => {
+        impl_def!($params, $op, $return_type, $oid, false)
+    };
+    ($params:expr, $op:expr, $return_type:expr, $oid:expr, $dangerous:expr) => {{
         FuncImpl {
             oid: $oid,
             params: $params.into(),
             op: $op.into(),
             return_type: $return_type.into(),
+            dangerous: $dangerous,
         }
     }};
 }
@@ -1622,6 +1628,31 @@ macro_rules! builtins {
         let mut builtins = BTreeMap::new();
         $(
             let impls = vec![$(impl_def!($params, $op, $return_type, $oid)),+];
+            let func = Func::$ty(impls);
+            let expect_set_return = matches!(&func, Func::Table(_));
+            for imp in func.func_impls() {
+                assert_eq!(imp.return_is_set, expect_set_return, "wrong set return value for func with oid {}", imp.oid);
+            }
+            let old = builtins.insert($name, func);
+            assert!(old.is_none(), "duplicate entry in builtins list {:?}", old);
+        )+
+        builtins
+    }};
+}
+
+/// Constructs builtin function map with potentially dangerous functions.
+macro_rules! builtins_dangerous {
+    {
+        $(
+            $name:expr => $ty:ident {
+                $($params:expr => $op:expr => $return_type:expr, $oid:expr, $dangerous:expr;)+
+            }
+        ),+
+    } => {{
+
+        let mut builtins = BTreeMap::new();
+        $(
+            let impls = vec![$(impl_def!($params, $op, $return_type, $oid, $dangerous)),+];
             let func = Func::$ty(impls);
             let expect_set_return = matches!(&func, Func::Table(_));
             for imp in func.func_impls() {
@@ -1667,6 +1698,18 @@ impl Func {
             Func::Table(..) => "table",
             Func::ScalarWindow(..) => "window",
             Func::ValueWindow(..) => "window",
+        }
+    }
+
+    /// If any of a functions implementations are dangerous then the entire function is declared
+    /// dangerous. This true in practice and makes dealing with dangerous functions easier.
+    pub fn dangerous(&self) -> bool {
+        match self {
+            Func::Scalar(impls) => impls.iter().any(|f| f.dangerous),
+            Func::Aggregate(impls) => impls.iter().any(|f| f.dangerous),
+            Func::Table(impls) => impls.iter().any(|f| f.dangerous),
+            Func::ScalarWindow(impls) => impls.iter().any(|f| f.dangerous),
+            Func::ValueWindow(impls) => impls.iter().any(|f| f.dangerous),
         }
     }
 }
@@ -3259,6 +3302,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 op: Operation::variadic(|_ecx, _e| {
                     bail_unsupported!(format!("{} in this position", sef_builtin.name))
                 }),
+                dangerous: false,
             }]),
         );
     }
@@ -3596,24 +3640,24 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
 pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|| {
     use ParamType::*;
     use ScalarBaseType::*;
-    builtins! {
+    builtins_dangerous! {
         "aclitem_grantor" => Scalar {
-            params!(AclItem) => UnaryFunc::AclItemGrantor(func::AclItemGrantor) => Oid, oid::FUNC_ACL_ITEM_GRANTOR_OID;
+            params!(AclItem) => UnaryFunc::AclItemGrantor(func::AclItemGrantor) => Oid, oid::FUNC_ACL_ITEM_GRANTOR_OID, false;
         },
         "aclitem_grantee" => Scalar {
-            params!(AclItem) => UnaryFunc::AclItemGrantee(func::AclItemGrantee) => Oid, oid::FUNC_ACL_ITEM_GRANTEE_OID;
+            params!(AclItem) => UnaryFunc::AclItemGrantee(func::AclItemGrantee) => Oid, oid::FUNC_ACL_ITEM_GRANTEE_OID, false;
         },
         "aclitem_privileges" => Scalar {
-            params!(AclItem) => UnaryFunc::AclItemPrivileges(func::AclItemPrivileges) => String, oid::FUNC_ACL_ITEM_PRIVILEGES_OID;
+            params!(AclItem) => UnaryFunc::AclItemPrivileges(func::AclItemPrivileges) => String, oid::FUNC_ACL_ITEM_PRIVILEGES_OID, false;
         },
         "is_rbac_enabled" => Scalar {
-            params!() => UnmaterializableFunc::IsRbacEnabled => Bool, oid::FUNC_IS_RBAC_ENABLED_OID;
+            params!() => UnmaterializableFunc::IsRbacEnabled => Bool, oid::FUNC_IS_RBAC_ENABLED_OID, false;
         },
         "make_mz_aclitem" => Scalar {
-            params!(String, String, String) => VariadicFunc::MakeMzAclItem => MzAclItem, oid::FUNC_MAKE_MZ_ACL_ITEM_OID;
+            params!(String, String, String) => VariadicFunc::MakeMzAclItem => MzAclItem, oid::FUNC_MAKE_MZ_ACL_ITEM_OID, false;
         },
         "mz_acl_item_contains_privilege" => Scalar {
-            params!(MzAclItem, String) => BinaryFunc::MzAclItemContainsPrivilege => Bool, oid::FUNC_MZ_ACL_ITEM_CONTAINS_PRIVILEGE_OID;
+            params!(MzAclItem, String) => BinaryFunc::MzAclItemContainsPrivilege => Bool, oid::FUNC_MZ_ACL_ITEM_CONTAINS_PRIVILEGE_OID, false;
         },
         "mz_aclexplode" => Table {
             params!(ScalarType::Array(Box::new(ScalarType::MzAclItem))) =>  Operation::unary(move |_ecx, mz_aclitems| {
@@ -3624,22 +3668,22 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                     },
                     column_names: vec!["grantor".into(), "grantee".into(), "privilege_type".into(), "is_grantable".into()],
                 })
-            }) => ReturnType::set_of(RecordAny), oid::FUNC_MZ_ACL_ITEM_EXPLODE_OID;
+            }) => ReturnType::set_of(RecordAny), oid::FUNC_MZ_ACL_ITEM_EXPLODE_OID, false;
         },
         "mz_aclitem_grantor" => Scalar {
-            params!(MzAclItem) => UnaryFunc::MzAclItemGrantor(func::MzAclItemGrantor) => String, oid::FUNC_MZ_ACL_ITEM_GRANTOR_OID;
+            params!(MzAclItem) => UnaryFunc::MzAclItemGrantor(func::MzAclItemGrantor) => String, oid::FUNC_MZ_ACL_ITEM_GRANTOR_OID, false;
         },
         "mz_aclitem_grantee" => Scalar {
-            params!(MzAclItem) => UnaryFunc::MzAclItemGrantee(func::MzAclItemGrantee) => String, oid::FUNC_MZ_ACL_ITEM_GRANTEE_OID;
+            params!(MzAclItem) => UnaryFunc::MzAclItemGrantee(func::MzAclItemGrantee) => String, oid::FUNC_MZ_ACL_ITEM_GRANTEE_OID, false;
         },
         "mz_aclitem_privileges" => Scalar {
-            params!(MzAclItem) => UnaryFunc::MzAclItemPrivileges(func::MzAclItemPrivileges) => String, oid::FUNC_MZ_ACL_ITEM_PRIVILEGES_OID;
+            params!(MzAclItem) => UnaryFunc::MzAclItemPrivileges(func::MzAclItemPrivileges) => String, oid::FUNC_MZ_ACL_ITEM_PRIVILEGES_OID, false;
         },
         "mz_all" => Aggregate {
-            params!(Any) => AggregateFunc::All => Bool, oid::FUNC_MZ_ALL_OID;
+            params!(Any) => AggregateFunc::All => Bool, oid::FUNC_MZ_ALL_OID, true;
         },
         "mz_any" => Aggregate {
-            params!(Any) => AggregateFunc::Any => Bool, oid::FUNC_MZ_ANY_OID;
+            params!(Any) => AggregateFunc::Any => Bool, oid::FUNC_MZ_ANY_OID, true;
         },
         // Note: See "avg_internal_v1" for why this duplicate function exists.
         //
@@ -3651,28 +3695,28 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
             // aggregate function, so that the avg of an integer column does
             // not get truncated to an integer, which would be surprising to
             // users (#549).
-            params!(Float32) => Operation::identity() => Float32, oid::FUNC_MZ_AVG_PROMOTION_F32_OID_INTERNAL_V1;
-            params!(Float64) => Operation::identity() => Float64, oid::FUNC_MZ_AVG_PROMOTION_F64_OID_INTERNAL_V1;
+            params!(Float32) => Operation::identity() => Float32, oid::FUNC_MZ_AVG_PROMOTION_F32_OID_INTERNAL_V1, false;
+            params!(Float64) => Operation::identity() => Float64, oid::FUNC_MZ_AVG_PROMOTION_F64_OID_INTERNAL_V1, false;
             params!(Int16) => Operation::unary(|ecx, e| {
                 typeconv::plan_cast(
                     ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
                 )
-            }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_I16_OID_INTERNAL_V1;
+            }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_I16_OID_INTERNAL_V1, false;
             params!(Int32) => Operation::unary(|ecx, e| {
                 typeconv::plan_cast(
                     ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
                 )
-            }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_I32_OID_INTERNAL_V1;
+            }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_I32_OID_INTERNAL_V1, false;
             params!(UInt16) => Operation::unary(|ecx, e| {
                 typeconv::plan_cast(
                     ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
                 )
-            }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_U16_OID_INTERNAL_V1;
+            }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_U16_OID_INTERNAL_V1, false;
             params!(UInt32) => Operation::unary(|ecx, e| {
                 typeconv::plan_cast(
                     ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
                 )
-            }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_U32_OID_INTERNAL_V1;
+            }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_U32_OID_INTERNAL_V1, false;
         },
         "mz_avg_promotion" => Scalar {
             // Promotes a numeric type to the smallest fractional type that
@@ -3680,51 +3724,51 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
             // aggregate function, so that the avg of an integer column does
             // not get truncated to an integer, which would be surprising to
             // users (#549).
-            params!(Float32) => Operation::identity() => Float32, oid::FUNC_MZ_AVG_PROMOTION_F32_OID;
-            params!(Float64) => Operation::identity() => Float64, oid::FUNC_MZ_AVG_PROMOTION_F64_OID;
+            params!(Float32) => Operation::identity() => Float32, oid::FUNC_MZ_AVG_PROMOTION_F32_OID, false;
+            params!(Float64) => Operation::identity() => Float64, oid::FUNC_MZ_AVG_PROMOTION_F64_OID, false;
             params!(Int16) => Operation::unary(|ecx, e| {
                 typeconv::plan_cast(
                     ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
                 )
-            }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_I16_OID;
+            }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_I16_OID, false;
             params!(Int32) => Operation::unary(|ecx, e| {
                 typeconv::plan_cast(
                     ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
                 )
-            }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_I32_OID;
+            }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_I32_OID, false;
             params!(Int64) => Operation::unary(|ecx, e| {
                 typeconv::plan_cast(
                     ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
                 )
-            }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_I64_OID;
+            }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_I64_OID, false;
             params!(UInt16) => Operation::unary(|ecx, e| {
                 typeconv::plan_cast(
                     ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
                 )
-            }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_U16_OID;
+            }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_U16_OID, false;
             params!(UInt32) => Operation::unary(|ecx, e| {
                 typeconv::plan_cast(
                     ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
                 )
-            }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_U32_OID;
+            }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_U32_OID, false;
             params!(UInt64) => Operation::unary(|ecx, e| {
                 typeconv::plan_cast(
                     ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
                 )
-            }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_U64_OID;
+            }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_U64_OID, false;
             params!(Numeric) => Operation::unary(|ecx, e| {
                 typeconv::plan_cast(
                     ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
                 )
-            }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_NUMERIC_OID;
+            }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_NUMERIC_OID, false;
         },
         "mz_error_if_null" => Scalar {
             // If the first argument is NULL, returns an EvalError::Internal whose error
             // message is the second argument.
-            params!(Any, String) => VariadicFunc::ErrorIfNull => Any, oid::FUNC_MZ_ERROR_IF_NULL_OID;
+            params!(Any, String) => VariadicFunc::ErrorIfNull => Any, oid::FUNC_MZ_ERROR_IF_NULL_OID, true;
         },
         "mz_format_privileges" => Scalar {
-            params!(String) => UnaryFunc::MzFormatPrivileges(func::MzFormatPrivileges) => ScalarType::Array(Box::new(ScalarType::String)), oid::FUNC_MZ_FORMAT_PRIVILEGES_OID;
+            params!(String) => UnaryFunc::MzFormatPrivileges(func::MzFormatPrivileges) => ScalarType::Array(Box::new(ScalarType::String)), oid::FUNC_MZ_FORMAT_PRIVILEGES_OID, true;
         },
         "mz_resolve_object_name" => Table {
             // This implementation is available primarily to drive the other, single-param
@@ -3757,7 +3801,7 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                         AND d.name = $1::pg_catalog.text
                 )
                 WHERE rank = 1;
-            ") => ReturnType::set_of(RecordAny), oid::FUNC_MZ_RESOLVE_OBJECT_NAME_FULL;
+            ") => ReturnType::set_of(RecordAny), oid::FUNC_MZ_RESOLVE_OBJECT_NAME_FULL, true;
             params!(String) =>
             // Normalize the input name, and for any NULL values (e.g. not database qualified), use
             // the defaults used during name resolution.
@@ -3777,7 +3821,7 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                         END,
                         n[3]
                     ) AS o
-            ") => ReturnType::set_of(RecordAny), oid::FUNC_MZ_RESOLVE_OBJECT_NAME;
+            ") => ReturnType::set_of(RecordAny), oid::FUNC_MZ_RESOLVE_OBJECT_NAME, true;
         },
         "mz_global_id_to_name" => Scalar {
             params!(String) => sql_impl_func("
@@ -3815,7 +3859,7 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                     )
                 )
                 END
-            ") => String, oid::FUNC_MZ_GLOBAL_ID_TO_NAME;
+            ") => String, oid::FUNC_MZ_GLOBAL_ID_TO_NAME, true;
         },
         "mz_normalize_object_name" => Scalar {
             params!(String) => sql_impl_func("
@@ -3839,13 +3883,13 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                 FROM (
                     SELECT pg_catalog.parse_ident($1) AS ident
                 ) AS i
-            )") => ScalarType::Array(Box::new(ScalarType::String)), oid::FUNC_MZ_NORMALIZE_OBJECT_NAME;
+            )") => ScalarType::Array(Box::new(ScalarType::String)), oid::FUNC_MZ_NORMALIZE_OBJECT_NAME, true;
         },
         "mz_render_typmod" => Scalar {
-            params!(Oid, Int32) => BinaryFunc::MzRenderTypmod => String, oid::FUNC_MZ_RENDER_TYPMOD_OID;
+            params!(Oid, Int32) => BinaryFunc::MzRenderTypmod => String, oid::FUNC_MZ_RENDER_TYPMOD_OID, false;
         },
         "mz_role_oid_memberships" => Scalar {
-            params!() => UnmaterializableFunc::MzRoleOidMemberships => ScalarType::Map{ value_type: Box::new(ScalarType::Array(Box::new(ScalarType::String))), custom_id: None }, oid::FUNC_MZ_ROLE_OID_MEMBERSHIPS;
+            params!() => UnmaterializableFunc::MzRoleOidMemberships => ScalarType::Map{ value_type: Box::new(ScalarType::Array(Box::new(ScalarType::String))), custom_id: None }, oid::FUNC_MZ_ROLE_OID_MEMBERSHIPS, true;
         },
         // There is no regclass equivalent for databases to look up oids, so we have this helper function instead.
         "mz_database_oid" => Scalar {
@@ -3859,7 +3903,7 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                     )
                 )
                 END
-            ") => Oid, oid::FUNC_DATABASE_OID_OID;
+            ") => Oid, oid::FUNC_DATABASE_OID_OID, false;
         },
         // There is no regclass equivalent for schemas to look up oids, so we have this helper function instead.
         // TODO: Support qualified names.
@@ -3875,7 +3919,7 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                     )
                 )
                 END
-            ") => Oid, oid::FUNC_SCHEMA_OID_OID;
+            ") => Oid, oid::FUNC_SCHEMA_OID_OID, false;
         },
         // There is no regclass equivalent for roles to look up oids, so we have this helper function instead.
         "mz_role_oid" => Scalar {
@@ -3889,28 +3933,28 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                     )
                 )
                 END
-            ") => Oid, oid::FUNC_ROLE_OID_OID;
+            ") => Oid, oid::FUNC_ROLE_OID_OID, false;
         },
         // This ought to be exposed in `mz_catalog`, but its name is rather
         // confusing. It does not identify the SQL session, but the
         // invocation of this `environmentd` process.
         "mz_session_id" => Scalar {
-            params!() => UnmaterializableFunc::MzSessionId => Uuid, oid::FUNC_MZ_SESSION_ID_OID;
+            params!() => UnmaterializableFunc::MzSessionId => Uuid, oid::FUNC_MZ_SESSION_ID_OID, false;
         },
         "mz_sleep" => Scalar {
-            params!(Float64) => UnaryFunc::Sleep(func::Sleep) => TimestampTz, oid::FUNC_MZ_SLEEP_OID;
+            params!(Float64) => UnaryFunc::Sleep(func::Sleep) => TimestampTz, oid::FUNC_MZ_SLEEP_OID, true;
         },
         "mz_panic" => Scalar {
-            params!(String) => UnaryFunc::Panic(func::Panic) => String, oid::FUNC_MZ_PANIC_OID;
+            params!(String) => UnaryFunc::Panic(func::Panic) => String, oid::FUNC_MZ_PANIC_OID, true;
         },
         "mz_type_name" => Scalar {
-            params!(Oid) => UnaryFunc::MzTypeName(func::MzTypeName) => String, oid::FUNC_MZ_TYPE_NAME;
+            params!(Oid) => UnaryFunc::MzTypeName(func::MzTypeName) => String, oid::FUNC_MZ_TYPE_NAME, false;
         },
         "mz_validate_privileges" => Scalar {
-            params!(String) => UnaryFunc::MzValidatePrivileges(func::MzValidatePrivileges) => Bool, oid::FUNC_MZ_VALIDATE_PRIVILEGES_OID;
+            params!(String) => UnaryFunc::MzValidatePrivileges(func::MzValidatePrivileges) => Bool, oid::FUNC_MZ_VALIDATE_PRIVILEGES_OID, true;
         },
         "mz_validate_role_privilege" => Scalar {
-            params!(String) => UnaryFunc::MzValidateRolePrivilege(func::MzValidateRolePrivilege) => Bool, oid::FUNC_MZ_VALIDATE_ROLE_PRIVILEGE_OID;
+            params!(String) => UnaryFunc::MzValidateRolePrivilege(func::MzValidateRolePrivilege) => Bool, oid::FUNC_MZ_VALIDATE_ROLE_PRIVILEGE_OID, true;
         }
     }
 });

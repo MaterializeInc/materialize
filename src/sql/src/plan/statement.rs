@@ -281,11 +281,8 @@ pub fn plan(
         .iter()
         // Filter out items that may not have been created yet, such as sub-sources.
         .filter_map(|id| catalog.try_get_item(id))
-        .any(|item| {
-            item.func().is_ok()
-                && item.name().qualifiers.schema_spec
-                    == SchemaSpecifier::Id(*catalog.get_mz_internal_schema_id())
-        })
+        .filter_map(|item| item.func().ok())
+        .any(|func| func.dangerous())
     {
         scx.require_feature_flag(&vars::ENABLE_DANGEROUS_FUNCTIONS)?;
     }
