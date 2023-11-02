@@ -78,7 +78,7 @@ pulumi_materialize.Cluster(
 
 The Materialize provider supports several data source types to retrieve
 information about your existing Materialize resources. Data sources can return
-details about objects defined outside of Pulumi that can still be used within 
+details about objects defined outside of Pulumi that can still be used within
 your project.
 
 For example, to retrieve your current clusters:
