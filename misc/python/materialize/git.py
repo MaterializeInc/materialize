@@ -183,6 +183,8 @@ def try_get_remote_name_by_url(url: str) -> str | None:
         remote, desc = line.split("\t")
         if desc.lower() == f"{url} (fetch)".lower():
             return remote
+        if f"{desc.lower()}.git" == f"{url} (fetch)".lower():
+            return remote
     return None
 
 
