@@ -31,12 +31,9 @@ column1
 statement ok
 CREATE TABLE asciitest (strcol CHAR(15), vccol VARCHAR(15))
 
-# TODO: Add two tests:
-# 1: empty string to each column
-# 2: single space in each column
 statement ok
 INSERT INTO asciitest VALUES ('hello world', 'goodbye moon'), (NULL, NULL),
-    ('你好', '再见'), ('😀', '👻')
+    ('你好', '再见'), ('😀', '👻'), ('',''), (' ', ' ');
 
 statement error
 SELECT ascii(98)
@@ -45,10 +42,12 @@ query II colnames
 SELECT ascii(strcol) AS strres, ascii(vccol) AS vcres FROM asciitest ORDER BY strres
 ----
 strres  vcres
-104     103
-20320   20877
+0  0
+0  32
+104  103
+20320  20877
 128512  128123
-NULL    NULL
+NULL  NULL
 
 query I
 SELECT ascii(NULL)
