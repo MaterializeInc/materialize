@@ -30,11 +30,11 @@
                  --in mz_objects to correctly report subsources.
                  when o.type = 'source' then so.type
                  else o.type end as table_type,
-            coalesce(obj_desc.comment, '') as table_comment,
+            obj_desc.comment as table_comment,
             c.name as column_name,
             c.position as column_index,
             c.type as column_type,
-            coalesce(col_desc.comment, '') as column_comment,
+            col_desc.comment as column_comment,
             r.name as table_owner
         from mz_objects o
         join mz_schemas s on o.schema_id = s.id
