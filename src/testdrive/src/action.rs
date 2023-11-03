@@ -309,6 +309,7 @@ impl State {
                     tls,
                 },
                 SYSTEM_TIME.clone(),
+                Some(self.environment_id.clone()),
             )
             .await?;
             let res = f(catalog.for_session(&Session::dummy()));
