@@ -189,14 +189,16 @@ def _get_subplot_in_grid(
     num_cols: int,
 ) -> tuple[Axes, bool]:
     use_no_grid = num_rows == 1 and num_cols == 1
-    use_single_row = num_rows == 1 and num_cols > 1
+    use_single_dimension = (num_rows == 1 and num_cols > 1) or (
+        num_cols == 1 and num_rows > 1
+    )
 
     if use_no_grid:
         plot: Axes = subplots
         is_in_first_column = True
-    elif use_single_row:
+    elif use_single_dimension:
         plot: Axes = subplots[index]
-        is_in_first_column = index == 0
+        is_in_first_column = index == 0 or num_cols == 1
     else:
         row = math.floor(index / num_cols)
         column = index % num_cols
