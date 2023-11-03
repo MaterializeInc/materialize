@@ -152,6 +152,9 @@ class OutputConsistencyTest:
         output_comparator = self.create_result_comparator(ignore_filter)
         sql_executors = self.create_sql_executors(config, connection, output_printer)
 
+        output_printer.print_info(sql_executors.get_database_infos())
+        output_printer.print_empty_line()
+
         test_runner = ConsistencyTestRunner(
             config,
             input_data,
