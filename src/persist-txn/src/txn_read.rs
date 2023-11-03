@@ -400,6 +400,11 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
                     ListenEvent::Updates(parts) => parts,
                 };
                 let mut updates = Vec::new();
+                // We filter out unrelated data in two passes. The first is
+                // `should_fetch_part`, which allows us to skip entire fetches
+                // from s3/Blob. Then, if a part does need to be fetched, it
+                // still might contain info about unrelated data shards, and we
+                // filter those out before buffering in `updates`.
                 for part in parts {
                     let should_fetch_part = self.should_fetch_part(&part);
                     debug!(
@@ -413,8 +418,6 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
                         continue;
                     }
                     let part_updates = self.txns_subscribe.fetch_batch_part(part).await;
-                    // To keep memory usage down, filter out unrelated data
-                    // shards even before we buffer them for the timestamp sort.
                     let part_updates = part_updates.map(|((k, v), t, d)| {
                         let (k, v) = (k.expect("valid key"), v.expect("valid val"));
                         (C::decode(k, v), t, d)
