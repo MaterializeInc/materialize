@@ -33,6 +33,7 @@ from materialize.scalability.endpoints import (
 from materialize.scalability.io import paths
 from materialize.scalability.plot.plot import (
     boxplot_duration_by_connections_for_workload,
+    boxplot_duration_by_endpoints_for_workload,
     scatterplot_tps_per_connections,
 )
 from materialize.scalability.regression import RegressionOutcome
@@ -333,6 +334,21 @@ def create_plots(result: BenchmarkResult, baseline_endpoint: Endpoint | None) ->
         )
         plt.savefig(
             paths.plot_png("duration_by_connections", workload_name),
+            bbox_inches="tight",
+            dpi=300,
+        )
+
+        fig = plt.figure(layout="constrained", figsize=(16, 10))
+        (subfigure) = fig.subfigures(1, 1)
+        boxplot_duration_by_endpoints_for_workload(
+            workload_name,
+            subfigure,
+            results_by_endpoint,
+            include_zero_in_y_axis=INCLUDE_ZERO_IN_Y_AXIS,
+            include_workload_in_title=True,
+        )
+        plt.savefig(
+            paths.plot_png("duration_by_endpoints", workload_name),
             bbox_inches="tight",
             dpi=300,
         )

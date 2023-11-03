@@ -120,7 +120,7 @@ def boxplot_duration_by_connections_for_workload(
     subplots = figure.subplots(num_rows, num_cols, sharey=False)
 
     for concurrency_index, concurrency in enumerate(concurrencies):
-        plot, is_in_first_column = _get_subplot_in_grid(
+        plot, is_in_first_column, is_in_last_row = _get_subplot_in_grid(
             subplots, concurrency_index, num_rows, num_cols
         )
 
@@ -157,6 +157,59 @@ def boxplot_duration_by_connections_for_workload(
         plot.set_title(title)
 
 
+def boxplot_duration_by_endpoints_for_workload(
+    workload_name: str,
+    figure: SubFigure,
+    df_details_by_endpoint_name: dict[str, pd.DataFrame],
+    include_zero_in_y_axis: bool,
+    include_workload_in_title: bool = False,
+) -> None:
+    if len(df_details_by_endpoint_name) == 0:
+        return
+
+    num_rows, num_cols = _compute_plot_grid(len(df_details_by_endpoint_name.keys()), 1)
+    subplots = figure.subplots(num_rows, num_cols, sharey=False)
+
+    for endpoint_index, (endpoint_version_name, df_details) in enumerate(
+        df_details_by_endpoint_name.items()
+    ):
+        plot, is_in_first_column, is_in_last_row = _get_subplot_in_grid(
+            subplots, endpoint_index, num_rows, num_cols
+        )
+
+        concurrencies = df_details[df_details_cols.CONCURRENCY].unique()
+
+        legend = []
+        durations: list[list[float]] = []
+
+        for concurrency in concurrencies:
+            legend.append(concurrency)
+
+            df_details_of_concurrency = df_details.loc[
+                df_details[df_details_cols.CONCURRENCY] == concurrency
+            ]
+            durations_of_concurrency = df_details_of_concurrency[
+                df_details_cols.WALLCLOCK
+            ]
+            durations.append(durations_of_concurrency)
+
+        plot.boxplot(durations, labels=legend)
+
+        if is_in_first_column and is_in_last_row:
+            plot.set_ylabel("Duration (seconds)")
+
+        if is_in_last_row:
+            plot.set_xlabel("Concurrencies")
+
+        if include_zero_in_y_axis:
+            plot.set_ylim(ymin=0)
+
+        title = endpoint_version_name
+        if include_workload_in_title:
+            title = f"{workload_name}, {title}"
+        plot.set_title(title)
+
+
 def _shorten_endpoint_version_name(endpoint_version_name: str) -> str:
     if " " not in endpoint_version_name:
         return endpoint_version_name
@@ -187,7 +240,7 @@ def _get_subplot_in_grid(
     index: int,
     num_rows: int,
     num_cols: int,
-) -> tuple[Axes, bool]:
+) -> tuple[Axes, bool, bool]:
     use_no_grid = num_rows == 1 and num_cols == 1
     use_single_dimension = (num_rows == 1 and num_cols > 1) or (
         num_cols == 1 and num_rows > 1
@@ -196,15 +249,18 @@ def _get_subplot_in_grid(
     if use_no_grid:
         plot: Axes = subplots
         is_in_first_column = True
+        is_in_last_row = True
     elif use_single_dimension:
         plot: Axes = subplots[index]
         is_in_first_column = index == 0 or num_cols == 1
+        is_in_last_row = index == (num_rows - 1) or num_rows == 1
     else:
         row = math.floor(index / num_cols)
         column = index % num_cols
         plot: Axes = subplots[row][column]
         is_in_first_column = column == 0
+        is_in_last_row = row == (num_rows - 1)
 
     assert type(plot) == Axes
 
-    return plot, is_in_first_column
+    return plot, is_in_first_column, is_in_last_row
