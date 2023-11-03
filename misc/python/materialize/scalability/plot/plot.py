@@ -24,10 +24,12 @@ PLOT_MARKER_SQUARE = MarkerStyle(",")
 
 
 def scatterplot_tps_per_connections(
+    workload_name: str,
     figure: SubFigure,
     df_totals_by_endpoint_name: dict[str, pd.DataFrame],
     baseline_version_name: str | None,
     include_zero_in_y_axis: bool,
+    include_workload_in_title: bool = False,
 ) -> None:
     legend = []
     plot: Axes = figure.subplots(1, 1)
@@ -53,14 +55,19 @@ def scatterplot_tps_per_connections(
     if include_zero_in_y_axis:
         plot.set_ylim(ymin=0)
 
+    if include_workload_in_title:
+        plot.set_title(workload_name)
+
     plot.legend(legend)
 
 
 def scatterplot_latency_per_connections(
+    workload_name: str,
     figure: SubFigure,
     df_details_by_endpoint_name: dict[str, pd.DataFrame],
     baseline_version_name: str | None,
     include_zero_in_y_axis: bool,
+    include_workload_in_title: bool = False,
 ) -> None:
     legend = []
     plot: Axes = figure.subplots(1, 1)
@@ -85,13 +92,18 @@ def scatterplot_latency_per_connections(
     if include_zero_in_y_axis:
         plot.set_ylim(ymin=0)
 
+    if include_workload_in_title:
+        plot.set_title(workload_name)
+
     plot.legend(legend)
 
 
 def boxplot_latency_per_connections(
+    workload_name: str,
     figure: SubFigure,
     df_details_by_endpoint_name: dict[str, pd.DataFrame],
     include_zero_in_y_axis: bool,
+    include_workload_in_title: bool = False,
 ) -> None:
     if len(df_details_by_endpoint_name) == 0:
         return
@@ -152,7 +164,10 @@ def boxplot_latency_per_connections(
         if include_zero_in_y_axis:
             plot.set_ylim(ymin=0)
 
-        plot.set_title(f"# connections: {concurrency}")
+        title = f"{concurrency} connections"
+        if include_workload_in_title:
+            title = f"{workload_name}, {title}"
+        plot.set_title(title)
 
 
 def _shorten_endpoint_name(endpoint_name: str) -> str:

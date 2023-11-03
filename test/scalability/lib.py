@@ -31,6 +31,7 @@ def plotit(workload_name: str, include_zero_in_y_axis: bool = True) -> None:
     )
 
     scatterplot_tps_per_connections(
+        workload_name,
         tps_figure,
         df_totals_by_endpoint_name,
         baseline_version_name=None,
@@ -39,12 +40,14 @@ def plotit(workload_name: str, include_zero_in_y_axis: bool = True) -> None:
 
     if USE_BOXPLOT:
         boxplot_latency_per_connections(
+            workload_name,
             latency_figure,
             df_details_by_endpoint_name,
             include_zero_in_y_axis=include_zero_in_y_axis,
         )
     else:
         scatterplot_latency_per_connections(
+            workload_name,
             latency_figure,
             df_details_by_endpoint_name,
             baseline_version_name=None,
