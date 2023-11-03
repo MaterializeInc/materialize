@@ -1235,11 +1235,7 @@ where
                 txns_cache.update_gt(&as_of).await;
                 let data_snapshot = txns_cache.data_snapshot(data_shard, as_of.clone());
                 let mut read_handle = self.read_handle_for_snapshot(id).await?;
-                let data_write = self.write_handle_for_snapshot(id).await?;
-                // TODO(txn): It's quite confusing that this read needs a write handle. Remove it.
-                data_snapshot
-                    .snapshot_and_fetch(&mut read_handle, data_write)
-                    .await
+                data_snapshot.snapshot_and_fetch(&mut read_handle).await
             }
         };
         match contents {
@@ -3171,33 +3167,6 @@ where
             .await
             .expect("invalid persist usage");
         Ok(read_handle)
-    }
-
-    async fn write_handle_for_snapshot(
-        &self,
-        id: GlobalId,
-    ) -> Result<WriteHandle<SourceData, (), T, Diff>, StorageError> {
-        let metadata = &self.collection(id)?.collection_metadata;
-
-        let persist_client = self
-            .persist
-            .open(metadata.persist_location.clone())
-            .await
-            .unwrap();
-
-        let write_handle = persist_client
-            .open_writer::<SourceData, (), _, _>(
-                metadata.data_shard,
-                Arc::new(metadata.relation_desc.clone()),
-                Arc::new(UnitSchema),
-                Diagnostics {
-                    shard_name: id.to_string(),
-                    handle_purpose: format!("snapshot {}", id),
-                },
-            )
-            .await
-            .expect("invalid persist usage");
-        Ok(write_handle)
     }
 
     async fn snapshot_and_stream(
