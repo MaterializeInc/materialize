@@ -300,9 +300,11 @@ def create_plots(result: BenchmarkResult) -> None:
         fig = plt.figure(layout="constrained", figsize=(16, 6))
         (subfigure) = fig.subfigures(1, 1)
         scatterplot_tps_per_connections(
+            workload_name,
             subfigure,
             results_by_endpoint,
             include_zero_in_y_axis=INCLUDE_ZERO_IN_Y_AXIS,
+            include_workload_in_title=True,
         )
         plt.savefig(paths.plot_png("tps", workload_name), bbox_inches="tight", dpi=300)
 
@@ -313,9 +315,11 @@ def create_plots(result: BenchmarkResult) -> None:
         fig = plt.figure(layout="constrained", figsize=(16, 10))
         (subfigure) = fig.subfigures(1, 1)
         boxplot_latency_per_connections(
+            workload_name,
             subfigure,
             results_by_endpoint,
             include_zero_in_y_axis=INCLUDE_ZERO_IN_Y_AXIS,
+            include_workload_in_title=True,
         )
         plt.savefig(
             paths.plot_png("latency", workload_name), bbox_inches="tight", dpi=300
