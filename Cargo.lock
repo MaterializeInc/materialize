@@ -5425,7 +5425,7 @@ dependencies = [
 
 [[package]]
 name = "mz-stash-debug"
-version = "0.28.0-dev"
+version = "0.77.0-dev"
 dependencies = [
  "anyhow",
  "clap",
