@@ -124,7 +124,7 @@ def boxplot_latency_per_connections(
             formatted_endpoint_name = (
                 endpoint_name
                 if not use_short_names
-                else shorten_endpoint_name(endpoint_name)
+                else _shorten_endpoint_name(endpoint_name)
             )
             legend.append(formatted_endpoint_name)
 
@@ -147,7 +147,7 @@ def boxplot_latency_per_connections(
         plot.set_title(f"# connections: {concurrency}")
 
 
-def shorten_endpoint_name(endpoint_name: str) -> str:
+def _shorten_endpoint_name(endpoint_name: str) -> str:
     if " " not in endpoint_name:
         return endpoint_name
 
