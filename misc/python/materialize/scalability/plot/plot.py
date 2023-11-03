@@ -14,27 +14,33 @@ from typing import cast
 import pandas as pd
 from matplotlib.axes import Axes
 from matplotlib.figure import SubFigure
+from matplotlib.markers import MarkerStyle
 
 from materialize.scalability.df import df_details_cols, df_totals_cols
 from materialize.scalability.endpoints import endpoint_name_to_description
+
+PLOT_MARKER_POINT = MarkerStyle("o")
+PLOT_MARKER_SQUARE = MarkerStyle(",")
 
 
 def scatterplot_tps_per_connections(
     figure: SubFigure,
     df_totals_by_endpoint_name: dict[str, pd.DataFrame],
+    baseline_version_name: str | None,
     include_zero_in_y_axis: bool,
 ) -> None:
     legend = []
     plot: Axes = figure.subplots(1, 1)
     max_concurrency = 1
 
-    for endpoint_name, df_totals in df_totals_by_endpoint_name.items():
-        legend.append(endpoint_name_to_description(endpoint_name))
+    for endpoint_version_name, df_totals in df_totals_by_endpoint_name.items():
+        legend.append(endpoint_name_to_description(endpoint_version_name))
 
         plot.scatter(
             df_totals[df_totals_cols.CONCURRENCY],
             df_totals[df_totals_cols.TPS],
             label=df_totals_cols.TPS,
+            marker=_get_plot_marker(endpoint_version_name, baseline_version_name),
         )
 
         max_concurrency = max(
@@ -53,20 +59,22 @@ def scatterplot_tps_per_connections(
 def scatterplot_latency_per_connections(
     figure: SubFigure,
     df_details_by_endpoint_name: dict[str, pd.DataFrame],
+    baseline_version_name: str | None,
     include_zero_in_y_axis: bool,
 ) -> None:
     legend = []
     plot: Axes = figure.subplots(1, 1)
 
     i = 0
-    for endpoint_name, df_details in df_details_by_endpoint_name.items():
+    for endpoint_version_name, df_details in df_details_by_endpoint_name.items():
         endpoint_offset = i / 40.0
-        legend.append(endpoint_name_to_description(endpoint_name))
+        legend.append(endpoint_name_to_description(endpoint_version_name))
 
         plot.scatter(
             df_details[df_details_cols.CONCURRENCY] + endpoint_offset,
             df_details[df_details_cols.WALLCLOCK],
             alpha=0.25,
+            marker=_get_plot_marker(endpoint_version_name, baseline_version_name),
         )
 
         i = i + 1
@@ -152,3 +160,15 @@ def _shorten_endpoint_name(endpoint_name: str) -> str:
         return endpoint_name
 
     return endpoint_name.split(" ")[0]
+
+
+def _get_plot_marker(
+    endpoint_version_name: str, baseline_version_name: str | None
+) -> MarkerStyle:
+    if (
+        baseline_version_name is not None
+        and endpoint_version_name == baseline_version_name
+    ):
+        return PLOT_MARKER_SQUARE
+
+    return PLOT_MARKER_POINT

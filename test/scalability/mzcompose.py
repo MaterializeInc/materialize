@@ -186,7 +186,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     result_file_paths = store_results_in_files(benchmark_result)
     upload_results_to_buildkite(result_file_paths)
 
-    create_plots(benchmark_result)
+    create_plots(benchmark_result, baseline_endpoint)
     upload_plots_to_buildkite()
 
     report_regression_result(
@@ -290,7 +290,7 @@ def create_result_analyzer(_args: argparse.Namespace) -> ResultAnalyzer:
     )
 
 
-def create_plots(result: BenchmarkResult) -> None:
+def create_plots(result: BenchmarkResult, baseline_endpoint: Endpoint | None) -> None:
     paths.plot_dir().mkdir(parents=True, exist_ok=True)
 
     for (
@@ -302,6 +302,9 @@ def create_plots(result: BenchmarkResult) -> None:
         scatterplot_tps_per_connections(
             subfigure,
             results_by_endpoint,
+            baseline_version_name=baseline_endpoint.try_load_version()
+            if baseline_endpoint
+            else None,
             include_zero_in_y_axis=INCLUDE_ZERO_IN_Y_AXIS,
         )
         plt.savefig(paths.plot_png("tps", workload_name), bbox_inches="tight", dpi=300)
