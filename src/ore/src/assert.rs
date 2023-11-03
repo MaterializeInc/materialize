@@ -42,8 +42,6 @@
 
 use std::sync::atomic::AtomicBool;
 
-use crate::env;
-
 /// Whether to enable soft assertions.
 ///
 /// This value defaults to `true` when `debug_assertions` are enabled, or to the
@@ -51,21 +49,21 @@ use crate::env;
 // The rules about what you can do in a `ctor` function are somewhat fuzzy,
 // because Rust does not explicitly support constructors. But a scan of the
 // stdlib suggests that reading environment variables is safe enough.
-#[cfg(not(miri))]
+#[cfg(not(any(miri, target_arch = "wasm32")))]
 #[ctor::ctor]
 pub static SOFT_ASSERTIONS: AtomicBool = {
-    let default = cfg!(debug_assertions) || env::is_var_truthy("MZ_SOFT_ASSERTIONS");
+    let default = cfg!(debug_assertions) || crate::env::is_var_truthy("MZ_SOFT_ASSERTIONS");
     AtomicBool::new(default)
 };
 
-/// Always enable soft assertions when running [Miri].
+/// Always enable soft assertions when running [Miri] or wasm.
 ///
 /// Note: Miri also doesn't support global constructors, aka [`ctor`], if it ever does we could
 /// get rid of this second definition. See <https://github.com/rust-lang/miri/issues/450> for
 /// more details.
 ///
 /// [Miri]: https://github.com/rust-lang/miri
-#[cfg(miri)]
+#[cfg(any(miri, target_arch = "wasm32"))]
 pub static SOFT_ASSERTIONS: AtomicBool = AtomicBool::new(true);
 
 /// Asserts that a condition is true if soft assertions are enabled.
