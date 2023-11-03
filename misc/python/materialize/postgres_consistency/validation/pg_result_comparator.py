@@ -75,11 +75,11 @@ class PostgresResultComparator(ResultComparator):
 
     def is_timestamp_equal(self, value1: str, value2: str) -> bool:
         # a timezone might be at the end, do not discard that
-        milliseconds_pattern = re.compile(r"\.\d+")
+        milliseconds_pattern = re.compile(r"\d\.\d+")
 
         if milliseconds_pattern.search(value1) and milliseconds_pattern.search(value2):
-            # drop milliseconds
-            value1 = milliseconds_pattern.sub(value1, "")
-            value2 = milliseconds_pattern.sub(value2, "")
+            # drop milliseconds and trunc last digit of second
+            value1 = milliseconds_pattern.sub(value1, "0")
+            value2 = milliseconds_pattern.sub(value2, "0")
 
         return value1 == value2
