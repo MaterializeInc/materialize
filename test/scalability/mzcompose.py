@@ -32,7 +32,7 @@ from materialize.scalability.endpoints import (
 )
 from materialize.scalability.io import paths
 from materialize.scalability.plot.plot import (
-    boxplot_latency_per_connections,
+    boxplot_duration_per_connections,
     scatterplot_tps_per_connections,
 )
 from materialize.scalability.regression import RegressionOutcome
@@ -324,7 +324,7 @@ def create_plots(result: BenchmarkResult, baseline_endpoint: Endpoint | None) ->
     ) in result.get_df_details_by_workload_and_endpoint().items():
         fig = plt.figure(layout="constrained", figsize=(16, 10))
         (subfigure) = fig.subfigures(1, 1)
-        boxplot_latency_per_connections(
+        boxplot_duration_per_connections(
             workload_name,
             subfigure,
             results_by_endpoint,
@@ -332,7 +332,7 @@ def create_plots(result: BenchmarkResult, baseline_endpoint: Endpoint | None) ->
             include_workload_in_title=True,
         )
         plt.savefig(
-            paths.plot_png("latency", workload_name), bbox_inches="tight", dpi=300
+            paths.plot_png("duration", workload_name), bbox_inches="tight", dpi=300
         )
 
 

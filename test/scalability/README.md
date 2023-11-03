@@ -108,7 +108,7 @@ operations was used when benchmarking concurrency 256, the test would complete i
 
 This diagram show the transactions per second per concurrency. Higher values are better.
 
-## Latency
+## Duration per transaction
 
 These boxplots show the duration of the individual statements per concurrency. They provide information about the mean
 duration of an operation and their timing reliability. Lower values are better.

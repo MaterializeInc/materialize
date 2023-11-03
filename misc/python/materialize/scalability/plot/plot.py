@@ -61,7 +61,7 @@ def scatterplot_tps_per_connections(
     plot.legend(legend)
 
 
-def scatterplot_latency_per_connections(
+def scatterplot_duration_per_connections(
     workload_name: str,
     figure: SubFigure,
     df_details_by_endpoint_name: dict[str, pd.DataFrame],
@@ -86,7 +86,7 @@ def scatterplot_latency_per_connections(
 
         i = i + 1
 
-    plot.set_ylabel("Latency in Seconds")
+    plot.set_ylabel("Duration in Seconds")
     plot.set_xlabel("Concurrent SQL Connections")
 
     if include_zero_in_y_axis:
@@ -98,7 +98,7 @@ def scatterplot_latency_per_connections(
     plot.legend(legend)
 
 
-def boxplot_latency_per_connections(
+def boxplot_duration_per_connections(
     workload_name: str,
     figure: SubFigure,
     df_details_by_endpoint_name: dict[str, pd.DataFrame],
@@ -159,7 +159,7 @@ def boxplot_latency_per_connections(
         plot.boxplot(wallclocks_of_endpoints, labels=legend)
 
         if is_in_first_column:
-            plot.set_ylabel("Latency in Seconds")
+            plot.set_ylabel("Duration in Seconds")
 
         if include_zero_in_y_axis:
             plot.set_ylim(ymin=0)
