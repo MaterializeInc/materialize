@@ -475,9 +475,9 @@ class CreateSchemaAction(Action):
                 return
             schema_id = exe.db.schema_id
             exe.db.schema_id += 1
-        schema = Schema(self.rng.choice(exe.db.dbs), schema_id)
-        schema.create(exe)
-        exe.db.schemas.append(schema)
+            schema = Schema(self.rng.choice(exe.db.dbs), schema_id)
+            schema.create(exe)
+            exe.db.schemas.append(schema)
 
 
 class DropSchemaAction(Action):
