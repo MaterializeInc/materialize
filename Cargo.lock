@@ -5757,6 +5757,7 @@ dependencies = [
  "mz-timely-util",
  "prometheus",
  "proptest",
+ "serde",
  "timely",
  "tokio",
  "tracing",
