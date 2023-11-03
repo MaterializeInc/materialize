@@ -82,7 +82,7 @@ Ensure you have the following:
 
     ```sql
     CREATE CONNECTION warpstream_kafka TO KAFKA (
-        BROKER '$CLUSTER_NAME.fly.dev:9092',
+        BROKER '<CLUSTER_NAME>.fly.dev:9092',
         SASL MECHANISMS = "PLAIN",
         SASL USERNAME = SECRET warpstream_username,
         SASL PASSWORD = SECRET warpstream_password
