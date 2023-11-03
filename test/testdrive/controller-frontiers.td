@@ -329,5 +329,20 @@ r3 <null>
   FROM mz_internal.mz_frontiers frontiers
   WHERE object_id LIKE 'u%'
 
+# Test that frontiers are correctly initialized on for collections on clusters
+# with zero replicas.
+
+> CREATE CLUSTER empty SIZE '1', REPLICATION FACTOR 0
+> CREATE TABLE t2 (a int)
+> CREATE INDEX idx2 IN CLUSTER empty ON t2 (a)
+
+> SELECT read_frontier > 0, read_frontier = write_frontier
+  FROM mz_internal.mz_frontiers
+  JOIN mz_indexes ON (id = object_id)
+  WHERE name = 'idx2'
+true true
+
+# Cleanup
+
 > DROP CLUSTER test CASCADE
 > DROP CLUSTER test_source CASCADE
