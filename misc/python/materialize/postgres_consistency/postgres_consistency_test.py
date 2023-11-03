@@ -62,7 +62,9 @@ class PostgresConsistencyTest(OutputConsistencyTest):
 
         return PgSqlExecutors(
             create_sql_executor(config, connection, output_printer, "mz"),
-            create_sql_executor(config, self.pg_connection, output_printer, "pg"),
+            create_sql_executor(
+                config, self.pg_connection, output_printer, "pg", is_mz=False
+            ),
         )
 
     def create_result_comparator(
