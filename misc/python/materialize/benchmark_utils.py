@@ -13,7 +13,7 @@ from materialize import buildkite
 
 
 def resolve_tag_of_common_ancestor(tag_when_on_default_branch: str = "latest") -> str:
-    if buildkite.is_on_default_branch():
+    if buildkite.is_in_buildkite() and not buildkite.is_in_pull_request():
         print(f"On default branch, using {tag_when_on_default_branch} as tag")
         return tag_when_on_default_branch
     else:
