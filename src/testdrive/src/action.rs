@@ -30,6 +30,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::retry::Retry;
 use mz_ore::task;
+use mz_sql::catalog::EnvironmentId;
 use mz_stash::StashFactory;
 use mz_tls_util::make_tls;
 use once_cell::sync::Lazy;
@@ -120,6 +121,8 @@ pub struct Config {
     pub materialize_catalog_postgres_stash: Option<String>,
     /// Build information
     pub build_info: &'static BuildInfo,
+    /// The environment ID to use for this run
+    pub environment_id: EnvironmentId,
 
     // === Persist options. ===
     /// Handle to the persist consensus system.
@@ -183,6 +186,7 @@ pub struct State {
     materialize_internal_http_addr: String,
     materialize_user: String,
     pgclient: tokio_postgres::Client,
+    environment_id: EnvironmentId,
 
     // === Persist state. ===
     persist_consensus_url: Option<String>,
@@ -872,6 +876,7 @@ pub async fn create_state(
         materialize_internal_http_addr,
         materialize_user,
         pgclient,
+        environment_id: config.environment_id.clone(),
 
         // === Persist state. ===
         persist_consensus_url: config.persist_consensus_url.clone(),

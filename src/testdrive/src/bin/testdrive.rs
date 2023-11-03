@@ -90,6 +90,7 @@ use itertools::Itertools;
 use mz_build_info::{build_info, BuildInfo};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::path::PathExt;
+use mz_sql::catalog::EnvironmentId;
 use mz_testdrive::Config;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
@@ -302,6 +303,9 @@ struct Args {
     // is started with, or the tests of catalog serialization will get confused.
     #[clap(long)]
     variable_length_row_encoding: bool,
+
+    #[clap(long)]
+    environment_id: String,
 }
 
 #[tokio::main]
@@ -413,6 +417,8 @@ async fn main() {
         materialize_params: args.materialize_param,
         materialize_catalog_postgres_stash: args.validate_postgres_stash,
         build_info: &BUILD_INFO,
+        environment_id: <EnvironmentId as std::str::FromStr>::from_str(&args.environment_id)
+            .unwrap(),
 
         // === Persist options. ===
         persist_consensus_url: args.persist_consensus_url,
