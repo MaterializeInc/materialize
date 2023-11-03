@@ -437,10 +437,15 @@ impl Catalog {
         let debug_stash_factory = DebugStashFactory::new().await;
         let persist_client = PersistClient::new_for_tests().await;
         let environmentd_id = Uuid::new_v4();
-        let catalog =
-            Self::open_debug_catalog(&debug_stash_factory, persist_client, environmentd_id, now)
-                .await
-                .expect("unable to open debug stash");
+        let catalog = Self::open_debug_catalog(
+            &debug_stash_factory,
+            persist_client,
+            environmentd_id,
+            now,
+            None,
+        )
+        .await
+        .expect("unable to open debug stash");
         let res = f(catalog).await;
         debug_stash_factory.drop().await;
         res
@@ -454,6 +459,7 @@ impl Catalog {
         persist_client: PersistClient,
         organization_id: Uuid,
         now: NowFn,
+        environment_id: Option<EnvironmentId>,
     ) -> Result<Catalog, anyhow::Error> {
         let openable_storage = Box::new(
             mz_catalog::durable::shadow_catalog_state(
@@ -471,7 +477,7 @@ impl Catalog {
         let storage = openable_storage
             .open(now(), &test_bootstrap_args(), None)
             .await?;
-        Self::open_debug_stash_catalog(storage, now).await
+        Self::open_debug_stash_catalog(storage, now, environment_id).await
     }
 
     /// Opens a debug stash backed catalog at `url`, using `schema` as the connection's search_path.
@@ -481,6 +487,7 @@ impl Catalog {
         url: String,
         schema: String,
         now: NowFn,
+        environment_id: Option<EnvironmentId>,
     ) -> Result<Catalog, anyhow::Error> {
         let tls = mz_tls_util::make_tls(&tokio_postgres::Config::new())
             .expect("unable to create TLS connector");
@@ -497,7 +504,7 @@ impl Catalog {
         let storage = openable_storage
             .open(now(), &test_bootstrap_args(), None)
             .await?;
-        Self::open_debug_stash_catalog(storage, now).await
+        Self::open_debug_stash_catalog(storage, now, environment_id).await
     }
 
     /// Opens a read only debug stash backed catalog defined by `stash_config`.
@@ -506,6 +513,7 @@ impl Catalog {
     pub async fn open_debug_read_only_stash_catalog_config(
         stash_config: StashConfig,
         now: NowFn,
+        environment_id: Option<EnvironmentId>,
     ) -> Result<Catalog, anyhow::Error> {
         let openable_storage = Box::new(mz_catalog::durable::stash_backed_catalog_state(
             stash_config,
@@ -513,12 +521,13 @@ impl Catalog {
         let storage = openable_storage
             .open_read_only(now(), &test_bootstrap_args())
             .await?;
-        Self::open_debug_stash_catalog(storage, now).await
+        Self::open_debug_stash_catalog(storage, now, environment_id).await
     }
 
     async fn open_debug_stash_catalog(
         storage: Box<dyn DurableCatalogState>,
         now: NowFn,
+        environment_id: Option<EnvironmentId>,
     ) -> Result<Catalog, anyhow::Error> {
         let metrics_registry = &MetricsRegistry::new();
         let active_connection_count = Arc::new(std::sync::Mutex::new(ConnectionCounter::new(0)));
@@ -534,7 +543,7 @@ impl Catalog {
             unsafe_mode: true,
             all_features: false,
             build_info: &DUMMY_BUILD_INFO,
-            environment_id: EnvironmentId::for_tests(),
+            environment_id: environment_id.unwrap_or(EnvironmentId::for_tests()),
             now,
             skip_migrations: true,
             metrics_registry,
@@ -4443,6 +4452,7 @@ mod tests {
                 persist_client.clone(),
                 organization_id.clone(),
                 NOW_ZERO.clone(),
+                None,
             )
             .await
             .expect("unable to open debug catalog");
@@ -4470,6 +4480,7 @@ mod tests {
                 persist_client,
                 organization_id,
                 NOW_ZERO.clone(),
+                None,
             )
             .await
             .expect("unable to open debug catalog");
@@ -4679,6 +4690,7 @@ mod tests {
                 persist_client.clone(),
                 organization_id.clone(),
                 SYSTEM_TIME.clone(),
+                None,
             )
             .await
             .expect("unable to open debug catalog");
@@ -4715,6 +4727,7 @@ mod tests {
                 persist_client,
                 organization_id,
                 SYSTEM_TIME.clone(),
+                None,
             )
             .await
             .expect("unable to open debug catalog");
