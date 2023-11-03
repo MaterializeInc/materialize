@@ -531,21 +531,22 @@ where
             )
             .await?;
 
-        let mut durable_metadata: BTreeMap<GlobalId, DurableCollectionMetadata> =
-            METADATA_COLLECTION
-                .peek_one(&mut self.stash)
-                .await?
-                .into_iter()
-                .map(RustType::from_proto)
-                .collect::<Result<_, _>>()
-                .map_err(|e| StorageError::IOError(e.into()))?;
+        let durable_metadata: BTreeMap<GlobalId, DurableCollectionMetadata> = METADATA_COLLECTION
+            .peek_one(&mut self.stash)
+            .await?
+            .into_iter()
+            .map(RustType::from_proto)
+            .collect::<Result<_, _>>()
+            .map_err(|e| StorageError::IOError(e.into()))?;
 
         // We first enrich each collection description with some additional metadata...
         use futures::stream::{StreamExt, TryStreamExt};
         let enriched_with_metadata = collections
             .into_iter()
             .map(|(id, description)| {
-                let collection_shards = durable_metadata.remove(&id).expect("inserted above");
+                // Clone the entry rather than `remove`ing it, so we can still look it up when
+                // enriching subsequent collections.
+                let collection_shards = durable_metadata.get(&id).expect("inserted above").clone();
 
                 let status_shard =
                     if let Some(status_collection_id) = description.status_collection_id {
