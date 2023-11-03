@@ -207,7 +207,7 @@ class QueryGenerator:
                     [expression],
                     None,
                     storage_layout,
-                    False,
+                    expression.is_aggregate,
                     row_selection,
                 )
             )
