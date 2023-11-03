@@ -10,14 +10,14 @@ Materialize stores data in S3 and metadata in CRDB. When restoring from backup, 
 
 Reasons one might want backup/restore, and whether they’re in scope for this design —
 
-| Scenario | Example | In scope? |
-| --- | --- | --- |
-| User-level backups | A user wants to explicitly back up a table, either ad-hoc or on some regular cadence. | No. (A S3 sink/source would provide similar functionality and integrate better with the rest of the product surface.) |
-| User error | A user puts a bunch of valuable data into a table, deletes a bunch of rows by accident, and asks us to restore it for them. | No. (Possibly useful for a system of record, but substantially more complex.) |
-| Controller bug | The compute controller fails to hold back the since of a shard far enough in a new version of , losing data needed by a downstream materialized view. | Yes! |
-| Persist bug | A harmless-seeming change to garbage collection accidentally deletes too much. | Yes! |
-| Snapshot | A shard causes an unusual performance problem for some compute operator, and we’d like to inspect a previous state to investigate. | Nice to have. |
-| Operator error | An operator typos an aws CLI command, accidentally deleting blobs that are still referenced. | Yes. (Impossible to prevent an admin from deleting data entirely, but it’s good if we can make ordinary operations less risky.) |
+| Scenario | Example                                                                                                                                                          | In scope? |
+| --- |------------------------------------------------------------------------------------------------------------------------------------------------------------------| --- |
+| User-level backups | A user wants to explicitly back up a table, either ad-hoc or on some regular cadence.                                                                            | No. (A S3 sink/source would provide similar functionality and integrate better with the rest of the product surface.) |
+| User error | A user puts a bunch of valuable data into a table, deletes a bunch of rows by accident, and asks us to restore it for them.                                      | No. (Possibly useful for a system of record, but substantially more complex.) |
+| Controller bug | The compute controller fails to hold back the since of a shard far enough in a new version of Materialize, losing data needed by a downstream materialized view. | Yes! |
+| Persist bug | A harmless-seeming change to garbage collection accidentally deletes too much.                                                                                   | Yes! |
+| Snapshot | A shard causes an unusual performance problem for some compute operator, and we’d like to inspect a previous state to investigate.                               | Nice to have. |
+| Operator error | An operator typos an aws CLI command, accidentally deleting blobs that are still referenced.                                                                     | Yes. (Impossible to prevent an admin from deleting data entirely, but it’s good if we can make ordinary operations less risky.) |
 
 Motivated by the above and [some other feedback](https://github.com/MaterializeInc/materialize/issues/17605), this design doc focuses on infrastructure-level backups (without no product surface area) that optimize for disaster recovery. For other possible approaches or extensions to backup/restore, see the [section on future work](#future-work).
 
@@ -141,7 +141,7 @@ In this world, a toy backup algorithm for a whole Materialize environment might 
 
 - Add the stash to the backup.
 - Enumerate all the shards in the environment, according to the catalog as of the moment it was backed up.
-- For every shard S, in reverse dependency order (ie. if A depends on B, process A first):
+- For every shard S, in reverse dependency order (ie. if B depends on A, process B first):
     - Stop advancing the since hold that S places on its dependencies.
     - Add S to the backup.
     - If any shards depend on S, continue advancing the since holds they place on S.
