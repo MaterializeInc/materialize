@@ -437,7 +437,7 @@ pub struct KafkaSinkConnection<C: ConnectionAccess = InlinedConnection> {
     pub retention: KafkaSinkConnectionRetention,
     /// Additional options that need to be set on the connection whenever it's
     /// inlined.
-    pub connection_options: BTreeMap<String, StringOrSecret>,
+    pub connection_options: Option<BTreeMap<String, StringOrSecret>>,
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
@@ -461,7 +461,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
         } = self;
 
         let mut connection = r.resolve_connection(connection).unwrap_kafka();
-        connection.options.extend(connection_options);
+        connection_options.map(|options| connection.options.extend(options));
 
         KafkaSinkConnection {
             connection_id,
@@ -476,7 +476,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
             replication_factor,
             fuel,
             retention,
-            connection_options: BTreeMap::default(),
+            connection_options: None,
         }
     }
 }
@@ -496,11 +496,10 @@ impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
             replication_factor: self.replication_factor,
             fuel: u64::cast_from(self.fuel),
             retention: Some(self.retention.into_proto()),
-            connection_options: self
-                .connection_options
-                .iter()
-                .map(|(k, v)| (k.clone(), v.into_proto()))
-                .collect(),
+            connection_options: match &self.connection_options {
+                None => BTreeMap::default(),
+                Some(o) => o.iter().map(|(k, v)| (k.clone(), v.into_proto())).collect(),
+            },
         }
     }
 
@@ -530,11 +529,19 @@ impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
             retention: proto
                 .retention
                 .into_rust_if_some("ProtoKafkaSinkConnectionV2::retention")?,
-            connection_options: proto
-                .connection_options
-                .into_iter()
-                .map(|(k, v)| StringOrSecret::from_proto(v).map(|v| (k, v)))
-                .collect::<Result<_, _>>()?,
+            connection_options: {
+                if proto.connection_options.is_empty() {
+                    None
+                } else {
+                    Some(
+                        proto
+                            .connection_options
+                            .into_iter()
+                            .map(|(k, v)| StringOrSecret::from_proto(v).map(|v| (k, v)))
+                            .collect::<Result<_, _>>()?,
+                    )
+                }
+            },
         })
     }
 }
