@@ -123,7 +123,7 @@ Ensure you have the following:
                     -tls -username ccun_XXXXXXXXXX \
                     -password ccp_XXXXXXXXXX \
                     -type produce \
-                    -topic materialize_click_streams_1 \
+                    -topic materialize_click_streams \
                     --records '{"action": "click", "user_id": "user_1", "page_id": "home"}'
     ```
 
