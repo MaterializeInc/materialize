@@ -1300,10 +1300,7 @@ impl Coordinator {
             .await?;
 
         // Do a first pass looking for collections to create so we can call
-        // create_collections only once with a large batch. This batches only
-        // tables and system sources. Replicas above, user sources, and
-        // materialized views below could be added here, but they take some
-        // additional work due to their dependencies.
+        // create_collections only once with a large batch.
         for entry in &entries {
             match entry.item() {
                 CatalogItem::Table(table) => {
@@ -1313,13 +1310,16 @@ impl Coordinator {
                     );
                     collections_to_create.push((entry.id(), collection_desc));
                 }
-                // User sources can have dependencies, so do avoid them in the
-                // batch.
-                CatalogItem::Source(source) if entry.id().is_system() => {
+                CatalogItem::Source(source) => {
                     collections_to_create.push((
                         entry.id(),
                         source_desc(self.catalog(), source_status_collection_id, source),
                     ));
+                }
+                CatalogItem::MaterializedView(mv) => {
+                    let collection_desc =
+                        CollectionDescription::from_desc(mv.desc.clone(), DataSourceOther::Compute);
+                    collections_to_create.push((entry.id(), collection_desc));
                 }
                 _ => {
                     // No collections to create.
@@ -1365,17 +1365,7 @@ impl Coordinator {
                 // about how it was built. If we start building multiple sinks and/or indexes
                 // using a single dataflow, we have to make sure the rebuild process re-runs
                 // the same multiple-build dataflow.
-                CatalogItem::Source(source) => {
-                    // System sources were created above, add others here.
-                    if !entry.id().is_system() {
-                        let source_desc =
-                            source_desc(self.catalog(), source_status_collection_id, source);
-                        self.controller
-                            .storage
-                            .create_collections(None, vec![(entry.id(), source_desc)])
-                            .await
-                            .unwrap_or_terminate("cannot fail to create collections");
-                    }
+                CatalogItem::Source(_) => {
                     policies_to_set
                         .entry(policy.expect("sources have a compaction window"))
                         .or_insert_with(Default::default)
@@ -1500,17 +1490,6 @@ impl Coordinator {
                 }
                 CatalogItem::View(_) => (),
                 CatalogItem::MaterializedView(mview) => {
-                    // Re-create the storage collection.
-                    let collection_desc = CollectionDescription::from_desc(
-                        mview.desc.clone(),
-                        DataSourceOther::Compute,
-                    );
-                    self.controller
-                        .storage
-                        .create_collections(None, vec![(entry.id(), collection_desc)])
-                        .await
-                        .unwrap_or_terminate("cannot fail to create collections");
-
                     policies_to_set
                         .entry(policy.expect("materialized views have a compaction window"))
                         .or_insert_with(Default::default)
