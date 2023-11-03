@@ -714,10 +714,15 @@ impl<T> CollectionState<T> {
 impl<T: Timestamp> CollectionState<T> {
     /// Creates a new collection state, with an initial read policy valid from `since`.
     pub fn new(
-        since: Antichain<T>,
+        as_of: Antichain<T>,
         storage_dependencies: Vec<GlobalId>,
         compute_dependencies: Vec<GlobalId>,
     ) -> Self {
+        // A collection is not readable before the `as_of`.
+        let since = as_of.clone();
+        // A collection won't produce updates for times before the `as_of`.
+        let upper = as_of.clone();
+
         let mut read_capabilities = MutableAntichain::new();
         read_capabilities.update_iter(since.iter().map(|time| (time.clone(), 1)));
 
@@ -728,7 +733,7 @@ impl<T: Timestamp> CollectionState<T> {
             read_policy: ReadPolicy::ValidFrom(since),
             storage_dependencies,
             compute_dependencies,
-            write_frontier: Antichain::from_elem(Timestamp::minimum()),
+            write_frontier: upper,
             replica_write_frontiers: BTreeMap::new(),
         }
     }
