@@ -59,7 +59,7 @@
       {% set ns.m_constraints = True %}
     {%- endif %}
 
-    {% if ns.c_constraints or ns.m_constraints %}
+    {% if ns.c_constraints %}
       with
         {{ get_table_columns_and_constraints() }}
     {%- endif %}
