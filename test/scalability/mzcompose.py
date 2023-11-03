@@ -49,7 +49,7 @@ SERVICES = [
     Postgres(),
 ]
 
-REGRESSION_THRESHOLD_AS_PERCENT_DECIMAL = 0.2
+DEFAULT_REGRESSION_THRESHOLD_AS_PERCENT_DECIMAL = 0.2
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -65,6 +65,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         type=str,
         help="Detect regression against: 'HEAD', 'local', 'remote', 'common-ancestor', 'Postgres', or a DockerHub tag",
         default=None,
+    )
+
+    parser.add_argument(
+        "--regression-threshold",
+        type=float,
+        help="Regression threshold (max. relative deterioration from target) as percent decimal",
+        default=DEFAULT_REGRESSION_THRESHOLD_AS_PERCENT_DECIMAL,
     )
 
     parser.add_argument(
@@ -282,9 +289,9 @@ def report_regression_result(
         print("No regressions were detected.")
 
 
-def create_result_analyzer(_args: argparse.Namespace) -> ResultAnalyzer:
+def create_result_analyzer(args: argparse.Namespace) -> ResultAnalyzer:
     return DefaultResultAnalyzer(
-        max_deviation_as_percent_decimal=REGRESSION_THRESHOLD_AS_PERCENT_DECIMAL
+        max_deviation_as_percent_decimal=args.regression_threshold
     )
 
 
