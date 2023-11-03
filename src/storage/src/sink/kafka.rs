@@ -1040,7 +1040,8 @@ where
                         assert!(is_active_worker);
 
                         info!(
-                            "Beginning transaction for {:?} with {:?} rows",
+                            "{}: beginning transaction for {:?} with {:?} rows",
+                            id,
                             ts,
                             rows.len()
                         );
@@ -1098,7 +1099,7 @@ where
                         // statistics.
                         s.send_progress_record(*ts).await;
 
-                        info!("Committing transaction for {:?}", ts,);
+                        info!("{}: committing transaction for {:?}", id, ts);
                         s.halt_on_err(
                             s.producer
                                 .retry_on_txn_error(|p| p.commit_transaction())
