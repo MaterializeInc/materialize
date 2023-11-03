@@ -12,6 +12,9 @@ use std::fmt;
 use std::sync::Arc;
 
 use anyhow::Context;
+use mz_expr::visit::Visit;
+use mz_expr::{MirScalarExpr, UnmaterializableFunc};
+use mz_ore::now::{to_datetime, NowFn};
 use mz_repr::{ColumnType, Datum, Row, RowArena};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::SecretsReader;
@@ -44,13 +47,19 @@ pub enum AppendWebhookError {
 pub struct AppendWebhookValidator {
     validation: WebhookValidation,
     secrets_reader: CachingSecretsReader,
+    now_fn: NowFn,
 }
 
 impl AppendWebhookValidator {
-    pub fn new(validation: WebhookValidation, secrets_reader: CachingSecretsReader) -> Self {
+    pub fn new(
+        validation: WebhookValidation,
+        secrets_reader: CachingSecretsReader,
+        now_fn: NowFn,
+    ) -> Self {
         AppendWebhookValidator {
             validation,
             secrets_reader,
+            now_fn,
         }
     }
 
@@ -62,6 +71,7 @@ impl AppendWebhookValidator {
         let AppendWebhookValidator {
             validation,
             secrets_reader,
+            now_fn,
         } = self;
 
         let WebhookValidation {
@@ -86,6 +96,15 @@ impl AppendWebhookValidator {
                 .map_err(|_| AppendWebhookError::MissingSecret)?;
             secret_contents.insert(column_idx, (secret, use_bytes));
         }
+
+        // Transform any calls to `now()` into a constant representing of the current time.
+        //
+        // Note: we do this outside the closure, because otherwise there are some odd catch unwind
+        // boundary errors, and this shouldn't be too computationally expensive.
+        let expression = eval_current_time(expression, now_fn()).map_err(|err| {
+            tracing::error!(?err, "failed to evaluate current time");
+            AppendWebhookError::InternalError
+        })?;
 
         // Create a closure to run our validation, this allows lifetimes and unwind boundaries to
         // work.
@@ -269,6 +288,26 @@ impl Default for WebhookConcurrencyLimiter {
     fn default() -> Self {
         WebhookConcurrencyLimiter::new(mz_sql::WEBHOOK_CONCURRENCY_LIMIT)
     }
+}
+
+/// Evaluates any calls to `UnmaterializableFunc::CurrentTimestamp`, replacing it with the current
+/// time.
+fn eval_current_time(
+    mut validation_expr: MirScalarExpr,
+    now: u64,
+) -> Result<MirScalarExpr, anyhow::Error> {
+    validation_expr.try_visit_mut_post(&mut |e| {
+        if let MirScalarExpr::CallUnmaterializable(f @ UnmaterializableFunc::CurrentTimestamp) = e {
+            let now = to_datetime(now);
+            let now: Datum = now.try_into()?;
+
+            let const_expr = MirScalarExpr::literal_ok(now, f.output_type().scalar_type);
+            *e = const_expr;
+        }
+        Ok::<_, anyhow::Error>(())
+    })?;
+
+    Ok(validation_expr)
 }
 
 #[cfg(test)]

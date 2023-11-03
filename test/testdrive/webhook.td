@@ -299,6 +299,25 @@ request_missing_some_mapped_headers
 request_1 "{content-type=>text/example,x-id=>a,x-timestamp=>100}" 100 a
 request_missing_some_mapped_headers "{x-random=>foo}" <null> <null>
 
+> CREATE SOURCE webhook_with_time_based_rejection IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+  CHECK (
+    WITH (HEADERS)
+    (headers->'timestamp'::text)::timestamp + INTERVAL '30s' >= now()
+  )
+
+$ webhook-append name=webhook_with_time_based_rejection timestamp=2020-01-01 status=400
+this_will_get_rejected
+
+$ set-from-sql var=current_ts
+SELECT now()::text
+
+$ webhook-append name=webhook_with_time_based_rejection timestamp=${current_ts}
+this_will_work
+
+> SELECT body FROM webhook_with_time_based_rejection
+this_will_work
+
 # Dropping a webhook source should drop the underlying persist shards.
 
 $ set-from-sql var=webhook-source-id

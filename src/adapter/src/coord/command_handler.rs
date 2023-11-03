@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_compute_client::protocol::response::PeekResponse;
+use mz_ore::now::NowFn;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::role_id::RoleId;
@@ -828,6 +829,7 @@ impl Coordinator {
             schema: String,
             name: String,
             conn_id: ConnectionId,
+            now_fn: NowFn,
         ) -> Result<AppendWebhookResponse, PartialItemName> {
             // Resolve our collection.
             let name = PartialItemName {
@@ -869,6 +871,7 @@ impl Coordinator {
                         AppendWebhookValidator::new(
                             validation,
                             coord.caching_secrets_reader.clone(),
+                            now_fn,
                         )
                     });
                     (body, headers.clone(), validator)
@@ -890,7 +893,9 @@ impl Coordinator {
             })
         }
 
-        let response = resolve(self, database, schema, name, conn_id).map_err(|name| {
+        // Get our current clock for any sources that might use time based validation.
+        let now_fn = self.catalog.config().now.clone();
+        let response = resolve(self, database, schema, name, conn_id, now_fn).map_err(|name| {
             AdapterError::UnknownWebhookSource {
                 database: name.database.expect("provided"),
                 schema: name.schema.expect("provided"),
