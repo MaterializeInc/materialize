@@ -37,8 +37,8 @@ from materialize.output_consistency.validation.result_comparator import ResultCo
 from materialize.version_consistency.execution.multi_version_executors import (
     MultiVersionSqlExecutors,
 )
-from materialize.version_consistency.ignore_filter.none_ignore_filter import (
-    NoneIgnoreFilter,
+from materialize.version_consistency.ignore_filter.version_consistency_ignore_filter import (
+    VersionConsistencyIgnoreFilter,
 )
 
 
@@ -69,7 +69,7 @@ class VersionConsistencyTest(OutputConsistencyTest):
         return ResultComparator(ignore_filter)
 
     def create_inconsistency_ignore_filter(self) -> InconsistencyIgnoreFilter:
-        return NoneIgnoreFilter()
+        return VersionConsistencyIgnoreFilter()
 
     def create_evaluation_strategies(self) -> list[EvaluationStrategy]:
         assert (

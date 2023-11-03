@@ -20,7 +20,7 @@ from materialize.output_consistency.validation.validation_message import (
 )
 
 
-class NoneIgnoreFilter(InconsistencyIgnoreFilter):
+class VersionConsistencyIgnoreFilter(InconsistencyIgnoreFilter):
     def shall_ignore_expression(
         self, expression: Expression, row_selection: DataRowSelection
     ) -> IgnoreVerdict:
