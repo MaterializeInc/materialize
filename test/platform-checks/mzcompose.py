@@ -25,6 +25,7 @@ from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
+from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
 from materialize.mzcompose.services.testdrive import Testdrive as TestdriveService
 from materialize.util import all_subclasses
 
@@ -57,6 +58,7 @@ SERVICES = [
         name="persistcli",
         config={"mzbuild": "jobs"},
     ),
+    SshBastionHost(),
 ]
 
 
@@ -73,7 +75,9 @@ def setup(c: Composition) -> None:
     c.up("testdrive", persistent=True)
     c.up("cockroach")
 
-    c.up("redpanda", "postgres", "debezium", "minio")
+    c.up(
+        "redpanda", "postgres", "debezium", "minio", "ssh-bastion-host", "materialized"
+    )
     c.up("mc", persistent=True)
     c.exec(
         "mc",
@@ -87,6 +91,30 @@ def setup(c: Composition) -> None:
     )
 
     c.exec("mc", "mc", "version", "enable", "persist/persist")
+
+    c.sql(
+        """
+        CREATE CONNECTION thancred TO SSH TUNNEL (
+        HOST 'ssh-bastion-host',
+        USER 'mz',
+        PORT 22
+        )"""
+    )
+
+    public_key = c.sql_query(
+        """
+            select public_key_1 from mz_ssh_tunnel_connections ssh \
+            join mz_connections c on c.id = ssh.id
+            where c.name = 'thancred';
+            """
+    )[0][0]
+
+    c.exec(
+        "ssh-bastion-host",
+        "bash",
+        "-c",
+        f"echo '{public_key}' > /etc/authorized_keys/mz",
+    )
 
 
 def teardown(c: Composition) -> None:

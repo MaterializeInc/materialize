@@ -501,7 +501,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=RestartSourcePostgres, --check=PgCdc]
+              args: [--scenario=RestartSourcePostgres, --check=PgCdc, --check=PgCdcNoWait, --check=PgCdcMzNow, --check=SshPg, --check=DebeziumPostgres]
 
   - id: cloudtest
     label: Cloudtest %n
