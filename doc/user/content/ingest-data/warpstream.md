@@ -119,7 +119,7 @@ Ensure you have the following:
     f. Produce additional records to monitor real-time updates:
 
     ```bash
-    warpstream kcmd -bootstrap-host warpstream-agent-demo.fly.dev \
+    warpstream kcmd -bootstrap-host $CLUSTER_NAME.fly.dev \
                     -tls -username ccun_XXXXXXXXXX \
                     -password ccp_XXXXXXXXXX \
                     -type produce \
