@@ -223,6 +223,22 @@ The `mz_kafka_sources` table contains a row for each Kafka source in the system.
 | `id`                   | [`text`]       | The ID of the Kafka source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).        |
 | `group_id_base`        | [`text`]       | The prefix of the group ID that Materialize will use when consuming data for the Kafka source.            |
 
+### `mz_materialization_lag`
+
+The `mz_materialization_lag` view describes for each materialized view, index, and sink in the system the difference between the input frontiers and the output frontier.
+For hydrated dataflows, this lag roughly corresponds to the time it takes for updates at the inputs to become reflected in the outputs.
+
+At this time, we do not make any guarantees about the freshness of these numbers.
+
+<!-- RELATION_SPEC mz_internal.mz_materialization_lag -->
+| Field                     | Type             | Meaning                                                                                  |
+| ------------------------- | ---------------- | --------                                                                                 |
+| `object_id`               | [`text`]         | The ID of the materialized view, index, or sink.                                         |
+| `local_lag`               | [`interval`]     | The amount of time the materialization lags behind its direct inputs.                    |
+| `global_lag`              | [`interval`]     | The amount of time the materialization lags behind its root inputs (sources and tables). |
+| `slowest_local_input_id`  | [`text`]         | The ID of the slowest direct input.                                                      |
+| `slowest_global_input_id` | [`text`]         | The ID of the slowest root input.                                                        |
+
 ### `mz_object_dependencies`
 
 The `mz_object_dependencies` table describes the dependency structure between
