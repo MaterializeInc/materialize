@@ -284,7 +284,7 @@ impl Retry {
     }
 
     /// Like [`Retry::retry_async`] but can pass around user specified state.
-    pub async fn retry_async_state<F, S, U, R, T, E>(
+    pub async fn retry_async_with_state<F, S, U, R, T, E>(
         self,
         mut user_state: S,
         mut f: F,
@@ -974,7 +974,7 @@ mod tests {
         let (_new_s, res) = Retry::default()
             .max_tries(10)
             .clamp_backoff(Duration::from_nanos(0))
-            .retry_async_state(s, |_, mut s| async {
+            .retry_async_with_state(s, |_, mut s| async {
                 let res = s.try_inc().await;
                 (s, res)
             })
@@ -985,7 +985,7 @@ mod tests {
         let (_new_s, res) = Retry::default()
             .max_tries(11)
             .clamp_backoff(Duration::from_nanos(0))
-            .retry_async_state(s, |_, mut s| async {
+            .retry_async_with_state(s, |_, mut s| async {
                 let res = s.try_inc().await;
                 (s, res)
             })
