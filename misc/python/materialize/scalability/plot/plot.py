@@ -20,7 +20,9 @@ from materialize.scalability.endpoints import endpoint_name_to_description
 
 
 def scatterplot_tps_per_connections(
-    figure: SubFigure, df_totals_by_endpoint_name: dict[str, pd.DataFrame]
+    figure: SubFigure,
+    df_totals_by_endpoint_name: dict[str, pd.DataFrame],
+    include_zero_in_y_axis: bool,
 ) -> None:
     legend = []
     plot: Axes = figure.subplots(1, 1)
@@ -41,11 +43,17 @@ def scatterplot_tps_per_connections(
 
     plot.set_ylabel("Transactions Per Second (tps)")
     plot.set_xlabel("Concurrent SQL Connections")
+
+    if include_zero_in_y_axis:
+        plot.set_ylim(ymin=0)
+
     plot.legend(legend)
 
 
 def scatterplot_latency_per_connections(
-    figure: SubFigure, df_details_by_endpoint_name: dict[str, pd.DataFrame]
+    figure: SubFigure,
+    df_details_by_endpoint_name: dict[str, pd.DataFrame],
+    include_zero_in_y_axis: bool,
 ) -> None:
     legend = []
     plot: Axes = figure.subplots(1, 1)
@@ -65,11 +73,17 @@ def scatterplot_latency_per_connections(
 
     plot.set_ylabel("Latency in Seconds")
     plot.set_xlabel("Concurrent SQL Connections")
+
+    if include_zero_in_y_axis:
+        plot.set_ylim(ymin=0)
+
     plot.legend(legend)
 
 
 def boxplot_latency_per_connections(
-    figure: SubFigure, df_details_by_endpoint_name: dict[str, pd.DataFrame]
+    figure: SubFigure,
+    df_details_by_endpoint_name: dict[str, pd.DataFrame],
+    include_zero_in_y_axis: bool,
 ) -> None:
     if len(df_details_by_endpoint_name) == 0:
         return
@@ -126,6 +140,9 @@ def boxplot_latency_per_connections(
 
         if is_in_first_column:
             plot.set_ylabel("Latency in Seconds")
+
+        if include_zero_in_y_axis:
+            plot.set_ylim(ymin=0)
 
         plot.set_title(f"# connections: {concurrency}")
 

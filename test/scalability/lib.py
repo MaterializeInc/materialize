@@ -22,7 +22,7 @@ from materialize.scalability.plot.plot import (
 USE_BOXPLOT = True
 
 
-def plotit(workload_name: str) -> None:
+def plotit(workload_name: str, include_zero_in_y_axis: bool = True) -> None:
     fig = plt.figure(layout="constrained", figsize=(16, 14))
     (tps_figure, latency_figure) = fig.subfigures(2, 1)
 
@@ -30,12 +30,24 @@ def plotit(workload_name: str) -> None:
         workload_name
     )
 
-    scatterplot_tps_per_connections(tps_figure, df_totals_by_endpoint_name)
+    scatterplot_tps_per_connections(
+        tps_figure,
+        df_totals_by_endpoint_name,
+        include_zero_in_y_axis=include_zero_in_y_axis,
+    )
 
     if USE_BOXPLOT:
-        boxplot_latency_per_connections(latency_figure, df_details_by_endpoint_name)
+        boxplot_latency_per_connections(
+            latency_figure,
+            df_details_by_endpoint_name,
+            include_zero_in_y_axis=include_zero_in_y_axis,
+        )
     else:
-        scatterplot_latency_per_connections(latency_figure, df_details_by_endpoint_name)
+        scatterplot_latency_per_connections(
+            latency_figure,
+            df_details_by_endpoint_name,
+            include_zero_in_y_axis=include_zero_in_y_axis,
+        )
 
 
 def load_data_from_filesystem(
