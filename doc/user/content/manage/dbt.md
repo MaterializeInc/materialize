@@ -22,8 +22,6 @@ In this guide, we’ll cover how to use dbt and Materialize to transform streami
 
 ## Setup
 
-**Minimum requirements:** dbt v0.18.1+
-
 Setting up a dbt project with Materialize is similar to setting it up with any other database that requires a non-native adapter. To get up and running, you need to:
 
 1. Install the [`dbt-materialize` plugin](https://pypi.org/project/dbt-materialize/) (optionally using a virtual environment):
@@ -313,6 +311,70 @@ Component                            | Value     | Description
     indexes=[{'default': True}]) }}
 ```
 
+### Configuration: model contracts and constraints {#configuration-contracts}
+
+#### Model contracts
+
+**Minimum requirements:** `dbt-materialize` v1.6.0+
+
+You can enforce [model contracts](https://docs.getdbt.com/docs/collaborate/govern/model-contracts)
+for `view`, `materialized_view` and `table` materializations to guarantee that
+there are no surprise breakages to your pipelines when the shape of the data
+changes.
+
+```yaml
+    - name: model_with_contract
+    config:
+      contract:
+        enforced: true
+    columns:
+      - name: col_with_constraints
+        data_type: string
+      - name: col_without_constraints
+        data_type: int
+```
+
+Setting the `contract` configuration to `enforced: true` requires you to specify
+a `name` and `data_type` for every column in your models. If there is a
+mismatch between the defined contract and the model you’re trying to run, dbt
+will fail during compilation! Optionally, you can also configure column-level
+[constraints](#constraints).
+
+#### Constraints
+
+**Minimum requirements:** `dbt-materialize` v1.6.1+
+
+Materialize supports enforcing column-level `not_null` [constraints](https://docs.getdbt.com/reference/resource-properties/constraints)
+for `materialized_view` materializations. No other constraint or materialization
+types are supported.
+
+```yaml
+    - name: model_with_constraints
+    config:
+      contract:
+        enforced: true
+    columns:
+      - name: col_with_constraints
+        data_type: string
+        constraints:
+          - type: not_null
+      - name: col_without_constraints
+        data_type: int
+```
+
+A `not_null` constraint will be compiled to an [`ASSERT NOT NULL`](/sql/create-materialized-view/#non-null-assertions)
+option for the specified columns of the materialize view.
+
+```sql
+CREATE MATERIALIZED VIEW model_with_constraints
+WITH (
+        ASSERT NOT NULL col_with_constraints
+     )
+AS
+SELECT NULL AS col_with_constraints,
+       2 AS col_without_constraints;
+```
+
 ## Build and run dbt
 
 1. [Run](https://docs.getdbt.com/reference/commands/run) the dbt models:
@@ -446,3 +508,49 @@ If you've already created `.yml` files with helpful [properties](https://docs.ge
     If you click **View Lineage Graph** in the lower right corner, you can even inspect the lineage of your streaming pipelines!
 
     ![dbt lineage graph](https://user-images.githubusercontent.com/23521087/138125450-cf33284f-2a33-4c1e-8bce-35f22685213d.png)
+
+### Persist documentation
+
+**Minimum requirements:** `dbt-materialize` v1.6.1+
+
+To persist model- and column-level descriptions as [comments](/sql/comment-on/)
+in Materialize, use the [`persist_docs`](https://docs.getdbt.com/reference/resource-configs/persist_docs)
+configuration.
+
+{{< note >}}
+Documentation persistence is tightly coupled with `dbt run` command invocations.
+For "use-at-your-own-risk" workarounds, see [`dbt-core` #4226](https://github.com/dbt-labs/dbt-core/issues/4226). 👻
+{{</ note >}}
+
+1. To enable docs persistence, add a `models` property to `dbt_project.yml` with
+   the `persist-docs` configuration:
+
+    ```yaml
+    models:
+      +persist_docs:
+        relation: true
+        columns: true
+    ```
+
+    As an alternative, you can configure `persist-docs` in the config block of your models:
+
+    ```sql
+    {{ config(
+        materialized=materialized_view,
+        persist_docs={"relation": true, "columns": true}
+    ) }}
+    ```
+
+1. Once `persist-docs` is configured, any `description` defined in your `.yml`
+  files is persisted to Materialize in the [mz_internal.mz_comments](/sql/system-catalog/mz_internal/#mz_comments)
+  system catalog table on every `dbt run`:
+
+    ```sql
+      SELECT * FROM mz_internal.mz_comments;
+
+        id  |    object_type    | object_sub_id |              comment
+      ------+-------------------+---------------+----------------------------------
+       u622 | materialize-view  |               | materialized view a description
+       u626 | materialized-view |             1 | column a description
+       u626 | materialized-view |             2 | column b description
+    ```
