@@ -163,10 +163,14 @@ The integration of Debezium with Microsoft SQL Server and Materialize presents a
     -   `DATETIMEOFFSET` values from SQL Server are replicated as `TEXT` in Materialize ([#8017](https://github.com/MaterializeInc/materialize/issues/8017)).
     -   `DATETIME2` values from SQL Server are replicated as `BIGINT` in Materialize ([#8041](https://github.com/MaterializeInc/materialize/issues/8041)).
 
-2.  **Upstream Bug (DBZ-3915):**
+1.  **Upstream Bug (DBZ-3915):**
 
     -   An upstream bug identified as [DBZ-3915](https://issues.redhat.com/browse/DBZ-3915) on RedHat’s issue tracker presents additional challenges.
 
-3.  **Configuration Limitation:**
+1.  **Configuration Limitation:**
 
     -   An operational issue exists which requires halting all updates to the tables intended for replication to Materialize until Debezium is completely configured, all snapshots have been taken, and an additional duration of 10 seconds has elapsed post-configuration. This limitation is significant and may influence the decision to utilize SQL Server and Debezium for this purpose.
+
+1. **Known Microsoft issues and errors with CDC**
+
+    - The official Microsoft documentation for CDC in SQL Server lists a number of [known issues and errors](https://learn.microsoft.com/en-us/sql/relational-databases/track-changes/known-issues-and-errors-change-data-capture?view=sql-server-ver16) that may affect the replication of data.
