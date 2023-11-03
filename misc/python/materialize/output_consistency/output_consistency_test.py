@@ -141,7 +141,9 @@ class OutputConsistencyTest:
 
         randomized_picker = RandomizedPicker(config)
 
-        ignore_filter = self.create_inconsistency_ignore_filter()
+        sql_executors = self.create_sql_executors(config, connection, output_printer)
+
+        ignore_filter = self.create_inconsistency_ignore_filter(sql_executors)
 
         expression_generator = ExpressionGenerator(
             config, randomized_picker, input_data
@@ -150,7 +152,6 @@ class OutputConsistencyTest:
             config, randomized_picker, input_data, ignore_filter
         )
         output_comparator = self.create_result_comparator(ignore_filter)
-        sql_executors = self.create_sql_executors(config, connection, output_printer)
 
         output_printer.print_info(sql_executors.get_database_infos())
         output_printer.print_empty_line()
@@ -201,7 +202,9 @@ class OutputConsistencyTest:
     ) -> ResultComparator:
         return ResultComparator(ignore_filter)
 
-    def create_inconsistency_ignore_filter(self) -> InconsistencyIgnoreFilter:
+    def create_inconsistency_ignore_filter(
+        self, sql_executors: SqlExecutors
+    ) -> InconsistencyIgnoreFilter:
         return InconsistencyIgnoreFilter()
 
     def create_evaluation_strategies(self) -> list[EvaluationStrategy]:

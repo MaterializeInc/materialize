@@ -21,6 +21,11 @@ from materialize.output_consistency.validation.validation_message import (
 
 
 class VersionConsistencyIgnoreFilter(InconsistencyIgnoreFilter):
+    def __init__(self, mz1_version: str, mz2_version: str):
+        super().__init__()
+        self.mz1_version = mz1_version
+        self.mz2_version = mz2_version
+
     def shall_ignore_expression(
         self, expression: Expression, row_selection: DataRowSelection
     ) -> IgnoreVerdict:

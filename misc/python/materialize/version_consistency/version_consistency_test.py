@@ -68,8 +68,14 @@ class VersionConsistencyTest(OutputConsistencyTest):
     ) -> ResultComparator:
         return ResultComparator(ignore_filter)
 
-    def create_inconsistency_ignore_filter(self) -> InconsistencyIgnoreFilter:
-        return VersionConsistencyIgnoreFilter()
+    def create_inconsistency_ignore_filter(
+        self, sql_executors: SqlExecutors
+    ) -> InconsistencyIgnoreFilter:
+        assert isinstance(sql_executors, MultiVersionSqlExecutors)
+        return VersionConsistencyIgnoreFilter(
+            sql_executors.executor.query_version(),
+            sql_executors.executor2.query_version(),
+        )
 
     def create_evaluation_strategies(self) -> list[EvaluationStrategy]:
         assert (
