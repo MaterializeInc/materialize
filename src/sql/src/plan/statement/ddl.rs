@@ -602,13 +602,12 @@ pub fn plan_create_source(
             key: _,
         }) => {
             let connection_item = scx.get_item_by_resolved_name(connection_name)?;
-            let mut kafka_connection = match connection_item.connection()? {
-                Connection::Kafka(connection) => connection.clone(),
-                _ => sql_bail!(
+            if !matches!(connection_item.connection()?, Connection::Kafka(_)) {
+                sql_bail!(
                     "{} is not a kafka connection",
                     scx.catalog.resolve_full_name(connection_item.name())
-                ),
-            };
+                )
+            }
 
             // Starting offsets are allowed out with feature flags mode, as they are a simple,
             // useful way to specify where to start reading a topic.
@@ -639,9 +638,7 @@ pub fn plan_create_source(
             let optional_start_offset =
                 Option::<kafka_util::KafkaStartOffsetType>::try_from(&extracted_options)?;
 
-            for (k, v) in kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0 {
-                kafka_connection.options.insert(k, v);
-            }
+            let connection_options = kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0;
 
             let topic = extracted_options
                 .topic
@@ -726,6 +723,7 @@ pub fn plan_create_source(
                 group_id_prefix,
                 environment_id: scx.catalog.config().environment_id.to_string(),
                 metadata_columns,
+                connection_options,
             };
 
             let connection = GenericSourceConnection::Kafka(connection);
