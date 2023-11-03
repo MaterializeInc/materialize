@@ -91,6 +91,25 @@ The framework will run `--count=256` operations for concurrency=1 and then multi
 This way, a larger number of operations will be performed for the higher concurrencies, leading to more stable results. If `--count`
 operations was used when benchmarking concurrency 256, the test would complete in a second, leading to unstable results.
 
+# Interpreting the diagrams
+
+## Transactions per second (tps)
+
+This diagram show the transactions per second per concurrency. Higher values are better.
+
+## Latency
+
+These boxplots show the duration of the individual statements per concurrency. They provide information about the mean
+duration of an operation and their timing reliability. Lower values are better.
+
+### How to interpret a boxplot
+The most important things in a nutshell:
+* 50% of the measurements are within the box.
+* The colored line in the box represents the median value.
+* The whiskers range until the last data point within the 1.5 times of the interquartile range (size of the box).
+* Dots are outliers.
+
+See also: https://en.wikipedia.org/wiki/Box_plot
 
 # Accuracy
 
