@@ -14,7 +14,7 @@ from matplotlib import pyplot as plt
 
 from materialize.scalability.io import paths
 from materialize.scalability.plot.plot import (
-    boxplot_duration_per_connections,
+    boxplot_duration_by_connections_for_workload,
     scatterplot_duration_per_connections,
     scatterplot_tps_per_connections,
 )
@@ -39,7 +39,7 @@ def plotit(workload_name: str, include_zero_in_y_axis: bool = True) -> None:
     )
 
     if USE_BOXPLOT:
-        boxplot_duration_per_connections(
+        boxplot_duration_by_connections_for_workload(
             workload_name,
             duration_figure,
             df_details_by_endpoint_name,

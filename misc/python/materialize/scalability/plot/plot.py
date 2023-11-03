@@ -98,7 +98,7 @@ def scatterplot_duration_per_connections(
     plot.legend(legend)
 
 
-def boxplot_duration_per_connections(
+def boxplot_duration_by_connections_for_workload(
     workload_name: str,
     figure: SubFigure,
     df_details_by_endpoint_name: dict[str, pd.DataFrame],
