@@ -5,7 +5,7 @@ menu:
   main:
     parent: "webhooks"
     name: "SnowcatCloud"
-    weight: 15
+    weight: 10
 ---
 
 [SnowcatCloud](https://www.snowcatcloud.com/) provides cloud-hosted and managed infrastructure to collect, enrich, and route event data using Snowplow and Analytics.js compatible pipelines. SnowcatCloud is SOC 2 Type 2 certified and has infrastructure in NA, EU, and AP.
