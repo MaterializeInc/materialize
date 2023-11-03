@@ -298,7 +298,9 @@ pub enum DefiniteError {
 impl From<DefiniteError> for SourceReaderError {
     fn from(err: DefiniteError) -> Self {
         SourceReaderError {
-            inner: SourceErrorDetails::Other(err.to_string()),
+            // Definite Postgres errors cannot be recovered from without recreating the source,
+            // and are therefore `Permanent1`.
+            inner: SourceErrorDetails::Permanent(err.to_string()),
         }
     }
 }

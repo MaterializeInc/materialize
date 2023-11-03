@@ -204,22 +204,32 @@ impl PerWorkerHealthStatus {
         }
     }
 
-    fn decide_status(&self) -> OverallStatus {
+    fn decide_status(&self, object_type: &'static str) -> OverallStatus {
         let mut output_status = OverallStatus::Starting;
         let mut namespaced_errors: BTreeMap<StatusNamespace, String> = BTreeMap::new();
+        let mut permanent_namespaced_errors: BTreeMap<StatusNamespace, String> = BTreeMap::new();
         let mut hints: BTreeSet<String> = BTreeSet::new();
 
         for status in self.errors_by_worker.iter() {
             use HealthStatusUpdate::*;
             for (ns, ns_status) in status.iter() {
-                if let Stalled { error, hint, .. } = ns_status {
-                    if Some(error) > namespaced_errors.get(ns).as_deref() {
-                        namespaced_errors.insert(*ns, error.to_string());
+                match ns_status {
+                    Failed { error, .. } => {
+                        if Some(error) > permanent_namespaced_errors.get(ns).as_deref() {
+                            permanent_namespaced_errors.insert(*ns, error.to_string());
+                        }
+                    }
+                    Stalled { error, hint, .. } => {
+                        if Some(error) > namespaced_errors.get(ns).as_deref() {
+                            namespaced_errors.insert(*ns, error.to_string());
+                        }
+
+                        if let Some(hint) = hint {
+                            hints.insert(hint.to_string());
+                        }
                     }
 
-                    if let Some(hint) = hint {
-                        hints.insert(hint.to_string());
-                    }
+                    _ => {}
                 }
 
                 if !ns.is_sidechannel() && matches!(ns_status, HealthStatusUpdate::Running) {
@@ -228,14 +238,31 @@ impl PerWorkerHealthStatus {
             }
         }
 
-        if !namespaced_errors.is_empty() {
+        if !permanent_namespaced_errors.is_empty() {
+            // Pick the most important error.
+            let (ns, err) = permanent_namespaced_errors.last_key_value().unwrap();
+            let error = format!("{}: {}", ns, err);
+
+            hints.insert(format!(
+                "this {object_type} is permanently stalled; it must be dropped and recreated"
+            ));
+
+            // Permanent errors rank higher than non-permanent ones, but we report all of them
+            permanent_namespaced_errors.extend(namespaced_errors);
+
+            output_status = OverallStatus::Failed {
+                error,
+                hints,
+                namespaced_errors: permanent_namespaced_errors,
+            };
+        } else if !namespaced_errors.is_empty() {
             // Pick the most important error.
             let (ns, err) = namespaced_errors.last_key_value().unwrap();
             output_status = OverallStatus::Stalled {
                 error: format!("{}: {}", ns, err),
                 hints,
                 namespaced_errors,
-            }
+            };
         }
 
         output_status
@@ -251,6 +278,11 @@ pub enum OverallStatus {
         hints: BTreeSet<String>,
         namespaced_errors: BTreeMap<StatusNamespace, String>,
     },
+    Failed {
+        error: String,
+        hints: BTreeSet<String>,
+        namespaced_errors: BTreeMap<StatusNamespace, String>,
+    },
 }
 
 impl OverallStatus {
@@ -260,6 +292,7 @@ impl OverallStatus {
             OverallStatus::Starting => "starting",
             OverallStatus::Running => "running",
             OverallStatus::Stalled { .. } => "stalled",
+            OverallStatus::Failed { .. } => "failed",
         }
     }
 
@@ -267,7 +300,9 @@ impl OverallStatus {
     pub(crate) fn error(&self) -> Option<&str> {
         match self {
             OverallStatus::Starting | OverallStatus::Running => None,
-            OverallStatus::Stalled { error, .. } => Some(error),
+            OverallStatus::Stalled { error, .. } | OverallStatus::Failed { error, .. } => {
+                Some(error)
+            }
         }
     }
 
@@ -277,6 +312,9 @@ impl OverallStatus {
             OverallStatus::Starting | OverallStatus::Running => None,
             OverallStatus::Stalled {
                 namespaced_errors, ..
+            }
+            | OverallStatus::Failed {
+                namespaced_errors, ..
             } => Some(namespaced_errors),
         }
     }
@@ -285,7 +323,9 @@ impl OverallStatus {
     pub(crate) fn hints(&self) -> Option<&BTreeSet<String>> {
         match self {
             OverallStatus::Starting | OverallStatus::Running => None,
-            OverallStatus::Stalled { hints, .. } => Some(hints),
+            OverallStatus::Stalled { hints, .. } | OverallStatus::Failed { hints, .. } => {
+                Some(hints)
+            }
         }
     }
 }
@@ -634,7 +674,7 @@ where
                         .get_mut(&output_index)
                         .expect("known to exist");
 
-                    let new_status = healths.decide_status();
+                    let new_status = healths.decide_status(object_type);
 
                     if Some(&new_status) != last_reported_status.as_ref() {
                         info!(
@@ -710,6 +750,9 @@ pub enum HealthStatusUpdate {
         hint: Option<String>,
         should_halt: bool,
     },
+    Failed {
+        error: String,
+    },
 }
 
 impl HealthStatusUpdate {
@@ -726,6 +769,11 @@ impl HealthStatusUpdate {
             should_halt: false,
         }
     }
+    /// Generates a failed [`HealthStatusUpdate`]. Failed statuses
+    /// are expected to never be cleared.
+    pub(crate) fn failed(error: String) -> Self {
+        HealthStatusUpdate::Failed { error }
+    }
 
     /// Generates a halting [`HealthStatusUpdate`] with `update`.
     pub(crate) fn halting(error: String, hint: Option<String>) -> Self {
@@ -739,7 +787,7 @@ impl HealthStatusUpdate {
     /// Whether or not we should halt the dataflow instances and restart it.
     pub(crate) fn should_halt(&self) -> bool {
         match self {
-            HealthStatusUpdate::Running => false,
+            HealthStatusUpdate::Running | HealthStatusUpdate::Failed { .. } => false,
             HealthStatusUpdate::Stalled { should_halt, .. } => *should_halt,
         }
     }
@@ -1122,6 +1170,59 @@ mod tests {
                     collection_index: 0,
                     status: "running".to_string(),
                     ..Default::default()
+                }]),
+            ],
+        );
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    fn test_health_operator_failed() {
+        use Step::*;
+
+        health_operator_runner(
+            2,
+            1,
+            true,
+            vec![
+                AssertStatus(vec![
+                    // Assert both inputs started.
+                    StatusToAssert {
+                        collection_index: 0,
+                        status: "starting".to_string(),
+                        ..Default::default()
+                    },
+                ]),
+                // Ssh is ranked higher than Kafka, but the kafka one is permanent, so
+                // it wins
+                Update(TestUpdate {
+                    worker_id: 0,
+                    namespace: StatusNamespace::Ssh,
+                    input_index: 0,
+                    update: HealthStatusUpdate::stalled("uhoh".to_string(), None),
+                }),
+                AssertStatus(vec![StatusToAssert {
+                    collection_index: 0,
+                    status: "stalled".to_string(),
+                    error: Some("ssh: uhoh".to_string()),
+                    errors: Some("ssh: uhoh".to_string()),
+                    ..Default::default()
+                }]),
+                Update(TestUpdate {
+                    worker_id: 0,
+                    namespace: StatusNamespace::Kafka,
+                    input_index: 0,
+                    update: HealthStatusUpdate::failed("uhoh2".to_string()),
+                }),
+                AssertStatus(vec![StatusToAssert {
+                    collection_index: 0,
+                    status: "failed".to_string(),
+                    error: Some("kafka: uhoh2".to_string()),
+                    errors: Some("kafka: uhoh2, ssh: uhoh".to_string()),
+                    hint: Some(
+                        "this source_test is permanently stalled; it must be dropped and recreated"
+                            .to_string(),
+                    ),
                 }]),
             ],
         );

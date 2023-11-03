@@ -53,7 +53,7 @@ use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_storage_client::client::SourceStatisticsUpdate;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::CollectionMetadata;
-use mz_storage_types::errors::SourceError;
+use mz_storage_types::errors::{SourceError, SourceErrorDetails};
 use mz_storage_types::sources::encoding::SourceDataEncoding;
 use mz_storage_types::sources::{MzOffset, SourceConnection, SourceExport, SourceTimestamp};
 use mz_timely_util::antichain::AntichainExt;
@@ -304,6 +304,11 @@ where
             for ((output_index, message), _, _) in data.iter() {
                 let status = match message {
                     Ok(_) => HealthStatusUpdate::running(),
+                    Err(
+                        error @ SourceReaderError {
+                            inner: SourceErrorDetails::Permanent(_),
+                        },
+                    ) => HealthStatusUpdate::failed(error.inner.to_string()),
                     Err(ref error) => HealthStatusUpdate::stalled(error.inner.to_string(), None),
                 };
 

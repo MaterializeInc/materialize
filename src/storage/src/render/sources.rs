@@ -110,6 +110,10 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
             .pg_source_snapshot_statement_timeout,
     };
 
+    if resume_uppers[&id].is_empty() {
+        return (Vec::new(), empty(scope).leave(), Rc::new(()));
+    }
+
     let base_source_config = RawSourceCreationConfig {
         name: source_name,
         id,

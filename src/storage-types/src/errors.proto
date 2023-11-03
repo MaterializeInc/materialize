@@ -36,7 +36,8 @@ message ProtoSourceErrorDetails {
         string initialization = 1;
         string deprecated_file_io = 2;
         string deprecated_persistence = 3;
-        string other = 4;
+        string deprecated_other = 4;
+        string permanent = 5;
     }
 }
 

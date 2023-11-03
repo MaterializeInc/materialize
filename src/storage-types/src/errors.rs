@@ -375,7 +375,8 @@ impl Display for SourceError {
 #[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum SourceErrorDetails {
     Initialization(String),
-    Other(String),
+    /// These errors are known to be _permanent_.
+    Permanent(String),
 }
 
 impl RustType<ProtoSourceErrorDetails> for SourceErrorDetails {
@@ -384,7 +385,7 @@ impl RustType<ProtoSourceErrorDetails> for SourceErrorDetails {
         ProtoSourceErrorDetails {
             kind: Some(match self {
                 SourceErrorDetails::Initialization(s) => Kind::Initialization(s.clone()),
-                SourceErrorDetails::Other(s) => Kind::Other(s.clone()),
+                SourceErrorDetails::Permanent(s) => Kind::Permanent(s.clone()),
             }),
         }
     }
@@ -394,11 +395,13 @@ impl RustType<ProtoSourceErrorDetails> for SourceErrorDetails {
         match proto.kind {
             Some(kind) => match kind {
                 Kind::Initialization(s) => Ok(SourceErrorDetails::Initialization(s)),
-                Kind::DeprecatedFileIo(s) | Kind::DeprecatedPersistence(s) => {
+                Kind::DeprecatedFileIo(s)
+                | Kind::DeprecatedPersistence(s)
+                | Kind::DeprecatedOther(s) => {
                     warn!("Deprecated source error kind: {s}");
-                    Ok(SourceErrorDetails::Other(s))
+                    Ok(SourceErrorDetails::Permanent(s))
                 }
-                Kind::Other(s) => Ok(SourceErrorDetails::Other(s)),
+                Kind::Permanent(s) => Ok(SourceErrorDetails::Permanent(s)),
             },
             None => Err(TryFromProtoError::missing_field(
                 "ProtoSourceErrorDetails::kind",
@@ -417,7 +420,7 @@ impl Display for SourceErrorDetails {
                     e
                 )
             }
-            SourceErrorDetails::Other(e) => write!(f, "{}", e),
+            SourceErrorDetails::Permanent(e) => write!(f, "{}", e),
         }
     }
 }
@@ -763,8 +766,8 @@ mod columnation {
                             SourceErrorDetails::Initialization(string) => {
                                 SourceErrorDetails::Initialization(self.string_region.copy(string))
                             }
-                            SourceErrorDetails::Other(string) => {
-                                SourceErrorDetails::Other(self.string_region.copy(string))
+                            SourceErrorDetails::Permanent(string) => {
+                                SourceErrorDetails::Permanent(self.string_region.copy(string))
                             }
                         },
                     };
