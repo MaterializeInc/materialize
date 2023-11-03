@@ -4,9 +4,7 @@
 
 * Support the [`ASSERT NOT NULL` option](https://materialize.com/docs/sql/create-materialized-view/#non-null-assertions)
   for `materialized_view` materializations via the `not_null` column-level
-  constraint. It's important to note that other constraint types are not
-  supported, and that `not_null` constraints can only be defined at the
-  column-level (not model-level).
+  constraint.
 
   ```yaml
     - name: model_with_constraints
@@ -21,6 +19,20 @@
       - name: col_without_constraints
         data_type: int
   ```
+
+  It's important to note that other constraint types are not
+  supported, and that `not_null` constraints can only be defined at the
+  column-level (not model-level).
+
+* Work around a bug in [`--persist-docs`](https://docs.getdbt.com/reference/resource-configs/persist_docs)
+  that prevented comments from being persisted for `materialized_view`
+  materializations. See [#21878]
+  (https://github.com/MaterializeInc/materialize/pull/21878) for details.
+
+  The `--persist-docs` flag requires [Materialize >=0.68.0](https://materialize.com/docs/releases/v0.68/).
+  Previous versions **do not** have support for the `COMMENT ON` syntax, which
+  is required to persist resource descriptions as column and relation comments
+  in Materialize.
 
 * Load seeds into tables rather than materialized views.
 
