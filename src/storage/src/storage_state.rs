@@ -782,6 +782,11 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     }
                 }
 
+                // If all subsources of the source are finished, we can skip rendering.
+                if resume_uppers.values().all(|frontier| frontier.is_empty()) {
+                    return;
+                }
+
                 crate::render::build_ingestion_dataflow(
                     self.timely_worker,
                     &mut self.storage_state,
