@@ -51,6 +51,8 @@ SERVICES = [
 
 REGRESSION_THRESHOLD_AS_PERCENT_DECIMAL = 0.2
 
+INCLUDE_ZERO_IN_Y_AXIS = True
+
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
@@ -297,7 +299,11 @@ def create_plots(result: BenchmarkResult) -> None:
     ) in result.get_df_total_by_workload_and_endpoint().items():
         fig = plt.figure(layout="constrained", figsize=(16, 6))
         (subfigure) = fig.subfigures(1, 1)
-        scatterplot_tps_per_connections(subfigure, results_by_endpoint)
+        scatterplot_tps_per_connections(
+            subfigure,
+            results_by_endpoint,
+            include_zero_in_y_axis=INCLUDE_ZERO_IN_Y_AXIS,
+        )
         plt.savefig(paths.plot_png("tps", workload_name), bbox_inches="tight", dpi=300)
 
     for (
@@ -306,7 +312,11 @@ def create_plots(result: BenchmarkResult) -> None:
     ) in result.get_df_details_by_workload_and_endpoint().items():
         fig = plt.figure(layout="constrained", figsize=(16, 10))
         (subfigure) = fig.subfigures(1, 1)
-        boxplot_latency_per_connections(subfigure, results_by_endpoint)
+        boxplot_latency_per_connections(
+            subfigure,
+            results_by_endpoint,
+            include_zero_in_y_axis=INCLUDE_ZERO_IN_Y_AXIS,
+        )
         plt.savefig(
             paths.plot_png("latency", workload_name), bbox_inches="tight", dpi=300
         )
