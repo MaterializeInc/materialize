@@ -12,7 +12,6 @@ clap = { version = "3.2.24", features = ["derive", "env"] }
 mz-adapter = { path = "../adapter" }
 mz-build-info = { path = "../build-info" }
 mz-catalog = { path = "../catalog" }
-mz-environmentd = { path = "../environmentd" }
 mz-ore = { path = "../ore" }
 mz-persist-client = { path = "../persist-client" }
 mz-tls-util = { path = "../tls-util" }

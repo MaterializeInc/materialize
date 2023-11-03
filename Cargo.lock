@@ -3741,7 +3741,6 @@ dependencies = [
  "mz-adapter",
  "mz-build-info",
  "mz-catalog",
- "mz-environmentd",
  "mz-ore",
  "mz-persist-client",
  "mz-secrets",

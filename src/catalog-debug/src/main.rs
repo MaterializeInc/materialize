@@ -109,9 +109,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
-use mz_persist_client::rpc::{
-    MetricsSameProcessPubSubSender, PersistGrpcPubSubServer, PubSubClientConnection, PubSubSender,
-};
+use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::PersistLocation;
 use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::EnvironmentId;
@@ -226,18 +224,12 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             Box::new(stash_backed_catalog_state(stash_config))
         }
         CatalogKind::Persist => {
-            let persist_config =
-                PersistConfig::new(&mz_environmentd::BUILD_INFO, SYSTEM_TIME.clone());
-            let persist_pubsub_server =
-                PersistGrpcPubSubServer::new(&persist_config, &metrics_registry);
-            let persist_pubsub_client = persist_pubsub_server.new_same_process_connection();
-
+            // It's important that the version in this `BUILD_INFO` is kept in sync with the build
+            // info used to write data to the persist catalog.
+            let persist_config = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone());
             let persist_clients =
-                PersistClientCache::new(persist_config, &metrics_registry, |_, metrics| {
-                    let sender: Arc<dyn PubSubSender> = Arc::new(
-                        MetricsSameProcessPubSubSender::new(persist_pubsub_client.sender, metrics),
-                    );
-                    PubSubClientConnection::new(sender, persist_pubsub_client.receiver)
+                PersistClientCache::new(persist_config, &metrics_registry, |_, _| {
+                    PubSubClientConnection::noop()
                 });
             let persist_location = PersistLocation {
                 blob_uri: args
@@ -480,7 +472,7 @@ async fn upgrade_check(
     let msg = format!(
         "catalog upgrade from {} to {} would succeed",
         last_catalog_version,
-        BUILD_INFO.human_version(),
+        &BUILD_INFO.human_version(),
     );
     println!("{msg}");
     Ok(())
