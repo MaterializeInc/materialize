@@ -431,11 +431,11 @@ CREATE CONNECTION pgconn TO POSTGRES (AWS PRIVATELINK = db.schema.item, PORT = 1
 CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("pgconn")]), connection_type: Postgres, if_not_exists: false, values: [ConnectionOption { name: AwsPrivatelink, value: Some(Item(Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("item")])))) }, ConnectionOption { name: Port, value: Some(Value(Number("1234"))) }], with_options: [] })
 
 parse-statement
-CREATE CONNECTION pgconn TO POSTGRES (AWS PRIVATELINK db.schema.item, PORT 1234, HOST foo)
+CREATE CONNECTION pgconn TO POSTGRES (AWS PRIVATELINK db.schema.item, PORT 1234, HOST foo, SSL CERTIFICATE 'cert', SSL CERTIFICATE AUTHORITY 'auth', SSL KEY 'key')
 ----
-CREATE CONNECTION pgconn TO POSTGRES (AWS PRIVATELINK = db.schema.item, PORT = 1234, HOST = foo)
+CREATE CONNECTION pgconn TO POSTGRES (AWS PRIVATELINK = db.schema.item, PORT = 1234, HOST = foo, SSL CERTIFICATE = 'cert', SSL CERTIFICATE AUTHORITY = 'auth', SSL KEY = 'key')
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("pgconn")]), connection_type: Postgres, if_not_exists: false, values: [ConnectionOption { name: AwsPrivatelink, value: Some(Item(Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("item")])))) }, ConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, ConnectionOption { name: Host, value: Some(Ident(Ident("foo"))) }], with_options: [] })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("pgconn")]), connection_type: Postgres, if_not_exists: false, values: [ConnectionOption { name: AwsPrivatelink, value: Some(Item(Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("item")])))) }, ConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, ConnectionOption { name: Host, value: Some(Ident(Ident("foo"))) }, ConnectionOption { name: SslCertificate, value: Some(Value(String("cert"))) }, ConnectionOption { name: SslCertificateAuthority, value: Some(Value(String("auth"))) }, ConnectionOption { name: SslKey, value: Some(Value(String("key"))) }], with_options: [] })
 
 
 parse-statement
@@ -1846,11 +1846,11 @@ ALTER SECRET secret AS decode('new c2VjcmV0Cg==', 'base64')
 AlterSecret(AlterSecretStatement { name: UnresolvedItemName([Ident("secret")]), if_exists: false, value: Function(Function { name: Name(UnresolvedItemName([Ident("decode")])), args: Args { args: [Value(String("new c2VjcmV0Cg==")), Value(String("base64"))], order_by: [] }, filter: None, over: None, distinct: false }) })
 
 parse-statement
-CREATE CONNECTION conn1 FOR KAFKA BROKER 'kafka:1234', SSL KEY = 'foo', SSL CERTIFICATE = 'qux';
+CREATE CONNECTION conn1 FOR KAFKA BROKER 'kafka:1234', SSL KEY = 'foo', SSL CERTIFICATE = 'qux', SSH TUNNEL = tunnel;
 ----
-CREATE CONNECTION conn1 TO KAFKA (BROKER = 'kafka:1234', SSL KEY = 'foo', SSL CERTIFICATE = 'qux')
+CREATE CONNECTION conn1 TO KAFKA (BROKER = 'kafka:1234', SSL KEY = 'foo', SSL CERTIFICATE = 'qux', SSH TUNNEL = tunnel)
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection_type: Kafka, if_not_exists: false, values: [ConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", tunnel: Direct })) }, ConnectionOption { name: SslKey, value: Some(Value(String("foo"))) }, ConnectionOption { name: SslCertificate, value: Some(Value(String("qux"))) }], with_options: [] })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection_type: Kafka, if_not_exists: false, values: [ConnectionOption { name: Broker, value: Some(ConnectionKafkaBroker(KafkaBroker { address: "kafka:1234", tunnel: Direct })) }, ConnectionOption { name: SslKey, value: Some(Value(String("foo"))) }, ConnectionOption { name: SslCertificate, value: Some(Value(String("qux"))) }, ConnectionOption { name: SshTunnel, value: Some(Item(Name(UnresolvedItemName([Ident("tunnel")])))) }], with_options: [] })
 
 parse-statement roundtrip
 CREATE CONNECTION conn1 TO KAFKA (BROKER 'kafka:1234', SSL KEY = 'foo', SSL CERTIFICATE = 'qux');
@@ -1963,11 +1963,11 @@ CREATE SOURCE src1 (PRIMARY KEY (key1, key2) NOT ENFORCED) FROM KAFKA CONNECTION
 CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("src1")]), in_cluster: None, col_names: [], connection: Kafka(KafkaSourceConnection { connection: KafkaConnection { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, key: None }), include_metadata: [], format: Bare(Bytes), envelope: None, if_not_exists: false, key_constraint: Some(PrimaryKeyNotEnforced { columns: [Ident("key1"), Ident("key2")] }), with_options: [], referenced_subsources: None, progress_subsource: None })
 
 parse-statement
-CREATE CONNECTION conn1 FOR CONFLUENT SCHEMA REGISTRY URL 'http://localhost:8081', USERNAME 'user', PASSWORD 'word'
+CREATE CONNECTION conn1 FOR CONFLUENT SCHEMA REGISTRY URL 'http://localhost:8081', USERNAME 'user', PASSWORD 'word', PORT 1234, AWS PRIVATELINK apl
 ----
-CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (URL = 'http://localhost:8081', USER = 'user', PASSWORD = 'word')
+CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (URL = 'http://localhost:8081', USER = 'user', PASSWORD = 'word', PORT = 1234, AWS PRIVATELINK = apl)
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection_type: Csr, if_not_exists: false, values: [ConnectionOption { name: Url, value: Some(Value(String("http://localhost:8081"))) }, ConnectionOption { name: User, value: Some(Value(String("user"))) }, ConnectionOption { name: Password, value: Some(Value(String("word"))) }], with_options: [] })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection_type: Csr, if_not_exists: false, values: [ConnectionOption { name: Url, value: Some(Value(String("http://localhost:8081"))) }, ConnectionOption { name: User, value: Some(Value(String("user"))) }, ConnectionOption { name: Password, value: Some(Value(String("word"))) }, ConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, ConnectionOption { name: AwsPrivatelink, value: Some(Item(Name(UnresolvedItemName([Ident("apl")])))) }], with_options: [] })
 
 parse-statement roundtrip
 CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (URL = 'http://localhost:8081', USERNAME = 'user', PASSWORD = 'word')
