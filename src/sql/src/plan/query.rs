@@ -1069,6 +1069,7 @@ pub fn plan_webhook_validate_using(
         .lower_uncorrelated()?;
     let validation = WebhookValidation {
         expression: expr,
+        relation_desc: desc,
         bodies: body_tuples,
         headers: header_tuples,
         secrets: validation_secrets,

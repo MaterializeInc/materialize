@@ -243,6 +243,11 @@ impl RelationType {
         }
         true
     }
+
+    /// Returns all the [`ColumnType`]s, in order, for this relation.
+    pub fn columns(&self) -> &[ColumnType] {
+        &self.column_types
+    }
 }
 
 impl RustType<ProtoRelationType> for RelationType {
