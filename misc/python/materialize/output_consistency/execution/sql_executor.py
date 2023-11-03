@@ -31,6 +31,12 @@ class SqlExecutionError(Exception):
 class SqlExecutor:
     """Base class of `PgWireDatabaseSqlExecutor` and `DryRunSqlExecutor`"""
 
+    def __init__(
+        self,
+        name: str,
+    ):
+        self.name = name
+
     def __str__(self) -> str:
         return self.__class__.__name__
 
@@ -61,11 +67,11 @@ class PgWireDatabaseSqlExecutor(SqlExecutor):
         output_printer: OutputPrinter,
         name: str,
     ):
+        super().__init__(name)
         connection.autocommit = use_autocommit
         self.cursor = connection.cursor()
         self.output_printer = output_printer
         self.last_statements = deque[str](maxlen=5)
-        self.name = name
 
     def ddl(self, sql: str) -> None:
         self._execute_with_cursor(sql)
@@ -145,7 +151,8 @@ class MzDatabaseSqlExecutor(PgWireDatabaseSqlExecutor):
 
 
 class DryRunSqlExecutor(SqlExecutor):
-    def __init__(self, output_printer: OutputPrinter):
+    def __init__(self, output_printer: OutputPrinter, name: str):
+        super().__init__(name)
         self.output_printer = output_printer
 
     def consume_sql(self, sql: str) -> None:
@@ -179,7 +186,7 @@ def create_sql_executor(
     is_mz: bool = True,
 ) -> SqlExecutor:
     if config.dry_run:
-        return DryRunSqlExecutor(output_printer)
+        return DryRunSqlExecutor(output_printer, name)
 
     if is_mz:
         return MzDatabaseSqlExecutor(
