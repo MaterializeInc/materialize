@@ -25,13 +25,13 @@ Ensure you have the following:
 
     If you already have a WarpStream cluster, you can skip this step.
 
-    a. **Sign Up**: Begin by registering for a WarpStream account.
+    a. Begin by registering for a WarpStream account or logging in to your existing account.
 
-    b. **Deploy on Fly.io**: Follow [this guide](https://github.com/warpstreamlabs/warpstream-fly-io-template) to deploy your WarpStream cluster on Fly.io.
+    b. Follow [this guide](https://github.com/warpstreamlabs/warpstream-fly-io-template) to deploy your WarpStream cluster on Fly.io.
 
-    c. **Generate Credentials**: Post deployment, [create credentials](https://docs.warpstream.com/warpstream/how-to/configure-the-warpstream-agent-for-production/configure-authentication-for-the-warpstream-agent#sasl-authentication) for connecting to your WarpStream cluster.
+    c. Post deployment, [create credentials](https://docs.warpstream.com/warpstream/how-to/configure-the-warpstream-agent-for-production/configure-authentication-for-the-warpstream-agent#sasl-authentication) for connecting to your WarpStream cluster.
 
-    d. **Test Connection**: Use the provided credentials to connect to the WarpStream cluster on Fly.io. Test this connection using [the WarpStream CLI](https://docs.warpstream.com/warpstream/install-the-warpstream-agent):
+    d. Use the provided credentials to connect to the WarpStream cluster on Fly.io. Test this connection using [the WarpStream CLI](https://docs.warpstream.com/warpstream/install-the-warpstream-agent):
 
     ```bash
     warpstream kcmd -type diagnose-connection \
@@ -42,7 +42,7 @@ Ensure you have the following:
 
     Change the `bootstrap-host` to the name of your WarpStream cluster on Fly.io.
 
-    e. **Topic Creation**: Establish the `materialize_click_streams` topic:
+    e. Create the `materialize_click_streams` topic:
 
     ```bash
     warpstream kcmd -bootstrap-host $CLUSTER_NAME.fly.dev \
@@ -52,7 +52,7 @@ Ensure you have the following:
                     -topic materialize_click_streams
     ```
 
-    f. **Produce Sample Records**: Generate and push sample records for testing:
+    f. Generate and push sample records for testing:
 
     ```bash
     warpstream kcmd -bootstrap-host $CLUSTER_NAME.fly.dev \
