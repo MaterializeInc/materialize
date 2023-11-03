@@ -530,24 +530,17 @@ class SwapSchemaAction(Action):
             return
         with exe.db.lock:
             db = self.rng.choice(exe.db.dbs)
-            schemas = [schema for schema in exe.db.schemas if schema.db == db]
+            schemas = [
+                schema for schema in exe.db.schemas if schema.db.db_id == db.db_id
+            ]
             if len(schemas) < 2:
                 return
-            (i1, schema1), (i2, schema2) = self.rng.sample(list(enumerate(schemas)), 2)
-            exe.db.schemas[i1], exe.db.schemas[i2] = (
-                exe.db.schemas[i2],
-                exe.db.schemas[i1],
+            schema1, schema2 = self.rng.sample(schemas, 2)
+            exe.execute(
+                f"ALTER SCHEMA {schema1} SWAP WITH {identifier(schema2.name())}"
             )
-            try:
-                exe.execute(
-                    f"ALTER SCHEMA {schema1} SWAP WITH {identifier(schema2.name())}"
-                )
-            except:
-                exe.db.schemas[i1], exe.db.schemas[i2] = (
-                    exe.db.schemas[i2],
-                    exe.db.schemas[i1],
-                )
-                raise
+            schema1.schema_id, schema2.schema_id = schema2.schema_id, schema1.schema_id
+            schema1.rename, schema2.rename = schema2.rename, schema1.rename
 
 
 class TransactionIsolationAction(Action):
@@ -694,6 +687,24 @@ class DropClusterAction(Action):
             del exe.db.clusters[cluster_id]
 
 
+class SwapClusterAction(Action):
+    def run(self, exe: Executor) -> None:
+        if exe.db.scenario != Scenario.Rename:
+            return
+        with exe.db.lock:
+            if len(exe.db.clusters) < 2:
+                return
+            cluster1, cluster2 = self.rng.sample(exe.db.clusters, 2)
+            exe.execute(
+                f"ALTER CLUSTER {cluster1} SWAP WITH {identifier(cluster2.name())}"
+            )
+            cluster1.cluster_id, cluster2.cluster_id = (
+                cluster2.cluster_id,
+                cluster1.cluster_id,
+            )
+            cluster1.rename, cluster2.rename = cluster2.rename, cluster1.rename
+
+
 class SetClusterAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
@@ -734,12 +745,12 @@ class CreateClusterReplicaAction(Action):
                 cluster=cluster,
             )
             cluster.replica_id += 1
-        try:
-            replica.create(exe)
-            cluster.replicas.append(replica)
-        except:
-            cluster.replica_id -= 1
-            raise
+            try:
+                replica.create(exe)
+                cluster.replicas.append(replica)
+            except:
+                cluster.replica_id -= 1
+                raise
 
 
 class DropClusterReplicaAction(Action):
@@ -981,12 +992,12 @@ class CreateWebhookSourceAction(Action):
                 return
             webhook_source_id = exe.db.webhook_source_id
             exe.db.webhook_source_id += 1
-        potential_clusters = [c for c in exe.db.clusters if len(c.replicas) == 1]
-        cluster = self.rng.choice(potential_clusters)
-        schema = self.rng.choice(exe.db.schemas)
-        source = WebhookSource(webhook_source_id, cluster, schema, self.rng)
-        source.create(exe)
-        exe.db.webhook_sources.append(source)
+            potential_clusters = [c for c in exe.db.clusters if len(c.replicas) == 1]
+            cluster = self.rng.choice(potential_clusters)
+            schema = self.rng.choice(exe.db.schemas)
+            source = WebhookSource(webhook_source_id, cluster, schema, self.rng)
+            source.create(exe)
+            exe.db.webhook_sources.append(source)
 
 
 class DropWebhookSourceAction(Action):
@@ -1285,6 +1296,7 @@ ddl_action_list = ActionList(
         (DropRoleAction, 1),
         (CreateClusterAction, 2),
         (DropClusterAction, 1),
+        (SwapClusterAction, 10),
         (CreateClusterReplicaAction, 4),
         (DropClusterReplicaAction, 2),
         (SetClusterAction, 1),

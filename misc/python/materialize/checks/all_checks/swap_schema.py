@@ -16,7 +16,7 @@ from materialize.util import MzVersion
 
 class SwapSchema(Check):
     def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse("0.74.0-dev")
+        return self.base_version >= MzVersion.parse("0.75.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(
