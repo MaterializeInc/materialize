@@ -374,6 +374,8 @@ where
                 }
             }
 
+            yield ListenEvent::Progress(Antichain::new());
+
             // intentionally keep this stream from dropping until the operator
             // is dropped. this ensures our Subscribe handle stays alive for as
             // long as is needed to finish fetching all of its parts.
