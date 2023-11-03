@@ -5,7 +5,7 @@ menu:
   main:
     parent: "webhooks"
     name: "Stripe"
-    weight: 10
+    weight: 15
 aliases:
   - /sql/create-source/webhook/#connecting-with-stripe
 ---
@@ -34,8 +34,8 @@ CREATE CLUSTER webhooks_cluster SIZE = '3xsmall';
 
 ## Step 2. Set up a webhook source
 
-Using the secret from the previous step, create a [webhook source](/sql/create-source/webhook/)
-in Materialize to ingest data from Stripe:
+Create a [webhook source](/sql/create-source/webhook/) in Materialize to ingest
+data from Stripe:
 
 ```sql
 CREATE SOURCE stripe_source
@@ -45,7 +45,11 @@ FROM WEBHOOK
 ```
 
 After a successful run, the command returns a `NOTICE` message containing the [webhook URL](https://materialize.com/docs/sql/create-source/webhook/#webhook-url).
-Copy and store it. You will need it for the next steps. Otherwise, you can query it here: [`mz_internal.mz_webhook_sources`](https://materialize.com/docs/sql/system-catalog/mz_internal/#mz_webhook_sources).
+Copy and store it. You will need it for the next step.
+
+If you missed the notice, you can find the URLs for all webhook sources in the
+[`mz_internal.mz_webhook_sources`](https://materialize.com/docs/sql/system-catalog/mz_internal/#mz_webhook_sources)
+system table.
 
 ## Step 3. Create a webhook endpoint in Stripe
 
