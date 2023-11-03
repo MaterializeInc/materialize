@@ -112,8 +112,8 @@ def boxplot_duration_by_connections_for_workload(
         df_details_cols.CONCURRENCY
     ].unique()
 
-    endpoint_names = df_details_by_endpoint_name.keys()
-    use_short_names = len(endpoint_names) > 2
+    endpoint_version_names = df_details_by_endpoint_name.keys()
+    use_short_names = len(endpoint_version_names) > 2
 
     num_rows, num_cols = _compute_plot_grid(len(concurrencies), 3)
 
@@ -127,26 +127,26 @@ def boxplot_duration_by_connections_for_workload(
         legend = []
         durations: list[list[float]] = []
 
-        for endpoint_name, df_details in df_details_by_endpoint_name.items():
+        for endpoint_version_name, df_details in df_details_by_endpoint_name.items():
             formatted_endpoint_name = (
-                endpoint_name
+                endpoint_version_name
                 if not use_short_names
-                else _shorten_endpoint_name(endpoint_name)
+                else _shorten_endpoint_version_name(endpoint_version_name)
             )
             legend.append(formatted_endpoint_name)
 
             df_details_of_concurrency = df_details.loc[
                 df_details[df_details_cols.CONCURRENCY] == concurrency
             ]
-            wallclocks_of_concurrency = df_details_of_concurrency[
+            durations_of_concurrency = df_details_of_concurrency[
                 df_details_cols.WALLCLOCK
             ]
-            durations.append(wallclocks_of_concurrency)
+            durations.append(durations_of_concurrency)
 
         plot.boxplot(durations, labels=legend)
 
         if is_in_first_column:
-            plot.set_ylabel("Duration in Seconds")
+            plot.set_ylabel("Duration (seconds)")
 
         if include_zero_in_y_axis:
             plot.set_ylim(ymin=0)
@@ -157,11 +157,11 @@ def boxplot_duration_by_connections_for_workload(
         plot.set_title(title)
 
 
-def _shorten_endpoint_name(endpoint_name: str) -> str:
-    if " " not in endpoint_name:
-        return endpoint_name
+def _shorten_endpoint_version_name(endpoint_version_name: str) -> str:
+    if " " not in endpoint_version_name:
+        return endpoint_version_name
 
-    return endpoint_name.split(" ")[0]
+    return endpoint_version_name.split(" ")[0]
 
 
 def _get_plot_marker(
