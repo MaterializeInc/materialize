@@ -69,8 +69,8 @@ In both of those cases, Materialize, CRDB and Python will run within the same ma
 ```
 
 ## Detecting regressions
-A regression is defined as a deterioration in performance (transactions per seconds) of more than 10% for a given
-workload and count factor compared to the baseline.
+A regression is defined as a deterioration in performance (transactions per seconds) of more than a configurable
+threshold (default: 20%) for a given workload and count factor compared to the baseline.
 
 To detect a regression, add the parameter `--regression-against` and specify a target. The specified target will be
 added to the `--target`s if it is not already present.
