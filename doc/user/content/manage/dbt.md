@@ -446,3 +446,47 @@ If you've already created `.yml` files with helpful [properties](https://docs.ge
     If you click **View Lineage Graph** in the lower right corner, you can even inspect the lineage of your streaming pipelines!
 
     ![dbt lineage graph](https://user-images.githubusercontent.com/23521087/138125450-cf33284f-2a33-4c1e-8bce-35f22685213d.png)
+
+### Persist documentation
+
+To persist model- and column-level descriptions as [comments](/sql/comment-on/)
+in Materialize, use the [`persist_docs`](https://docs.getdbt.com/reference/resource-configs/persist_docs)
+configuration.
+
+{{< note >}}
+Documentation persistence is tightly coupled with `dbt run` command invocations.
+For "use-at-your-own-risk" workarounds, see [`dbt-core` #4226](https://github.com/dbt-labs/dbt-core/issues/4226). 👻
+{{</ note >}}
+
+1. To enable docs persistence, add a `models` property to `dbt_project.yml` with
+   the `persist-docs` configuration:
+
+    ```yaml
+    models:
+      +persist_docs:
+        relation: true
+        columns: true
+    ```
+
+    As an alternative, you can configure `persist-docs` in the config block of your models:
+
+    ```sql
+    {{ config(
+        materialized=materialized_view,
+        persist_docs={"relation": true, "columns": true}
+    ) }}
+    ```
+
+1. Once `persist-docs` is configured, any `description` defined in your `.yml`
+  files is persisted to Materialize in the [mz_internal.mz_comments](/sql/system-catalog/mz_internal/#mz_comments)
+  system catalog table on every `dbt run`:
+
+    ```sql
+      SELECT * FROM mz_internal.mz_comments;
+
+        id  |    object_type    | object_sub_id |              comment
+      ------+-------------------+---------------+----------------------------------
+       u622 | materialize-view  |               | materialized view a description
+       u626 | materialized-view |             1 | column a description
+       u626 | materialized-view |             2 | column b description
+    ```
