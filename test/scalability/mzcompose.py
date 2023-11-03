@@ -49,7 +49,7 @@ SERVICES = [
     Postgres(),
 ]
 
-DEFAULT_REGRESSION_THRESHOLD_AS_PERCENT_DECIMAL = 0.2
+DEFAULT_REGRESSION_THRESHOLD = 0.2
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -71,7 +71,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--regression-threshold",
         type=float,
         help="Regression threshold (max. relative deterioration from target) as percent decimal",
-        default=DEFAULT_REGRESSION_THRESHOLD_AS_PERCENT_DECIMAL,
+        default=DEFAULT_REGRESSION_THRESHOLD,
     )
 
     parser.add_argument(
