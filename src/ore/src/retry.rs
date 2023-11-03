@@ -283,6 +283,37 @@ impl Retry {
         Err(err.expect("retry produces at least one element"))
     }
 
+    /// Like [`Retry::retry_async`] but can pass around user specified state.
+    pub async fn retry_async_with_state<F, S, U, R, T, E>(
+        self,
+        mut user_state: S,
+        mut f: F,
+    ) -> (S, Result<T, E>)
+    where
+        F: FnMut(RetryState, S) -> U,
+        U: Future<Output = (S, R)>,
+        R: Into<RetryResult<T, E>>,
+    {
+        let stream = self.into_retry_stream();
+        tokio::pin!(stream);
+        let mut err = None;
+        while let Some(retry_state) = stream.next().await {
+            let (s, r) = f(retry_state, user_state).await;
+            match r.into() {
+                RetryResult::Ok(v) => return (s, Ok(v)),
+                RetryResult::FatalErr(e) => return (s, Err(e)),
+                RetryResult::RetryableErr(e) => {
+                    err = Some(e);
+                    user_state = s;
+                }
+            }
+        }
+        (
+            user_state,
+            Err(err.expect("retry produces at least one element")),
+        )
+    }
+
     /// Convert into [`RetryStream`]
     pub fn into_retry_stream(self) -> RetryStream {
         RetryStream {
@@ -919,5 +950,46 @@ mod tests {
         let mut data = Vec::new();
         reader.read_to_end(&mut data).await.unwrap();
         assert_eq!(data, vec![b'A'; 256]);
+    }
+
+    #[mz_test_macro::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: cannot write to event
+    async fn test_retry_async_state() {
+        struct S {
+            i: i64,
+        }
+        impl S {
+            #[allow(clippy::unused_async)]
+            async fn try_inc(&mut self) -> Result<i64, ()> {
+                self.i += 1;
+                if self.i > 10 {
+                    Ok(self.i)
+                } else {
+                    Err(())
+                }
+            }
+        }
+
+        let s = S { i: 0 };
+        let (_new_s, res) = Retry::default()
+            .max_tries(10)
+            .clamp_backoff(Duration::from_nanos(0))
+            .retry_async_with_state(s, |_, mut s| async {
+                let res = s.try_inc().await;
+                (s, res)
+            })
+            .await;
+        assert_eq!(res, Err(()));
+
+        let s = S { i: 0 };
+        let (_new_s, res) = Retry::default()
+            .max_tries(11)
+            .clamp_backoff(Duration::from_nanos(0))
+            .retry_async_with_state(s, |_, mut s| async {
+                let res = s.try_inc().await;
+                (s, res)
+            })
+            .await;
+        assert_eq!(res, Ok(11));
     }
 }
