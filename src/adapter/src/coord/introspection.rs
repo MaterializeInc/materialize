@@ -96,6 +96,7 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::CommitTransaction(_)
         | Plan::AbortTransaction(_)
         | Plan::CopyFrom(_)
+        | Plan::CopyTo(_)
         | Plan::ExplainPlan(_)
         | Plan::ExplainSinkSchema(_)
         | Plan::Insert(_)

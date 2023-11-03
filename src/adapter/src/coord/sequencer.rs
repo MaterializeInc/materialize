@@ -316,6 +316,9 @@ impl Coordinator {
                         session,
                     );
                 }
+                Plan::CopyTo(plan) => {
+                    self.sequence_copy_to(&mut ctx, plan, target_cluster).await;
+                }
                 Plan::ExplainPlan(plan) => {
                     self.sequence_explain_plan(ctx, plan, target_cluster).await;
                 }

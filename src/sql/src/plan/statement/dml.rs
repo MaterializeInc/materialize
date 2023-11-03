@@ -23,7 +23,7 @@ use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::{RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
     ExplainSinkSchemaFor, ExplainSinkSchemaStatement, ExplainTimestampStatement, Expr,
-    IfExistsBehavior, OrderByExpr, SubscribeOutput, UnresolvedItemName,
+    IfExistsBehavior, OrderByExpr, S3Target, SubscribeOutput, UnresolvedItemName,
 };
 use mz_sql_parser::ident;
 use mz_storage_types::sinks::{KafkaSinkConnection, KafkaSinkFormat, StorageSinkConnection};
@@ -43,7 +43,8 @@ use crate::plan::scope::Scope;
 use crate::plan::statement::{ddl, StatementContext, StatementDesc};
 use crate::plan::with_options::TryFromValue;
 use crate::plan::{
-    self, side_effecting_func, CreateSinkPlan, ExplainSinkSchemaPlan, ExplainTimestampPlan,
+    self, side_effecting_func, CopyToPlan, CreateSinkPlan, ExplainSinkSchemaPlan,
+    ExplainTimestampPlan,
 };
 use crate::plan::{
     query, CopyFormat, CopyFromPlan, ExplainPlanPlan, InsertPlan, MutationKind, Params, Plan,
@@ -176,6 +177,23 @@ pub fn describe_select(
     let query::PlannedRootQuery { desc, .. } =
         query::plan_root_query(scx, stmt.query, QueryLifetime::OneShot)?;
     Ok(StatementDesc::new(Some(desc)))
+}
+
+pub fn plan_copy_to(
+    scx: &StatementContext,
+    item_name: ResolvedItemName,
+    target: S3Target<Aug>,
+) -> Result<Plan, PlanError> {
+    let connection = scx
+        .get_item_by_resolved_name(&target.connection)?
+        .connection()?;
+    Ok(Plan::CopyTo(CopyToPlan {
+        from: *item_name.item_id(),
+        connection: connection.to_owned(),
+        to: target.url,
+        when: plan::QueryWhen::Immediately,
+        emit_progress: true,
+    }))
 }
 
 pub fn plan_select(
@@ -901,6 +919,15 @@ pub fn plan_copy(
             CopyRelation::Subscribe(stmt) => {
                 Ok(plan_subscribe(scx, stmt, &Params::empty(), Some(format))?)
             }
+        },
+        (CopyDirection::To, CopyTarget::S3(target)) => match relation {
+            CopyRelation::Table { name, columns } => {
+                if !columns.is_empty() {
+                    sql_bail!("no select allowed!")
+                };
+                Ok(plan_copy_to(scx, name, target.clone())?)
+            }
+            _ => sql_bail!("unsupported!!"),
         },
         (CopyDirection::From, CopyTarget::Stdin) => match relation {
             CopyRelation::Table { name, columns } => {

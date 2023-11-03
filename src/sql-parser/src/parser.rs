@@ -5124,9 +5124,26 @@ impl<'a> Parser<'a> {
                 (CopyDirection::From, CopyTarget::Stdin)
             }
             TO => {
-                self.expect_keyword(STDOUT)
-                    .map_parser_err(StatementKind::Copy)?;
-                (CopyDirection::To, CopyTarget::Stdout)
+                match self
+                    .expect_one_of_keywords(&[STDOUT, S3])
+                    .map_parser_err(StatementKind::Copy)?
+                {
+                    STDOUT => (CopyDirection::To, CopyTarget::Stdout),
+                    S3 => {
+                        self.expect_keyword(USING)
+                            .map_parser_err(StatementKind::Copy)?;
+                        let connection =
+                            self.parse_raw_name().map_parser_err(StatementKind::Copy)?;
+                        (
+                            CopyDirection::To,
+                            CopyTarget::S3(S3Target {
+                                connection,
+                                url: "s3://mouli-test-bucket/test_data/mz/".to_string(), //TODO(mouli): fix
+                            }),
+                        )
+                    }
+                    _ => unreachable!(),
+                }
             }
             _ => unreachable!(),
         };

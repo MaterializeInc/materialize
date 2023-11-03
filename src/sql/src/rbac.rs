@@ -738,6 +738,14 @@ fn generate_rbac_requirements(
             ],
             ..Default::default()
         },
+        Plan::CopyTo(plan::CopyToPlan { from: id, .. }) => RbacRequirements {
+            privileges: vec![(
+                SystemObjectId::Object(catalog.get_item(id).name().qualifiers.clone().into()),
+                AclMode::USAGE,
+                role_id,
+            )],
+            ..Default::default()
+        },
         Plan::ExplainPlan(plan::ExplainPlanPlan {
             stage: _,
             format: _,

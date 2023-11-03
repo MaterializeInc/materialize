@@ -813,6 +813,7 @@ where
                     ComputeSinkConnection::Persist(conn)
                 }
                 ComputeSinkConnection::Subscribe(conn) => ComputeSinkConnection::Subscribe(conn),
+                ComputeSinkConnection::S3(conn) => ComputeSinkConnection::S3(conn),
             };
             let desc = ComputeSinkDesc {
                 from: se.from,

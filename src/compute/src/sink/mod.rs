@@ -9,4 +9,5 @@
 
 mod persist_sink;
 mod refresh;
+mod s3_sink;
 mod subscribe;

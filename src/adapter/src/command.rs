@@ -602,6 +602,7 @@ impl ExecuteResponse {
             }
             Close => vec![ClosedCursor],
             PlanKind::CopyFrom => vec![ExecuteResponseKind::CopyFrom],
+            PlanKind::CopyTo => vec![ExecuteResponseKind::Inserted], //TODO(mouli): fix
             PlanKind::Comment => vec![ExecuteResponseKind::Comment],
             CommitTransaction => vec![TransactionCommitted, TransactionRolledBack],
             CreateConnection => vec![CreatedConnection],
@@ -627,7 +628,11 @@ impl ExecuteResponse {
             PlanKind::EmptyQuery => vec![ExecuteResponseKind::EmptyQuery],
             ExplainPlan | ExplainTimestamp | Select | ShowAllVariables | ShowCreate
             | ShowColumns | ShowVariable | InspectShard | ExplainSinkSchema => {
-                vec![CopyTo, SendingRows, SendingRowsImmediate]
+                vec![
+                    ExecuteResponseKind::CopyTo,
+                    SendingRows,
+                    SendingRowsImmediate,
+                ]
             }
             Execute | ReadThenWrite => vec![
                 Deleted,
@@ -648,7 +653,7 @@ impl ExecuteResponse {
             PlanKind::SetVariable | ResetVariable | PlanKind::SetTransaction => {
                 vec![ExecuteResponseKind::SetVariable]
             }
-            PlanKind::Subscribe => vec![Subscribing, CopyTo],
+            PlanKind::Subscribe => vec![Subscribing, ExecuteResponseKind::CopyTo],
             StartTransaction => vec![StartedTransaction],
             SideEffectingFunc => vec![SendingRowsImmediate],
             ValidateConnection => vec![ExecuteResponseKind::ValidatedConnection],

@@ -55,10 +55,10 @@ use mz_catalog::memory::objects::{
     CatalogItem, Cluster, Connection, DataSourceDesc, Secret, Sink, Source, Table, Type,
 };
 use mz_sql::plan::{
-    AlterConnectionAction, AlterConnectionPlan, AlterOptionParameter, ExplainSinkSchemaPlan,
-    Explainee, Index, IndexOption, MutationKind, Params, Plan, PlannedAlterRoleOption,
-    PlannedRoleVariable, QueryWhen, SideEffectingFunc, SourceSinkClusterConfig, UpdatePrivilege,
-    VariableValue,
+    AlterConnectionAction, AlterConnectionPlan, AlterOptionParameter, CopyToPlan,
+    ExplainSinkSchemaPlan, Explainee, Index, IndexOption, MutationKind, Params, Plan,
+    PlannedAlterRoleOption, PlannedRoleVariable, QueryWhen, SideEffectingFunc,
+    SourceSinkClusterConfig, UpdatePrivilege, VariableValue,
 };
 use mz_sql::session::user::UserKind;
 use mz_sql::session::vars::{
@@ -2561,6 +2561,107 @@ impl Coordinator {
         } else {
             None
         }
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub(super) async fn sequence_copy_to(
+        &mut self,
+        ctx: &mut ExecuteContext,
+        plan: plan::CopyToPlan,
+        target_cluster: TargetCluster,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let CopyToPlan {
+            from: from_id,
+            connection: _,
+            to: _,
+            when,
+            emit_progress: _,
+        } = plan;
+        let cluster = self
+            .catalog()
+            .resolve_target_cluster(target_cluster, ctx.session())?;
+        let cluster_id = cluster.id;
+
+        let target_replica_name = ctx.session().vars().cluster_replica();
+        let mut target_replica = target_replica_name
+            .map(|name| {
+                cluster
+                    .replica_id(name)
+                    .ok_or(AdapterError::UnknownClusterReplica {
+                        cluster_name: cluster.name.clone(),
+                        replica_name: name.to_string(),
+                    })
+            })
+            .transpose()?;
+
+        let depends_on = BTreeSet::from([from_id]);
+
+        let notices = check_log_reads(
+            self.catalog(),
+            cluster,
+            &depends_on,
+            &mut target_replica,
+            ctx.session().vars(),
+        )?;
+        ctx.session_mut().add_notices(notices);
+
+        let timeline = self.validate_timeline_context(depends_on.clone())?;
+
+        // Collect optimizer parameters.
+        let compute_instance = self
+            .instance_snapshot(cluster_id)
+            .expect("compute instance does not exist");
+        let id = self.allocate_transient_id()?;
+        let conn_id = ctx.session().conn_id().clone();
+        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
+
+        // Build an optimizer for this S3 Sink.
+        let mut optimizer = optimize::s3::Optimizer::new(
+            self.owned_catalog(),
+            compute_instance,
+            id,
+            conn_id,
+            optimizer_config,
+        );
+
+        // MIR ⇒ MIR optimization (global)
+        let global_mir_plan = optimizer.optimize(from_id)?;
+        // Timestamp selection
+        let as_of = self
+            .determine_timestamp(
+                ctx.session(),
+                &global_mir_plan.id_bundle(optimizer.cluster_id()),
+                &when,
+                cluster_id,
+                &timeline,
+                None,
+            )
+            .await?
+            .timestamp_context
+            .timestamp_or_default();
+        if let Some(id) = ctx.extra().contents() {
+            self.set_statement_execution_timestamp(id, as_of);
+        }
+
+        let global_mir_plan = global_mir_plan.resolve(Antichain::from_elem(as_of));
+        // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+        let global_lir_plan = optimizer.optimize(global_mir_plan.clone())?;
+
+        // Save plan structures.
+        self.catalog_mut()
+            .set_optimized_plan(id, global_mir_plan.df_desc().clone());
+        self.catalog_mut()
+            .set_physical_plan(id, global_lir_plan.df_desc().clone());
+        self.catalog_mut()
+            .set_dataflow_metainfo(id, global_lir_plan.df_meta().clone());
+
+        // Emit notices.
+        self.emit_optimizer_notices(ctx.session(), &global_lir_plan.df_meta().optimizer_notices);
+
+        let _sink_id = global_lir_plan.sink_id();
+        // TODO(mouli)
+
+        Ok(ExecuteResponse::Inserted(1))
     }
 
     pub(super) async fn sequence_explain_plan(

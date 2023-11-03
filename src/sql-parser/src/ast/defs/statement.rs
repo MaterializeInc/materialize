@@ -323,20 +323,30 @@ impl AstDisplay for CopyDirection {
 impl_display!(CopyDirection);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CopyTarget {
+pub enum CopyTarget<T: AstInfo> {
     Stdin,
     Stdout,
+    S3(S3Target<T>),
+}
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct S3Target<T: AstInfo> {
+    pub url: String,
+    pub connection: T::ItemName,
 }
 
-impl AstDisplay for CopyTarget {
+impl<T: AstInfo> AstDisplay for CopyTarget<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str(match self {
-            CopyTarget::Stdin => "STDIN",
-            CopyTarget::Stdout => "STDOUT",
-        })
+        match self {
+            CopyTarget::Stdin => f.write_str("STDIN"),
+            CopyTarget::Stdout => f.write_str("STDOUT"),
+            CopyTarget::S3(target) => {
+                f.write_str("S3 USING ");
+                f.write_node(&target.connection);
+            }
+        }
     }
 }
-impl_display!(CopyTarget);
+impl_display_t!(CopyTarget);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CopyOptionName {
@@ -385,7 +395,7 @@ pub struct CopyStatement<T: AstInfo> {
     /// DIRECTION
     pub direction: CopyDirection,
     // TARGET
-    pub target: CopyTarget,
+    pub target: CopyTarget<T>,
     // OPTIONS
     pub options: Vec<CopyOption<T>>,
 }

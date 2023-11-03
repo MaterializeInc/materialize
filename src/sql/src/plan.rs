@@ -134,6 +134,7 @@ pub enum Plan {
     AbortTransaction(AbortTransactionPlan),
     Select(SelectPlan),
     Subscribe(SubscribePlan),
+    CopyTo(CopyToPlan),
     CopyFrom(CopyFromPlan),
     ExplainPlan(ExplainPlanPlan),
     ExplainTimestamp(ExplainTimestampPlan),
@@ -234,7 +235,12 @@ impl Plan {
             StatementKind::Close => vec![PlanKind::Close],
             StatementKind::Comment => vec![PlanKind::Comment],
             StatementKind::Commit => vec![PlanKind::CommitTransaction],
-            StatementKind::Copy => vec![PlanKind::CopyFrom, PlanKind::Select, PlanKind::Subscribe],
+            StatementKind::Copy => vec![
+                PlanKind::CopyFrom,
+                PlanKind::CopyTo,
+                PlanKind::Select,
+                PlanKind::Subscribe,
+            ],
             StatementKind::CreateCluster => vec![PlanKind::CreateCluster],
             StatementKind::CreateClusterReplica => vec![PlanKind::CreateClusterReplica],
             StatementKind::CreateConnection => vec![PlanKind::CreateConnection],
@@ -345,6 +351,7 @@ impl Plan {
             Plan::AbortTransaction(_) => "abort",
             Plan::Select(_) => "select",
             Plan::Subscribe(_) => "subscribe",
+            Plan::CopyTo(_) => "copy to",
             Plan::CopyFrom(_) => "copy from",
             Plan::ExplainPlan(_) => "explain plan",
             Plan::ExplainTimestamp(_) => "explain timestamp",
@@ -766,6 +773,15 @@ pub enum SubscribeOutput {
         /// Order by with just keys
         order_by_keys: Vec<ColumnOrder>,
     },
+}
+
+#[derive(Clone, Debug)]
+pub struct CopyToPlan {
+    pub from: GlobalId,
+    pub connection: mz_storage_types::connections::Connection<ReferencedConnection>,
+    pub to: String,
+    pub when: QueryWhen,
+    pub emit_progress: bool,
 }
 
 #[derive(Debug)]
