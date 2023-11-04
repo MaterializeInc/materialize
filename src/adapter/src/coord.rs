@@ -1223,9 +1223,6 @@ impl Coordinator {
             .map(|log| self.catalog().resolve_builtin_log(log))
             .collect();
 
-        // This is disabled for the moment because it has unusual upper
-        // advancement behavior.
-        // See: https://materializeinc.slack.com/archives/C01CFKM1QRF/p1660726837927649
         let source_status_collection_id = Some(
             self.catalog()
                 .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY),
