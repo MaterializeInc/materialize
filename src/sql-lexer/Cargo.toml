@@ -24,7 +24,7 @@ phf_codegen = "0.11.1"
 uncased = "0.9.7"
 
 [features]
-default = ["workspace-hack"]
+default = ["workspace-hack", "mz-ore/workspace-hack"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
