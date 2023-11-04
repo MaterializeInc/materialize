@@ -74,6 +74,11 @@ impl CollectionIdBundle {
             .copied()
             .chain(self.compute_ids.values().flat_map(BTreeSet::iter).copied())
     }
+
+    /// Returns an iterator over all compute IDs in the bundle.
+    pub fn iter_compute(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.compute_ids.values().flat_map(BTreeSet::iter).copied()
+    }
 }
 
 impl Coordinator {

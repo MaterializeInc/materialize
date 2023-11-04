@@ -1226,6 +1226,9 @@ impl Coordinator {
         debug!("coordinator init: pre-optimizing compute objects");
         let mut pre_optimized = self.bootstrap_pre_optimize(&entries)?;
 
+        // Discover what indexes materialized views depend on. Needed for as-of selection below.
+        let mut index_dependent_matviews = collect_index_dependent_matviews(&pre_optimized);
+
         let logs: BTreeSet<_> = BUILTINS::logs()
             .map(|log| self.catalog().resolve_builtin_log(log))
             .collect();
@@ -1293,10 +1296,14 @@ impl Coordinator {
                             .expect("all indexes were pre-optimized");
 
                         // Timestamp selection
+                        let dependent_matviews = index_dependent_matviews
+                            .remove(&entry.id())
+                            .expect("all index dependants were collected");
                         let as_of = self.bootstrap_index_as_of(
                             global_mir_plan.df_desc(),
                             global_mir_plan.compute_instance_id(),
                             idx.is_retained_metrics_object,
+                            dependent_matviews,
                         );
                         let global_mir_plan = global_mir_plan.resolve(as_of);
                         // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
@@ -1705,6 +1712,7 @@ impl Coordinator {
         dataflow: &DataflowDescription<OptimizedMirRelationExpr>,
         cluster_id: ComputeInstanceId,
         is_retained_metrics_index: bool,
+        dependent_matviews: BTreeSet<GlobalId>,
     ) -> Antichain<Timestamp> {
         // All inputs must be readable at the chosen `as_of`, so it must be at least the join of
         // the `since`s of all dependencies.
@@ -1749,19 +1757,32 @@ impl Coordinator {
         } else {
             DEFAULT_LOGICAL_COMPACTION_WINDOW_TS
         };
-
         let time = write_frontier.clone().into_option().expect("checked above");
         let time = time.saturating_sub(lag);
-        let max_as_of = Antichain::from_elem(time);
+        let compaction_frontier = Antichain::from_elem(time);
 
-        let as_of = min_as_of.join(&max_as_of);
+        // We must not select an `as_of` that is beyond any times that have not yet been written to
+        // downstream materialized views. If we would we might skip times in the output of these
+        // materialized views, violating correctness. So our chosen `as_of` must be at most the
+        // meet of the `upper`s of all dependent materialized views.
+        let id_bundle = CollectionIdBundle {
+            storage_ids: dependent_matviews,
+            ..Default::default()
+        };
+        let max_as_of = self.least_valid_write(&id_bundle);
+
+        let mut as_of = min_as_of.clone();
+        as_of.join_assign(&compaction_frontier);
+        as_of.meet_assign(&max_as_of);
 
         tracing::info!(
             export_ids = %dataflow.display_export_ids(),
             %cluster_id,
             min_as_of = ?min_as_of.elements(),
+            max_as_of = ?max_as_of.elements(),
             write_frontier = ?write_frontier.elements(),
             %lag,
+            compaction_frontier = ?compaction_frontier.elements(),
             "selecting index `as_of` as {:?}",
             as_of.elements(),
         );
@@ -2053,6 +2074,56 @@ struct PreOptimizedObjects {
             optimize::UnresolvedMaterializedViewPlan,
         ),
     >,
+}
+
+/// Collects for each index the materialized views that depend on it, either directly or
+/// transitively through other indexes (but not through other MVs).
+///
+/// The returned information is required during coordinator bootstrap for index as-of selection, to
+/// ensure that selected as-ofs satisfy the requirements of downstream MVs.
+fn collect_index_dependent_matviews(
+    pre_optimized: &PreOptimizedObjects,
+) -> BTreeMap<GlobalId, BTreeSet<GlobalId>> {
+    let mut dependants: BTreeMap<_, _> = pre_optimized
+        .indexes
+        .keys()
+        .map(|id| (*id, BTreeSet::new()))
+        .collect();
+
+    // Collect direct dependants first.
+    for (mv_id, (_, mv_plan)) in &pre_optimized.matviews {
+        for dep_id in mv_plan.id_bundle().iter_compute() {
+            if let Some(ids) = dependants.get_mut(&dep_id) {
+                ids.insert(*mv_id);
+            }
+        }
+    }
+
+    // Collect transitive dependants.
+    loop {
+        let mut changed = false;
+
+        // Objects with larger IDs tend to depend on objects with smaller IDs. We don't want to
+        // rely on that being true, but we can use it to be more efficient.
+        for (idx_id, (_, idx_plan)) in pre_optimized.indexes.iter().rev() {
+            let mv_ids = dependants.get(idx_id).expect("inserted above").clone();
+            if mv_ids.is_empty() {
+                continue;
+            }
+
+            for dep_id in idx_plan.id_bundle().iter_compute() {
+                if let Some(ids) = dependants.get_mut(&dep_id) {
+                    changed |= mv_ids.iter().any(|mv_id| ids.insert(*mv_id));
+                }
+            }
+        }
+
+        if !changed {
+            break;
+        }
+    }
+
+    dependants
 }
 
 /// Serves the coordinator based on the provided configuration.
