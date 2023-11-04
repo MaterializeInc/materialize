@@ -1110,6 +1110,9 @@ impl Coordinator {
             .storage
             .drop_sinks_unvalidated(builtin_migration_metadata.previous_sink_ids);
 
+        debug!("coordinator init: initializing storage collections");
+        self.bootstrap_storage_collections().await;
+
         // Load catalog entries based on topological dependency sorting. We do
         // this to reinforce that `GlobalId`'s `Ord` implementation does not
         // express the entries' dependency graph.
@@ -1222,115 +1225,6 @@ impl Coordinator {
         let logs: BTreeSet<_> = BUILTINS::logs()
             .map(|log| self.catalog().resolve_builtin_log(log))
             .collect();
-
-        let source_status_collection_id = Some(
-            self.catalog()
-                .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY),
-        );
-
-        let mut collections_to_create = Vec::new();
-
-        fn source_desc<T>(
-            catalog: &Catalog,
-            source_status_collection_id: Option<GlobalId>,
-            source: &Source,
-        ) -> CollectionDescription<T> {
-            let (data_source, status_collection_id) = match &source.data_source {
-                // Re-announce the source description.
-                DataSourceDesc::Ingestion(ingestion) => {
-                    let ingestion = ingestion.clone().into_inline_connection(catalog.state());
-
-                    (
-                        DataSource::Ingestion(ingestion.clone()),
-                        source_status_collection_id,
-                    )
-                }
-                // Subsources use source statuses.
-                DataSourceDesc::Source => (
-                    DataSource::Other(DataSourceOther::Source),
-                    source_status_collection_id,
-                ),
-                DataSourceDesc::Webhook { .. } => {
-                    (DataSource::Webhook, source_status_collection_id)
-                }
-                DataSourceDesc::Progress => (DataSource::Progress, None),
-                DataSourceDesc::Introspection(introspection) => {
-                    (DataSource::Introspection(*introspection), None)
-                }
-            };
-            CollectionDescription {
-                desc: source.desc.clone(),
-                data_source,
-                since: None,
-                status_collection_id,
-            }
-        }
-
-        let migratable_collections = entries
-            .iter()
-            .filter_map(|entry| match entry.item() {
-                CatalogItem::Source(source) => Some((
-                    entry.id(),
-                    source_desc(self.catalog(), source_status_collection_id, source),
-                )),
-                CatalogItem::Table(table) => {
-                    let collection_desc = CollectionDescription::from_desc(
-                        table.desc.clone(),
-                        DataSourceOther::TableWrites,
-                    );
-                    Some((entry.id(), collection_desc))
-                }
-                CatalogItem::MaterializedView(mview) => {
-                    let collection_desc = CollectionDescription::from_desc(
-                        mview.desc.clone(),
-                        DataSourceOther::Compute,
-                    );
-                    Some((entry.id(), collection_desc))
-                }
-                _ => None,
-            })
-            .collect();
-
-        self.controller
-            .storage
-            .migrate_collections(migratable_collections)
-            .await?;
-
-        // Do a first pass looking for collections to create so we can call
-        // create_collections only once with a large batch.
-        for entry in &entries {
-            match entry.item() {
-                CatalogItem::Table(table) => {
-                    let collection_desc = CollectionDescription::from_desc(
-                        table.desc.clone(),
-                        DataSourceOther::TableWrites,
-                    );
-                    collections_to_create.push((entry.id(), collection_desc));
-                }
-                CatalogItem::Source(source) => {
-                    collections_to_create.push((
-                        entry.id(),
-                        source_desc(self.catalog(), source_status_collection_id, source),
-                    ));
-                }
-                CatalogItem::MaterializedView(mv) => {
-                    let collection_desc =
-                        CollectionDescription::from_desc(mv.desc.clone(), DataSourceOther::Compute);
-                    collections_to_create.push((entry.id(), collection_desc));
-                }
-                _ => {
-                    // No collections to create.
-                }
-            }
-        }
-
-        let register_ts = self.get_local_write_ts().await.timestamp;
-        self.controller
-            .storage
-            .create_collections(Some(register_ts), collections_to_create)
-            .await
-            .unwrap_or_terminate("cannot fail to create collections");
-        self.apply_local_write(register_ts).await;
 
         debug!("coordinator init: installing existing objects in catalog");
         let mut privatelink_connections = BTreeMap::new();
@@ -1691,6 +1585,94 @@ impl Coordinator {
 
         info!("coordinator init: bootstrap complete");
         Ok(())
+    }
+
+    /// Initializes all storage collections required by catalog objects in the storage controller.
+    ///
+    /// This method takes care of collection creation, as well as migration of existing
+    /// collections.
+    ///
+    /// Creating all storage collections in a single `create_collections` call, rather than on
+    /// demand, is more efficient as it reduces the number of writes to durable storage. It also
+    /// allows subsequent bootstrap logic to fetch metadata (such as frontiers) of arbitrary
+    /// storage collections, without needing to worry about dependency order.
+    async fn bootstrap_storage_collections(&mut self) {
+        let catalog = self.catalog();
+        let source_status_collection_id = catalog
+            .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY);
+
+        let source_desc = |source: &Source| {
+            let (data_source, status_collection_id) = match &source.data_source {
+                // Re-announce the source description.
+                DataSourceDesc::Ingestion(ingestion) => {
+                    let ingestion = ingestion.clone().into_inline_connection(catalog.state());
+
+                    (
+                        DataSource::Ingestion(ingestion.clone()),
+                        Some(source_status_collection_id),
+                    )
+                }
+                // Subsources use source statuses.
+                DataSourceDesc::Source => (
+                    DataSource::Other(DataSourceOther::Source),
+                    Some(source_status_collection_id),
+                ),
+                DataSourceDesc::Webhook { .. } => {
+                    (DataSource::Webhook, Some(source_status_collection_id))
+                }
+                DataSourceDesc::Progress => (DataSource::Progress, None),
+                DataSourceDesc::Introspection(introspection) => {
+                    (DataSource::Introspection(*introspection), None)
+                }
+            };
+            CollectionDescription {
+                desc: source.desc.clone(),
+                data_source,
+                since: None,
+                status_collection_id,
+            }
+        };
+
+        let collections: Vec<_> = catalog
+            .entries()
+            .filter_map(|entry| {
+                let id = entry.id();
+                match entry.item() {
+                    CatalogItem::Source(source) => Some((id, source_desc(source))),
+                    CatalogItem::Table(table) => {
+                        let collection_desc = CollectionDescription::from_desc(
+                            table.desc.clone(),
+                            DataSourceOther::TableWrites,
+                        );
+                        Some((id, collection_desc))
+                    }
+                    CatalogItem::MaterializedView(mv) => {
+                        let collection_desc = CollectionDescription::from_desc(
+                            mv.desc.clone(),
+                            DataSourceOther::Compute,
+                        );
+                        Some((id, collection_desc))
+                    }
+                    _ => None,
+                }
+            })
+            .collect();
+
+        self.controller
+            .storage
+            .migrate_collections(collections.clone())
+            .await
+            .unwrap_or_terminate("cannot fail to migrate collections");
+
+        let register_ts = self.get_local_write_ts().await.timestamp;
+
+        self.controller
+            .storage
+            .create_collections(Some(register_ts), collections)
+            .await
+            .unwrap_or_terminate("cannot fail to create collections");
+
+        self.apply_local_write(register_ts).await;
     }
 
     /// Returns an `as_of` suitable for bootstrapping the given index dataflow.
