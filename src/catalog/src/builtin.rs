@@ -24,6 +24,7 @@
 
 use std::hash::Hash;
 
+use const_format::concatcp;
 use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
 use mz_pgrepr::oid;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
@@ -3334,6 +3335,16 @@ pub const PG_SHDESCRIPTION: BuiltinView = BuiltinView {
     sensitivity: DataSensitivity::Public,
 };
 
+pub const PG_TIMEZONE_ABBREVS: BuiltinView = BuiltinView {
+    name: "pg_timezone_abbrevs",
+    schema: PG_CATALOG_SCHEMA,
+    sql: concatcp!(
+        "CREATE VIEW pg_catalog.pg_timezone_abbrevs (abbrev, utc_offset, is_dst) AS ",
+        mz_pgtz::TIMEZONE_ABBREV_SQL,
+    ),
+    sensitivity: DataSensitivity::Public,
+};
+
 pub const MZ_PEEK_DURATIONS_HISTOGRAM_PER_WORKER: BuiltinView = BuiltinView {
     name: "mz_peek_durations_histogram_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
@@ -5671,6 +5682,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&PG_LANGUAGE),
         Builtin::View(&PG_SHDESCRIPTION),
         Builtin::View(&PG_INDEXES),
+        Builtin::View(&PG_TIMEZONE_ABBREVS),
         Builtin::View(&INFORMATION_SCHEMA_APPLICABLE_ROLES),
         Builtin::View(&INFORMATION_SCHEMA_COLUMNS),
         Builtin::View(&INFORMATION_SCHEMA_ENABLED_ROLES),

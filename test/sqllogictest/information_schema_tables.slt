@@ -873,6 +873,10 @@ pg_tablespace
 VIEW
 materialize
 pg_catalog
+pg_timezone_abbrevs
+VIEW
+materialize
+pg_catalog
 pg_trigger
 VIEW
 materialize
