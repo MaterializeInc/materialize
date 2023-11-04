@@ -74,6 +74,13 @@ use mz_transform::TransformError;
 use crate::coord::dataflows::DataflowBuilder;
 use crate::AdapterError;
 
+/// An index plan awaiting timestamp selection.
+pub type UnresolvedIndexPlan = index::GlobalMirPlan<index::Unresolved>;
+
+/// A materialized view plan awaiting timestamp selection.
+pub type UnresolvedMaterializedViewPlan =
+    materialized_view::GlobalMirPlan<materialized_view::Unresolved>;
+
 /// A trait that represents an optimization stage.
 ///
 /// The trait is implemented by structs that encapsulate the context needed to

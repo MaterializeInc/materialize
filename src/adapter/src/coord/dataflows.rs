@@ -79,6 +79,11 @@ impl ComputeInstanceSnapshot {
     pub fn contains_collection(&self, id: &GlobalId) -> bool {
         self.collections.contains(id)
     }
+
+    /// Inserts the given collection into the snapshot.
+    pub fn insert_collection(&mut self, id: GlobalId) {
+        self.collections.insert(id);
+    }
 }
 
 /// Borrows of catalog and indexes sufficient to build dataflow descriptions.
