@@ -211,7 +211,7 @@ impl Optimize<MirRelationExpr> for OptimizePeek {
 
     fn optimize(&mut self, expr: MirRelationExpr) -> Result<Self::To, OptimizerError> {
         // MIR ⇒ MIR optimization (local)
-        let expr = span!(target: "optimizer", Level::TRACE, "local").in_scope(|| {
+        let expr = span!(target: "optimizer", Level::DEBUG, "local").in_scope(|| {
             let optimizer = TransformOptimizer::logical_optimizer(&self.typecheck_ctx);
             let expr = optimizer.optimize(expr)?.into_inner();
 

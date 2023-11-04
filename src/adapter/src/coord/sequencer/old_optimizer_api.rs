@@ -978,7 +978,7 @@ impl Coordinator {
         // -------------------------------------------------------
 
         // Trace the pipeline input under `optimize/raw`.
-        tracing::span!(target: "optimizer", Level::TRACE, "raw").in_scope(|| {
+        tracing::span!(target: "optimizer", Level::DEBUG, "raw").in_scope(|| {
             trace_plan(&raw_plan);
         });
 
@@ -1005,7 +1005,7 @@ impl Coordinator {
 
         // Execute the `optimize/local` stage.
         let optimized_plan = catch_unwind(broken, "local", || {
-            let _span = tracing::span!(target: "optimizer", Level::TRACE, "local").entered();
+            let _span = tracing::span!(target: "optimizer", Level::DEBUG, "local").entered();
             let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
             trace_plan(optimized_plan.as_inner());
             Ok::<_, AdapterError>(optimized_plan)

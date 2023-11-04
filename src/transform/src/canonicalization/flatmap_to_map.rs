@@ -21,8 +21,8 @@ pub struct FlatMapToMap;
 
 impl crate::Transform for FlatMapToMap {
     #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
+        target = "optimizer",
+        level = "debug",
         skip_all,
         fields(path.segment = "flatmap_to_map")
     )]

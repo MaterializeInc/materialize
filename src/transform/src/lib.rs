@@ -297,8 +297,8 @@ pub struct Fixpoint {
 
 impl Transform for Fixpoint {
     #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
+        target = "optimizer",
+        level = "debug",
         skip_all,
         fields(path.segment = self.name)
     )]
@@ -322,7 +322,7 @@ impl Transform for Fixpoint {
 
                 let span = tracing::span!(
                     target: "optimizer",
-                    tracing::Level::TRACE,
+                    tracing::Level::DEBUG,
                     "iteration",
                     path.segment = format!("{:04}", i)
                 );
@@ -400,8 +400,8 @@ impl Default for FuseAndCollapse {
 
 impl Transform for FuseAndCollapse {
     #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
+        target = "optimizer",
+        level = "debug",
         skip_all,
         fields(path.segment = "fuse_and_collapse")
     )]
@@ -663,7 +663,7 @@ impl Optimizer {
     /// which makes them suitable for pre-optimization before dataflow deployment.
     #[tracing::instrument(
         target = "optimizer",
-        level = "trace",
+        level = "debug",
         skip_all,
         fields(path.segment = self.name)
     )]

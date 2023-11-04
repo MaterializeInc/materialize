@@ -70,8 +70,8 @@ impl CheckedRecursion for Demand {
 
 impl crate::Transform for Demand {
     #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
+        target = "optimizer",
+        level = "debug",
         skip_all,
         fields(path.segment = "demand")
     )]

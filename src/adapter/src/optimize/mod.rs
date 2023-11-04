@@ -226,7 +226,7 @@ impl<'a> DataflowBuilder<'a> {
                 if let CatalogItem::View(view) = &self.catalog.get_entry(&desc.id).item {
                     let span = tracing::span!(
                         target: "optimizer",
-                        tracing::Level::TRACE,
+                        tracing::Level::DEBUG,
                         "view",
                         path.segment = desc.id.to_string()
                     );

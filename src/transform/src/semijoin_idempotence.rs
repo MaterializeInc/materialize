@@ -56,8 +56,8 @@ impl CheckedRecursion for SemijoinIdempotence {
 
 impl crate::Transform for SemijoinIdempotence {
     #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
+        target = "optimizer",
+        level = "debug",
         skip_all,
         fields(path.segment = "semijoin_idempotence")
     )]

@@ -22,8 +22,8 @@ pub struct Project;
 
 impl crate::Transform for Project {
     #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
+        target = "optimizer",
+        level = "debug",
         skip_all,
         fields(path.segment = "project_fusion")
     )]

@@ -3328,7 +3328,7 @@ impl Coordinator {
     // would be very hard to read. Additionally, once the issues with `broken` are resolved
     // (as discussed in <https://github.com/MaterializeInc/materialize/pull/21809>), this
     // can be simplified, as only a _singular_ `Registry` will be in use.
-    #[tracing::instrument(target = "optimizer", level = "trace", name = "optimize", skip_all)]
+    #[tracing::instrument(target = "optimizer", level = "debug", name = "optimize", skip_all)]
     async fn explain_query_optimizer_pipeline(
         &mut self,
         raw_plan: mz_sql::plan::HirRelationExpr,
@@ -3394,7 +3394,7 @@ impl Coordinator {
         // -------------------------------------------------------
 
         // Trace the pipeline input under `optimize/raw`.
-        tracing::span!(target: "optimizer", Level::TRACE, "raw").in_scope(|| {
+        tracing::span!(target: "optimizer", Level::DEBUG, "raw").in_scope(|| {
             trace_plan(&raw_plan);
         });
 
@@ -3517,7 +3517,7 @@ impl Coordinator {
     /// Currently this method does not need to use the global `Dispatch` like
     /// `explain_query_optimizer_pipeline`, but it is passed in case changes to this function
     /// require it.
-    #[tracing::instrument(target = "optimizer", level = "trace", name = "optimize", skip_all)]
+    #[tracing::instrument(target = "optimizer", level = "debug", name = "optimize", skip_all)]
     async fn explain_create_materialized_view_optimizer_pipeline(
         &mut self,
         name: QualifiedItemName,
@@ -3586,7 +3586,7 @@ impl Coordinator {
         // -------------------------------------------------------
 
         // Trace the pipeline input under `optimize/raw`.
-        tracing::span!(target: "optimizer", Level::TRACE, "raw").in_scope(|| {
+        tracing::span!(target: "optimizer", Level::DEBUG, "raw").in_scope(|| {
             trace_plan(&raw_plan);
         });
 
@@ -3641,7 +3641,7 @@ impl Coordinator {
     // Currently this method does not need to use the global `Dispatch` like
     // `explain_query_optimizer_pipeline`, but it is passed in case changes to this function
     // require it.
-    #[tracing::instrument(target = "optimizer", level = "trace", name = "optimize", skip_all)]
+    #[tracing::instrument(target = "optimizer", level = "debug", name = "optimize", skip_all)]
     async fn explain_create_index_optimizer_pipeline(
         &mut self,
         name: QualifiedItemName,

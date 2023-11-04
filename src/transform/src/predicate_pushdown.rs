@@ -117,8 +117,8 @@ impl CheckedRecursion for PredicatePushdown {
 
 impl crate::Transform for PredicatePushdown {
     #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
+        target = "optimizer",
+        level = "debug",
         skip_all,
         fields(path.segment = "predicate_pushdown")
     )]
