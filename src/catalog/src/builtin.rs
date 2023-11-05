@@ -3340,7 +3340,7 @@ pub const PG_TIMEZONE_ABBREVS: BuiltinView = BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     sql: concatcp!(
         "CREATE VIEW pg_catalog.pg_timezone_abbrevs (abbrev, utc_offset, is_dst) AS ",
-        mz_pgtz::TIMEZONE_ABBREV_SQL,
+        mz_pgtz::abbrev::TIMEZONE_ABBREV_SQL,
     ),
     sensitivity: DataSensitivity::Public,
 };

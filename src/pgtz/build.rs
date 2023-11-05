@@ -148,8 +148,8 @@ fn main() -> Result<()> {
 
     sql_buf.end_line();
 
-    fs::write(out_dir.join("gen.sql"), sql_buf.into_string())?;
-    fs::write(out_dir.join("gen.rs"), rust_buf.into_string())?;
+    fs::write(out_dir.join("abbrev.gen.sql"), sql_buf.into_string())?;
+    fs::write(out_dir.join("abbrev.gen.rs"), rust_buf.into_string())?;
 
     Ok(())
 }
