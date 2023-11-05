@@ -40,6 +40,7 @@ system catalog](https://www.postgresql.org/docs/current/catalogs.html):
   * [`pg_tables`](https://www.postgresql.org/docs/current/view-pg-tables.html)
   * [`pg_tablespace`](https://www.postgresql.org/docs/current/catalog-pg-tablespace.html)
   * [`pg_timezone_abbrevs`](https://www.postgresql.org/docs/current/view-pg-timezone-abbrevs.html)
+  * [`pg_timezone_names`](https://www.postgresql.org/docs/current/view-pg-timezone-names.html)
   * [`pg_trigger`](https://www.postgresql.org/docs/current/catalog-pg-trigger.html)
   * [`pg_type`](https://www.postgresql.org/docs/current/catalog-pg-type.html)
   * [`pg_views`](https://www.postgresql.org/docs/current/view-pg-views.html)

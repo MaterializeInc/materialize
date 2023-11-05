@@ -17,8 +17,15 @@ use mz_proto::chrono::{any_fixed_offset, any_timezone};
 use mz_proto::{RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
+use uncased::UncasedStr;
+
+use crate::abbrev::TIMEZONE_ABBREVS;
 
 include!(concat!(env!("OUT_DIR"), "/mz_pgtz.timezone.rs"));
+
+/// The SQL definition of the contents of the `pg_timezone_names` view.
+pub const PG_CATALOG_TIMEZONE_NAMES_SQL: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/timezone.gen.sql"));
 
 /// Parsed timezone.
 #[derive(Arbitrary, Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, MzReflect)]
@@ -342,6 +349,10 @@ fn build_timezone_offset_second(
                 }
                 (Zulu, Zulu) => return Ok(Default::default()),
                 (TzName(val), TzName(_)) => {
+                    if let Some(abbrev) = TIMEZONE_ABBREVS.get(UncasedStr::new(val)) {
+                        return Ok(abbrev.timezone());
+                    }
+
                     return match Tz::from_str_insensitive(val) {
                         Ok(tz) => Ok(Timezone::Tz(tz)),
                         Err(err) => Err(format!(
@@ -450,11 +461,11 @@ mod tests {
             ("+00000100", F(FixedOffset::east_opt(3600).unwrap())),
             ("Z", F(FixedOffset::east_opt(0).unwrap())),
             ("z", F(FixedOffset::east_opt(0).unwrap())),
-            ("UTC", T(Tz::UTC)),
+            ("UTC", F(FixedOffset::east_opt(0).unwrap())),
             ("Pacific/Auckland", T(Tz::Pacific__Auckland)),
             ("America/New_York", T(Tz::America__New_York)),
             ("America/Los_Angeles", T(Tz::America__Los_Angeles)),
-            ("utc", T(Tz::UTC)),
+            ("utc", F(FixedOffset::east_opt(0).unwrap())),
             ("pAcIfIc/AUcKlAnD", T(Tz::Pacific__Auckland)),
             ("AMERICA/NEW_YORK", T(Tz::America__New_York)),
             ("america/los_angeles", T(Tz::America__Los_Angeles)),

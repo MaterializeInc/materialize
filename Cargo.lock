@@ -4862,12 +4862,15 @@ dependencies = [
  "mz-lowertest",
  "mz-ore",
  "mz-proto",
+ "phf",
+ "phf_codegen",
  "proptest",
  "proptest-derive",
  "prost",
  "prost-build",
  "protobuf-src",
  "serde",
+ "uncased",
  "workspace-hack",
 ]
 

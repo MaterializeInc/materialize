@@ -85,11 +85,21 @@ use std::path::PathBuf;
 use std::{env, fs};
 
 use anyhow::{bail, Context, Result};
+use chrono_tz::TZ_VARIANTS;
 use mz_ore::codegen::CodegenBuf;
+use mz_ore::str::StrExt;
+use uncased::UncasedStr;
 
 const DEFAULT_TZNAMES: &str = "tznames/Default";
 
+enum TimezoneAbbrevSpec<'a> {
+    FixedOffset { utc_offset_secs: i32, is_dst: bool },
+    Tz(&'a str),
+}
+
 fn main() -> Result<()> {
+    let out_dir = PathBuf::from(env::var_os("OUT_DIR").context("Cannot read OUT_DIR env var")?);
+
     // Build protobufs.
     {
         env::set_var("PROTOC", protobuf_src::protoc());
@@ -101,14 +111,14 @@ fn main() -> Result<()> {
     }
 
     // Convert the default PostgreSQL timezone abbreviation file into a Rust
-    // constants, one for each abbrevation in the file.
+    // constants, one for each abbrevation in the file, and the SQL definition
+    // of the `pg_timezone_abbrevs` view.
     //
     // See: https://www.postgresql.org/docs/16/datetime-config-files.html
     {
-        let out_dir = PathBuf::from(env::var_os("OUT_DIR").context("Cannot read OUT_DIR env var")?);
-
         let mut sql_buf = CodegenBuf::new();
         let mut rust_buf = CodegenBuf::new();
+        let mut phf_map = phf_codegen::Map::new();
 
         sql_buf.writeln("VALUES");
 
@@ -130,41 +140,102 @@ fn main() -> Result<()> {
             }
 
             let abbrev = pieces[0];
-            let utc_offset_secs = match pieces[1].parse::<i32>() {
-                Ok(utc_offset_secs) => utc_offset_secs,
-                Err(_) => {
-                    // Link to timezone rather than fixed offset from UTC. These
-                    // hard to handle as the offset from UTC changes depending on
-                    // the current date/time. Skip for now.
-                    continue;
-                }
+            let spec = match pieces[1].parse::<i32>() {
+                Ok(utc_offset_secs) => TimezoneAbbrevSpec::FixedOffset {
+                    utc_offset_secs,
+                    is_dst: pieces.get(2) == Some(&"D"),
+                },
+                Err(_) => TimezoneAbbrevSpec::Tz(pieces[1]),
             };
-            let is_dst = pieces.get(2) == Some(&"D");
 
             rust_buf.write_block(
                 format!("pub const {abbrev}: TimezoneAbbrev = TimezoneAbbrev"),
                 |rust_buf| {
-                    rust_buf.writeln(format!("abbrev: \"{abbrev}\","));
-                    rust_buf.writeln(format!("utc_offset_secs: {utc_offset_secs},"));
-                    rust_buf.writeln(format!("is_dst: {is_dst}"));
+                    rust_buf.writeln(format!("abbrev: {},", abbrev.quoted()));
+                    match &spec {
+                        TimezoneAbbrevSpec::FixedOffset {
+                            utc_offset_secs,
+                            is_dst,
+                        } => {
+                            rust_buf.write_block(
+                                "spec: TimezoneAbbrevSpec::FixedOffset",
+                                |rust_buf| {
+                                    rust_buf.writeln(format!(
+                                        "offset: make_fixed_offset({utc_offset_secs}),"
+                                    ));
+                                    rust_buf.writeln(format!("is_dst: {is_dst},"));
+                                },
+                            );
+                        }
+                        TimezoneAbbrevSpec::Tz(name) => {
+                            let name = name.replace('/', "__");
+                            rust_buf.writeln(format!("spec: TimezoneAbbrevSpec::Tz(Tz::{name})"));
+                        }
+                    }
                 },
             );
             rust_buf.writeln(";");
 
+            let (sql_utc_offset, sql_is_dst) = match &spec {
+                TimezoneAbbrevSpec::FixedOffset {
+                    utc_offset_secs,
+                    is_dst,
+                } => {
+                    let utc_offset = format!("interval '{utc_offset_secs} seconds'");
+                    let is_dst = is_dst.to_string();
+                    (utc_offset, is_dst)
+                }
+                TimezoneAbbrevSpec::Tz(name) => {
+                    let utc_offset = format!("timezone_offset('{name}', now()).base_utc_offset + timezone_offset('{name}', now()).dst_offset");
+                    let is_dst =
+                        format!("timezone_offset('{name}', now()).dst_offset <> interval '0'");
+                    (utc_offset, is_dst)
+                }
+            };
             if emitted_abbrev {
                 sql_buf.writeln(",");
             }
-            sql_buf.write(format!(
-                "('{abbrev}', interval '{utc_offset_secs} seconds', {is_dst})"
-            ));
+            sql_buf.writeln(format!("('{abbrev}', {sql_utc_offset}, {sql_is_dst})"));
+
+            phf_map.entry(UncasedStr::new(abbrev), abbrev);
 
             emitted_abbrev = true;
         }
 
         sql_buf.end_line();
 
+        rust_buf.writeln(format!(
+            "pub static TIMEZONE_ABBREVS: phf::Map<&'static UncasedStr, TimezoneAbbrev> = {};",
+            phf_map.build(),
+        ));
+
         fs::write(out_dir.join("abbrev.gen.sql"), sql_buf.into_string())?;
         fs::write(out_dir.join("abbrev.gen.rs"), rust_buf.into_string())?;
+    }
+
+    // Convert chrono-tz's list of timezones into the SQL definition of the
+    // pg_timezone_names view.
+    {
+        let mut sql_buf = CodegenBuf::new();
+
+        sql_buf.writeln("VALUES");
+
+        for (i, tz) in TZ_VARIANTS.iter().enumerate() {
+            let name = tz.name();
+            if i > 0 {
+                sql_buf.writeln(",");
+            }
+            sql_buf.write("(");
+            sql_buf.write(format!("'{name}',"));
+            sql_buf.write(format!("timezone_offset('{name}', now()).abbrev,"));
+            sql_buf.write(format!("timezone_offset('{name}', now()).base_utc_offset,"));
+            sql_buf.write(format!(
+                "timezone_offset('{name}', now()).dst_offset > interval '0'"
+            ));
+            sql_buf.write(")");
+        }
+
+        fs::write(out_dir.join("timezone.gen.sql"), sql_buf.into_string())?;
     }
 
     Ok(())

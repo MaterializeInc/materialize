@@ -7,18 +7,54 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use chrono::FixedOffset;
+use chrono_tz::Tz;
+use uncased::UncasedStr;
+
+use crate::timezone::Timezone;
+
 /// An abbreviation for a time zone.
 pub struct TimezoneAbbrev {
-    /// The abbreviation for a fixed offset from UTC.
+    /// The name of the abbreviation.
     pub abbrev: &'static str,
-    /// The number of seconds offset from UTC, where positive means east of
-    /// Greenwich.
-    pub utc_offset_secs: i32,
-    /// Whether this is a daylight saving abbreviation.
-    pub is_dst: bool,
+    /// What the abbreviation specifies.
+    pub spec: TimezoneAbbrevSpec,
+}
+
+impl TimezoneAbbrev {
+    /// Returns the [`Timezone`] that the abbreviation specifies.
+    pub fn timezone(&self) -> Timezone {
+        match &self.spec {
+            TimezoneAbbrevSpec::FixedOffset { offset, .. } => Timezone::FixedOffset(*offset),
+            TimezoneAbbrevSpec::Tz(tz) => Timezone::Tz(*tz),
+        }
+    }
+}
+
+/// What a [`TimezoneAbbrev`] can specify.
+pub enum TimezoneAbbrevSpec {
+    /// A fixed offset from UTC.
+    FixedOffset {
+        /// The offset from UTC.
+        offset: FixedOffset,
+        /// Whether this is abbreviation represents a Daylight Saving Time
+        /// offset.
+        is_dst: bool,
+    },
+    /// A reference to a time zone in the IANA Time Zone Database.
+    Tz(Tz),
+}
+
+const fn make_fixed_offset(utc_offset_secs: i32) -> FixedOffset {
+    // `unwrap()` is not stable in `const` contexts, so manually match.
+    match FixedOffset::east_opt(utc_offset_secs) {
+        None => panic!("invalid fixed offset"),
+        Some(fixed_offset) => fixed_offset,
+    }
 }
 
 include!(concat!(env!("OUT_DIR"), "/abbrev.gen.rs"));
 
-/// A SQL `VALUES` clause containing all known time zone abbreviations.
-pub const TIMEZONE_ABBREV_SQL: &str = include_str!(concat!(env!("OUT_DIR"), "/abbrev.gen.sql"));
+/// The SQL definition of the contents of the `pg_timezone_abbrevs` view.
+pub const PG_CATALOG_TIMEZONE_ABBREVS_SQL: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/abbrev.gen.sql"));
