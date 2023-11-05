@@ -2380,6 +2380,7 @@ pub enum EvalError {
     InvalidTimezone(String),
     InvalidTimezoneInterval,
     InvalidTimezoneConversion,
+    InvalidIanaTimezoneId(String),
     InvalidLayer {
         max_layer: usize,
         val: i64,
@@ -2515,6 +2516,9 @@ impl fmt::Display for EvalError {
                 f.write_str("timezone interval must not contain months or years")
             }
             EvalError::InvalidTimezoneConversion => f.write_str("invalid timezone conversion"),
+            EvalError::InvalidIanaTimezoneId(tz) => {
+                write!(f, "invalid IANA Time Zone Database identifier: '{}'", tz)
+            }
             EvalError::InvalidLayer { max_layer, val } => write!(
                 f,
                 "invalid layer: {}; must use value within [1, {}]",
@@ -2893,6 +2897,7 @@ impl RustType<ProtoEvalError> for EvalError {
             EvalError::LengthTooLarge => LengthTooLarge(()),
             EvalError::AclArrayNullElement => AclArrayNullElement(()),
             EvalError::MzAclArrayNullElement => MzAclArrayNullElement(()),
+            EvalError::InvalidIanaTimezoneId(s) => InvalidIanaTimezoneId(s.clone()),
         };
         ProtoEvalError { kind: Some(kind) }
     }
@@ -3012,6 +3017,7 @@ impl RustType<ProtoEvalError> for EvalError {
                 LengthTooLarge(()) => Ok(EvalError::LengthTooLarge),
                 AclArrayNullElement(()) => Ok(EvalError::AclArrayNullElement),
                 MzAclArrayNullElement(()) => Ok(EvalError::MzAclArrayNullElement),
+                InvalidIanaTimezoneId(s) => Ok(EvalError::InvalidIanaTimezoneId(s)),
             },
             None => Err(TryFromProtoError::missing_field("ProtoEvalError::kind")),
         }

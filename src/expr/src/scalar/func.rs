@@ -20,7 +20,8 @@ use std::{fmt, iter, str};
 
 use ::encoding::label::encoding_from_whatwg_label;
 use ::encoding::DecoderTrap;
-use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, Timelike, Utc};
+use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, TimeZone, Timelike, Utc};
+use chrono_tz::{OffsetComponents, OffsetName, Tz};
 use dec::OrderedDecimal;
 use fallible_iterator::FallibleIterator;
 use hmac::{Hmac, Mac};
@@ -1950,6 +1951,26 @@ fn timezone_interval_timestamptz(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'st
     }
 }
 
+fn timezone_offset<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let tz_str = a.unwrap_str();
+    let tz = match Tz::from_str_insensitive(tz_str) {
+        Ok(tz) => tz,
+        Err(_) => return Err(EvalError::InvalidIanaTimezoneId(tz_str.into())),
+    };
+    let offset = tz.offset_from_utc_datetime(&b.unwrap_timestamptz().naive_utc());
+    Ok(temp_storage.make_datum(|packer| {
+        packer.push_list_with(|packer| {
+            packer.push(Datum::from(offset.abbreviation()));
+            packer.push(Datum::from(offset.base_utc_offset()));
+            packer.push(Datum::from(offset.dst_offset()));
+        });
+    }))
+}
+
 /// Determines if an mz_aclitem contains one of the specified privileges. This will return true if
 /// any of the listed privileges are contained in the mz_aclitem.
 fn mz_acl_item_contains_privilege(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'static>, EvalError> {
@@ -2242,6 +2263,7 @@ pub enum BinaryFunc {
     TimezoneIntervalTimestamp,
     TimezoneIntervalTimestampTz,
     TimezoneIntervalTime,
+    TimezoneOffset,
     TextConcat,
     JsonbGetInt64 { stringify: bool },
     JsonbGetString { stringify: bool },
@@ -2486,6 +2508,7 @@ impl BinaryFunc {
             BinaryFunc::TimezoneIntervalTimestamp => timezone_interval_timestamp(a, b),
             BinaryFunc::TimezoneIntervalTimestampTz => timezone_interval_timestamptz(a, b),
             BinaryFunc::TimezoneIntervalTime => timezone_interval_time(a, b),
+            BinaryFunc::TimezoneOffset => timezone_offset(a, b, temp_storage),
             BinaryFunc::TextConcat => Ok(text_concat_binary(a, b, temp_storage)),
             BinaryFunc::JsonbGetInt64 { stringify } => {
                 Ok(jsonb_get_int64(a, b, temp_storage, *stringify))
@@ -2667,6 +2690,15 @@ impl BinaryFunc {
             }
 
             TimezoneIntervalTime => ScalarType::Time.nullable(in_nullable),
+
+            TimezoneOffset => ScalarType::Record {
+                fields: vec![
+                    ("abbrev".into(), ScalarType::String.nullable(false)),
+                    ("base_utc_offset".into(), ScalarType::Interval.nullable(false)),
+                    ("dst_offset".into(), ScalarType::Interval.nullable(false)),
+                ],
+                custom_id: None,
+            }.nullable(true),
 
             SubTime => ScalarType::Interval.nullable(in_nullable),
 
@@ -2895,6 +2927,7 @@ impl BinaryFunc {
             | TimezoneIntervalTimestamp
             | TimezoneIntervalTimestampTz
             | TimezoneIntervalTime
+            | TimezoneOffset
             | TextConcat
             | JsonbContainsString
             | JsonbContainsJsonb
@@ -3115,6 +3148,7 @@ impl BinaryFunc {
             | TimezoneIntervalTimestamp
             | TimezoneIntervalTimestampTz
             | TimezoneIntervalTime
+            | TimezoneOffset
             | RoundNumeric
             | ConvertFrom
             | Left
@@ -3306,7 +3340,8 @@ impl BinaryFunc {
             | BinaryFunc::TimezoneTimestampTz
             | BinaryFunc::TimezoneIntervalTimestamp
             | BinaryFunc::TimezoneIntervalTimestampTz
-            | BinaryFunc::TimezoneIntervalTime => (false, false),
+            | BinaryFunc::TimezoneIntervalTime
+            | BinaryFunc::TimezoneOffset => (false, false),
             BinaryFunc::TextConcat
             | BinaryFunc::JsonbGetInt64 { .. }
             | BinaryFunc::JsonbGetString { .. }
@@ -3505,6 +3540,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::TimezoneIntervalTimestamp => f.write_str("timezoneits"),
             BinaryFunc::TimezoneIntervalTimestampTz => f.write_str("timezoneitstz"),
             BinaryFunc::TimezoneIntervalTime => f.write_str("timezoneit"),
+            BinaryFunc::TimezoneOffset => f.write_str("timezone_offset"),
             BinaryFunc::TextConcat => f.write_str("||"),
             BinaryFunc::JsonbGetInt64 { stringify: false } => f.write_str("->"),
             BinaryFunc::JsonbGetInt64 { stringify: true } => f.write_str("->>"),
@@ -3715,6 +3751,7 @@ impl Arbitrary for BinaryFunc {
             Just(BinaryFunc::TimezoneIntervalTimestamp).boxed(),
             Just(BinaryFunc::TimezoneIntervalTimestampTz).boxed(),
             Just(BinaryFunc::TimezoneIntervalTime).boxed(),
+            Just(BinaryFunc::TimezoneOffset).boxed(),
             Just(BinaryFunc::TextConcat).boxed(),
             bool::arbitrary()
                 .prop_map(|stringify| BinaryFunc::JsonbGetInt64 { stringify })
@@ -3914,6 +3951,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::TimezoneIntervalTimestamp => TimezoneIntervalTimestamp(()),
             BinaryFunc::TimezoneIntervalTimestampTz => TimezoneIntervalTimestampTz(()),
             BinaryFunc::TimezoneIntervalTime => TimezoneIntervalTime(()),
+            BinaryFunc::TimezoneOffset => TimezoneOffset(()),
             BinaryFunc::TextConcat => TextConcat(()),
             BinaryFunc::JsonbGetInt64 { stringify } => JsonbGetInt64(*stringify),
             BinaryFunc::JsonbGetString { stringify } => JsonbGetString(*stringify),
@@ -4113,6 +4151,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 TimezoneIntervalTimestamp(()) => Ok(BinaryFunc::TimezoneIntervalTimestamp),
                 TimezoneIntervalTimestampTz(()) => Ok(BinaryFunc::TimezoneIntervalTimestampTz),
                 TimezoneIntervalTime(()) => Ok(BinaryFunc::TimezoneIntervalTime),
+                TimezoneOffset(()) => Ok(BinaryFunc::TimezoneOffset),
                 TextConcat(()) => Ok(BinaryFunc::TextConcat),
                 JsonbGetInt64(stringify) => Ok(BinaryFunc::JsonbGetInt64 { stringify }),
                 JsonbGetString(stringify) => Ok(BinaryFunc::JsonbGetString { stringify }),
