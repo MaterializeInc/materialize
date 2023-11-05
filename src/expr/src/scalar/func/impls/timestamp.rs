@@ -14,8 +14,9 @@ use chrono::{
 };
 use mz_lowertest::MzReflect;
 use mz_ore::result::ResultExt;
+use mz_pgtz::timezone::Timezone;
 use mz_repr::adt::date::Date;
-use mz_repr::adt::datetime::{DateTimeUnits, Timezone};
+use mz_repr::adt::datetime::DateTimeUnits;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{DecimalLike, Numeric};
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampPrecision, MAX_PRECISION};

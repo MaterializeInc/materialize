@@ -7,11 +7,22 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+chrono = { version = "0.4.23", default-features = false, features = ["serde", "std"] }
+chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"] }
+mz-lowertest = { path = "../lowertest" }
+mz-ore = { path = "../ore", features = ["test"] }
+mz-proto = { path = "../proto", features = ["chrono"] }
+proptest = { version = "1.0.0", default-features = false, features = ["std"] }
+proptest-derive = { version = "0.3.0", features = ["boxed_union"] }
+prost = { version = "0.11.3", features = ["no-recursion-limit"] }
+serde = { version = "1.0.152", features = ["derive"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [build-dependencies]
 anyhow = "1.0.66"
 mz-ore = { path = "../ore" }
+prost-build = "0.11.2"
+protobuf-src = "1.1.0"
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

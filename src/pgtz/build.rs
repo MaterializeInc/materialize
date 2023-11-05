@@ -90,66 +90,82 @@ use mz_ore::codegen::CodegenBuf;
 const DEFAULT_TZNAMES: &str = "tznames/Default";
 
 fn main() -> Result<()> {
-    let out_dir = PathBuf::from(env::var_os("OUT_DIR").context("Cannot read OUT_DIR env var")?);
+    // Build protobufs.
+    {
+        env::set_var("PROTOC", protobuf_src::protoc());
 
-    let mut sql_buf = CodegenBuf::new();
-    let mut rust_buf = CodegenBuf::new();
-
-    sql_buf.writeln("VALUES");
-
-    let tznames = fs::read_to_string(DEFAULT_TZNAMES)?;
-    let mut emitted_abbrev = false;
-    for (i, line) in tznames.lines().enumerate() {
-        let pieces = line.split_ascii_whitespace().collect::<Vec<_>>();
-
-        if let Some(p) = pieces.first() {
-            if p.starts_with('#') {
-                // Comment line.
-                continue;
-            }
-        } else if pieces.len() == 0 {
-            // Empty line.
-            continue;
-        } else if pieces.len() < 2 {
-            bail!("line {}: did not find at least two fields", i + 1);
-        }
-
-        let abbrev = pieces[0];
-        let utc_offset_secs = match pieces[1].parse::<i32>() {
-            Ok(utc_offset_secs) => utc_offset_secs,
-            Err(_) => {
-                // Link to timezone rather than fixed offset from UTC. These
-                // hard to handle as the offset from UTC changes depending on
-                // the current date/time. Skip for now.
-                continue;
-            }
-        };
-        let is_dst = pieces.get(2) == Some(&"D");
-
-        rust_buf.write_block(
-            format!("pub const {abbrev}: TimezoneAbbrev = TimezoneAbbrev"),
-            |rust_buf| {
-                rust_buf.writeln(format!("abbrev: \"{abbrev}\","));
-                rust_buf.writeln(format!("utc_offset_secs: {utc_offset_secs},"));
-                rust_buf.writeln(format!("is_dst: {is_dst}"));
-            },
-        );
-        rust_buf.writeln(";");
-
-        if emitted_abbrev {
-            sql_buf.writeln(",");
-        }
-        sql_buf.write(format!(
-            "('{abbrev}', interval '{utc_offset_secs} seconds', {is_dst})"
-        ));
-
-        emitted_abbrev = true;
+        prost_build::Config::new()
+            .btree_map(["."])
+            .extern_path(".mz_proto", "::mz_proto")
+            .compile_protos(&["pgtz/src/timezone.proto"], &[".."])?;
     }
 
-    sql_buf.end_line();
+    // Convert the default PostgreSQL timezone abbreviation file into a Rust
+    // constants, one for each abbrevation in the file.
+    //
+    // See: https://www.postgresql.org/docs/16/datetime-config-files.html
+    {
+        let out_dir = PathBuf::from(env::var_os("OUT_DIR").context("Cannot read OUT_DIR env var")?);
 
-    fs::write(out_dir.join("abbrev.gen.sql"), sql_buf.into_string())?;
-    fs::write(out_dir.join("abbrev.gen.rs"), rust_buf.into_string())?;
+        let mut sql_buf = CodegenBuf::new();
+        let mut rust_buf = CodegenBuf::new();
+
+        sql_buf.writeln("VALUES");
+
+        let tznames = fs::read_to_string(DEFAULT_TZNAMES)?;
+        let mut emitted_abbrev = false;
+        for (i, line) in tznames.lines().enumerate() {
+            let pieces = line.split_ascii_whitespace().collect::<Vec<_>>();
+
+            if let Some(p) = pieces.first() {
+                if p.starts_with('#') {
+                    // Comment line.
+                    continue;
+                }
+            } else if pieces.len() == 0 {
+                // Empty line.
+                continue;
+            } else if pieces.len() < 2 {
+                bail!("line {}: did not find at least two fields", i + 1);
+            }
+
+            let abbrev = pieces[0];
+            let utc_offset_secs = match pieces[1].parse::<i32>() {
+                Ok(utc_offset_secs) => utc_offset_secs,
+                Err(_) => {
+                    // Link to timezone rather than fixed offset from UTC. These
+                    // hard to handle as the offset from UTC changes depending on
+                    // the current date/time. Skip for now.
+                    continue;
+                }
+            };
+            let is_dst = pieces.get(2) == Some(&"D");
+
+            rust_buf.write_block(
+                format!("pub const {abbrev}: TimezoneAbbrev = TimezoneAbbrev"),
+                |rust_buf| {
+                    rust_buf.writeln(format!("abbrev: \"{abbrev}\","));
+                    rust_buf.writeln(format!("utc_offset_secs: {utc_offset_secs},"));
+                    rust_buf.writeln(format!("is_dst: {is_dst}"));
+                },
+            );
+            rust_buf.writeln(";");
+
+            if emitted_abbrev {
+                sql_buf.writeln(",");
+            }
+            sql_buf.write(format!(
+                "('{abbrev}', interval '{utc_offset_secs} seconds', {is_dst})"
+            ));
+
+            emitted_abbrev = true;
+        }
+
+        sql_buf.end_line();
+
+        fs::write(out_dir.join("abbrev.gen.sql"), sql_buf.into_string())?;
+        fs::write(out_dir.join("abbrev.gen.rs"), rust_buf.into_string())?;
+    }
 
     Ok(())
 }

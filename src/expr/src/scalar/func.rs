@@ -34,11 +34,11 @@ use mz_ore::option::OptionExt;
 use mz_ore::result::ResultExt;
 use mz_ore::soft_assert;
 use mz_pgrepr::Type;
+use mz_pgtz::timezone::{Timezone, TimezoneSpec};
 use mz_proto::chrono::any_naive_datetime;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::date::Date;
-use mz_repr::adt::datetime::{Timezone, TimezoneSpec};
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::mz_acl_item::{AclItem, AclMode, MzAclItem};
@@ -2477,9 +2477,9 @@ impl BinaryFunc {
             BinaryFunc::DateTruncTimestamp => date_trunc(a, b.unwrap_timestamp().deref()),
             BinaryFunc::DateTruncInterval => date_trunc_interval(a, b),
             BinaryFunc::DateTruncTimestampTz => date_trunc(a, b.unwrap_timestamptz().deref()),
-            BinaryFunc::TimezoneTimestamp => parse_timezone(a.unwrap_str(), TimezoneSpec::POSIX)
+            BinaryFunc::TimezoneTimestamp => parse_timezone(a.unwrap_str(), TimezoneSpec::Posix)
                 .and_then(|tz| timezone_timestamp(tz, b.unwrap_timestamp().into()).map(Into::into)),
-            BinaryFunc::TimezoneTimestampTz => parse_timezone(a.unwrap_str(), TimezoneSpec::POSIX)
+            BinaryFunc::TimezoneTimestampTz => parse_timezone(a.unwrap_str(), TimezoneSpec::Posix)
                 .and_then(|tz| {
                     Ok(timezone_timestamptz(tz, b.unwrap_timestamptz().into())?.try_into()?)
                 }),
@@ -7483,7 +7483,7 @@ impl VariadicFunc {
             VariadicFunc::MakeMzAclItem => make_mz_acl_item(&ds),
             VariadicFunc::ArrayPosition => array_position(&ds),
             VariadicFunc::ArrayFill { .. } => array_fill(&ds, temp_storage),
-            VariadicFunc::TimezoneTime => parse_timezone(ds[0].unwrap_str(), TimezoneSpec::POSIX)
+            VariadicFunc::TimezoneTime => parse_timezone(ds[0].unwrap_str(), TimezoneSpec::Posix)
                 .map(|tz| {
                     timezone_time(
                         tz,

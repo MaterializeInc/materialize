@@ -20,10 +20,11 @@ use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
 use mz_ore::vec::swap_remove_multiple;
 use mz_pgrepr::TypeFromOidError;
+use mz_pgtz::timezone::TimezoneSpec;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::array::InvalidArrayError;
 use mz_repr::adt::date::DateError;
-use mz_repr::adt::datetime::{DateTimeUnits, TimezoneSpec};
+use mz_repr::adt::datetime::DateTimeUnits;
 use mz_repr::adt::range::InvalidRangeError;
 use mz_repr::adt::regex::Regex;
 use mz_repr::adt::timestamp::TimestampError;
@@ -985,7 +986,7 @@ impl MirScalarExpr {
                             // time we really don't want to parse it again and again, so we parse it once and embed it into the
                             // UnaryFunc enum. The memory footprint of Timezone is small (8 bytes).
                             let tz = expr1.as_literal_str().unwrap();
-                            *e = match parse_timezone(tz, TimezoneSpec::POSIX) {
+                            *e = match parse_timezone(tz, TimezoneSpec::Posix) {
                                 Ok(tz) => MirScalarExpr::CallUnary {
                                     func: UnaryFunc::TimezoneTimestamp(func::TimezoneTimestamp(tz)),
                                     expr: Box::new(expr2.take()),
@@ -997,7 +998,7 @@ impl MirScalarExpr {
                             }
                         } else if *func == BinaryFunc::TimezoneTimestampTz && expr1.is_literal() {
                             let tz = expr1.as_literal_str().unwrap();
-                            *e = match parse_timezone(tz, TimezoneSpec::POSIX) {
+                            *e = match parse_timezone(tz, TimezoneSpec::Posix) {
                                 Ok(tz) => MirScalarExpr::CallUnary {
                                     func: UnaryFunc::TimezoneTimestampTz(
                                         func::TimezoneTimestampTz(tz),
@@ -1204,7 +1205,7 @@ impl MirScalarExpr {
                         } else if let VariadicFunc::TimezoneTime = func {
                             if exprs[0].is_literal() && exprs[2].is_literal_ok() {
                                 let tz = exprs[0].as_literal_str().unwrap();
-                                *e = match parse_timezone(tz, TimezoneSpec::POSIX) {
+                                *e = match parse_timezone(tz, TimezoneSpec::Posix) {
                                     Ok(tz) => MirScalarExpr::CallUnary {
                                         func: UnaryFunc::TimezoneTime(func::TimezoneTime {
                                             tz,

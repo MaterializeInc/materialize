@@ -81,6 +81,7 @@ fn main() {
     env::set_var("PROTOC", protobuf_src::protoc());
 
     prost_build::Config::new()
+        .extern_path(".mz_pgtz", "::mz_pgtz")
         .extern_path(".mz_proto", "::mz_proto")
         .extern_path(".mz_repr.adt.array", "::mz_repr::adt::array")
         .extern_path(".mz_repr.adt.char", "::mz_repr::adt::char")

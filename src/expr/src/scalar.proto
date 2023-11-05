@@ -15,6 +15,7 @@ import "google/protobuf/empty.proto";
 
 import "expr/src/scalar/like_pattern.proto";
 
+import "pgtz/src/timezone.proto";
 import "proto/src/chrono.proto";
 import "repr/src/adt/array.proto";
 import "repr/src/adt/char.proto";
@@ -115,7 +116,7 @@ message ProtoUnaryFunc {
         bool fail_on_len = 2;
     }
     message ProtoTimezoneTime {
-        mz_repr.adt.datetime.ProtoTimezone tz = 1;
+        mz_pgtz.timezone.ProtoTimezone tz = 1;
         mz_proto.chrono.ProtoNaiveDateTime wall_time = 2;
     }
     message ProtoCastToVariableType {
@@ -300,8 +301,8 @@ message ProtoUnaryFunc {
         mz_repr.adt.datetime.ProtoDateTimeUnits date_part_timestamp_tz = 164;
         mz_repr.adt.datetime.ProtoDateTimeUnits date_trunc_timestamp = 165;
         mz_repr.adt.datetime.ProtoDateTimeUnits date_trunc_timestamp_tz = 166;
-        mz_repr.adt.datetime.ProtoTimezone timezone_timestamp = 167;
-        mz_repr.adt.datetime.ProtoTimezone timezone_timestamp_tz = 168;
+        mz_pgtz.timezone.ProtoTimezone timezone_timestamp = 167;
+        mz_pgtz.timezone.ProtoTimezone timezone_timestamp_tz = 168;
         ProtoTimezoneTime timezone_time = 169;
         google.protobuf.Empty to_timestamp = 170;
         google.protobuf.Empty justify_days = 171;
