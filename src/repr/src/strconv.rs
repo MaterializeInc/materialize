@@ -50,7 +50,7 @@ use uuid::Uuid;
 
 use crate::adt::array::ArrayDimension;
 use crate::adt::date::Date;
-use crate::adt::datetime::{self, DateTimeField, ParsedDateTime};
+use crate::adt::datetime::{self, DateTimeField, ParsedDateTime, Timezone, TimezoneSpec};
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
 use crate::adt::mz_acl_item::{AclItem, MzAclItem};
@@ -393,7 +393,7 @@ fn parse_timestamp_string(s: &str) -> Result<(NaiveDate, NaiveTime, datetime::Ti
     let offset = if tz_string.is_empty() {
         Default::default()
     } else {
-        tz_string.parse()?
+        Timezone::parse(tz_string, TimezoneSpec::ISO)?
     };
 
     Ok((d, t, offset))
