@@ -5023,6 +5023,8 @@ name = "mz-proto"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "chrono",
+ "chrono-tz",
  "globset",
  "http",
  "mz-ore",

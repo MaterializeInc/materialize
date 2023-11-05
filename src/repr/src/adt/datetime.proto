@@ -11,13 +11,13 @@ syntax = "proto3";
 
 package mz_repr.adt.datetime;
 
-import "repr/src/chrono.proto";
+import "proto/src/chrono.proto";
 import "google/protobuf/empty.proto";
 
 message ProtoTimezone {
     oneof kind {
-        chrono.ProtoFixedOffset fixed_offset = 1;
-        chrono.ProtoTz tz = 2;
+        mz_proto.chrono.ProtoFixedOffset fixed_offset = 1;
+        mz_proto.chrono.ProtoTz tz = 2;
     }
 }
 

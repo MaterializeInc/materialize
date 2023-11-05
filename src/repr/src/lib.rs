@@ -100,7 +100,6 @@ mod timestamp;
 
 pub mod adt;
 pub mod antichain;
-pub mod chrono;
 pub mod explain;
 pub mod fixed_length;
 pub mod global_id;

@@ -19,13 +19,13 @@ use std::str::FromStr;
 use chrono::{FixedOffset, NaiveDate, NaiveTime};
 use chrono_tz::Tz;
 use mz_lowertest::MzReflect;
+use mz_proto::chrono::{any_fixed_offset, any_timezone};
 use mz_proto::{RustType, TryFromProtoError};
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::adt::interval::Interval;
-use crate::chrono::{any_fixed_offset, any_timezone};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.datetime.rs"));
 

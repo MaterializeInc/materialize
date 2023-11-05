@@ -15,6 +15,7 @@ import "google/protobuf/empty.proto";
 
 import "expr/src/scalar/like_pattern.proto";
 
+import "proto/src/chrono.proto";
 import "repr/src/adt/array.proto";
 import "repr/src/adt/char.proto";
 import "repr/src/adt/datetime.proto";
@@ -23,7 +24,6 @@ import "repr/src/adt/range.proto";
 import "repr/src/adt/regex.proto";
 import "repr/src/adt/timestamp.proto";
 import "repr/src/adt/varchar.proto";
-import "repr/src/chrono.proto";
 import "repr/src/relation_and_scalar.proto";
 import "repr/src/row.proto";
 import "repr/src/strconv.proto";
@@ -116,7 +116,7 @@ message ProtoUnaryFunc {
     }
     message ProtoTimezoneTime {
         mz_repr.adt.datetime.ProtoTimezone tz = 1;
-        mz_repr.chrono.ProtoNaiveDateTime wall_time = 2;
+        mz_proto.chrono.ProtoNaiveDateTime wall_time = 2;
     }
     message ProtoCastToVariableType {
         mz_repr.relation_and_scalar.ProtoScalarType return_ty = 1;

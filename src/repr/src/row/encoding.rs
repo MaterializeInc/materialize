@@ -23,6 +23,7 @@ use mz_persist_types::dyn_col::DynColumnRef;
 use mz_persist_types::dyn_struct::{ColumnsMut, ColumnsRef, DynStructCfg, ValidityRef};
 use mz_persist_types::stats::{AtomicBytesStats, BytesStats, DynStats, OptionStats, StatsFn};
 use mz_persist_types::Codec;
+use mz_proto::chrono::ProtoNaiveTime;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use prost::Message;
 use uuid::Uuid;
@@ -32,7 +33,6 @@ use crate::adt::date::{Date, ProtoDate};
 use crate::adt::jsonb::Jsonb;
 use crate::adt::numeric::Numeric;
 use crate::adt::range::{Range, RangeInner, RangeLowerBound, RangeUpperBound};
-use crate::chrono::ProtoNaiveTime;
 use crate::row::proto_datum::DatumType;
 use crate::row::{
     ProtoArray, ProtoArrayDimension, ProtoDatum, ProtoDatumOther, ProtoDict, ProtoDictElement,
