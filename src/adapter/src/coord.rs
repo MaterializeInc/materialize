@@ -1229,6 +1229,10 @@ impl Coordinator {
         debug!("coordinator init: optimizing dataflow plans");
         self.bootstrap_dataflow_plans(&entries)?;
 
+        // Discover what indexes MVs depend on. Needed for as-of selection below.
+        // This step relies on the dataflow plans created by `bootstrap_dataflow_plans`.
+        let mut index_dependent_matviews = self.collect_index_dependent_matviews();
+
         let logs: BTreeSet<_> = BUILTINS::logs()
             .map(|log| self.catalog().resolve_builtin_log(log))
             .collect();
@@ -1291,10 +1295,14 @@ impl Coordinator {
                             .clone();
 
                         // Timestamp selection
+                        let dependent_matviews = index_dependent_matviews
+                            .remove(&entry.id())
+                            .expect("all index dependants were collected");
                         let as_of = self.bootstrap_index_as_of(
                             &df_desc,
                             idx.cluster_id,
                             idx.is_retained_metrics_object,
+                            dependent_matviews,
                         );
                         df_desc.set_as_of(as_of);
 
@@ -1680,12 +1688,91 @@ impl Coordinator {
         Ok(())
     }
 
+    /// Collects for each index the materialized views that depend on it, either directly or
+    /// transitively through other indexes (but not through other MVs).
+    ///
+    /// The returned information is required during coordinator bootstrap for index as-of
+    /// selection, to ensure that selected as-ofs satisfy the requirements of downstream MVs.
+    ///
+    /// This method expects all dataflow plans to be available, so it must run after
+    /// [`Coordinator::bootstrap_dataflow_plans`].
+    fn collect_index_dependent_matviews(&self) -> BTreeMap<GlobalId, BTreeSet<GlobalId>> {
+        // Collect imports of all indexes and MVs in the catalog.
+        let mut index_imports = BTreeMap::new();
+        let mut mv_imports = BTreeMap::new();
+        let catalog = self.catalog();
+        for entry in catalog.entries() {
+            let id = entry.id();
+            if let Some(plan) = catalog.try_get_physical_plan(&id) {
+                let imports: Vec<_> = plan.import_ids().collect();
+                if entry.is_index() {
+                    index_imports.insert(id, imports);
+                } else if entry.is_materialized_view() {
+                    mv_imports.insert(id, imports);
+                }
+            }
+        }
+
+        // Start with an empty set of dependants for each index.
+        let mut dependants: BTreeMap<_, _> = index_imports
+            .keys()
+            .map(|id| (*id, BTreeSet::new()))
+            .collect();
+
+        // Collect direct dependants first.
+        for (mv_id, mv_deps) in &mv_imports {
+            for dep_id in mv_deps {
+                if let Some(ids) = dependants.get_mut(dep_id) {
+                    ids.insert(*mv_id);
+                } else {
+                    // `dep_id` references a source import.
+                    // We ignore it since we only want to collect dependants on indexes.
+                }
+            }
+        }
+
+        // Collect transitive dependants.
+        loop {
+            let mut changed = false;
+
+            // Objects with larger IDs tend to depend on objects with smaller IDs. We don't want to
+            // rely on that being true, but we can use it to be more efficient.
+            for (idx_id, idx_deps) in index_imports.iter().rev() {
+                // For each dependency of this index, and each MV depending on this index, add the
+                // transitive dependency to `dependants`.
+                //
+                // I.e., if `dep_id <- idx_id` and `idx_id <- mv_id`, then we add `dep_id <- mv_id`
+                // to `dependants`.
+
+                let mv_ids = dependants.get(idx_id).expect("inserted above").clone();
+                if mv_ids.is_empty() {
+                    continue;
+                }
+
+                for dep_id in idx_deps {
+                    if let Some(ids) = dependants.get_mut(dep_id) {
+                        changed |= mv_ids.iter().any(|mv_id| ids.insert(*mv_id));
+                    } else {
+                        // `dep_id` references a source import.
+                    }
+                }
+            }
+
+            if !changed {
+                break;
+            }
+        }
+
+        dependants
+    }
+
     /// Returns an `as_of` suitable for bootstrapping the given index dataflow.
     fn bootstrap_index_as_of(
         &self,
         dataflow: &DataflowDescription<Plan>,
         cluster_id: ComputeInstanceId,
         is_retained_metrics_index: bool,
+        dependent_matviews: BTreeSet<GlobalId>,
     ) -> Antichain<Timestamp> {
         // All inputs must be readable at the chosen `as_of`, so it must be at least the join of
         // the `since`s of all dependencies.
@@ -1733,16 +1820,30 @@ impl Coordinator {
 
         let time = write_frontier.clone().into_option().expect("checked above");
         let time = time.saturating_sub(lag);
-        let max_as_of = Antichain::from_elem(time);
+        let max_compaction_frontier = Antichain::from_elem(time);
 
-        let as_of = min_as_of.join(&max_as_of);
+        // We must not select an `as_of` that is beyond any times that have not yet been written to
+        // downstream materialized views. If we would, we might skip times in the output of these
+        // materialized views, violating correctness. So our chosen `as_of` must be at most the
+        // meet of the `upper`s of all dependent materialized views.
+        let id_bundle = CollectionIdBundle {
+            storage_ids: dependent_matviews,
+            ..Default::default()
+        };
+        let max_as_of = self.least_valid_write(&id_bundle);
+
+        let mut as_of = min_as_of.clone();
+        as_of.join_assign(&max_compaction_frontier);
+        as_of.meet_assign(&max_as_of);
 
         tracing::info!(
             export_ids = %dataflow.display_export_ids(),
             %cluster_id,
             min_as_of = ?min_as_of.elements(),
+            max_as_of = ?max_as_of.elements(),
             write_frontier = ?write_frontier.elements(),
             %lag,
+            max_compaction_frontier = ?max_compaction_frontier.elements(),
             "selecting index `as_of` as {:?}",
             as_of.elements(),
         );
