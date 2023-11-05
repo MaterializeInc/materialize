@@ -79,6 +79,11 @@ impl ComputeInstanceSnapshot {
     pub fn contains_collection(&self, id: &GlobalId) -> bool {
         self.collections.contains(id)
     }
+
+    /// Inserts the given collection into the snapshot.
+    pub fn insert_collection(&mut self, id: GlobalId) {
+        self.collections.insert(id);
+    }
 }
 
 /// Borrows of catalog and indexes sufficient to build dataflow descriptions.
@@ -257,8 +262,8 @@ impl Coordinator {
 }
 
 /// Returns an ID bundle with the given dataflows imports.
-pub fn dataflow_import_id_bundle(
-    dataflow: &DataflowDesc,
+pub fn dataflow_import_id_bundle<P>(
+    dataflow: &DataflowDescription<P>,
     compute_instance: ComputeInstanceId,
 ) -> CollectionIdBundle {
     let storage_ids = dataflow.source_imports.keys().copied().collect();

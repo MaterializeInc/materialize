@@ -81,8 +81,10 @@ use itertools::Itertools;
 use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW_TS;
 use mz_adapter_types::connection::ConnectionId;
 use mz_build_info::BuildInfo;
+use mz_catalog::memory::objects::CatalogEntry;
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig};
 use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::plan::Plan;
 use mz_compute_types::ComputeInstanceId;
 use mz_controller::clusters::{ClusterConfig, ClusterEvent, CreateReplicaConfig};
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -1224,6 +1226,9 @@ impl Coordinator {
             "items not cleared from queue {entries_awaiting_dependent:?}, {entries_awaiting_dependencies:?}"
         );
 
+        debug!("coordinator init: optimizing dataflow plans");
+        self.bootstrap_dataflow_plans(&entries)?;
+
         let logs: BTreeSet<_> = BUILTINS::logs()
             .map(|log| self.catalog().resolve_builtin_log(log))
             .collect();
@@ -1279,50 +1284,19 @@ impl Coordinator {
                             .or_insert_with(BTreeSet::new)
                             .insert(entry.id());
                     } else {
-                        // Collect optimizer parameters.
-                        let compute_instance = self
-                            .instance_snapshot(idx.cluster_id)
-                            .expect("compute instance does not exist");
-                        let optimizer_config =
-                            OptimizerConfig::from(self.catalog().system_config());
+                        let mut df_desc = self
+                            .catalog()
+                            .try_get_physical_plan(&entry.id())
+                            .expect("added in `bootstrap_dataflow_plans`")
+                            .clone();
 
-                        // Build an optimizer for this INDEX.
-                        let mut optimizer = optimize::index::Optimizer::new(
-                            self.owned_catalog(),
-                            compute_instance,
-                            entry.id(),
-                            optimizer_config,
-                        );
-
-                        // MIR ⇒ MIR optimization (global)
-                        let index_plan =
-                            optimize::index::Index::new(entry.name(), &idx.on, &idx.keys);
-                        let global_mir_plan = optimizer.optimize(index_plan)?;
-                        // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                        let global_lir_plan = optimizer.optimize(global_mir_plan.clone())?;
                         // Timestamp selection
                         let as_of = self.bootstrap_index_as_of(
-                            global_mir_plan.df_desc(),
-                            optimizer.cluster_id(),
+                            &df_desc,
+                            idx.cluster_id,
                             idx.is_retained_metrics_object,
                         );
-                        let global_lir_plan = global_lir_plan.resolve(as_of);
-
-                        // Note: ideally, the optimized_plan should be computed
-                        // and set when the CatalogItem is re-constructed (in
-                        // parse_item).
-                        //
-                        // However, it's not clear how exactly to change
-                        // `load_catalog_items` in order to accommodate for the
-                        // optimizer pipeline executed above.
-                        self.catalog_mut()
-                            .set_optimized_plan(entry.id(), global_mir_plan.df_desc().clone());
-                        self.catalog_mut()
-                            .set_physical_plan(entry.id(), global_lir_plan.df_desc().clone());
-                        self.catalog_mut()
-                            .set_dataflow_metainfo(entry.id(), global_lir_plan.df_meta().clone());
-
-                        let df_desc = global_lir_plan.unapply().0;
+                        df_desc.set_as_of(as_of);
 
                         // What follows is morally equivalent to `self.ship_dataflow(df, idx.cluster_id)`,
                         // but we cannot call that as it will also downgrade the read hold on the index.
@@ -1346,55 +1320,16 @@ impl Coordinator {
                         .storage_ids
                         .insert(entry.id());
 
-                    // Collect optimizer parameters.
-                    let compute_instance = self
-                        .instance_snapshot(mview.cluster_id)
-                        .expect("compute instance does not exist");
-                    let internal_view_id = self.allocate_transient_id()?;
-                    let debug_name = self
+                    let mut df_desc = self
                         .catalog()
-                        .resolve_full_name(entry.name(), None)
-                        .to_string();
-                    let optimizer_config = OptimizerConfig::from(self.catalog().system_config());
+                        .try_get_physical_plan(&entry.id())
+                        .expect("added in `bootstrap_dataflow_plans`")
+                        .clone();
 
-                    // Build an optimizer for this MATERIALIZED VIEW.
-                    let mut optimizer = optimize::materialized_view::Optimizer::new(
-                        self.owned_catalog(),
-                        compute_instance,
-                        entry.id(),
-                        internal_view_id,
-                        mview.desc.iter_names().cloned().collect(),
-                        mview.non_null_assertions.clone(),
-                        debug_name,
-                        optimizer_config,
-                    );
-
-                    // MIR ⇒ MIR optimization (global)
-                    let global_mir_plan = optimizer.optimize(mview.optimized_expr.clone())?;
-                    // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                    let global_lir_plan = optimizer.optimize(global_mir_plan.clone())?;
                     // Timestamp selection
-                    let as_of = self.bootstrap_materialized_view_as_of(
-                        global_mir_plan.df_desc(),
-                        optimizer.cluster_id(),
-                    );
-                    let global_lir_plan = global_lir_plan.resolve(as_of);
+                    let as_of = self.bootstrap_materialized_view_as_of(&df_desc, mview.cluster_id);
+                    df_desc.set_as_of(as_of);
 
-                    // Note: ideally, the optimized_plan should be computed
-                    // and set when the CatalogItem is re-constructed (in
-                    // parse_item).
-                    //
-                    // However, it's not clear how exactly to change
-                    // `load_catalog_items` in order to accommodate for the
-                    // optimizer pipeline executed above.
-                    self.catalog_mut()
-                        .set_optimized_plan(entry.id(), global_mir_plan.df_desc().clone());
-                    self.catalog_mut()
-                        .set_physical_plan(entry.id(), global_lir_plan.df_desc().clone());
-                    self.catalog_mut()
-                        .set_dataflow_metainfo(entry.id(), global_lir_plan.df_meta().clone());
-
-                    let df_desc = global_lir_plan.unapply().0;
                     self.ship_dataflow_new(df_desc, mview.cluster_id).await;
                 }
                 CatalogItem::Sink(sink) => {
@@ -1634,10 +1569,121 @@ impl Coordinator {
         self.apply_local_write(register_ts).await;
     }
 
+    /// Invokes the optimizer on all indexes and materialized views in the catalog and inserts the
+    /// resulting dataflow plans into the catalog state.
+    ///
+    /// `ordered_catalog_entries` must by sorted in dependency order, with dependencies ordered
+    /// before their dependants.
+    ///
+    /// This method does not perform timestamp selection for the dataflows, nor does it create them
+    /// in the compute controller. Both of these steps happen later during bootstrapping.
+    fn bootstrap_dataflow_plans(
+        &mut self,
+        ordered_catalog_entries: &[CatalogEntry],
+    ) -> Result<(), AdapterError> {
+        // The optimizer expects to be able to query its `ComputeInstanceSnapshot` for
+        // collections the current dataflow can depend on. But since we don't yet install anything
+        // on compute instances, the snapshot information is incomplete. We fix that by manually
+        // updating `ComputeInstanceSnapshot` objects to ensure they contain collections previously
+        // optimized.
+        let mut instance_snapshots = BTreeMap::new();
+
+        let optimizer_config = OptimizerConfig::from(self.catalog().system_config());
+
+        for entry in ordered_catalog_entries {
+            let id = entry.id();
+            match entry.item() {
+                CatalogItem::Index(idx) => {
+                    // Collect optimizer parameters.
+                    let compute_instance =
+                        instance_snapshots.entry(idx.cluster_id).or_insert_with(|| {
+                            self.instance_snapshot(idx.cluster_id)
+                                .expect("compute instance exists")
+                        });
+
+                    // The index may already be installed on the compute instance. For example,
+                    // this is the case for introspection indexes.
+                    if compute_instance.contains_collection(&id) {
+                        continue;
+                    }
+
+                    // Build an optimizer for this INDEX.
+                    let mut optimizer = optimize::index::Optimizer::new(
+                        self.owned_catalog(),
+                        compute_instance.clone(),
+                        entry.id(),
+                        optimizer_config.clone(),
+                    );
+
+                    // MIR ⇒ MIR optimization (global)
+                    let index_plan = optimize::index::Index::new(entry.name(), &idx.on, &idx.keys);
+                    let global_mir_plan = optimizer.optimize(index_plan)?;
+                    let optimized_plan = global_mir_plan.df_desc().clone();
+
+                    // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+                    let global_lir_plan = optimizer.optimize(global_mir_plan)?;
+                    let physical_plan = global_lir_plan.df_desc().clone();
+                    let metainfo = global_lir_plan.df_meta().clone();
+
+                    let catalog = self.catalog_mut();
+                    catalog.set_optimized_plan(id, optimized_plan);
+                    catalog.set_physical_plan(id, physical_plan);
+                    catalog.set_dataflow_metainfo(id, metainfo);
+
+                    compute_instance.insert_collection(id);
+                }
+                CatalogItem::MaterializedView(mv) => {
+                    // Collect optimizer parameters.
+                    let compute_instance =
+                        instance_snapshots.entry(mv.cluster_id).or_insert_with(|| {
+                            self.instance_snapshot(mv.cluster_id)
+                                .expect("compute instance exists")
+                        });
+                    let internal_view_id = self.allocate_transient_id()?;
+                    let debug_name = self
+                        .catalog()
+                        .resolve_full_name(entry.name(), None)
+                        .to_string();
+
+                    // Build an optimizer for this MATERIALIZED VIEW.
+                    let mut optimizer = optimize::materialized_view::Optimizer::new(
+                        self.owned_catalog(),
+                        compute_instance.clone(),
+                        entry.id(),
+                        internal_view_id,
+                        mv.desc.iter_names().cloned().collect(),
+                        mv.non_null_assertions.clone(),
+                        debug_name,
+                        optimizer_config.clone(),
+                    );
+
+                    // MIR ⇒ MIR optimization (global)
+                    let global_mir_plan = optimizer.optimize(mv.optimized_expr.clone())?;
+                    let optimized_plan = global_mir_plan.df_desc().clone();
+
+                    // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+                    let global_lir_plan = optimizer.optimize(global_mir_plan)?;
+                    let physical_plan = global_lir_plan.df_desc().clone();
+                    let metainfo = global_lir_plan.df_meta().clone();
+
+                    let catalog = self.catalog_mut();
+                    catalog.set_optimized_plan(id, optimized_plan);
+                    catalog.set_physical_plan(id, physical_plan);
+                    catalog.set_dataflow_metainfo(id, metainfo);
+
+                    compute_instance.insert_collection(id);
+                }
+                _ => (),
+            }
+        }
+
+        Ok(())
+    }
+
     /// Returns an `as_of` suitable for bootstrapping the given index dataflow.
     fn bootstrap_index_as_of(
         &self,
-        dataflow: &DataflowDescription<OptimizedMirRelationExpr>,
+        dataflow: &DataflowDescription<Plan>,
         cluster_id: ComputeInstanceId,
         is_retained_metrics_index: bool,
     ) -> Antichain<Timestamp> {
@@ -1707,7 +1753,7 @@ impl Coordinator {
     /// Returns an `as_of` suitable for bootstrapping the given materialized view dataflow.
     fn bootstrap_materialized_view_as_of(
         &self,
-        dataflow: &DataflowDescription<OptimizedMirRelationExpr>,
+        dataflow: &DataflowDescription<Plan>,
         cluster_id: ComputeInstanceId,
     ) -> Antichain<Timestamp> {
         // All inputs must be readable at the chosen `as_of`, so it must be at least the join of
