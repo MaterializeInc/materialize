@@ -43,7 +43,6 @@ use timely::PartialOrder;
 use tracing::warn;
 
 use crate::catalog::{CatalogItem, CatalogState, DataSourceDesc, MaterializedView, Source, View};
-use crate::coord::ddl::CatalogTxn;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timestamp_selection::TimestampProvider;
 use crate::coord::Coordinator;
@@ -134,22 +133,6 @@ impl Coordinator {
         ComputeInstanceSnapshot::new(&self.controller, id)
     }
 
-    /// Finalizes a dataflow and then broadcasts it to all workers.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the dataflow fails to ship.
-    pub(crate) async fn must_ship_dataflow(
-        &mut self,
-        dataflow: DataflowDesc,
-        instance: ComputeInstanceId,
-    ) -> DataflowDescription<Plan> {
-        #[allow(deprecated)]
-        self.ship_dataflow(dataflow, instance)
-            .await
-            .expect("failed to ship dataflow")
-    }
-
     /// Call into the compute controller to install a finalized dataflow, and
     /// initialize the read policies for its exported objects.
     pub(crate) async fn ship_dataflow_new(
@@ -174,9 +157,6 @@ impl Coordinator {
 
     #[deprecated = "This is being replaced by ship_dataflow_new (see #20569)."]
     /// Finalizes a dataflow and then broadcasts it to all workers.
-    ///
-    /// Returns an error on failure. DO NOT call this for DDL. Instead, use the non-fallible version
-    /// [`Self::must_ship_dataflow`].
     pub(crate) async fn ship_dataflow(
         &mut self,
         mut dataflow: DataflowDesc,
@@ -215,34 +195,6 @@ impl Coordinator {
     /// invariants such as ensuring that the `as_of` frontier is in advance of
     /// the various `since` frontiers of participating data inputs.
     ///
-    /// In particular, there are requirement on the `as_of` field for the dataflow
-    /// and the `since` frontiers of created arrangements, as a function of the `since`
-    /// frontiers of dataflow inputs (sources and imported arrangements).
-    ///
-    /// # Panics
-    ///
-    /// Panics if as_of is < the `since` frontiers.
-    ///
-    /// Panics if the dataflow descriptions contain an invalid plan.
-    pub(crate) fn must_finalize_dataflow(
-        &self,
-        dataflow: DataflowDesc,
-        compute_instance: ComputeInstanceId,
-    ) -> DataflowDescription<mz_compute_types::plan::Plan> {
-        // This function must succeed because catalog_transact has generally been run
-        // before calling this function. We don't have plumbing yet to rollback catalog
-        // operations if this function fails, and environmentd will be in an unsafe
-        // state if we do not correctly clean up the catalog.
-        self.finalize_dataflow(dataflow, compute_instance)
-            .expect("Dataflow planning failed; unrecoverable error")
-    }
-
-    /// Finalizes a dataflow.
-    ///
-    /// Finalization includes optimization, but also validation of various
-    /// invariants such as ensuring that the `as_of` frontier is in advance of
-    /// the various `since` frontiers of participating data inputs.
-    ///
     /// In particular, there are requirements on the `as_of` field for the dataflow
     /// and the `since` frontiers of created arrangements, as a function of the `since`
     /// frontiers of dataflow inputs (sources and imported arrangements).
@@ -250,9 +202,6 @@ impl Coordinator {
     /// Additionally, this method requires that the `until` field of the dataflow
     /// has been set, so that any plan improvements based on its difference to `as_of`
     /// can be carried out.
-    ///
-    /// This method will return an error if the finalization fails. DO NOT call this
-    /// method for DDL. Instead, use the non-fallible version [`Self::must_finalize_dataflow`].
     ///
     /// # Panics
     ///
@@ -310,15 +259,6 @@ pub fn dataflow_import_id_bundle(
     CollectionIdBundle {
         storage_ids,
         compute_ids: btreemap! {compute_instance => compute_ids},
-    }
-}
-
-impl CatalogTxn<'_, mz_repr::Timestamp> {
-    /// Creates a new dataflow builder from an ongoing catalog transaction.
-    pub fn dataflow_builder(&self, instance: ComputeInstanceId) -> DataflowBuilder {
-        let snapshot = ComputeInstanceSnapshot::new(self.dataflow_client, instance)
-            .expect("compute instance does not exist");
-        DataflowBuilder::new(self.catalog, snapshot)
     }
 }
 
@@ -417,54 +357,6 @@ impl<'a> DataflowBuilder<'a> {
         }
         dataflow.insert_plan(*view_id, view.clone());
         Ok(())
-    }
-
-    /// Builds a dataflow description for the index with the specified ID.
-    pub fn build_index_dataflow(
-        &mut self,
-        id: GlobalId,
-    ) -> Result<(DataflowDesc, DataflowMetainfo), AdapterError> {
-        let index_entry = self.catalog.get_entry(&id);
-        let index = match index_entry.item() {
-            CatalogItem::Index(index) => index,
-            _ => unreachable!("cannot create index dataflow on non-index"),
-        };
-        let on_entry = self.catalog.get_entry(&index.on);
-        let on_type = on_entry
-            .desc(
-                &self
-                    .catalog
-                    .resolve_full_name(on_entry.name(), on_entry.conn_id()),
-            )
-            .expect("can only create indexes on items with a valid description")
-            .typ()
-            .clone();
-        let name = self
-            .catalog
-            .resolve_full_name(index_entry.name(), index_entry.conn_id())
-            .to_string();
-        let mut dataflow = DataflowDesc::new(name);
-        self.import_into_dataflow(&index.on, &mut dataflow)?;
-        for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
-            prep_relation_expr(self.catalog, plan, ExprPrepStyle::Index)?;
-        }
-        let mut index_description = IndexDesc {
-            on_id: index.on,
-            key: index.keys.clone(),
-        };
-        for key in &mut index_description.key {
-            prep_scalar_expr(self.catalog, key, ExprPrepStyle::Index)?;
-        }
-        dataflow.export_index(id, index_description, on_type);
-
-        // Optimize the dataflow across views, and any other ways that appeal.
-        let dataflow_metainfo = mz_transform::optimize_dataflow(
-            &mut dataflow,
-            self,
-            &mz_transform::EmptyStatisticsOracle,
-        )?;
-
-        Ok((dataflow, dataflow_metainfo))
     }
 
     /// Builds a dataflow description for the sink with the specified name,
@@ -889,21 +781,16 @@ fn role_oid_memberships_inner<'a>(
 #[cfg(test)]
 impl Coordinator {
     #[allow(dead_code)]
-    async fn verify_ship_dataflow_no_error(&mut self) {
-        // must_ship_dataflow and must_finalize_dataflow are not allowed
-        // to have a `Result` return because these functions are called after
-        // `catalog_transact`, after which no errors are allowed. This test exists to
-        // prevent us from incorrectly teaching those functions how to return errors
-        // (which has happened twice and is the motivation for this test).
+    async fn verify_ship_dataflow_no_error(&mut self, dataflow: DataflowDescription<Plan>) {
+        // `ship_dataflow_new` is not allowed to have a `Result` return because this function is
+        // called after `catalog_transact`, after which no errors are allowed. This test exists to
+        // prevent us from incorrectly teaching those functions how to return errors (which has
+        // happened twice and is the motivation for this test).
 
         // An arbitrary compute instance ID to satisfy the function calls below. Note that
         // this only works because this function will never run.
         let compute_instance = ComputeInstanceId::User(1);
 
-        let dataflow = || DataflowDesc::new("".into());
-        let _: DataflowDescription<mz_compute_types::plan::Plan> =
-            self.must_ship_dataflow(dataflow(), compute_instance).await;
-        let _: DataflowDescription<mz_compute_types::plan::Plan> =
-            self.must_finalize_dataflow(dataflow(), compute_instance);
+        let _: () = self.ship_dataflow_new(dataflow, compute_instance).await;
     }
 }

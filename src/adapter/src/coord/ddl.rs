@@ -58,6 +58,9 @@ use crate::{catalog, flags, AdapterError, AdapterNotice};
 /// State provided to a catalog transaction closure.
 pub struct CatalogTxn<'a, T> {
     pub(crate) dataflow_client: &'a mz_controller::Controller<T>,
+
+    // TODO: This field is currently unused. Consider removing it.
+    #[allow(dead_code)]
     pub(crate) catalog: &'a CatalogState,
 }
 
