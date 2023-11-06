@@ -85,8 +85,7 @@ class PreExecutionInconsistencyIgnoreFilter(PreExecutionInconsistencyIgnoreFilte
                     isinstance(arg_type_spec, NumericReturnTypeSpec)
                     and not arg_type_spec.only_integer
                 ):
-                    # tracked with https://github.com/MaterializeInc/materialize/issues/19592
-                    return YesIgnore("#19592")
+                    return YesIgnore("#15186")
 
         return NoIgnore()
 
