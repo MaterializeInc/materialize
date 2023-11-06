@@ -41,6 +41,7 @@ pub mod compound;
 pub mod cse;
 pub mod dataflow;
 pub mod demand;
+pub mod equivalence_propagation;
 pub mod fold_constants;
 pub mod fusion;
 pub mod join_implementation;
@@ -479,6 +480,7 @@ impl Optimizer {
                 transforms: vec![
                     // Predicate pushdown sets the equivalence classes of joins.
                     Box::new(crate::predicate_pushdown::PredicatePushdown::default()),
+                    Box::new(crate::equivalence_propagation::EquivalencePropagation::default()),
                     // Lifts the information `!isnull(col)`
                     Box::new(crate::nonnullable::NonNullable),
                     // Lifts the information `col = literal`
