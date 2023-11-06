@@ -709,6 +709,17 @@ steps:
               composition: postgres-consistency
               args: ["--seed=$BUILDKITE_JOB_ID", "--max-runtime-in-sec=1200"]
 
+      - id: version-consistency
+        label: "Version consistency"
+        timeout_in_minutes: 58
+        agents:
+          queue: linux-x86_64
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: version-consistency
+              args: ["--seed=$BUILDKITE_JOB_ID", "--max-runtime-in-sec=1200"]
+
   - group: SQLsmith
     key: sqlsmith-group
     steps:
