@@ -117,9 +117,6 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("inconsistent ordering, not an error")
 
-        if db_function.function_name_in_lower_case == "timezone":
-            return YesIgnore("#21999: timezone")
-
         if db_function.function_name_in_lower_case == "date_trunc":
             precision = expression.args[0]
             if isinstance(precision, EnumConstant) and precision.value == "second":
