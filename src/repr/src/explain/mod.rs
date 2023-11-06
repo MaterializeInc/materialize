@@ -33,6 +33,7 @@
 use itertools::Itertools;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fmt::{Display, Formatter};
@@ -680,6 +681,13 @@ impl<'a> fmt::Display for HumanizedAttributes<'a> {
 
         if self.config.column_names {
             let column_names = self.attrs.column_names.as_ref().expect("column_names");
+            let column_names = column_names.into_iter().enumerate().map(|(i, c)| {
+                if c.is_empty() {
+                    Cow::Owned(format!("#{i}"))
+                } else {
+                    Cow::Borrowed(c)
+                }
+            });
             let column_names = bracketed("(", ")", separated(", ", column_names)).to_string();
             builder.field("column_names", &column_names);
         }
