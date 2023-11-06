@@ -170,6 +170,7 @@ SCENARIOS = [
             {ITERATIONS * REPEAT}
             """
         ),
+        clusterd_memory="3.6Gb",
     ),
     PgCdcScenario(
         name="pg-cdc-update",
@@ -376,7 +377,7 @@ SCENARIOS = [
             """
         ),
         materialized_memory="10Gb",
-        clusterd_memory="3.2Gb",
+        clusterd_memory="3.5Gb",
     ),
     KafkaScenario(
         name="upsert-index-hydration",
