@@ -18,7 +18,7 @@ change arbitrarily in future versions of Materialize.
 
 {{< diagram "explain-schema.svg" >}}
 
-#### `create_sink_stmt`
+#### `rest_of_create_sink_stmt`
 [CREATE SINK](/sql/create-sink/)
 
 ### Output format

@@ -270,7 +270,8 @@ explain_schema ::=
   'EXPLAIN' ( 'KEY' | 'VALUE' ) 'SCHEMA'
   ( 'AS JSON' )?
   'FOR'
-  create_sink_stmt
+  'CREATE SINK' (optional_name)?
+  rest_of_create_sink_stmt
 fetch ::=
   'FETCH' 'FORWARD'? ('ALL' | count)? 'FROM'? cursor_name
   ( 'WITH'? '(' (option_name ('=' option_value)?) ( ',' (option_name ('=' option_value)?) )* ')' )?
