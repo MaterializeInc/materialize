@@ -152,6 +152,7 @@ known_errors = [
     "target replica failed or was dropped",  # expected on replica OoMs with #21587
     "cannot materialize call to",  # create materialized view on some internal views
     "arrays must not contain null values",  # aclexplode, mz_aclexplode
+    "use of AT TIME ZONE with time type is not supported",
 ]
 
 
