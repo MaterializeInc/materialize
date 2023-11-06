@@ -36,7 +36,7 @@ use crate::plan::scope::Scope;
 use crate::plan::side_effecting_func::PG_CATALOG_SEF_BUILTINS;
 use crate::plan::transform_ast;
 use crate::plan::typeconv::{self, CastContext};
-use crate::session::vars;
+use crate::session::vars::{self, ENABLE_TIME_AT_TIME_ZONE};
 
 /// A specifier for a function or an operator.
 #[derive(Clone, Copy, Debug)]
@@ -2604,7 +2604,21 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(String, Timestamp) => BinaryFunc::TimezoneTimestamp => TimestampTz, 2069;
             params!(String, TimestampTz) => BinaryFunc::TimezoneTimestampTz => Timestamp, 1159;
             // PG defines this as `text timetz`
-            params!(String, Time) => Operation::binary(|_ecx, lhs, rhs| {
+            params!(String, Time) => Operation::binary(|ecx, lhs, rhs| {
+                // NOTE: this overload is wrong. It should take and return a
+                // `timetz`, which is a type we don't support because it has
+                // inscrutable semantics (timezones are meaningless without a
+                // date). This implementation attempted to extend those already
+                // inscrutable semantics to the `time` type, which makes matters
+                // even worse.
+                //
+                // This feature flag ensures we don't get *new* uses of this
+                // function. At some point in the future, we should either
+                // remove this overload entirely, after validating there are no
+                // catalogs in production that rely on this overload, or we
+                // should properly support the `timetz` type and adjust this
+                // overload accordingly.
+                ecx.require_feature_flag(&ENABLE_TIME_AT_TIME_ZONE)?;
                 Ok(HirScalarExpr::CallVariadic {
                     func: VariadicFunc::TimezoneTime,
                     exprs: vec![

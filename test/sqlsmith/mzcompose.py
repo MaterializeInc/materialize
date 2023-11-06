@@ -155,6 +155,7 @@ known_errors = [
     "window functions are not allowed in table function arguments",
     "window functions are not allowed in OR argument",
     "window functions are not allowed in AND argument",
+    "use of AT TIME ZONE with time type is not supported",
 ]
 
 

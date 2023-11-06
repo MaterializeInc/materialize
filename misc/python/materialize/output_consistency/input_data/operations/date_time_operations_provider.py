@@ -133,7 +133,7 @@ DATE_TIME_OPERATION_TYPES.append(
 DATE_TIME_OPERATION_TYPES.append(
     DbOperation(
         "$ AT TIME ZONE $::TEXT",
-        [DateTimeOperationParam(), TIME_ZONE_PARAM],
+        [DateTimeOperationParam(support_time=False), TIME_ZONE_PARAM],
         DateTimeReturnTypeSpec(TIMESTAMPTZ_TYPE_IDENTIFIER),
     )
 )
