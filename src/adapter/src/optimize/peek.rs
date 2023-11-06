@@ -68,8 +68,8 @@ impl Debug for OptimizePeek {
     }
 }
 
-/// Placeholder type for [`LocalMirPlan`] and [`GlobalMirPlan`] structs
-/// representing an optimization result without context.
+/// Marker type for [`LocalMirPlan`] and [`GlobalMirPlan`] structs representing
+/// an optimization result without context.
 pub struct Unresolved;
 
 /// The (sealed intermediate) result after HIR ⇒ MIR lowering and decorrelation
@@ -86,8 +86,8 @@ impl<T> LocalMirPlan<T> {
     }
 }
 
-/// Context information type for [`LocalMirPlan`] structs representing an
-/// optimization result with a resolved timestamp and an enclosing [`Session`].
+/// Marker type for [`LocalMirPlan`] structs representing an optimization result
+/// with attached environment context required for the next optimization stage.
 pub struct ResolvedLocal<'s> {
     stats: Box<dyn StatisticsOracle>,
     session: &'s Session,
@@ -124,8 +124,12 @@ impl Debug for GlobalMirPlan<Unresolved> {
     }
 }
 
-/// Context information type for [`GlobalMirPlan`] structs representing an
-/// optimization result with a resolved timestamp and an enclosing [`Session`].
+/// Marker type for [`GlobalMirPlan`] structs representing an optimization
+/// result with with a resolved timestamp and attached environment context
+/// required for the next optimization stage.
+///
+/// The actual timestamp value is set in the [`MirDataflowDescription`] of the
+/// surrounding [`GlobalMirPlan`] when we call `resolve()`.
 #[derive(Clone)]
 pub struct ResolvedGlobal<'s> {
     session: &'s Session,
@@ -289,7 +293,7 @@ impl<'s> Optimize<LocalMirPlan<ResolvedLocal<'s>>> for OptimizePeek {
             |s| prep_scalar_expr(self.catalog.state(), s, style),
         )?;
 
-        // TODO(aalexandrov): Instead of conditioning here we should really
+        // TODO: Instead of conditioning here we should really
         // reconsider how to render multi-plan peek dataflows. The main
         // difficulty here is rendering the optional finishing bit.
         if self.config.mode != OptimizeMode::Explain {
@@ -396,7 +400,9 @@ impl<'s> Optimize<GlobalMirPlan<ResolvedGlobal<'s>>> for OptimizePeek {
         )? {
             Some(plan) => {
                 // An ugly way to prevent panics when explaining the physical
-                // plan of a fast-path query. TODO: get rid of this.
+                // plan of a fast-path query.
+                //
+                // TODO: get rid of this.
                 if self.config.mode == OptimizeMode::Explain {
                     // Finalize the dataflow. This includes:
                     // - MIR ⇒ LIR lowering

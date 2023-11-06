@@ -9,16 +9,15 @@
 
 //! Optimizer implementation for `CREATE MATERIALIZED VIEW` statements.
 
+use std::marker::PhantomData;
 use std::sync::Arc;
 
-use differential_dataflow::lattice::Lattice;
 use maplit::btreemap;
 use mz_compute_types::dataflows::BuildDesc;
 use mz_compute_types::plan::Plan;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSinkConnection};
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
-use mz_ore::soft_assert_or_log;
 use mz_repr::explain::trace_plan;
 use mz_repr::{ColumnName, GlobalId, RelationDesc, Timestamp};
 use mz_sql::plan::HirRelationExpr;
@@ -60,6 +59,12 @@ pub struct OptimizeMaterializedView {
     config: OptimizerConfig,
 }
 
+impl OptimizeMaterializedView {
+    pub fn cluster_id(&self) -> ComputeInstanceId {
+        self.compute_instance.instance_id()
+    }
+}
+
 /// The (sealed intermediate) result after HIR ⇒ MIR lowering and decorrelation
 /// and MIR optimization.
 #[derive(Clone)]
@@ -73,34 +78,68 @@ pub struct LocalMirPlan {
 /// 2. transitively inlining referenced views, and
 /// 3. jointly optimizing the `MIR` plans in the [`MirDataflowDescription`].
 #[derive(Clone)]
-pub struct GlobalMirPlan<T: Clone> {
+pub struct GlobalMirPlan {
     df_desc: MirDataflowDescription,
     df_meta: DataflowMetainfo,
-    ts_info: T,
 }
 
-/// Timestamp information type for [`GlobalMirPlan`] structs representing an
-/// optimization result without a resolved timestamp.
-#[derive(Clone)]
-pub struct Unresolved {
-    compute_instance_id: ComputeInstanceId,
-}
+impl GlobalMirPlan {
+    pub fn df_desc(&self) -> &MirDataflowDescription {
+        &self.df_desc
+    }
 
-/// Timestamp information type for [`GlobalMirPlan`] structs representing an
-/// optimization result with a resolved timestamp.
-///
-/// The actual timestamp value is set in the [`MirDataflowDescription`] of the
-/// surrounding [`GlobalMirPlan`] when we call `resolve()`.
-#[derive(Clone)]
-pub struct Resolved;
+    pub fn df_meta(&self) -> &DataflowMetainfo {
+        &self.df_meta
+    }
+}
 
 /// The (final) result after MIR ⇒ LIR lowering and optimizing the resulting
 /// `DataflowDescription` with `LIR` plans.
 #[derive(Clone)]
-pub struct GlobalLirPlan {
+pub struct GlobalLirPlan<T: Clone> {
     df_desc: LirDataflowDescription,
     df_meta: DataflowMetainfo,
+    phantom: PhantomData<T>,
 }
+
+impl<T: Clone> GlobalLirPlan<T> {
+    pub fn df_desc(&self) -> &LirDataflowDescription {
+        &self.df_desc
+    }
+
+    pub fn df_meta(&self) -> &DataflowMetainfo {
+        &self.df_meta
+    }
+
+    pub fn desc(&self) -> &RelationDesc {
+        let sink_exports = &self.df_desc.sink_exports;
+        let sink = sink_exports.values().next().expect("valid sink");
+        &sink.from_desc
+    }
+
+    /// Computes the [`CollectionIdBundle`] of the wrapped dataflow.
+    pub fn id_bundle(&self, compute_instance_id: ComputeInstanceId) -> CollectionIdBundle {
+        let storage_ids = self.df_desc.source_imports.keys().copied().collect();
+        let compute_ids = self.df_desc.index_imports.keys().copied().collect();
+        CollectionIdBundle {
+            storage_ids,
+            compute_ids: btreemap! {compute_instance_id => compute_ids},
+        }
+    }
+}
+
+/// Marker type for [`GlobalLirPlan`] structs representing an optimization
+/// result without a resolved timestamp.
+#[derive(Clone)]
+pub struct Unresolved;
+
+/// Marker type for [`GlobalLirPlan`] structs representing an optimization
+/// result with a resolved timestamp.
+///
+/// The actual timestamp value is set in the [`LirDataflowDescription`] of the
+/// surrounding [`GlobalLirPlan`] when we call `resolve()`.
+#[derive(Clone)]
+pub struct Resolved;
 
 impl OptimizeMaterializedView {
     pub fn new(
@@ -159,7 +198,7 @@ impl LocalMirPlan {
 /// This is needed only because the pipeline in the bootstrap code starts from an
 /// [`OptimizedMirRelationExpr`] attached to a [`crate::catalog::CatalogItem`].
 impl Optimize<OptimizedMirRelationExpr> for OptimizeMaterializedView {
-    type To = GlobalMirPlan<Unresolved>;
+    type To = GlobalMirPlan;
 
     fn optimize(&mut self, expr: OptimizedMirRelationExpr) -> Result<Self::To, OptimizerError> {
         let expr = expr.into_inner();
@@ -168,7 +207,7 @@ impl Optimize<OptimizedMirRelationExpr> for OptimizeMaterializedView {
 }
 
 impl Optimize<LocalMirPlan> for OptimizeMaterializedView {
-    type To = GlobalMirPlan<Unresolved>;
+    type To = GlobalMirPlan;
 
     fn optimize(&mut self, plan: LocalMirPlan) -> Result<Self::To, OptimizerError> {
         let expr = OptimizedMirRelationExpr(plan.expr);
@@ -209,78 +248,17 @@ impl Optimize<LocalMirPlan> for OptimizeMaterializedView {
         )?;
 
         // Return the (sealed) plan at the end of this optimization step.
-        Ok(GlobalMirPlan {
-            df_desc,
-            df_meta,
-            ts_info: Unresolved {
-                compute_instance_id: self.compute_instance.instance_id(),
-            },
-        })
+        Ok(GlobalMirPlan { df_desc, df_meta })
     }
 }
 
-impl<T: Clone> GlobalMirPlan<T> {
-    pub fn df_desc(&self) -> &MirDataflowDescription {
-        &self.df_desc
-    }
+impl Optimize<GlobalMirPlan> for OptimizeMaterializedView {
+    type To = GlobalLirPlan<Unresolved>;
 
-    pub fn df_meta(&self) -> &DataflowMetainfo {
-        &self.df_meta
-    }
-}
-
-impl GlobalMirPlan<Unresolved> {
-    /// Produces the [`GlobalMirPlan`] with [`Resolved`] timestamp required for
-    /// the next stage.
-    pub fn resolve(mut self, as_of: Antichain<Timestamp>) -> GlobalMirPlan<Resolved> {
-        // Set the `as_of` timestamp for the dataflow.
-        self.df_desc.set_as_of(as_of);
-
-        soft_assert_or_log!(
-            self.df_desc.index_exports.is_empty(),
-            "unexpectedly setting until for a DataflowDescription with an index",
-        );
-
-        // The only outputs of the dataflow are sinks, so we might be able to
-        // turn off the computation early, if they all have non-trivial
-        // `up_to`s.
-        self.df_desc.until = Antichain::from_elem(Timestamp::MIN);
-        for (_, sink) in &self.df_desc.sink_exports {
-            self.df_desc.until.join_assign(&sink.up_to);
-        }
-
-        GlobalMirPlan {
-            df_desc: self.df_desc,
-            df_meta: self.df_meta,
-            ts_info: Resolved,
-        }
-    }
-
-    /// Computes the [`CollectionIdBundle`] of the wrapped dataflow.
-    pub fn id_bundle(&self) -> CollectionIdBundle {
-        let storage_ids = self.df_desc.source_imports.keys().copied().collect();
-        let compute_ids = self.df_desc.index_imports.keys().copied().collect();
-        CollectionIdBundle {
-            storage_ids,
-            compute_ids: btreemap! {self.compute_instance_id() => compute_ids},
-        }
-    }
-
-    /// Returns the [`ComputeInstanceId`] against which we should resolve the
-    /// timestamp for the next stage.
-    pub fn compute_instance_id(&self) -> ComputeInstanceId {
-        self.ts_info.compute_instance_id
-    }
-}
-
-impl Optimize<GlobalMirPlan<Resolved>> for OptimizeMaterializedView {
-    type To = GlobalLirPlan;
-
-    fn optimize(&mut self, plan: GlobalMirPlan<Resolved>) -> Result<Self::To, OptimizerError> {
+    fn optimize(&mut self, plan: GlobalMirPlan) -> Result<Self::To, OptimizerError> {
         let GlobalMirPlan {
             mut df_desc,
             df_meta,
-            ts_info: _,
         } = plan;
 
         // Ensure all expressions are normalized before finalizing.
@@ -299,26 +277,40 @@ impl Optimize<GlobalMirPlan<Resolved>> for OptimizeMaterializedView {
         .map_err(OptimizerError::Internal)?;
 
         // Return the plan at the end of this `optimize` step.
-        Ok(GlobalLirPlan { df_desc, df_meta })
+        Ok(GlobalLirPlan {
+            df_desc,
+            df_meta,
+            phantom: PhantomData::<Unresolved>,
+        })
     }
 }
 
-impl GlobalLirPlan {
+impl GlobalLirPlan<Unresolved> {
+    /// Produces the [`GlobalLirPlan`] with [`Resolved`] timestamp.
+    pub fn resolve(mut self, as_of: Antichain<Timestamp>) -> GlobalLirPlan<Resolved> {
+        // Set the `as_of` timestamp for the dataflow.
+        self.df_desc.set_as_of(as_of);
+
+        // The only dataflow exports are sinks with an empty `up_to` frontier,
+        // so the `df_desc.until` should also be the empty frontier.
+        assert!(self.df_desc.index_exports.is_empty());
+        for (_, sink) in &self.df_desc.sink_exports {
+            assert!(sink.up_to.is_empty());
+        }
+        // The `until` is set to the empty frontier in the `df_desc` constructor.
+        assert!(self.df_desc.until.is_empty());
+
+        GlobalLirPlan {
+            df_desc: self.df_desc,
+            df_meta: self.df_meta,
+            phantom: PhantomData::<Resolved>,
+        }
+    }
+}
+
+impl GlobalLirPlan<Resolved> {
+    /// Unwraps the parts of the final result of the optimization pipeline.
     pub fn unapply(self) -> (LirDataflowDescription, DataflowMetainfo) {
         (self.df_desc, self.df_meta)
-    }
-
-    pub fn df_desc(&self) -> &LirDataflowDescription {
-        &self.df_desc
-    }
-
-    pub fn df_meta(&self) -> &DataflowMetainfo {
-        &self.df_meta
-    }
-
-    pub fn desc(&self) -> RelationDesc {
-        let sink_exports = &self.df_desc.sink_exports;
-        let sink = sink_exports.values().next().expect("valid sink");
-        sink.from_desc.clone()
     }
 }

@@ -9,6 +9,7 @@
 
 //! Optimizer implementation for `SUBSCRIBE` statements.
 
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
@@ -54,6 +55,12 @@ pub struct OptimizeSubscribe {
     config: OptimizerConfig,
 }
 
+impl OptimizeSubscribe {
+    pub fn cluster_id(&self) -> ComputeInstanceId {
+        self.compute_instance.instance_id()
+    }
+}
+
 /// The (sealed intermediate) result after:
 ///
 /// 1. embedding a [`SubscribeFrom`] plan into a [`MirDataflowDescription`],
@@ -63,30 +70,72 @@ pub struct OptimizeSubscribe {
 pub struct GlobalMirPlan<T: Clone> {
     df_desc: MirDataflowDescription,
     df_meta: DataflowMetainfo,
-    ts_info: T,
+    phantom: PhantomData<T>,
 }
 
-/// Timestamp information type for [`GlobalMirPlan`] structs representing an
-/// optimization result without a resolved timestamp.
+impl<T: Clone> GlobalMirPlan<T> {
+    pub fn df_desc(&self) -> &MirDataflowDescription {
+        &self.df_desc
+    }
+
+    #[allow(dead_code)] // This will be needed for EXPLAIN SUBSCRIBE
+    pub fn df_meta(&self) -> &DataflowMetainfo {
+        &self.df_meta
+    }
+
+    /// Computes the [`CollectionIdBundle`] of the wrapped dataflow.
+    pub fn id_bundle(&self, compute_instance_id: ComputeInstanceId) -> CollectionIdBundle {
+        let storage_ids = self.df_desc.source_imports.keys().copied().collect();
+        let compute_ids = self.df_desc.index_imports.keys().copied().collect();
+        CollectionIdBundle {
+            storage_ids,
+            compute_ids: btreemap! {compute_instance_id => compute_ids},
+        }
+    }
+}
+
+/// The (final) result after MIR ⇒ LIR lowering and optimizing the resulting
+/// `DataflowDescription` with `LIR` plans.
 #[derive(Clone)]
-pub struct Unresolved {
-    compute_instance_id: ComputeInstanceId,
+pub struct GlobalLirPlan {
+    df_desc: LirDataflowDescription,
+    df_meta: DataflowMetainfo,
 }
 
-/// Timestamp information type for [`GlobalMirPlan`] structs representing an
-/// optimization result with a resolved timestamp.
+impl GlobalLirPlan {
+    pub fn df_desc(&self) -> &LirDataflowDescription {
+        &self.df_desc
+    }
+
+    pub fn df_meta(&self) -> &DataflowMetainfo {
+        &self.df_meta
+    }
+
+    pub fn sink_id(&self) -> GlobalId {
+        let sink_exports = &self.df_desc.sink_exports;
+        let sink_id = sink_exports.keys().next().expect("valid sink");
+        *sink_id
+    }
+
+    pub fn sink_desc(&self) -> &ComputeSinkDesc {
+        let sink_exports = &self.df_desc.sink_exports;
+        let sink_desc = sink_exports.values().next().expect("valid sink");
+        sink_desc
+    }
+}
+
+/// Marker type for [`GlobalMirPlan`] structs representing an optimization
+/// result without a resolved timestamp.
+#[derive(Clone)]
+pub struct Unresolved;
+
+/// Marker type for [`GlobalMirPlan`] structs representing an optimization
+/// result with a resolved timestamp.
 ///
 /// The actual timestamp value is set in the [`MirDataflowDescription`] of the
 /// surrounding [`GlobalMirPlan`] when we call `resolve()`.
 #[derive(Clone)]
 pub struct Resolved;
-
-/// The (final) result after MIR ⇒ LIR lowering and optimizing the resulting
-/// `DataflowDescription` with `LIR` plans.
-pub struct GlobalLirPlan {
-    df_desc: LirDataflowDescription,
-    df_meta: DataflowMetainfo,
-}
 
 impl OptimizeSubscribe {
     pub fn new(
@@ -155,7 +204,7 @@ impl Optimize<SubscribeFrom> for OptimizeSubscribe {
                 // HIR ⇒ MIR lowering and decorrelation here. This would allow
                 // us implement something like `EXPLAIN RAW PLAN FOR SUBSCRIBE.`
                 //
-                // let expr = expr.lower()?;
+                // let expr = expr.lower(&self.config)?;
 
                 // MIR ⇒ MIR optimization (local)
                 let expr = span!(target: "optimizer", Level::DEBUG, "local").in_scope(|| {
@@ -201,27 +250,17 @@ impl Optimize<SubscribeFrom> for OptimizeSubscribe {
         Ok(GlobalMirPlan {
             df_desc,
             df_meta,
-            ts_info: Unresolved {
-                compute_instance_id: self.compute_instance.instance_id(),
-            },
+            phantom: PhantomData::<Unresolved>,
         })
     }
 }
 
-impl<T: Clone> GlobalMirPlan<T> {
-    pub fn df_desc(&self) -> &MirDataflowDescription {
-        &self.df_desc
-    }
-
-    #[allow(dead_code)] // This will be needed for EXPLAIN SUBSCRIBE
-    pub fn df_meta(&self) -> &DataflowMetainfo {
-        &self.df_meta
-    }
-}
-
 impl GlobalMirPlan<Unresolved> {
-    /// Produces the [`GlobalMirPlan`] with [`Resolved`] timestamp required for
-    /// the next stage.
+    /// Produces the [`GlobalMirPlan`] with [`Resolved`] timestamp.
+    ///
+    /// We need to resolve timestamps before the `GlobalMirPlan ⇒ GlobalLirPlan`
+    /// optimization stage in order to profit from possible single-time
+    /// optimizations in the `Plan::finalize_dataflow` call.
     pub fn resolve(mut self, as_of: Antichain<Timestamp>) -> GlobalMirPlan<Resolved> {
         // A datalfow description for a `SUBSCRIBE` statement should not have
         // index exports.
@@ -244,24 +283,8 @@ impl GlobalMirPlan<Unresolved> {
         GlobalMirPlan {
             df_desc: self.df_desc,
             df_meta: self.df_meta,
-            ts_info: Resolved,
+            phantom: PhantomData::<Resolved>,
         }
-    }
-
-    /// Computes the [`CollectionIdBundle`] of the wrapped dataflow.
-    pub fn id_bundle(&self) -> CollectionIdBundle {
-        let storage_ids = self.df_desc.source_imports.keys().copied().collect();
-        let compute_ids = self.df_desc.index_imports.keys().copied().collect();
-        CollectionIdBundle {
-            storage_ids,
-            compute_ids: btreemap! {self.compute_instance_id() => compute_ids},
-        }
-    }
-
-    /// Returns the [`ComputeInstanceId`] against which we should resolve the
-    /// timestamp for the next stage.
-    pub fn compute_instance_id(&self) -> ComputeInstanceId {
-        self.ts_info.compute_instance_id
     }
 }
 
@@ -272,7 +295,7 @@ impl Optimize<GlobalMirPlan<Resolved>> for OptimizeSubscribe {
         let GlobalMirPlan {
             mut df_desc,
             df_meta,
-            ts_info: _,
+            phantom: _,
         } = plan;
 
         // Ensure all expressions are normalized before finalizing.
@@ -296,27 +319,8 @@ impl Optimize<GlobalMirPlan<Resolved>> for OptimizeSubscribe {
 }
 
 impl GlobalLirPlan {
+    /// Unwraps the parts of the final result of the optimization pipeline.
     pub fn unapply(self) -> (LirDataflowDescription, DataflowMetainfo) {
         (self.df_desc, self.df_meta)
-    }
-
-    pub fn df_desc(&self) -> &LirDataflowDescription {
-        &self.df_desc
-    }
-
-    pub fn df_meta(&self) -> &DataflowMetainfo {
-        &self.df_meta
-    }
-
-    pub fn sink_id(&self) -> GlobalId {
-        let sink_exports = &self.df_desc.sink_exports;
-        let sink_id = sink_exports.keys().next().expect("valid sink");
-        *sink_id
-    }
-
-    pub fn sink_desc(&self) -> &ComputeSinkDesc {
-        let sink_exports = &self.df_desc.sink_exports;
-        let sink_desc = sink_exports.values().next().expect("valid sink");
-        sink_desc
     }
 }

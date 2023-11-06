@@ -1033,11 +1033,11 @@ impl Coordinator {
         // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
         let local_mir_plan = optimizer.optimize(raw_expr.clone())?;
         let global_mir_plan = optimizer.optimize(local_mir_plan.clone())?;
-        // Timestamp selection
-        let since = self.least_valid_read(&global_mir_plan.id_bundle());
-        let global_mir_plan = global_mir_plan.resolve(since.clone());
         // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
         let global_lir_plan = optimizer.optimize(global_mir_plan.clone())?;
+        // Timestamp selection
+        let since = self.least_valid_read(&global_lir_plan.id_bundle(optimizer.cluster_id()));
+        let global_lir_plan = global_lir_plan.resolve(since.clone());
 
         let mut ops = Vec::new();
         ops.extend(
@@ -1053,7 +1053,7 @@ impl Coordinator {
                 create_sql,
                 raw_expr,
                 optimized_expr: local_mir_plan.expr(),
-                desc: global_lir_plan.desc(),
+                desc: global_lir_plan.desc().clone(),
                 resolved_ids,
                 cluster_id,
                 non_null_assertions,
@@ -1085,7 +1085,7 @@ impl Coordinator {
                         vec![(
                             id,
                             CollectionDescription {
-                                desc: global_lir_plan.desc(),
+                                desc: global_lir_plan.desc().clone(),
                                 data_source: DataSource::Other(DataSourceOther::Compute),
                                 since: Some(since),
                                 status_collection_id: None,
@@ -1159,11 +1159,11 @@ impl Coordinator {
         // MIR ⇒ MIR optimization (global)
         let index_plan = optimize::index::Index::new(&name, &on, &keys);
         let global_mir_plan = optimizer.optimize(index_plan)?;
-        // Timestamp selection
-        let since = self.least_valid_read(&global_mir_plan.id_bundle());
-        let global_mir_plan = global_mir_plan.resolve(since);
         // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
         let global_lir_plan = optimizer.optimize(global_mir_plan.clone())?;
+        // Timestamp selection
+        let since = self.least_valid_read(&global_lir_plan.id_bundle(optimizer.cluster_id()));
+        let global_lir_plan = global_lir_plan.resolve(since);
 
         let index = catalog::Index {
             create_sql,
@@ -2862,7 +2862,7 @@ impl Coordinator {
         let as_of = self
             .determine_timestamp(
                 ctx.session(),
-                &global_mir_plan.id_bundle(),
+                &global_mir_plan.id_bundle(optimizer.cluster_id()),
                 &when,
                 cluster_id,
                 &timeline,
@@ -3610,12 +3610,12 @@ impl Coordinator {
                 )
             };
 
-            // Timestamp selection
-            let since = self.least_valid_read(&global_mir_plan.id_bundle());
-            let global_mir_plan = global_mir_plan.resolve(since);
-
             // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
             let global_lir_plan = optimizer.optimize(global_mir_plan)?;
+
+            // Timestamp selection
+            let since = self.least_valid_read(&global_lir_plan.id_bundle(optimizer.cluster_id()));
+            let global_lir_plan = global_lir_plan.resolve(since);
 
             let (df_desc, df_meta) = global_lir_plan.unapply();
 
@@ -3722,12 +3722,12 @@ impl Coordinator {
                 )
             };
 
-            // Timestamp selection
-            let since = self.least_valid_read(&global_mir_plan.id_bundle());
-            let global_mir_plan = global_mir_plan.resolve(since);
-
             // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
             let global_lir_plan = optimizer.optimize(global_mir_plan)?;
+
+            // Timestamp selection
+            let since = self.least_valid_read(&global_lir_plan.id_bundle(optimizer.cluster_id()));
+            let global_lir_plan = global_lir_plan.resolve(since);
 
             let (df_desc, df_meta) = global_lir_plan.unapply();
 

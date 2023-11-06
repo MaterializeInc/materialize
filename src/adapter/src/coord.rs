@@ -1299,15 +1299,15 @@ impl Coordinator {
                         let index_plan =
                             optimize::index::Index::new(entry.name(), &idx.on, &idx.keys);
                         let global_mir_plan = optimizer.optimize(index_plan)?;
+                        // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+                        let global_lir_plan = optimizer.optimize(global_mir_plan.clone())?;
                         // Timestamp selection
                         let as_of = self.bootstrap_index_as_of(
                             global_mir_plan.df_desc(),
-                            global_mir_plan.compute_instance_id(),
+                            optimizer.cluster_id(),
                             idx.is_retained_metrics_object,
                         );
-                        let global_mir_plan = global_mir_plan.resolve(as_of);
-                        // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                        let global_lir_plan = optimizer.optimize(global_mir_plan.clone())?;
+                        let global_lir_plan = global_lir_plan.resolve(as_of);
 
                         // Note: ideally, the optimized_plan should be computed
                         // and set when the CatalogItem is re-constructed (in
@@ -1372,14 +1372,14 @@ impl Coordinator {
 
                     // MIR ⇒ MIR optimization (global)
                     let global_mir_plan = optimizer.optimize(mview.optimized_expr.clone())?;
+                    // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+                    let global_lir_plan = optimizer.optimize(global_mir_plan.clone())?;
                     // Timestamp selection
                     let as_of = self.bootstrap_materialized_view_as_of(
                         global_mir_plan.df_desc(),
-                        global_mir_plan.compute_instance_id(),
+                        optimizer.cluster_id(),
                     );
-                    let global_mir_plan = global_mir_plan.resolve(as_of);
-                    // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                    let global_lir_plan = optimizer.optimize(global_mir_plan.clone())?;
+                    let global_lir_plan = global_lir_plan.resolve(as_of);
 
                     // Note: ideally, the optimized_plan should be computed
                     // and set when the CatalogItem is re-constructed (in
