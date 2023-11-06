@@ -22,6 +22,7 @@ use serde::ser::SerializeSeq;
 use serde::{Deserialize, Serialize};
 
 use mz_compute_client::logging::LogVariant;
+use mz_compute_types::ComputeInstanceId;
 use mz_controller::clusters::{
     ClusterRole, ClusterStatus, ProcessId, ReplicaConfig, ReplicaLogging,
 };
@@ -338,6 +339,7 @@ pub enum CatalogItem {
     Func(Func),
     Secret(Secret),
     Connection(Connection),
+    Hold(Hold),
 }
 
 impl From<CatalogEntry> for durable::Item {
@@ -373,6 +375,73 @@ impl Table {
     // so they are realtime.
     pub fn timeline(&self) -> Timeline {
         Timeline::EpochMilliseconds
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Hold {
+    pub create_sql: String,
+    pub bundle: CollectionIdBundle,
+    pub resolved_ids: ResolvedIds,
+}
+
+/// A bundle of storage and compute collection identifiers.
+#[derive(Serialize, Debug, Default, Clone)]
+pub struct CollectionIdBundle {
+    /// The identifiers for sources in the storage layer.
+    pub storage_ids: BTreeSet<GlobalId>,
+    /// The identifiers for indexes in the compute layer.
+    pub compute_ids: BTreeMap<ComputeInstanceId, BTreeSet<GlobalId>>,
+}
+
+impl CollectionIdBundle {
+    /// Reports whether the bundle contains any identifiers of any type.
+    pub fn is_empty(&self) -> bool {
+        self.storage_ids.is_empty() && self.compute_ids.values().all(|ids| ids.is_empty())
+    }
+
+    /// Returns a new bundle without the identifiers from `other`.
+    pub fn difference(&self, other: &CollectionIdBundle) -> CollectionIdBundle {
+        let storage_ids = &self.storage_ids - &other.storage_ids;
+        let compute_ids: BTreeMap<_, _> = self
+            .compute_ids
+            .iter()
+            .map(|(compute_instance, compute_ids)| {
+                let compute_ids =
+                    if let Some(other_compute_ids) = other.compute_ids.get(compute_instance) {
+                        compute_ids - other_compute_ids
+                    } else {
+                        compute_ids.clone()
+                    };
+                (*compute_instance, compute_ids)
+            })
+            .filter(|(_, ids)| !ids.is_empty())
+            .collect();
+        CollectionIdBundle {
+            storage_ids,
+            compute_ids,
+        }
+    }
+
+    /// Extends a `CollectionIdBundle` with the contents of another `CollectionIdBundle`.
+    pub fn extend(&mut self, other: &CollectionIdBundle) {
+        self.storage_ids.extend(&other.storage_ids);
+        for (compute_instance, ids) in &other.compute_ids {
+            self.compute_ids
+                .entry(*compute_instance)
+                .or_default()
+                .extend(ids);
+        }
+    }
+
+    /// Returns an iterator over all IDs in the bundle.
+    ///
+    /// The IDs are iterated in an unspecified order.
+    pub fn iter(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.storage_ids
+            .iter()
+            .copied()
+            .chain(self.compute_ids.values().flat_map(BTreeSet::iter).copied())
     }
 }
 
@@ -731,6 +800,7 @@ impl CatalogItem {
             CatalogItem::Func(_) => mz_sql::catalog::CatalogItemType::Func,
             CatalogItem::Secret(_) => mz_sql::catalog::CatalogItemType::Secret,
             CatalogItem::Connection(_) => mz_sql::catalog::CatalogItemType::Connection,
+            CatalogItem::Hold(_) => mz_sql::catalog::CatalogItemType::Hold,
         }
     }
 
@@ -807,6 +877,7 @@ impl CatalogItem {
             CatalogItem::MaterializedView(mview) => &mview.resolved_ids,
             CatalogItem::Secret(_) => &*EMPTY,
             CatalogItem::Connection(connection) => &connection.resolved_ids,
+            CatalogItem::Hold(hold) => &hold.resolved_ids,
         }
     }
 
@@ -824,6 +895,7 @@ impl CatalogItem {
             | CatalogItem::Secret(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
+            | CatalogItem::Hold(_)
             | CatalogItem::Connection(_) => None,
         }
     }
@@ -903,6 +975,11 @@ impl CatalogItem {
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::Type(i))
             }
+            CatalogItem::Hold(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::Hold(i))
+            }
             CatalogItem::Func(i) => Ok(CatalogItem::Func(i.clone())),
         }
     }
@@ -974,6 +1051,11 @@ impl CatalogItem {
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::Connection(i))
             }
+            CatalogItem::Hold(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::Hold(i))
+            }
         }
     }
 
@@ -995,6 +1077,7 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
+            | CatalogItem::Hold(_)
             | CatalogItem::Connection(_) => None,
         }
     }
@@ -1017,6 +1100,7 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
+            | CatalogItem::Hold(_)
             | CatalogItem::Connection(_) => None,
         }
     }
@@ -1038,6 +1122,7 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
+            | CatalogItem::Hold(_)
             | CatalogItem::Connection(_) => None,
         }
     }
@@ -1062,6 +1147,7 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
+            | CatalogItem::Hold(_)
             | CatalogItem::Connection(_) => return None,
         };
         Some(custom_logical_compaction_window.unwrap_or(DEFAULT_LOGICAL_COMPACTION_WINDOW))
@@ -1082,6 +1168,7 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
+            | CatalogItem::Hold(_)
             | CatalogItem::Connection(_) => false,
         }
     }
@@ -1104,6 +1191,7 @@ impl CatalogItem {
             CatalogItem::Type(typ) => typ.create_sql.clone(),
             CatalogItem::Secret(secret) => secret.create_sql.clone(),
             CatalogItem::Connection(connection) => connection.create_sql.clone(),
+            CatalogItem::Hold(hold) => hold.create_sql.clone(),
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
         }
     }
@@ -1126,6 +1214,7 @@ impl CatalogItem {
             CatalogItem::Type(typ) => typ.create_sql,
             CatalogItem::Secret(secret) => secret.create_sql,
             CatalogItem::Connection(connection) => connection.create_sql,
+            CatalogItem::Hold(hold) => hold.create_sql,
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
         }
     }
@@ -1910,6 +1999,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
             CatalogItem::Type(Type { create_sql, .. }) => create_sql,
             CatalogItem::Secret(Secret { create_sql, .. }) => create_sql,
             CatalogItem::Connection(Connection { create_sql, .. }) => create_sql,
+            CatalogItem::Hold(Hold { create_sql, .. }) => create_sql,
             CatalogItem::Func(_) => "<builtin>",
             CatalogItem::Log(_) => "<builtin>",
         }

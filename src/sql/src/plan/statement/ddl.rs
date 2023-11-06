@@ -36,9 +36,9 @@ use mz_sql_parser::ast::{
     AlterSourceAddSubsourceOption, AlterSourceAddSubsourceOptionName, AlterSourceStatement,
     AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement,
     CommentObjectType, CommentStatement, CreateConnectionOption, CreateConnectionOptionName,
-    CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
-    DeferredItemName, DocOnIdentifier, DocOnSchema, DropOwnedStatement, SetRoleVar,
-    UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
+    CreateHoldStatement, CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption,
+    CreateTypeMapOptionName, DeferredItemName, DocOnIdentifier, DocOnSchema, DropOwnedStatement,
+    SetRoleVar, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnection};
 use mz_storage_types::connections::Connection;
@@ -106,13 +106,13 @@ use crate::plan::{
     AlterSystemResetPlan, AlterSystemSetPlan, CommentPlan, ComputeReplicaConfig,
     ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan, CreateClusterPlan,
     CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
-    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
-    DropOwnedPlan, FullItemName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan,
-    PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, RotateKeysPlan, Secret, Sink,
-    Source, SourceSinkClusterConfig, Table, Type, VariableValue, View, WebhookHeaderFilters,
-    WebhookHeaders, WebhookValidation,
+    CreateConnectionPlan, CreateDatabasePlan, CreateHoldPlan, CreateIndexPlan,
+    CreateMaterializedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
+    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc,
+    DropObjectsPlan, DropOwnedPlan, FullItemName, HirScalarExpr, Index, Ingestion,
+    MaterializedView, Params, Plan, PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig,
+    RotateKeysPlan, Secret, Sink, Source, SourceSinkClusterConfig, Table, Type, VariableValue,
+    View, WebhookHeaderFilters, WebhookHeaders, WebhookValidation,
 };
 use crate::session::vars;
 
@@ -2915,6 +2915,65 @@ generate_extracted_config!(
     (KeyType, ResolvedDataType),
     (ValueType, ResolvedDataType)
 );
+
+pub fn describe_create_hold(
+    _: &StatementContext,
+    _: CreateHoldStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_create_hold(
+    scx: &StatementContext,
+    stmt: CreateHoldStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    let CreateHoldStatement { name, on, at } = stmt;
+
+    // Check for an object in the catalog with this same name
+    let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name.clone())?)?;
+    let full_name = scx.catalog.resolve_full_name(&name);
+    let partial_name = PartialItemName::from(full_name.clone());
+    if let Ok(item) = scx.catalog.resolve_item(&partial_name) {
+        return Err(PlanError::ItemAlreadyExists {
+            name: full_name.to_string(),
+            item_type: item.item_type(),
+        });
+    }
+
+    let on: Vec<GlobalId> = on
+        .iter()
+        .map(|on| match on {
+            ResolvedItemName::Item { id, .. } => Ok(*id),
+            ResolvedItemName::Cte { .. } | ResolvedItemName::Error => {
+                sql_bail!("[internal error] invalid target id")
+            }
+        })
+        .collect::<Result<_, _>>()?;
+
+    let at = at
+        .map(|mut at| {
+            let scope = Scope::empty();
+            let desc = RelationDesc::empty();
+            let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
+            transform_ast::transform(scx, &mut at)?;
+            let ecx = &ExprContext {
+                qcx: &qcx,
+                name: "AT",
+                scope: &scope,
+                relation_type: desc.typ(),
+                allow_aggregates: false,
+                allow_subqueries: false,
+                allow_parameters: false,
+                allow_windows: false,
+            };
+            query::plan_expr(ecx, &at)?
+                .cast_to(ecx, CastContext::Implicit, &ScalarType::MzTimestamp)?
+                .lower_uncorrelated()
+        })
+        .transpose()?;
+
+    Ok(Plan::CreateHold(CreateHoldPlan { name, on, at }))
+}
 
 #[derive(Debug)]
 pub enum PlannedAlterRoleOption {

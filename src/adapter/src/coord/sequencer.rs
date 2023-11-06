@@ -13,6 +13,7 @@
 //! Logic for executing a planned SQL query.
 
 use inner::return_if_err;
+use mz_catalog::memory::objects::CollectionIdBundle;
 use mz_controller_types::ClusterId;
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::tracing::OpenTelemetryContext;
@@ -33,7 +34,6 @@ use tracing::{event, Instrument, Level, Span};
 
 use crate::catalog::{Catalog, ErrorKind};
 use crate::command::{Command, ExecuteResponse, Response};
-use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::{introspection, Coordinator, Message};
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
@@ -207,6 +207,10 @@ impl Coordinator {
                 let result = self
                     .sequence_create_type(ctx.session(), plan, resolved_ids)
                     .await;
+                ctx.retire(result);
+            }
+            Plan::CreateHold(plan) => {
+                let result = self.sequence_create_hold(ctx.session(), plan).await;
                 ctx.retire(result);
             }
             Plan::Comment(plan) => {

@@ -572,6 +572,23 @@ fn generate_rbac_requirements(
             item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
+        Plan::CreateHold(plan::CreateHoldPlan { name, on, at: _ }) => RbacRequirements {
+            privileges: {
+                let mut privileges = vec![(
+                    SystemObjectId::Object(name.qualifiers.clone().into()),
+                    AclMode::CREATE,
+                    role_id,
+                )];
+                privileges.extend(generate_read_privileges(
+                    catalog,
+                    on.iter().cloned(),
+                    role_id,
+                ));
+                privileges
+            },
+            item_usage: &CREATE_ITEM_USAGE,
+            ..Default::default()
+        },
         Plan::Comment(plan::CommentPlan {
             object_id,
             sub_component: _,
@@ -1477,7 +1494,10 @@ fn generate_read_privileges_inner(
                 CatalogItemType::Type | CatalogItemType::Secret | CatalogItemType::Connection => {
                     privileges.push((SystemObjectId::Object(id.into()), AclMode::USAGE, role_id));
                 }
-                CatalogItemType::Sink | CatalogItemType::Index | CatalogItemType::Func => {}
+                CatalogItemType::Sink
+                | CatalogItemType::Index
+                | CatalogItemType::Func
+                | CatalogItemType::Hold => {}
             }
         }
     }
@@ -1583,6 +1603,7 @@ pub const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {
         SystemObjectType::Object(ObjectType::Source) => AclMode::SELECT,
         SystemObjectType::Object(ObjectType::Sink) => EMPTY_ACL_MODE,
         SystemObjectType::Object(ObjectType::Index) => EMPTY_ACL_MODE,
+        SystemObjectType::Object(ObjectType::Hold) => EMPTY_ACL_MODE,
         SystemObjectType::Object(ObjectType::Type) => AclMode::USAGE,
         SystemObjectType::Object(ObjectType::Role) => EMPTY_ACL_MODE,
         SystemObjectType::Object(ObjectType::Cluster) => USAGE_CREATE_ACL_MODE,
@@ -1613,6 +1634,7 @@ const fn default_builtin_object_acl_mode(object_type: ObjectType) -> AclMode {
         ObjectType::Type | ObjectType::Schema => AclMode::USAGE,
         ObjectType::Sink
         | ObjectType::Index
+        | ObjectType::Hold
         | ObjectType::Role
         | ObjectType::Cluster
         | ObjectType::ClusterReplica

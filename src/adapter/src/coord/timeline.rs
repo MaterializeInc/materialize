@@ -16,6 +16,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
+use mz_catalog::memory::objects::CollectionIdBundle;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::{CollectionPlan, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
@@ -28,7 +29,6 @@ use timely::progress::Timestamp as TimelyTimestamp;
 use tracing::error;
 
 use crate::catalog::CatalogItem;
-use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::read_policy::ReadHolds;
 use crate::coord::timestamp_oracle::catalog_oracle::{
     CatalogTimestampOracle, CatalogTimestampPersistence, TimestampPersistence,

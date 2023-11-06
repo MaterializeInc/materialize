@@ -2667,3 +2667,17 @@ ALTER SINK * SET CLUSTER
 error: Expected identifier, found star
 ALTER SINK * SET CLUSTER
            ^
+
+parse-statement
+CREATE HOLD h ON a, a.b, a.b.c AT 1+3
+----
+CREATE HOLD h ON a, a.b, a.b.c AT 1 + 3
+=>
+CreateHold(CreateHoldStatement { name: UnresolvedItemName([Ident("h")]), on: [Name(UnresolvedItemName([Ident("a")])), Name(UnresolvedItemName([Ident("a"), Ident("b")])), Name(UnresolvedItemName([Ident("a"), Ident("b"), Ident("c")]))], at: Some(Op { op: Op { namespace: None, op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("3"))) }) })
+
+parse-statement
+CREATE HOLD h ON a
+----
+CREATE HOLD h ON a
+=>
+CreateHold(CreateHoldStatement { name: UnresolvedItemName([Ident("h")]), on: [Name(UnresolvedItemName([Ident("a")]))], at: None })

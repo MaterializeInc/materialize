@@ -19,6 +19,7 @@ use anyhow::anyhow;
 use futures::future::BoxFuture;
 use itertools::Itertools;
 use maplit::{btreemap, btreeset};
+use mz_catalog::memory::objects::CollectionIdBundle;
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_compute_types::dataflows::{DataflowDesc, DataflowDescription, IndexDesc};
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -94,7 +95,6 @@ use crate::coord::dataflows::{
     prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot, DataflowBuilder, EvalTime,
     ExprPrepStyle,
 };
-use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::{FastPathPlan, PeekDataflowPlan, PlannedPeek};
 use crate::coord::read_policy::SINCE_GRANULARITY;
 use crate::coord::timeline::TimelineContext;
@@ -1254,6 +1254,82 @@ impl Coordinator {
         };
         match self.catalog_transact(Some(session), vec![op]).await {
             Ok(()) => Ok(ExecuteResponse::CreatedType),
+            Err(err) => Err(err),
+        }
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub(super) async fn sequence_create_hold(
+        &mut self,
+        session: &Session,
+        plan: plan::CreateHoldPlan,
+        resolved_ids: ResolvedIds,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let catalog = self.catalog();
+
+        // Generate the id bundle for the read hold.
+        let mut bundle = CollectionIdBundle::default();
+        for id in plan.on {
+            let entry = catalog.get_entry(&id);
+            let item = entry.item();
+            match item {
+                CatalogItem::Table(_)
+                | CatalogItem::Source(_)
+                | CatalogItem::MaterializedView(_) => {
+                    bundle.storage_ids.insert(id);
+                }
+                CatalogItem::Index(index) => {
+                    bundle
+                        .compute_ids
+                        .entry(index.cluster_id)
+                        .or_default()
+                        .insert(id);
+                }
+
+                CatalogItem::Log(_)
+                | CatalogItem::View(_)
+                | CatalogItem::Sink(_)
+                | CatalogItem::Type(_)
+                | CatalogItem::Func(_)
+                | CatalogItem::Secret(_)
+                | CatalogItem::Hold(_)
+                | CatalogItem::Connection(_) => {
+                    coord_bail!("cannot create HOLD for a {}", item.typ())
+                }
+            }
+        }
+        let least_valid_read = self.least_valid_read(&bundle);
+        let timestamp = match plan.at {
+            Some(at) => {
+                let at = Coordinator::evaluate_when(catalog.state(), at, session)?;
+                if least_valid_read.less_than(&at) {
+                    coord_bail!("requested AT timestamp {at} is greater than the read frontier of objects: {least_valid_read:?}");
+                }
+                at
+            }
+            None => {
+                let Some(timestamp) = least_valid_read.into_option() else {
+                    coord_bail!("read frontier is closed");
+                };
+                timestamp
+            }
+        };
+        let hold_id = self.catalog_mut().allocate_user_id().await?;
+        let hold = catalog::Hold {
+            create_sql: table.create_sql,
+            bundle,
+            resolved_ids,
+        };
+        let hold_oid = self.catalog_mut().allocate_oid()?;
+        let ops = vec![catalog::Op::CreateItem {
+            id: hold_id,
+            oid: hold_oid,
+            name: plan.name,
+            item: CatalogItem::Hold(hold),
+            owner_id: *session.current_role_id(),
+        }];
+        match self.catalog_transact(Some(session), ops).await {
+            Ok(()) => Ok(ExecuteResponse::CreatedHold),
             Err(err) => Err(err),
         }
     }

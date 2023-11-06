@@ -14,6 +14,7 @@ use std::fmt;
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use differential_dataflow::lattice::Lattice;
+use mz_catalog::memory::objects::CollectionIdBundle;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::MirScalarExpr;
 use mz_ore::cast::CastLossy;
@@ -29,7 +30,6 @@ use tracing::{event, Level};
 
 use crate::catalog::CatalogState;
 use crate::coord::dataflows::{prep_scalar_expr, ExprPrepStyle};
-use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timeline::TimelineContext;
 use crate::coord::Coordinator;
 use crate::session::Session;

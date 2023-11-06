@@ -1860,6 +1860,9 @@ impl<'a> Parser<'a> {
                 self.peek_pos(),
                 "CREATE USER is not supported, for more information consult the documentation at https://materialize.com/docs/sql/create-role/#details"
             ).map_parser_err(StatementKind::CreateRole)
+        } else if self.peek_keyword(HOLD) {
+            self.parse_create_hold()
+                .map_parser_err(StatementKind::CreateHold)
         } else {
             let index = self.index;
 
@@ -3562,6 +3565,19 @@ impl<'a> Parser<'a> {
         ))
     }
 
+    fn parse_create_hold(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.next_token();
+        let name = self.parse_item_name()?;
+        self.expect_keyword(ON)?;
+        let on = self.parse_comma_separated(Parser::parse_raw_name)?;
+        let at = if self.parse_keyword(AT) {
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
+        Ok(Statement::CreateHold(CreateHoldStatement { name, on, at }))
+    }
+
     fn parse_if_exists(&mut self) -> Result<bool, ParserError> {
         if self.parse_keyword(IF) {
             self.expect_keyword(EXISTS)?;
@@ -3678,6 +3694,7 @@ impl<'a> Parser<'a> {
             | ObjectType::Sink
             | ObjectType::Index
             | ObjectType::Type
+            | ObjectType::Hold
             | ObjectType::Secret
             | ObjectType::Connection => {
                 let names = self.parse_comma_separated(|parser| {
@@ -4123,7 +4140,7 @@ impl<'a> Parser<'a> {
                 }))
             }
             ObjectType::Schema => self.parse_alter_schema(object_type),
-            ObjectType::Func | ObjectType::Subsource => parser_err!(
+            ObjectType::Func | ObjectType::Subsource | ObjectType::Hold => parser_err!(
                 self,
                 self.peek_prev_pos(),
                 format!("Unsupported ALTER on {object_type}")
@@ -5423,6 +5440,7 @@ impl<'a> Parser<'a> {
             | ObjectType::Sink
             | ObjectType::Index
             | ObjectType::Type
+            | ObjectType::Hold
             | ObjectType::Secret
             | ObjectType::Connection
             | ObjectType::Func => UnresolvedObjectName::Item(self.parse_item_name()?),
@@ -6153,6 +6171,7 @@ impl<'a> Parser<'a> {
                     ShowObjectType::Sink { in_cluster }
                 }
                 ObjectType::Type => ShowObjectType::Type,
+                ObjectType::Hold => ShowObjectType::Hold,
                 ObjectType::Role => ShowObjectType::Role,
                 ObjectType::ClusterReplica => ShowObjectType::ClusterReplica,
                 ObjectType::Secret => ShowObjectType::Secret,
@@ -7389,6 +7408,7 @@ impl<'a> Parser<'a> {
             | ObjectType::ClusterReplica
             | ObjectType::Role
             | ObjectType::Func
+            | ObjectType::Hold
             | ObjectType::Subsource => {
                 parser_err!(
                     self,

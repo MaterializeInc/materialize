@@ -59,6 +59,7 @@ pub enum Statement<T: AstInfo> {
     CreateCluster(CreateClusterStatement<T>),
     CreateClusterReplica(CreateClusterReplicaStatement<T>),
     CreateSecret(CreateSecretStatement<T>),
+    CreateHold(CreateHoldStatement<T>),
     AlterCluster(AlterClusterStatement<T>),
     AlterOwner(AlterOwnerStatement<T>),
     AlterObjectRename(AlterObjectRenameStatement),
@@ -128,6 +129,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateType(stmt) => f.write_node(stmt),
             Statement::CreateCluster(stmt) => f.write_node(stmt),
             Statement::CreateClusterReplica(stmt) => f.write_node(stmt),
+            Statement::CreateHold(stmt) => f.write_node(stmt),
             Statement::AlterCluster(stmt) => f.write_node(stmt),
             Statement::AlterOwner(stmt) => f.write_node(stmt),
             Statement::AlterObjectRename(stmt) => f.write_node(stmt),
@@ -200,6 +202,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::CreateCluster => "create_cluster",
         StatementKind::CreateClusterReplica => "create_cluster_replica",
         StatementKind::CreateSecret => "create_secret",
+        StatementKind::CreateHold => "create_hold",
         StatementKind::AlterCluster => "alter_cluster",
         StatementKind::AlterObjectRename => "alter_object_rename",
         StatementKind::AlterObjectSwap => "alter_object_swap",
@@ -2441,6 +2444,7 @@ pub enum ShowObjectType<T: AstInfo> {
         in_cluster: Option<T::ClusterName>,
     },
     Type,
+    Hold,
     Role,
     Cluster,
     ClusterReplica,
@@ -2492,6 +2496,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ShowObjectType::Source { .. } => "SOURCES",
             ShowObjectType::Sink { .. } => "SINKS",
             ShowObjectType::Type => "TYPES",
+            ShowObjectType::Hold => "HOLDS",
             ShowObjectType::Role => "ROLES",
             ShowObjectType::Cluster => "CLUSTERS",
             ShowObjectType::ClusterReplica => "CLUSTER REPLICAS",
@@ -2961,6 +2966,7 @@ pub enum ObjectType {
     Schema,
     Func,
     Subsource,
+    Hold,
 }
 
 impl ObjectType {
@@ -2976,6 +2982,7 @@ impl ObjectType {
             | ObjectType::Secret
             | ObjectType::Connection
             | ObjectType::Func
+            | ObjectType::Hold
             | ObjectType::Subsource => true,
             ObjectType::Database
             | ObjectType::Schema
@@ -3005,6 +3012,7 @@ impl AstDisplay for ObjectType {
             ObjectType::Schema => "SCHEMA",
             ObjectType::Func => "FUNCTION",
             ObjectType::Subsource => "SUBSOURCE",
+            ObjectType::Hold => "HOLD",
         })
     }
 }
@@ -4110,3 +4118,28 @@ impl<T: AstInfo> AstDisplay for CommentObjectType<T> {
 }
 
 impl_display_t!(CommentObjectType);
+
+/// `CREATE HOLD ..`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateHoldStatement<T: AstInfo> {
+    /// Name of the created hold.
+    pub name: UnresolvedItemName,
+    /// Objects in the hold.
+    pub on: Vec<T::ItemName>,
+    /// Time for the hold.
+    pub at: Option<Expr<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for CreateHoldStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CREATE HOLD ");
+        f.write_node(&self.name);
+        f.write_str(" ON ");
+        f.write_node(&display::comma_separated(&self.on));
+        if let Some(at) = &self.at {
+            f.write_str(" AT ");
+            f.write_node(at);
+        }
+    }
+}
+impl_display_t!(CreateHoldStatement);
