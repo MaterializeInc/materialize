@@ -586,11 +586,6 @@ pub fn annotate_plan<'a>(
                 subtree_refs.iter(),
                 attributes.remove_results::<ColumnNames>().into_iter(),
             ) {
-                let column_names = column_names
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, c)| if c.is_empty() { format!("#{i}") } else { c })
-                    .collect();
                 let attrs = annotations.entry(expr).or_default();
                 attrs.column_names = Some(column_names);
             }
