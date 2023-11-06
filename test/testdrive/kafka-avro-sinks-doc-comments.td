@@ -127,6 +127,19 @@ $ schema-registry-verify schema-type=avro subject=testdrive-sink3-${testdrive.se
   ENVELOPE UPSERT;
 "{\n  \"type\": \"record\",\n  \"name\": \"row\",\n  \"doc\": \"key of the upsert\",\n  \"fields\": [\n    {\n      \"name\": \"c2\",\n      \"type\": \"string\",\n      \"doc\": \"comment on t.c2\"\n    }\n  ]\n}"
 
+# Works without sink name
+> EXPLAIN KEY SCHEMA FOR CREATE SINK FROM t
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink3-${testdrive.seed}')
+  KEY (c2) NOT ENFORCED
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  (
+    NULL DEFAULTS = TRUE,
+    VALUE DOC ON TYPE t = 'body of the upsert',
+    KEY DOC ON TYPE t = 'key of the upsert'
+  )
+  ENVELOPE UPSERT;
+"{\n  \"type\": \"record\",\n  \"name\": \"row\",\n  \"doc\": \"key of the upsert\",\n  \"fields\": [\n    {\n      \"name\": \"c2\",\n      \"type\": \"string\",\n      \"doc\": \"comment on t.c2\"\n    }\n  ]\n}"
+
 # errors
 ! CREATE SINK bad_sink FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink1-${testdrive.seed}')
@@ -147,6 +160,14 @@ contains: Expected identifier, found equals sign
   )
   ENVELOPE UPSERT
 contains: column "t.bad_column" does not exist
+
+# Fails if name is not provided
+! CREATE SINK from t
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink1-${testdrive.seed}')
+  KEY (c2) NOT ENFORCED
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE UPSERT
+contains: Expected FROM, found identifier
 
 ! CREATE SINK bad_sink FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink1-${testdrive.seed}')
