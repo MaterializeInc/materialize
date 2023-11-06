@@ -108,6 +108,13 @@ def get_version_tags(*, fetch: bool = True, prefix: str = "v") -> list[Version]:
     return sorted(tags, reverse=True)
 
 
+def get_latest_version() -> Version:
+    all_version_tags = get_version_tags(fetch=True)
+    all_version_tags.sort(reverse=True)
+
+    return all_version_tags[0]
+
+
 def is_ancestor(earlier: str, later: str) -> bool:
     """True if earlier is in an ancestor of later"""
     try:
