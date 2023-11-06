@@ -19,7 +19,14 @@ from materialize.output_consistency.operation.operation_param import OperationPa
 
 
 class EnumConstantOperationParam(OperationParam):
-    def __init__(self, values: list[str], add_quotes: bool, optional: bool = False):
+    def __init__(
+        self,
+        values: list[str],
+        add_quotes: bool,
+        add_invalid_value: bool = True,
+        optional: bool = False,
+        invalid_value: str = "invalid_value_123",
+    ):
         super().__init__(
             DataTypeCategory.ENUM,
             optional=optional,
@@ -28,6 +35,10 @@ class EnumConstantOperationParam(OperationParam):
         )
         assert len(values) == len(set(values)), f"Values contain duplicates {values}"
         self.values = values
+
+        if add_invalid_value:
+            self.values.append(invalid_value)
+
         self.add_quotes = add_quotes
         self.characteristics_per_index: list[set[ExpressionCharacteristics]] = [
             set() for _ in values
