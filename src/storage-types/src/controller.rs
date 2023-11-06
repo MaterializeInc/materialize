@@ -11,14 +11,19 @@ use std::error::Error;
 use std::fmt::{self, Debug};
 
 use itertools::Itertools;
+use mz_persist_client::stats::PartStats;
 use mz_persist_client::{PersistLocation, ShardId};
 use mz_persist_txn::{TxnsCodec, TxnsEntry};
 use mz_persist_types::codec_impls::UnitSchema;
+use mz_persist_types::columnar::Data;
+use mz_persist_types::dyn_struct::DynStruct;
+use mz_persist_types::stats::StructStats;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Datum, GlobalId, RelationDesc, Row, ScalarType};
 use mz_stash_types::StashError;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
+use tracing::error;
 
 use crate::errors::DataflowError;
 use crate::instances::StorageInstanceId;
@@ -330,5 +335,18 @@ impl TxnsCodec for TxnsCodecRow {
         } else {
             TxnsEntry::Append(data_id, batch.unwrap_bytes().to_vec())
         }
+    }
+
+    fn should_fetch_part(data_id: &ShardId, stats: &PartStats) -> Option<bool> {
+        fn col<'a, T: Data>(stats: &'a StructStats, col: &str) -> Option<&'a T::Stats> {
+            stats
+                .col::<T>(col)
+                .map_err(|err| error!("unexpected stats type for col {}: {}", col, err))
+                .ok()?
+        }
+        let stats = col::<Option<DynStruct>>(&stats.key, "ok")?;
+        let stats = col::<String>(&stats.some, "shard_id")?;
+        let data_id_str = data_id.to_string();
+        Some(stats.lower <= data_id_str && stats.upper >= data_id_str)
     }
 }

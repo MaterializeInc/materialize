@@ -109,7 +109,7 @@ where
     let shutdown_button = builder.build(move |capabilities| async move {
         let [mut cap]: [_; 1] = capabilities.try_into().expect("one capability per output");
         let client = client.await;
-        let mut txns_cache = TxnsCache::<T, C>::open(&client, txns_id).await;
+        let mut txns_cache = TxnsCache::<T, C>::open(&client, txns_id, Some(data_id)).await;
 
         txns_cache.update_gt(&as_of).await;
         let snap = txns_cache.data_snapshot(data_id, as_of.clone());

@@ -2016,7 +2016,7 @@ where
                 Arc::new(UnitSchema),
             )
             .await;
-            let txns_cache = TxnsCache::open(&client, txns_id).await;
+            let txns_cache = TxnsCache::open(&client, txns_id, None).await;
             let worker = persist_handles::PersistTableWriteWorker::new_txns(tx.clone(), txns);
             (worker, Some(txns_cache))
         } else {

@@ -177,6 +177,11 @@ where
         ret
     }
 
+    /// Fetches the contents of `part` and returns its lease.
+    pub async fn fetch_batch_part(&mut self, part: LeasedBatchPart<T>) -> FetchedPart<K, V, T, D> {
+        self.listen.fetch_batch_part(part).await
+    }
+
     /// Takes a [`SerdeLeasedBatchPart`] into a [`LeasedBatchPart`].
     pub fn leased_part_from_exchangeable(&self, x: SerdeLeasedBatchPart) -> LeasedBatchPart<T> {
         self.listen
