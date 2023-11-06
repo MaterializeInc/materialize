@@ -113,7 +113,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         prog="postgres-consistency-test",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Test the consistency of Materialize and Postgres",
+        description="Test the consistency of different versions of mz",
     )
 
     parser.add_argument("--mz-host", default="localhost", type=str)
