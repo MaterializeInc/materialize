@@ -33,6 +33,7 @@ use crate::batch::{
     validate_truncate_batch, Added, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
     ProtoBatch,
 };
+use crate::cfg::PersistFeatureFlag;
 use crate::error::{InvalidUsage, UpperMismatch};
 use crate::internal::compact::Compactor;
 use crate::internal::encoding::Schemas;
@@ -535,6 +536,11 @@ where
     /// to append it to this shard.
     pub fn batch_from_transmittable_batch(&self, batch: ProtoBatch) -> Batch<K, V, T, D> {
         let ret = Batch {
+            batch_delete_enabled: self
+                .cfg
+                .dynamic
+                .enabled(PersistFeatureFlag::BATCH_DELETE_ENABLED),
+            metrics: Arc::clone(&self.metrics),
             shard_id: batch
                 .shard_id
                 .into_rust()
@@ -544,7 +550,7 @@ where
                 .batch
                 .into_rust_if_some("ProtoBatch::batch")
                 .expect("valid transmittable batch"),
-            _blob: Arc::clone(&self.blob),
+            blob: Arc::clone(&self.blob),
             _phantom: std::marker::PhantomData,
         };
         assert_eq!(ret.shard_id, self.machine.shard_id());

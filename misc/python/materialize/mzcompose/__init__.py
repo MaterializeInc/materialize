@@ -49,6 +49,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "persist_pubsub_push_diff_enabled": "true",
     "persist_pubsub_client_enabled": "true",
     "persist_stats_audit_percent": "100",
+    "persist_batch_delete_enabled": "true",
     "enable_rbac_checks": "true",
     "enable_try_parse_monotonic_iso8601_timestamp": "true",
     "enable_dangerous_functions": "true",
