@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+mod state_update;
+
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::future::Future;
@@ -25,24 +27,21 @@ use mz_ore::{soft_assert, soft_assert_eq};
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
-use mz_persist_types::codec_impls::{
-    SimpleDecoder, SimpleEncoder, SimpleSchema, UnitSchema, VecU8Schema,
-};
-use mz_persist_types::dyn_struct::{ColumnsMut, ColumnsRef, DynStructCfg};
-use mz_persist_types::Codec;
+use mz_persist_types::codec_impls::VecU8Schema;
 use mz_proto::RustType;
 use mz_repr::Diff;
 use mz_stash::USER_VERSION_KEY;
 use mz_stash_types::objects::proto;
 use mz_stash_types::STASH_VERSION;
 use mz_storage_types::sources::Timeline;
-use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tracing::debug;
 use uuid::Uuid;
 
 use crate::durable::debug::{Collection, DebugCatalogState, Trace};
+use crate::durable::impls::persist::state_update::StateUpdateKindTag;
+pub use crate::durable::impls::persist::state_update::{StateUpdate, StateUpdateKind};
 use crate::durable::initialize::DEPLOY_GENERATION;
 use crate::durable::objects::{AuditLogKey, DurableType, Snapshot, StorageUsageKey};
 use crate::durable::transaction::TransactionBatch;
@@ -65,183 +64,6 @@ enum Mode {
     Writable,
 }
 
-/// A single update to the catalog state.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct StateUpdate {
-    /// They kind and contents of the state update.
-    kind: StateUpdateKind,
-    /// The timestamp at which the update occurred.
-    ts: Timestamp,
-    /// Record count difference for the update.
-    diff: Diff,
-}
-
-impl StateUpdate {
-    /// Convert a [`TransactionBatch`] to a list of [`StateUpdate`]s at timestamp `ts`.
-    fn from_txn_batch(txn_batch: TransactionBatch, ts: Timestamp) -> Vec<StateUpdate> {
-        fn from_batch<K, V>(
-            batch: Vec<(K, V, Diff)>,
-            ts: Timestamp,
-            kind: fn(K, V) -> StateUpdateKind,
-        ) -> impl Iterator<Item = StateUpdate> {
-            batch.into_iter().map(move |(k, v, diff)| StateUpdate {
-                kind: kind(k, v),
-                ts,
-                diff,
-            })
-        }
-        let TransactionBatch {
-            databases,
-            schemas,
-            items,
-            comments,
-            roles,
-            clusters,
-            cluster_replicas,
-            introspection_sources,
-            id_allocator,
-            configs,
-            settings,
-            timestamps,
-            system_gid_mapping,
-            system_configurations,
-            default_privileges,
-            system_privileges,
-            audit_log_updates,
-            storage_usage_updates,
-            // Persist implementation does not use the connection timeout.
-            connection_timeout: _,
-        } = txn_batch;
-        let databases = from_batch(databases, ts, StateUpdateKind::Database);
-        let schemas = from_batch(schemas, ts, StateUpdateKind::Schema);
-        let items = from_batch(items, ts, StateUpdateKind::Item);
-        let comments = from_batch(comments, ts, StateUpdateKind::Comment);
-        let roles = from_batch(roles, ts, StateUpdateKind::Role);
-        let clusters = from_batch(clusters, ts, StateUpdateKind::Cluster);
-        let cluster_replicas = from_batch(cluster_replicas, ts, StateUpdateKind::ClusterReplica);
-        let introspection_sources = from_batch(
-            introspection_sources,
-            ts,
-            StateUpdateKind::IntrospectionSourceIndex,
-        );
-        let id_allocators = from_batch(id_allocator, ts, StateUpdateKind::IdAllocator);
-        let configs = from_batch(configs, ts, StateUpdateKind::Config);
-        let settings = from_batch(settings, ts, StateUpdateKind::Setting);
-        let timestamps = from_batch(timestamps, ts, StateUpdateKind::Timestamp);
-        let system_object_mappings =
-            from_batch(system_gid_mapping, ts, StateUpdateKind::SystemObjectMapping);
-        let system_configurations = from_batch(
-            system_configurations,
-            ts,
-            StateUpdateKind::SystemConfiguration,
-        );
-        let default_privileges =
-            from_batch(default_privileges, ts, StateUpdateKind::DefaultPrivilege);
-        let system_privileges = from_batch(system_privileges, ts, StateUpdateKind::SystemPrivilege);
-        let audit_logs = from_batch(audit_log_updates, ts, StateUpdateKind::AuditLog);
-        let storage_usage_updates =
-            from_batch(storage_usage_updates, ts, StateUpdateKind::StorageUsage);
-
-        databases
-            .chain(schemas)
-            .chain(items)
-            .chain(comments)
-            .chain(roles)
-            .chain(clusters)
-            .chain(cluster_replicas)
-            .chain(introspection_sources)
-            .chain(id_allocators)
-            .chain(configs)
-            .chain(settings)
-            .chain(timestamps)
-            .chain(system_object_mappings)
-            .chain(system_configurations)
-            .chain(default_privileges)
-            .chain(system_privileges)
-            .chain(audit_logs)
-            .chain(storage_usage_updates)
-            .collect()
-    }
-}
-
-/// The contents of a single state update.
-// TODO(jkosh44) Remove Serde when we switch to proto fully.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum StateUpdateKind {
-    AuditLog(proto::AuditLogKey, ()),
-    Cluster(proto::ClusterKey, proto::ClusterValue),
-    ClusterReplica(proto::ClusterReplicaKey, proto::ClusterReplicaValue),
-    Comment(proto::CommentKey, proto::CommentValue),
-    Config(proto::ConfigKey, proto::ConfigValue),
-    Database(proto::DatabaseKey, proto::DatabaseValue),
-    DefaultPrivilege(proto::DefaultPrivilegesKey, proto::DefaultPrivilegesValue),
-    Epoch(Epoch),
-    IdAllocator(proto::IdAllocKey, proto::IdAllocValue),
-    IntrospectionSourceIndex(
-        proto::ClusterIntrospectionSourceIndexKey,
-        proto::ClusterIntrospectionSourceIndexValue,
-    ),
-    Item(proto::ItemKey, proto::ItemValue),
-    Role(proto::RoleKey, proto::RoleValue),
-    Schema(proto::SchemaKey, proto::SchemaValue),
-    Setting(proto::SettingKey, proto::SettingValue),
-    StorageUsage(proto::StorageUsageKey, ()),
-    SystemConfiguration(
-        proto::ServerConfigurationKey,
-        proto::ServerConfigurationValue,
-    ),
-    SystemObjectMapping(proto::GidMappingKey, proto::GidMappingValue),
-    SystemPrivilege(proto::SystemPrivilegesKey, proto::SystemPrivilegesValue),
-    Timestamp(proto::TimestampKey, proto::TimestampValue),
-}
-
-// TODO(jkosh44) As an initial implementation we simply serialize and deserialize everything as a
-// JSON. Before enabling in production, we'd like to utilize Protobuf to serialize and deserialize
-// everything.
-impl Codec for StateUpdateKind {
-    type Schema = VecU8Schema;
-
-    fn codec_name() -> String {
-        "StateUpdateJson".to_string()
-    }
-
-    fn encode<B>(&self, buf: &mut B)
-    where
-        B: bytes::BufMut,
-    {
-        let bytes = serde_json::to_vec(&self).expect("failed to encode StateUpdate");
-        buf.put(bytes.as_slice());
-    }
-
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
-        serde_json::from_slice(buf).map_err(|err| err.to_string())
-    }
-}
-
-impl mz_persist_types::columnar::Schema<StateUpdateKind> for VecU8Schema {
-    type Encoder<'a> = SimpleEncoder<'a, StateUpdateKind, Vec<u8>>;
-
-    type Decoder<'a> = SimpleDecoder<'a, StateUpdateKind, Vec<u8>>;
-
-    fn columns(&self) -> DynStructCfg {
-        SimpleSchema::<StateUpdateKind, Vec<u8>>::columns(&())
-    }
-
-    fn decoder<'a>(&self, cols: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String> {
-        SimpleSchema::<StateUpdateKind, Vec<u8>>::decoder(cols, |val, ret| {
-            *ret = StateUpdateKind::decode(val).expect("should be valid StateUpdateKind")
-        })
-    }
-
-    fn encoder<'a>(&self, cols: ColumnsMut<'a>) -> Result<Self::Encoder<'a>, String> {
-        SimpleSchema::<StateUpdateKind, Vec<u8>>::push_encoder(cols, |col, val| {
-            let mut buf = Vec::new();
-            StateUpdateKind::encode(val, &mut buf);
-            mz_persist_types::columnar::ColumnPush::<Vec<u8>>::push(col, &buf)
-        })
-    }
-}
-
 /// Handles and metadata needed to interact with persist.
 ///
 /// Production users should call [`Self::expire`] before dropping a [`PersistHandle`] so that it
@@ -249,9 +71,9 @@ impl mz_persist_types::columnar::Schema<StateUpdateKind> for VecU8Schema {
 #[derive(Debug)]
 pub struct PersistHandle {
     /// Write handle to persist.
-    write_handle: WriteHandle<StateUpdateKind, (), Timestamp, Diff>,
+    write_handle: WriteHandle<StateUpdateKindTag, StateUpdateKind, Timestamp, Diff>,
     /// Read handle to persist.
-    read_handle: ReadHandle<StateUpdateKind, (), Timestamp, Diff>,
+    read_handle: ReadHandle<StateUpdateKindTag, StateUpdateKind, Timestamp, Diff>,
 }
 
 impl PersistHandle {
@@ -273,7 +95,7 @@ impl PersistHandle {
             .open(
                 shard_id,
                 Arc::new(VecU8Schema::default()),
-                Arc::new(UnitSchema),
+                Arc::new(VecU8Schema::default()),
                 Diagnostics {
                     shard_name: "catalog".to_string(),
                     handle_purpose: "durable catalog state".to_string(),
@@ -450,10 +272,10 @@ impl PersistHandle {
         );
         snapshot
             .into_iter()
-            .map(|((key, _unit), ts, diff)| StateUpdate {
-                kind: key.expect("key decoding error"),
-                ts,
-                diff,
+            .map(|((tag, kind), ts, diff)| {
+                let kind = kind.expect("kind decoding error");
+                soft_assert_eq!(tag.expect("tag decoding error"), kind.tag());
+                StateUpdate { kind, ts, diff }
             })
             .sorted_by(|a, b| Ord::cmp(&b.ts, &a.ts))
     }
@@ -482,13 +304,11 @@ impl PersistHandle {
         } else {
             Vec::new()
         };
-        snapshot
-            .into_iter()
-            .map(|((key, _unit), ts, diff)| StateUpdate {
-                kind: key.expect("key decoding error"),
-                ts,
-                diff,
-            })
+        snapshot.into_iter().map(|((tag, kind), ts, diff)| {
+            let kind = kind.expect("kind decoding error");
+            soft_assert_eq!(tag.expect("tag decoding error"), kind.tag());
+            StateUpdate { kind, ts, diff }
+        })
     }
 
     /// Get value of config `key`.
@@ -535,7 +355,7 @@ impl PersistHandle {
     ) -> Result<(), CatalogError> {
         let updates = updates
             .into_iter()
-            .map(|update| ((update.kind, ()), update.ts, update.diff));
+            .map(|update| ((update.kind.tag(), update.kind), update.ts, update.diff));
         match self
             .write_handle
             .compare_and_append(
