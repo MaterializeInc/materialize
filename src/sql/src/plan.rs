@@ -1314,7 +1314,7 @@ impl WebhookValidation {
     /// Attempt to reduce the internal [`MirScalarExpr`] into a simpler expression.
     ///
     /// The reduction happens on a separate thread, we also only wait for
-    /// [`WebhookValidation::MAX_REDUCE_TIME`] before timing out and returning an error.
+    /// `WebhookValidation::MAX_REDUCE_TIME` before timing out and returning an error.
     pub async fn reduce_expression(&mut self) -> Result<(), &'static str> {
         let WebhookValidation {
             expression,
