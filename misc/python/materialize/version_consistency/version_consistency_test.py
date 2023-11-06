@@ -41,6 +41,10 @@ from materialize.version_consistency.ignore_filter.version_consistency_ignore_fi
     VersionConsistencyIgnoreFilter,
 )
 
+EVALUATION_STRATEGY_NAME_DFR = "dataflow_rendering"
+EVALUATION_STRATEGY_NAME_CTF = "constant_folding"
+EVALUATION_STRATEGY_NAMES = [EVALUATION_STRATEGY_NAME_DFR, EVALUATION_STRATEGY_NAME_CTF]
+
 
 class VersionConsistencyTest(OutputConsistencyTest):
     def __init__(self) -> None:
@@ -84,12 +88,12 @@ class VersionConsistencyTest(OutputConsistencyTest):
 
         strategies: list[EvaluationStrategy]
 
-        if self.evaluation_strategy_name == "dataflow_rendering":
+        if self.evaluation_strategy_name == EVALUATION_STRATEGY_NAME_DFR:
             strategies = [DataFlowRenderingEvaluation(), DataFlowRenderingEvaluation()]
             strategies[
                 1
             ].identifier = EvaluationStrategyKey.MZ_DATAFLOW_RENDERING_OTHER_DB
-        elif self.evaluation_strategy_name == "constant_folding":
+        elif self.evaluation_strategy_name == EVALUATION_STRATEGY_NAME_CTF:
             strategies = [ConstantFoldingEvaluation(), ConstantFoldingEvaluation()]
             strategies[
                 1
@@ -122,9 +126,9 @@ def main() -> int:
     parser.add_argument("--mz-port-2", default=6975, type=int)
     parser.add_argument(
         "--evaluation-strategy",
-        default="dataflow_rendering",
+        default=EVALUATION_STRATEGY_NAME_DFR,
         type=str,
-        choices=["dataflow_rendering", "constant_folding"],
+        choices=EVALUATION_STRATEGY_NAMES,
     )
 
     args = test.parse_output_consistency_input_args(parser)
