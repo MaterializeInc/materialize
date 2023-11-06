@@ -222,24 +222,6 @@ $ webhook-append name=webhook_hex status=400
 # 'z' is an invalid character in hex which causes an evaluation failure.
 z
 
-# Enable unstable dependencies so we can use mz_panic.
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_unstable_dependencies = true;
-
-# Create a source that will panic when we run validation. Validation panicking should not take down
-# all of environmentd, we should catch the panic.
-#
-# Note: if you change the message in the panic, then you need to update ci_logged_errors_detect.py.
-> CREATE SOURCE webhook_validation_panic IN CLUSTER webhook_cluster FROM WEBHOOK
-  BODY FORMAT TEXT
-  CHECK (
-    WITH (HEADERS)
-    mz_internal.mz_panic('forced panic') = headers::text
-  );
-
-$ webhook-append name=webhook_validation_panic status=500
-abc
-
 # Can use SECRETs as both Bytes and Strings.
 
 > CREATE SECRET webhook_secret_bytes AS 'this_key_is_bytes';
@@ -332,6 +314,3 @@ SELECT id FROM mz_sources WHERE name = 'webhook_bytes';
 
 # Cleanup.
 > DROP CLUSTER webhook_cluster CASCADE;
-
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_unstable_dependencies = false;

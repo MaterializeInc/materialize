@@ -172,7 +172,7 @@ impl Coordinator {
 
         for plan::CreateSourcePlans {
             source_id,
-            plan,
+            mut plan,
             resolved_ids,
         } in plans
         {
@@ -194,6 +194,21 @@ impl Coordinator {
                 }
                 _ => None,
             };
+
+            // Attempt to reduce the `CHECK` expression, we timeout if this takes too long.
+            if let mz_sql::plan::DataSourceDesc::Webhook {
+                validate_using: Some(validate),
+                ..
+            } = &mut plan.source.data_source
+            {
+                if let Err(reason) = validate.reduce_expression().await {
+                    self.metrics
+                        .webhook_validation_reduce_failures
+                        .with_label_values(&[reason])
+                        .inc();
+                }
+            }
+
             let source =
                 catalog::Source::new(source_id, plan, cluster_id, resolved_ids, None, false);
             ops.push(catalog::Op::CreateItem {

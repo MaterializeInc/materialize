@@ -66,6 +66,7 @@ impl AppendWebhookValidator {
 
         let WebhookValidation {
             expression,
+            relation_desc: _,
             secrets,
             bodies: body_columns,
             headers: header_columns,
