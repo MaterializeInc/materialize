@@ -22,8 +22,8 @@ class MultiVersionSqlExecutors(SqlExecutors):
 
     def get_executor(self, strategy: EvaluationStrategy) -> SqlExecutor:
         if strategy.identifier in [
-            EvaluationStrategyKey.MZ_DATAFLOW_RENDERING_DB_2,
-            EvaluationStrategyKey.MZ_CONSTANT_FOLDING_DB_2,
+            EvaluationStrategyKey.MZ_DATAFLOW_RENDERING_OTHER_DB,
+            EvaluationStrategyKey.MZ_CONSTANT_FOLDING_OTHER_DB,
         ]:
             return self.executor2
 

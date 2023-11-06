@@ -86,10 +86,14 @@ class VersionConsistencyTest(OutputConsistencyTest):
 
         if self.evaluation_strategy_name == "dataflow_rendering":
             strategies = [DataFlowRenderingEvaluation(), DataFlowRenderingEvaluation()]
-            strategies[1].identifier = EvaluationStrategyKey.MZ_DATAFLOW_RENDERING_DB_2
+            strategies[
+                1
+            ].identifier = EvaluationStrategyKey.MZ_DATAFLOW_RENDERING_OTHER_DB
         elif self.evaluation_strategy_name == "constant_folding":
             strategies = [ConstantFoldingEvaluation(), ConstantFoldingEvaluation()]
-            strategies[1].identifier = EvaluationStrategyKey.MZ_CONSTANT_FOLDING_DB_2
+            strategies[
+                1
+            ].identifier = EvaluationStrategyKey.MZ_CONSTANT_FOLDING_OTHER_DB
         else:
             raise RuntimeError(f"Unexpected name: {self.evaluation_strategy_name}")
 
