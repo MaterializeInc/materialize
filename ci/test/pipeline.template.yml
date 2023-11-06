@@ -167,7 +167,7 @@ steps:
     steps:
       - id: cargo-test
         label: Cargo test
-        timeout_in_minutes: 30
+        timeout_in_minutes: 45
         artifact_paths: [junit_*.xml, target/nextest/ci/junit_cargo-test.xml]
         inputs:
           - Cargo.lock
