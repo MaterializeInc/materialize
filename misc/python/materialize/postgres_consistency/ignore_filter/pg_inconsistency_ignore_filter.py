@@ -137,7 +137,7 @@ class PgPreExecutionInconsistencyIgnoreFilter(
                 and return_type_spec.type_identifier == TIME_TYPE_IDENTIFIER
             ):
                 # MIN and MAX currently not supported on TIME type in mz
-                return YesIgnore("#21584: min/max on time")
+                return YesIgnore("#22024: min/max on time")
             if isinstance(return_type_spec, TextReturnTypeSpec):
                 return YesIgnore("#22002: min/max on text")
 
