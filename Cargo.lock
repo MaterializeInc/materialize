@@ -3755,6 +3755,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-catalog-debug"
+version = "0.77.0-dev"
+dependencies = [
+ "anyhow",
+ "clap",
+ "mz-adapter",
+ "mz-build-info",
+ "mz-catalog",
+ "mz-ore",
+ "mz-persist-client",
+ "mz-secrets",
+ "mz-sql",
+ "mz-stash",
+ "mz-tls-util",
+ "once_cell",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-postgres",
+ "url",
+ "uuid",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-ccsr"
 version = "0.0.0"
 dependencies = [

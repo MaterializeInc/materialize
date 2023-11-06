@@ -9,6 +9,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
+use std::future::Future;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,6 +20,7 @@ use futures::StreamExt;
 use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_ore::now::EpochMillis;
+use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::{soft_assert, soft_assert_eq};
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::write::WriteHandle;
@@ -1081,6 +1083,28 @@ impl PersistHandle {
         T::Key: PartialEq + Eq + Debug + Clone,
         T::Value: Debug + Clone,
     {
+        let (_, prev) = retry(self, move |s| {
+            let key = key.clone();
+            let value = value.clone();
+            async {
+                let prev = s.debug_edit_inner::<T>(key, value).await;
+                (s, prev)
+            }
+        })
+        .await;
+        prev
+    }
+
+    #[tracing::instrument(level = "info", skip(self))]
+    pub(crate) async fn debug_edit_inner<T: Collection>(
+        &mut self,
+        key: T::Key,
+        value: T::Value,
+    ) -> Result<Option<T::Value>, CatalogError>
+    where
+        T::Key: PartialEq + Eq + Debug + Clone,
+        T::Value: Debug + Clone,
+    {
         let current_upper = self.current_upper().await;
         let next_upper = current_upper.step_forward();
         let snapshot = self.snapshot(current_upper).await;
@@ -1126,6 +1150,23 @@ impl PersistHandle {
         key: T::Key,
     ) -> Result<(), CatalogError>
     where
+        T::Key: PartialEq + Eq + Debug + Clone,
+    {
+        let (_, res) = retry(self, move |s| {
+            let key = key.clone();
+            async {
+                let res = s.debug_delete_inner::<T>(key).await;
+                (s, res)
+            }
+        })
+        .await;
+        res
+    }
+
+    /// Manually delete `key` from collection `T`.
+    #[tracing::instrument(level = "info", skip(self))]
+    async fn debug_delete_inner<T: Collection>(&mut self, key: T::Key) -> Result<(), CatalogError>
+    where
         T::Key: PartialEq + Eq + Debug,
     {
         let current_upper = self.current_upper().await;
@@ -1150,4 +1191,18 @@ impl PersistHandle {
             .await?;
         Ok(())
     }
+}
+
+/// Wrapper for [`Retry::retry_async_with_state`] so that all commands share the same retry behavior.
+async fn retry<F, S, U, R, T, E>(state: S, mut f: F) -> (S, Result<T, E>)
+where
+    F: FnMut(S) -> U,
+    U: Future<Output = (S, R)>,
+    R: Into<RetryResult<T, E>>,
+{
+    Retry::default()
+        .max_duration(Duration::from_secs(30))
+        .clamp_backoff(Duration::from_secs(1))
+        .retry_async_with_state(state, |_, s| f(s))
+        .await
 }
