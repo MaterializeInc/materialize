@@ -1017,7 +1017,8 @@ fn construct_source_message(
                     Some(headers) => {
                         let d = headers
                             .iter()
-                            .find(|header| header.key == key)
+                            .filter(|header| header.key == key)
+                            .last()
                             .map(|header| match header.value {
                                 Some(v) => {
                                     if *use_bytes {
