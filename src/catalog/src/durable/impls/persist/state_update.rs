@@ -10,7 +10,7 @@
 use prost::Message;
 use std::fmt::Debug;
 
-use mz_persist_types::codec_impls::{SimpleDecoder, SimpleEncoder, SimpleSchema, VecU8Schema};
+use mz_persist_types::codec_impls::{SimpleDecoder, SimpleEncoder, SimpleSchema};
 use mz_persist_types::dyn_struct::{ColumnsMut, ColumnsRef, DynStructCfg};
 use mz_persist_types::Codec;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
@@ -528,8 +528,11 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct StateUpdateKindTagSchema;
+
 impl Codec for StateUpdateKindTag {
-    type Schema = VecU8Schema;
+    type Schema = StateUpdateKindTagSchema;
 
     fn codec_name() -> String {
         "StateUpdateTag".to_string()
@@ -550,32 +553,33 @@ impl Codec for StateUpdateKindTag {
     }
 }
 
-impl mz_persist_types::columnar::Schema<StateUpdateKindTag> for VecU8Schema {
-    type Encoder<'a> = SimpleEncoder<'a, StateUpdateKindTag, Vec<u8>>;
+impl mz_persist_types::columnar::Schema<StateUpdateKindTag> for StateUpdateKindTagSchema {
+    type Encoder<'a> = SimpleEncoder<'a, StateUpdateKindTag, u64>;
 
-    type Decoder<'a> = SimpleDecoder<'a, StateUpdateKindTag, Vec<u8>>;
+    type Decoder<'a> = SimpleDecoder<'a, StateUpdateKindTag, u64>;
 
     fn columns(&self) -> DynStructCfg {
-        SimpleSchema::<StateUpdateKindTag, Vec<u8>>::columns(&())
+        SimpleSchema::<StateUpdateKindTag, u64>::columns(&())
     }
 
     fn decoder<'a>(&self, cols: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String> {
-        SimpleSchema::<StateUpdateKindTag, Vec<u8>>::decoder(cols, |val, ret| {
-            *ret = StateUpdateKindTag::decode(val).expect("should be valid StateUpdateKindTag")
+        SimpleSchema::<StateUpdateKindTag, u64>::decoder(cols, |val, ret| {
+            *ret = StateUpdateKindTag(val);
         })
     }
 
     fn encoder<'a>(&self, cols: ColumnsMut<'a>) -> Result<Self::Encoder<'a>, String> {
-        SimpleSchema::<StateUpdateKindTag, Vec<u8>>::push_encoder(cols, |col, val| {
-            let mut buf = Vec::new();
-            StateUpdateKindTag::encode(val, &mut buf);
-            mz_persist_types::columnar::ColumnPush::<Vec<u8>>::push(col, &buf)
+        SimpleSchema::<StateUpdateKindTag, u64>::push_encoder(cols, |col, val| {
+            mz_persist_types::columnar::ColumnPush::<u64>::push(col, val.0)
         })
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct StateUpdateKindSchema;
+
 impl Codec for StateUpdateKind {
-    type Schema = VecU8Schema;
+    type Schema = StateUpdateKindSchema;
 
     fn codec_name() -> String {
         "StateUpdateProto".to_string()
@@ -595,7 +599,7 @@ impl Codec for StateUpdateKind {
     }
 }
 
-impl mz_persist_types::columnar::Schema<StateUpdateKind> for VecU8Schema {
+impl mz_persist_types::columnar::Schema<StateUpdateKind> for StateUpdateKindSchema {
     type Encoder<'a> = SimpleEncoder<'a, StateUpdateKind, Vec<u8>>;
 
     type Decoder<'a> = SimpleDecoder<'a, StateUpdateKind, Vec<u8>>;

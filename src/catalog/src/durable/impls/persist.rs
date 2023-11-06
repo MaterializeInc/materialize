@@ -27,7 +27,6 @@ use mz_ore::{soft_assert, soft_assert_eq};
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
-use mz_persist_types::codec_impls::VecU8Schema;
 use mz_proto::RustType;
 use mz_repr::Diff;
 use mz_stash::USER_VERSION_KEY;
@@ -40,8 +39,10 @@ use tracing::debug;
 use uuid::Uuid;
 
 use crate::durable::debug::{Collection, DebugCatalogState, Trace};
-use crate::durable::impls::persist::state_update::StateUpdateKindTag;
 pub use crate::durable::impls::persist::state_update::{StateUpdate, StateUpdateKind};
+use crate::durable::impls::persist::state_update::{
+    StateUpdateKindSchema, StateUpdateKindTag, StateUpdateKindTagSchema,
+};
 use crate::durable::initialize::DEPLOY_GENERATION;
 use crate::durable::objects::{AuditLogKey, DurableType, Snapshot, StorageUsageKey};
 use crate::durable::transaction::TransactionBatch;
@@ -94,8 +95,8 @@ impl PersistHandle {
         let (write_handle, read_handle) = persist_client
             .open(
                 shard_id,
-                Arc::new(VecU8Schema::default()),
-                Arc::new(VecU8Schema::default()),
+                Arc::new(StateUpdateKindTagSchema::default()),
+                Arc::new(StateUpdateKindSchema::default()),
                 Diagnostics {
                     shard_name: "catalog".to_string(),
                     handle_purpose: "durable catalog state".to_string(),
