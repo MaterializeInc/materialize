@@ -329,7 +329,7 @@ pub fn create_statement(
         }
 
         Statement::CreateSink(CreateSinkStatement {
-            name,
+            name: Some(name),
             in_cluster: _,
             connection: _,
             format: _,

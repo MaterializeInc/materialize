@@ -439,7 +439,7 @@ pub fn plan_explain_schema(
 
     crate::pure::add_materialize_comments(scx.catalog, &mut statement)?;
 
-    match ddl::plan_create_sink(scx, statement)? {
+    match ddl::plan_create_sink(scx, statement, true)? {
         Plan::CreateSink(CreateSinkPlan { sink, .. }) => match sink.connection {
             StorageSinkConnection::Kafka(KafkaSinkConnection {
                 format:

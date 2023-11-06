@@ -136,7 +136,9 @@ pub fn create_stmt_rename(create_stmt: &mut Statement<Raw>, to_item_name: String
         Statement::CreateIndex(CreateIndexStatement { name, .. }) => {
             *name = Some(Ident::new(to_item_name));
         }
-        Statement::CreateSink(CreateSinkStatement { name, .. })
+        Statement::CreateSink(CreateSinkStatement {
+            name: Some(name), ..
+        })
         | Statement::CreateSource(CreateSourceStatement { name, .. })
         | Statement::CreateSubsource(CreateSubsourceStatement { name, .. })
         | Statement::CreateView(CreateViewStatement {
