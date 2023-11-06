@@ -187,7 +187,7 @@ impl Optimize<LocalMirPlan> for OptimizeMaterializedView {
         df_builder.reoptimize_imported_views(&mut df_desc, &self.config)?;
 
         for BuildDesc { plan, .. } in &mut df_desc.objects_to_build {
-            prep_relation_expr(self.catalog.state(), plan, ExprPrepStyle::Index)?;
+            prep_relation_expr(plan, ExprPrepStyle::Index)?;
         }
 
         let sink_description = ComputeSinkDesc {

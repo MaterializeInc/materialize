@@ -136,7 +136,7 @@ impl Optimize<Index> for OptimizeIndex {
         df_builder.reoptimize_imported_views(&mut df_desc, &self.config)?;
 
         for desc in df_desc.objects_to_build.iter_mut() {
-            prep_relation_expr(state, &mut desc.plan, ExprPrepStyle::Index)?;
+            prep_relation_expr(&mut desc.plan, ExprPrepStyle::Index)?;
         }
 
         let mut index_desc = IndexDesc {
@@ -145,7 +145,7 @@ impl Optimize<Index> for OptimizeIndex {
         };
 
         for key in index_desc.key.iter_mut() {
-            prep_scalar_expr(state, key, ExprPrepStyle::Index)?;
+            prep_scalar_expr(key, ExprPrepStyle::Index)?;
         }
 
         df_desc.export_index(self.exported_index_id, index_desc, on_desc.typ().clone());

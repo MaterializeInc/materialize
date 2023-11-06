@@ -12,15 +12,15 @@ use std::fmt;
 use std::sync::Arc;
 
 use anyhow::Context;
-use mz_expr::visit::Visit;
-use mz_expr::{MirScalarExpr, UnmaterializableFunc};
-use mz_ore::now::{to_datetime, NowFn};
+use mz_ore::now::NowFn;
 use mz_repr::{ColumnType, Datum, Row, RowArena};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::SecretsReader;
 use mz_sql::plan::{WebhookHeaders, WebhookValidation, WebhookValidationSecret};
 use mz_storage_client::controller::MonotonicAppender;
 use tokio::sync::Semaphore;
+
+use crate::coord::dataflows::{prep_scalar_expr, ExprPrepStyle};
 
 /// Errors returns when running validation of a webhook request.
 #[derive(thiserror::Error, Debug)]
@@ -75,7 +75,7 @@ impl AppendWebhookValidator {
         } = self;
 
         let WebhookValidation {
-            expression,
+            mut expression,
             relation_desc: _,
             secrets,
             bodies: body_columns,
@@ -101,7 +101,11 @@ impl AppendWebhookValidator {
         //
         // Note: we do this outside the closure, because otherwise there are some odd catch unwind
         // boundary errors, and this shouldn't be too computationally expensive.
-        let expression = eval_current_time(expression, now_fn()).map_err(|err| {
+        prep_scalar_expr(
+            &mut expression,
+            ExprPrepStyle::WebhookValidation { now: now_fn() },
+        )
+        .map_err(|err| {
             tracing::error!(?err, "failed to evaluate current time");
             AppendWebhookError::InternalError
         })?;
@@ -288,26 +292,6 @@ impl Default for WebhookConcurrencyLimiter {
     fn default() -> Self {
         WebhookConcurrencyLimiter::new(mz_sql::WEBHOOK_CONCURRENCY_LIMIT)
     }
-}
-
-/// Evaluates any calls to `UnmaterializableFunc::CurrentTimestamp`, replacing it with the current
-/// time.
-fn eval_current_time(
-    mut validation_expr: MirScalarExpr,
-    now: u64,
-) -> Result<MirScalarExpr, anyhow::Error> {
-    validation_expr.try_visit_mut_post(&mut |e| {
-        if let MirScalarExpr::CallUnmaterializable(f @ UnmaterializableFunc::CurrentTimestamp) = e {
-            let now = to_datetime(now);
-            let now: Datum = now.try_into()?;
-
-            let const_expr = MirScalarExpr::literal_ok(now, f.output_type().scalar_type);
-            *e = const_expr;
-        }
-        Ok::<_, anyhow::Error>(())
-    })?;
-
-    Ok(validation_expr)
 }
 
 #[cfg(test)]

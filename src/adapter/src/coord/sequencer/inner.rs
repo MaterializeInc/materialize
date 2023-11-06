@@ -5141,11 +5141,11 @@ impl Coordinator {
     ) -> Result<Vec<u8>, AdapterError> {
         let temp_storage = RowArena::new();
         prep_scalar_expr(
-            self.catalog().state(),
             secret_as,
             ExprPrepStyle::OneShot {
                 logical_time: EvalTime::NotAvailable,
                 session,
+                catalog_state: self.catalog().state(),
             },
         )?;
         let evaled = secret_as.eval(&[], &temp_storage)?;

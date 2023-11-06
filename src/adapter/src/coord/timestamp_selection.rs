@@ -516,7 +516,7 @@ impl Coordinator {
         session: &Session,
     ) -> Result<mz_repr::Timestamp, AdapterError> {
         let temp_storage = RowArena::new();
-        prep_scalar_expr(catalog, &mut timestamp, ExprPrepStyle::AsOfUpTo)?;
+        prep_scalar_expr(&mut timestamp, ExprPrepStyle::AsOfUpTo)?;
         let evaled = timestamp.eval(&[], &temp_storage)?;
         if evaled.is_null() {
             coord_bail!("can't use {} as a mz_timestamp for AS OF or UP TO", evaled);

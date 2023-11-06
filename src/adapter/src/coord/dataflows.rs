@@ -31,6 +31,7 @@ use mz_expr::{
     UnmaterializableFunc, RECURSION_LIMIT,
 };
 use mz_ore::cast::ReinterpretCast;
+use mz_ore::now::{to_datetime, EpochMillis};
 use mz_ore::stack::{maybe_grow, CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::role_id::RoleId;
@@ -102,9 +103,15 @@ pub enum ExprPrepStyle<'a> {
     OneShot {
         logical_time: EvalTime,
         session: &'a Session,
+        catalog_state: &'a CatalogState,
     },
     /// The expression is being prepared for evaluation in an AS OF or UP TO clause.
     AsOfUpTo,
+    /// The expression is being prepared for evaluation in a CHECK expression of a webhook source.
+    WebhookValidation {
+        /// Time at which this expression is being evaluated.
+        now: EpochMillis,
+    },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -386,7 +393,7 @@ impl<'a> DataflowBuilder<'a> {
     ) -> Result<DataflowMetainfo, AdapterError> {
         self.import_into_dataflow(&sink_description.from, dataflow)?;
         for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
-            prep_relation_expr(self.catalog, plan, ExprPrepStyle::Index)?;
+            prep_relation_expr(plan, ExprPrepStyle::Index)?;
         }
         dataflow.export_sink(id, sink_description);
 
@@ -500,7 +507,6 @@ impl<'a> CheckedRecursion for DataflowBuilder<'a> {
 /// contained scalar expressions (see `prep_scalar_expr`) in the specified
 /// style.
 pub fn prep_relation_expr(
-    catalog: &CatalogState,
     expr: &mut OptimizedMirRelationExpr,
     style: ExprPrepStyle,
 ) -> Result<(), AdapterError> {
@@ -515,19 +521,21 @@ pub fn prep_relation_expr(
                         Err(e) => coord_bail!("{:?}", e),
                         Ok(mut mfp) => {
                             for s in mfp.iter_nontemporal_exprs() {
-                                prep_scalar_expr(catalog, s, style)?;
+                                prep_scalar_expr(s, style)?;
                             }
                             Ok(())
                         }
                     }
                 } else {
-                    e.try_visit_scalars_mut1(&mut |s| prep_scalar_expr(catalog, s, style))
+                    e.try_visit_scalars_mut1(&mut |s| prep_scalar_expr(s, style))
                 }
             })
         }
-        ExprPrepStyle::OneShot { .. } | ExprPrepStyle::AsOfUpTo => expr
+        ExprPrepStyle::OneShot { .. }
+        | ExprPrepStyle::AsOfUpTo
+        | ExprPrepStyle::WebhookValidation { .. } => expr
             .0
-            .try_visit_scalars_mut(&mut |s| prep_scalar_expr(catalog, s, style)),
+            .try_visit_scalars_mut(&mut |s| prep_scalar_expr(s, style)),
     }
 }
 
@@ -538,7 +546,6 @@ pub fn prep_relation_expr(
 /// `style` is `OneShot`. If `style` is `Index`, then an error is produced
 /// if a call to a unmaterializable function is encountered.
 pub fn prep_scalar_expr(
-    state: &CatalogState,
     expr: &mut MirScalarExpr,
     style: ExprPrepStyle,
 ) -> Result<(), AdapterError> {
@@ -548,15 +555,16 @@ pub fn prep_scalar_expr(
         ExprPrepStyle::OneShot {
             logical_time,
             session,
+            catalog_state,
         } => expr.try_visit_mut_post(&mut |e| {
             if let MirScalarExpr::CallUnmaterializable(f) = e {
-                *e = eval_unmaterializable_func(state, f, logical_time, session)?;
+                *e = eval_unmaterializable_func(catalog_state, f, logical_time, session)?;
             }
             Ok(())
         }),
 
         // Reject the query if it contains any unmaterializable function calls.
-        ExprPrepStyle::Index | ExprPrepStyle::AsOfUpTo => {
+        ExprPrepStyle::Index { .. } | ExprPrepStyle::AsOfUpTo => {
             let mut last_observed_unmaterializable_func = None;
             expr.visit_mut_post(&mut |e| {
                 if let MirScalarExpr::CallUnmaterializable(f) = e {
@@ -566,7 +574,7 @@ pub fn prep_scalar_expr(
 
             if let Some(f) = last_observed_unmaterializable_func {
                 let err = match style {
-                    ExprPrepStyle::Index => AdapterError::UnmaterializableFunction(f),
+                    ExprPrepStyle::Index { .. } => AdapterError::UnmaterializableFunction(f),
                     ExprPrepStyle::AsOfUpTo => AdapterError::UncallableFunction {
                         func: f,
                         context: "AS OF or UP TO",
@@ -575,6 +583,23 @@ pub fn prep_scalar_expr(
                 };
                 return Err(err);
             }
+            Ok(())
+        }
+
+        ExprPrepStyle::WebhookValidation { now } => {
+            expr.try_visit_mut_post(&mut |e| {
+                if let MirScalarExpr::CallUnmaterializable(
+                    f @ UnmaterializableFunc::CurrentTimestamp,
+                ) = e
+                {
+                    let now = to_datetime(now);
+                    let now: Datum = now.try_into()?;
+
+                    let const_expr = MirScalarExpr::literal_ok(now, f.output_type().scalar_type);
+                    *e = const_expr;
+                }
+                Ok::<_, anyhow::Error>(())
+            })?;
             Ok(())
         }
     }
