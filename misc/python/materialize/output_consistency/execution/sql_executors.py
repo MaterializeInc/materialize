@@ -19,3 +19,8 @@ class SqlExecutors:
 
     def get_executor(self, strategy: EvaluationStrategy) -> SqlExecutor:
         return self.executor
+
+    def get_database_infos(self) -> str:
+        return (
+            f"Using {self.executor.name} in version '{self.executor.query_version()}'."
+        )
