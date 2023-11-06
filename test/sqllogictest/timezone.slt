@@ -128,3 +128,25 @@ SELECT pg_catalog.timezone(-INTERVAL '1' MINUTE, TIMESTAMP '95143-12-31 23:59:59
 # Regression for #20514
 query error timestamp out of range
 SELECT pg_catalog.timezone('JAPAN', TIMESTAMPTZ '95143-12-31 23:59:59+06' + INTERVAL '167 MILLENNIUM')
+
+# Test that POSIX is used for timezone() and AT TIME ZONE.
+
+query T
+SELECT timezone('+5', '0001-01-01 12:00:00 +6'::TIMESTAMPTZ);
+----
+0001-01-01 01:00:00
+
+query T
+SELECT '0001-01-01 12:00:00 +6'::TIMESTAMPTZ AT TIME ZONE '+5';
+----
+0001-01-01 01:00:00
+
+query T
+SELECT timezone('-5', '0001-01-01 12:00:00 -6'::TIMESTAMPTZ);
+----
+0001-01-01 23:00:00
+
+query T
+SELECT '0001-01-01 12:00:00 -6'::TIMESTAMPTZ AT TIME ZONE '-5';
+----
+0001-01-01 23:00:00

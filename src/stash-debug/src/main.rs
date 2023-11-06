@@ -81,12 +81,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{self, Write};
 use std::path::PathBuf;
+use std::pin;
 use std::process;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::Context;
 use clap::Parser;
+use futures::StreamExt;
 use once_cell::sync::Lazy;
 use tracing_subscriber::filter::EnvFilter;
 
@@ -99,6 +102,7 @@ use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
+use mz_ore::retry::Retry;
 use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
@@ -493,54 +497,72 @@ impl Usage {
         }
 
         let metrics_registry = &MetricsRegistry::new();
-        let now = SYSTEM_TIME.clone();
-        let openable_storage = Box::new(mz_catalog::durable::stash_backed_catalog_state(
-            stash_config,
-        ));
-        let storage = openable_storage
-            .open_savepoint(
-                now(),
-                &BootstrapArgs {
-                    default_cluster_replica_size: "1".into(),
-                    bootstrap_role: None,
-                },
-                None,
-            )
-            .await?;
-        let secrets_reader = Arc::new(InMemorySecretsController::new());
+        let retry = Retry::default()
+            .clamp_backoff(Duration::from_secs(1))
+            .max_duration(Duration::from_secs(30))
+            .into_retry_stream();
+        let mut retry = pin::pin!(retry);
 
-        let (catalog, _, _, last_catalog_version) = Catalog::open(Config {
-            storage,
-            unsafe_mode: true,
-            all_features: false,
-            build_info: &BUILD_INFO,
-            environment_id: EnvironmentId::for_tests(),
-            now,
-            skip_migrations: false,
-            metrics_registry,
-            cluster_replica_sizes,
-            default_storage_cluster_size: None,
-            builtin_cluster_replica_size: "1".into(),
-            system_parameter_defaults: Default::default(),
-            availability_zones: vec![],
-            secrets_reader,
-            egress_ips: vec![],
-            aws_principal_context: None,
-            aws_privatelink_availability_zones: None,
-            system_parameter_sync_config: None,
-            storage_usage_retention_period: None,
-            http_host_name: None,
-            connection_context: None,
-            active_connection_count: Arc::new(Mutex::new(ConnectionCounter::new(0))),
-        })
-        .await?;
-        catalog.expire().await;
+        loop {
+            let now = SYSTEM_TIME.clone();
+            let secrets_reader = Arc::new(InMemorySecretsController::new());
+            let openable_storage = Box::new(mz_catalog::durable::stash_backed_catalog_state(
+                stash_config.clone(),
+            ));
+            let storage = openable_storage
+                .open_savepoint(
+                    now(),
+                    &BootstrapArgs {
+                        default_cluster_replica_size: "1".into(),
+                        bootstrap_role: None,
+                    },
+                    None,
+                )
+                .await?;
 
-        Ok(format!(
-            "catalog upgrade from {} to {} would succeed",
-            last_catalog_version,
-            BUILD_INFO.human_version(),
-        ))
+            match Catalog::open(Config {
+                storage,
+                unsafe_mode: true,
+                all_features: false,
+                build_info: &BUILD_INFO,
+                environment_id: EnvironmentId::for_tests(),
+                now,
+                skip_migrations: false,
+                metrics_registry,
+                cluster_replica_sizes: cluster_replica_sizes.clone(),
+                default_storage_cluster_size: None,
+                builtin_cluster_replica_size: "1".into(),
+                system_parameter_defaults: Default::default(),
+                availability_zones: vec![],
+                secrets_reader,
+                egress_ips: vec![],
+                aws_principal_context: None,
+                aws_privatelink_availability_zones: None,
+                system_parameter_sync_config: None,
+                storage_usage_retention_period: None,
+                http_host_name: None,
+                connection_context: None,
+                active_connection_count: Arc::new(Mutex::new(ConnectionCounter::new(0))),
+            })
+            .await
+            {
+                Ok((catalog, _, _, last_catalog_version)) => {
+                    catalog.expire().await;
+                    return Ok(format!(
+                        "catalog upgrade from {} to {} would succeed",
+                        last_catalog_version,
+                        BUILD_INFO.human_version(),
+                    ));
+                }
+                Err(e) => {
+                    if retry.next().await.is_none() {
+                        tracing::error!(?e, "Could not open catalog, and out of retries.");
+                        return Err(e.into());
+                    }
+                    tracing::warn!(?e, "Could not open catalog. Retrying...");
+                }
+            }
+        }
     }
 }
 

@@ -155,6 +155,13 @@ contains:CONFLUENT SCHEMA REGISTRY connections do not support TOKEN values
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
+! CREATE SOURCE csr_source
+  FROM KAFKA CONNECTION csr_conn (TOPIC 'testdrive-csr_test-${testdrive.seed}')
+    FORMAT AVRO
+    USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+    ENVELOPE DEBEZIUM
+contains:is not a KAFKA CONNECTION
+
 > CREATE SOURCE csr_source
     FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-csr_test-${testdrive.seed}')
     FORMAT AVRO

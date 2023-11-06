@@ -49,7 +49,7 @@ else
     done
 fi
 
-rm -f src/{clusterd,environmentd,persist-client,stash-debug,catalog-debug}/Cargo.toml.bak LICENSE.bak
+rm -f src/{clusterd,environmentd,persist-client,testdrive,stash-debug,catalog-debug}/Cargo.toml.bak LICENSE.bak
 
 cargo check
 

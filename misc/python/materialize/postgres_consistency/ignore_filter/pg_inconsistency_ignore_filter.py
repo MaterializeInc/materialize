@@ -327,6 +327,15 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         if "timestamp out of range" in mz_error_msg:
             return YesIgnore("#22264")
 
+        if "invalid regular expression: regex parse error" in mz_error_msg:
+            return YesIgnore("#22956")
+
+        if "invalid regular expression flag" in mz_error_msg:
+            return YesIgnore("#22958")
+
+        if "unit 'invalid_value_123' not recognized" in mz_error_msg:
+            return YesIgnore("#22957")
+
         if _error_message_is_about_zero_or_value_ranges(mz_error_msg):
             return YesIgnore("Caused by a different precision")
 

@@ -9,6 +9,7 @@
 
 //! Types and traits related to reporting changing collections out of `dataflow`.
 
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 
 use mz_ore::cast::CastFrom;
@@ -22,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 use timely::PartialOrder;
 
-use crate::connections::{CsrConnection, KafkaConnection};
+use crate::connections::StringOrSecret;
 use crate::controller::{CollectionMetadata, StorageError};
 
 use crate::connections::inline::{
@@ -421,7 +422,7 @@ impl RustType<ProtoKafkaConsistencyConfig> for KafkaConsistencyConfig {
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSinkConnection<C: ConnectionAccess = InlinedConnection> {
     pub connection_id: GlobalId,
-    pub connection: KafkaConnection<C>,
+    pub connection: C::Kafka,
     pub format: KafkaSinkFormat<C>,
     /// A natural key of the sinked relation (view or source).
     pub relation_key_indices: Option<Vec<usize>>,
@@ -434,6 +435,9 @@ pub struct KafkaSinkConnection<C: ConnectionAccess = InlinedConnection> {
     pub replication_factor: i32,
     pub fuel: usize,
     pub retention: KafkaSinkConnectionRetention,
+    /// Additional options that need to be set on the connection whenever it's
+    /// inlined.
+    pub connection_options: Option<BTreeMap<String, StringOrSecret>>,
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
@@ -453,10 +457,15 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
             replication_factor,
             fuel,
             retention,
+            connection_options,
         } = self;
+
+        let mut connection = r.resolve_connection(connection).unwrap_kafka();
+        connection_options.map(|options| connection.options.extend(options));
+
         KafkaSinkConnection {
             connection_id,
-            connection: connection.into_inline_connection(&r),
+            connection,
             format: format.into_inline_connection(r),
             relation_key_indices,
             key_desc_and_indices,
@@ -467,6 +476,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
             replication_factor,
             fuel,
             retention,
+            connection_options: None,
         }
     }
 }
@@ -486,6 +496,10 @@ impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
             replication_factor: self.replication_factor,
             fuel: u64::cast_from(self.fuel),
             retention: Some(self.retention.into_proto()),
+            connection_options: match &self.connection_options {
+                None => BTreeMap::default(),
+                Some(o) => o.iter().map(|(k, v)| (k.clone(), v.into_proto())).collect(),
+            },
         }
     }
 
@@ -515,6 +529,19 @@ impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
             retention: proto
                 .retention
                 .into_rust_if_some("ProtoKafkaSinkConnectionV2::retention")?,
+            connection_options: {
+                if proto.connection_options.is_empty() {
+                    None
+                } else {
+                    Some(
+                        proto
+                            .connection_options
+                            .into_iter()
+                            .map(|(k, v)| StringOrSecret::from_proto(v).map(|v| (k, v)))
+                            .collect::<Result<_, _>>()?,
+                    )
+                }
+            },
         })
     }
 }
@@ -549,7 +576,7 @@ pub enum KafkaSinkAvroFormatState<C: ConnectionAccess = InlinedConnection> {
     UnpublishedMaybe {
         key_schema: Option<String>,
         value_schema: String,
-        csr_connection: CsrConnection<C>,
+        csr_connection: C::Csr,
     },
     /// After communicating with the CSR, the IDs we've been given for the
     /// schemas.
@@ -571,7 +598,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkAvroFormatState, R>
             } => KafkaSinkAvroFormatState::UnpublishedMaybe {
                 key_schema,
                 value_schema,
-                csr_connection: csr_connection.into_inline_connection(r),
+                csr_connection: r.resolve_connection(csr_connection).unwrap_csr(),
             },
             Self::Published {
                 key_schema_id,

@@ -97,7 +97,11 @@ generate_extracted_config!(
     (RetentionMs, i64)
 );
 
-/// The config options we expect to pass along when connecting to librdkafka
+/// The config options we expect to pass along when connecting to librdkafka.
+///
+/// Note that these are meant to be disjoint from the options we permit being
+/// set on Kafka connections (CREATE CONNECTION), i.e. these are meant to be
+/// per-client options (CREATE SOURCE, CREATE SINK).
 #[derive(Debug)]
 pub struct LibRdKafkaConfig(pub BTreeMap<String, StringOrSecret>);
 

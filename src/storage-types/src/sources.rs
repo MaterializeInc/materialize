@@ -51,6 +51,7 @@ use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
 };
+use crate::connections::StringOrSecret;
 use crate::controller::{CollectionMetadata, StorageError};
 use crate::errors::{DataflowError, ProtoDataflowError};
 use crate::instances::StorageInstanceId;
@@ -1404,6 +1405,9 @@ pub struct KafkaSourceConnection<C: ConnectionAccess = InlinedConnection> {
     pub group_id_prefix: Option<String>,
     pub environment_id: String,
     pub metadata_columns: Vec<(String, KafkaMetadataKind)>,
+    /// Additional options that need to be set on the connection whenever it's
+    /// inlined.
+    pub connection_options: Option<BTreeMap<String, StringOrSecret>>,
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<KafkaSourceConnection, R>
@@ -1418,16 +1422,21 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSourceConnection, R>
             group_id_prefix,
             environment_id,
             metadata_columns,
+            connection_options,
         } = self;
 
+        let mut connection = r.resolve_connection(connection).unwrap_kafka();
+        connection_options.map(|options| connection.options.extend(options));
+
         KafkaSourceConnection {
-            connection: r.resolve_connection(connection).unwrap_kafka(),
+            connection,
             connection_id,
             topic,
             start_offsets,
             group_id_prefix,
             environment_id,
             metadata_columns,
+            connection_options: None,
         }
     }
 }
@@ -1530,6 +1539,7 @@ where
             any::<Option<String>>(),
             any::<String>(),
             proptest::collection::vec(any::<(String, KafkaMetadataKind)>(), 0..4),
+            proptest::collection::btree_map(any::<String>(), any::<StringOrSecret>(), 0..4),
         )
             .prop_map(
                 |(
@@ -1540,6 +1550,7 @@ where
                     group_id_prefix,
                     environment_id,
                     metadata_columns,
+                    connection_options,
                 )| KafkaSourceConnection {
                     connection,
                     connection_id,
@@ -1548,6 +1559,11 @@ where
                     group_id_prefix,
                     environment_id,
                     metadata_columns,
+                    connection_options: if connection_options.is_empty() {
+                        None
+                    } else {
+                        Some(connection_options)
+                    },
                 },
             )
             .boxed()
@@ -1572,6 +1588,10 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection<InlinedConne
                     kind: Some(kind.into_proto()),
                 })
                 .collect(),
+            connection_options: match &self.connection_options {
+                None => BTreeMap::default(),
+                Some(o) => o.iter().map(|(k, v)| (k.clone(), v.into_proto())).collect(),
+            },
         }
     }
 
@@ -1601,6 +1621,19 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection<InlinedConne
                 }
             },
             metadata_columns,
+            connection_options: {
+                if proto.connection_options.is_empty() {
+                    None
+                } else {
+                    Some(
+                        proto
+                            .connection_options
+                            .into_iter()
+                            .map(|(k, v)| StringOrSecret::from_proto(v).map(|v| (k, v)))
+                            .collect::<Result<_, _>>()?,
+                    )
+                }
+            },
         })
     }
 }

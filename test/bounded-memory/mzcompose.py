@@ -25,15 +25,13 @@ PAD_LEN = 1024
 STRING_PAD = "x" * PAD_LEN
 REPEAT = 16 * 1024
 ITERATIONS = 128
-MATERIALIZED_MEMORY = "5Gb"
-CLUSTERD_MEMORY = "3.5Gb"
 
 SERVICES = [
-    Materialized(memory=MATERIALIZED_MEMORY),
+    Materialized(),
     Testdrive(no_reset=True, seed=1, default_timeout="3600s"),
     Redpanda(),
     Postgres(),
-    Clusterd(memory=CLUSTERD_MEMORY),
+    Clusterd(),
 ]
 
 
@@ -43,6 +41,8 @@ class Scenario:
     pre_restart: str
     post_restart: str
     disabled: bool = False
+    materialized_memory: str = "5Gb"
+    clusterd_memory: str = "3.5Gb"
 
 
 class PgCdcScenario(Scenario):
@@ -170,6 +170,7 @@ SCENARIOS = [
             {ITERATIONS * REPEAT}
             """
         ),
+        clusterd_memory="3.6Gb",
     ),
     PgCdcScenario(
         name="pg-cdc-update",
@@ -238,7 +239,7 @@ SCENARIOS = [
         ),
         post_restart=KafkaScenario.SCHEMAS + KafkaScenario.POST_RESTART,
     ),
-    # Peform updates while the source is ingesting
+    # Perform updates while the source is ingesting
     KafkaScenario(
         name="upsert-update",
         pre_restart=KafkaScenario.SCHEMAS
@@ -265,7 +266,7 @@ SCENARIOS = [
         ),
         post_restart=KafkaScenario.SCHEMAS + KafkaScenario.POST_RESTART,
     ),
-    # Peform inserts+deletes while the source is ingesting
+    # Perform inserts+deletes while the source is ingesting
     KafkaScenario(
         name="upsert-insert-delete",
         pre_restart=KafkaScenario.SCHEMAS
@@ -333,6 +334,94 @@ SCENARIOS = [
            """
         ),
     ),
+    Scenario(
+        name="table-index-hydration",
+        pre_restart=dedent(
+            """
+            > DROP CLUSTER REPLICA clusterd.r1;
+
+            > CREATE TABLE t (a bigint, b bigint);
+
+            > CREATE INDEX idx IN CLUSTER clusterd ON t (a);
+
+            > INSERT INTO t SELECT a, a FROM generate_series(1, 2000000) AS a;
+            > UPDATE t SET b = b + 100000;
+            > UPDATE t SET b = b + 1000000;
+            > UPDATE t SET b = b + 10000000;
+            > UPDATE t SET b = b + 100000000;
+            > UPDATE t SET b = b + 1000000000;
+            > UPDATE t SET a = a + 100000;
+            > UPDATE t SET a = a + 1000000;
+            > UPDATE t SET a = a + 10000000;
+            > UPDATE t SET a = a + 100000000;
+            > UPDATE t SET a = a + 1000000000;
+
+            > CREATE CLUSTER REPLICA clusterd.r1
+              STORAGECTL ADDRESSES ['clusterd:2100'],
+              STORAGE ADDRESSES ['clusterd:2103'],
+              COMPUTECTL ADDRESSES ['clusterd:2101'],
+              COMPUTE ADDRESSES ['clusterd:2102'];
+
+            > SET CLUSTER = clusterd
+
+            > SELECT count(*) FROM t;
+            2000000
+            """
+        ),
+        post_restart=dedent(
+            """
+            > SET CLUSTER = clusterd
+
+            > SELECT count(*) FROM t;
+            2000000
+            """
+        ),
+        materialized_memory="10Gb",
+        clusterd_memory="3.5Gb",
+    ),
+    KafkaScenario(
+        name="upsert-index-hydration",
+        pre_restart=KafkaScenario.SCHEMAS
+        + KafkaScenario.CONNECTIONS
+        + dedent(
+            f"""
+            $ kafka-ingest format=avro key-format=avro topic=topic1 schema=${{value-schema}} key-schema=${{key-schema}} repeat={90 * REPEAT}
+            "${{kafka-ingest.iteration}}" {{"f1": "{STRING_PAD}"}}
+            """
+        )
+        + KafkaScenario.END_MARKER
+        + dedent(
+            """
+            > CREATE SOURCE s1
+              FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic1-${testdrive.seed}')
+              FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+              ENVELOPE UPSERT;
+
+            > DROP CLUSTER REPLICA clusterd.r1;
+
+            > CREATE INDEX i1 IN CLUSTER clusterd ON s1 (f1);
+            """
+        ),
+        post_restart=KafkaScenario.SCHEMAS
+        + dedent(
+            f"""
+            > CREATE CLUSTER REPLICA clusterd.r1
+              STORAGECTL ADDRESSES ['clusterd:2100'],
+              STORAGE ADDRESSES ['clusterd:2103'],
+              COMPUTECTL ADDRESSES ['clusterd:2101'],
+              COMPUTE ADDRESSES ['clusterd:2102'];
+
+            > SET CLUSTER = clusterd;
+
+            > SELECT count(*) FROM s1;
+            {90 * REPEAT + 2}
+            # Delete all rows except markers
+            $ kafka-ingest format=avro key-format=avro topic=topic1 schema=${{value-schema}} key-schema=${{key-schema}} repeat={REPEAT}
+            "${{kafka-ingest.iteration}}"
+            """
+        ),
+        materialized_memory="10Gb",
+    ),
 ]
 
 
@@ -361,30 +450,34 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         c.down(destroy_volumes=True)
 
-        c.up("redpanda", "materialized", "postgres", "clusterd")
+        with c.override(
+            Materialized(memory=scenario.materialized_memory),
+            Clusterd(memory=scenario.clusterd_memory),
+        ):
+            c.up("redpanda", "materialized", "postgres", "clusterd")
 
-        c.sql(
-            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
-            port=6877,
-            user="mz_system",
-        )
+            c.sql(
+                "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+                port=6877,
+                user="mz_system",
+            )
 
-        c.sql(
+            c.sql(
+                """
+                CREATE CLUSTER clusterd REPLICAS (r1 (
+                    STORAGECTL ADDRESSES ['clusterd:2100'],
+                    STORAGE ADDRESSES ['clusterd:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd:2101'],
+                    COMPUTE ADDRESSES ['clusterd:2102']
+                ))
             """
-            CREATE CLUSTER clusterd REPLICAS (r1 (
-                STORAGECTL ADDRESSES ['clusterd:2100'],
-                STORAGE ADDRESSES ['clusterd:2103'],
-                COMPUTECTL ADDRESSES ['clusterd:2101'],
-                COMPUTE ADDRESSES ['clusterd:2102']
-            ))
-        """
-        )
+            )
 
-        c.up("testdrive", persistent=True)
-        c.testdrive(scenario.pre_restart)
+            c.up("testdrive", persistent=True)
+            c.testdrive(scenario.pre_restart)
 
-        # Restart Mz to confirm that re-hydration is also bounded memory
-        c.kill("materialized", "clusterd")
-        c.up("materialized", "clusterd")
+            # Restart Mz to confirm that re-hydration is also bounded memory
+            c.kill("materialized", "clusterd")
+            c.up("materialized", "clusterd")
 
-        c.testdrive(scenario.post_restart)
+            c.testdrive(scenario.post_restart)

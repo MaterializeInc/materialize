@@ -254,7 +254,6 @@ impl Catalog {
 
         let mut storage = config.storage;
         let is_read_only = storage.is_read_only();
-        tracing::info!("Catalog::open - beginning initial transaction.");
         let mut txn = storage.transaction().await?;
         // Choose a time at which to boot. This is the time at which we will run
         // internal migrations.
@@ -845,7 +844,6 @@ impl Catalog {
         )?;
 
         txn.commit().await?;
-        tracing::info!("Catalog::open - ending initial transaction.");
         let mut catalog = Catalog {
             state,
             plans: CatalogPlans {
