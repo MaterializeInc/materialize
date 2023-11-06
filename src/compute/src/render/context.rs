@@ -1082,7 +1082,7 @@ where
         // Catch-all: Just use RowRow.
         let (oks, errs) = oks.map_fallible(
             "FormArrangementKey",
-            specialized_arrangement_key(key.clone(), thinning.clone(), None, None),
+            row_arrangement_key(key.clone(), thinning.clone()),
         );
         let oks = oks.mz_arrange::<RowSpine<Row, Row, _, _>>(name);
         (SpecializedArrangement::RowRow(oks), errs)
@@ -1109,6 +1109,29 @@ fn derive_key_val_types(
         Some((key_types, val_types))
     } else {
         None
+    }
+}
+
+/// Obtains a specialized function that maps input rows to (Row, Row) pairs according
+/// to the given key and thinning expressions.
+fn row_arrangement_key(
+    key: Vec<MirScalarExpr>,
+    thinning: Vec<usize>,
+) -> impl FnMut(Row) -> Result<(Row, Row), DataflowError> {
+    let mut row_buf = Row::default();
+
+    let mut datums = DatumVec::new();
+    move |row| {
+        // TODO: Consider reusing the `row` allocation; probably in *next* invocation.
+        let datums = datums.borrow_with(&row);
+        let temp_storage = RowArena::new();
+        row_buf
+            .packer()
+            .try_extend(key.iter().map(|k| k.eval(&datums, &temp_storage)))?;
+        let key_row = row_buf.clone();
+        row_buf.packer().extend(thinning.iter().map(|c| datums[*c]));
+        let val_row = row_buf.clone();
+        Ok::<(Row, Row), DataflowError>((key_row, val_row))
     }
 }
 
