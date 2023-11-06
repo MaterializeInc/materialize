@@ -943,26 +943,27 @@ Explained Query:
         Project (#1) // { arity: 1 }
           Reduce group_by=[#0] aggregates=[count(#1)] // { arity: 2 }
             Union // { arity: 2 }
-              Project (#0, #22) // { arity: 2 }
-                Get l0 // { arity: 23 }
               Map (null) // { arity: 2 }
                 Union // { arity: 1 }
                   Negate // { arity: 1 }
                     Project (#0) // { arity: 1 }
-                      Distinct project=[#0..=#21] // { arity: 22 }
-                        Project (#0..=#21) // { arity: 22 }
-                          Get l0 // { arity: 23 }
+                      Distinct project=[#0..=#2] // { arity: 3 }
+                        Project (#0..=#2) // { arity: 3 }
+                          Get l0 // { arity: 4 }
                   Project (#0) // { arity: 1 }
                     ReadIndex on=customer fk_customer_district=[*** full scan ***] // { arity: 22 }
+              Project (#0, #3) // { arity: 2 }
+                Get l0 // { arity: 4 }
     With
       cte l0 =
-        Project (#0..=#22) // { arity: 23 }
-          Filter (#27 > 8) AND (#0) IS NOT NULL // { arity: 30 }
-            Join on=(#0 = #25 AND #1 = #23 AND #2 = #24) type=differential // { arity: 30 }
+        Project (#0..=#3) // { arity: 4 }
+          Filter (#8 > 8) AND (#0) IS NOT NULL // { arity: 11 }
+            Join on=(#0 = #6 AND #1 = #4 AND #2 = #5) type=differential // { arity: 11 }
               implementation
                 %0:customer[#2, #1, #0]UKKK » %1:order[#2, #1, #3]KKKAif
-              ArrangeBy keys=[[#2, #1, #0]] // { arity: 22 }
-                ReadIndex on=customer fk_customer_district=[*** full scan ***] // { arity: 22 }
+              ArrangeBy keys=[[#2, #1, #0]] // { arity: 3 }
+                Project (#0..=#2) // { arity: 3 }
+                  ReadIndex on=customer fk_customer_district=[*** full scan ***] // { arity: 22 }
               ArrangeBy keys=[[#2, #1, #3]] // { arity: 8 }
                 ReadIndex on=order fk_order_customer=[differential join] // { arity: 8 }
 
