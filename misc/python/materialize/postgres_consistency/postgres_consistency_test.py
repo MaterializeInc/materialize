@@ -61,8 +61,10 @@ class PostgresConsistencyTest(OutputConsistencyTest):
             raise RuntimeError("Postgres connection is not initialized")
 
         return PgSqlExecutors(
-            create_sql_executor(config, connection, output_printer),
-            create_sql_executor(config, self.pg_connection, output_printer),
+            create_sql_executor(config, connection, output_printer, "mz"),
+            create_sql_executor(
+                config, self.pg_connection, output_printer, "pg", is_mz=False
+            ),
         )
 
     def create_result_comparator(
@@ -70,7 +72,9 @@ class PostgresConsistencyTest(OutputConsistencyTest):
     ) -> ResultComparator:
         return PostgresResultComparator(ignore_filter)
 
-    def create_inconsistency_ignore_filter(self) -> InconsistencyIgnoreFilter:
+    def create_inconsistency_ignore_filter(
+        self, sql_executors: SqlExecutors
+    ) -> InconsistencyIgnoreFilter:
         return PgInconsistencyIgnoreFilter()
 
     def create_evaluation_strategies(self) -> list[EvaluationStrategy]:

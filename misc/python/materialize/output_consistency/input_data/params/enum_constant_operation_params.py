@@ -39,14 +39,17 @@ DATE_TIME_COMPONENT_PARAM = EnumConstantOperationParam(
 TYPE_FORMAT_PARAM = EnumConstantOperationParam(
     ["Dy, Mon DD YYYY HH24:MI:SS +0000", "Welcome to Mon, YYYY", 'Dth "of" Mon'],
     add_quotes=True,
+    add_invalid_value=False,
 )
 
 ISO8601_TIMESTAMP_PARAM = EnumConstantOperationParam(
-    ["0000-01-01T00:00:00.000Z", "2015-09-18T23:56:04.123Z", "invalid_timestamp"],
+    ["0000-01-01T00:00:00.000Z", "2015-09-18T23:56:04.123Z"],
     add_quotes=True,
 )
 
-REGEX_PARAM = EnumConstantOperationParam([".*", "A+", "[ab]"], add_quotes=True)
+REGEX_PARAM = EnumConstantOperationParam(
+    [".*", "A+", "[ab]"], add_quotes=True, invalid_value="ab("
+)
 
 REGEX_FLAG_PARAM = EnumConstantOperationParam(["i"], add_quotes=True, optional=True)
 

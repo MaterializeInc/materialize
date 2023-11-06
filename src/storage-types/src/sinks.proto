@@ -112,6 +112,7 @@ message ProtoKafkaSinkConnectionV2 {
     ProtoKafkaConsistencyConfig consistency_config = 10;
     ProtoKafkaSinkFormat format = 11;
     int32 partition_count = 12;
+    map<string, mz_storage_types.connections.ProtoStringOrSecret> connection_options = 13;
 }
 
 message ProtoPersistSinkConnection {

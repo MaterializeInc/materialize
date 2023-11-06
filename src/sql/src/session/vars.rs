@@ -1979,7 +1979,7 @@ feature_flags!(
     {
         name: enable_new_outer_join_lowering,
         desc: "new outer join lowering",
-        default: false,
+        default: true,
         internal: true,
         enable_for_item_parsing: false,
     },

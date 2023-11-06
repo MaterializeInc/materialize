@@ -31,6 +31,12 @@ class SqlExecutionError(Exception):
 class SqlExecutor:
     """Base class of `PgWireDatabaseSqlExecutor` and `DryRunSqlExecutor`"""
 
+    def __init__(
+        self,
+        name: str,
+    ):
+        self.name = name
+
     def __str__(self) -> str:
         return self.__class__.__name__
 
@@ -49,6 +55,9 @@ class SqlExecutor:
     def query(self, sql: str) -> Sequence[Sequence[Any]]:
         raise NotImplementedError
 
+    def query_version(self) -> str:
+        raise NotImplementedError
+
 
 class PgWireDatabaseSqlExecutor(SqlExecutor):
     def __init__(
@@ -56,7 +65,9 @@ class PgWireDatabaseSqlExecutor(SqlExecutor):
         connection: Connection,
         use_autocommit: bool,
         output_printer: OutputPrinter,
+        name: str,
     ):
+        super().__init__(name)
         connection.autocommit = use_autocommit
         self.cursor = connection.cursor()
         self.output_printer = output_printer
@@ -80,6 +91,9 @@ class PgWireDatabaseSqlExecutor(SqlExecutor):
             return self.cursor.fetchall()
         except (ProgrammingError, DatabaseError) as err:
             raise SqlExecutionError(self._extract_message_from_error(err))
+
+    def query_version(self) -> str:
+        return self.query("SELECT version();")[0][0]
 
     def _execute_with_cursor(self, sql: str) -> None:
         try:
@@ -122,8 +136,23 @@ class PgWireDatabaseSqlExecutor(SqlExecutor):
             return f"{message} ({details})"
 
 
+class MzDatabaseSqlExecutor(PgWireDatabaseSqlExecutor):
+    def __init__(
+        self,
+        connection: Connection,
+        use_autocommit: bool,
+        output_printer: OutputPrinter,
+        name: str,
+    ):
+        super().__init__(connection, use_autocommit, output_printer, name)
+
+    def query_version(self) -> str:
+        return self.query("SELECT mz_version();")[0][0]
+
+
 class DryRunSqlExecutor(SqlExecutor):
-    def __init__(self, output_printer: OutputPrinter):
+    def __init__(self, output_printer: OutputPrinter, name: str):
+        super().__init__(name)
         self.output_printer = output_printer
 
     def consume_sql(self, sql: str) -> None:
@@ -145,15 +174,25 @@ class DryRunSqlExecutor(SqlExecutor):
         self.consume_sql(sql)
         return []
 
+    def query_version(self) -> str:
+        return "(dry-run)"
+
 
 def create_sql_executor(
     config: ConsistencyTestConfiguration,
     connection: Connection,
     output_printer: OutputPrinter,
+    name: str,
+    is_mz: bool = True,
 ) -> SqlExecutor:
     if config.dry_run:
-        return DryRunSqlExecutor(output_printer)
-    else:
-        return PgWireDatabaseSqlExecutor(
-            connection, config.use_autocommit, output_printer
+        return DryRunSqlExecutor(output_printer, name)
+
+    if is_mz:
+        return MzDatabaseSqlExecutor(
+            connection, config.use_autocommit, output_printer, name
         )
+
+    return PgWireDatabaseSqlExecutor(
+        connection, config.use_autocommit, output_printer, name
+    )

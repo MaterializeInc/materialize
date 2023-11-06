@@ -153,6 +153,7 @@ message ProtoKafkaSourceConnection {
     optional mz_proto.ProtoU128 environment_id = 5;
     optional string environment_name = 12;
     repeated ProtoKafkaMetadataColumn metadata_columns = 11;
+    map<string, mz_storage_types.connections.ProtoStringOrSecret> connection_options = 14;
 }
 
 message ProtoSourceDesc {

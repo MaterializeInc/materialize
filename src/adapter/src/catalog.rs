@@ -92,7 +92,7 @@ pub use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterConfig, ClusterReplica, ClusterReplicaProcessStatus,
     ClusterVariant, ClusterVariantManaged, CommentsMap, Connection, DataSourceDesc, Database,
     DefaultPrivileges, Func, Index, Log, MaterializedView, Role, Schema, Secret, Sink, Source,
-    StorageSinkConnectionState, Table, Type, View,
+    Table, Type, View,
 };
 
 mod builtin_table_updates;
@@ -437,10 +437,15 @@ impl Catalog {
         let debug_stash_factory = DebugStashFactory::new().await;
         let persist_client = PersistClient::new_for_tests().await;
         let environmentd_id = Uuid::new_v4();
-        let catalog =
-            Self::open_debug_catalog(&debug_stash_factory, persist_client, environmentd_id, now)
-                .await
-                .expect("unable to open debug stash");
+        let catalog = Self::open_debug_catalog(
+            &debug_stash_factory,
+            persist_client,
+            environmentd_id,
+            now,
+            None,
+        )
+        .await
+        .expect("unable to open debug stash");
         let res = f(catalog).await;
         debug_stash_factory.drop().await;
         res
@@ -454,6 +459,7 @@ impl Catalog {
         persist_client: PersistClient,
         organization_id: Uuid,
         now: NowFn,
+        environment_id: Option<EnvironmentId>,
     ) -> Result<Catalog, anyhow::Error> {
         let openable_storage = Box::new(
             mz_catalog::durable::shadow_catalog_state(
@@ -471,7 +477,7 @@ impl Catalog {
         let storage = openable_storage
             .open(now(), &test_bootstrap_args(), None)
             .await?;
-        Self::open_debug_stash_catalog(storage, now).await
+        Self::open_debug_stash_catalog(storage, now, environment_id).await
     }
 
     /// Opens a debug stash backed catalog at `url`, using `schema` as the connection's search_path.
@@ -481,6 +487,7 @@ impl Catalog {
         url: String,
         schema: String,
         now: NowFn,
+        environment_id: Option<EnvironmentId>,
     ) -> Result<Catalog, anyhow::Error> {
         let tls = mz_tls_util::make_tls(&tokio_postgres::Config::new())
             .expect("unable to create TLS connector");
@@ -497,7 +504,7 @@ impl Catalog {
         let storage = openable_storage
             .open(now(), &test_bootstrap_args(), None)
             .await?;
-        Self::open_debug_stash_catalog(storage, now).await
+        Self::open_debug_stash_catalog(storage, now, environment_id).await
     }
 
     /// Opens a read only debug stash backed catalog defined by `stash_config`.
@@ -506,6 +513,7 @@ impl Catalog {
     pub async fn open_debug_read_only_stash_catalog_config(
         stash_config: StashConfig,
         now: NowFn,
+        environment_id: Option<EnvironmentId>,
     ) -> Result<Catalog, anyhow::Error> {
         let openable_storage = Box::new(mz_catalog::durable::stash_backed_catalog_state(
             stash_config,
@@ -513,12 +521,13 @@ impl Catalog {
         let storage = openable_storage
             .open_read_only(now(), &test_bootstrap_args())
             .await?;
-        Self::open_debug_stash_catalog(storage, now).await
+        Self::open_debug_stash_catalog(storage, now, environment_id).await
     }
 
     async fn open_debug_stash_catalog(
         storage: Box<dyn DurableCatalogState>,
         now: NowFn,
+        environment_id: Option<EnvironmentId>,
     ) -> Result<Catalog, anyhow::Error> {
         let metrics_registry = &MetricsRegistry::new();
         let active_connection_count = Arc::new(std::sync::Mutex::new(ConnectionCounter::new(0)));
@@ -534,7 +543,7 @@ impl Catalog {
             unsafe_mode: true,
             all_features: false,
             build_info: &DUMMY_BUILD_INFO,
-            environment_id: EnvironmentId::for_tests(),
+            environment_id: environment_id.unwrap_or(EnvironmentId::for_tests()),
             now,
             skip_migrations: true,
             metrics_registry,
@@ -1115,7 +1124,6 @@ impl Catalog {
             &mut audit_events,
             &mut tx,
             &mut state,
-            &drop_ids,
         )?;
 
         let result = f(&state)?;
@@ -1155,9 +1163,6 @@ impl Catalog {
         audit_events: &mut Vec<VersionedEvent>,
         tx: &mut Transaction<'_>,
         state: &mut CatalogState,
-        // Provide all of the IDs that are being dropped in this transaction so we can provide
-        // stronger invariants about when we change items' dependencies.
-        drop_ids: &BTreeSet<GlobalId>,
     ) -> Result<(), AdapterError> {
         // NOTE(benesch): to support altering legacy sized sources and sinks
         // (those with linked clusters), we need to generate retractions for
@@ -1227,7 +1232,6 @@ impl Catalog {
                     tx,
                     builtin_table_updates,
                     oracle_write_ts,
-                    drop_ids,
                     audit_events,
                     session,
                     id,
@@ -1322,14 +1326,7 @@ impl Catalog {
                     )?;
 
                     let to_name = entry.name().clone();
-                    Self::update_item(
-                        state,
-                        builtin_table_updates,
-                        id,
-                        to_name,
-                        sink.item,
-                        drop_ids,
-                    )?;
+                    Self::update_item(state, builtin_table_updates, id, to_name, sink.item)?;
                 }
                 Op::AlterSource { id, cluster_config } => {
                     use mz_sql::ast::Value;
@@ -1422,14 +1419,7 @@ impl Catalog {
                     )?;
 
                     let to_name = entry.name().clone();
-                    Self::update_item(
-                        state,
-                        builtin_table_updates,
-                        id,
-                        to_name,
-                        source.item,
-                        drop_ids,
-                    )?;
+                    Self::update_item(state, builtin_table_updates, id, to_name, source.item)?;
                 }
                 Op::CreateDatabase {
                     name,
@@ -2698,14 +2688,7 @@ impl Catalog {
                     builtin_table_updates.extend(state.pack_item_update(id, -1));
                     updates.push((id, to_qualified_name, new_entry.item));
                     for (id, to_name, to_item) in updates {
-                        Self::update_item(
-                            state,
-                            builtin_table_updates,
-                            id,
-                            to_name,
-                            to_item,
-                            drop_ids,
-                        )?;
+                        Self::update_item(state, builtin_table_updates, id, to_name, to_item)?;
                     }
                 }
                 Op::RenameSchema {
@@ -2860,14 +2843,7 @@ impl Catalog {
                     ));
 
                     for (id, new_name, new_item) in updates {
-                        Self::update_item(
-                            state,
-                            builtin_table_updates,
-                            id,
-                            new_name,
-                            new_item,
-                            drop_ids,
-                        )?;
+                        Self::update_item(state, builtin_table_updates, id, new_name, new_item)?;
                     }
                 }
                 Op::UpdateOwner { id, new_owner } => {
@@ -3054,7 +3030,6 @@ impl Catalog {
                         id,
                         name.clone(),
                         to_item.clone(),
-                        drop_ids,
                     )?;
                     let entry = state.get_entry(&id);
                     tx.update_item(id, entry.clone().into())?;
@@ -3153,9 +3128,6 @@ impl Catalog {
         id: GlobalId,
         to_name: QualifiedItemName,
         to_item: CatalogItem,
-        // This lets us understand which items are dropped in this transaction so we can account
-        // for changes in dependencies.
-        drop_ids: &BTreeSet<GlobalId>,
     ) -> Result<(), AdapterError> {
         let old_entry = state.entry_by_id.remove(&id).expect("catalog out of sync");
         info!(
@@ -3165,25 +3137,6 @@ impl Catalog {
             id
         );
 
-        // Ensure any removal from the uses is accompanied by a drop.
-        let to_item_uses_and_dropped_ids: BTreeSet<&GlobalId> =
-            drop_ids.iter().chain(&to_item.uses().0).collect();
-
-        assert!(
-            old_entry
-                .uses()
-                .0
-                .iter()
-                .all(|id| to_item_uses_and_dropped_ids.contains(id)),
-            "all of the old entries used items must be accompanied by a drop \
-                old_entry.uses: {:?}\
-                to_item.uses: {:?}\
-                drop_ids {:?}",
-            old_entry.uses(),
-            to_item.uses(),
-            drop_ids,
-        );
-
         let conn_id = old_entry.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
         let schema = state.get_schema_mut(
             &old_entry.name().qualifiers.database_spec,
@@ -3191,6 +3144,14 @@ impl Catalog {
             conn_id,
         );
         schema.items.remove(&old_entry.name().item);
+
+        // Dropped deps
+        let dropped_deps: Vec<_> = old_entry
+            .uses()
+            .0
+            .difference(&to_item.uses().0)
+            .cloned()
+            .collect();
 
         // We only need to install this item on items in the `used_by` of new
         // dependencies.
@@ -3206,6 +3167,14 @@ impl Catalog {
         new_entry.item = to_item;
 
         schema.items.insert(new_entry.name().item.clone(), id);
+
+        for u in dropped_deps {
+            // OK if we no longer have this entry because we are dropping our
+            // dependency on it.
+            if let Some(metadata) = state.entry_by_id.get_mut(&u) {
+                metadata.used_by.retain(|dep_id| *dep_id != id)
+            }
+        }
 
         for u in new_deps {
             match state.entry_by_id.get_mut(&u) {
@@ -4443,6 +4412,7 @@ mod tests {
                 persist_client.clone(),
                 organization_id.clone(),
                 NOW_ZERO.clone(),
+                None,
             )
             .await
             .expect("unable to open debug catalog");
@@ -4470,6 +4440,7 @@ mod tests {
                 persist_client,
                 organization_id,
                 NOW_ZERO.clone(),
+                None,
             )
             .await
             .expect("unable to open debug catalog");
@@ -4679,6 +4650,7 @@ mod tests {
                 persist_client.clone(),
                 organization_id.clone(),
                 SYSTEM_TIME.clone(),
+                None,
             )
             .await
             .expect("unable to open debug catalog");
@@ -4715,6 +4687,7 @@ mod tests {
                 persist_client,
                 organization_id,
                 SYSTEM_TIME.clone(),
+                None,
             )
             .await
             .expect("unable to open debug catalog");

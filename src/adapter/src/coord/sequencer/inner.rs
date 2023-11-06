@@ -3152,11 +3152,6 @@ impl Coordinator {
         // we aren't storing this clone in a `Subscriber`, so we should be fine.
         let root_dispatch = tracing::dispatcher::get_default(|d| d.clone());
 
-        let enable_unified_optimizer_api = self
-            .catalog()
-            .system_config()
-            .enable_unified_optimizer_api();
-
         let pipeline_result = match stmt {
             plan::ExplaineeStatement::Query {
                 raw_plan,
@@ -3204,32 +3199,16 @@ impl Coordinator {
                 index,
                 broken,
             } => {
-                if enable_unified_optimizer_api {
-                    // Please see the docs on `explain_query_optimizer_pipeline` above.
-                    self.explain_create_index_optimizer_pipeline(
-                        name,
-                        index,
-                        broken,
-                        &config,
-                        root_dispatch,
-                    )
-                    .with_subscriber(&optimizer_trace)
-                    .await
-                } else {
-                    // Allow while the introduction of the new optimizer API in
-                    // #20569 is in progress.
-                    #[allow(deprecated)]
-                    // Please see the docs on `explain_query_optimizer_pipeline` above.
-                    self.explain_create_index_optimizer_pipeline_deprecated(
-                        name,
-                        index,
-                        broken,
-                        &config,
-                        root_dispatch,
-                    )
-                    .with_subscriber(&optimizer_trace)
-                    .await
-                }
+                // Please see the docs on `explain_query_optimizer_pipeline` above.
+                self.explain_create_index_optimizer_pipeline(
+                    name,
+                    index,
+                    broken,
+                    &config,
+                    root_dispatch,
+                )
+                .with_subscriber(&optimizer_trace)
+                .await
             }
         };
 

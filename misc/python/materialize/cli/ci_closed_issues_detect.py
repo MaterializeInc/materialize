@@ -43,6 +43,8 @@ REFERENCE_RE = re.compile(
     | @disabled
     # Used in pytest
     | @pytest.mark.skip
+    # Used in output-consistency framework
+    | YesIgnore
     )
     """,
     re.VERBOSE | re.IGNORECASE,

@@ -40,7 +40,7 @@ use mz_sql_parser::ast::{
     DeferredItemName, DocOnIdentifier, DocOnSchema, DropOwnedStatement, SetRoleVar,
     UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
-use mz_storage_types::connections::inline::ReferencedConnection;
+use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnection};
 use mz_storage_types::connections::Connection;
 use mz_storage_types::sinks::{
     KafkaConsistencyConfig, KafkaSinkAvroFormatState, KafkaSinkConnection,
@@ -602,13 +602,12 @@ pub fn plan_create_source(
             key: _,
         }) => {
             let connection_item = scx.get_item_by_resolved_name(connection_name)?;
-            let mut kafka_connection = match connection_item.connection()? {
-                Connection::Kafka(connection) => connection.clone(),
-                _ => sql_bail!(
+            if !matches!(connection_item.connection()?, Connection::Kafka(_)) {
+                sql_bail!(
                     "{} is not a kafka connection",
                     scx.catalog.resolve_full_name(connection_item.name())
-                ),
-            };
+                )
+            }
 
             // Starting offsets are allowed out with feature flags mode, as they are a simple,
             // useful way to specify where to start reading a topic.
@@ -639,9 +638,7 @@ pub fn plan_create_source(
             let optional_start_offset =
                 Option::<kafka_util::KafkaStartOffsetType>::try_from(&extracted_options)?;
 
-            for (k, v) in kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0 {
-                kafka_connection.options.insert(k, v);
-            }
+            let connection_options = kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0;
 
             let topic = extracted_options
                 .topic
@@ -726,6 +723,7 @@ pub fn plan_create_source(
                 group_id_prefix,
                 environment_id: scx.catalog.config().environment_id.to_string(),
                 metadata_columns,
+                connection_options: Some(connection_options),
             };
 
             let connection = GenericSourceConnection::Kafka(connection);
@@ -1620,7 +1618,7 @@ generate_extracted_config!(AvroSchemaOption, (ConfluentWireFormat, bool, Default
 pub struct Schema {
     pub key_schema: Option<String>,
     pub value_schema: String,
-    pub csr_connection: Option<mz_storage_types::connections::CsrConnection<ReferencedConnection>>,
+    pub csr_connection: Option<<ReferencedConnection as ConnectionAccess>::Csr>,
     pub confluent_wire_format: bool,
 }
 
@@ -1667,7 +1665,7 @@ fn get_encoding_inner(
                 } => {
                     let item = scx.get_item_by_resolved_name(&connection.connection)?;
                     let csr_connection = match item.connection()? {
-                        Connection::Csr(connection) => connection.clone(),
+                        Connection::Csr(_) => item.id(),
                         _ => {
                             sql_bail!(
                                 "{} is not a schema registry connection",
@@ -2461,9 +2459,19 @@ fn kafka_sink_builder(
     sink_from: GlobalId,
 ) -> Result<StorageSinkConnection<ReferencedConnection>, PlanError> {
     let item = scx.get_item_by_resolved_name(&connection)?;
-    // Get Kafka connection
-    let mut connection = match item.connection()? {
-        Connection::Kafka(connection) => connection.clone(),
+    // Get Kafka connection + progress topic
+    //
+    // TODO: In ALTER CONNECTION, the progress topic must be immutable
+    let (connection, progress_topic) = match item.connection()? {
+        Connection::Kafka(connection) => {
+            let id = item.id();
+            let progress_topic = connection
+                .progress_topic
+                .clone()
+                .unwrap_or_else(|| scx.catalog.config().default_kafka_sink_progress_topic(id));
+
+            (id, progress_topic)
+        }
         _ => sql_bail!(
             "{} is not a kafka connection",
             scx.catalog.resolve_full_name(item.name())
@@ -2489,9 +2497,7 @@ fn kafka_sink_builder(
 
     let extracted_options: KafkaConfigOptionExtracted = options.try_into()?;
 
-    for (k, v) in kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0 {
-        connection.options.insert(k, v);
-    }
+    let connection_options = kafka_util::LibRdKafkaConfig::try_from(&extracted_options)?.0;
 
     let connection_id = item.id();
     let KafkaConfigOptionExtracted {
@@ -2531,7 +2537,7 @@ fn kafka_sink_builder(
 
             let item = scx.get_item_by_resolved_name(&connection)?;
             let csr_connection = match item.connection()? {
-                Connection::Csr(connection) => connection.clone(),
+                Connection::Csr(_) => item.id(),
                 _ => {
                     sql_bail!(
                         "{} is not a schema registry connection",
@@ -2599,11 +2605,7 @@ fn kafka_sink_builder(
     };
 
     let consistency_config = KafkaConsistencyConfig::Progress {
-        topic: connection.progress_topic.clone().unwrap_or_else(|| {
-            scx.catalog
-                .config()
-                .default_kafka_sink_progress_topic(connection_id)
-        }),
+        topic: progress_topic,
     };
 
     if partition_count == 0 || partition_count < -1 {
@@ -2644,6 +2646,7 @@ fn kafka_sink_builder(
         key_desc_and_indices,
         value_desc,
         retention,
+        connection_options: Some(connection_options),
     }))
 }
 
