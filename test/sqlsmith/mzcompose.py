@@ -152,6 +152,9 @@ known_errors = [
     "target replica failed or was dropped",  # expected on replica OoMs with #21587
     "cannot materialize call to",  # create materialized view on some internal views
     "arrays must not contain null values",  # aclexplode, mz_aclexplode
+    "window functions are not allowed in table function arguments",
+    "window functions are not allowed in OR argument",
+    "window functions are not allowed in AND argument",
 ]
 
 
