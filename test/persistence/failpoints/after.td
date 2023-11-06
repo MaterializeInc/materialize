@@ -52,7 +52,7 @@ $ kafka-ingest format=avro topic=failpoint key-format=avro key-schema=${keyschem
   );
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE failpoint_from_sink
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-failpoint-sink-${testdrive.seed}')

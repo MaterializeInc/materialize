@@ -20,13 +20,13 @@ $ kafka-ingest format=bytes topic=connection_test
 1,2
 2,3
 
-! CREATE CONNECTION testconn TO KAFKA (BROKER '${testdrive.kafka-addr}', ACCESS KEY ID = 'abc')
+! CREATE CONNECTION testconn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT, ACCESS KEY ID = 'abc')
 contains:KAFKA connections do not support ACCESS KEY ID values
 
-! CREATE CONNECTION testconn TO KAFKA (BROKER '${testdrive.kafka-addr}', ACCESS KEY ID = 'abc', PORT = 1)
+! CREATE CONNECTION testconn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT, ACCESS KEY ID = 'abc', PORT = 1)
 contains:KAFKA connections do not support ACCESS KEY ID, PORT values
 
-> CREATE CONNECTION testconn TO KAFKA (BROKER '${testdrive.kafka-addr}')
+> CREATE CONNECTION testconn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
 > SELECT name, type from mz_connections
 name       type
@@ -39,7 +39,7 @@ testconn    kafka
 > SHOW CREATE CONNECTION testconn
 name   create_sql
 ---------------------------------
-materialize.public.testconn   "CREATE CONNECTION \"materialize\".\"public\".\"testconn\" TO KAFKA (BROKER = '${testdrive.kafka-addr}')"
+materialize.public.testconn   "CREATE CONNECTION \"materialize\".\"public\".\"testconn\" TO KAFKA (BROKER = '${testdrive.kafka-addr}', SECURITY PROTOCOL = \"plaintext\")"
 
 > SELECT
       brokers,
@@ -53,7 +53,8 @@ materialize.public.testconn   "CREATE CONNECTION \"materialize\".\"public\".\"te
 
 > CREATE CONNECTION progress_override TO KAFKA (
     BROKER '${testdrive.kafka-addr}',
-    PROGRESS TOPIC 'override_topic'
+    PROGRESS TOPIC 'override_topic',
+    SECURITY PROTOCOL PLAINTEXT
   )
 
 > SELECT
@@ -66,7 +67,7 @@ materialize.public.testconn   "CREATE CONNECTION \"materialize\".\"public\".\"te
 ###
 # Test that connections work in creating a source
 ###
-> CREATE CONNECTION testconn TO KAFKA (BROKER '${testdrive.kafka-addr}')
+> CREATE CONNECTION testconn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
 > CREATE SOURCE connection_source (first, second)
   FROM KAFKA CONNECTION testconn (TOPIC 'testdrive-connection_test-${testdrive.seed}')
@@ -153,7 +154,7 @@ $ kafka-ingest format=avro topic=csr_test key-format=avro key-schema=${keyschema
 contains:CONFLUENT SCHEMA REGISTRY connections do not support TOKEN values
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 ! CREATE SOURCE csr_source
   FROM KAFKA CONNECTION csr_conn (TOPIC 'testdrive-csr_test-${testdrive.seed}')
@@ -173,7 +174,7 @@ id creature
 -----------
 1  lizard
 
-> CREATE CONNECTION broker_connection TO KAFKA (BROKER '${testdrive.kafka-addr}')
+> CREATE CONNECTION broker_connection TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
 > CREATE SOURCE two_connection_source
   FROM KAFKA CONNECTION broker_connection (TOPIC 'testdrive-csr_test-${testdrive.seed}')
@@ -311,30 +312,34 @@ ssh_conn true
 ## Kafka
 ! CREATE CONNECTION not_a_secret TO KAFKA (
     BROKER '',
-    SASL PASSWORD = ''
+    SASL PASSWORD = '',
+    SECURITY PROTOCOL PLAINTEXT
   );
 contains:invalid SASL PASSWORD: must provide a secret value
 
 ! CREATE CONNECTION not_a_secret TO KAFKA (
     BROKER '',
-    SSL KEY = ''
+    SSL KEY = '',
+    SECURITY PROTOCOL PLAINTEXT
   );
 contains:invalid SSL KEY: must provide a secret value
 
 ! CREATE CONNECTION duplicate_option TO KAFKA (
     BROKER '',
-    BROKER ''
+    BROKER '',
+    SECURITY PROTOCOL PLAINTEXT
   );
 contains:BROKER specified more than once
 
 ! CREATE CONNECTION no_broker TO KAFKA (
-    SASL MECHANISMS = 'PLAIN'
+    SECURITY PROTOCOL PLAINTEXT
   );
 contains:must set either BROKER or BROKERS
 
 ! CREATE CONNECTION ssl_underspeced TO KAFKA (
     BROKER 'kafka:9092',
-    BROKERS ['kafka:9092', 'kafka:9093']
+    BROKERS ['kafka:9092', 'kafka:9093'],
+    SECURITY PROTOCOL PLAINTEXT
   );
 contains:cannot set BROKER and BROKERS
 
@@ -342,13 +347,13 @@ contains:cannot set BROKER and BROKERS
     BROKER 'kafka:9092',
     SSL CERTIFICATE = ''
   );
-contains:under-specified security configuration
+contains:SSL KEY must be specified with SSL CERTIFICATE
 
 ! CREATE CONNECTION sasl_underspeced TO KAFKA (
     BROKER 'kafka:9092',
     SASL MECHANISMS = 'PLAIN'
   );
-contains:under-specified security configuration
+contains:SASL USERNAME must be specified
 
 > CREATE SECRET s AS '...';
 
@@ -378,12 +383,14 @@ contains:under-specified security configuration
   ) WITH (VALIDATE = FALSE);
 
 ! CREATE CONNECTION multiple_brokers TO KAFKA (
-    BROKER 'kafka:9092, kafka:9093'
+    BROKER 'kafka:9092, kafka:9093',
+    SECURITY PROTOCOL PLAINTEXT
   );
 contains:cannot specify multiple Kafka broker addresses in one string
 
 ! CREATE CONNECTION multiple_brokers TO KAFKA (
-    BROKERS ['kafka:9092, kafka:9093']
+    BROKERS ['kafka:9092, kafka:9093'],
+    SECURITY PROTOCOL PLAINTEXT
   );
 contains:cannot specify multiple Kafka broker addresses in one string
 
@@ -418,7 +425,7 @@ contains: HOST option is required
 
 ## AWS PrivateLink
 
-! CREATE CONNECTION conn1 TO KAFKA (BROKER '${testdrive.kafka-addr}' USING AWS PRIVATELINK foo (PORT 9093));
+! CREATE CONNECTION conn1 TO KAFKA (BROKER '${testdrive.kafka-addr}' USING AWS PRIVATELINK foo (PORT 9093), SECURITY PROTOCOL PLAINTEXT);
 contains: unknown catalog item 'foo'
 
 ! CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (AWS PRIVATELINK foo, PORT 8080)

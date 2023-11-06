@@ -70,7 +70,7 @@ def test_source_creation(mz: MaterializeApplication) -> None:
             $ kafka-ingest format=bytes topic=test
             ABC
 
-            > CREATE CONNECTION IF NOT EXISTS kafka TO KAFKA (BROKER '${testdrive.kafka-addr}')
+            > CREATE CONNECTION IF NOT EXISTS kafka TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
             > CREATE SOURCE source1
               FROM KAFKA CONNECTION kafka
@@ -107,7 +107,7 @@ def test_source_resizing(mz: MaterializeApplication) -> None:
             $ kafka-ingest format=bytes topic=test
             ABC
 
-            > CREATE CONNECTION IF NOT EXISTS kafka TO KAFKA (BROKER '${testdrive.kafka-addr}')
+            > CREATE CONNECTION IF NOT EXISTS kafka TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
             > CREATE SOURCE resize_source
               FROM KAFKA CONNECTION kafka
@@ -174,7 +174,7 @@ def test_source_shutdown(mz: MaterializeApplication, failpoint: bool) -> None:
             $ kafka-ingest format=bytes topic=test
             ABC
 
-            > CREATE CONNECTION IF NOT EXISTS kafka TO KAFKA (BROKER '${testdrive.kafka-addr}')
+            > CREATE CONNECTION IF NOT EXISTS kafka TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
             > CREATE SOURCE source1
               FROM KAFKA CONNECTION kafka
@@ -225,7 +225,7 @@ def test_sink_resizing(mz: MaterializeApplication) -> None:
             """
             > CREATE TABLE t1 (f1 int NOT NULL)
 
-            > CREATE CONNECTION IF NOT EXISTS kafka TO KAFKA (BROKER '${testdrive.kafka-addr}')
+            > CREATE CONNECTION IF NOT EXISTS kafka TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
             > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
                 URL '${testdrive.schema-registry-url}'

@@ -105,7 +105,7 @@ class KafkaScenario(Scenario):
           URL '${testdrive.schema-registry-url}';
 
         > CREATE CONNECTION IF NOT EXISTS kafka_conn
-          FOR KAFKA BROKER '${testdrive.kafka-addr}';
+          FOR KAFKA BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT;
         """
     )
 

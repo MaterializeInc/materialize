@@ -29,7 +29,7 @@ $ kafka-ingest format=avro topic=envelope-none key-format=avro key-schema=${sche
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE envelope_none
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-envelope-none-${testdrive.seed}')

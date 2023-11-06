@@ -116,7 +116,7 @@ aa
 bb
 
 > CREATE CONNECTION kafka
-  TO KAFKA (BROKER '${testdrive.kafka-addr}')
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
 > CREATE SOURCE data1
   IN CLUSTER storage

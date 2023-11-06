@@ -40,7 +40,7 @@ $ kafka-create-topic topic=wide-data-ten
 $ kafka-ingest format=avro topic=wide-data-ten key-format=avro key-schema=${keyschema} schema=${schema} repeat=10
 {"f1": ${kafka-ingest.iteration}} {"f2": ${kafka-ingest.iteration}}
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'

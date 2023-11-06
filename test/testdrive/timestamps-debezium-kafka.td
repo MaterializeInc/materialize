@@ -98,7 +98,7 @@ $ kafka-ingest format=avro topic=bar schema=${schema}
 {"array":[{"data":{"a":10,"b":1},"time":1,"diff":1}]}
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE data_foo
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-foo-${testdrive.seed}')

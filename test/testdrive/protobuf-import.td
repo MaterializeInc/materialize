@@ -57,7 +57,7 @@ $ kafka-ingest topic=import format=protobuf descriptor-file=import.pb message=Im
 {"importee1": {"b": false}, "importee2": {"ts": "1970-01-01T00:20:34.000005678Z"}}
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE import FROM
   KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-import-${testdrive.seed}')

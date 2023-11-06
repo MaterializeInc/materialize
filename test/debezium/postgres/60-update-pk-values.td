@@ -23,7 +23,7 @@ $ schema-registry-wait subject=postgres.public.update_pk_values-value
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE update_pk_values
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.update_pk_values')

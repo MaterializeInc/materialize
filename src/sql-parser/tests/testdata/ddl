@@ -1897,6 +1897,11 @@ CREATE CONNECTION conn1 TO KAFKA (BROKER 'kafka:1234', SSL KEY = 'foo', SSL CERT
 ----
 CREATE CONNECTION conn1 TO KAFKA (BROKER = 'kafka:1234', SSL KEY = 'foo', SSL CERTIFICATE = 'qux')
 
+parse-statement roundtrip
+CREATE CONNECTION conn1 TO KAFKA (SECURITY PROTOCOL = 'foOoO');
+----
+CREATE CONNECTION conn1 TO KAFKA (SECURITY PROTOCOL = 'foOoO')
+
 parse-statement
 CREATE CONNECTION conn1 FOR KAFKA BROKER 'kafka:1234', PROGRESS TOPIC 'my-materialize-progress-topic';
 ----

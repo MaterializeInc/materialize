@@ -17,7 +17,7 @@ $ kafka-create-topic topic=topic1
     ))
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn
-    FOR KAFKA BROKER '${testdrive.kafka-addr}';
+    FOR KAFKA BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT;
 
 > CREATE SOURCE s1
     IN CLUSTER c1

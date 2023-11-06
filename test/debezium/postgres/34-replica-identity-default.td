@@ -23,7 +23,7 @@ $ schema-registry-wait subject=postgres.public.replica_identity_default-value
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE replica_identity_default
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.replica_identity_default')

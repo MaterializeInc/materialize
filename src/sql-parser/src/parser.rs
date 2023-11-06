@@ -2437,6 +2437,7 @@ impl<'a> Parser<'a> {
             ROLE,
             SASL,
             SECRET,
+            SECURITY,
             SERVICE,
             SSH,
             SSL,
@@ -2488,6 +2489,10 @@ impl<'a> Parser<'a> {
             PROGRESS => {
                 self.expect_keyword(TOPIC)?;
                 ConnectionOptionName::ProgressTopic
+            }
+            SECURITY => {
+                self.expect_keyword(PROTOCOL)?;
+                ConnectionOptionName::SecurityProtocol
             }
             REGION => ConnectionOptionName::Region,
             ROLE => {

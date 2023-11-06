@@ -39,7 +39,7 @@ $ kafka-ingest format=avro topic=delayed-materialization key-format=avro key-sch
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE materialized_via_create_index_before_restart
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-delayed-materialization-${testdrive.seed}')

@@ -139,7 +139,7 @@ class SshKafka(Check):
                 one
 
                 > CREATE CONNECTION kafka_conn_ssh1
-                  TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL thancred);
+                  TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL thancred, SECURITY PROTOCOL PLAINTEXT);
 
                 > CREATE SOURCE ssh1
                   FROM KAFKA CONNECTION kafka_conn_ssh1 (TOPIC 'testdrive-ssh1-${testdrive.seed}')
@@ -155,7 +155,7 @@ class SshKafka(Check):
             for s in [
                 """
                 > CREATE CONNECTION kafka_conn_ssh2
-                  TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL thancred);
+                  TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL thancred, SECURITY PROTOCOL PLAINTEXT);
 
                 > CREATE SOURCE ssh2
                   FROM KAFKA CONNECTION kafka_conn_ssh2 (TOPIC 'testdrive-ssh2-${testdrive.seed}')
@@ -170,7 +170,7 @@ class SshKafka(Check):
                 """,
                 """
                 > CREATE CONNECTION kafka_conn_ssh3
-                  TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL thancred);
+                  TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL thancred, SECURITY PROTOCOL PLAINTEXT);
 
                 > CREATE SOURCE ssh3
                   FROM KAFKA CONNECTION kafka_conn_ssh3 (TOPIC 'testdrive-ssh3-${testdrive.seed}')

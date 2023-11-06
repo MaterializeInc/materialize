@@ -179,7 +179,7 @@ class KafkaTopics(Generator):
 
         print(
             """> CREATE CONNECTION IF NOT EXISTS kafka_conn
-            TO KAFKA (BROKER '${testdrive.kafka-addr}');
+            TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
             """
         )
 
@@ -233,7 +233,7 @@ class KafkaSourcesSameTopic(Generator):
 
         print(
             """> CREATE CONNECTION IF NOT EXISTS kafka_conn
-            TO KAFKA (BROKER '${testdrive.kafka-addr}');
+            TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
             """
         )
 
@@ -285,7 +285,7 @@ class KafkaPartitions(Generator):
 
         print(
             """> CREATE CONNECTION IF NOT EXISTS kafka_conn
-            TO KAFKA (BROKER '${testdrive.kafka-addr}');
+            TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
             """
         )
 
@@ -341,7 +341,7 @@ class KafkaRecordsEnvelopeNone(Generator):
 
         print(
             """> CREATE CONNECTION IF NOT EXISTS kafka_conn
-            TO KAFKA (BROKER '${testdrive.kafka-addr}');
+            TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
             """
         )
 
@@ -390,7 +390,7 @@ class KafkaRecordsEnvelopeUpsertSameValue(Generator):
 
         print(
             """> CREATE CONNECTION IF NOT EXISTS kafka_conn
-            TO KAFKA (BROKER '${testdrive.kafka-addr}');
+            TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
             """
         )
 
@@ -442,7 +442,7 @@ class KafkaRecordsEnvelopeUpsertDistinctValues(Generator):
 
         print(
             """> CREATE CONNECTION IF NOT EXISTS kafka_conn
-            TO KAFKA (BROKER '${testdrive.kafka-addr}');
+            TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
             """
         )
 
@@ -530,7 +530,7 @@ class KafkaSinksSameSource(Generator):
         )
         print("> CREATE MATERIALIZED VIEW v1 (f1) AS VALUES (123)")
         print(
-            """> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');"""
+            """> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);"""
         )
         print(
             """> CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL '${testdrive.schema-registry-url}');"""

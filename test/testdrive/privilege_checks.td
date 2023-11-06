@@ -16,7 +16,7 @@ $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdri
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET enable_rbac_checks TO true;
-CREATE CONNECTION kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+CREATE CONNECTION kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL '${testdrive.schema-registry-url}');
 CREATE TABLE t (a INT);
 REVOKE USAGE ON SCHEMA materialize.public FROM PUBLIC;

@@ -191,7 +191,7 @@ fn test_no_block() {
 
                 let result = client
                     .batch_execute(&format!(
-                        "CREATE CONNECTION kafka_conn TO KAFKA (BROKER '{}') WITH (VALIDATE = false)",
+                        "CREATE CONNECTION kafka_conn TO KAFKA (BROKER '{}', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false)",
                         &*KAFKA_ADDRS,
                     ))
                     .await;
@@ -262,7 +262,7 @@ fn test_drop_connection_race() {
             .unwrap();
         client
             .batch_execute(&format!(
-                "CREATE CONNECTION kafka_conn TO KAFKA (BROKER '{}') WITH (VALIDATE = false)",
+                "CREATE CONNECTION kafka_conn TO KAFKA (BROKER '{}', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false)",
                 &*KAFKA_ADDRS,
             ))
             .await

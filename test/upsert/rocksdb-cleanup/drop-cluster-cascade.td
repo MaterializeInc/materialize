@@ -10,7 +10,7 @@
 $ kafka-create-topic topic=upsert
 
 > CREATE CONNECTION conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}'
+  FOR KAFKA BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT
 
 > CREATE SOURCE kept_upsert
   FROM KAFKA CONNECTION conn (TOPIC

@@ -36,7 +36,7 @@ $ kafka-ingest format=bytes topic=many partition=9
 msg
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}');
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE many
   FROM KAFKA CONNECTION kafka_conn (TOPIC
