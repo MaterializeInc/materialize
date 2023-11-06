@@ -221,6 +221,59 @@ SELECT timezone_offset('America/New_York', '2023-11-05T06:00:00+00')
 ----
 (EST,-05:00:00,00:00:00)
 
+query T
+SELECT timezone_offset('Europe/Vienna', '2023-11-05T06:00:00 UTC')
+----
+(CET,01:00:00,00:00:00)
+
+query T
+SELECT timezone_offset('Europe/Vienna', '2023-11-05T06:00:00 CET')
+----
+(CET,01:00:00,00:00:00)
+
+query T
+SELECT timezone_offset('Europe/Vienna', '2023-11-05T06:00:00 CEST')
+----
+(CET,01:00:00,00:00:00)
+
+query T
+SELECT timezone_offset('Europe/Vienna', '2023-06-05T06:00:00 CET')
+----
+(CEST,01:00:00,01:00:00)
+
+query T
+SELECT timezone_offset('Europe/Vienna', '2023-06-05T06:00:00 CEST')
+----
+(CEST,01:00:00,01:00:00)
+
+query T
+SELECT timezone_offset('Europe/Vienna', '2023-11-05T06:00:00.123+00')
+----
+(CET,01:00:00,00:00:00)
+
+query T
+SELECT timezone_offset('Europe/Vienna', '2023-11-05T06:00:00')
+----
+(CET,01:00:00,00:00:00)
+
+query T
+SELECT timezone_offset('Europe/Vienna', '2023-11-05')
+----
+(CET,01:00:00,00:00:00)
+
+query T
+SELECT timezone_offset(NULL, '2023-11-05T06:00:00+00')
+----
+NULL
+
+query T
+SELECT timezone_offset('Europe/Vienna', NULL)
+----
+NULL
+
+query error invalid IANA Time Zone Database identifier: ''
+SELECT timezone_offset('', '2023-11-05T06:00:00+00')
+
 query error invalid IANA Time Zone Database identifier: 'America/New_Yorks'
 SELECT timezone_offset('America/New_Yorks', now())
 
