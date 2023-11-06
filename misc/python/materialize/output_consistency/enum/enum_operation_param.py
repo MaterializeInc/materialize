@@ -37,7 +37,10 @@ class EnumConstantOperationParam(OperationParam):
         self.values = values
 
         if add_invalid_value:
+            self.invalid_value = invalid_value
             self.values.append(invalid_value)
+        else:
+            self.invalid_value = None
 
         self.add_quotes = add_quotes
         self.characteristics_per_index: list[set[ExpressionCharacteristics]] = [
@@ -56,3 +59,9 @@ class EnumConstantOperationParam(OperationParam):
         value = self.values[index]
         characteristics = self.characteristics_per_index[index]
         return EnumConstant(value, self.add_quotes, characteristics)
+
+    def get_valid_values(self) -> list[str]:
+        if self.invalid_value is None:
+            return self.values
+
+        return [value for value in self.values if value != self.invalid_value]
