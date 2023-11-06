@@ -206,6 +206,7 @@ class BenchmarkExecutor:
                         local,
                         cursor_pool,
                         operations[i % len(operations)],
+                        i,
                     )
                     for i in range(count)
                 ],
@@ -247,9 +248,9 @@ class BenchmarkExecutor:
         return DfTotals(df_total), DfDetails(df_detail)
 
     def execute_operation(
-        self, args: tuple[Workload, int, threading.local, list[Cursor], Operation]
+        self, args: tuple[Workload, int, threading.local, list[Cursor], Operation, int]
     ) -> dict[str, Any]:
-        workload, concurrency, local, cursor_pool, operation = args
+        workload, concurrency, local, cursor_pool, operation, transaction_index = args
         assert (
             len(cursor_pool) >= local.worker_id + 1
         ), f"len(cursor_pool) is {len(cursor_pool)} but local.worker_id is {local.worker_id}"
@@ -264,6 +265,7 @@ class BenchmarkExecutor:
             df_details_cols.WALLCLOCK: wallclock,
             df_details_cols.OPERATION: type(operation).__name__,
             df_details_cols.WORKLOAD: workload.name(),
+            df_details_cols.TRANSACTION_INDEX: transaction_index,
         }
 
     def initialize_worker(self, local: threading.local, lock: threading.Lock):
