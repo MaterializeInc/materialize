@@ -25,6 +25,7 @@ from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
+from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
 from materialize.mzcompose.services.testdrive import Testdrive as TestdriveService
 from materialize.util import all_subclasses
 
@@ -57,6 +58,7 @@ SERVICES = [
         name="persistcli",
         config={"mzbuild": "jobs"},
     ),
+    SshBastionHost(),
 ]
 
 
@@ -73,7 +75,7 @@ def setup(c: Composition) -> None:
     c.up("testdrive", persistent=True)
     c.up("cockroach")
 
-    c.up("redpanda", "postgres", "debezium", "minio")
+    c.up("redpanda", "postgres", "debezium", "minio", "ssh-bastion-host")
     c.up("mc", persistent=True)
     c.exec(
         "mc",

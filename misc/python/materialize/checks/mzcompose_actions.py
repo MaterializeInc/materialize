@@ -64,6 +64,32 @@ class StartMz(MzcomposeAction):
         with c.override(mz):
             c.up("materialized")
 
+        # This should live in all_checks/ssh.py, but accessing the ssh bastion
+        # host from inside a check is not possible.
+        c.sql(
+            """
+            CREATE CONNECTION IF NOT EXISTS thancred TO SSH TUNNEL (
+            HOST 'ssh-bastion-host',
+            USER 'mz',
+            PORT 22
+            )"""
+        )
+
+        public_key = c.sql_query(
+            """
+                select public_key_1 from mz_ssh_tunnel_connections ssh \
+                join mz_connections c on c.id = ssh.id
+                where c.name = 'thancred';
+                """
+        )[0][0]
+
+        c.exec(
+            "ssh-bastion-host",
+            "bash",
+            "-c",
+            f"echo '{public_key}' > /etc/authorized_keys/mz",
+        )
+
         mz_version = MzVersion.parse_sql(c)
         if self.tag:
             assert (

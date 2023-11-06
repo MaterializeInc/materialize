@@ -298,6 +298,33 @@ def workflow_pg_restart_bastion(c: Composition) -> None:
     ), "this test requires that the ssh server fingerprint changes"
 
 
+def workflow_pg_restart_postgres(c: Composition) -> None:
+    c.up("materialized", "ssh-bastion-host", "postgres")
+
+    c.run("testdrive", "setup.td")
+
+    public_key = c.sql_query(
+        """
+        select public_key_1 from mz_ssh_tunnel_connections ssh \
+        join mz_connections c on c.id = ssh.id
+        where c.name = 'thancred';
+        """
+    )[0][0]
+    c.exec(
+        "ssh-bastion-host",
+        "bash",
+        "-c",
+        f"echo '{public_key}' > /etc/authorized_keys/mz",
+    )
+
+    c.run("testdrive", "--no-reset", "pg-source.td")
+
+    c.kill("postgres")
+    c.up("postgres")
+
+    c.run("testdrive", "--no-reset", "pg-source-ingest-more.td")
+
+
 def workflow_pg_via_ssh_tunnel_with_ssl(c: Composition) -> None:
     c.up("materialized", "ssh-bastion-host", "postgres")
 
@@ -416,27 +443,38 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     ]:
         workflow(c, redpanda=False)
         c.sanity_restart_mz()
+        c.run("testdrive", "--no-reset", "validate-success.td")
         if args.extended:
             workflow(c, redpanda=True)
             c.sanity_restart_mz()
+            c.run("testdrive", "--no-reset", "validate-success.td")
 
     # These tests core functionality related to pg with ssh and error reporting.
+    workflow_basic_ssh_features(c)
+    c.sanity_restart_mz()
     for workflow in [
-        workflow_basic_ssh_features,
         workflow_pg,
         workflow_kafka_restart_replica,
     ]:
         workflow(c)
         c.sanity_restart_mz()
+        c.run("testdrive", "--no-reset", "validate-success.td")
 
     if args.extended:
         # Various special cases related to ssh
         for workflow in [
-            workflow_validate_connection,
             workflow_ssh_key_after_restart,
             workflow_rotated_ssh_key_after_restart,
-            workflow_pg_via_ssh_tunnel_with_ssl,
-            workflow_pg_restart_bastion,
         ]:
             workflow(c)
             c.sanity_restart_mz()
+
+        for workflow in [
+            workflow_validate_connection,
+            workflow_pg_via_ssh_tunnel_with_ssl,
+            workflow_pg_restart_bastion,
+            workflow_pg_restart_postgres,
+        ]:
+            workflow(c)
+            c.sanity_restart_mz()
+            c.run("testdrive", "--no-reset", "validate-success.td")
