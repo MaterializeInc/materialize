@@ -401,19 +401,19 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
                 };
                 let mut updates = Vec::new();
                 // We filter out unrelated data in two passes. The first is
-                // `should_fetch_part`, which allows us to skip entire fetches
+                // `should_filter_part`, which allows us to skip entire fetches
                 // from s3/Blob. Then, if a part does need to be fetched, it
                 // still might contain info about unrelated data shards, and we
                 // filter those out before buffering in `updates`.
                 for part in parts {
-                    let should_fetch_part = self.should_fetch_part(&part);
+                    let should_filter_part = self.should_filter_part(&part);
                     debug!(
-                        "should_fetch_part={} for {:?} {:?}",
-                        should_fetch_part,
+                        "should_filter_part={} for {:?} {:?}",
+                        should_filter_part,
                         self.only_data_id,
                         part.stats()
                     );
-                    if !should_fetch_part {
+                    if should_filter_part {
                         self.txns_subscribe.return_leased_part(part);
                         continue;
                     }
@@ -632,16 +632,16 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
         debug_assert_eq!(self.validate(), Ok(()));
     }
 
-    fn should_fetch_part(&self, part: &LeasedBatchPart<T>) -> bool {
+    fn should_filter_part(&self, part: &LeasedBatchPart<T>) -> bool {
         let Some(only_data_id) = self.only_data_id.as_ref() else {
-            return true;
+            return false;
         };
         // This `part.stats()` call involves decoding and the only_data_id=None
         // case is common-ish, so make sure to keep it after that early return.
         let Some(stats) = part.stats() else {
-            return true;
+            return false;
         };
-        C::should_fetch_part(only_data_id, &stats).unwrap_or(true)
+        C::should_filter_part(only_data_id, &stats).unwrap_or(false)
     }
 
     fn assert_only_data_id(&self, data_id: &ShardId) {

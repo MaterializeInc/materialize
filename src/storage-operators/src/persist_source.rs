@@ -271,9 +271,9 @@ where
                     desc: &desc,
                     stats,
                 };
-                filter_may_match(desc.typ(), time_range, stats, plan)
+                !filter_may_match(desc.typ(), time_range, stats, plan)
             } else {
-                true
+                false
             }
         },
     );

@@ -310,7 +310,7 @@ impl DataSubscribe {
                     false.then_some(|_, _: &_, _| unreachable!()),
                     Arc::new(StringSchema),
                     Arc::new(UnitSchema),
-                    |_, _| true,
+                    |_, _| false,
                 );
                 (data_stream.leave(), token)
             });

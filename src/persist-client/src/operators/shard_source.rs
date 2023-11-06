@@ -77,7 +77,7 @@ pub fn shard_source<'g, K, V, T, D, F, DT, G, C>(
     desc_transformer: Option<DT>,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
-    should_fetch_part: F,
+    should_filter_part: F,
 ) -> (
     Stream<Child<'g, G, T>, FetchedPart<K, V, G::Timestamp, D>>,
     Rc<dyn Any>,
@@ -134,7 +134,7 @@ where
         chosen_worker,
         Arc::clone(&key_schema),
         Arc::clone(&val_schema),
-        should_fetch_part,
+        should_filter_part,
     );
     let descs = descs.enter(scope);
     let (descs, backpressure_token) = match desc_transformer {
@@ -179,7 +179,7 @@ pub(crate) fn shard_source_descs<K, V, D, F, G>(
     chosen_worker: usize,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
-    mut should_fetch_part: F,
+    mut should_filter_part: F,
 ) -> (Stream<G, (usize, SerdeLeasedBatchPart)>, Rc<dyn Any>)
 where
     K: Debug + Codec,
@@ -438,14 +438,11 @@ where
                             for mut part_desc in std::mem::take(&mut batch_parts) {
                                 // TODO: Push the filter down into the Subscribe?
                                 if cfg.dynamic.stats_filter_enabled() {
-                                    let should_fetch = part_desc.stats.as_ref().map_or(true, |stats| {
-                                        should_fetch_part(&stats.decode(), AntichainRef::new(slice::from_ref(&current_ts)))
+                                    let should_filter = part_desc.stats.as_ref().map_or(false, |stats| {
+                                        should_filter_part(&stats.decode(), AntichainRef::new(slice::from_ref(&current_ts)))
                                     });
                                     let bytes = u64::cast_from(part_desc.encoded_size_bytes);
-                                    if should_fetch {
-                                        metrics.pushdown.parts_fetched_count.inc();
-                                        metrics.pushdown.parts_fetched_bytes.inc_by(bytes);
-                                    } else {
+                                    if should_filter {
                                         metrics.pushdown.parts_filtered_count.inc();
                                         metrics.pushdown.parts_filtered_bytes.inc_by(bytes);
                                         let should_audit = {
@@ -462,6 +459,9 @@ where
                                             lease_returner.return_leased_part(part_desc);
                                             continue;
                                         }
+                                    } else {
+                                        metrics.pushdown.parts_fetched_count.inc();
+                                        metrics.pushdown.parts_fetched_bytes.inc_by(bytes);
                                     }
                                 }
 
@@ -660,7 +660,7 @@ mod tests {
                         Arc::new(
                             <std::string::String as mz_persist_types::Codec>::Schema::default(),
                         ),
-                        |_fetch, _frontier| true,
+                        |_fetch, _frontier| false,
                     );
                     (stream.leave(), token)
                 });
@@ -728,7 +728,7 @@ mod tests {
                         Arc::new(
                             <std::string::String as mz_persist_types::Codec>::Schema::default(),
                         ),
-                        |_fetch, _frontier| true,
+                        |_fetch, _frontier| false,
                     );
                     (stream.leave(), token)
                 });

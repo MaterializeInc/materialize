@@ -325,13 +325,13 @@ pub trait TxnsCodec: Debug {
     /// Implementations should panic if the values are invalid.
     fn decode(key: Self::Key, val: Self::Val) -> TxnsEntry;
 
-    /// Returns if a part might include the given data shard based on pushdown
-    /// stats.
+    /// Returns if a part is guaranteed to _NOT_ include the given data shard
+    /// based on pushdown stats.
     ///
-    /// False positives are okay (needless fetches) but false negatives are not
+    /// False negatives are okay (needless fetches) but false positives are not
     /// (incorrectness). Returns an Option to make `?` convenient, `None` is
-    /// treated the same as `Some(true)`.
-    fn should_fetch_part(data_id: &ShardId, stats: &PartStats) -> Option<bool>;
+    /// treated the same as `Some(false)`.
+    fn should_filter_part(data_id: &ShardId, stats: &PartStats) -> Option<bool>;
 }
 
 /// A reasonable default implementation of [TxnsCodec].
@@ -360,14 +360,14 @@ impl TxnsCodec for TxnsCodecDefault {
             TxnsEntry::Append(key, val)
         }
     }
-    fn should_fetch_part(data_id: &ShardId, stats: &PartStats) -> Option<bool> {
+    fn should_filter_part(data_id: &ShardId, stats: &PartStats) -> Option<bool> {
         let stats = stats
             .key
             .col::<String>("")
             .map_err(|err| error!("unexpected stats type: {}", err))
             .ok()??;
         let data_id_str = data_id.to_string();
-        Some(stats.lower <= data_id_str && stats.upper >= data_id_str)
+        Some(stats.lower > data_id_str || stats.upper < data_id_str)
     }
 }
 

@@ -337,7 +337,7 @@ impl TxnsCodec for TxnsCodecRow {
         }
     }
 
-    fn should_fetch_part(data_id: &ShardId, stats: &PartStats) -> Option<bool> {
+    fn should_filter_part(data_id: &ShardId, stats: &PartStats) -> Option<bool> {
         fn col<'a, T: Data>(stats: &'a StructStats, col: &str) -> Option<&'a T::Stats> {
             stats
                 .col::<T>(col)
@@ -347,6 +347,6 @@ impl TxnsCodec for TxnsCodecRow {
         let stats = col::<Option<DynStruct>>(&stats.key, "ok")?;
         let stats = col::<String>(&stats.some, "shard_id")?;
         let data_id_str = data_id.to_string();
-        Some(stats.lower <= data_id_str && stats.upper >= data_id_str)
+        Some(stats.lower > data_id_str || stats.upper < data_id_str)
     }
 }
