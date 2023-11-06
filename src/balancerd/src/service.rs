@@ -31,7 +31,7 @@ pub struct Args {
 
     /// Static pgwire resolver address to use for local testing.
     #[clap(long, value_name = "HOST:PORT")]
-    static_resolver_addr: Option<SocketAddr>,
+    static_resolver_addr: Option<String>,
     /// Frontegg resolver address template. `{}` is replaced with the user's frontegg tenant id to
     /// get a DNS address. The first IP that address resolves to is the proxy destinaiton.
     #[clap(long,
@@ -87,7 +87,15 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
                 addr_template,
             })
         }
-        (Some(addr), None) => Resolver::Static(addr),
+        (Some(addr), None) => {
+            let mut addrs = tokio::net::lookup_host(&addr)
+                .await
+                .unwrap_or_else(|_| panic!("could not resolve {addr}"));
+            let Some(addr) = addrs.next() else {
+                panic!("{addr} did not resolve to any addresses");
+            };
+            Resolver::Static(addr)
+        }
         _ => anyhow::bail!(
             "exactly one of --static-resolver-addr or --frontegg-resolver-template must be present"
         ),
