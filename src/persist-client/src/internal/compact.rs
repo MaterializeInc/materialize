@@ -711,6 +711,9 @@ where
             metrics.compaction.not_all_prefetched.inc();
         }
 
+        // Reuse the allocations for individual keys and values
+        let mut key_vec = vec![];
+        let mut val_vec = vec![];
         loop {
             let fetch_start = Instant::now();
             let Some(updates) = consolidator.next().await? else {
@@ -718,9 +721,11 @@ where
             };
             timings.part_fetching += fetch_start.elapsed();
             for (k, v, t, d) in updates.take(cfg.compaction_yield_after_n_updates) {
-                batch
-                    .add(&real_schemas, &k.to_vec(), &v.to_vec(), &t, &d)
-                    .await?;
+                key_vec.clear();
+                key_vec.extend_from_slice(k);
+                val_vec.clear();
+                val_vec.extend_from_slice(v);
+                batch.add(&real_schemas, &key_vec, &val_vec, &t, &d).await?;
             }
             tokio::task::yield_now().await;
         }
