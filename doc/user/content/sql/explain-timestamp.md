@@ -178,5 +178,4 @@ Each source contains two frontiers:
 
 The privileges required to execute this statement are:
 
-- `USAGE` privileges on the schemas that all relations and types in the query are contained in.
-- `USAGE` privileges on all types used in the query.
+- `USAGE` privileges on the schemas that all relations in the query are contained in.
