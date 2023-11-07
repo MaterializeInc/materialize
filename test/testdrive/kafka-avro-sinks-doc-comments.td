@@ -83,7 +83,7 @@ $ schema-registry-verify schema-type=avro subject=testdrive-sink3-${testdrive.se
 {"type":"record","name":"row","doc":"comment on table t with a \\\\ \\","fields":[{"name":"c2","type":"string","doc":"doc on t.c2"}]}
 
 # Explain schema. Note that we intentionally use a sink name that already exists
-# to ensure that `EXPLAIN SCHEMA` doesn't complain if the speciifed sink name is
+# to ensure that `EXPLAIN SCHEMA` doesn't complain if the specified sink name is
 # already in use.
 > EXPLAIN VALUE SCHEMA FOR CREATE SINK sink1 FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink3-${testdrive.seed}')
