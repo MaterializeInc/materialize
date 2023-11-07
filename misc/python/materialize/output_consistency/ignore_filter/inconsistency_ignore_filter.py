@@ -218,7 +218,7 @@ class PostExecutionInconsistencyIgnoreFilter(
             return False
 
         def is_function_taking_shortcut(expression: Expression) -> bool:
-            functions_taking_shortcuts = {"count", "string_agg"}
+            functions_taking_shortcuts = {"count", "string_agg", "coalesce"}
 
             if isinstance(expression, ExpressionWithArgs):
                 operation = expression.operation
