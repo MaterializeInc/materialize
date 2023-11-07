@@ -18,7 +18,7 @@ use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::columnar::Data;
 use mz_persist_types::dyn_struct::DynStruct;
 use mz_persist_types::stats::StructStats;
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use mz_repr::{Datum, GlobalId, RelationDesc, Row, ScalarType};
 use mz_stash_types::StashError;
 use proptest_derive::Arbitrary;
@@ -110,24 +110,6 @@ impl RustType<ProtoDurableCollectionMetadata> for DurableCollectionMetadata {
                 .data_shard
                 .parse()
                 .map_err(TryFromProtoError::InvalidShardId)?,
-        })
-    }
-}
-
-impl RustType<mz_stash_types::objects::proto::DurableCollectionMetadata>
-    for DurableCollectionMetadata
-{
-    fn into_proto(&self) -> mz_stash_types::objects::proto::DurableCollectionMetadata {
-        mz_stash_types::objects::proto::DurableCollectionMetadata {
-            data_shard: self.data_shard.into_proto(),
-        }
-    }
-
-    fn from_proto(
-        proto: mz_stash_types::objects::proto::DurableCollectionMetadata,
-    ) -> Result<Self, TryFromProtoError> {
-        Ok(DurableCollectionMetadata {
-            data_shard: proto.data_shard.into_rust()?,
         })
     }
 }

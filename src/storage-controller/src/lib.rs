@@ -112,7 +112,6 @@ use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{ColumnName, Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_stash::{self, AppendBatch, StashFactory, TypedCollection};
 use mz_stash_types::metrics::Metrics as StashMetrics;
-use mz_stash_types::objects::proto;
 use mz_storage_client::client::{
     CreateSinkCommand, ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand,
     SinkStatisticsUpdate, SourceStatisticsUpdate, StorageCommand, StorageResponse,
@@ -128,6 +127,7 @@ use mz_storage_client::healthcheck::{
     MZ_STATEMENT_EXECUTION_HISTORY_DESC,
 };
 use mz_storage_client::metrics::StorageControllerMetrics;
+use mz_storage_types::collections as proto;
 use mz_storage_types::controller::{
     CollectionMetadata, DurableCollectionMetadata, StorageError, TxnsCodecRow,
 };
@@ -223,17 +223,17 @@ impl RustType<ProtoDurableExportMetadata> for DurableExportMetadata<mz_repr::Tim
     }
 }
 
-impl RustType<mz_stash_types::objects::proto::DurableExportMetadata>
+impl RustType<mz_storage_types::collections::DurableExportMetadata>
     for DurableExportMetadata<mz_repr::Timestamp>
 {
-    fn into_proto(&self) -> mz_stash_types::objects::proto::DurableExportMetadata {
-        mz_stash_types::objects::proto::DurableExportMetadata {
+    fn into_proto(&self) -> mz_storage_types::collections::DurableExportMetadata {
+        mz_storage_types::collections::DurableExportMetadata {
             initial_as_of: Some(self.initial_as_of.into_proto()),
         }
     }
 
     fn from_proto(
-        proto: mz_stash_types::objects::proto::DurableExportMetadata,
+        proto: mz_storage_types::collections::DurableExportMetadata,
     ) -> Result<Self, TryFromProtoError> {
         Ok(DurableExportMetadata {
             initial_as_of: proto
