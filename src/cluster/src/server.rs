@@ -179,6 +179,28 @@ where
             &differential_dataflow::Config { idle_merge_effort },
         );
 
+        let idle_merge_effort =
+            idle_merge_effort.map(|effort| usize::try_from(effort).expect("Known to be positive"));
+        worker_config.set::<differential_dataflow::trace::ExertionLogic>(
+            "differential/default_exert_logic".to_string(),
+            Arc::new(move |batches| {
+                let mut non_empty = 0;
+                for (_index, count, length) in batches {
+                    if count > 1 {
+                        return idle_merge_effort;
+                    }
+                    if length > 0 {
+                        if non_empty > 1 {
+                            return idle_merge_effort;
+                        }
+                        non_empty = 8;
+                    }
+                    non_empty /= 2;
+                }
+                None
+            }),
+        );
+
         let worker_guards = execute_from(builders, other, worker_config, move |timely_worker| {
             let timely_worker_index = timely_worker.index();
             let _tokio_guard = tokio_executor.enter();
