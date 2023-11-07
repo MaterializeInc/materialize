@@ -3740,6 +3740,7 @@ dependencies = [
  "postgres-openssl",
  "proptest",
  "proptest-derive",
+ "prost",
  "rand",
  "serde",
  "serde_json",

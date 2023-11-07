@@ -957,7 +957,7 @@ Snapshot {
         ConfigKey {
             key: "user_version",
         }: ConfigValue {
-            value: 41,
+            value: 42,
         },
     },
     settings: {},
