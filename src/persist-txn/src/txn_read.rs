@@ -19,7 +19,7 @@ use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use mz_ore::collections::HashMap;
 use mz_persist_client::fetch::LeasedBatchPart;
-use mz_persist_client::read::{ListenEvent, ReadHandle, Since, Subscribe};
+use mz_persist_client::read::{Cursor, ListenEvent, ReadHandle, Since, Subscribe};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::{Codec, Codec64, StepForward};
@@ -943,6 +943,23 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
         self.unblock_read(data_write).await;
         data_read
             .snapshot_and_fetch(Antichain::from_elem(self.as_of.clone()))
+            .await
+    }
+
+    /// See [ReadHandle::snapshot_cursor].
+    pub async fn snapshot_cursor<K, V, D>(
+        &self,
+        data_read: &mut ReadHandle<K, V, T, D>,
+    ) -> Result<Cursor<K, V, T, D>, Since<T>>
+    where
+        K: Debug + Codec + Ord,
+        V: Debug + Codec + Ord,
+        D: Semigroup + Codec64 + Send + Sync,
+    {
+        let data_write = WriteHandle::from_read(data_read, "unblock_read");
+        self.unblock_read(data_write).await;
+        data_read
+            .snapshot_cursor(Antichain::from_elem(self.as_of.clone()))
             .await
     }
 

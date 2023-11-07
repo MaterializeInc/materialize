@@ -1268,23 +1268,51 @@ where
     }
 
     async fn snapshot_cursor(
-        &self,
+        &mut self,
         id: GlobalId,
         as_of: Self::Timestamp,
     ) -> Result<SnapshotCursor<Self::Timestamp>, StorageError>
     where
         Self::Timestamp: Timestamp + Lattice + Codec64,
     {
-        let mut handle = self.read_handle_for_snapshot(id).await?;
-        let cursor = handle
-            .snapshot_cursor(Antichain::from_elem(as_of))
-            .await
-            .map_err(|_| StorageError::ReadBeforeSince(id))?;
+        let data_shard = self.collection(id)?.collection_metadata.data_shard;
+        // See the comments in Self::snapshot for what's going on here.
+        let cursor = match self.txns_id.as_mut() {
+            None => {
+                let mut handle = self.read_handle_for_snapshot(id).await?;
+                let cursor = handle
+                    .snapshot_cursor(Antichain::from_elem(as_of))
+                    .await
+                    .map_err(|_| StorageError::ReadBeforeSince(id))?;
+                SnapshotCursor {
+                    _read_handle: handle,
+                    cursor,
+                }
+            }
+            Some(txns_id) => {
+                // TODO(txn): Replace this with the shared TxnsCache thing
+                // we'll have to do anyway for the dataflow operators.
+                let mut txns_cache = TxnsCache::<Self::Timestamp, TxnsCodecRow>::open(
+                    &self.txns_client,
+                    *txns_id,
+                    Some(data_shard),
+                )
+                .await;
+                txns_cache.update_gt(&as_of).await;
+                let data_snapshot = txns_cache.data_snapshot(data_shard, as_of.clone());
+                let mut handle = self.read_handle_for_snapshot(id).await?;
+                let cursor = data_snapshot
+                    .snapshot_cursor(&mut handle)
+                    .await
+                    .map_err(|_| StorageError::ReadBeforeSince(id))?;
+                SnapshotCursor {
+                    _read_handle: handle,
+                    cursor,
+                }
+            }
+        };
 
-        Ok(SnapshotCursor {
-            _read_handle: handle,
-            cursor,
-        })
+        Ok(cursor)
     }
 
     async fn snapshot_stats(
