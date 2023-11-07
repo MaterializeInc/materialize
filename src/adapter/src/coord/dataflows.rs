@@ -16,6 +16,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use maplit::{btreemap, btreeset};
 use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW_TS;
@@ -31,7 +32,6 @@ use mz_expr::{
     UnmaterializableFunc, RECURSION_LIMIT,
 };
 use mz_ore::cast::ReinterpretCast;
-use mz_ore::now::{to_datetime, EpochMillis};
 use mz_ore::stack::{maybe_grow, CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::role_id::RoleId;
@@ -110,7 +110,7 @@ pub enum ExprPrepStyle<'a> {
     /// The expression is being prepared for evaluation in a CHECK expression of a webhook source.
     WebhookValidation {
         /// Time at which this expression is being evaluated.
-        now: EpochMillis,
+        now: DateTime<Utc>,
     },
 }
 
@@ -542,9 +542,14 @@ pub fn prep_relation_expr(
 /// Prepares a scalar expression for execution by handling unmaterializable
 /// functions.
 ///
-/// Specifically, calls to unmaterializable functions are replaced if
-/// `style` is `OneShot`. If `style` is `Index`, then an error is produced
-/// if a call to a unmaterializable function is encountered.
+/// How we prepare the scalar expression depends on which `style` is specificed.
+///
+/// * `OneShot`: Calls to all unmaterializable functions are replaced.
+/// * `Index`: An error is produced if a call to an unmaterializable function is encountered.
+/// * `AsOfUpTo`: An error is produced if a call to an unmaterializable function is encountered.
+/// * `WebhookValidation`: Only calls to `UnmaterializableFunc::CurrentTimestamp` are replaced,
+///   others are left untouched.
+///
 pub fn prep_scalar_expr(
     expr: &mut MirScalarExpr,
     style: ExprPrepStyle,
@@ -564,7 +569,7 @@ pub fn prep_scalar_expr(
         }),
 
         // Reject the query if it contains any unmaterializable function calls.
-        ExprPrepStyle::Index { .. } | ExprPrepStyle::AsOfUpTo => {
+        ExprPrepStyle::Index | ExprPrepStyle::AsOfUpTo => {
             let mut last_observed_unmaterializable_func = None;
             expr.visit_mut_post(&mut |e| {
                 if let MirScalarExpr::CallUnmaterializable(f) = e {
@@ -574,7 +579,7 @@ pub fn prep_scalar_expr(
 
             if let Some(f) = last_observed_unmaterializable_func {
                 let err = match style {
-                    ExprPrepStyle::Index { .. } => AdapterError::UnmaterializableFunction(f),
+                    ExprPrepStyle::Index => AdapterError::UnmaterializableFunction(f),
                     ExprPrepStyle::AsOfUpTo => AdapterError::UncallableFunction {
                         func: f,
                         context: "AS OF or UP TO",
@@ -592,9 +597,7 @@ pub fn prep_scalar_expr(
                     f @ UnmaterializableFunc::CurrentTimestamp,
                 ) = e
                 {
-                    let now = to_datetime(now);
                     let now: Datum = now.try_into()?;
-
                     let const_expr = MirScalarExpr::literal_ok(now, f.output_type().scalar_type);
                     *e = const_expr;
                 }
