@@ -23,6 +23,58 @@ reference these objects is not allowed.
 
 ## System Relations
 
+### `mz_activity_log`
+
+{{< public-preview />}}
+
+{{< warning >}}
+Do not rely on all statements being logged in this view. Materialize
+controls the maximum rate at which statements are sampled, and may change
+this rate at any time.
+{{< /warning >}}
+
+{{< warning >}}
+Entries in this view may be cleared on restart (e.g., during Materialize maintenance windows).
+{{< /warning >}}
+
+The `mz_activity_log` view contains a log of the SQL statements that
+have been issued to Materialize, along with various metadata about
+them.
+
+Entries in this log may be sampled. The sampling rate is controlled by
+the session variable `statement_logging_sample_rate`, which may be set
+to any value between 0 and 1. For example, to disable statement
+logging entirely for a session, execute `SET
+statement_logging_sample_rate TO 0`. Materialize may apply a lower
+sampling rate than the one set in this variable, as described in the
+warning box above.
+
+<!-- RELATION_SPEC mz_internal.mz_activity_log -->
+| Field                     | Type                         | Meaning                                                                                                                                                                                                                                                                       |
+|---------------------------|------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `execution_id`            | [`uuid`]                     | An ID that is unique for each execute statement.                                                                                                                                                                                                                              |
+| `sample_rate`             | [`double precision`]         | The actual rate at which the statement was sampled.                                                                                                                                                                                                                           |
+| `cluster_id`              | [`text`]                     | The ID of the cluster the statement execution was directed to.                                                                                                                                                                                                                |
+| `application_name`        | [`text`]                     | The value of the `application_name` session variable at execution time.                                                                                                                                                                                                       |
+| `cluster_name`            | [`text`]                     | The name of the cluster with ID `cluster_id` at execution time.                                                                                                                                                                                                               |
+| `transaction_isolation`   | [`text`]                     | The value of the `transaction_isolation` session variable at execution time.                                                                                                                                                                                                  |
+| `execution_timestamp`     | [`uint8`]                    | The logical timestamp at which education was scheduled.                                                                                                                                                                                                                       |
+| `transient_index_id`      | [`text`]                     | The internal index of the compute dataflow created for the query, if any.                                                                                                                                                                                                     |
+| `params`                  | [`text array`]                   | The parameters with which the statement was executed.                                                                                                                                                                                                                         |
+| `began_at`                | [`timestamp with time zone`] | The wall-clock time at which the statement began executing.                                                                                                                                                                                                                   |
+| `finished_at`             | [`timestamp with time zone`] | The wall-clock time at which the statement began executing.                                                                                                                                                                                                                   |
+| `finished_status`         | [`text`]                     | The final status of the statement (e.g., `success`, `canceled`, `errored`, or `aborted`). `aborted` means that Materialize exited before the statement finished executing.                                                                                                    |
+| `error_message`           | [`text`]                     | The error message, if the statement failed.                                                                                                                                                                                                                                   |
+| `rows_returned`           | [`bigint`]                   | The number of rows returned, for statements that return rows.                                                                                                                                                                                                                 |
+| `execution_strategy`      | [`text`]                     | For `SELECT` queries, the strategy for executing the query. `constant` means computed in the control plane without the involvement of a cluster, `fast-path` means read by a cluster directly from an in-memory index, and `standard` means computed by a temporary dataflow. |
+| `transaction_id`          | [`uint8`]                    | The ID of the transaction that the statement was part of. Note that transaction IDs are only unique per session.                                                                                                                                                              |
+| `prepared_statement_id`   | [`uuid`]                     | An ID that is unique for each prepared statement. For example, if a statement is prepared once and then executed multiple times, all executions will have the same value for this column (but different values for `execution_id`).                                           |
+| `sql`                     | [`text`]                     | The SQL text of the statement.                                                                                                                                                                                                                                                |
+| `prepared_statement_name` | [`text`]                     | The name given by the client library to the prepared statement.                                                                                                                                                                                                               |
+| `session_id`              | [`uuid`]                     | An ID that is unique for each session.                                                                                                                                                                                                                                        |
+| `redacted_sql`            | [`text`]                     | The SQL text of the statement, in a normalized form, with all string and numeric literals hidden.                                                                                                                                                                             |
+| `prepared_at`             | [`timestamp with time zone`] | The time at which the statement was prepared                                                                                                                                                                                                                                  |
+
 ### `mz_cluster_replica_frontiers`
 
 The `mz_cluster_replica_frontiers` table describes the per-replica frontiers of
@@ -1106,6 +1158,7 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 [`mz_timestamp`]: /sql/types/mz_timestamp
 [`numeric`]: /sql/types/numeric
 [`text`]: /sql/types/text
+[`text array`]: /sql/types/array
 [`text list`]: /sql/types/list
 [`uuid`]: /sql/types/uuid
 [`uint4`]: /sql/types/uint4
@@ -1118,7 +1171,6 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 [Top K]: /transform-data/patterns/top-k
 [query hints]: /sql/select/#query-hints
 
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_activity_log -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_activity_log_redacted -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_aggregates -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_reachability -->
