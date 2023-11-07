@@ -997,7 +997,7 @@ where
                     // Queue all pending rows waiting to be sent to kafka
                     assert!(is_active_worker);
                     for ((key, value), time, diff) in rows.drain(..) {
-                        let should_emit = if as_of.strict {
+                        let should_emit = if as_of.strict > 0 {
                             as_of.frontier.less_than(&time)
                         } else {
                             as_of.frontier.less_equal(&time)
@@ -1282,7 +1282,7 @@ where
         while let Some(event) = input.next_mut().await {
             if let Event::Data(cap, rows) = event {
                 for ((key, value), time, diff) in rows.drain(..) {
-                    let should_emit = if as_of.strict {
+                    let should_emit = if as_of.strict > 0 {
                         as_of.frontier.less_than(&time)
                     } else {
                         as_of.frontier.less_equal(&time)

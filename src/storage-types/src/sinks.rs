@@ -228,7 +228,7 @@ impl RustType<ProtoSinkEnvelope> for SinkEnvelope {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SinkAsOf<T = mz_repr::Timestamp> {
     pub frontier: Antichain<T>,
-    pub strict: bool,
+    pub strict: i32,
 }
 
 impl<T: PartialOrder + Clone> SinkAsOf<T> {
@@ -239,7 +239,7 @@ impl<T: PartialOrder + Clone> SinkAsOf<T> {
             // TODO(aljoscha): Should this be meet_assign?
             self.frontier.clone_from(other_since);
             // If we're using the since, never read the snapshot
-            self.strict = true;
+            self.strict = 1;
         }
     }
 }
@@ -255,7 +255,7 @@ impl Arbitrary for SinkAsOf<mz_repr::Timestamp> {
         )
             .prop_map(|(frontier, strict)| SinkAsOf {
                 frontier: Antichain::from(frontier),
-                strict,
+                strict: if strict { 1 } else { -1 },
             })
             .boxed()
     }
@@ -265,7 +265,7 @@ impl RustType<ProtoSinkAsOf> for SinkAsOf<mz_repr::Timestamp> {
     fn into_proto(&self) -> ProtoSinkAsOf {
         ProtoSinkAsOf {
             frontier: Some(self.frontier.into_proto()),
-            strict: self.strict,
+            strict: self.strict > 0,
         }
     }
 
@@ -274,7 +274,7 @@ impl RustType<ProtoSinkAsOf> for SinkAsOf<mz_repr::Timestamp> {
             frontier: proto
                 .frontier
                 .into_rust_if_some("ProtoSinkAsOf::frontier")?,
-            strict: proto.strict,
+            strict: if proto.strict { 1 } else { -1 },
         })
     }
 }

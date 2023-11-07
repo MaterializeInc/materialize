@@ -101,7 +101,7 @@ pub mod upgrade {
         }
     }
 
-    objects!(v35, v36, v37, v38, v39, v40, v41, v42);
+    objects!(v35, v36, v37, v38, v39, v40, v41, v42, v43);
 }
 
 /// The current version of the `Stash`.
@@ -109,7 +109,7 @@ pub mod upgrade {
 /// We will initialize new `Stash`es with this version, and migrate existing `Stash`es to this
 /// version. Whenever the `Stash` changes, e.g. the protobufs we serialize in the `Stash`
 /// change, we need to bump this version.
-pub const STASH_VERSION: u64 = 42;
+pub const STASH_VERSION: u64 = 43;
 
 /// The minimum `Stash` version number that we support migrating from.
 ///
