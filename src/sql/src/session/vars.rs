@@ -1992,7 +1992,7 @@ feature_flags!(
     },
     {
         name: enable_time_at_time_zone,
-        desc: "use of AT TIME ZONE with time type",
+        desc: "use of AT TIME ZONE or timezone() with time type",
         default: false,
         internal: true,
         enable_for_item_parsing: true,
