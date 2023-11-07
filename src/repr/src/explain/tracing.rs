@@ -364,8 +364,8 @@ impl Default for DelegateSubscriber {
 }
 
 impl subscriber::Subscriber for DelegateSubscriber {
-    fn enabled(&self, metadata: &Metadata<'_>) -> bool {
-        metadata.target() == "optimizer" || self.inner.enabled(metadata)
+    fn enabled(&self, m: &Metadata<'_>) -> bool {
+        m.target() == "optimizer" && m.level() >= &Level::DEBUG || self.inner.enabled(m)
     }
 
     fn new_span(&self, span: &span::Attributes<'_>) -> span::Id {

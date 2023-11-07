@@ -80,6 +80,24 @@ pub struct PeekDataflowPlan<T = mz_repr::Timestamp> {
     thinned_arity: usize,
 }
 
+impl<T> PeekDataflowPlan<T> {
+    pub fn new(
+        desc: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
+        id: GlobalId,
+        key: Vec<MirScalarExpr>,
+        permutation: BTreeMap<usize, usize>,
+        thinned_arity: usize,
+    ) -> Self {
+        Self {
+            desc,
+            id,
+            key,
+            permutation,
+            thinned_arity,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Ord, PartialOrd)]
 pub enum FastPathPlan {
     /// The view evaluates to a constant result that can be returned.

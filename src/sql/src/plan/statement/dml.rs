@@ -334,16 +334,10 @@ pub fn plan_explain_plan(
             let query::PlannedQuery {
                 expr: mut raw_plan,
                 desc,
-                finishing,
+                finishing: row_set_finishing,
                 scope: _,
             } = query::plan_root_query(scx, *query, QueryLifetime::OneShot)?;
             raw_plan.bind_parameters(params)?;
-
-            let row_set_finishing = if finishing.is_trivial(desc.arity()) {
-                None
-            } else {
-                Some(finishing)
-            };
 
             if broken {
                 scx.require_feature_flag(&vars::ENABLE_EXPLAIN_BROKEN)?;
@@ -352,6 +346,7 @@ pub fn plan_explain_plan(
             crate::plan::Explainee::Statement(ExplaineeStatement::Query {
                 raw_plan,
                 row_set_finishing,
+                desc,
                 broken,
             })
         }

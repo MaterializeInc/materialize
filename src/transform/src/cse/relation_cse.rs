@@ -42,8 +42,8 @@ impl RelationCSE {
 
 impl crate::Transform for RelationCSE {
     #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
+        target = "optimizer",
+        level = "debug",
         skip_all,
         fields(path.segment = "relation_cse")
     )]

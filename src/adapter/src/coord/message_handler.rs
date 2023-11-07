@@ -30,6 +30,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::command::Command;
 use crate::coord::appends::Deferred;
+use crate::coord::sequencer::old_optimizer_api::{PeekStageDeprecated, PeekStageFinishDeprecated};
 use crate::coord::{
     Coordinator, CreateConnectionValidationReady, Message, PeekStage, PeekStageFinish,
     PendingReadTxn, PlanValidity, PurifiedStatementReady, RealTimeRecencyContext,
@@ -106,6 +107,12 @@ impl Coordinator {
             }
             Message::PeekStageReady { ctx, stage } => {
                 self.sequence_peek_stage(ctx, stage).await;
+            }
+            Message::PeekStageDeprecatedReady { ctx, stage } => {
+                // Allow while the introduction of the new optimizer API in
+                // #20569 is in progress.
+                #[allow(deprecated)]
+                self.sequence_peek_stage_deprecated(ctx, stage).await;
             }
             Message::DrainStatementLog => {
                 self.drain_statement_log().await;
@@ -656,6 +663,34 @@ impl Coordinator {
             }
             RealTimeRecencyContext::Peek {
                 ctx,
+                copy_to,
+                when,
+                target_replica,
+                timeline_context,
+                source_ids,
+                in_immediate_multi_stmt_txn: _,
+                optimizer,
+                global_mir_plan,
+            } => {
+                self.sequence_peek_stage(
+                    ctx,
+                    PeekStage::Finish(PeekStageFinish {
+                        validity,
+                        copy_to,
+                        id_bundle: None,
+                        when,
+                        target_replica,
+                        timeline_context,
+                        source_ids,
+                        real_time_recency_ts: Some(real_time_recency_ts),
+                        optimizer,
+                        global_mir_plan,
+                    }),
+                )
+                .await;
+            }
+            RealTimeRecencyContext::PeekDeprecated {
+                ctx,
                 finishing,
                 copy_to,
                 dataflow,
@@ -671,9 +706,12 @@ impl Coordinator {
                 typ,
                 dataflow_metainfo,
             } => {
-                self.sequence_peek_stage(
+                // Allow while the introduction of the new optimizer API in
+                // #20569 is in progress.
+                #[allow(deprecated)]
+                self.sequence_peek_stage_deprecated(
                     ctx,
-                    PeekStage::Finish(PeekStageFinish {
+                    PeekStageDeprecated::Finish(PeekStageFinishDeprecated {
                         validity,
                         finishing,
                         copy_to,

@@ -60,7 +60,7 @@ mod alter_set_cluster;
 mod cluster;
 mod inner;
 mod linked_cluster;
-mod old_optimizer_api;
+pub(super) mod old_optimizer_api;
 
 impl Coordinator {
     #[tracing::instrument(level = "debug", skip_all)]

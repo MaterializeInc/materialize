@@ -134,6 +134,7 @@ use crate::coord::dataflows::dataflow_import_id_bundle;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
 use crate::coord::read_policy::ReadCapability;
+use crate::coord::sequencer::old_optimizer_api::PeekStageDeprecated;
 use crate::coord::timeline::{TimelineContext, TimelineState, WriteTimestamp};
 use crate::coord::timestamp_oracle::catalog_oracle::CatalogTimestampPersistence;
 use crate::coord::timestamp_selection::TimestampContext;
@@ -225,6 +226,10 @@ pub enum Message<T = mz_repr::Timestamp> {
         ctx: ExecuteContext,
         stage: PeekStage,
     },
+    PeekStageDeprecatedReady {
+        ctx: ExecuteContext,
+        stage: PeekStageDeprecated,
+    },
     DrainStatementLog,
 }
 
@@ -264,6 +269,7 @@ impl Message {
                 "execute_single_statement_transaction"
             }
             Message::PeekStageReady { .. } => "peek_stage_ready",
+            Message::PeekStageDeprecatedReady { .. } => "peek_stage_ready",
             Message::DrainStatementLog => "drain_statement_log",
         }
     }
@@ -308,6 +314,17 @@ pub enum RealTimeRecencyContext {
     },
     Peek {
         ctx: ExecuteContext,
+        copy_to: Option<CopyFormat>,
+        when: QueryWhen,
+        target_replica: Option<ReplicaId>,
+        timeline_context: TimelineContext,
+        source_ids: BTreeSet<GlobalId>,
+        in_immediate_multi_stmt_txn: bool,
+        optimizer: optimize::OptimizePeek,
+        global_mir_plan: optimize::peek::GlobalMirPlan,
+    },
+    PeekDeprecated {
+        ctx: ExecuteContext,
         finishing: RowSetFinishing,
         copy_to: Option<CopyFormat>,
         dataflow: DataflowDescription<OptimizedMirRelationExpr>,
@@ -330,6 +347,7 @@ impl RealTimeRecencyContext {
         match self {
             RealTimeRecencyContext::ExplainTimestamp { ctx, .. }
             | RealTimeRecencyContext::Peek { ctx, .. } => ctx,
+            RealTimeRecencyContext::PeekDeprecated { ctx, .. } => ctx,
         }
     }
 }
@@ -363,56 +381,41 @@ pub struct PeekStageValidate {
 pub struct PeekStageOptimize {
     validity: PlanValidity,
     source: MirRelationExpr,
-    finishing: RowSetFinishing,
     copy_to: Option<CopyFormat>,
-    view_id: GlobalId,
-    index_id: GlobalId,
     source_ids: BTreeSet<GlobalId>,
-    cluster_id: ClusterId,
     when: QueryWhen,
     target_replica: Option<ReplicaId>,
     timeline_context: TimelineContext,
     in_immediate_multi_stmt_txn: bool,
+    optimizer: optimize::OptimizePeek,
 }
 
 #[derive(Debug)]
 pub struct PeekStageTimestamp {
     validity: PlanValidity,
-    dataflow: DataflowDescription<OptimizedMirRelationExpr>,
-    finishing: RowSetFinishing,
     copy_to: Option<CopyFormat>,
-    view_id: GlobalId,
-    index_id: GlobalId,
     source_ids: BTreeSet<GlobalId>,
-    cluster_id: ClusterId,
     id_bundle: CollectionIdBundle,
     when: QueryWhen,
     target_replica: Option<ReplicaId>,
     timeline_context: TimelineContext,
     in_immediate_multi_stmt_txn: bool,
-    key: Vec<MirScalarExpr>,
-    typ: RelationType,
-    dataflow_metainfo: DataflowMetainfo,
+    optimizer: optimize::OptimizePeek,
+    global_mir_plan: optimize::peek::GlobalMirPlan,
 }
 
 #[derive(Debug)]
 pub struct PeekStageFinish {
     validity: PlanValidity,
-    finishing: RowSetFinishing,
     copy_to: Option<CopyFormat>,
-    dataflow: DataflowDescription<OptimizedMirRelationExpr>,
-    cluster_id: ClusterId,
     id_bundle: Option<CollectionIdBundle>,
     when: QueryWhen,
     target_replica: Option<ReplicaId>,
-    view_id: GlobalId,
-    index_id: GlobalId,
     timeline_context: TimelineContext,
     source_ids: BTreeSet<GlobalId>,
     real_time_recency_ts: Option<mz_repr::Timestamp>,
-    key: Vec<MirScalarExpr>,
-    typ: RelationType,
-    dataflow_metainfo: DataflowMetainfo,
+    optimizer: optimize::OptimizePeek,
+    global_mir_plan: optimize::peek::GlobalMirPlan,
 }
 
 /// An enum describing which cluster to run a statement on.
@@ -1412,7 +1415,8 @@ impl Coordinator {
                         );
 
                         // MIR ⇒ MIR optimization (global)
-                        let index_plan = optimize::Index::new(entry.name(), &idx.on, &idx.keys);
+                        let index_plan =
+                            optimize::index::Index::new(entry.name(), &idx.on, &idx.keys);
                         let global_mir_plan = optimizer.optimize(index_plan)?;
                         // Timestamp selection
                         let as_of = self.bootstrap_index_as_of(

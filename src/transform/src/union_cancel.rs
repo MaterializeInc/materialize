@@ -30,8 +30,8 @@ pub struct UnionBranchCancellation;
 
 impl crate::Transform for UnionBranchCancellation {
     #[tracing::instrument(
-        target = "optimizer"
-        level = "trace",
+        target = "optimizer",
+        level = "debug",
         skip_all,
         fields(path.segment = "union_branch_cancellation")
     )]

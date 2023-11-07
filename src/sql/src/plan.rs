@@ -847,7 +847,8 @@ pub enum ExplaineeStatement {
     /// The object to be explained is a SELECT statement.
     Query {
         raw_plan: HirRelationExpr,
-        row_set_finishing: Option<RowSetFinishing>,
+        row_set_finishing: RowSetFinishing,
+        desc: RelationDesc,
         /// Broken flag (see [`ExplaineeStatement::broken()`]).
         broken: bool,
     },
@@ -900,10 +901,16 @@ impl ExplaineeStatement {
     pub fn row_set_finishing(&self) -> Option<RowSetFinishing> {
         match self {
             Self::Query {
-                row_set_finishing, ..
+                row_set_finishing,
+                desc,
+                ..
             } => {
-                // Use the optional finishing extracted in the plan_query call.
-                row_set_finishing.clone()
+                if !row_set_finishing.is_trivial(desc.arity()) {
+                    // Use the optional finishing extracted in the plan_query call.
+                    Some(row_set_finishing.clone())
+                } else {
+                    None
+                }
             }
             Self::CreateMaterializedView { .. } => {
                 // Trivial finishing asserted in plan_create_materialized_view.
