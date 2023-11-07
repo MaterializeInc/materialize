@@ -117,6 +117,9 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("inconsistent ordering, not an error")
 
+        if db_function.function_name_in_lower_case == "timezone":
+            return YesIgnore("#21999: timezone")
+
         if db_function.function_name_in_lower_case == "date_trunc":
             precision = expression.args[0]
             if isinstance(precision, EnumConstant) and precision.value == "second":
@@ -250,6 +253,9 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         if " out of range" in pg_error_msg:
             return YesIgnore("#22265")
 
+        if "value overflows numeric format" in pg_error_msg:
+            return YesIgnore("#21994")
+
         if _error_message_is_about_zero_or_value_ranges(pg_error_msg):
             return YesIgnore("Caused by a different precision")
 
@@ -301,13 +307,13 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             or 'inf" real out of range' in mz_error_msg
             or 'inf" double precision out of range' in mz_error_msg
         ):
-            return YesIgnore("#21994: overflow in mz")
+            return YesIgnore("#21994: overflow")
 
         if (
             "value out of range: underflow" in mz_error_msg
             or '"-inf" real out of range' in mz_error_msg
         ):
-            return YesIgnore("#21995: underflow in mz")
+            return YesIgnore("#21995: underflow")
 
         if (
             "precision for type timestamp or timestamptz must be between 0 and 6"
@@ -332,6 +338,9 @@ class PgPostExecutionInconsistencyIgnoreFilter(
 
         if "unit 'invalid_value_123' not recognized" in mz_error_msg:
             return YesIgnore("#22957")
+
+        if "invalid time zone" in mz_error_msg:
+            return YesIgnore("#22984")
 
         if _error_message_is_about_zero_or_value_ranges(mz_error_msg):
             return YesIgnore("Caused by a different precision")
