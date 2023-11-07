@@ -361,7 +361,7 @@ where
     blob: Arc<dyn Blob + Send + Sync>,
     metrics: Arc<Metrics>,
     _schemas: Schemas<K, V>,
-    consolidate: bool,
+    assume_preconsolidated: bool,
 
     buffer: BatchBuffer<T, D>,
 
@@ -400,7 +400,7 @@ where
         version: Version,
         since: Antichain<T>,
         inline_upper: Option<Antichain<T>>,
-        consolidate: bool,
+        assume_preconsolidated: bool,
     ) -> Self {
         let parts = BatchParts::new(
             cfg.clone(),
@@ -411,7 +411,6 @@ where
             Arc::clone(&blob),
             isolated_runtime,
             &batch_write_metrics,
-            consolidate,
         );
         Self {
             lower,
@@ -421,11 +420,11 @@ where
                 Arc::clone(&metrics),
                 batch_write_metrics,
                 cfg.blob_target_size,
-                consolidate,
+                !assume_preconsolidated,
             ),
             metrics,
             _schemas: schemas,
-            consolidate,
+            assume_preconsolidated,
             max_kvt_in_run: None,
             parts_written: 0,
             runs: Vec::new(),
@@ -542,40 +541,38 @@ where
             return;
         }
 
-        if self.consolidate {
-            // if our parts are consolidated, we can rely on their sorted order to
-            // appropriately determine runs of ordered parts
-            let ((min_part_k, min_part_v), min_part_t, _d) =
-                columnar.get(0).expect("num updates is greater than zero");
-            let min_part_t = T::decode(min_part_t);
-            let ((max_part_k, max_part_v), max_part_t, _d) = columnar
-                .get(num_updates.saturating_sub(1))
-                .expect("num updates is greater than zero");
-            let max_part_t = T::decode(max_part_t);
+        // At this point, all parts are consolidated, so we can rely on their sorted order to
+        // appropriately determine runs of ordered parts.
+        let ((min_part_k, min_part_v), min_part_t, _d) =
+            columnar.get(0).expect("num updates is greater than zero");
+        let min_part_t = T::decode(min_part_t);
+        let ((max_part_k, max_part_v), max_part_t, _d) = columnar
+            .get(num_updates.saturating_sub(1))
+            .expect("num updates is greater than zero");
+        let max_part_t = T::decode(max_part_t);
 
-            if let Some((max_run_k, max_run_v, max_run_t)) = &mut self.max_kvt_in_run {
-                // start a new run if our part contains an update that exists in the
-                // range already covered by the existing parts of the current run
-                if (min_part_k, min_part_v, &min_part_t) < (max_run_k, max_run_v, max_run_t) {
-                    self.runs.push(self.parts_written);
+        if let Some((max_run_k, max_run_v, max_run_t)) = &mut self.max_kvt_in_run {
+            // start a new run if our part contains an update that exists in the
+            // range already covered by the existing parts of the current run
+            if (min_part_k, min_part_v, &min_part_t) < (max_run_k, max_run_v, max_run_t) {
+                if self.assume_preconsolidated {
+                    error!(
+                        "data written to shard {} did not arrive in order as expected",
+                        self.shard_id
+                    )
                 }
-
-                // given the above check, whether or not we extended an existing run or
-                // started a new one, this part contains the greatest KVT in the run
-                max_run_k.clear();
-                max_run_v.clear();
-                max_run_k.extend_from_slice(max_part_k);
-                max_run_v.extend_from_slice(max_part_v);
-                *max_run_t = max_part_t;
-            } else {
-                self.max_kvt_in_run = Some((max_part_k.to_vec(), max_part_v.to_vec(), max_part_t));
-            }
-        } else {
-            // if our parts are not consolidated, we simply say each part is its own run.
-            // NB: there is an implicit run starting at index 0
-            if self.parts_written > 0 {
                 self.runs.push(self.parts_written);
             }
+
+            // given the above check, whether or not we extended an existing run or
+            // started a new one, this part contains the greatest KVT in the run
+            max_run_k.clear();
+            max_run_v.clear();
+            max_run_k.extend_from_slice(max_part_k);
+            max_run_v.extend_from_slice(max_part_v);
+            *max_run_t = max_part_t;
+        } else {
+            self.max_kvt_in_run = Some((max_part_k.to_vec(), max_part_v.to_vec(), max_part_t));
         }
 
         let start = Instant::now();
@@ -736,7 +733,6 @@ pub(crate) struct BatchParts<T> {
     writing_parts: VecDeque<JoinHandle<HollowBatchPart>>,
     finished_parts: Vec<HollowBatchPart>,
     batch_metrics: BatchWriteMetrics,
-    consolidated: bool,
 }
 
 impl<T: Timestamp + Codec64> BatchParts<T> {
@@ -749,7 +745,6 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         blob: Arc<dyn Blob + Send + Sync>,
         isolated_runtime: Arc<IsolatedRuntime>,
         batch_metrics: &BatchWriteMetrics,
-        consolidated: bool,
     ) -> Self {
         BatchParts {
             cfg,
@@ -762,7 +757,6 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             writing_parts: VecDeque::new(),
             finished_parts: Vec::new(),
             batch_metrics: batch_metrics.clone(),
-            consolidated,
         }
     }
 
@@ -785,7 +779,6 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         let stats_collection_enabled = self.cfg.stats_collection_enabled;
         let stats_budget = self.cfg.stats_budget;
         let schemas = schemas.clone();
-        let consolidated = self.consolidated;
         let untrimmable_columns = Arc::clone(&self.cfg.stats_untrimmable_columns);
 
         let write_span = debug_span!("batch::write_part", shard = %self.shard_id).or_current();
@@ -793,13 +786,9 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             || "batch::write_part",
             async move {
                 let goodbytes = updates.goodbytes();
-                let key_lower = if consolidated {
-                    updates.get(0).and_then(|((k, _), _, _)| {
-                        truncate_bytes(k, TRUNCATE_LEN, TruncateBound::Lower)
-                    })
-                } else {
-                    None
-                };
+                let key_lower = updates.get(0).and_then(|((k, _), _, _)| {
+                    truncate_bytes(k, TRUNCATE_LEN, TruncateBound::Lower)
+                });
                 let batch = BlobTraceBatchPart {
                     desc,
                     updates: vec![updates],
