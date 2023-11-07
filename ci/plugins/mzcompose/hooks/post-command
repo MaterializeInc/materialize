@@ -44,7 +44,7 @@ if [ -n "${CI_COVERAGE_ENABLED:-}" ] && [ -z "${BUILDKITE_MZCOMPOSE_PLUGIN_SKIP_
         find . -name '*.profraw' -delete
 
         ARGS=()
-        for program in clusterd environmentd sqllogictest testdrive; do
+        for program in clusterd environmentd balancerd sqllogictest testdrive; do
             if [ -f coverage/"$program" ]; then
                 export_cov coverage/"$program"
                 ARGS+=("-a" coverage/"$BUILDKITE_JOB_ID"-"$program".lcov)
@@ -77,11 +77,13 @@ if find cores -name 'core.*' | grep -q .; then
     # Best effort attempt to fetch interesting executables to get backtrace of core files
     bin/ci-builder run stable cp /mnt/build/debug/clusterd cores/ || true
     bin/ci-builder run stable cp /mnt/build/debug/environmentd cores/ || true
+    bin/ci-builder run stable cp /mnt/build/debug/mz-balancerd cores/balancerd || true
     bin/ci-builder run stable cp /mnt/build/debug/sqllogictest cores/ || true
     run cp sqllogictest:/usr/local/bin/sqllogictest cores/ || true
     run cp sqllogictest:/usr/local/bin/clusterd cores/ || true
     run cp materialized:/usr/local/bin/environmentd cores/ || true
     run cp materialized:/usr/local/bin/clusterd cores/ || true
+    run cp balancerd:/usr/local/bin/balancerd cores/ || true
     run cp testdrive:/usr/local/bin/testdrive cores/ || true
 fi
 
