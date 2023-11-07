@@ -110,9 +110,7 @@ def get_version_tags(*, fetch: bool = True, prefix: str = "v") -> list[Version]:
 
 def get_latest_version() -> Version:
     all_version_tags = get_version_tags(fetch=True)
-    all_version_tags.sort(reverse=True)
-
-    return all_version_tags[0]
+    return max(all_version_tags)
 
 
 def is_ancestor(earlier: str, later: str) -> bool:
