@@ -85,8 +85,7 @@ class PreExecutionInconsistencyIgnoreFilter(PreExecutionInconsistencyIgnoreFilte
                     isinstance(arg_type_spec, NumericReturnTypeSpec)
                     and not arg_type_spec.only_integer
                 ):
-                    # tracked with https://github.com/MaterializeInc/materialize/issues/19592
-                    return YesIgnore("#19592")
+                    return YesIgnore("#15186")
 
         return NoIgnore()
 
@@ -106,15 +105,13 @@ class PreExecutionInconsistencyIgnoreFilter(PreExecutionInconsistencyIgnoreFilte
             "var_pop",
         }:
             if ExpressionCharacteristics.MAX_VALUE in all_involved_characteristics:
-                # tracked with https://github.com/MaterializeInc/materialize/issues/19511
-                return YesIgnore("#19511")
+                return YesIgnore("#15186")
 
             if (
                 ExpressionCharacteristics.DECIMAL in all_involved_characteristics
                 and ExpressionCharacteristics.TINY_VALUE in all_involved_characteristics
             ):
-                # tracked with https://github.com/MaterializeInc/materialize/issues/19511
-                return YesIgnore("#19511")
+                return YesIgnore("#15186")
 
         if db_function.function_name_in_lower_case in {
             "array_agg",
