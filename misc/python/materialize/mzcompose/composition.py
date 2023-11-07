@@ -261,7 +261,7 @@ class Composition:
         """
 
         if not self.silent:
-            print(f"$ docker compose {' '.join(args)}", file=sys.stderr)
+            print(f"--- docker compose {' '.join(args)}", file=sys.stderr)
 
         self.file.seek(0)
 
