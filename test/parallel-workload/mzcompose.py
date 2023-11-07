@@ -42,6 +42,7 @@ SERVICES = [
         external_minio=True,
         ports=["6975:6875", "6976:6876", "6977:6877"],
     ),
+    Service("sqlsmith", {"mzbuild": "sqlsmith"}),
     Service(
         name="persistcli",
         config={"mzbuild": "jobs"},

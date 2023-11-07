@@ -123,7 +123,8 @@ def run(
         )
         conn.autocommit = True
         with conn.cursor() as cur:
-            database.create(Executor(rng, cur, database))
+            assert composition
+            database.create(Executor(rng, cur, database), composition)
         conn.close()
 
     workers = []
@@ -150,7 +151,8 @@ def run(
             weights,
         )[0]
         actions = [
-            action_class(worker_rng) for action_class in action_list.action_classes
+            action_class(worker_rng, composition)
+            for action_class in action_list.action_classes
         ]
         worker = Worker(
             worker_rng,
@@ -159,6 +161,7 @@ def run(
             end_time,
             action_list.autocommit,
             system=False,
+            composition=composition,
         )
         thread_name = f"worker_{i}"
         print(
@@ -178,11 +181,12 @@ def run(
         worker_rng = random.Random(rng.randrange(SEED_RANGE))
         worker = Worker(
             worker_rng,
-            [CancelAction(worker_rng, workers)],
+            [CancelAction(worker_rng, composition, workers)],
             [1],
             end_time,
             autocommit=False,
             system=True,
+            composition=composition,
         )
         workers.append(worker)
         thread = threading.Thread(
@@ -202,6 +206,7 @@ def run(
             end_time,
             autocommit=False,
             system=False,
+            composition=composition,
         )
         workers.append(worker)
         thread = threading.Thread(
@@ -221,6 +226,7 @@ def run(
             end_time,
             autocommit=False,
             system=False,
+            composition=composition,
         )
         workers.append(worker)
         thread = threading.Thread(
@@ -278,8 +284,8 @@ def run(
     conn.autocommit = True
     with conn.cursor() as cur:
         exe = Executor(rng, cur, database)
-        print(f"Dropping database {database}")
         for db in database.dbs:
+            print(f"Dropping database {db}")
             db.drop(exe)
     conn.close()
 
