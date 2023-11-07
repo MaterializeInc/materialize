@@ -34,3 +34,6 @@ class MultiVersionSqlExecutors(SqlExecutors):
             f"Using {self.executor.name} in version '{self.executor.query_version()}'."
             f"Using {self.executor2.name} in version '{self.executor2.query_version()}'."
         )
+
+    def uses_different_versions(self) -> bool:
+        return self.executor.query_version() != self.executor2.query_version()

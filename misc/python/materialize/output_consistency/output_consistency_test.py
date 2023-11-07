@@ -156,6 +156,10 @@ class OutputConsistencyTest:
         output_printer.print_info(sql_executors.get_database_infos())
         output_printer.print_empty_line()
 
+        if not self.shall_run(sql_executors):
+            output_printer.print_info("Not running the test, criteria are not met.")
+            return ConsistencyTestSummary()
+
         test_runner = ConsistencyTestRunner(
             config,
             input_data,
@@ -183,6 +187,9 @@ class OutputConsistencyTest:
         output_printer.print_test_summary(test_summary)
 
         return test_summary
+
+    def shall_run(self, sql_executors: SqlExecutors) -> bool:
+        return True
 
     def create_sql_executors(
         self,
