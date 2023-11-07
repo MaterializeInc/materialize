@@ -1482,3 +1482,63 @@ ALTER SYSTEM SET max_tables = {self.n() * 2};
 """
             ),
         ]
+
+
+class HydrateIndex(ScenarioBig):
+    """Measure the time it takes for an index to hydrate when a cluster comes online."""
+
+    def init(self) -> list[Action]:
+        return [
+            self.table_ten(),
+            TdAction(
+                """
+> CREATE CLUSTER idx_cluster SIZE '16', REPLICATION FACTOR 1
+"""
+            ),
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        return Td(
+            f"""
+> DROP TABLE IF EXISTS t1 CASCADE
+> CREATE TABLE t1 (f1 INTEGER, f2 INTEGER)
+> ALTER CLUSTER idx_cluster SET (REPLICATION FACTOR 0)
+> CREATE INDEX i1 IN CLUSTER idx_cluster ON t1(f1)
+> INSERT INTO t1 (f1) SELECT {self.unique_values()} FROM {self.join()}
+> UPDATE t1 SET f1 = f1 + 100000
+> UPDATE t1 SET f1 = f1 + 1000000
+> UPDATE t1 SET f1 = f1 + 10000000
+> UPDATE t1 SET f1 = f1 + 100000000
+> UPDATE t1 SET f1 = f1 + 1000000000
+> SELECT 1
+  /* A */
+1
+> ALTER CLUSTER idx_cluster SET (REPLICATION FACTOR 1)
+> SET CLUSTER = idx_cluster
+? EXPLAIN SELECT COUNT(*) FROM t1
+Explained Query:
+  Return
+    Union
+      Get l0
+      Map (0)
+        Union
+          Negate
+            Project ()
+              Get l0
+          Constant
+            - ()
+  With
+    cte l0 =
+      Reduce aggregates=[count(*)]
+        Project ()
+          ReadIndex on=t1 i1=[*** full scan ***]
+
+Used Indexes:
+  - materialize.public.i1 (*** full scan ***)
+
+> SELECT COUNT(*) FROM t1
+  /* B */
+{self._n}
+> SET CLUSTER = default
+"""
+        )
