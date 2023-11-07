@@ -83,4 +83,5 @@ def disabled(ignore_reason: str):
             check = self.check_class(*cls_ars)
             return check
 
+
     return ClassWrapper
