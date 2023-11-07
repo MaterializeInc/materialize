@@ -37,12 +37,12 @@ use crate::optimize::{
 };
 use crate::CollectionIdBundle;
 
-pub struct OptimizeMaterializedView {
+pub struct Optimizer {
     /// A typechecking context to use throughout the optimizer pipeline.
     typecheck_ctx: TypecheckContext,
     /// A snapshot of the catalog state.
     catalog: Arc<Catalog>,
-    /// A snapshot of the compute instance that will run the dataflows.
+    /// A snapshot of the cluster that will run the dataflows.
     compute_instance: ComputeInstanceSnapshot,
     /// A durable GlobalId to be used with the exported materialized view sink.
     exported_sink_id: GlobalId,
@@ -59,7 +59,30 @@ pub struct OptimizeMaterializedView {
     config: OptimizerConfig,
 }
 
-impl OptimizeMaterializedView {
+impl Optimizer {
+    pub fn new(
+        catalog: Arc<Catalog>,
+        compute_instance: ComputeInstanceSnapshot,
+        exported_sink_id: GlobalId,
+        internal_view_id: GlobalId,
+        column_names: Vec<ColumnName>,
+        non_null_assertions: Vec<usize>,
+        debug_name: String,
+        config: OptimizerConfig,
+    ) -> Self {
+        Self {
+            typecheck_ctx: empty_context(),
+            catalog,
+            compute_instance,
+            exported_sink_id,
+            internal_view_id,
+            column_names,
+            non_null_assertions,
+            debug_name,
+            config,
+        }
+    }
+
     pub fn cluster_id(&self) -> ComputeInstanceId {
         self.compute_instance.instance_id()
     }
@@ -141,32 +164,7 @@ pub struct Unresolved;
 #[derive(Clone)]
 pub struct Resolved;
 
-impl OptimizeMaterializedView {
-    pub fn new(
-        catalog: Arc<Catalog>,
-        compute_instance: ComputeInstanceSnapshot,
-        exported_sink_id: GlobalId,
-        internal_view_id: GlobalId,
-        column_names: Vec<ColumnName>,
-        non_null_assertions: Vec<usize>,
-        debug_name: String,
-        config: OptimizerConfig,
-    ) -> Self {
-        Self {
-            typecheck_ctx: empty_context(),
-            catalog,
-            compute_instance,
-            exported_sink_id,
-            internal_view_id,
-            column_names,
-            non_null_assertions,
-            debug_name,
-            config,
-        }
-    }
-}
-
-impl Optimize<HirRelationExpr> for OptimizeMaterializedView {
+impl Optimize<HirRelationExpr> for Optimizer {
     type To = LocalMirPlan;
 
     fn optimize(&mut self, expr: HirRelationExpr) -> Result<Self::To, OptimizerError> {
@@ -197,7 +195,7 @@ impl LocalMirPlan {
 
 /// This is needed only because the pipeline in the bootstrap code starts from an
 /// [`OptimizedMirRelationExpr`] attached to a [`crate::catalog::CatalogItem`].
-impl Optimize<OptimizedMirRelationExpr> for OptimizeMaterializedView {
+impl Optimize<OptimizedMirRelationExpr> for Optimizer {
     type To = GlobalMirPlan;
 
     fn optimize(&mut self, expr: OptimizedMirRelationExpr) -> Result<Self::To, OptimizerError> {
@@ -206,7 +204,7 @@ impl Optimize<OptimizedMirRelationExpr> for OptimizeMaterializedView {
     }
 }
 
-impl Optimize<LocalMirPlan> for OptimizeMaterializedView {
+impl Optimize<LocalMirPlan> for Optimizer {
     type To = GlobalMirPlan;
 
     fn optimize(&mut self, plan: LocalMirPlan) -> Result<Self::To, OptimizerError> {
@@ -252,7 +250,7 @@ impl Optimize<LocalMirPlan> for OptimizeMaterializedView {
     }
 }
 
-impl Optimize<GlobalMirPlan> for OptimizeMaterializedView {
+impl Optimize<GlobalMirPlan> for Optimizer {
     type To = GlobalLirPlan<Unresolved>;
 
     fn optimize(&mut self, plan: GlobalMirPlan) -> Result<Self::To, OptimizerError> {

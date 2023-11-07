@@ -320,7 +320,7 @@ pub enum RealTimeRecencyContext {
         timeline_context: TimelineContext,
         source_ids: BTreeSet<GlobalId>,
         in_immediate_multi_stmt_txn: bool,
-        optimizer: optimize::OptimizePeek,
+        optimizer: optimize::peek::Optimizer,
         global_mir_plan: optimize::peek::GlobalMirPlan,
     },
     PeekDeprecated {
@@ -387,7 +387,7 @@ pub struct PeekStageOptimize {
     target_replica: Option<ReplicaId>,
     timeline_context: TimelineContext,
     in_immediate_multi_stmt_txn: bool,
-    optimizer: optimize::OptimizePeek,
+    optimizer: optimize::peek::Optimizer,
 }
 
 #[derive(Debug)]
@@ -400,7 +400,7 @@ pub struct PeekStageTimestamp {
     target_replica: Option<ReplicaId>,
     timeline_context: TimelineContext,
     in_immediate_multi_stmt_txn: bool,
-    optimizer: optimize::OptimizePeek,
+    optimizer: optimize::peek::Optimizer,
     global_mir_plan: optimize::peek::GlobalMirPlan,
 }
 
@@ -414,7 +414,7 @@ pub struct PeekStageFinish {
     timeline_context: TimelineContext,
     source_ids: BTreeSet<GlobalId>,
     real_time_recency_ts: Option<mz_repr::Timestamp>,
-    optimizer: optimize::OptimizePeek,
+    optimizer: optimize::peek::Optimizer,
     global_mir_plan: optimize::peek::GlobalMirPlan,
 }
 
@@ -1288,7 +1288,7 @@ impl Coordinator {
                             OptimizerConfig::from(self.catalog().system_config());
 
                         // Build an optimizer for this INDEX.
-                        let mut optimizer = optimize::OptimizeIndex::new(
+                        let mut optimizer = optimize::index::Optimizer::new(
                             self.owned_catalog(),
                             compute_instance,
                             entry.id(),
@@ -1359,7 +1359,7 @@ impl Coordinator {
                     let optimizer_config = OptimizerConfig::from(self.catalog().system_config());
 
                     // Build an optimizer for this MATERIALIZED VIEW.
-                    let mut optimizer = optimize::OptimizeMaterializedView::new(
+                    let mut optimizer = optimize::materialized_view::Optimizer::new(
                         self.owned_catalog(),
                         compute_instance,
                         entry.id(),

@@ -33,12 +33,12 @@ use crate::optimize::{
 };
 use crate::CollectionIdBundle;
 
-pub struct OptimizeIndex {
+pub struct Optimizer {
     /// A typechecking context to use throughout the optimizer pipeline.
     _typecheck_ctx: TypecheckContext,
     /// A snapshot of the catalog state.
     catalog: Arc<Catalog>,
-    /// A snapshot of the compute instance that will run the dataflows.
+    /// A snapshot of the cluster that will run the dataflows.
     compute_instance: ComputeInstanceSnapshot,
     /// A durable GlobalId to be used with the exported index arrangement.
     exported_index_id: GlobalId,
@@ -46,7 +46,22 @@ pub struct OptimizeIndex {
     config: OptimizerConfig,
 }
 
-impl OptimizeIndex {
+impl Optimizer {
+    pub fn new(
+        catalog: Arc<Catalog>,
+        compute_instance: ComputeInstanceSnapshot,
+        exported_index_id: GlobalId,
+        config: OptimizerConfig,
+    ) -> Self {
+        Self {
+            _typecheck_ctx: empty_context(),
+            catalog,
+            compute_instance,
+            exported_index_id,
+            config,
+        }
+    }
+
     pub fn cluster_id(&self) -> ComputeInstanceId {
         self.compute_instance.instance_id()
     }
@@ -136,24 +151,7 @@ pub struct Unresolved;
 #[derive(Clone)]
 pub struct Resolved;
 
-impl OptimizeIndex {
-    pub fn new(
-        catalog: Arc<Catalog>,
-        compute_instance: ComputeInstanceSnapshot,
-        exported_index_id: GlobalId,
-        config: OptimizerConfig,
-    ) -> Self {
-        Self {
-            _typecheck_ctx: empty_context(),
-            catalog,
-            compute_instance,
-            exported_index_id,
-            config,
-        }
-    }
-}
-
-impl Optimize<Index> for OptimizeIndex {
+impl Optimize<Index> for Optimizer {
     type To = GlobalMirPlan;
 
     fn optimize(&mut self, index: Index) -> Result<Self::To, OptimizerError> {
@@ -201,7 +199,7 @@ impl Optimize<Index> for OptimizeIndex {
     }
 }
 
-impl Optimize<GlobalMirPlan> for OptimizeIndex {
+impl Optimize<GlobalMirPlan> for Optimizer {
     type To = GlobalLirPlan<Unresolved>;
 
     fn optimize(&mut self, plan: GlobalMirPlan) -> Result<Self::To, OptimizerError> {

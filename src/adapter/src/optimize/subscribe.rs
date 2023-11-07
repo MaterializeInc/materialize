@@ -36,12 +36,12 @@ use crate::optimize::{
 };
 use crate::CollectionIdBundle;
 
-pub struct OptimizeSubscribe {
+pub struct Optimizer {
     /// A typechecking context to use throughout the optimizer pipeline.
     typecheck_ctx: TypecheckContext,
     /// A snapshot of the catalog state.
     catalog: Arc<Catalog>,
-    /// A snapshot of the compute instance that will run the dataflows.
+    /// A snapshot of the cluster that will run the dataflows.
     compute_instance: ComputeInstanceSnapshot,
     /// A transient GlobalId to be used when constructing the dataflow.
     transient_id: GlobalId,
@@ -55,7 +55,28 @@ pub struct OptimizeSubscribe {
     config: OptimizerConfig,
 }
 
-impl OptimizeSubscribe {
+impl Optimizer {
+    pub fn new(
+        catalog: Arc<Catalog>,
+        compute_instance: ComputeInstanceSnapshot,
+        transient_id: GlobalId,
+        conn_id: ConnectionId,
+        with_snapshot: bool,
+        up_to: Option<Timestamp>,
+        config: OptimizerConfig,
+    ) -> Self {
+        Self {
+            typecheck_ctx: empty_context(),
+            catalog,
+            compute_instance,
+            transient_id,
+            conn_id,
+            with_snapshot,
+            up_to,
+            config,
+        }
+    }
+
     pub fn cluster_id(&self) -> ComputeInstanceId {
         self.compute_instance.instance_id()
     }
@@ -137,30 +158,7 @@ pub struct Unresolved;
 #[derive(Clone)]
 pub struct Resolved;
 
-impl OptimizeSubscribe {
-    pub fn new(
-        catalog: Arc<Catalog>,
-        compute_instance: ComputeInstanceSnapshot,
-        transient_id: GlobalId,
-        conn_id: ConnectionId,
-        with_snapshot: bool,
-        up_to: Option<Timestamp>,
-        config: OptimizerConfig,
-    ) -> Self {
-        Self {
-            typecheck_ctx: empty_context(),
-            catalog,
-            compute_instance,
-            transient_id,
-            conn_id,
-            with_snapshot,
-            up_to,
-            config,
-        }
-    }
-}
-
-impl Optimize<SubscribeFrom> for OptimizeSubscribe {
+impl Optimize<SubscribeFrom> for Optimizer {
     type To = GlobalMirPlan<Unresolved>;
 
     fn optimize(&mut self, plan: SubscribeFrom) -> Result<Self::To, OptimizerError> {
@@ -288,7 +286,7 @@ impl GlobalMirPlan<Unresolved> {
     }
 }
 
-impl Optimize<GlobalMirPlan<Resolved>> for OptimizeSubscribe {
+impl Optimize<GlobalMirPlan<Resolved>> for Optimizer {
     type To = GlobalLirPlan;
 
     fn optimize(&mut self, plan: GlobalMirPlan<Resolved>) -> Result<Self::To, OptimizerError> {

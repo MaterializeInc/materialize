@@ -38,21 +38,54 @@ use crate::optimize::{
 };
 use crate::session::Session;
 
-pub struct OptimizePeek {
+pub struct Optimizer {
     /// A typechecking context to use throughout the optimizer pipeline.
     typecheck_ctx: TypecheckContext,
     /// A snapshot of the catalog state.
     catalog: Arc<Catalog>,
-    /// A snapshot of the compute instance that will run the dataflows.
-    pub compute_instance: ComputeInstanceSnapshot,
+    /// A snapshot of the cluster that will run the dataflows.
+    compute_instance: ComputeInstanceSnapshot,
     /// Optional row-set finishing to be applied to the final result.
-    pub finishing: RowSetFinishing,
+    finishing: RowSetFinishing,
     /// A transient GlobalId to be used when constructing the dataflow.
-    pub select_id: GlobalId,
+    select_id: GlobalId,
     /// A transient GlobalId to be used when constructing a PeekPlan.
-    pub index_id: GlobalId,
+    index_id: GlobalId,
     // Optimizer config.
     config: OptimizerConfig,
+}
+
+impl Optimizer {
+    pub fn new(
+        catalog: Arc<Catalog>,
+        compute_instance: ComputeInstanceSnapshot,
+        finishing: RowSetFinishing,
+        select_id: GlobalId,
+        index_id: GlobalId,
+        config: OptimizerConfig,
+    ) -> Self {
+        Self {
+            typecheck_ctx: empty_context(),
+            catalog,
+            compute_instance,
+            finishing,
+            select_id,
+            index_id,
+            config,
+        }
+    }
+
+    pub fn cluster_id(&self) -> ComputeInstanceId {
+        self.compute_instance.instance_id()
+    }
+
+    pub fn finishing(&self) -> &RowSetFinishing {
+        &self.finishing
+    }
+
+    pub fn index_id(&self) -> GlobalId {
+        self.index_id
+    }
 }
 
 // A bogey `Debug` implementation that hides fields. This is needed to make the
@@ -60,7 +93,7 @@ pub struct OptimizePeek {
 //
 // For now, we skip almost all fields, but we might revisit that bit if it turns
 // out that we really need those for debugging purposes.
-impl Debug for OptimizePeek {
+impl Debug for Optimizer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OptimizePeek")
             .field("config", &self.config)
@@ -77,7 +110,7 @@ pub struct Unresolved;
 #[derive(Clone)]
 pub struct LocalMirPlan<T = Unresolved> {
     expr: MirRelationExpr,
-    cx_info: T,
+    context: T,
 }
 
 impl<T> LocalMirPlan<T> {
@@ -102,7 +135,7 @@ pub struct ResolvedLocal<'s> {
 pub struct GlobalMirPlan<T = Unresolved> {
     df_desc: MirDataflowDescription,
     df_meta: DataflowMetainfo,
-    cx_info: T,
+    context: T,
 }
 
 impl GlobalMirPlan {
@@ -169,36 +202,7 @@ impl GlobalLirPlan {
     }
 }
 
-impl OptimizePeek {
-    pub fn new(
-        catalog: Arc<Catalog>,
-        compute_instance: ComputeInstanceSnapshot,
-        finishing: RowSetFinishing,
-        select_id: GlobalId,
-        index_id: GlobalId,
-        config: OptimizerConfig,
-    ) -> Self {
-        Self {
-            typecheck_ctx: empty_context(),
-            catalog,
-            compute_instance,
-            finishing,
-            select_id,
-            index_id,
-            config,
-        }
-    }
-
-    pub fn cluster_id(&self) -> ComputeInstanceId {
-        self.compute_instance.instance_id()
-    }
-
-    pub fn index_id(&self) -> GlobalId {
-        self.index_id
-    }
-}
-
-impl Optimize<HirRelationExpr> for OptimizePeek {
+impl Optimize<HirRelationExpr> for Optimizer {
     type To = LocalMirPlan;
 
     fn optimize(&mut self, expr: HirRelationExpr) -> Result<Self::To, OptimizerError> {
@@ -210,7 +214,7 @@ impl Optimize<HirRelationExpr> for OptimizePeek {
     }
 }
 
-impl Optimize<MirRelationExpr> for OptimizePeek {
+impl Optimize<MirRelationExpr> for Optimizer {
     type To = LocalMirPlan;
 
     fn optimize(&mut self, expr: MirRelationExpr) -> Result<Self::To, OptimizerError> {
@@ -228,7 +232,7 @@ impl Optimize<MirRelationExpr> for OptimizePeek {
         // Return the (sealed) plan at the end of this optimization step.
         Ok(LocalMirPlan {
             expr,
-            cx_info: Unresolved,
+            context: Unresolved,
         })
     }
 }
@@ -243,12 +247,12 @@ impl LocalMirPlan<Unresolved> {
     ) -> LocalMirPlan<ResolvedLocal> {
         LocalMirPlan {
             expr: self.expr,
-            cx_info: ResolvedLocal { session, stats },
+            context: ResolvedLocal { session, stats },
         }
     }
 }
 
-impl<'s> Optimize<LocalMirPlan<ResolvedLocal<'s>>> for OptimizePeek {
+impl<'s> Optimize<LocalMirPlan<ResolvedLocal<'s>>> for Optimizer {
     type To = GlobalMirPlan<Unresolved>;
 
     fn optimize(
@@ -257,7 +261,7 @@ impl<'s> Optimize<LocalMirPlan<ResolvedLocal<'s>>> for OptimizePeek {
     ) -> Result<Self::To, OptimizerError> {
         let LocalMirPlan {
             expr,
-            cx_info: ResolvedLocal { stats, session },
+            context: ResolvedLocal { stats, session },
         } = plan;
 
         let expr = OptimizedMirRelationExpr(expr);
@@ -313,7 +317,7 @@ impl<'s> Optimize<LocalMirPlan<ResolvedLocal<'s>>> for OptimizePeek {
         Ok(GlobalMirPlan {
             df_desc,
             df_meta,
-            cx_info: Unresolved,
+            context: Unresolved,
         })
     }
 }
@@ -347,14 +351,15 @@ impl GlobalMirPlan<Unresolved> {
         GlobalMirPlan {
             df_desc: self.df_desc,
             df_meta: self.df_meta,
-            cx_info: ResolvedGlobal { session },
+            context: ResolvedGlobal { session },
         }
     }
 }
 
-impl<'s> Optimize<GlobalMirPlan<ResolvedGlobal<'s>>> for OptimizePeek {
+impl<'s> Optimize<GlobalMirPlan<ResolvedGlobal<'s>>> for Optimizer {
     type To = GlobalLirPlan;
 
+    // TODO: make Coordinator::plan_peek part of this `optimize` call.
     fn optimize(
         &mut self,
         plan: GlobalMirPlan<ResolvedGlobal<'s>>,
@@ -362,7 +367,7 @@ impl<'s> Optimize<GlobalMirPlan<ResolvedGlobal<'s>>> for OptimizePeek {
         let GlobalMirPlan {
             mut df_desc,
             df_meta,
-            cx_info: ResolvedGlobal { session },
+            context: ResolvedGlobal { session },
         } = plan;
 
         // Get the single timestamp representing the `as_of` time.
