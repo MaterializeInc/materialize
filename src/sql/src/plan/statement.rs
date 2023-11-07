@@ -315,7 +315,7 @@ pub fn plan(
         Statement::CreateRole(stmt) => ddl::plan_create_role(scx, stmt),
         Statement::CreateSchema(stmt) => ddl::plan_create_schema(scx, stmt),
         Statement::CreateSecret(stmt) => ddl::plan_create_secret(scx, stmt),
-        Statement::CreateSink(stmt) => ddl::plan_create_sink(scx, stmt, false),
+        Statement::CreateSink(stmt) => ddl::plan_create_sink(scx, stmt),
         Statement::CreateWebhookSource(stmt) => ddl::plan_create_webhook_source(scx, stmt),
         Statement::CreateSource(stmt) => ddl::plan_create_source(scx, stmt),
         Statement::CreateSubsource(stmt) => ddl::plan_create_subsource(scx, stmt),

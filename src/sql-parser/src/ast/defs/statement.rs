@@ -1153,17 +1153,18 @@ impl<T: AstInfo> AstDisplay for CreateSinkStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("CREATE SINK ");
         if self.if_not_exists {
-            f.write_str("IF NOT EXISTS");
+            f.write_str("IF NOT EXISTS ");
         }
         if let Some(name) = &self.name {
-            f.write_str(" ");
             f.write_node(&name);
+            f.write_str(" ");
         }
         if let Some(cluster) = &self.in_cluster {
-            f.write_str(" IN CLUSTER ");
+            f.write_str("IN CLUSTER ");
             f.write_node(cluster);
+            f.write_str(" ");
         }
-        f.write_str(" FROM ");
+        f.write_str("FROM ");
         f.write_node(&self.from);
         f.write_str(" INTO ");
         f.write_node(&self.connection);

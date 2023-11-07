@@ -1811,7 +1811,7 @@ impl<'a> Parser<'a> {
             self.parse_create_schema()
                 .map_parser_err(StatementKind::CreateSchema)
         } else if self.peek_keyword(SINK) {
-            self.parse_create_sink(true)
+            self.parse_create_sink()
                 .map_parser_err(StatementKind::CreateSink)
         } else if self.peek_keyword(TYPE) {
             self.parse_create_type()
@@ -2897,15 +2897,25 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_create_sink(&mut self, with_name: bool) -> Result<Statement<Raw>, ParserError> {
+    fn parse_create_sink(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(SINK)?;
         let if_not_exists = self.parse_if_not_exists()?;
 
-        let name = if with_name {
-            Some(self.parse_item_name()?)
-        } else {
-            None
-        };
+        let mut name = Some(self.parse_item_name()?);
+
+        // Sniff out `CREATE SINK IN CLUSTER <c> ...` and `CREATE SINK FROM
+        // <view>...`  and ensure they are parsed as nameless `CREATE SINK`
+        // commands.
+        //
+        // This is a bit gross, but we didn't have the foresight to make
+        // `IN` and `FROM` reserved keywords for sink names.
+        if (name == Some(UnresolvedItemName::unqualified("in")) && self.peek_keyword(CLUSTER))
+            || (name == Some(UnresolvedItemName::unqualified("from")) && !self.peek_keyword(FROM))
+        {
+            name = None;
+            self.prev_token();
+        }
+
         let in_cluster = self.parse_optional_in_cluster()?;
         self.expect_keyword(FROM)?;
         let from = self.parse_raw_name()?;
@@ -7053,13 +7063,7 @@ impl<'a> Parser<'a> {
 
         self.expect_keywords(&[FOR, CREATE])?;
 
-        // parsing if sink name is not provided and also when name is given
-        let create_sink_stmt = match self.maybe_parse(|parser| parser.parse_create_sink(false)) {
-            Some(stmt) => stmt,
-            None => self.parse_create_sink(true)?,
-        };
-
-        if let Statement::CreateSink(statement) = create_sink_stmt {
+        if let Statement::CreateSink(statement) = self.parse_create_sink()? {
             Ok(Statement::ExplainSinkSchema(ExplainSinkSchemaStatement {
                 schema_for,
                 statement,

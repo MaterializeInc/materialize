@@ -2163,12 +2163,11 @@ generate_extracted_config!(CreateSinkOption, (Size, String), (Snapshot, bool));
 pub fn plan_create_sink(
     scx: &StatementContext,
     stmt: CreateSinkStatement<Aug>,
-    is_explain: bool,
 ) -> Result<Plan, PlanError> {
     let create_sql = normalize::create_statement(scx, Statement::CreateSink(stmt.clone()))?;
 
     let CreateSinkStatement {
-        name: name_opt,
+        name,
         in_cluster,
         from,
         connection,
@@ -2202,27 +2201,20 @@ pub fn plan_create_sink(
         Some(Envelope::CdcV2) => bail_unsupported!("CDCv2 sinks"),
         Some(Envelope::None) => bail_unsupported!("\"ENVELOPE NONE\" sinks"),
     };
-    if !is_explain && name_opt.is_none() {
-        sql_bail!("CREATE SINK requires a name!");
-    }
-    let name = if let Some(name) = name_opt {
-        let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
-        // Check for an object in the catalog with this same name
-        let full_name = scx.catalog.resolve_full_name(&name);
-        let partial_name = PartialItemName::from(full_name.clone());
-        if let (false, Ok(item)) = (if_not_exists, scx.catalog.resolve_item(&partial_name)) {
-            return Err(PlanError::ItemAlreadyExists {
-                name: full_name.to_string(),
-                item_type: item.item_type(),
-            });
-        }
-        name
-    } else {
-        let suggested_name = vec![Ident::new("temp_sink")];
-        let partial = normalize::unresolved_item_name(UnresolvedItemName(suggested_name))?;
-        let qualified = scx.allocate_qualified_name(partial)?;
-        scx.catalog.find_available_name(qualified)
+
+    // Check for an object in the catalog with this same name
+    let Some(name) = name else {
+        sql_bail!("unspecified sink name");
     };
+    let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
+    let full_name = scx.catalog.resolve_full_name(&name);
+    let partial_name = PartialItemName::from(full_name.clone());
+    if let (false, Ok(item)) = (if_not_exists, scx.catalog.resolve_item(&partial_name)) {
+        return Err(PlanError::ItemAlreadyExists {
+            name: full_name.to_string(),
+            item_type: item.item_type(),
+        });
+    }
 
     let from_name = &from;
     let from = scx.get_item_by_resolved_name(&from)?;

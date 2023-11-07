@@ -25,6 +25,10 @@ Sink source type      | Description
 
 {{< diagram "create-sink-kafka.svg" >}}
 
+#### `sink_definition`
+
+{{< diagram "sink-definition.svg" >}}
+
 #### `sink_format_spec`
 
 {{< diagram "sink-format-spec.svg" >}}

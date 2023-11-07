@@ -23,7 +23,7 @@ use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::{RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
     ExplainSinkSchemaFor, ExplainSinkSchemaStatement, ExplainTimestampStatement, Expr,
-    IfExistsBehavior, OrderByExpr, SubscribeOutput,
+    IfExistsBehavior, OrderByExpr, SubscribeOutput, UnresolvedItemName,
 };
 use mz_storage_types::sinks::{
     KafkaSinkAvroFormatState, KafkaSinkConnection, KafkaSinkFormat, StorageSinkConnection,
@@ -437,9 +437,17 @@ pub fn plan_explain_schema(
         mut statement,
     } = explain_schema;
 
+    // Force the sink's name to one that's guaranteed not to exist, by virtue of
+    // being a non-existent item in a schema under the system's control, so that
+    // `plan_create_sink` doesn't complain about the name already existing.
+    statement.name = Some(UnresolvedItemName::qualified(&[
+        "mz_catalog",
+        "mz_explain_schema",
+    ]));
+
     crate::pure::add_materialize_comments(scx.catalog, &mut statement)?;
 
-    match ddl::plan_create_sink(scx, statement, true)? {
+    match ddl::plan_create_sink(scx, statement)? {
         Plan::CreateSink(CreateSinkPlan { sink, .. }) => match sink.connection {
             StorageSinkConnection::Kafka(KafkaSinkConnection {
                 format:
