@@ -96,11 +96,6 @@ def detect_closed_issues(filename: str) -> list[IssueRef]:
                     ]
                     assert len(groups) == 1, f"Expected only 1 element in {groups}"
                     group, issue_id = groups[0]
-                    (
-                        "TimelyDataflow/timely-dataflow"
-                        if issue_match.group("timelydataflow")
-                        else "MaterializeInc/materialize"
-                    )
                     issue_refs.append(
                         IssueRef(
                             GROUP_REPO[group],
