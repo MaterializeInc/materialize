@@ -26,7 +26,7 @@ use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::interval::Interval;
-use mz_repr::adt::numeric::{self, NumericMaxScale};
+use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::adt::regex::Regex as ReprRegex;
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampLike};
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, RelationType, Row, RowArena, ScalarType};
@@ -138,17 +138,18 @@ fn sum_numeric<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    let datums = datums
-        .into_iter()
-        .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_numeric().0)
-        .collect::<Vec<_>>();
-    if datums.is_empty() {
-        Datum::Null
-    } else {
-        let mut cx = numeric::cx_datum();
-        let sum = cx.sum(datums.iter());
-        Datum::from(sum)
+    let mut cx = numeric::cx_datum();
+    let mut sum = Numeric::zero();
+    let mut empty = true;
+    for d in datums {
+        if !d.is_null() {
+            empty = false;
+            cx.add(&mut sum, &d.unwrap_numeric().0);
+        }
+    }
+    match empty {
+        true => Datum::Null,
+        false => Datum::from(sum),
     }
 }
 
