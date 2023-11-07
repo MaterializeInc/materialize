@@ -407,5 +407,4 @@ MATERIALIZED VIEW my_mat_view;
 
 The privileges required to execute this statement are:
 
-- `USAGE` privileges on the schemas that all relations and types in the explainee are contained in.
-- `USAGE` privileges on all types used in the explainee.
+- `USAGE` privileges on the schemas that all relations in the explainee are contained in.
