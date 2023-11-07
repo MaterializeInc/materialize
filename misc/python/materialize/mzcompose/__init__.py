@@ -75,6 +75,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "persist_fast_path_limit": "1000",
     "enable_alter_swap": "true",
     "enable_rename_schema": "true",
+    "enable_persist_txn_tables": "true",
 }
 
 DEFAULT_CRDB_ENVIRONMENT = [
