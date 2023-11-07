@@ -59,7 +59,8 @@ warning box above.
 | `cluster_name`            | [`text`]                     | The name of the cluster with ID `cluster_id` at execution time.                                                                                                                                                                                                               |
 | `transaction_isolation`   | [`text`]                     | The value of the `transaction_isolation` session variable at execution time.                                                                                                                                                                                                  |
 | `execution_timestamp`     | [`uint8`]                    | The logical timestamp at which education was scheduled.                                                                                                                                                                                                                       |
-| `params`                  | [`text list`]                | The parameters with which the statement was executed.                                                                                                                                                                                                                         |
+| `transient_index_id`      | [`text`]                     | The internal index of the compute dataflow created for the query, if any.                                                                                                                                                                                                     |
+| `params`                  | [`text array`]                   | The parameters with which the statement was executed.                                                                                                                                                                                                                         |
 | `began_at`                | [`timestamp with time zone`] | The wall-clock time at which the statement began executing.                                                                                                                                                                                                                   |
 | `finished_at`             | [`timestamp with time zone`] | The wall-clock time at which the statement began executing.                                                                                                                                                                                                                   |
 | `finished_status`         | [`text`]                     | The final status of the statement (e.g., `success`, `canceled`, `errored`, or `aborted`). `aborted` means that Materialize exited before the statement finished executing.                                                                                                    |
@@ -71,7 +72,8 @@ warning box above.
 | `sql`                     | [`text`]                     | The SQL text of the statement.                                                                                                                                                                                                                                                |
 | `prepared_statement_name` | [`text`]                     | The name given by the client library to the prepared statement.                                                                                                                                                                                                               |
 | `session_id`              | [`uuid`]                     | An ID that is unique for each session.                                                                                                                                                                                                                                        |
-| `redacted_sql`            | [`text`]                     | The SQL text of the statement, in a normalized form, with all string and numeric literals hidden.                                                                                                                                                                                                                                                                              |
+| `redacted_sql`            | [`text`]                     | The SQL text of the statement, in a normalized form, with all string and numeric literals hidden.                                                                                                                                                                             |
+| `prepared_at`             | [`timestamp with time zone`] | The time at which the statement was prepared                                                                                                                                                                                                                                  |
 
 ### `mz_cluster_replica_frontiers`
 
@@ -1156,6 +1158,7 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 [`mz_timestamp`]: /sql/types/mz_timestamp
 [`numeric`]: /sql/types/numeric
 [`text`]: /sql/types/text
+[`text array`]: /sql/types/array
 [`text list`]: /sql/types/list
 [`uuid`]: /sql/types/uuid
 [`uint4`]: /sql/types/uint4
