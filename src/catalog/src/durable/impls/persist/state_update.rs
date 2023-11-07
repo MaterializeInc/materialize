@@ -121,6 +121,9 @@ impl StateUpdate {
 }
 
 /// The contents of a single state update.
+///
+/// The entire catalog is serialized as bytes and saved in a single persist shard. We use this
+/// enum to determine what collection something in the catalog belongs to.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StateUpdateKind {
     AuditLog(proto::AuditLogKey, ()),
@@ -148,36 +151,6 @@ pub enum StateUpdateKind {
     SystemObjectMapping(proto::GidMappingKey, proto::GidMappingValue),
     SystemPrivilege(proto::SystemPrivilegesKey, proto::SystemPrivilegesValue),
     Timestamp(proto::TimestampKey, proto::TimestampValue),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) struct StateUpdateKindTag(u64);
-
-impl StateUpdateKind {
-    /// Returns a tag to differentiate between different variants.
-    pub(super) fn tag(&self) -> StateUpdateKindTag {
-        StateUpdateKindTag(match self {
-            StateUpdateKind::AuditLog(_, _) => 1,
-            StateUpdateKind::Cluster(_, _) => 2,
-            StateUpdateKind::ClusterReplica(_, _) => 3,
-            StateUpdateKind::Comment(_, _) => 4,
-            StateUpdateKind::Config(_, _) => 5,
-            StateUpdateKind::Database(_, _) => 6,
-            StateUpdateKind::DefaultPrivilege(_, _) => 7,
-            StateUpdateKind::Epoch(_) => 8,
-            StateUpdateKind::IdAllocator(_, _) => 9,
-            StateUpdateKind::IntrospectionSourceIndex(_, _) => 10,
-            StateUpdateKind::Item(_, _) => 11,
-            StateUpdateKind::Role(_, _) => 12,
-            StateUpdateKind::Schema(_, _) => 13,
-            StateUpdateKind::Setting(_, _) => 14,
-            StateUpdateKind::StorageUsage(_, _) => 15,
-            StateUpdateKind::SystemConfiguration(_, _) => 16,
-            StateUpdateKind::SystemObjectMapping(_, _) => 17,
-            StateUpdateKind::SystemPrivilege(_, _) => 18,
-            StateUpdateKind::Timestamp(_, _) => 19,
-        })
-    }
 }
 
 impl RustType<proto::StateUpdateKind> for StateUpdateKind {
@@ -525,53 +498,6 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                 ),
             },
         )
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct StateUpdateKindTagSchema;
-
-impl Codec for StateUpdateKindTag {
-    type Schema = StateUpdateKindTagSchema;
-
-    fn codec_name() -> String {
-        "StateUpdateTag".to_string()
-    }
-
-    fn encode<B>(&self, buf: &mut B)
-    where
-        B: bytes::BufMut,
-    {
-        let bytes = self.0.to_le_bytes();
-        buf.put(bytes.as_slice());
-    }
-
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
-        assert_eq!(buf.len(), 8, "u64 is 8 bytes");
-        let tag = u64::from_le_bytes(buf[0..8].try_into().expect("asserted above"));
-        Ok(Self(tag))
-    }
-}
-
-impl mz_persist_types::columnar::Schema<StateUpdateKindTag> for StateUpdateKindTagSchema {
-    type Encoder<'a> = SimpleEncoder<'a, StateUpdateKindTag, u64>;
-
-    type Decoder<'a> = SimpleDecoder<'a, StateUpdateKindTag, u64>;
-
-    fn columns(&self) -> DynStructCfg {
-        SimpleSchema::<StateUpdateKindTag, u64>::columns(&())
-    }
-
-    fn decoder<'a>(&self, cols: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String> {
-        SimpleSchema::<StateUpdateKindTag, u64>::decoder(cols, |val, ret| {
-            *ret = StateUpdateKindTag(val);
-        })
-    }
-
-    fn encoder<'a>(&self, cols: ColumnsMut<'a>) -> Result<Self::Encoder<'a>, String> {
-        SimpleSchema::<StateUpdateKindTag, u64>::push_encoder(cols, |col, val| {
-            mz_persist_types::columnar::ColumnPush::<u64>::push(col, val.0)
-        })
     }
 }
 

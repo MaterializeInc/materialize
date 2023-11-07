@@ -27,6 +27,7 @@ use mz_ore::{soft_assert, soft_assert_eq};
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_proto::RustType;
 use mz_repr::Diff;
 use mz_stash::USER_VERSION_KEY;
@@ -39,10 +40,8 @@ use tracing::debug;
 use uuid::Uuid;
 
 use crate::durable::debug::{Collection, DebugCatalogState, Trace};
+use crate::durable::impls::persist::state_update::StateUpdateKindSchema;
 pub use crate::durable::impls::persist::state_update::{StateUpdate, StateUpdateKind};
-use crate::durable::impls::persist::state_update::{
-    StateUpdateKindSchema, StateUpdateKindTag, StateUpdateKindTagSchema,
-};
 use crate::durable::initialize::DEPLOY_GENERATION;
 use crate::durable::objects::{AuditLogKey, DurableType, Snapshot, StorageUsageKey};
 use crate::durable::transaction::TransactionBatch;
@@ -72,9 +71,9 @@ enum Mode {
 #[derive(Debug)]
 pub struct PersistHandle {
     /// Write handle to persist.
-    write_handle: WriteHandle<StateUpdateKindTag, StateUpdateKind, Timestamp, Diff>,
+    write_handle: WriteHandle<StateUpdateKind, (), Timestamp, Diff>,
     /// Read handle to persist.
-    read_handle: ReadHandle<StateUpdateKindTag, StateUpdateKind, Timestamp, Diff>,
+    read_handle: ReadHandle<StateUpdateKind, (), Timestamp, Diff>,
 }
 
 impl PersistHandle {
@@ -95,8 +94,8 @@ impl PersistHandle {
         let (write_handle, read_handle) = persist_client
             .open(
                 shard_id,
-                Arc::new(StateUpdateKindTagSchema::default()),
                 Arc::new(StateUpdateKindSchema::default()),
+                Arc::new(UnitSchema::default()),
                 Diagnostics {
                     shard_name: "catalog".to_string(),
                     handle_purpose: "durable catalog state".to_string(),
@@ -273,10 +272,10 @@ impl PersistHandle {
         );
         snapshot
             .into_iter()
-            .map(|((tag, kind), ts, diff)| {
-                let kind = kind.expect("kind decoding error");
-                soft_assert_eq!(tag.expect("tag decoding error"), kind.tag());
-                StateUpdate { kind, ts, diff }
+            .map(|((kind, _unit), ts, diff)| StateUpdate {
+                kind: kind.expect("kind decoding error"),
+                ts,
+                diff,
             })
             .sorted_by(|a, b| Ord::cmp(&b.ts, &a.ts))
     }
@@ -305,11 +304,13 @@ impl PersistHandle {
         } else {
             Vec::new()
         };
-        snapshot.into_iter().map(|((tag, kind), ts, diff)| {
-            let kind = kind.expect("kind decoding error");
-            soft_assert_eq!(tag.expect("tag decoding error"), kind.tag());
-            StateUpdate { kind, ts, diff }
-        })
+        snapshot
+            .into_iter()
+            .map(|((kind, _unit), ts, diff)| StateUpdate {
+                kind: kind.expect("kind decoding error"),
+                ts,
+                diff,
+            })
     }
 
     /// Get value of config `key`.
@@ -356,7 +357,7 @@ impl PersistHandle {
     ) -> Result<(), CatalogError> {
         let updates = updates
             .into_iter()
-            .map(|update| ((update.kind.tag(), update.kind), update.ts, update.diff));
+            .map(|update| ((update.kind, ()), update.ts, update.diff));
         match self
             .write_handle
             .compare_and_append(
