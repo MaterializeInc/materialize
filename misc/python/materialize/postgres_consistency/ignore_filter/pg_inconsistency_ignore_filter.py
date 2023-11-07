@@ -333,6 +333,9 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         if "unit 'invalid_value_123' not recognized" in mz_error_msg:
             return YesIgnore("#22957")
 
+        if "invalid time zone" in mz_error_msg:
+            return YesIgnore("#22984")
+
         if _error_message_is_about_zero_or_value_ranges(mz_error_msg):
             return YesIgnore("Caused by a different precision")
 
