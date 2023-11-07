@@ -20,6 +20,12 @@ from typing import Any, Dict, List, Optional
 import dbt.exceptions
 from dbt.adapters.base.impl import AdapterConfig, ConstraintSupport
 from dbt.adapters.base.meta import available
+from dbt.adapters.capability import (
+    CapabilityDict,
+    CapabilitySupport,
+    Support,
+    Capability,
+)
 from dbt.adapters.materialize.connections import MaterializeConnectionManager
 from dbt.adapters.materialize.relation import MaterializeRelation
 from dbt.adapters.postgres import PostgresAdapter
@@ -78,6 +84,13 @@ class MaterializeAdapter(PostgresAdapter):
         ConstraintType.primary_key: ConstraintSupport.NOT_SUPPORTED,
         ConstraintType.foreign_key: ConstraintSupport.NOT_SUPPORTED,
     }
+
+    _capabilities = CapabilityDict(
+        {
+            Capability.SchemaMetadataByRelations: CapabilitySupport(support=Support.Full),
+            Capability.TableLastModifiedMetadata: CapabilitySupport(support=Support.Full),
+        }
+    )
 
     @classmethod
     def is_cancelable(cls) -> bool:
