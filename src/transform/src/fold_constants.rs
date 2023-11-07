@@ -432,10 +432,10 @@ impl FoldConstants {
         rows: &[(Row, Diff)],
         limit: Option<usize>,
     ) -> Option<Result<Vec<(Row, Diff)>, EvalError>> {
-        // Build a map from `group_key` to `Vec<Vec<an, ..., a1>>)`,
-        // where `an` is the input to the nth aggregate function in
-        // `aggregates`.
-        let mut groups = BTreeMap::new();
+        // A list of all keys, independent of the aggregates.
+        let mut keys = BTreeSet::new();
+        // For each aggregate, a map from keys to a list of (val, diff) pairs.
+        let mut groups = vec![BTreeMap::new(); aggregates.len()];
         let temp_storage2 = RowArena::new();
         let mut row_buf = Row::default();
         let mut limit_remaining = limit.unwrap_or(usize::MAX);
@@ -463,25 +463,23 @@ impl FoldConstants {
                 .map(|e| e.eval(&datums, &temp_storage2))
                 .collect::<Result<Vec<_>, _>>()
             {
-                Ok(key) => key,
+                Ok(key) => std::rc::Rc::new(key),
                 Err(e) => return Some(Err(e)),
             };
-            let val = match aggregates
-                .iter()
-                .map(|agg| {
-                    row_buf
-                        .packer()
-                        .extend([agg.expr.eval(&datums, &temp_storage)?]);
-                    Ok::<_, EvalError>(row_buf.clone())
-                })
-                .collect::<Result<Vec<_>, _>>()
-            {
-                Ok(val) => val,
-                Err(e) => return Some(Err(e)),
-            };
-            let entry = groups.entry(key).or_insert_with(Vec::new);
-            for _ in 0..*diff {
-                entry.push(val.clone());
+            keys.insert((*key).clone());
+            for (aggregate, group) in aggregates.iter().zip(groups.iter_mut()) {
+                let entry = group.entry(key.clone()).or_insert_with(Vec::new);
+                row_buf
+                    .packer()
+                    .extend([aggregate.expr.eval(&datums, &temp_storage).ok()?]);
+                entry.push((row_buf.clone(), *diff));
+            }
+        }
+
+        // Consolidate each group, in the event that there are like records.
+        for group in groups.iter_mut() {
+            for vals in group.values_mut() {
+                differential_dataflow::consolidation::consolidate(vals);
             }
         }
 
@@ -490,33 +488,34 @@ impl FoldConstants {
         // `Vec<Vec<k1, ..., kn, r1, ..., rn>>`
         // where kn is the nth column of the key and rn is the
         // result of the nth aggregate function for that group.
-        let new_rows = groups
-            .into_iter()
-            .map({
-                let mut row_buf = Row::default();
-                move |(key, vals)| {
-                    let temp_storage = RowArena::new();
-                    row_buf.packer().extend(key.into_iter().chain(
-                        aggregates.iter().enumerate().map(|(i, agg)| {
-                            if agg.distinct {
-                                agg.func.eval(
-                                    vals.iter()
-                                        .map(|val| val[i].unpack_first())
-                                        .collect::<BTreeSet<_>>(),
-                                    &temp_storage,
-                                )
-                            } else {
-                                agg.func.eval(
-                                    vals.iter().map(|val| val[i].unpack_first()),
-                                    &temp_storage,
-                                )
-                            }
-                        }),
-                    ));
-                    (row_buf.clone(), 1)
-                }
+        let mut row_buf = Row::default();
+        let new_rows = keys
+            .iter()
+            .map(|key| {
+                let temp_storage = RowArena::new();
+                row_buf.packer().extend(key.into_iter().cloned().chain(
+                    groups.iter_mut().zip(aggregates).map(|(group, aggr)| {
+                        let values = &group[key];
+                        if aggr.distinct {
+                            aggr.func.eval(
+                                values.iter().map(|(val, _count)| val.unpack_first()),
+                                &temp_storage,
+                            )
+                        } else {
+                            aggr.func.eval(
+                                values.iter().flat_map(|(val, count)| {
+                                    std::iter::repeat(val.unpack_first())
+                                        .take((*count).try_into().unwrap())
+                                }),
+                                &temp_storage,
+                            )
+                        }
+                    }),
+                ));
+                (row_buf.clone(), 1)
             })
-            .collect();
+            .collect::<Vec<_>>();
+
         Some(Ok(new_rows))
     }
 
