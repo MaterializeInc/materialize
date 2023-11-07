@@ -723,7 +723,7 @@ pub fn plan_create_source(
                 group_id_prefix,
                 environment_id: scx.catalog.config().environment_id.to_string(),
                 metadata_columns,
-                connection_options: Some(connection_options),
+                connection_options,
             };
 
             let connection = GenericSourceConnection::Kafka(connection);
@@ -2646,7 +2646,7 @@ fn kafka_sink_builder(
         key_desc_and_indices,
         value_desc,
         retention,
-        connection_options: Some(connection_options),
+        connection_options,
     }))
 }
 

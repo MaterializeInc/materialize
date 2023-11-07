@@ -1407,7 +1407,7 @@ pub struct KafkaSourceConnection<C: ConnectionAccess = InlinedConnection> {
     pub metadata_columns: Vec<(String, KafkaMetadataKind)>,
     /// Additional options that need to be set on the connection whenever it's
     /// inlined.
-    pub connection_options: Option<BTreeMap<String, StringOrSecret>>,
+    pub connection_options: BTreeMap<String, StringOrSecret>,
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<KafkaSourceConnection, R>
@@ -1426,7 +1426,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSourceConnection, R>
         } = self;
 
         let mut connection = r.resolve_connection(connection).unwrap_kafka();
-        connection_options.map(|options| connection.options.extend(options));
+        connection.options.extend(connection_options);
 
         KafkaSourceConnection {
             connection,
@@ -1436,7 +1436,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSourceConnection, R>
             group_id_prefix,
             environment_id,
             metadata_columns,
-            connection_options: None,
+            connection_options: BTreeMap::default(),
         }
     }
 }
@@ -1559,11 +1559,7 @@ where
                     group_id_prefix,
                     environment_id,
                     metadata_columns,
-                    connection_options: if connection_options.is_empty() {
-                        None
-                    } else {
-                        Some(connection_options)
-                    },
+                    connection_options,
                 },
             )
             .boxed()
@@ -1588,10 +1584,11 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection<InlinedConne
                     kind: Some(kind.into_proto()),
                 })
                 .collect(),
-            connection_options: match &self.connection_options {
-                None => BTreeMap::default(),
-                Some(o) => o.iter().map(|(k, v)| (k.clone(), v.into_proto())).collect(),
-            },
+            connection_options: self
+                .connection_options
+                .iter()
+                .map(|(k, v)| (k.clone(), v.into_proto()))
+                .collect(),
         }
     }
 
@@ -1621,19 +1618,11 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection<InlinedConne
                 }
             },
             metadata_columns,
-            connection_options: {
-                if proto.connection_options.is_empty() {
-                    None
-                } else {
-                    Some(
-                        proto
-                            .connection_options
-                            .into_iter()
-                            .map(|(k, v)| StringOrSecret::from_proto(v).map(|v| (k, v)))
-                            .collect::<Result<_, _>>()?,
-                    )
-                }
-            },
+            connection_options: proto
+                .connection_options
+                .into_iter()
+                .map(|(k, v)| StringOrSecret::from_proto(v).map(|v| (k, v)))
+                .collect::<Result<_, _>>()?,
         })
     }
 }
