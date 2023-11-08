@@ -25,6 +25,7 @@ from materialize.parallel_workload.action import (
     BackupRestoreAction,
     CancelAction,
     KillAction,
+    action_lists,
     ddl_action_list,
     dml_nontrans_action_list,
     fetch_action_list,
@@ -241,7 +242,7 @@ def run(
     else:
         raise ValueError(f"Unknown scenario {scenario}")
 
-    num_queries = 0
+    num_queries = Counter()
     try:
         while time.time() < end_time:
             for thread in threads:
@@ -253,12 +254,14 @@ def run(
             print(
                 "QPS: "
                 + " ".join(
-                    f"{worker.num_queries / REPORT_TIME:05.1f}" for worker in workers
+                    f"{worker.num_queries.total() / REPORT_TIME:05.1f}"
+                    for worker in workers
                 )
             )
             for worker in workers:
-                num_queries += worker.num_queries
-                worker.num_queries = 0
+                for action in worker.num_queries.elements():
+                    num_queries[action] += worker.num_queries[action]
+                worker.num_queries.clear()
     except KeyboardInterrupt:
         print("Keyboard interrupt, exiting")
         for worker in workers:
@@ -298,9 +301,19 @@ def run(
         for count in counter.values():
             num_failures += count
 
-    failed = 100.0 * num_failures / num_queries if num_queries else 0
-    print(f"Queries executed: {num_queries} ({failed:.0f}% failed)")
-    print("Error statistics:")
+    total_queries = num_queries.total()
+    failed = 100.0 * num_failures / total_queries if total_queries else 0
+    print(f"Queries executed: {total_queries} ({failed:.0f}% failed)")
+    print("--- Action statistics:")
+    for action_list in action_lists:
+        text = ", ".join(
+            [
+                f"{action_class.__name__}: {num_queries[action_class]}"
+                for action_class in action_list.action_classes
+            ]
+        )
+        print(f"  {text}")
+    print("--- Error statistics:")
     for error, counter in ignored_errors.items():
         text = ", ".join(
             f"{action_class.__name__}: {count}"

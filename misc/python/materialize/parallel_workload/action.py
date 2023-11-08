@@ -368,11 +368,6 @@ class CommentAction(Action):
         exe.execute(query)
 
 
-class SleepAction(Action):
-    def run(self, exe: Executor) -> None:
-        time.sleep(1)
-
-
 class CreateIndexAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
@@ -1358,7 +1353,6 @@ dml_nontrans_action_list = ActionList(
 
 ddl_action_list = ActionList(
     [
-        (SleepAction, 100),  # DDLs easily starve Mz, don't run them too often
         (CreateIndexAction, 2),
         (DropIndexAction, 1),
         (CreateTableAction, 2),
@@ -1397,3 +1391,11 @@ ddl_action_list = ActionList(
     ],
     autocommit=True,
 )
+
+action_lists = [
+    read_action_list,
+    fetch_action_list,
+    write_action_list,
+    dml_nontrans_action_list,
+    ddl_action_list,
+]

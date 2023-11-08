@@ -26,7 +26,7 @@ class Worker:
     actions: list[Action]
     weights: list[float]
     end_time: float
-    num_queries: int
+    num_queries: Counter[type[Action]]
     autocommit: bool
     system: bool
     exe: Executor | None
@@ -47,7 +47,7 @@ class Worker:
         self.actions = actions
         self.weights = weights
         self.end_time = end_time
-        self.num_queries = 0
+        self.num_queries = Counter()
         self.autocommit = autocommit
         self.system = system
         self.ignored_errors = defaultdict(Counter)
@@ -67,7 +67,7 @@ class Worker:
 
         while time.time() < self.end_time:
             action = self.rng.choices(self.actions, self.weights)[0]
-            self.num_queries += 1
+            self.num_queries[type(action)] += 1
             try:
                 if self.exe.rollback_next:
                     try:
