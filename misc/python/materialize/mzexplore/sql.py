@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import functools
 import logging
 import ssl
 import subprocess
@@ -16,6 +17,7 @@ from typing import Any, cast
 
 import pg8000
 import sqlparse
+from pg8000.exceptions import InterfaceError
 from pg8000.native import literal
 
 from materialize.mzexplore.common import resource_path
@@ -117,3 +119,62 @@ def try_mzfmt(sql: str) -> str:
         return result.stdout.decode("utf-8").rstrip()
     else:
         return sql.rstrip().rstrip(";")
+
+
+def identifier(s: str) -> str:
+    """
+    A version of pg8000.native.identifier (1) that is _ACTUALLY_ compatible with
+    the Postgres code (2).
+
+    1. https://github.com/tlocke/pg8000/blob/017959e97751c35a3d58bc8bd5722cee5c10b656/pg8000/converters.py#L739-L761
+    2. https://github.com/postgres/postgres/blob/b0f7dd915bca6243f3daf52a81b8d0682a38ee3b/src/backend/utils/adt/ruleutils.c#L11968-L12050
+    """
+    if not isinstance(s, str):
+        raise InterfaceError("identifier must be a str")
+
+    if len(s) == 0:
+        raise InterfaceError("identifier must be > 0 characters in length")
+
+    # Look for characters that require quotation.
+    def is_alpha(c: str) -> bool:
+        return ord(c) >= ord("a") and ord(c) <= ord("z") or c == "_"
+
+    def is_alphanum(c: str) -> bool:
+        return is_alpha(c) or ord(c) >= ord("0") and ord(c) <= ord("9")
+
+    quote = not (is_alpha(s[0]))
+
+    for c in s[1:]:
+        if not (is_alphanum(c)):
+            if c == "\u0000":
+                raise InterfaceError(
+                    "identifier cannot contain the code zero character"
+                )
+            quote = True
+
+        if quote:
+            break
+
+    # Even if no speciall characters can be found we still want to quote
+    # keywords.
+    if s.upper() in keywords():
+        quote = True
+
+    if quote:
+        s = s.replace('"', '""')
+        return f'"{s}"'
+    else:
+        return s
+
+
+@functools.lru_cache(maxsize=1)
+def keywords() -> set[str]:
+    """
+    Return a list of keywords reserved by Materialize.
+    """
+    with resource_path("sql/keywords.txt").open() as f:
+        return set(
+            line.strip().upper()
+            for line in f.readlines()
+            if not line.startswith("#") and len(line.strip()) > 0
+        )
