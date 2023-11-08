@@ -25,6 +25,7 @@ from materialize.parallel_workload.action import (
     BackupRestoreAction,
     CancelAction,
     KillAction,
+    StatisticsAction,
     action_lists,
     ddl_action_list,
     dml_nontrans_action_list,
@@ -62,13 +63,14 @@ def run(
     scenario: Scenario,
     num_threads: int | None,
     naughty_identifiers: bool,
+    fast_startup: bool,
     composition: Composition | None,
 ) -> None:
     num_threads = num_threads or os.cpu_count() or 10
     random.seed(seed)
 
     print(
-        f"+++ Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity.value} --scenario={scenario.value} {'--naughty-identifiers ' if naughty_identifiers else ''}(--host={host})"
+        f"+++ Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity.value} --scenario={scenario.value} {'--naughty-identifiers ' if naughty_identifiers else ''} {'--fast-startup' if fast_startup else ''}(--host={host})"
     )
     initialize_logging()
 
@@ -78,7 +80,7 @@ def run(
 
     rng = random.Random(random.randrange(SEED_RANGE))
     database = Database(
-        rng, seed, host, ports, complexity, scenario, naughty_identifiers
+        rng, seed, host, ports, complexity, scenario, naughty_identifiers, fast_startup
     )
 
     system_conn = pg8000.connect(
@@ -242,6 +244,26 @@ def run(
     else:
         raise ValueError(f"Unknown scenario {scenario}")
 
+    if False:  # sanity check for debugging
+        worker_rng = random.Random(rng.randrange(SEED_RANGE))
+        worker = Worker(
+            worker_rng,
+            [StatisticsAction(worker_rng, composition)],
+            [1],
+            end_time,
+            autocommit=True,
+            system=True,
+            composition=composition,
+        )
+        workers.append(worker)
+        thread = threading.Thread(
+            name="statistics",
+            target=worker.run,
+            args=(host, ports["mz_system"], "mz_system", database),
+        )
+        thread.start()
+        threads.append(thread)
+
     num_queries = Counter()
     try:
         while time.time() < end_time:
@@ -347,6 +369,11 @@ def parse_common_args(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Whether to use naughty strings as identifiers, makes the queries unreadable",
     )
+    parser.add_argument(
+        "--fast-startup",
+        action="store_true",
+        help="Whether to initialize expensive parts like SQLsmith, sources, sinks (for fast local testing, reduces coverage)",
+    )
 
 
 def main() -> int:
@@ -395,6 +422,7 @@ def main() -> int:
         Scenario(args.scenario),
         args.threads,
         args.naughty_identifiers,
+        args.fast_startup,
         composition=None,  # only works in mzcompose
     )
     return 0

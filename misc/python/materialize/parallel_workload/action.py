@@ -11,6 +11,7 @@ import datetime
 import json
 import random
 import time
+import urllib.parse
 from typing import TYPE_CHECKING
 
 import pg8000
@@ -20,6 +21,7 @@ from pg8000.native import identifier
 import materialize.parallel_workload.database
 from materialize.data_ingest.data_type import NUMBER_TYPES, Text, TextTextMap
 from materialize.data_ingest.query_error import QueryError
+from materialize.data_ingest.row import Operation
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.minio import MINIO_BLOB_URI
 from materialize.parallel_workload.database import (
@@ -156,12 +158,18 @@ class SelectAction(Action):
     def run(self, exe: Executor) -> None:
         obj = self.rng.choice(exe.db.db_objects())
         column = self.rng.choice(obj.columns)
-        obj2 = self.rng.choice(exe.db.db_objects())
+        obj2 = self.rng.choice(exe.db.db_objects_without_views())
         obj_name = str(obj)
         obj2_name = str(obj2)
-        columns = [c for c in obj2.columns if c.data_type == column.data_type]
+        columns = [
+            c
+            for c in obj2.columns
+            if c.data_type == column.data_type and c.data_type != TextTextMap
+        ]
 
-        if obj_name != obj2_name and columns:
+        join = obj_name != obj2_name and obj not in exe.db.views and columns
+
+        if join:
             all_columns = list(obj.columns) + list(obj2.columns)
         else:
             all_columns = obj.columns
@@ -187,13 +195,9 @@ class SelectAction(Action):
 
         query = f"SELECT {expressions} FROM {obj_name} "
 
-        if obj_name != obj2_name and columns:
+        if join:
             column2 = self.rng.choice(columns)
-            query += f"JOIN {obj2_name} ON "
-            if column.data_type == TextTextMap:
-                query += f"map_length({column}) = map_length({column2})"
-            else:
-                query += f"{column} = {column2}"
+            query += f"JOIN {obj2_name} ON {column} = {column2}"
 
         query += " LIMIT 1"
 
@@ -229,13 +233,16 @@ class SQLsmithAction(Action):
         return result
 
     def run(self, exe: Executor) -> None:
+        if exe.db.fast_startup:
+            return
+
         if not self.queries:
             with exe.db.lock:
                 self.composition.silent = True
                 try:
                     result = self.composition.run(
                         "sqlsmith",
-                        "--max-joins=1",
+                        "--max-joins=0",
                         "--target=host=materialized port=6875 dbname=materialize user=materialize",
                         "--read-state",
                         "--dry-run",
@@ -267,36 +274,53 @@ class InsertAction(Action):
             for t in exe.db.tables:
                 if t.table_id == exe.insert_table:
                     table = t
+                    if table.num_rows >= MAX_ROWS:
+                        exe.commit() if self.rng.choice(
+                            [True, False]
+                        ) else exe.rollback()
+                        table = None
                     break
             else:
                 exe.commit() if self.rng.choice([True, False]) else exe.rollback()
         if not table:
-            table = self.rng.choice(
-                [table for table in exe.db.tables if table.num_rows <= MAX_ROWS]
-            )
+            tables = [table for table in exe.db.tables if table.num_rows < MAX_ROWS]
+            if not tables:
+                return
+            table = self.rng.choice(tables)
 
         column_names = ", ".join(column.name(True) for column in table.columns)
-        column_values = ", ".join(
-            column.value(self.rng, True) for column in table.columns
-        )
-        query = f"INSERT INTO {table} ({column_names}) VALUES ({column_values})"
+        column_values = []
+        max_rows = min(100, MAX_ROWS - table.num_rows)
+        for i in range(self.rng.randrange(1, max_rows + 1)):
+            column_values.append(
+                ", ".join(column.value(self.rng, True) for column in table.columns)
+            )
+        all_column_values = ", ".join(f"({v})" for v in column_values)
+        query = f"INSERT INTO {table} ({column_names}) VALUES {all_column_values}"
         exe.execute(query)
+        table.num_rows += len(column_values)
         exe.insert_table = table.table_id
-        table.num_rows += 1
 
 
 class SourceInsertAction(Action):
     def run(self, exe: Executor) -> None:
         with exe.db.lock:
-            sources = exe.db.kafka_sources + exe.db.postgres_sources
+            sources = [
+                source
+                for source in exe.db.kafka_sources + exe.db.postgres_sources
+                if source.num_rows < MAX_ROWS
+            ]
             if not sources:
                 return
             source = self.rng.choice(sources)
         with source.lock:
             transaction = next(source.generator)
-            source.num_rows += sum(
-                [len(row_list.rows) for row_list in transaction.row_lists]
-            )
+            for row_list in transaction.row_lists:
+                for row in row_list.rows:
+                    if row.operation == Operation.INSERT:
+                        source.num_rows += 1
+                    elif row.operation == Operation.DELETE:
+                        source.num_rows -= 1
             source.executor.run(transaction)
 
 
@@ -337,22 +361,19 @@ class DeleteAction(Action):
         table = self.rng.choice(exe.db.tables)
         query = f"DELETE FROM {table}"
         if self.rng.random() < 0.95:
-            column = self.rng.choice(table.columns)
-            query += " WHERE "
+            query += " WHERE true"
             # TODO: Generic expression generator
-            if column.data_type == TextTextMap:
-                query += f"map_length({column.name(True)}) = map_length({column.value(self.rng, True)})"
-            else:
-                query += f"{column.name(True)} = {column.value(self.rng, True)}"
-            exe.execute(query)
-        else:
-            exe.execute(query)
-            # Only after a commit we can be sure that the table is empty again,
-            # so for now have to trigger them manually here.
-            if self.rng.choice([True, False]):
-                exe.commit()
-                with exe.db.lock:
-                    table.num_rows = 0
+            for column in table.columns:
+                if column.data_type == TextTextMap:
+                    query += f" AND map_length({column.name(True)}) = map_length({column.value(self.rng, True)})"
+                else:
+                    query += (
+                        f" AND {column.name(True)} = {column.value(self.rng, True)}"
+                    )
+        exe.execute(query)
+        exe.commit()
+        result = exe.cur.rowcount
+        table.num_rows -= result
 
 
 class CommentAction(Action):
@@ -375,18 +396,17 @@ class CreateIndexAction(Action):
         ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> None:
-        tables_views: list[DBObject] = [*exe.db.tables, *exe.db.views]
-        table = self.rng.choice(tables_views)
-        columns = self.rng.sample(table.columns, len(table.columns))
+        obj = self.rng.choice(exe.db.db_objects())
+        columns = self.rng.sample(obj.columns, len(obj.columns))
         columns_str = "_".join(column.name() for column in columns)
         # columns_str may exceed 255 characters, so it is converted to a positive number with hash
-        index_name = f"idx_{table.name()}_{abs(hash(columns_str))}"
+        index_name = f"idx_{obj.name()}_{abs(hash(columns_str))}"
         index_elems = []
         for column in columns:
             order = self.rng.choice(["ASC", "DESC"])
             index_elems.append(f"{column.name(True)} {order}")
         index_str = ", ".join(index_elems)
-        query = f"CREATE INDEX {identifier(index_name)} ON {table} ({index_str})"
+        query = f"CREATE INDEX {identifier(index_name)} ON {obj} ({index_str})"
         exe.execute(query)
         with exe.db.lock:
             exe.db.indexes.add(index_name)
@@ -615,7 +635,7 @@ class TransactionIsolationAction(Action):
 
 class CommitRollbackAction(Action):
     def run(self, exe: Executor) -> None:
-        if self.rng.choice([True, False]):
+        if self.rng.random() < 0.7:
             exe.commit()
         else:
             exe.rollback()
@@ -1261,7 +1281,7 @@ class HttpPostAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = super().errors_to_ignore(exe)
         if exe.db.scenario == Scenario.Rename:
-            result.extend(["POST failed: 404, no object was found at the path"])
+            result.extend(["404: no object was found at the path"])
         return result
 
     def run(self, exe: Executor) -> None:
@@ -1269,16 +1289,21 @@ class HttpPostAction(Action):
             if not exe.db.webhook_sources:
                 return
 
-            source = self.rng.choice(exe.db.webhook_sources)
-            url = f"http://{exe.db.host}:{exe.db.ports['http']}/api/webhook/{source.schema.db.name()}/{source.schema.name()}/{source.name()}"
+            sources = [
+                source
+                for source in exe.db.webhook_sources
+                if source.num_rows < MAX_ROWS
+            ]
+            if not sources:
+                return
+            source = self.rng.choice(sources)
+            url = f"http://{exe.db.host}:{exe.db.ports['http']}/api/webhook/{urllib.parse.quote(source.schema.db.name(), safe='')}/{urllib.parse.quote(source.schema.name(), safe='')}/{urllib.parse.quote(source.name(), safe='')}"
 
             payload = source.body_format.to_data_type().random_value(self.rng)
 
             header_fields = source.explicit_include_headers
             if source.include_headers:
-                header_fields.extend(
-                    ["x-event-type", "signature", "x-mz-api-key"]
-                )
+                header_fields.extend(["x-event-type", "signature", "x-mz-api-key"])
 
             headers = {
                 header: f"{datetime.datetime.now()}"
@@ -1296,13 +1321,28 @@ class HttpPostAction(Action):
                     url, data=payload.encode("utf-8"), headers=headers
                 )
                 if result.status_code != 200:
-                    raise QueryError(
-                        f"POST failed: {result.status_code}, {result.text}", log
-                    )
+                    raise QueryError(f"{result.status_code}: {result.text}", log)
             except (requests.exceptions.ConnectionError):
                 # Expected when Mz is killed
                 if exe.db.scenario not in (Scenario.Kill, Scenario.BackupRestore):
                     raise
+
+
+class StatisticsAction(Action):
+    def run(self, exe: Executor) -> None:
+        for typ, objs in [
+            ("tables", exe.db.tables),
+            ("views", exe.db.views),
+            ("kafka_sources", exe.db.kafka_sources),
+            ("postgres_sources", exe.db.postgres_sources),
+            ("webhook_sources", exe.db.webhook_sources),
+        ]:
+            counts = []
+            for t in objs:
+                exe.execute(f"SELECT count(*) FROM {t}")
+                counts.append(str(exe.cur.fetchall()[0][0]))
+            print(f"{typ}: {' '.join(counts)}")
+            time.sleep(10)
 
 
 class ActionList:
@@ -1323,7 +1363,7 @@ read_action_list = ActionList(
         (SelectAction, 100),
         (SQLsmithAction, 30),
         # (SetClusterAction, 1),  # SET cluster cannot be called in an active transaction
-        (CommitRollbackAction, 1),
+        (CommitRollbackAction, 30),
         (ReconnectAction, 1),
     ],
     autocommit=False,
@@ -1340,10 +1380,10 @@ fetch_action_list = ActionList(
 
 write_action_list = ActionList(
     [
-        (InsertAction, 100),
+        (InsertAction, 50),
         # (SetClusterAction, 1),  # SET cluster cannot be called in an active transaction
         (HttpPostAction, 50),
-        (CommitRollbackAction, 1),
+        (CommitRollbackAction, 100),
         (ReconnectAction, 1),
         (SourceInsertAction, 100),
     ],

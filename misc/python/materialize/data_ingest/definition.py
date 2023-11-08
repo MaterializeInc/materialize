@@ -22,6 +22,7 @@ rng = random.Random()
 class Records(Enum):
     ALL = 0  #  Only applies to DELETE operations
     ONE = 1
+    HUNDRED = 100
     SOME = 1_000
     MANY = 1_000_000
 

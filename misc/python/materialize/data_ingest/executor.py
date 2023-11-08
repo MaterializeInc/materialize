@@ -176,7 +176,6 @@ class KafkaExecutor(Executor):
         )
         for topic, f in fs.items():
             f.result()
-            print(f"Topic {topic} created")
 
         # NOTE: this _could_ be refactored, but since we are fairly certain at
         # this point there will be exactly one topic it should be fine.

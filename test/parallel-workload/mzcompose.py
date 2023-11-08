@@ -91,6 +91,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         Scenario(args.scenario),
         args.threads,
         args.naughty_identifiers,
+        args.fast_startup,
         c,
     )
     # TODO: Only ignore errors that will be handled by parallel-workload, not others

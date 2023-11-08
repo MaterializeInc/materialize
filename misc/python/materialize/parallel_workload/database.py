@@ -24,6 +24,7 @@ from materialize.data_ingest.data_type import (
     Text,
     TextTextMap,
 )
+from materialize.data_ingest.definition import Insert
 from materialize.data_ingest.executor import KafkaExecutor, PgExecutor
 from materialize.data_ingest.field import Field
 from materialize.data_ingest.transaction import Transaction
@@ -35,7 +36,7 @@ from materialize.util import naughty_strings
 
 MAX_COLUMNS = 100
 MAX_INCLUDE_HEADERS = 5
-MAX_ROWS = 1000
+MAX_ROWS = 100
 MAX_CLUSTERS = 10
 MAX_CLUSTER_REPLICAS = 4
 MAX_DBS = 10
@@ -399,9 +400,7 @@ class WebhookSource(DBObject):
                 "map_length(HEADERS) = map_length(HEADERS)",
             ]
             if "timestamp" in self.explicit_include_headers:
-                exprs.append(
-                    "(headers->'timestamp'::text)::timestamp + INTERVAL '10s' >= now()"
-                )
+                exprs.append("(headers->'timestamp'::text)::timestamp <= now()")
             self.check_expr = " AND ".join(
                 rng.sample(exprs, k=rng.randint(1, len(exprs)))
             )
@@ -476,7 +475,12 @@ class KafkaSource(DBObject):
         self.executor = KafkaExecutor(
             self.source_id, ports, fields, schema.db.name(), schema.name()
         )
-        self.generator = rng.choice(list(WORKLOADS))(None).generate(fields)
+        workload = rng.choice(list(WORKLOADS))(None)
+        for transaction_def in workload.cycle:
+            for definition in transaction_def.operations:
+                if type(definition) == Insert and definition.count > MAX_ROWS:
+                    definition.count = 100
+        self.generator = workload.generate(fields)
         self.lock = threading.Lock()
 
     def name(self) -> str:
@@ -724,6 +728,7 @@ class Database:
     lock: threading.Lock
     seed: str
     sqlsmith_state: str
+    fast_startup: bool
 
     def __init__(
         self,
@@ -734,6 +739,7 @@ class Database:
         complexity: Complexity,
         scenario: Scenario,
         naughty_identifiers: bool,
+        fast_startup: bool,
     ):
         global NAUGHTY_IDENTIFIERS
         self.host = host
@@ -742,6 +748,7 @@ class Database:
         self.scenario = scenario
         self.seed = seed
         NAUGHTY_IDENTIFIERS = naughty_identifiers
+        self.fast_startup = fast_startup
 
         self.dbs = [DB(seed, i) for i in range(rng.randint(1, MAX_INITIAL_DBS))]
         self.db_id = len(self.dbs)
@@ -786,38 +793,42 @@ class Database:
             for i in range(rng.randint(0, MAX_INITIAL_WEBHOOK_SOURCES))
         ]
         self.webhook_source_id = len(self.webhook_sources)
-        self.kafka_sources = [
-            KafkaSource(
-                i,
-                rng.choice(self.clusters),
-                rng.choice(self.schemas),
-                ports,
-                rng,
-            )
-            for i in range(rng.randint(0, MAX_INITIAL_KAFKA_SOURCES))
-        ]
+        self.kafka_sources = []
+        self.postgres_sources = []
+        self.kafka_sinks = []
+        if not self.fast_startup:
+            self.kafka_sources = [
+                KafkaSource(
+                    i,
+                    rng.choice(self.clusters),
+                    rng.choice(self.schemas),
+                    ports,
+                    rng,
+                )
+                for i in range(rng.randint(0, MAX_INITIAL_KAFKA_SOURCES))
+            ]
+            self.postgres_sources = [
+                PostgresSource(
+                    i,
+                    rng.choice(self.clusters),
+                    rng.choice(self.schemas),
+                    ports,
+                    rng,
+                )
+                for i in range(rng.randint(0, MAX_INITIAL_POSTGRES_SOURCES))
+            ]
+            self.kafka_sinks = [
+                KafkaSink(
+                    i,
+                    rng.choice(self.clusters),
+                    rng.choice(self.schemas),
+                    rng.choice(self.db_objects_without_views()),
+                    rng,
+                )
+                for i in range(rng.randint(0, MAX_INITIAL_KAFKA_SINKS))
+            ]
         self.kafka_source_id = len(self.kafka_sources)
-        self.postgres_sources = [
-            PostgresSource(
-                i,
-                rng.choice(self.clusters),
-                rng.choice(self.schemas),
-                ports,
-                rng,
-            )
-            for i in range(rng.randint(0, MAX_INITIAL_POSTGRES_SOURCES))
-        ]
         self.postgres_source_id = len(self.postgres_sources)
-        self.kafka_sinks = [
-            KafkaSink(
-                i,
-                rng.choice(self.clusters),
-                rng.choice(self.schemas),
-                rng.choice(self.db_objects_without_views()),
-                rng,
-            )
-            for i in range(rng.randint(0, MAX_INITIAL_KAFKA_SINKS))
-        ]
         self.kafka_sink_id = len(self.kafka_sinks)
         self.lock = threading.Lock()
         self.sqlsmith_state = ""
@@ -875,27 +886,29 @@ class Database:
         for relation in self:
             relation.create(exe)
 
-        result = composition.run(
-            "sqlsmith",
-            "--target=host=materialized port=6875 dbname=materialize user=materialize",
-            "--exclude-catalog",
-            "--dump-state",
-            capture=True,
-            capture_stderr=True,
-            rm=True,
-        )
-        self.sqlsmith_state = result.stdout
+        if not self.fast_startup:
+            result = composition.run(
+                "sqlsmith",
+                "--target=host=materialized port=6875 dbname=materialize user=materialize",
+                "--exclude-catalog",
+                "--dump-state",
+                capture=True,
+                capture_stderr=True,
+                rm=True,
+            )
+            self.sqlsmith_state = result.stdout
 
     def update_sqlsmith_state(self, composition: Composition) -> None:
-        result = composition.run(
-            "sqlsmith",
-            "--target=host=materialized port=6875 dbname=materialize user=materialize",
-            "--exclude-catalog",
-            "--read-state",
-            "--dump-state",
-            stdin=self.sqlsmith_state,
-            capture=True,
-            capture_stderr=True,
-            rm=True,
-        )
-        self.sqlsmith_state = result.stdout
+        if not self.fast_startup:
+            result = composition.run(
+                "sqlsmith",
+                "--target=host=materialized port=6875 dbname=materialize user=materialize",
+                "--exclude-catalog",
+                "--read-state",
+                "--dump-state",
+                stdin=self.sqlsmith_state,
+                capture=True,
+                capture_stderr=True,
+                rm=True,
+            )
+            self.sqlsmith_state = result.stdout
