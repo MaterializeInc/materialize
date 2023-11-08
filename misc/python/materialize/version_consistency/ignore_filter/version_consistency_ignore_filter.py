@@ -28,8 +28,8 @@ from materialize.util import MzVersion
 class VersionConsistencyIgnoreFilter(InconsistencyIgnoreFilter):
     def __init__(self, mz1_version: str, mz2_version: str):
         super().__init__()
-        self.mz1_version = MzVersion.parse_mz(mz1_version)
-        self.mz2_version = MzVersion.parse_mz(mz2_version)
+        self.mz1_version = MzVersion.parse_mz(mz1_version, drop_dev_suffix=True)
+        self.mz2_version = MzVersion.parse_mz(mz2_version, drop_dev_suffix=True)
 
     def shall_ignore_expression(
         self, expression: Expression, row_selection: DataRowSelection

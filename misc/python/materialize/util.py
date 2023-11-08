@@ -34,7 +34,7 @@ class MzVersion(Version):
     """Version of Materialize, can be parsed from version string, SQL, cargo"""
 
     @classmethod
-    def parse_mz(cls, version: str) -> "MzVersion":
+    def parse_mz(cls, version: str, drop_dev_suffix: bool = False) -> "MzVersion":
         """Parses a Mz version string, for example:  v0.45.0-dev (f01773cb1)"""
         if not version[0] == "v":
             raise ValueError(f"Invalid mz version string: {version}")
@@ -44,6 +44,10 @@ class MzVersion(Version):
             if not git_hash[0] == "(" or not git_hash[-1] == ")":
                 raise ValueError(f"Invalid mz version string: {version}")
             # Hash ignored
+
+        if drop_dev_suffix:
+            version = version.replace("-dev", "")
+
         return cls.parse(version)
 
     @classmethod
