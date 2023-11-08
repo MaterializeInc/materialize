@@ -3000,11 +3000,15 @@ fn test_auto_run_on_introspection_feature_disabled() {
         .unwrap();
     assert_introspection_notice(None);
 
-    let _row = client
-        .query_one(
-            "SELECT * FROM mz_internal.mz_cluster_replica_heartbeats LIMIT 1",
-            &[],
-        )
+    // We add a retry here since it might take a moment to get a replica heartbeat.
+    let _row = Retry::default()
+        .max_tries(5)
+        .retry(|_state| {
+            client.query_one(
+                "SELECT * FROM mz_internal.mz_cluster_replica_heartbeats LIMIT 1",
+                &[],
+            )
+        })
         .unwrap();
     assert_introspection_notice(None);
 
