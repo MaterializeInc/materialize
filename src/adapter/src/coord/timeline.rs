@@ -281,11 +281,6 @@ impl Coordinator {
         }
         let became_empty = read_holds.is_empty();
 
-        // Finally, remove the Timeline if it's empty.
-        if became_empty {
-            self.global_timelines.remove(&timeline);
-        }
-
         became_empty
     }
 
