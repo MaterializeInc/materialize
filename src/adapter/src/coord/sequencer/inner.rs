@@ -2707,9 +2707,8 @@ impl Coordinator {
             )
             .await?;
         let timestamp_context = determination.clone().timestamp_context;
-        let as_of = timestamp_context.antichain();
 
-        let global_mir_plan = global_mir_plan.resolve(as_of, session);
+        let global_mir_plan = global_mir_plan.resolve(timestamp_context, session);
         let global_lir_plan = optimizer.optimize(global_mir_plan)?;
 
         let key = global_lir_plan.key();
@@ -3407,7 +3406,7 @@ impl Coordinator {
         // Resolve timestamp statistics catalog
         // ------------------------------------
 
-        let (as_of, stats) = {
+        let (timestamp_ctx, stats) = {
             let source_ids = local_mir_plan.expr().depends_on();
             let mut timeline_context =
                 self.validate_timeline_context(source_ids.iter().cloned())?;
@@ -3448,7 +3447,7 @@ impl Coordinator {
                 .with_subscriber(root_dispatch)
                 .await?;
 
-            (timestamp_ctx.antichain(), stats)
+            (timestamp_ctx, stats)
         };
 
         let (used_indexes, fast_path_plan, df_meta) = catch_unwind(broken, "optimize", || {
@@ -3472,7 +3471,7 @@ impl Coordinator {
             };
 
             // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-            let global_mir_plan = global_mir_plan.resolve(as_of, session);
+            let global_mir_plan = global_mir_plan.resolve(timestamp_ctx, session);
             let global_lir_plan = optimizer.optimize(global_mir_plan)?;
 
             let (fast_path_plan, df_meta) = match global_lir_plan {
