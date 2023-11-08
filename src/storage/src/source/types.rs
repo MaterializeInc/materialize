@@ -254,6 +254,8 @@ pub struct SourceMetrics {
     pub(crate) resume_upper: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
     /// Per-partition Prometheus metrics.
     pub(crate) partition_metrics: BTreeMap<PartitionId, PartitionMetrics>,
+    /// The number of in-memory remap bindings that reclocking a time needs to iterate over.
+    pub(crate) inmemory_remap_bindings: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     source_name: String,
     source_id: GlobalId,
     base_metrics: SourceBaseMetrics,
@@ -281,6 +283,10 @@ impl SourceMetrics {
                 .source_specific
                 .resume_upper
                 .get_delete_on_drop_gauge(vec![source_id.to_string()]),
+            inmemory_remap_bindings: base
+                .source_specific
+                .inmemory_remap_bindings
+                .get_delete_on_drop_gauge(vec![source_id.to_string(), worker_id.to_string()]),
             partition_metrics: Default::default(),
             source_name: source_name.to_string(),
             source_id,
