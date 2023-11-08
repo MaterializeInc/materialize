@@ -14,6 +14,7 @@ use std::sync::{atomic, Arc, Mutex};
 
 use anyhow::{anyhow, Error};
 use async_trait::async_trait;
+use differential_dataflow::trace::ExertionLogic;
 use futures::future;
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
 use mz_ore::cast::CastFrom;
@@ -168,15 +169,41 @@ where
         )
         .await?;
 
-        let idle_merge_effort = isize::cast_from(config.idle_arrangement_merge_effort);
+        let mut worker_config = WorkerConfig::default();
+
+        let idle_merge_effort = usize::cast_from(config.idle_arrangement_merge_effort);
         // We want a value of `0` to disable idle merging. DD will only disable idle merging if we
         // configure the effort to `None`, not when we set it to `Some(0)`.
         let idle_merge_effort = (idle_merge_effort > 0).then_some(idle_merge_effort);
 
-        let mut worker_config = WorkerConfig::default();
-        differential_dataflow::configure(
-            &mut worker_config,
-            &differential_dataflow::Config { idle_merge_effort },
+        worker_config.set::<ExertionLogic>(
+            "differential/default_exert_logic".to_string(),
+            Arc::new(move |layers| {
+                let mut prop = config.arrangement_exert_proportionality;
+
+                // Layers are ordered from largest to smallest.
+                // Skip to the largest occupied layer.
+                let layers = layers.skip_while(|(_idx, count, _len)| *count == 0);
+
+                let mut first = true;
+                for (_idx, count, len) in layers {
+                    if count > 1 {
+                        // Found an in-progress merge that we should continue.
+                        return idle_merge_effort;
+                    }
+
+                    if !first && prop > 0 && len > 0 {
+                        // Found a non-empty batch within `arrangement_exert_proportionality` of
+                        // the largest one.
+                        return idle_merge_effort;
+                    }
+
+                    first = false;
+                    prop /= 2;
+                }
+
+                None
+            }),
         );
 
         let worker_guards = execute_from(builders, other, worker_config, move |timely_worker| {

@@ -44,6 +44,7 @@ pub(super) struct ReplicaConfig {
     pub location: ClusterReplicaLocation,
     pub logging: LoggingConfig,
     pub idle_arrangement_merge_effort: u32,
+    pub arrangement_exert_proportionality: u32,
     pub grpc_client: GrpcClientParameters,
 }
 
@@ -274,6 +275,7 @@ where
                 process: 0,
                 addresses: self.config.location.dataflow_addrs.clone(),
                 idle_arrangement_merge_effort: self.config.idle_arrangement_merge_effort,
+                arrangement_exert_proportionality: self.config.arrangement_exert_proportionality,
                 variable_length_row_encoding: config.variable_length_row_encoding,
             };
             *epoch = self.epoch;
