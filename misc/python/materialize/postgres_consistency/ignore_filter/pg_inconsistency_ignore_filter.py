@@ -511,6 +511,7 @@ def _error_message_is_about_zero_or_value_ranges(message: str) -> bool:
         or "cannot take logarithm of a negative number" in message
         or "division by zero" in message
         or "is defined for numbers between -1 and 1 inclusive" in message
+        or "is defined for numbers greater than or equal to 1" in message
         or "cannot take square root of a negative number" in message
         or "negative substring length not allowed" in message
         or "input is out of range" in message
