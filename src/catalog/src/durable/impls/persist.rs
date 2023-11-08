@@ -30,7 +30,6 @@ use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_proto::RustType;
 use mz_repr::Diff;
-use mz_stash::USER_VERSION_KEY;
 use mz_stash_types::objects::proto;
 use mz_stash_types::STASH_VERSION;
 use mz_storage_types::sources::Timeline;
@@ -42,7 +41,7 @@ use uuid::Uuid;
 use crate::durable::debug::{Collection, DebugCatalogState, Trace};
 use crate::durable::impls::persist::state_update::StateUpdateKindSchema;
 pub use crate::durable::impls::persist::state_update::{StateUpdate, StateUpdateKind};
-use crate::durable::initialize::{DEPLOY_GENERATION, ENABLE_PERSIST_TXN_TABLES};
+use crate::durable::initialize::{DEPLOY_GENERATION, ENABLE_PERSIST_TXN_TABLES, USER_VERSION_KEY};
 use crate::durable::objects::{AuditLogKey, DurableType, Snapshot, StorageUsageKey};
 use crate::durable::transaction::TransactionBatch;
 use crate::durable::{

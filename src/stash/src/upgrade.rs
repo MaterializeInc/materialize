@@ -40,21 +40,20 @@
 use std::collections::BTreeMap;
 
 use bytes::Bytes;
-use mz_stash_types::objects::proto::{ConfigKey, ConfigValue};
 use mz_stash_types::{InternalStashError, StashError};
 
-use crate::{AppendBatch, Data, Transaction, TypedCollection, COLLECTION_CONFIG, USER_VERSION_KEY};
+use crate::{AppendBatch, Data, Transaction, TypedCollection};
 
-pub(crate) mod v35_to_v36;
-pub(crate) mod v36_to_v37;
-pub(crate) mod v37_to_v38;
-pub(crate) mod v38_to_v39;
-pub(crate) mod v39_to_v40;
-pub(crate) mod v40_to_v41;
-pub(crate) mod v41_to_v42;
-pub(crate) mod v42_to_v43;
+pub mod v35_to_v36;
+pub mod v36_to_v37;
+pub mod v37_to_v38;
+pub mod v38_to_v39;
+pub mod v39_to_v40;
+pub mod v40_to_v41;
+pub mod v41_to_v42;
+pub mod v42_to_v43;
 
-pub(crate) enum MigrationAction<K1, K2, V2> {
+pub enum MigrationAction<K1, K2, V2> {
     /// Deletes the provided key.
     #[allow(unused)]
     Delete(K1),
@@ -71,7 +70,7 @@ where
 {
     /// Provided a closure, will migrate a [`TypedCollection`] of types `K` and `V` to types `K2`
     /// and `V2`.
-    pub(crate) async fn migrate_to<K2, V2>(
+    pub async fn migrate_to<K2, V2>(
         &self,
         tx: &Transaction<'_>,
         f: impl for<'a> FnOnce(&'a BTreeMap<K, V>) -> Vec<MigrationAction<K, K2, V2>>,
@@ -210,49 +209,6 @@ where
                 .collect()
         })
         .await?;
-
-        Ok(())
-    }
-}
-
-impl TypedCollection<ConfigKey, ConfigValue> {
-    pub(crate) async fn version(&self, tx: &Transaction<'_>) -> Result<u64, StashError> {
-        let key = ConfigKey {
-            key: USER_VERSION_KEY.to_string(),
-        };
-        let config = COLLECTION_CONFIG.from_tx(tx).await?;
-        let version = tx
-            .peek_key_one(config, &key)
-            .await?
-            .ok_or_else(|| StashError {
-                inner: InternalStashError::Uninitialized,
-            })?;
-
-        Ok(version.value)
-    }
-
-    pub(crate) async fn set_version(
-        &self,
-        tx: &Transaction<'_>,
-        version: u64,
-    ) -> Result<(), StashError> {
-        let key = ConfigKey {
-            key: USER_VERSION_KEY.to_string(),
-        };
-        let value = ConfigValue { value: version };
-
-        // Either insert a new version, or bump the old version.
-        COLLECTION_CONFIG
-            .migrate_to(tx, |entries| {
-                let action = if entries.contains_key(&key) {
-                    MigrationAction::Update(key.clone(), (key, value))
-                } else {
-                    MigrationAction::Insert(key, value)
-                };
-
-                vec![action]
-            })
-            .await?;
 
         Ok(())
     }
