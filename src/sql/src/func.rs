@@ -3447,23 +3447,21 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         },
         "csv_extract" => Table {
             params!(Int64, String) => Operation::binary(move |_ecx, ncols, input| {
+                const MAX_EXTRACT_COLUMNS: i64 = 8192;
+                const TOO_MANY_EXTRACT_COLUMNS: i64 = MAX_EXTRACT_COLUMNS + 1;
+
                 let ncols = match ncols.into_literal_int64() {
                     None | Some(i64::MIN..=0) => {
                         sql_bail!("csv_extract number of columns must be a positive integer literal");
                     },
-                    Some(ncols) => ncols,
+                    Some(ncols @ 1..=MAX_EXTRACT_COLUMNS) => ncols,
+                    Some(TOO_MANY_EXTRACT_COLUMNS..) => {
+                        sql_bail!("csv_extract number of columns too large, must be less than or equal to {MAX_EXTRACT_COLUMNS}");
+                    },
                 };
                 let ncols = usize::try_from(ncols).expect("known to be greater than zero");
 
-                // Prevent OOMing if the user requests some extremely large number of columns.
-                let mut column_names = Vec::new();
-                if let Err(_) = column_names.try_reserve(ncols) {
-                    sql_bail!("csv_extract number of columns too large");
-                };
-                for i in 1..=ncols {
-                    column_names.push(format!("column{}", i).into());
-                }
-
+                let column_names = (1..=ncols).map(|i| format!("column{}", i).into()).collect();
                 Ok(TableFuncPlan {
                     expr: HirRelationExpr::CallTable {
                         func: TableFunc::CsvExtract(ncols),
