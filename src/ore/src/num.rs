@@ -16,11 +16,10 @@
 
 //! Number utilities
 
-use crate::cast::CastFrom;
 use std::fmt::{Display, Formatter};
 use std::ops::{Add, Sub};
 
-/// Overflowing number
+/// Overflowing number. Operations panic on overflow, even in release mode.
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Copy, Clone)]
 pub struct Overflowing<T>(pub T);
 
@@ -52,14 +51,18 @@ impl Sub<Self> for Overflowing<u32> {
     }
 }
 
-impl From<usize> for Overflowing<u32> {
-    fn from(value: usize) -> Self {
-        Self(u32::try_from(value).expect("Overflow"))
+impl TryFrom<usize> for Overflowing<u32> {
+    type Error = <u32 as TryFrom<usize>>::Error;
+
+    fn try_from(value: usize) -> Result<Self, Self::Error> {
+        u32::try_from(value).map(Self)
     }
 }
 
-impl From<Overflowing<u32>> for usize {
-    fn from(value: Overflowing<u32>) -> Self {
-        Self::cast_from(value.0)
+impl TryFrom<Overflowing<u32>> for usize {
+    type Error = <usize as TryFrom<u32>>::Error;
+
+    fn try_from(value: Overflowing<u32>) -> Result<Self, Self::Error> {
+        Self::try_from(value.0)
     }
 }
