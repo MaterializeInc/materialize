@@ -519,10 +519,11 @@ impl Coordinator {
         let style = ExprPrepStyle::OneShot {
             logical_time: EvalTime::Deferred,
             session,
+            catalog_state: catalog,
         };
         dataflow.visit_children(
-            |r| prep_relation_expr(catalog, r, style),
-            |s| prep_scalar_expr(catalog, s, style),
+            |r| prep_relation_expr(r, style),
+            |s| prep_scalar_expr(s, style),
         )?;
 
         dataflow.export_index(
@@ -879,14 +880,15 @@ impl Coordinator {
 
         // Now that we have a timestamp, set the as of and resolve calls to mz_now().
         dataflow.set_as_of(determination.timestamp_context.antichain());
+        let catalog_state = self.catalog().state();
         let style = ExprPrepStyle::OneShot {
             logical_time: EvalTime::Time(determination.timestamp_context.timestamp_or_default()),
             session,
+            catalog_state,
         };
-        let state = self.catalog().state();
         dataflow.visit_children(
-            |r| prep_relation_expr(state, r, style),
-            |s| prep_scalar_expr(state, s, style),
+            |r| prep_relation_expr(r, style),
+            |s| prep_scalar_expr(s, style),
         )?;
 
         let (permutation, thinning) = permutation_for_arrangement(&key, typ.arity());
@@ -1051,10 +1053,11 @@ impl Coordinator {
             let style = ExprPrepStyle::OneShot {
                 logical_time: EvalTime::Deferred,
                 session,
+                catalog_state: state,
             };
             df.visit_children(
-                |r| prep_relation_expr(state, r, style),
-                |s| prep_scalar_expr(state, s, style),
+                |r| prep_relation_expr(r, style),
+                |s| prep_scalar_expr(s, style),
             )?;
 
             // Optimize the dataflow across views, and any other ways that appeal.
@@ -1086,10 +1089,11 @@ impl Coordinator {
             let style = ExprPrepStyle::OneShot {
                 logical_time: EvalTime::Time(timestamp_ctx.timestamp_or_default()),
                 session,
+                catalog_state: state,
             };
             df.visit_children(
-                |r| prep_relation_expr(state, r, style),
-                |s| prep_scalar_expr(state, s, style),
+                |r| prep_relation_expr(r, style),
+                |s| prep_scalar_expr(s, style),
             )?;
             peek::create_fast_path_plan(
                 &mut df,

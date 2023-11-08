@@ -5392,6 +5392,7 @@ mod tests {
         let prep_style = ExprPrepStyle::OneShot {
             logical_time: EvalTime::Time(Timestamp::MIN),
             session: &session,
+            catalog_state: &catalog.state,
         };
 
         // Execute the function as much as possible, ensuring no panics occur, but
@@ -5401,8 +5402,7 @@ mod tests {
         if let Ok(hir) = res {
             if let Ok(mut mir) = hir.lower_uncorrelated() {
                 // Populate unmaterialized functions.
-                prep_scalar_expr(&catalog.state, &mut mir, prep_style.clone())
-                    .expect("must succeed");
+                prep_scalar_expr(&mut mir, prep_style.clone()).expect("must succeed");
 
                 if let Ok(eval_result_datum) = mir.eval(&[], &arena) {
                     if let Some(return_styp) = return_styp {

@@ -16,6 +16,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use maplit::{btreemap, btreeset};
 use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW_TS;
@@ -102,9 +103,15 @@ pub enum ExprPrepStyle<'a> {
     OneShot {
         logical_time: EvalTime,
         session: &'a Session,
+        catalog_state: &'a CatalogState,
     },
     /// The expression is being prepared for evaluation in an AS OF or UP TO clause.
     AsOfUpTo,
+    /// The expression is being prepared for evaluation in a CHECK expression of a webhook source.
+    WebhookValidation {
+        /// Time at which this expression is being evaluated.
+        now: DateTime<Utc>,
+    },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -386,7 +393,7 @@ impl<'a> DataflowBuilder<'a> {
     ) -> Result<DataflowMetainfo, AdapterError> {
         self.import_into_dataflow(&sink_description.from, dataflow)?;
         for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
-            prep_relation_expr(self.catalog, plan, ExprPrepStyle::Index)?;
+            prep_relation_expr(plan, ExprPrepStyle::Index)?;
         }
         dataflow.export_sink(id, sink_description);
 
@@ -500,7 +507,6 @@ impl<'a> CheckedRecursion for DataflowBuilder<'a> {
 /// contained scalar expressions (see `prep_scalar_expr`) in the specified
 /// style.
 pub fn prep_relation_expr(
-    catalog: &CatalogState,
     expr: &mut OptimizedMirRelationExpr,
     style: ExprPrepStyle,
 ) -> Result<(), AdapterError> {
@@ -515,30 +521,36 @@ pub fn prep_relation_expr(
                         Err(e) => coord_bail!("{:?}", e),
                         Ok(mut mfp) => {
                             for s in mfp.iter_nontemporal_exprs() {
-                                prep_scalar_expr(catalog, s, style)?;
+                                prep_scalar_expr(s, style)?;
                             }
                             Ok(())
                         }
                     }
                 } else {
-                    e.try_visit_scalars_mut1(&mut |s| prep_scalar_expr(catalog, s, style))
+                    e.try_visit_scalars_mut1(&mut |s| prep_scalar_expr(s, style))
                 }
             })
         }
-        ExprPrepStyle::OneShot { .. } | ExprPrepStyle::AsOfUpTo => expr
+        ExprPrepStyle::OneShot { .. }
+        | ExprPrepStyle::AsOfUpTo
+        | ExprPrepStyle::WebhookValidation { .. } => expr
             .0
-            .try_visit_scalars_mut(&mut |s| prep_scalar_expr(catalog, s, style)),
+            .try_visit_scalars_mut(&mut |s| prep_scalar_expr(s, style)),
     }
 }
 
 /// Prepares a scalar expression for execution by handling unmaterializable
 /// functions.
 ///
-/// Specifically, calls to unmaterializable functions are replaced if
-/// `style` is `OneShot`. If `style` is `Index`, then an error is produced
-/// if a call to a unmaterializable function is encountered.
+/// How we prepare the scalar expression depends on which `style` is specificed.
+///
+/// * `OneShot`: Calls to all unmaterializable functions are replaced.
+/// * `Index`: An error is produced if a call to an unmaterializable function is encountered.
+/// * `AsOfUpTo`: An error is produced if a call to an unmaterializable function is encountered.
+/// * `WebhookValidation`: Only calls to `UnmaterializableFunc::CurrentTimestamp` are replaced,
+///   others are left untouched.
+///
 pub fn prep_scalar_expr(
-    state: &CatalogState,
     expr: &mut MirScalarExpr,
     style: ExprPrepStyle,
 ) -> Result<(), AdapterError> {
@@ -548,9 +560,10 @@ pub fn prep_scalar_expr(
         ExprPrepStyle::OneShot {
             logical_time,
             session,
+            catalog_state,
         } => expr.try_visit_mut_post(&mut |e| {
             if let MirScalarExpr::CallUnmaterializable(f) = e {
-                *e = eval_unmaterializable_func(state, f, logical_time, session)?;
+                *e = eval_unmaterializable_func(catalog_state, f, logical_time, session)?;
             }
             Ok(())
         }),
@@ -575,6 +588,21 @@ pub fn prep_scalar_expr(
                 };
                 return Err(err);
             }
+            Ok(())
+        }
+
+        ExprPrepStyle::WebhookValidation { now } => {
+            expr.try_visit_mut_post(&mut |e| {
+                if let MirScalarExpr::CallUnmaterializable(
+                    f @ UnmaterializableFunc::CurrentTimestamp,
+                ) = e
+                {
+                    let now: Datum = now.try_into()?;
+                    let const_expr = MirScalarExpr::literal_ok(now, f.output_type().scalar_type);
+                    *e = const_expr;
+                }
+                Ok::<_, anyhow::Error>(())
+            })?;
             Ok(())
         }
     }

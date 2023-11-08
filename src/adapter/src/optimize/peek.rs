@@ -291,10 +291,11 @@ impl<'s> Optimize<LocalMirPlan<ResolvedLocal<'s>>> for Optimizer {
         let style = ExprPrepStyle::OneShot {
             logical_time: EvalTime::Deferred,
             session,
+            catalog_state: self.catalog.state(),
         };
         df_desc.visit_children(
-            |r| prep_relation_expr(self.catalog.state(), r, style),
-            |s| prep_scalar_expr(self.catalog.state(), s, style),
+            |r| prep_relation_expr(r, style),
+            |s| prep_scalar_expr(s, style),
         )?;
 
         // TODO: Instead of conditioning here we should really
@@ -382,10 +383,11 @@ impl<'s> Optimize<GlobalMirPlan<ResolvedGlobal<'s>>> for Optimizer {
         let style = ExprPrepStyle::OneShot {
             logical_time: EvalTime::Time(as_of),
             session,
+            catalog_state: self.catalog.state(),
         };
         df_desc.visit_children(
-            |r| prep_relation_expr(self.catalog.state(), r, style),
-            |s| prep_scalar_expr(self.catalog.state(), s, style),
+            |r| prep_relation_expr(r, style),
+            |s| prep_scalar_expr(s, style),
         )?;
 
         // TODO: grab this bit from the index exports once it's always

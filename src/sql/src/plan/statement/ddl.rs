@@ -18,7 +18,7 @@ use std::iter;
 
 use itertools::Itertools;
 use mz_controller_types::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL_MICROS};
-use mz_expr::CollectionPlan;
+use mz_expr::{CollectionPlan, UnmaterializableFunc};
 use mz_interchange::avro::{AvroSchemaGenerator, AvroSchemaOptions, DocTarget};
 use mz_ore::cast::{self, CastFrom, TryCastFrom};
 use mz_ore::collections::HashSet;
@@ -416,8 +416,10 @@ pub fn plan_create_webhook_source(
         if !expression.contains_column() {
             return Err(PlanError::WebhookValidationDoesNotUseColumns);
         }
-        // Validation expressions cannot contain unmaterializable functions, e.g. now().
-        if expression.contains_unmaterializable() {
+        // Validation expressions cannot contain unmaterializable functions, except `now()`. We
+        // allow calls to `now()` because some webhook providers recommend rejecting requests that
+        // are older than a certain threshold.
+        if expression.contains_unmaterializable_except(&[UnmaterializableFunc::CurrentTimestamp]) {
             return Err(PlanError::WebhookValidationNonDeterministic);
         }
     }

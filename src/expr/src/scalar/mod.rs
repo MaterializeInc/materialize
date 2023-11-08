@@ -1867,6 +1867,18 @@ impl MirScalarExpr {
         contains
     }
 
+    /// True iff the expression contains an `UnmaterializableFunc` that is not in the `exceptions`
+    /// list.
+    pub fn contains_unmaterializable_except(&self, exceptions: &[UnmaterializableFunc]) -> bool {
+        let mut contains = false;
+        #[allow(deprecated)]
+        self.visit_post_nolimit(&mut |e| match e {
+            MirScalarExpr::CallUnmaterializable(f) if !exceptions.contains(f) => contains = true,
+            _ => (),
+        });
+        contains
+    }
+
     /// True iff the expression contains a `Column`.
     pub fn contains_column(&self) -> bool {
         let mut contains = false;
