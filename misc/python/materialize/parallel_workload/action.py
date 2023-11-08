@@ -1269,7 +1269,7 @@ class HttpPostAction(Action):
                 return
 
             source = self.rng.choice(exe.db.webhook_sources)
-        url = f"http://{exe.db.host}:{exe.db.ports['http']}/api/webhook/{exe.db}/public/{source}"
+        url = f"http://{exe.db.host}:{exe.db.ports['http']}/api/webhook/{source.schema.db.name()}/{source.schema.name()}/{source.name()}"
 
         payload = source.body_format.to_data_type().random_value(self.rng)
 
@@ -1289,6 +1289,7 @@ class HttpPostAction(Action):
             f"POST Headers: {', '.join(headers_strs)} Body: {payload.encode('utf-8')}"
         )
         try:
+            source.num_rows += 1
             result = requests.post(url, data=payload.encode("utf-8"), headers=headers)
             if result.status_code != 200:
                 raise ValueError(f"POST failed: {result.status_code}, {result.text}")
