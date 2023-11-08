@@ -1291,7 +1291,9 @@ class HttpPostAction(Action):
         try:
             result = requests.post(url, data=payload.encode("utf-8"), headers=headers)
             if result.status_code != 200:
-                raise ValueError(f"POST failed: {result.status_code}, {result.text}\nURL: {url}")
+                raise ValueError(
+                    f"POST failed: {result.status_code}, {result.text}\nURL: {url}"
+                )
         except (requests.exceptions.ConnectionError):
             # Expected when Mz is killed
             if exe.db.scenario not in (Scenario.Kill, Scenario.BackupRestore):
