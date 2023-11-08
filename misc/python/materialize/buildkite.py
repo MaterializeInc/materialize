@@ -20,10 +20,24 @@ def is_in_buildkite() -> bool:
 
 
 def is_in_pull_request() -> bool:
-    """
-    Note that this does not work in (manually triggered) nightly builds because they don't carry this information!
-    Consider using #is_on_default_branch() instead.
-    """
+    if not is_in_buildkite():
+        return False
+
+    if is_pull_request_marker_set():
+        return True
+
+    if is_on_default_branch():
+        return False
+
+    is_tagged_commit = len(git.get_tags_of_current_commit()) > 0
+    if is_tagged_commit:
+        # likely a release version
+        return False
+
+    return True
+
+
+def is_pull_request_marker_set() -> bool:
     return ui.env_is_truthy("BUILDKITE_PULL_REQUEST")
 
 
