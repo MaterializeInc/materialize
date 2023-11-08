@@ -135,10 +135,11 @@ pub struct ResolvedLocal<'s> {
 pub struct GlobalMirPlan<T = Unresolved> {
     df_desc: MirDataflowDescription,
     df_meta: DataflowMetainfo,
+    typ: RelationType, // TODO: read this from the index_exports.
     context: T,
 }
 
-impl GlobalMirPlan {
+impl<T> GlobalMirPlan<T> {
     pub fn df_desc(&self) -> &MirDataflowDescription {
         &self.df_desc
     }
@@ -153,6 +154,7 @@ impl Debug for GlobalMirPlan<Unresolved> {
         f.debug_struct("GlobalMirPlan")
             .field("df_desc", &self.df_desc)
             .field("df_meta", &self.df_meta)
+            .field("typ", &self.typ)
             .finish()
     }
 }
@@ -308,7 +310,7 @@ impl<'s> Optimize<LocalMirPlan<ResolvedLocal<'s>>> for Optimizer {
                     on_id: self.select_id,
                     key,
                 },
-                typ,
+                typ.clone(),
             );
         }
 
@@ -318,6 +320,7 @@ impl<'s> Optimize<LocalMirPlan<ResolvedLocal<'s>>> for Optimizer {
         Ok(GlobalMirPlan {
             df_desc,
             df_meta,
+            typ,
             context: Unresolved,
         })
     }
@@ -352,6 +355,7 @@ impl GlobalMirPlan<Unresolved> {
         GlobalMirPlan {
             df_desc: self.df_desc,
             df_meta: self.df_meta,
+            typ: self.typ,
             context: ResolvedGlobal { session },
         }
     }
@@ -368,6 +372,7 @@ impl<'s> Optimize<GlobalMirPlan<ResolvedGlobal<'s>>> for Optimizer {
         let GlobalMirPlan {
             mut df_desc,
             df_meta,
+            typ,
             context: ResolvedGlobal { session },
         } = plan;
 
@@ -390,14 +395,14 @@ impl<'s> Optimize<GlobalMirPlan<ResolvedGlobal<'s>>> for Optimizer {
             |s| prep_scalar_expr(s, style),
         )?;
 
-        // TODO: grab this bit from the index exports once it's always
-        // created.
-        let typ = df_desc
-            .objects_to_build
-            .iter()
-            .find(|build_desc| build_desc.id == self.select_id)
-            .map(|x| x.plan.typ())
-            .expect("oneshot-select type");
+        // TODO: use the following code once we can be sure that the
+        // index_exports always exist.
+        //
+        // let typ = self.df_desc
+        //     .index_exports
+        //     .first_key_value()
+        //     .map(|(_key, (_desc, typ))| typ.clone())
+        //     .expect("GlobalMirPlan type");
 
         match create_fast_path_plan(
             &mut df_desc,
