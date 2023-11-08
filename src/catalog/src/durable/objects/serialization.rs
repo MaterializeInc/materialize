@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! This module is responsible for serializing catalog objects into Protobuf.
+
 use mz_audit_log::{
     AlterDefaultPrivilegeV1, AlterSetClusterV1, AlterSourceSinkV1, CreateClusterReplicaV1,
     CreateSourceSinkV1, CreateSourceSinkV2, DropClusterReplicaV1, EventDetails, EventType, EventV1,
@@ -43,7 +45,7 @@ use crate::durable::{
     ClusterConfig, ClusterVariant, ClusterVariantManaged, ReplicaConfig, ReplicaLocation,
 };
 
-pub(crate) mod proto {
+pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/objects.rs"));
 }
 
@@ -2104,12 +2106,16 @@ impl From<String> for proto::StringWrapper {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use std::collections::BTreeSet;
     use std::fs;
     use std::io::{BufRead, BufReader};
 
+    use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
+    use mz_proto::RustType;
     use proptest::prelude::*;
+
+    use crate::durable::upgrade::{MIN_STASH_VERSION, STASH_VERSION};
 
     // Note: Feel free to update this path if the protos move.
     const PROTO_DIRECTORY: &str = "protos";
@@ -2189,7 +2195,7 @@ mod test {
         #[cfg_attr(miri, ignore)] // slow
         fn proptest_audit_log_roundtrips(event: VersionedEvent) {
             let proto = event.into_proto();
-            let roundtrip = VersionedEvent::from_proto(proto).unwrap();
+            let roundtrip = VersionedEvent::from_proto(proto).expect("valid proto");
 
             prop_assert_eq!(event, roundtrip);
         }
@@ -2198,7 +2204,7 @@ mod test {
         #[cfg_attr(miri, ignore)] // slow
         fn proptest_storage_usage_roundtrips(usage: VersionedStorageUsage) {
             let proto = usage.into_proto();
-            let roundtrip = VersionedStorageUsage::from_proto(proto).unwrap();
+            let roundtrip = VersionedStorageUsage::from_proto(proto).expect("valid proto");
 
             prop_assert_eq!(usage, roundtrip);
         }

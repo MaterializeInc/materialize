@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! This module contains all of the helpers for upgrading/migrating the [`Stash`].
+//! This module contains all of the helpers for upgrading/migrating the [`crate::Stash`].
 
 use std::collections::BTreeMap;
 

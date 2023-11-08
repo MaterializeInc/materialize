@@ -33,7 +33,7 @@
 //!    `objects_v15.proto` and `objects_v16.proto`. In this migration code you __should not__
 //!    import any defaults or constants from elsewhere in the codebase, because then a future
 //!    change could then impact a previous migration.
-//! 9. Call your upgrade function in [`crate::durable::upgrade::upgrade`].
+//! 9. Call your upgrade function in [`crate::durable::upgrade::upgrade()`].
 //!
 //! When in doubt, reach out to the Surfaces team, and we'll be more than happy to help :)
 //!

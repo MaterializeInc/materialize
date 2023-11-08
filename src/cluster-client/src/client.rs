@@ -215,6 +215,8 @@ pub struct ClusterReplicaLocation {
 
 #[cfg(test)]
 mod tests {
+    use mz_proto::protobuf_roundtrip;
+    use proptest::prelude::ProptestConfig;
     use proptest::proptest;
 
     use super::*;

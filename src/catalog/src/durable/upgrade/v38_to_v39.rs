@@ -51,7 +51,7 @@ pub async fn upgrade(tx: &Transaction<'_>) -> Result<(), StashError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Stash;
+    use mz_stash::Stash;
 
     const ROLES_COLLECTION_V39: TypedCollection<v39::RoleKey, v39::RoleValue> =
         TypedCollection::new("role");
@@ -118,7 +118,7 @@ mod tests {
                     })
                 })
                 .await
-                .unwrap();
+                .expect("transaction failed");
 
             let roles = ROLES_COLLECTION_V39
                 .peek_one(&mut stash)
@@ -206,6 +206,6 @@ mod tests {
         "###);
         })
         .await
-        .unwrap();
+        .expect("stash failed");
     }
 }

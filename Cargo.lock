@@ -3762,6 +3762,7 @@ dependencies = [
  "serde_json",
  "serde_plain",
  "sha2",
+ "similar-asserts",
  "static_assertions",
  "thiserror",
  "timely",
@@ -5557,7 +5558,6 @@ dependencies = [
  "proptest-derive",
  "prost",
  "serde",
- "similar-asserts",
  "tokio-postgres",
  "workspace-hack",
 ]

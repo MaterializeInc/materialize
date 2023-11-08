@@ -133,7 +133,7 @@ async fn migrate_audit_log(tx: &Transaction<'_>) -> Result<(), StashError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Stash;
+    use mz_stash::Stash;
 
     const AUDIT_LOG_COLLECTION_V40: TypedCollection<v40::AuditLogKey, ()> =
         TypedCollection::new("audit_log");
@@ -237,7 +237,7 @@ mod tests {
                     })
                 })
                 .await
-                .unwrap();
+                .expect("transaction failed");
 
             let roles = CLUSTER_REPLICA_COLLECTION_V40
                 .peek_one(&mut stash)
@@ -377,7 +377,7 @@ mod tests {
         "###);
         })
         .await
-        .unwrap();
+        .expect("stash failed");
     }
 
     #[mz_ore::test(tokio::test)]
@@ -428,7 +428,7 @@ mod tests {
                     })
                 })
                 .await
-                .unwrap();
+                .expect("transaction failed");
 
             let roles = AUDIT_LOG_COLLECTION_V40
                 .peek_one(&mut stash)
@@ -479,6 +479,6 @@ mod tests {
         "###);
         })
         .await
-        .unwrap();
+        .expect("stash failed");
     }
 }

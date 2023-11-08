@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-pub(crate) mod serialization;
+pub mod serialization;
 
 use std::collections::BTreeMap;
 
@@ -39,6 +39,8 @@ use crate::durable::objects::serialization::proto;
 /// This trait is based on [`RustType`], however it is meant to
 /// convert the types used in [`RustType`] to a more consumable and
 /// condensed type.
+///
+/// [`RustType`]: mz_proto::RustType
 pub trait DurableType<K, V>: Sized {
     /// Consume and convert `Self` into a `(K, V)` key-value pair.
     fn into_key_value(self) -> (K, V);

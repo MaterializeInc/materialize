@@ -564,6 +564,8 @@ impl VersionedStorageUsage {
 
 #[cfg(test)]
 mod tests {
+    use crate::{EventDetails, EventType, EventV1, IdNameV1, ObjectType, VersionedEvent};
+
     // Test all versions of events. This test hard codes bytes so that
     // programmers are not able to change data structures here without this test
     // failing. Instead of changing data structures, add new variants.
