@@ -56,7 +56,7 @@ CREATE SOURCE snowcatcloud_source IN CLUSTER snowcatcloud_cluster
         BODY AS body,
         SECRET snowcatcloud_shared_secret
       )
-      headers->'authorization' = snowcatcloud_shared_secret
+      constant_time_eq(headers->'authorization', snowcatcloud_shared_secret)
 );
 ```
 

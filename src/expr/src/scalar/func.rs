@@ -55,6 +55,7 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
 use sha2::{Sha224, Sha256, Sha384, Sha512};
+use subtle::ConstantTimeEq;
 
 use crate::scalar::func::format::DateTimeFormat;
 use crate::scalar::{
@@ -1360,6 +1361,18 @@ fn get_byte<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     Ok(Datum::from(i32::from(*i)))
 }
 
+pub fn constant_time_eq_bytes<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let a_bytes = a.unwrap_bytes();
+    let b_bytes = b.unwrap_bytes();
+    Ok(Datum::from(bool::from(a_bytes.ct_eq(b_bytes))))
+}
+
+pub fn constant_time_eq_string<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let a = a.unwrap_str();
+    let b = b.unwrap_str();
+    Ok(Datum::from(bool::from(a.as_bytes().ct_eq(b.as_bytes()))))
+}
+
 fn contains_range_elem<'a, R: RangeOps<'a>>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a>
 where
     <R as TryFrom<Datum<'a>>>::Error: std::fmt::Debug,
@@ -2272,6 +2285,8 @@ pub enum BinaryFunc {
     Power,
     PowerNumeric,
     GetByte,
+    ConstantTimeEqBytes,
+    ConstantTimeEqString,
     RangeContainsElem { elem_type: ScalarType, rev: bool },
     RangeContainsRange { rev: bool },
     RangeOverlaps,
@@ -2521,6 +2536,8 @@ impl BinaryFunc {
             BinaryFunc::PowerNumeric => power_numeric(a, b),
             BinaryFunc::RepeatString => repeat_string(a, b, temp_storage),
             BinaryFunc::GetByte => get_byte(a, b),
+            BinaryFunc::ConstantTimeEqBytes => constant_time_eq_bytes(a, b),
+            BinaryFunc::ConstantTimeEqString => constant_time_eq_string(a, b),
             BinaryFunc::RangeContainsElem { elem_type, rev: _ } => Ok(match elem_type {
                 ScalarType::Int32 => contains_range_elem::<i32>(a, b),
                 ScalarType::Int64 => contains_range_elem::<i64>(a, b),
@@ -2699,6 +2716,10 @@ impl BinaryFunc {
 
             GetByte => ScalarType::Int32.nullable(in_nullable),
 
+            ConstantTimeEqBytes | ConstantTimeEqString => {
+                ScalarType::Bool.nullable(in_nullable)
+            },
+
             UuidGenerateV5 => ScalarType::Uuid.nullable(in_nullable),
 
             RangeContainsElem { .. }
@@ -2853,6 +2874,8 @@ impl BinaryFunc {
             | IsRegexpMatch { .. }
             | ToCharTimestamp
             | ToCharTimestampTz
+            | ConstantTimeEqBytes
+            | ConstantTimeEqString
             | DateBinTimestamp
             | DateBinTimestampTz
             | ExtractInterval
@@ -3117,6 +3140,8 @@ impl BinaryFunc {
             | UuidGenerateV5
             | GetByte
             | MzAclItemContainsPrivilege
+            | ConstantTimeEqBytes
+            | ConstantTimeEqString
             | ParseIdent => false,
         }
     }
@@ -3338,6 +3363,7 @@ impl BinaryFunc {
             BinaryFunc::UuidGenerateV5 => (false, false),
             BinaryFunc::MzAclItemContainsPrivilege => (false, false),
             BinaryFunc::ParseIdent => (false, false),
+            BinaryFunc::ConstantTimeEqBytes | BinaryFunc::ConstantTimeEqString => (false, false),
         }
     }
 }
@@ -3523,6 +3549,8 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::PowerNumeric => f.write_str("power_numeric"),
             BinaryFunc::RepeatString => f.write_str("repeat"),
             BinaryFunc::GetByte => f.write_str("get_byte"),
+            BinaryFunc::ConstantTimeEqBytes => f.write_str("constant_time_compare_bytes"),
+            BinaryFunc::ConstantTimeEqString => f.write_str("constant_time_compare_strings"),
             BinaryFunc::RangeContainsElem { rev, .. } => {
                 f.write_str(if *rev { "<@" } else { "@>" })
             }
@@ -3948,6 +3976,8 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::UuidGenerateV5 => UuidGenerateV5(()),
             BinaryFunc::MzAclItemContainsPrivilege => MzAclItemContainsPrivilege(()),
             BinaryFunc::ParseIdent => ParseIdent(()),
+            BinaryFunc::ConstantTimeEqBytes => ConstantTimeEqBytes(()),
+            BinaryFunc::ConstantTimeEqString => ConstantTimeEqString(()),
         };
         ProtoBinaryFunc { kind: Some(kind) }
     }
@@ -4147,6 +4177,8 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 UuidGenerateV5(()) => Ok(BinaryFunc::UuidGenerateV5),
                 MzAclItemContainsPrivilege(()) => Ok(BinaryFunc::MzAclItemContainsPrivilege),
                 ParseIdent(()) => Ok(BinaryFunc::ParseIdent),
+                ConstantTimeEqBytes(()) => Ok(BinaryFunc::ConstantTimeEqBytes),
+                ConstantTimeEqString(()) => Ok(BinaryFunc::ConstantTimeEqString),
             }
         } else {
             Err(TryFromProtoError::missing_field("ProtoBinaryFunc::kind"))

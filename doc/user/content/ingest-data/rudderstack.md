@@ -57,7 +57,7 @@ CREATE SOURCE rudderstack_source IN CLUSTER rudderstack_cluster
         BODY AS request_body,
         SECRET rudderstack_shared_secret
       )
-      headers->'authorization' = rudderstack_shared_secret
+      constant_time_eq(headers->'authorization', rudderstack_shared_secret)
 );
 ```
 
