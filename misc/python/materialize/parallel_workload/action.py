@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import datetime
 import json
 import random
 import time
@@ -1274,12 +1275,12 @@ class HttpPostAction(Action):
 
         header_fields = source.explicit_include_headers
         if source.include_headers:
-            header_fields.extend(
-                ["timestamp", "x-event-type", "signature", "x-mz-api-key"]
-            )
+            header_fields.extend(["x-event-type", "signature", "x-mz-api-key"])
 
         headers = {
-            header: f'"{Text.random_value(self.rng)}"'.encode()
+            header: f"{datetime.datetime.now()}"
+            if header == "timestamp"
+            else f'"{Text.random_value(self.rng)}"'.encode()
             for header in self.rng.sample(header_fields, len(header_fields))
         }
 
@@ -1288,8 +1289,9 @@ class HttpPostAction(Action):
             f"POST Headers: {', '.join(headers_strs)} Body: {payload.encode('utf-8')}"
         )
         try:
-            source.num_rows += 1
-            requests.post(url, data=payload.encode("utf-8"), headers=headers)
+            result = requests.post(url, data=payload.encode("utf-8"), headers=headers)
+            if result.status_code != 200:
+                raise ValueError(f"POST failed: {result.status_code}, {result.text}")
         except (requests.exceptions.ConnectionError):
             # Expected when Mz is killed
             if exe.db.scenario not in (Scenario.Kill, Scenario.BackupRestore):

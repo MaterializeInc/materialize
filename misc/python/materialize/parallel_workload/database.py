@@ -383,6 +383,9 @@ class WebhookSource(DBObject):
         for i in range(rng.randint(0, MAX_INCLUDE_HEADERS)):
             # naughtify: UnicodeEncodeError: 'ascii' codec can't encode characters
             self.explicit_include_headers.append(f"ih{i}")
+        # for testing now() in check
+        if rng.choice([True, False]):
+            self.explicit_include_headers.append("timestamp")
         self.columns += [
             WebhookColumn(include_header, Text, True, self)
             for include_header in self.explicit_include_headers
@@ -391,8 +394,16 @@ class WebhookSource(DBObject):
         self.check_expr = None
         if rng.choice([True, False]):
             # TODO: More general expressions, failing expressions
-            self.check_expr = (
-                "BODY = BODY AND map_length(HEADERS) = map_length(HEADERS)"
+            exprs = [
+                "BODY = BODY",
+                "map_length(HEADERS) = map_length(HEADERS)",
+            ]
+            if "timestamp" in self.explicit_include_headers:
+                exprs.append(
+                    "(headers->'timestamp'::text)::timestamp + INTERVAL '10s' >= now()"
+                )
+            self.check_expr = " AND ".join(
+                rng.sample(exprs, k=rng.randint(1, len(exprs)))
             )
         # TODO: CHECK WITH SECRET
         # TODO: NOT IN INCLUDE HEADERS
