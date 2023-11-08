@@ -195,8 +195,8 @@ check [this guide](/ops/network-security/privatelink/).
 
 {{< warning >}}
 If you do not specify a default [`SSH TUNNEL`](#kafka-options) and your Kafka
-cluster advertises brokers that are not listed in `BROKERS` clause, Materialize
-will attempt to connect to those brokers without any tunneling.
+cluster advertises brokers that are not listed in the `BROKERS` clause,
+Materialize will attempt to connect to those brokers without any tunneling.
 {{< /warning >}}
 
 {{< diagram "create-connection-kafka-brokers.svg" >}}
