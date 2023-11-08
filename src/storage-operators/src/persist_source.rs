@@ -22,7 +22,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::cfg::PersistConfig;
+use mz_persist_client::cfg::{PersistConfig, RetryParameters};
 use mz_persist_client::fetch::FetchedPart;
 use mz_persist_client::fetch::SerdeLeasedBatchPart;
 use mz_persist_client::metrics::Metrics;
@@ -129,6 +129,17 @@ where
             None => (None, None),
         };
 
+        // Our default listen sleeps are tuned for the case of a shard that is
+        // written once a second, but persist-txns allows these to be lazy.
+        // Override the tuning to reduce crdb load. The pubsub fallback
+        // responsibility is then replaced by manual "one state" wakeups in the
+        // txns_progress operator.
+        let cfg = persist_clients.cfg().clone();
+        let subscribe_sleep = match metadata.txns_shard {
+            Some(_) => Some(move || cfg.dynamic.txns_data_shard_retry_params()),
+            None => None,
+        };
+
         let (stream, token) = persist_source_core(
             scope,
             source_id,
@@ -138,6 +149,7 @@ where
             until,
             map_filter_project,
             flow_control,
+            subscribe_sleep,
         );
 
         let stream = match feedback_handle {
@@ -210,6 +222,8 @@ pub fn persist_source_core<'g, G>(
     until: Antichain<Timestamp>,
     map_filter_project: Option<&mut MfpPlan>,
     flow_control: Option<FlowControl<RefinedScope<'g, G>>>,
+    // If Some, an override for the default listen sleep retry parameters.
+    listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
 ) -> (
     Stream<RefinedScope<'g, G>, (Result<Row, DataflowError>, (mz_repr::Timestamp, u64), Diff)>,
     Rc<dyn Any>,
@@ -276,6 +290,7 @@ where
                 true
             }
         },
+        listen_sleep,
     );
     let rows = decode_and_mfp(cfg, &fetched, &name, until, map_filter_project);
     (rows, token)

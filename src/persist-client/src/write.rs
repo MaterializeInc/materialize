@@ -623,7 +623,7 @@ where
         let mut watch = self.machine.applier.watch();
         let batch = self
             .machine
-            .next_listen_batch(frontier, &mut watch, None)
+            .next_listen_batch(frontier, &mut watch, None, None)
             .await;
         if PartialOrder::less_than(&self.upper, batch.desc.upper()) {
             self.upper.clone_from(batch.desc.upper());

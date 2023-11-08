@@ -388,7 +388,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64, C: TxnsCodec> 
 
     async fn update<F: Fn(&T) -> bool>(&mut self, done: F) {
         while !done(&self.progress_exclusive) {
-            let events = self.txns_subscribe.next().await;
+            let events = self.txns_subscribe.next(None).await;
             for event in events {
                 let parts = match event {
                     ListenEvent::Progress(frontier) => {

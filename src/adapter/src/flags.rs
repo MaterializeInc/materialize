@@ -197,6 +197,11 @@ fn persist_config(config: &SystemVars) -> PersistParameters {
             multiplier: config.persist_next_listen_batch_retryer_multiplier(),
             clamp: config.persist_next_listen_batch_retryer_clamp(),
         }),
+        txns_data_shard_retryer: Some(RetryParameters {
+            initial_backoff: config.persist_txns_data_shard_retryer_initial_backoff(),
+            multiplier: config.persist_txns_data_shard_retryer_multiplier(),
+            clamp: config.persist_txns_data_shard_retryer_clamp(),
+        }),
         reader_lease_duration: Some(config.persist_reader_lease_duration()),
         stats_audit_percent: Some(config.persist_stats_audit_percent()),
         stats_collection_enabled: Some(config.persist_stats_collection_enabled()),

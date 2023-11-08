@@ -646,6 +646,33 @@ const PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP: ServerVar<Duration> = ServerVar {
     internal: true,
 };
 
+/// Controls initial backoff of [`mz_persist_client::cfg::DynamicConfig::txns_data_shard_retry_params`].
+const PERSIST_TXNS_DATA_SHARD_RETRYER_INITIAL_BACKOFF: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("persist_txns_data_shard_retryer_initial_backoff"),
+    value: &PersistConfig::DEFAULT_TXNS_DATA_SHARD_RETRYER.initial_backoff,
+    description:
+        "The initial backoff when polling for new batches from a txns data shard persist_source.",
+    internal: true,
+};
+
+/// Controls backoff multiplier of [`mz_persist_client::cfg::DynamicConfig::txns_data_shard_retry_params`].
+const PERSIST_TXNS_DATA_SHARD_RETRYER_MULTIPLIER: ServerVar<u32> = ServerVar {
+    name: UncasedStr::new("persist_txns_data_shard_retryer_multiplier"),
+    value: &PersistConfig::DEFAULT_TXNS_DATA_SHARD_RETRYER.multiplier,
+    description:
+        "The backoff multiplier when polling for new batches from a txns data shard persist_source.",
+    internal: true,
+};
+
+/// Controls backoff clamp of [`mz_persist_client::cfg::DynamicConfig::txns_data_shard_retry_params`].
+const PERSIST_TXNS_DATA_SHARD_RETRYER_CLAMP: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("persist_txns_data_shard_retryer_clamp"),
+    value: &PersistConfig::DEFAULT_TXNS_DATA_SHARD_RETRYER.clamp,
+    description:
+        "The backoff clamp duration when polling for new batches from a txns data shard persist_source.",
+    internal: true,
+};
+
 const PERSIST_FAST_PATH_LIMIT: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("persist_fast_path_limit"),
     value: &0,
@@ -2679,6 +2706,9 @@ impl SystemVars {
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF)
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER)
             .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP)
+            .with_var(&PERSIST_TXNS_DATA_SHARD_RETRYER_INITIAL_BACKOFF)
+            .with_var(&PERSIST_TXNS_DATA_SHARD_RETRYER_MULTIPLIER)
+            .with_var(&PERSIST_TXNS_DATA_SHARD_RETRYER_CLAMP)
             .with_var(&PERSIST_FAST_PATH_LIMIT)
             .with_var(&PERSIST_STATS_AUDIT_PERCENT)
             .with_var(&PERSIST_STATS_COLLECTION_ENABLED)
@@ -3166,6 +3196,21 @@ impl SystemVars {
     /// Returns the `persist_next_listen_batch_retryer_clamp` configuration parameter.
     pub fn persist_next_listen_batch_retryer_clamp(&self) -> Duration {
         *self.expect_value(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP)
+    }
+
+    /// Returns the `persist_txns_data_shard_retryer_initial_backoff` configuration parameter.
+    pub fn persist_txns_data_shard_retryer_initial_backoff(&self) -> Duration {
+        *self.expect_value(&PERSIST_TXNS_DATA_SHARD_RETRYER_INITIAL_BACKOFF)
+    }
+
+    /// Returns the `persist_txns_data_shard_retryer_multiplier` configuration parameter.
+    pub fn persist_txns_data_shard_retryer_multiplier(&self) -> u32 {
+        *self.expect_value(&PERSIST_TXNS_DATA_SHARD_RETRYER_MULTIPLIER)
+    }
+
+    /// Returns the `persist_txns_data_shard_retryer_clamp` configuration parameter.
+    pub fn persist_txns_data_shard_retryer_clamp(&self) -> Duration {
+        *self.expect_value(&PERSIST_TXNS_DATA_SHARD_RETRYER_CLAMP)
     }
 
     pub fn persist_fast_path_limit(&self) -> usize {
@@ -5115,6 +5160,9 @@ fn is_persist_config_var(name: &str) -> bool {
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF.name()
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER.name()
         || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP.name()
+        || name == PERSIST_TXNS_DATA_SHARD_RETRYER_INITIAL_BACKOFF.name()
+        || name == PERSIST_TXNS_DATA_SHARD_RETRYER_MULTIPLIER.name()
+        || name == PERSIST_TXNS_DATA_SHARD_RETRYER_CLAMP.name()
         || name == PERSIST_FAST_PATH_LIMIT.name()
         || name == PERSIST_STATS_AUDIT_PERCENT.name()
         || name == PERSIST_STATS_COLLECTION_ENABLED.name()
