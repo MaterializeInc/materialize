@@ -46,6 +46,7 @@ from materialize.output_consistency.operation.operation import (
     DbOperationOrFunction,
     OperationRelevance,
 )
+from materialize.util import MzVersion
 
 TEXT_OPERATION_TYPES: list[DbOperationOrFunction] = []
 
@@ -382,5 +383,6 @@ TEXT_OPERATION_TYPES.append(
         [TextOperationParam(), TextOperationParam()],
         BooleanReturnTypeSpec(),
         is_pg_compatible=False,
+        since_mz_version=MzVersion.parse_mz("v0.77.0"),
     )
 )

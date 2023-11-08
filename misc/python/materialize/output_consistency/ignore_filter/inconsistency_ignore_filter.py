@@ -176,6 +176,9 @@ class PostExecutionInconsistencyIgnoreFilter(
             # errors (while the other uses another order).
             return YesIgnore("#17189")
 
+        if self._uses_eager_evaluation(query_template):
+            return YesIgnore("#17189")
+
         return NoIgnore()
 
     def _shall_ignore_error_mismatch(
