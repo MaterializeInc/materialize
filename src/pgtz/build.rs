@@ -228,9 +228,9 @@ fn main() -> Result<()> {
             sql_buf.write("(");
             sql_buf.write(format!("'{name}',"));
             sql_buf.write(format!("timezone_offset('{name}', now()).abbrev,"));
-            sql_buf.write(format!("timezone_offset('{name}', now()).base_utc_offset,"));
+            sql_buf.write(format!("timezone_offset('{name}', now()).base_utc_offset + timezone_offset('{name}', now()).dst_offset,"));
             sql_buf.write(format!(
-                "timezone_offset('{name}', now()).dst_offset > interval '0'"
+                "timezone_offset('{name}', now()).dst_offset <> interval '0'"
             ));
             sql_buf.write(")");
         }

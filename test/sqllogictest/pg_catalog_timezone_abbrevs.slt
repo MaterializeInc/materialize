@@ -9,10 +9,14 @@
 
 mode cockroach
 
-query TTT colnames,rowsort
+query T
+select count(distinct utc_offset) >= 24 as ok from pg_timezone_names
+----
+true
+
+query TTT rowsort
 SELECT * FROM pg_catalog.pg_timezone_abbrevs
 ----
-abbrev utc_offset is_dst
 ACDT  10:30:00  true
 ACSST  10:30:00  true
 ACST  09:30:00  false

@@ -73,6 +73,7 @@ copyright_files=$(grep -vE \
     -e 'supply-chain/.*' \
     -e '.devcontainer/.*' \
     -e 'snapshots/.*\.snap' \
+    -e 'src/environmentd/tests/testdata/timezones/.*\.csv' \
     <<< "$files"
 )
 

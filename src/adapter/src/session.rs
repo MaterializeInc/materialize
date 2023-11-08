@@ -210,6 +210,13 @@ impl<T: TimestampManipulation> Session<T> {
             .pcx
     }
 
+    fn new_pcx(&self, mut wall_time: DateTime<Utc>) -> PlanContext {
+        if let Some(mock_time) = self.vars().unsafe_new_transaction_wall_time() {
+            wall_time = *mock_time;
+        }
+        PlanContext::new(wall_time)
+    }
+
     /// Starts an explicit transaction, or changes an implicit to an explicit
     /// transaction.
     pub fn start_transaction(
@@ -242,7 +249,7 @@ impl<T: TimestampManipulation> Session<T> {
                 let id = self.next_transaction_id;
                 self.next_transaction_id = self.next_transaction_id.wrapping_add(1);
                 self.transaction = TransactionStatus::InTransaction(Transaction {
-                    pcx: PlanContext::new(wall_time),
+                    pcx: self.new_pcx(wall_time),
                     ops: TransactionOps::None,
                     write_lock_guard: None,
                     access,
@@ -276,7 +283,7 @@ impl<T: TimestampManipulation> Session<T> {
             let id = self.next_transaction_id;
             self.next_transaction_id = self.next_transaction_id.wrapping_add(1);
             let txn = Transaction {
-                pcx: PlanContext::new(wall_time),
+                pcx: self.new_pcx(wall_time),
                 ops: TransactionOps::None,
                 write_lock_guard: None,
                 access: None,
