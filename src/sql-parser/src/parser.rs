@@ -2900,7 +2900,22 @@ impl<'a> Parser<'a> {
     fn parse_create_sink(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(SINK)?;
         let if_not_exists = self.parse_if_not_exists()?;
-        let name = self.parse_item_name()?;
+
+        let mut name = Some(self.parse_item_name()?);
+
+        // Sniff out `CREATE SINK IN CLUSTER <c> ...` and `CREATE SINK FROM
+        // <view>...`  and ensure they are parsed as nameless `CREATE SINK`
+        // commands.
+        //
+        // This is a bit gross, but we didn't have the foresight to make
+        // `IN` and `FROM` reserved keywords for sink names.
+        if (name == Some(UnresolvedItemName::unqualified("in")) && self.peek_keyword(CLUSTER))
+            || (name == Some(UnresolvedItemName::unqualified("from")) && !self.peek_keyword(FROM))
+        {
+            name = None;
+            self.prev_token();
+        }
+
         let in_cluster = self.parse_optional_in_cluster()?;
         self.expect_keyword(FROM)?;
         let from = self.parse_raw_name()?;

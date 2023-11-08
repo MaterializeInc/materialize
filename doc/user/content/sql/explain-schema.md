@@ -18,8 +18,9 @@ change arbitrarily in future versions of Materialize.
 
 {{< diagram "explain-schema.svg" >}}
 
-#### `create_sink_stmt`
-[CREATE SINK](/sql/create-sink/)
+#### `sink_definition`
+
+{{< diagram "sink-definition.svg" >}}
 
 ### Output format
 
@@ -41,7 +42,7 @@ COMMENT ON TABLE t IS 'materialize comment on t';
 COMMENT ON COLUMN t.c2 IS 'materialize comment on t.c2';
 
 EXPLAIN VALUE SCHEMA FOR
-  CREATE SINK avro_sink
+  CREATE SINK
   FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'test_avro_topic')
   KEY (c1)

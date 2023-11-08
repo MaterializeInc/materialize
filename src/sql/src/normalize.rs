@@ -337,7 +337,9 @@ pub fn create_statement(
             if_not_exists,
             ..
         }) => {
-            *name = allocate_name(name)?;
+            if let Some(name) = name {
+                *name = allocate_name(name)?;
+            }
             *if_not_exists = false;
         }
 

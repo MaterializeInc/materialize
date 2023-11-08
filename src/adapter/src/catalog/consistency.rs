@@ -440,7 +440,10 @@ impl CatalogState {
                         | Statement::CreateSubsource(ast::CreateSubsourceStatement {
                             name, ..
                         })
-                        | Statement::CreateSink(ast::CreateSinkStatement { name, .. })
+                        | Statement::CreateSink(ast::CreateSinkStatement {
+                            name: Some(name),
+                            ..
+                        })
                         | Statement::CreateView(ast::CreateViewStatement {
                             definition: ast::ViewDefinition { name, .. },
                             ..
