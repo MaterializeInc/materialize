@@ -28,6 +28,6 @@ class PgSqlExecutors(SqlExecutors):
 
     def get_database_infos(self) -> str:
         return (
-            f"Using {self.executor.name} in version '{self.executor.query_version()}'."
+            f"Using {self.executor.name} in version '{self.executor.query_version()}'. "
             f"Using {self.pg_executor.name} in version '{self.pg_executor.query_version()}'."
         )
