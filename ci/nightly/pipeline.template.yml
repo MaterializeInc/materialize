@@ -28,7 +28,7 @@ steps:
 
   - id: closed-issues-detect
     label: Detect references to already closed issues
-    command: bin/ci-builder run stable bin/ci-closed-issues-detect
+    command: bin/ci-builder run stable bin/ci-closed-issues-detect --changed-lines-only-when-in-pr
     agents:
       queue: linux-x86_64
 

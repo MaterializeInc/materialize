@@ -168,6 +168,12 @@ def main() -> int:
         help="only report issues in changed files/lines",
     )
 
+    parser.add_argument(
+        "--changed-lines-only-when-in-pr",
+        help="only report issues in changed files/lines when in a pull request",
+        default=False,
+    )
+
     args = parser.parse_args()
 
     filenames = spawn.capture(
@@ -184,7 +190,9 @@ def main() -> int:
         ):
             issue_refs.extend(detect_closed_issues(filename))
 
-    if args.changed_lines_only:
+    if args.changed_lines_only or (
+        args.changed_lines_only_when_in_pr and not buildkite.is_on_default_branch()
+    ):
         issue_refs = filter_changed_lines(issue_refs)
 
     issue_refs = filter_closed_issues(issue_refs)
