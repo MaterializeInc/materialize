@@ -60,7 +60,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         materialized_environment_extra[0] = "MZ_PERSIST_COMPACTION_DISABLED=true"
 
     for name in c.workflows:
-        if name == "default":
+        if name in ["default", "load-test"]:
             continue
         with c.test_case(name):
             c.workflow(name)
@@ -213,7 +213,6 @@ def workflow_rehydration(c: Composition) -> None:
             clusterd,
             Testdrive(no_reset=True, consistent_seed=True),
         ):
-
             print(f"Running rehydration workflow {style}")
             c.down(destroy_volumes=True)
 
