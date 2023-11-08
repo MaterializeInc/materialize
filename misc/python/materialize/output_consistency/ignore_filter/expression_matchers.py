@@ -45,6 +45,16 @@ def matches_fun_by_name(
     return False
 
 
+def matches_fun_by_any_name(
+    expression: Expression, function_names_in_lower_case: list[str]
+) -> bool:
+    for function_name in function_names_in_lower_case:
+        if matches_fun_by_name(expression, function_name):
+            return True
+
+    return False
+
+
 def matches_op_by_pattern(expression: Expression, pattern: str) -> bool:
     if isinstance(expression, ExpressionWithArgs) and isinstance(
         expression.operation, DbOperation
