@@ -20,6 +20,8 @@ def is_in_buildkite() -> bool:
 
 
 def is_in_pull_request() -> bool:
+    """Note that this is a heuristic."""
+
     if not is_in_buildkite():
         return False
 
