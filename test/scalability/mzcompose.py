@@ -358,7 +358,7 @@ def upload_regressions_to_buildkite(outcome: RegressionOutcome) -> None:
     if not outcome.has_regressions():
         return
 
-    outcome.raw_regression_data.to_csv(paths.regressions_csv())
+    outcome.regression_data.to_csv(paths.regressions_csv())
     buildkite.upload_artifact(
         paths.regressions_csv().relative_to(paths.RESULTS_DIR),
         cwd=paths.RESULTS_DIR,

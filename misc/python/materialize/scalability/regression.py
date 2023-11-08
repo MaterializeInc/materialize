@@ -8,15 +8,13 @@
 # by the Apache License, Version 2.0.
 from __future__ import annotations
 
-import pandas as pd
-
+from materialize.scalability.df.df_totals import DfTotals, concat_df_totals
 from materialize.scalability.endpoint import Endpoint
 
 
 class Regression:
     def __init__(
         self,
-        row: pd.Series,
         workload_name: str,
         concurrency: int,
         count: int,
@@ -26,7 +24,6 @@ class Regression:
         tps_diff_percent: float,
         endpoint: Endpoint,
     ):
-        self.row = row
         self.workload_name = workload_name
         self.concurrency = concurrency
         self.count = count
@@ -50,10 +47,10 @@ class RegressionOutcome:
         self,
     ):
         self.regressions: list[Regression] = []
-        self.raw_regression_data = pd.DataFrame()
+        self.regression_data = DfTotals()
 
     def has_regressions(self) -> bool:
-        assert len(self.regressions) == len(self.raw_regression_data.index)
+        assert len(self.regressions) == self.regression_data.length()
         return len(self.regressions) > 0
 
     def __str__(self) -> str:
@@ -64,9 +61,9 @@ class RegressionOutcome:
 
     def merge(self, other: RegressionOutcome) -> None:
         self.regressions.extend(other.regressions)
-        self.append_raw_data(other.raw_regression_data)
+        self.append_raw_data(other.regression_data)
 
-    def append_raw_data(self, regressions_frame: pd.DataFrame) -> None:
-        self.raw_regression_data = pd.concat(
-            [self.raw_regression_data, regressions_frame], ignore_index=True
+    def append_raw_data(self, regressions_data: DfTotals) -> None:
+        self.regression_data = concat_df_totals(
+            [self.regression_data, regressions_data]
         )

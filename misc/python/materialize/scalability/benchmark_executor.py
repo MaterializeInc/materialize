@@ -19,6 +19,8 @@ from psycopg import Cursor
 from materialize.scalability.benchmark_config import BenchmarkConfiguration
 from materialize.scalability.benchmark_result import BenchmarkResult
 from materialize.scalability.df import df_details_cols, df_totals_cols
+from materialize.scalability.df.df_details import DfDetails, concat_df_details
+from materialize.scalability.df.df_totals import DfTotals, concat_df_totals
 from materialize.scalability.endpoint import Endpoint
 from materialize.scalability.io import paths
 from materialize.scalability.operation import Operation
@@ -123,8 +125,8 @@ class BenchmarkExecutor:
     ) -> WorkloadResult:
         print(f"Running workload {workload.name()} on {endpoint}")
 
-        df_totals = pd.DataFrame()
-        df_details = pd.DataFrame()
+        df_totals = DfTotals()
+        df_details = DfDetails()
 
         concurrencies = self._get_concurrencies()
         print(f"Concurrencies: {concurrencies}")
@@ -136,8 +138,8 @@ class BenchmarkExecutor:
                 concurrency,
                 self.config.get_count_for_concurrency(concurrency),
             )
-            df_totals = pd.concat([df_totals, df_total], ignore_index=True)
-            df_details = pd.concat([df_details, df_detail], ignore_index=True)
+            df_totals = concat_df_totals([df_totals, df_total])
+            df_details = concat_df_details([df_details, df_detail])
 
             endpoint_version_name = endpoint.try_load_version()
             pathlib.Path(paths.endpoint_dir(endpoint_version_name)).mkdir(
@@ -161,7 +163,7 @@ class BenchmarkExecutor:
         workload: Workload,
         concurrency: int,
         count: int,
-    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    ) -> tuple[DfTotals, DfDetails]:
         print(
             f"Preparing benchmark for workload '{workload.name()}' at concurrency {concurrency} ..."
         )
@@ -242,7 +244,7 @@ class BenchmarkExecutor:
             ]
         )
 
-        return df_total, df_detail
+        return DfTotals(df_total), DfDetails(df_detail)
 
     def execute_operation(
         self, args: tuple[Workload, int, threading.local, list[Cursor], Operation]
