@@ -25,7 +25,7 @@ use mz_repr::{GlobalId, Timestamp};
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaSpecifier};
 use mz_storage_types::sources::Timeline;
 use timely::progress::Timestamp as TimelyTimestamp;
-use tracing::error;
+use tracing::{debug, error};
 
 use crate::catalog::CatalogItem;
 use crate::coord::id_bundle::CollectionIdBundle;
@@ -632,9 +632,22 @@ impl Coordinator {
                 // advance of any object's upper. This is the largest timestamp that is closed
                 // to writes.
                 let id_bundle = self.ids_in_timeline(&timeline);
-                let now =
-                    Self::largest_not_in_advance_of_upper(&self.least_valid_write(&id_bundle));
-                oracle.apply_write(now).await;
+
+                // Advance the timeline if-and-only-if there are objects in it.
+                // Otherwise we'd advance to the empty frontier, meaning we
+                // close it off for ever.
+                if !id_bundle.is_empty() {
+                    let least_valid_write = self.least_valid_write(&id_bundle);
+                    let now = Self::largest_not_in_advance_of_upper(&least_valid_write);
+                    oracle.apply_write(now).await;
+                    debug!(
+                        least_valid_write = ?least_valid_write,
+                        oracle_read_ts = ?oracle.read_ts().await,
+                        "advanced {:?} to {}",
+                        timeline,
+                        now,
+                    );
+                }
             };
             let read_ts = oracle.read_ts().await;
             if read_holds.times().any(|time| time.less_than(&read_ts)) {
