@@ -125,6 +125,7 @@ pub mod metrics;
 #[cfg(feature = "network")]
 pub mod netio;
 pub mod now;
+pub mod num;
 pub mod option;
 pub mod panic;
 pub mod path;
