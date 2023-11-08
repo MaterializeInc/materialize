@@ -48,7 +48,7 @@ A **read-only** transaction can produce an error with the text:
 
 > Transactions can only reference objects in the same timedomain.
 
-The first `SELECT` in a transaction assumes that any object in that `SELECT`, any other object in the same schemas, and all pg_catalog objects are assumed to be possible query targets.
+The first `SELECT` in a transaction assumes that any object in that `SELECT`, any other object in the same schemas, and all `pg_catalog` objects are assumed to be possible query targets.
 If an object in the timedomain is a view, it will be replaced with the objects in the view definition.
 If a later `SELECT` references another object, the transaction will fail.
 This can happen if the object is in a schema not referenced by the first `SELECT`.
