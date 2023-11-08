@@ -611,6 +611,7 @@ mz_dataflows
 mz_dataflows_per_worker
 mz_expected_group_size_advice
 mz_global_frontiers
+mz_materialization_lag
 mz_message_counts
 mz_message_counts_per_worker
 mz_object_fully_qualified_names
@@ -669,7 +670,7 @@ test_table
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-112
+113
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

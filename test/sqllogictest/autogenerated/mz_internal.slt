@@ -156,6 +156,15 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 2  group_id_base  text
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_materialization_lag' ORDER BY position
+----
+1  object_id  text
+2  local_lag  interval
+3  global_lag  interval
+4  slowest_local_input_id  text
+5  slowest_global_input_id  text
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_dependencies' ORDER BY position
 ----
 1  object_id  text
@@ -681,6 +690,7 @@ mz_frontiers
 mz_global_frontiers
 mz_internal_cluster_replicas
 mz_kafka_sources
+mz_materialization_lag
 mz_message_batch_counts_received_raw
 mz_message_batch_counts_sent_raw
 mz_message_counts
