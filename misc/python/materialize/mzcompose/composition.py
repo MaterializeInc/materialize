@@ -39,6 +39,7 @@ import pg8000
 import sqlparse
 import yaml
 from pg8000 import Connection, Cursor
+from pg8000.native import identifier
 
 from materialize import MZ_ROOT, mzbuild, spawn, ui
 from materialize.mzcompose import loader
@@ -752,6 +753,17 @@ class Composition:
             if len(ps.stdout) == 0:
                 print("Service materialized not running, will not restart it.")
                 return
+
+            for (db,) in self.sql_query("SELECT name FROM mz_databases"):
+                self.sql(f"DROP DATABASE {identifier(db)}", user="mz_system", port=6877)
+                self.sql(
+                    f"CREATE DATABASE {identifier(db)}", user="mz_system", port=6877
+                )
+            self.sql(
+                "GRANT ALL PRIVILEGES ON SCHEMA materialize.public TO materialize",
+                user="mz_system",
+                port=6877,
+            )
 
             self.kill("materialized")
             # TODO(def-): Better way to detect when kill has finished
