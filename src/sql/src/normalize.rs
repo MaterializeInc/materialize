@@ -372,7 +372,7 @@ pub fn create_statement(
             columns: _,
             in_cluster: _,
             query,
-            non_null_assertions: _,
+            with_options: _,
         }) => {
             *name = allocate_name(name)?;
             {
@@ -462,34 +462,51 @@ pub fn create_statement(
 /// - `Default($v)` is an optional parameter that sets the default value of the
 ///   field to `$v`. `$v` must be convertible to `$t` using `.into`. This also
 ///   converts the struct's type from `Option<$t>` to `<$t>`.
+/// - `AllowMultiple` is an optional parameter that, when specified, allows
+///   the given option to appear multiple times in the `WITH` clause. This
+///   also converts the struct's type from `$t` to `Vec<$t>`.
 macro_rules! generate_extracted_config {
     // No default specified, have remaining options.
     ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty), $($tail:tt),*) => {
-        generate_extracted_config!($option_ty, [$($processed)* ($option_name, Option::<$t>, None)], $(
+        generate_extracted_config!($option_ty, [$($processed)* ($option_name, Option::<$t>, None, false)], $(
             $tail
         ),*);
     };
     // No default specified, no remaining options.
     ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty)) => {
-        generate_extracted_config!($option_ty, [$($processed)* ($option_name, Option::<$t>, None)]);
+        generate_extracted_config!($option_ty, [$($processed)* ($option_name, Option::<$t>, None, false)]);
     };
     // Default specified, have remaining options.
     ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty, Default($v:expr)), $($tail:tt),*) => {
-        generate_extracted_config!($option_ty, [$($processed)* ($option_name, $t, $v)], $(
+        generate_extracted_config!($option_ty, [$($processed)* ($option_name, $t, $v, false)], $(
             $tail
         ),*);
     };
     // Default specified, no remaining options.
     ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty, Default($v:expr))) => {
-        generate_extracted_config!($option_ty, [$($processed)* ($option_name, $t, $v)]);
+        generate_extracted_config!($option_ty, [$($processed)* ($option_name, $t, $v, false)]);
     };
-    ($option_ty:ty, [$(($option_name:path, $t:ty, $v:expr))+]) => {
+    // AllowMultiple specified, have remaining options.
+    ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty, AllowMultiple), $($tail:tt),*) => {
+        generate_extracted_config!($option_ty, [$($processed)* ($option_name, $t, vec![], true)], $(
+            $tail
+        ),*);
+    };
+    // AllowMultiple specified, no remaining options.
+    ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty, AllowMultiple)) => {
+        generate_extracted_config!($option_ty, [$($processed)* ($option_name, $t, vec![], true)]);
+    };
+    ($option_ty:ty, [$(($option_name:path, $t:ty, $v:expr, $allow_multiple:literal))+]) => {
         paste::paste! {
             #[derive(Debug)]
             pub struct [<$option_ty Extracted>] {
                 seen: ::std::collections::BTreeSet::<[<$option_ty Name>]>,
                 $(
-                    pub(crate) [<$option_name:snake>]: $t,
+                    pub(crate) [<$option_name:snake>]: generate_extracted_config!(
+                        @ifty $allow_multiple,
+                        Vec::<$t>,
+                        $t
+                    ),
                 )*
             }
 
@@ -498,7 +515,11 @@ macro_rules! generate_extracted_config {
                     [<$option_ty Extracted>] {
                         seen: ::std::collections::BTreeSet::<[<$option_ty Name>]>::new(),
                         $(
-                            [<$option_name:snake>]: $t::from($v),
+                            [<$option_name:snake>]: <generate_extracted_config!(
+                                @ifty $allow_multiple,
+                                Vec::<$t>,
+                                $t
+                            )>::from($v),
                         )*
                     }
                 }
@@ -510,15 +531,19 @@ macro_rules! generate_extracted_config {
                     use [<$option_ty Name>]::*;
                     let mut extracted = [<$option_ty Extracted>]::default();
                     for option in v {
-                        if !extracted.seen.insert(option.name.clone()) {
-                            sql_bail!("{} specified more than once", option.name.to_ast_string());
-                        }
                         match option.name {
                             $(
                                 $option_name => {
-                                    extracted.[<$option_name:snake>] =
-                                        <$t>::try_from_value(option.value)
-                                            .map_err(|e| sql_err!("invalid {}: {}", option.name.to_ast_string(), e))?;
+                                    if !$allow_multiple && !extracted.seen.insert(option.name.clone()) {
+                                        sql_bail!("{} specified more than once", option.name.to_ast_string());
+                                    }
+                                    let val = <$t>::try_from_value(option.value)
+                                        .map_err(|e| sql_err!("invalid {}: {}", option.name.to_ast_string(), e))?;
+                                    generate_extracted_config!(
+                                        @ifexpr $allow_multiple,
+                                        extracted.[<$option_name:snake>].push(val),
+                                        extracted.[<$option_name:snake>] = val
+                                    );
                                 }
                             )*
                         }
@@ -530,6 +555,20 @@ macro_rules! generate_extracted_config {
     };
     ($option_ty:ty, $($h:tt),+) => {
         generate_extracted_config!{$option_ty, [], $($h),+}
+    };
+    // Helper `if` constructs to conditionally generate expressions and types
+    // based on the value of $allow_multiple.
+    (@ifexpr false, $lhs:expr, $rhs:expr) => {
+        $rhs
+    };
+    (@ifexpr true, $lhs:expr, $rhs:expr) => {
+        $lhs
+    };
+    (@ifty false, $lhs:ty, $rhs:ty) => {
+        $rhs
+    };
+    (@ifty true, $lhs:ty, $rhs:ty) => {
+        $lhs
     };
 }
 

@@ -3167,14 +3167,11 @@ impl<'a> Parser<'a> {
         let columns = self.parse_parenthesized_column_list(Optional)?;
         let in_cluster = self.parse_optional_in_cluster()?;
 
-        let non_null_assertions = if self.parse_keyword(WITH) {
+        let with_options = if self.parse_keyword(WITH) {
             self.expect_token(&Token::LParen)?;
-            let assertions = self.parse_comma_separated(|self_| {
-                self_.expect_keywords(&[ASSERT, NOT, NULL])?;
-                self_.parse_identifier()
-            })?;
+            let options = self.parse_comma_separated(Parser::parse_materialized_view_option)?;
             self.expect_token(&Token::RParen)?;
-            assertions
+            options
         } else {
             vec![]
         };
@@ -3189,9 +3186,24 @@ impl<'a> Parser<'a> {
                 columns,
                 in_cluster,
                 query,
-                non_null_assertions,
+                with_options,
             },
         ))
+    }
+
+    fn parse_materialized_view_option_name(
+        &mut self,
+    ) -> Result<MaterializedViewOptionName, ParserError> {
+        self.expect_keywords(&[ASSERT, NOT, NULL])?;
+        Ok(MaterializedViewOptionName::AssertNotNull)
+    }
+
+    fn parse_materialized_view_option(
+        &mut self,
+    ) -> Result<MaterializedViewOption<Raw>, ParserError> {
+        let name = self.parse_materialized_view_option_name()?;
+        let value = self.parse_optional_option_value()?;
+        Ok(MaterializedViewOption { name, value })
     }
 
     fn parse_create_index(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -3262,8 +3274,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_index_option(&mut self) -> Result<IndexOption<Raw>, ParserError> {
-        self.expect_keywords(&[LOGICAL, COMPACTION, WINDOW])?;
-        let name = IndexOptionName::LogicalCompactionWindow;
+        let name = self.parse_index_option_name()?;
         let value = self.parse_optional_option_value()?;
         Ok(IndexOption { name, value })
     }

@@ -86,6 +86,13 @@ pub(crate) fn doc_create_materialized_view<T: AstInfo>(
             cluster.to_ast_string()
         )));
     }
+    if !v.with_options.is_empty() {
+        docs.push(bracket(
+            "WITH (",
+            comma_separate(doc_display_pass, &v.with_options),
+            ")",
+        ));
+    }
     docs.push(nest_title("AS", doc_query(&v.query)));
     RcDoc::intersperse(docs, Doc::line()).nest(TAB).group()
 }
