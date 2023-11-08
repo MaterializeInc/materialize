@@ -26,7 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ADD https://api.github.com/repos/MaterializeInc/sqlsmith/git/refs/heads/master version.json
 
 # Build SQLsmith
-RUN git clone --depth=1 --single-branch --branch=master https://github.com/MaterializeInc/sqlsmith \
+RUN git clone --single-branch --branch=master https://github.com/MaterializeInc/sqlsmith \
     && cd sqlsmith \
     && git checkout 981f55a5573a338068d53385e5155bbb7af2905f \
     && cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=c++ . \
