@@ -1316,7 +1316,7 @@ pub struct WebhookValidation {
 }
 
 impl WebhookValidation {
-    const MAX_REDUCE_TIME: Duration = Duration::from_secs(2);
+    const MAX_REDUCE_TIME: Duration = Duration::from_secs(60);
 
     /// Attempt to reduce the internal [`MirScalarExpr`] into a simpler expression.
     ///

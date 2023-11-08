@@ -203,6 +203,9 @@ impl Coordinator {
                         .webhook_validation_reduce_failures
                         .with_label_values(&[reason])
                         .inc();
+                    return Err(AdapterError::Internal(format!(
+                        "failed to reduce check expression, {reason}"
+                    )));
                 }
             }
 
