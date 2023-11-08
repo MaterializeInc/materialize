@@ -1060,12 +1060,14 @@ impl Coordinator {
         let storage_config = flags::storage_config(system_config);
         let scheduling_config = flags::orchestrator_scheduling_config(system_config);
         let merge_effort = system_config.default_idle_arrangement_merge_effort();
+        let exert_prop = system_config.default_arrangement_exert_proportionality();
         self.controller.compute.update_configuration(compute_config);
         self.controller.storage.update_configuration(storage_config);
         self.controller
             .update_orchestrator_scheduling_config(scheduling_config);
         self.controller
             .set_default_idle_arrangement_merge_effort(merge_effort);
+        self.controller.set_default_arrangement_exert_proportionality(exert_prop);
 
         // Capture identifiers that need to have their read holds relaxed once the bootstrap completes.
         //

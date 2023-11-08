@@ -160,7 +160,7 @@ timely_communication = { git = "https://github.com/MaterializeInc/timely-dataflo
 timely_container = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
 timely_logging = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git", branch = "exert_logic_config" }
-dogsdogsdogs = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" , branch = "exert_logic_config"}
+dogsdogsdogs = { git = "https://github.com/TimelyDataflow/differential-dataflow.git", branch = "exert_logic_config" }
 
 # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
@@ -212,9 +212,4 @@ reqwest-retry = { git = "https://github.com/MaterializeInc/reqwest-middleware.gi
 columnation = { git = "https://github.com/MaterializeInc/columnation.git" }
 
 [patch."https://github.com/TimelyDataflow/timely-dataflow"]
-# Projects that do not reliably release to crates.io.
 timely = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
-timely_bytes = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
-timely_communication = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
-timely_container = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }
-timely_logging = { git = "https://github.com/MaterializeInc/timely-dataflow.git" }

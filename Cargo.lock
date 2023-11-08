@@ -1729,7 +1729,7 @@ checksum = "0e25ea47919b1560c4e3b7fe0aaab9becf5b84a10325ddf7db0f0ba5e1026499"
 [[package]]
 name = "differential-dataflow"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git?branch=exert_logic_config#612fc91b443eca6f17876b304c0c22a346b036b8"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git?branch=exert_logic_config#6cab205a96e963accb7c10344393bcfd65e1d462"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -1786,7 +1786,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git?branch=exert_logic_config#612fc91b443eca6f17876b304c0c22a346b036b8"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git?branch=exert_logic_config#6cab205a96e963accb7c10344393bcfd65e1d462"
 dependencies = [
  "abomonation",
  "abomonation_derive",

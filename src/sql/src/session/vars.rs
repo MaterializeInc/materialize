@@ -1316,6 +1316,14 @@ pub const DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT: ServerVar<u32> = ServerVar {
     internal: true,
 };
 
+pub const DEFAULT_ARRANGEMENT_EXERT_PROPORTIONALITY: ServerVar<u32> = ServerVar {
+    name: UncasedStr::new("default_arrangement_exert_proprotionality"),
+    value: &16,
+    description:
+        "The default value to use for the `ARRANGEMENT EXERT PROPORTIONALITY` cluster/replica option.",
+    internal: true,
+};
+
 pub const ENABLE_DEFAULT_CONNECTION_VALIDATION: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_default_connection_validation"),
     value: &true,
@@ -2711,6 +2719,7 @@ impl SystemVars {
             .with_var(&ENABLE_MZ_JOIN_CORE)
             .with_var(&LINEAR_JOIN_YIELDING)
             .with_var(&DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT)
+            .with_var(&DEFAULT_ARRANGEMENT_EXERT_PROPORTIONALITY)
             .with_var(&ENABLE_STORAGE_SHARD_FINALIZATION)
             .with_var(&ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE)
             .with_var(&ENABLE_SPECIALIZED_ARRANGEMENTS)
@@ -3377,6 +3386,11 @@ impl SystemVars {
     /// Returns the `default_idle_arrangement_merge_effort` configuration parameter.
     pub fn default_idle_arrangement_merge_effort(&self) -> u32 {
         *self.expect_value(&DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT)
+    }
+
+    /// Returns the `default_arrangement_exert_proportionality` configuration parameter.
+    pub fn default_arrangement_exert_proportionality(&self) -> u32 {
+        *self.expect_value(&DEFAULT_ARRANGEMENT_EXERT_PROPORTIONALITY)
     }
 
     /// Returns the `enable_storage_shard_finalization` configuration parameter.
