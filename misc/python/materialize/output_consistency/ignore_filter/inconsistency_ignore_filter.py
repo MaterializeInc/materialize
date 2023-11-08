@@ -6,7 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-
+from functools import partial
 
 from materialize.output_consistency.data_value.data_value import DataValue
 from materialize.output_consistency.execution.evaluation_strategy import (
@@ -18,6 +18,9 @@ from materialize.output_consistency.expression.expression_characteristics import
 )
 from materialize.output_consistency.expression.expression_with_args import (
     ExpressionWithArgs,
+)
+from materialize.output_consistency.ignore_filter.expression_matchers import (
+    matches_fun_by_any_name,
 )
 from materialize.output_consistency.ignore_filter.ignore_verdict import (
     IgnoreVerdict,
@@ -191,6 +194,9 @@ class PostExecutionInconsistencyIgnoreFilter(
             # see https://github.com/MaterializeInc/materialize/issues/17189
             return YesIgnore("#17189")
 
+        if self._uses_eager_evaluation(query_template):
+            return YesIgnore("#17189")
+
         if query_template.where_expression is not None:
             # The error message may depend on the evaluation order of the where expression.
             # see https://github.com/MaterializeInc/materialize/issues/17189
@@ -218,7 +224,7 @@ class PostExecutionInconsistencyIgnoreFilter(
             return False
 
         def is_function_taking_shortcut(expression: Expression) -> bool:
-            functions_taking_shortcuts = {"count", "string_agg", "coalesce"}
+            functions_taking_shortcuts = {"count", "string_agg"}
 
             if isinstance(expression, ExpressionWithArgs):
                 operation = expression.operation
@@ -252,3 +258,16 @@ class PostExecutionInconsistencyIgnoreFilter(
                 return True
 
         return False
+
+    def _uses_eager_evaluation(self, query_template: QueryTemplate) -> bool:
+        # note that these functions do not necessarily require an aggregation
+
+        functions_with_eager_evaluation = ["coalesce"]
+
+        return query_template.matches_any_expression(
+            partial(
+                matches_fun_by_any_name,
+                function_names_in_lower_case=functions_with_eager_evaluation,
+            ),
+            True,
+        )
