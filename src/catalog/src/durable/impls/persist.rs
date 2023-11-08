@@ -30,7 +30,6 @@ use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_proto::RustType;
 use mz_repr::Diff;
-use mz_stash_types::STASH_VERSION;
 use mz_storage_types::sources::Timeline;
 use sha2::Digest;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
@@ -44,6 +43,7 @@ use crate::durable::initialize::{DEPLOY_GENERATION, ENABLE_PERSIST_TXN_TABLES, U
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{AuditLogKey, DurableType, Snapshot, StorageUsageKey};
 use crate::durable::transaction::TransactionBatch;
+use crate::durable::upgrade::STASH_VERSION;
 use crate::durable::{
     initialize, BootstrapArgs, CatalogError, DurableCatalogError, DurableCatalogState, Epoch,
     OpenableDurableCatalogState, ReadOnlyDurableCatalogState, TimelineTimestamp, Transaction,

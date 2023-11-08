@@ -7,13 +7,44 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Contains the logic for upgrading the catalog from one version to another.
+//! This module contains all of the helpers and code paths for upgrading/migrating the [`Stash`].
+//!
+//! We facilitate migrations by keeping snapshots of the objects we previously stored, and relying
+//! entirely on these snapshots. These exist in the form of `catalog/protos/objects_vXX.proto`. By
+//! maintaining and relying on snapshots we don't have to worry about changes elsewhere in the
+//! codebase effecting our migrations because our application and serialization logic is decoupled,
+//! and the objects of the Stash for a given version are "frozen in time".
+//!
+//! When you want to make a change to the `Stash` you need to follow these steps:
+//!
+//! 1. Check the current [`STASH_VERSION`], make sure an `objects_v<STASH_VERSION>.proto` file
+//!    exists. If one doesn't, copy and paste the current `objects.proto` file, renaming it to
+//!    `objects_v<STASH_VERSION>.proto`.
+//! 2. Bump [`STASH_VERSION`] by one.
+//! 3. Make your changes to `objects.proto`.
+//! 4. Copy and paste `objects.proto`, naming the copy `objects_v<STASH_VERSION>.proto`.
+//! 5. We should now have a copy of the protobuf objects as they currently exist, and a copy of
+//!    how we want them to exist. For example, if the version of the Stash before we made our
+//!    changes was 15, we should now have `objects_v15.proto` and `objects_v16.proto`.
+//! 6. Add `v<STASH_VERSION>` to the call to the `objects!` macro in this file.
+//! 7. Add a new file to `catalog/src/durable/upgrade`, which is where we'll put the new migration
+//!    path.
+//! 8. Write an upgrade function using the the two versions of the protos we now have, e.g.
+//!    `objects_v15.proto` and `objects_v16.proto`. In this migration code you __should not__
+//!    import any defaults or constants from elsewhere in the codebase, because then a future
+//!    change could then impact a previous migration.
+//! 9. Call your upgrade function in [`crate::durable::upgrade::upgrade`].
+//!
+//! When in doubt, reach out to the Surfaces team, and we'll be more than happy to help :)
+//!
+//! [`Stash`]: mz_stash::Stash
+
 //! TODO(jkosh44) Make this generic over the catalog instead of specific to the stash
 //! implementation.
 
 use futures::FutureExt;
 use mz_stash::Stash;
-use mz_stash_types::{InternalStashError, StashError, MIN_STASH_VERSION, STASH_VERSION};
+use mz_stash_types::{InternalStashError, StashError};
 use paste::paste;
 
 use crate::durable::initialize::USER_VERSION_KEY;
@@ -43,6 +74,18 @@ macro_rules! objects {
 
 objects!(v35, v36, v37, v38, v39, v40, v41, v42, v43);
 
+/// The current version of the `Stash`.
+///
+/// We will initialize new `Stash`es with this version, and migrate existing `Stash`es to this
+/// version. Whenever the `Stash` changes, e.g. the protobufs we serialize in the `Stash`
+/// change, we need to bump this version.
+pub const STASH_VERSION: u64 = 43;
+
+/// The minimum `Stash` version number that we support migrating from.
+///
+/// After bumping this we can delete the old migrations.
+pub const MIN_STASH_VERSION: u64 = 35;
+
 #[tracing::instrument(name = "stash::upgrade", level = "debug", skip_all)]
 pub async fn upgrade(stash: &mut Stash) -> Result<(), StashError> {
     // Run migrations until we're up-to-date.
@@ -59,7 +102,11 @@ pub async fn upgrade(stash: &mut Stash) -> Result<(), StashError> {
                     const TOO_OLD_VERSION: u64 = MIN_STASH_VERSION - 1;
                     const FUTURE_VERSION: u64 = STASH_VERSION + 1;
                     let incompatible = StashError {
-                        inner: InternalStashError::IncompatibleVersion(version),
+                        inner: InternalStashError::IncompatibleVersion {
+                            found_version: version,
+                            min_stash_version: MIN_STASH_VERSION,
+                            stash_version: STASH_VERSION,
+                        },
                     };
 
                     match version {
