@@ -118,7 +118,6 @@ class PreExecutionInconsistencyIgnoreFilter(PreExecutionInconsistencyIgnoreFilte
             "string_agg",
         } and not isinstance(db_function, DbFunctionWithCustomPattern):
             # The unordered variants are to be ignored.
-            # https://github.com/MaterializeInc/materialize/issues/19832
             return YesIgnore("#19832")
 
         return NoIgnore()
@@ -156,7 +155,6 @@ class PostExecutionInconsistencyIgnoreFilter(
         if dfr_fails_but_ctf_succeeds and self._uses_shortcut_optimization(
             query_template.select_expressions, contains_aggregation
         ):
-            # see https://github.com/MaterializeInc/materialize/issues/19662
             return YesIgnore("#19662")
 
         if (
@@ -166,7 +164,6 @@ class PostExecutionInconsistencyIgnoreFilter(
                 [query_template.where_expression], contains_aggregation
             )
         ):
-            # see https://github.com/MaterializeInc/materialize/issues/17189
             return YesIgnore("#17189")
 
         if (
@@ -174,7 +171,6 @@ class PostExecutionInconsistencyIgnoreFilter(
         ) and query_template.where_expression is not None:
             # An evaluation strategy may touch further rows than the selected subset and thereby run into evaluation
             # errors (while the other uses another order).
-            # see https://github.com/MaterializeInc/materialize/issues/17189
             return YesIgnore("#17189")
 
         return NoIgnore()
@@ -188,12 +184,10 @@ class PostExecutionInconsistencyIgnoreFilter(
         if self._uses_shortcut_optimization(
             query_template.select_expressions, contains_aggregation
         ):
-            # see https://github.com/MaterializeInc/materialize/issues/17189
             return YesIgnore("#17189")
 
         if query_template.where_expression is not None:
             # The error message may depend on the evaluation order of the where expression.
-            # see https://github.com/MaterializeInc/materialize/issues/17189
             return YesIgnore("#17189")
 
         return NoIgnore()
@@ -231,7 +225,6 @@ class PostExecutionInconsistencyIgnoreFilter(
 
         for expression in expressions:
             if expression.contains(is_function_taking_shortcut, True):
-                # see https://github.com/MaterializeInc/materialize/issues/17189
                 return True
 
         return False
@@ -248,7 +241,6 @@ class PostExecutionInconsistencyIgnoreFilter(
             if expression.contains(is_null_expression, True):
                 # Constant folding takes shortcuts when it can infer that an expression will be NULL or not
                 # (e.g., `chr(huge_value) = NULL` won't be fully evaluated)
-                # see https://github.com/MaterializeInc/materialize/issues/17189
                 return True
 
         return False
