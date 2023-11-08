@@ -23,7 +23,7 @@
 //!
 //! - Implementors of this trait are structs that encapsulate all context
 //!   required to optimize a statement of type `T` end-to-end (for example
-//!   [`OptimizeMaterializedView`] for `T` = `MaterializedView`).
+//!   [`materialized_view::Optimizer`] for `T` = `MaterializedView`).
 //! - Each struct implements [`Optimize`] once for each optimization stage. The
 //!   `From` type represents the input of the stage and `Self::To` the
 //!   associated stage output. This allows to have more than one entrypoints to
@@ -57,13 +57,6 @@ pub mod materialized_view;
 pub mod peek;
 pub mod subscribe;
 pub mod view;
-
-// Re-export optimzier structs
-pub use index::OptimizeIndex;
-pub use materialized_view::OptimizeMaterializedView;
-pub use peek::OptimizePeek;
-pub use subscribe::OptimizeSubscribe;
-pub use view::OptimizeView;
 
 use mz_catalog::memory::objects::CatalogItem;
 use mz_compute_types::dataflows::DataflowDescription;
@@ -131,7 +124,7 @@ pub struct OptimizerConfig {
     pub enable_specialized_arrangements: bool,
     /// An exclusive upper bound on the number of results we may return from a
     /// Persist fast-path peek. Required by the `create_fast_path_plan` call in
-    /// [`OptimizePeek`].
+    /// [`peek::Optimizer`].
     pub persist_fast_path_limit: usize,
     /// Enable outer join lowering implemented in #22343.
     pub enable_new_outer_join_lowering: bool,
@@ -231,7 +224,7 @@ impl<'a> DataflowBuilder<'a> {
                         path.segment = desc.id.to_string()
                     );
                     desc.plan = span.in_scope(|| {
-                        let mut view_optimizer = OptimizeView::new(config.clone());
+                        let mut view_optimizer = view::Optimizer::new(config.clone());
                         view_optimizer.optimize(view.raw_expr.clone())
                     })?;
                 }

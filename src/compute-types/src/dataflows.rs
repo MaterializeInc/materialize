@@ -173,33 +173,6 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
             || self.source_imports.keys().any(|i| i == id)
     }
 
-    /// Assigns the `as_of` frontier to the supplied argument.
-    ///
-    /// This method allows the dataflow to indicate a frontier up through
-    /// which all times should be advanced. This can be done for at least
-    /// two reasons: 1. correctness and 2. performance.
-    ///
-    /// Correctness may require an `as_of` to ensure that historical detail
-    /// is consolidated at representative times that do not present specific
-    /// detail that is not specifically correct. For example, updates may be
-    /// compacted to times that are no longer the source times, but instead
-    /// some byproduct of when compaction was executed; we should not present
-    /// those specific times as meaningfully different from other equivalent
-    /// times.
-    ///
-    /// Performance may benefit from an aggressive `as_of` as it reduces the
-    /// number of distinct moments at which collections vary. Differential
-    /// dataflow will refresh its outputs at each time its inputs change and
-    /// to moderate that we can minimize the volume of distinct input times
-    /// as much as possible.
-    ///
-    /// Generally, one should consider setting `as_of` at least to the `since`
-    /// frontiers of contributing data sources and as aggressively as the
-    /// computation permits.
-    pub fn set_as_of(&mut self, as_of: Antichain<T>) {
-        self.as_of = Some(as_of);
-    }
-
     /// The number of columns associated with an identifier in the dataflow.
     pub fn arity_of(&self, id: &GlobalId) -> usize {
         for (source_id, (source, _monotonic)) in self.source_imports.iter() {
@@ -248,6 +221,33 @@ impl<P, S, T> DataflowDescription<P, S, T>
 where
     P: CollectionPlan,
 {
+    /// Assigns the `as_of` frontier to the supplied argument.
+    ///
+    /// This method allows the dataflow to indicate a frontier up through
+    /// which all times should be advanced. This can be done for at least
+    /// two reasons: 1. correctness and 2. performance.
+    ///
+    /// Correctness may require an `as_of` to ensure that historical detail
+    /// is consolidated at representative times that do not present specific
+    /// detail that is not specifically correct. For example, updates may be
+    /// compacted to times that are no longer the source times, but instead
+    /// some byproduct of when compaction was executed; we should not present
+    /// those specific times as meaningfully different from other equivalent
+    /// times.
+    ///
+    /// Performance may benefit from an aggressive `as_of` as it reduces the
+    /// number of distinct moments at which collections vary. Differential
+    /// dataflow will refresh its outputs at each time its inputs change and
+    /// to moderate that we can minimize the volume of distinct input times
+    /// as much as possible.
+    ///
+    /// Generally, one should consider setting `as_of` at least to the `since`
+    /// frontiers of contributing data sources and as aggressively as the
+    /// computation permits.
+    pub fn set_as_of(&mut self, as_of: Antichain<T>) {
+        self.as_of = Some(as_of);
+    }
+
     /// Identifiers of imported objects (indexes and sources).
     pub fn import_ids(&self) -> impl Iterator<Item = GlobalId> + Clone + '_ {
         self.index_imports

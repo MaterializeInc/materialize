@@ -18,14 +18,14 @@ use tracing::{span, Level};
 
 use crate::optimize::{Optimize, OptimizerConfig, OptimizerError};
 
-pub struct OptimizeView {
+pub struct Optimizer {
     /// A typechecking context to use throughout the optimizer pipeline.
     typecheck_ctx: TypecheckContext,
     // Optimizer config.
     config: OptimizerConfig,
 }
 
-impl OptimizeView {
+impl Optimizer {
     pub fn new(config: OptimizerConfig) -> Self {
         Self {
             typecheck_ctx: empty_context(),
@@ -34,7 +34,7 @@ impl OptimizeView {
     }
 }
 
-impl Optimize<HirRelationExpr> for OptimizeView {
+impl Optimize<HirRelationExpr> for Optimizer {
     type To = OptimizedMirRelationExpr;
 
     fn optimize(&mut self, expr: HirRelationExpr) -> Result<Self::To, OptimizerError> {

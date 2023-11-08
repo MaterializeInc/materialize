@@ -909,7 +909,7 @@ impl Coordinator {
             let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
 
             // Build an optimizer for this VIEW.
-            let mut optimizer = optimize::OptimizeView::new(optimizer_config);
+            let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
 
             // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
             let optimized_expr = optimizer.optimize(raw_expr.clone())?;
@@ -1019,7 +1019,7 @@ impl Coordinator {
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
 
         // Build an optimizer for this MATERIALIZED VIEW.
-        let mut optimizer = optimize::OptimizeMaterializedView::new(
+        let mut optimizer = optimize::materialized_view::Optimizer::new(
             self.owned_catalog(),
             compute_instance,
             id,
@@ -1033,11 +1033,11 @@ impl Coordinator {
         // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
         let local_mir_plan = optimizer.optimize(raw_expr.clone())?;
         let global_mir_plan = optimizer.optimize(local_mir_plan.clone())?;
-        // Timestamp selection
-        let since = self.least_valid_read(&global_mir_plan.id_bundle());
-        let global_mir_plan = global_mir_plan.resolve(since.clone());
         // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
         let global_lir_plan = optimizer.optimize(global_mir_plan.clone())?;
+        // Timestamp selection
+        let since = self.least_valid_read(&global_lir_plan.id_bundle(optimizer.cluster_id()));
+        let global_lir_plan = global_lir_plan.resolve(since.clone());
 
         let mut ops = Vec::new();
         ops.extend(
@@ -1053,7 +1053,7 @@ impl Coordinator {
                 create_sql,
                 raw_expr,
                 optimized_expr: local_mir_plan.expr(),
-                desc: global_lir_plan.desc(),
+                desc: global_lir_plan.desc().clone(),
                 resolved_ids,
                 cluster_id,
                 non_null_assertions,
@@ -1085,7 +1085,7 @@ impl Coordinator {
                         vec![(
                             id,
                             CollectionDescription {
-                                desc: global_lir_plan.desc(),
+                                desc: global_lir_plan.desc().clone(),
                                 data_source: DataSource::Other(DataSourceOther::Compute),
                                 since: Some(since),
                                 status_collection_id: None,
@@ -1149,7 +1149,7 @@ impl Coordinator {
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
 
         // Build an optimizer for this INDEX.
-        let mut optimizer = optimize::OptimizeIndex::new(
+        let mut optimizer = optimize::index::Optimizer::new(
             self.owned_catalog(),
             compute_instance,
             id,
@@ -1159,11 +1159,11 @@ impl Coordinator {
         // MIR ⇒ MIR optimization (global)
         let index_plan = optimize::index::Index::new(&name, &on, &keys);
         let global_mir_plan = optimizer.optimize(index_plan)?;
-        // Timestamp selection
-        let since = self.least_valid_read(&global_mir_plan.id_bundle());
-        let global_mir_plan = global_mir_plan.resolve(since);
         // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
         let global_lir_plan = optimizer.optimize(global_mir_plan.clone())?;
+        // Timestamp selection
+        let since = self.least_valid_read(&global_lir_plan.id_bundle(optimizer.cluster_id()));
+        let global_lir_plan = global_lir_plan.resolve(since);
 
         let index = catalog::Index {
             create_sql,
@@ -2236,7 +2236,7 @@ impl Coordinator {
         let optimizer_config = OptimizerConfig::from(self.catalog().system_config());
 
         // Build an optimizer for this SELECT.
-        let optimizer = optimize::OptimizePeek::new(
+        let optimizer = optimize::peek::Optimizer::new(
             Arc::clone(&catalog),
             compute_instance,
             finishing.clone(),
@@ -2515,10 +2515,6 @@ impl Coordinator {
 
         let determination = peek_plan.determination.clone();
 
-        // Move out from optimizer fields that are needed for the rest of the pipeline.
-        let finishing = optimizer.finishing;
-        let cluster_id = optimizer.compute_instance.instance_id();
-
         let max_query_result_size = std::cmp::min(
             ctx.session().vars().max_query_result_size(),
             self.catalog().system_config().max_result_size(),
@@ -2528,16 +2524,20 @@ impl Coordinator {
             .implement_peek_plan(
                 ctx.extra_mut(),
                 peek_plan,
-                finishing,
-                cluster_id,
+                optimizer.finishing().clone(),
+                optimizer.cluster_id(),
                 target_replica,
                 max_query_result_size,
             )
             .await?;
 
         if ctx.session().vars().emit_timestamp_notice() {
-            let explanation =
-                self.explain_timestamp(ctx.session(), cluster_id, &id_bundle, determination);
+            let explanation = self.explain_timestamp(
+                ctx.session(),
+                optimizer.cluster_id(),
+                &id_bundle,
+                determination,
+            );
             ctx.session()
                 .add_notice(AdapterNotice::QueryTimestamp { explanation });
         }
@@ -2688,7 +2688,7 @@ impl Coordinator {
         source_ids: BTreeSet<GlobalId>,
         id_bundle: &CollectionIdBundle,
         real_time_recency_ts: Option<Timestamp>,
-        optimizer: &mut optimize::OptimizePeek,
+        optimizer: &mut optimize::peek::Optimizer,
         global_mir_plan: optimize::peek::GlobalMirPlan,
     ) -> Result<PlannedPeek, AdapterError> {
         let conn_id = session.conn_id().clone();
@@ -2846,7 +2846,7 @@ impl Coordinator {
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
 
         // Build an optimizer for this SUBSCRIBE.
-        let mut optimizer = optimize::OptimizeSubscribe::new(
+        let mut optimizer = optimize::subscribe::Optimizer::new(
             self.owned_catalog(),
             compute_instance,
             id,
@@ -2862,7 +2862,7 @@ impl Coordinator {
         let as_of = self
             .determine_timestamp(
                 ctx.session(),
-                &global_mir_plan.id_bundle(),
+                &global_mir_plan.id_bundle(optimizer.cluster_id()),
                 &when,
                 cluster_id,
                 &timeline,
@@ -3369,7 +3369,7 @@ impl Coordinator {
         let optimizer_config = OptimizerConfig::from((system_config, explain_config));
 
         // Build an optimizer for this SELECT.
-        let mut optimizer = optimize::OptimizePeek::new(
+        let mut optimizer = optimize::peek::Optimizer::new(
             Arc::clone(&catalog),
             compute_instance,
             finishing,
@@ -3474,8 +3474,8 @@ impl Coordinator {
 
             let (fast_path_plan, df_meta) = match global_lir_plan {
                 optimize::peek::GlobalLirPlan::FastPath { plan, typ, df_meta } => {
-                    let finishing = if !optimizer.finishing.is_trivial(typ.arity()) {
-                        Some(optimizer.finishing.clone())
+                    let finishing = if !optimizer.finishing().is_trivial(typ.arity()) {
+                        Some(optimizer.finishing().clone())
                     } else {
                         None
                     };
@@ -3559,7 +3559,7 @@ impl Coordinator {
         let optimizer_config = optimize::OptimizerConfig::from((system_config, explain_config));
 
         // Build an optimizer for this MATERIALIZED VIEW.
-        let mut optimizer = optimize::OptimizeMaterializedView::new(
+        let mut optimizer = optimize::materialized_view::Optimizer::new(
             self.owned_catalog(),
             compute_instance,
             exported_sink_id,
@@ -3610,12 +3610,12 @@ impl Coordinator {
                 )
             };
 
-            // Timestamp selection
-            let since = self.least_valid_read(&global_mir_plan.id_bundle());
-            let global_mir_plan = global_mir_plan.resolve(since);
-
             // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
             let global_lir_plan = optimizer.optimize(global_mir_plan)?;
+
+            // Timestamp selection
+            let since = self.least_valid_read(&global_lir_plan.id_bundle(optimizer.cluster_id()));
+            let global_lir_plan = global_lir_plan.resolve(since);
 
             let (df_desc, df_meta) = global_lir_plan.unapply();
 
@@ -3674,7 +3674,7 @@ impl Coordinator {
         let optimizer_config = optimize::OptimizerConfig::from((system_config, explain_config));
 
         // Build an optimizer for this INDEX.
-        let mut optimizer = optimize::OptimizeIndex::new(
+        let mut optimizer = optimize::index::Optimizer::new(
             self.owned_catalog(),
             compute_instance,
             exported_index_id,
@@ -3722,12 +3722,12 @@ impl Coordinator {
                 )
             };
 
-            // Timestamp selection
-            let since = self.least_valid_read(&global_mir_plan.id_bundle());
-            let global_mir_plan = global_mir_plan.resolve(since);
-
             // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
             let global_lir_plan = optimizer.optimize(global_mir_plan)?;
+
+            // Timestamp selection
+            let since = self.least_valid_read(&global_lir_plan.id_bundle(optimizer.cluster_id()));
+            let global_lir_plan = global_lir_plan.resolve(since);
 
             let (df_desc, df_meta) = global_lir_plan.unapply();
 
@@ -3829,7 +3829,7 @@ impl Coordinator {
             let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
 
             // Build an optimizer for this VIEW.
-            let mut optimizer = optimize::OptimizeView::new(optimizer_config);
+            let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
 
             // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
             optimizer.optimize(raw_plan)?
@@ -3976,7 +3976,7 @@ impl Coordinator {
             let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
 
             // Build an optimizer for this VIEW.
-            let mut optimizer = optimize::OptimizeView::new(optimizer_config);
+            let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
 
             // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
             return_if_err!(optimizer.optimize(plan.values), ctx)

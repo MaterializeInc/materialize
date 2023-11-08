@@ -773,7 +773,7 @@ impl CatalogState {
                         optimize::OptimizerConfig::from(session_catalog.system_vars());
 
                     // Build an optimizer for this VIEW.
-                    let mut optimizer = optimize::OptimizeView::new(optimizer_config);
+                    let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
 
                     // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
                     let raw_expr = view.expr;
@@ -909,7 +909,7 @@ impl CatalogState {
                         optimize::OptimizerConfig::from(session_catalog.system_vars());
 
                     // Build an optimizer for this VIEW.
-                    let mut optimizer = optimize::OptimizeView::new(optimizer_config);
+                    let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
 
                     // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
                     let raw_expr = view.expr;
