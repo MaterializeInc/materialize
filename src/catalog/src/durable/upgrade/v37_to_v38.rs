@@ -7,10 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_stash_types::upgrade::{objects_v37, objects_v38};
+use mz_stash::upgrade::MigrationAction;
+use mz_stash::{Transaction, TypedCollection};
+use mz_stash_types::StashError;
 
-use crate::upgrade::MigrationAction;
-use crate::{StashError, Transaction, TypedCollection};
+use crate::durable::upgrade::{objects_v37, objects_v38};
 
 /// Update fingerprint of builtin types to have timestsamp with precision
 pub async fn upgrade(tx: &Transaction<'_>) -> Result<(), StashError> {

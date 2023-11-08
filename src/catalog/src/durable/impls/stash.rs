@@ -27,12 +27,12 @@ use mz_proto::{ProtoType, RustType};
 use mz_repr::Timestamp;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_stash::{AppendBatch, DebugStashFactory, Diff, Stash, StashFactory, TypedCollection};
-use mz_stash_types::objects::proto;
 use mz_stash_types::StashError;
 use mz_storage_types::sources::Timeline;
 
 use crate::durable::debug::{Collection, CollectionTrace, Trace};
 use crate::durable::initialize::{DEPLOY_GENERATION, ENABLE_PERSIST_TXN_TABLES, USER_VERSION_KEY};
+use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{
     AuditLogKey, DurableType, IdAllocKey, IdAllocValue, Snapshot, StorageUsageKey,
     TimelineTimestamp, TimestampValue,

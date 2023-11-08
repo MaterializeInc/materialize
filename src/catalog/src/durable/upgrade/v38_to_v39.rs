@@ -7,10 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_stash_types::upgrade::{objects_v38 as v38, objects_v39 as v39};
+use mz_stash::upgrade::{wire_compatible, MigrationAction, WireCompatible};
+use mz_stash::{Transaction, TypedCollection};
+use mz_stash_types::StashError;
 
-use crate::upgrade::{wire_compatible, MigrationAction, WireCompatible};
-use crate::{StashError, Transaction, TypedCollection};
+use crate::durable::upgrade::{objects_v38 as v38, objects_v39 as v39};
 
 wire_compatible!(v38::RoleKey with v39::RoleKey);
 wire_compatible!(v38::RoleAttributes with v39::RoleAttributes);

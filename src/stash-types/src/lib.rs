@@ -84,25 +84,6 @@ use mz_proto::TryFromProtoError;
 use tokio_postgres::error::SqlState;
 
 pub mod metrics;
-pub mod objects;
-
-/// Not a public API, only exposed for mz-stash.
-pub mod upgrade {
-    use paste::paste;
-    macro_rules! objects {
-        ( $( $x:ident ),* ) => {
-            paste! {
-                $(
-                    pub mod [<objects_ $x>] {
-                        include!(concat!(env!("OUT_DIR"), "/objects_", stringify!($x), ".rs"));
-                    }
-                )*
-            }
-        }
-    }
-
-    objects!(v35, v36, v37, v38, v39, v40, v41, v42, v43);
-}
 
 /// The current version of the `Stash`.
 ///

@@ -44,15 +44,6 @@ use mz_stash_types::{InternalStashError, StashError};
 
 use crate::{AppendBatch, Data, Transaction, TypedCollection};
 
-pub mod v35_to_v36;
-pub mod v36_to_v37;
-pub mod v37_to_v38;
-pub mod v38_to_v39;
-pub mod v39_to_v40;
-pub mod v40_to_v41;
-pub mod v41_to_v42;
-pub mod v42_to_v43;
-
 pub enum MigrationAction<K1, K2, V2> {
     /// Deletes the provided key.
     #[allow(unused)]
@@ -244,6 +235,7 @@ unsafe impl<T: prost::Message + Default + Clone> WireCompatible<T> for T {
 /// `WireCompatible<objects_v27::DatabaseKey> for objects_v28::DatabaseKey` and generate `proptest`
 /// cases that will create arbitrary objects of type `B` and assert they can be deserialized with
 /// type `A`, and vice versa.
+#[macro_export]
 macro_rules! wire_compatible {
     ($a:ident $(:: $a_sub:ident)* with $b:ident $(:: $b_sub:ident)*) => {
         ::static_assertions::assert_impl_all!(
@@ -297,4 +289,4 @@ macro_rules! wire_compatible {
         }
     };
 }
-pub(crate) use wire_compatible;
+pub use wire_compatible;

@@ -9,7 +9,6 @@ publish = false
 [dependencies]
 anyhow = "1.0.66"
 mz-ore = { path = "../ore" }
-mz-proto = { path = "../proto" }
 mz-stash-types = { path = "../stash-types" }
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}
 proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git", features = ["boxed_union"]}

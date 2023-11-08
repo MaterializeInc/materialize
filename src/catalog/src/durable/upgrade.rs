@@ -11,12 +11,37 @@
 //! TODO(jkosh44) Make this generic over the catalog instead of specific to the stash
 //! implementation.
 
-use crate::durable::initialize::USER_VERSION_KEY;
-use crate::durable::CONFIG_COLLECTION;
 use futures::FutureExt;
 use mz_stash::Stash;
-use mz_stash_types::objects::proto;
 use mz_stash_types::{InternalStashError, StashError, MIN_STASH_VERSION, STASH_VERSION};
+use paste::paste;
+
+use crate::durable::initialize::USER_VERSION_KEY;
+use crate::durable::objects::serialization::proto;
+use crate::durable::{upgrade, CONFIG_COLLECTION};
+
+mod v35_to_v36;
+mod v36_to_v37;
+mod v37_to_v38;
+mod v38_to_v39;
+mod v39_to_v40;
+mod v40_to_v41;
+mod v41_to_v42;
+mod v42_to_v43;
+
+macro_rules! objects {
+        ( $( $x:ident ),* ) => {
+            paste! {
+                $(
+                    pub mod [<objects_ $x>] {
+                        include!(concat!(env!("OUT_DIR"), "/objects_", stringify!($x), ".rs"));
+                    }
+                )*
+            }
+        }
+    }
+
+objects!(v35, v36, v37, v38, v39, v40, v41, v42, v43);
 
 #[tracing::instrument(name = "stash::upgrade", level = "debug", skip_all)]
 pub async fn upgrade(stash: &mut Stash) -> Result<(), StashError> {
@@ -40,14 +65,14 @@ pub async fn upgrade(stash: &mut Stash) -> Result<(), StashError> {
                     match version {
                         ..=TOO_OLD_VERSION => return Err(incompatible),
 
-                        35 => mz_stash::upgrade::v35_to_v36::upgrade(&tx).await?,
-                        36 => mz_stash::upgrade::v36_to_v37::upgrade(),
-                        37 => mz_stash::upgrade::v37_to_v38::upgrade(&tx).await?,
-                        38 => mz_stash::upgrade::v38_to_v39::upgrade(&tx).await?,
-                        39 => mz_stash::upgrade::v39_to_v40::upgrade(&tx).await?,
-                        40 => mz_stash::upgrade::v40_to_v41::upgrade(),
-                        41 => mz_stash::upgrade::v41_to_v42::upgrade(),
-                        42 => mz_stash::upgrade::v42_to_v43::upgrade(),
+                        35 => upgrade::v35_to_v36::upgrade(&tx).await?,
+                        36 => upgrade::v36_to_v37::upgrade(),
+                        37 => upgrade::v37_to_v38::upgrade(&tx).await?,
+                        38 => upgrade::v38_to_v39::upgrade(&tx).await?,
+                        39 => upgrade::v39_to_v40::upgrade(&tx).await?,
+                        40 => upgrade::v40_to_v41::upgrade(),
+                        41 => upgrade::v41_to_v42::upgrade(),
+                        42 => upgrade::v42_to_v43::upgrade(),
 
                         // Up-to-date, no migration needed!
                         STASH_VERSION => return Ok(STASH_VERSION),
