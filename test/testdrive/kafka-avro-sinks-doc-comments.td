@@ -169,7 +169,7 @@ contains: column "t.bad_column" does not exist
   KEY (c2) NOT ENFORCED
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
-contains: unspecified sink name
+contains: unspecified name for sink
 
 ! CREATE SINK bad_sink FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink1-${testdrive.seed}')

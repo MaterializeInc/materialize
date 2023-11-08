@@ -226,6 +226,7 @@ pub enum PlanError {
     TestScriptSourcePurification(TestScriptSourcePurificationError),
     LoadGeneratorSourcePurification(LoadGeneratorSourcePurificationError),
     CsrPurification(CsrPurificationError),
+    MissingName(CatalogItemType),
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -589,6 +590,9 @@ impl fmt::Display for PlanError {
             Self::CsrPurification(e) => write!(f, "CONFLUENT SCHEMA REGISTRY validation: {}", e),
             Self::MangedReplicaName(name) => {
                 write!(f, "{name} is reserved for replicas of managed clusters")
+            }
+            Self::MissingName(item_type) => {
+                write!(f, "unspecified name for {item_type}")
             }
         }
     }

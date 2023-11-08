@@ -2204,7 +2204,7 @@ pub fn plan_create_sink(
 
     // Check for an object in the catalog with this same name
     let Some(name) = name else {
-        sql_bail!("unspecified sink name");
+        return Err(PlanError::MissingName(CatalogItemType::Sink));
     };
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
     let full_name = scx.catalog.resolve_full_name(&name);
