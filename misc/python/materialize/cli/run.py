@@ -148,7 +148,6 @@ def main() -> int:
             artifact_path = MZ_ROOT / "target" / "release"
         else:
             artifact_path = MZ_ROOT / "target" / "debug"
-        program_path = artifact_path / args.program
 
         if args.disable_mac_codesigning:
             if sys.platform != "darwin":
@@ -164,7 +163,7 @@ def main() -> int:
             command = shlex.split(args.wrapper)
         else:
             command = []
-        command.append(str(program_path))
+        command.append(str(artifact_path / args.program))
         if args.tokio_console:
             command += ["--tokio-console-listen-addr=127.0.0.1:6669"]
         if args.program == "environmentd":
