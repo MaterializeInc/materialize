@@ -2676,6 +2676,28 @@ fn test_webhook_duplicate_headers() {
     assert_eq!(resp.status().as_u16(), 401);
 }
 
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_webhook_invalid_path() {
+    let server = test_util::start_server(test_util::Config::default()).unwrap();
+    let http_client = Client::new();
+
+    let webhook_url = format!(
+        "http://{}/api/webhook/materialize/public/webhook_text/extra_component",
+        server.inner.http_local_addr()
+    );
+
+    // Send a request with duplicate headers.
+    let resp = http_client
+        .post(webhook_url)
+        .body("test")
+        .send()
+        .expect("failed to POST event");
+
+    assert_eq!(resp.status().as_u16(), 404);
+    assert!(resp.text().unwrap().is_empty());
+}
+
 // Test that websockets observe cancellation and leave the transaction in an idle state.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
