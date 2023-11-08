@@ -488,10 +488,13 @@ impl SourceRender for KafkaSourceConnection {
                     // something like KIP-516 so we're left with heuristics.
                     //
                     // The first heuristic is whether the reported number of partitions went down
+                    //
+                    // These errors are not fixable without recreating the source, and are
+                    // therefore `Permanent`.
                     if !PartialOrder::less_equal(data_cap.time(), &future_ts) {
                         let prev_pid_count = prev_pid_info.map(|info| info.len()).unwrap_or(0);
                         let pid_count = partitions.len();
-                        let err = SourceReaderError::other_definite(anyhow!(
+                        let err = SourceReaderError::permanent_definite(anyhow!(
                             "topic was recreated: partition \
                                      count regressed from {prev_pid_count} to {pid_count}"
                         ));
@@ -505,7 +508,7 @@ impl SourceRender for KafkaSourceConnection {
                         for (pid, prev_watermarks) in prev_pid_info {
                             let watermarks = &partitions[&pid];
                             if !(prev_watermarks.high <= watermarks.high) {
-                                let err = SourceReaderError::other_definite(anyhow!(
+                                let err = SourceReaderError::permanent_definite(anyhow!(
                                     "topic was recreated: high watermark of \
                                         partition {pid} regressed from {} to {}",
                                     prev_watermarks.high,

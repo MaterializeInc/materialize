@@ -162,9 +162,9 @@ impl SourceReaderError {
     /// This is an unclassified but definite error. This is typically only appropriate
     /// when the error is permanently fatal for the source... some critical invariant
     /// is violated or data is corrupted, for example.
-    pub fn other_definite(e: anyhow::Error) -> SourceReaderError {
+    pub fn permanent_definite(e: anyhow::Error) -> SourceReaderError {
         SourceReaderError {
-            inner: SourceErrorDetails::Other(format!("{}", e)),
+            inner: SourceErrorDetails::Permanent(format!("{}", e)),
         }
     }
 }

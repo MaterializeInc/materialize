@@ -341,6 +341,7 @@ class KafkaSinkDisruption:
 class PgDisruption:
     name: str
     breakage: Callable
+    expected_status: str
     expected_error: str
     fixage: Callable | None
 
@@ -361,7 +362,7 @@ class PgDisruption:
         ):
             self.populate(c)
             self.breakage(c, seed)
-            self.assert_error(c, self.expected_error)
+            self.assert_error(c, self.expected_status, self.expected_error)
 
             if self.fixage:
                 self.fixage(c, seed)
@@ -400,7 +401,7 @@ class PgDisruption:
             )
         )
 
-    def assert_error(self, c: Composition, error: str) -> None:
+    def assert_error(self, c: Composition, status: str, error: str) -> None:
         c.testdrive(
             dedent(
                 f"""
@@ -410,9 +411,9 @@ class PgDisruption:
                 > SELECT status, error ~* '{error}'
                   FROM mz_internal.mz_source_status_history
                   JOIN mz_sources ON mz_sources.id = source_id
-                  WHERE name = 'source1' and status = 'stalled'
+                  WHERE name = 'source1' and status = '{status}'
                   ORDER BY occurred_at DESC LIMIT 1
-                stalled true
+                {status} true
                 """
             )
         )
@@ -489,6 +490,7 @@ disruptions: list[Disruption] = [
     PgDisruption(
         name="kill-postgres",
         breakage=lambda c, _: c.kill("postgres"),
+        expected_status="stalled",
         expected_error="error connecting to server|connection closed|deadline has elapsed",
         fixage=lambda c, _: c.up("postgres"),
     ),
@@ -503,6 +505,8 @@ disruptions: list[Disruption] = [
                 """
             )
         ),
+        # TODO(guswynn): ideally this would be a `failed` error, but we currently restart continuously on it.
+        expected_status="stalled",
         expected_error="publication .+ does not exist",
         # Can't recover when publication state is deleted.
         fixage=None,
@@ -510,12 +514,14 @@ disruptions: list[Disruption] = [
     PgDisruption(
         name="alter-postgres",
         breakage=lambda c, _: alter_pg_table(c),
+        expected_status="failed",
         expected_error="source table source1 with oid .+ has been altered",
         fixage=None,
     ),
     PgDisruption(
         name="unsupported-postgres",
         breakage=lambda c, _: unsupported_pg_table(c),
+        expected_status="failed",
         expected_error="invalid input syntax for type array",
         fixage=None,
     ),

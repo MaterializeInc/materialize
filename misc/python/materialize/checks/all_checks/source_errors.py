@@ -92,8 +92,8 @@ class SourceErrors(Check):
                   WHERE name LIKE 'source_errors_source%'
                   AND type != 'subsource'
                   AND type != 'progress';
-                stalled true
-                stalled true
+                failed true
+                failed true
                 """
             )
         )

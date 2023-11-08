@@ -251,7 +251,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
 
             let (feedback_handle, feedback) = into_time_scope.feedback(Default::default());
 
-            let (mut outputs, source_health, token) = crate::render::sources::render_source(
+            let (outputs, source_health, token) = crate::render::sources::render_source(
                 into_time_scope,
                 &debug_name,
                 primary_source_id,
@@ -269,9 +269,14 @@ pub fn build_ingestion_dataflow<A: Allocate>(
             let mut upper_streams = vec![];
             let mut health_streams = vec![source_health];
             for (export_id, export) in description.source_exports {
-                let (ok, err) = outputs
-                    .get_mut(export.output_index)
-                    .expect("known to exist");
+                // Skip rendering a sink for outputs that are not actually rendered (because they
+                // have empty uppers)>
+                let (ok, err) = if let Some((ok, err)) = outputs.get(export.output_index) {
+                    (ok, err)
+                } else {
+                    continue;
+                };
+
                 let source_data = ok.map(Ok).concat(&err.map(Err));
 
                 let metrics = SourcePersistSinkMetrics::new(
