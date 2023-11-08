@@ -271,15 +271,15 @@ class InsertAction(Action):
             else:
                 exe.commit() if self.rng.choice([True, False]) else exe.rollback()
         if not table:
-            table = self.rng.choice(exe.db.tables)
+            table = self.rng.choice(
+                [table for table in exe.db.tables if table.num_rows <= MAX_ROWS]
+            )
 
         column_names = ", ".join(column.name(True) for column in table.columns)
         column_values = ", ".join(
             column.value(self.rng, True) for column in table.columns
         )
         query = f"INSERT INTO {table} ({column_names}) VALUES ({column_values})"
-        if table.num_rows > MAX_ROWS:
-            return
         exe.execute(query)
         exe.insert_table = table.table_id
         table.num_rows += 1
@@ -1270,35 +1270,39 @@ class HttpPostAction(Action):
                 return
 
             source = self.rng.choice(exe.db.webhook_sources)
-        url = f"http://{exe.db.host}:{exe.db.ports['http']}/api/webhook/{source.schema.db.name()}/{source.schema.name()}/{source.name()}"
+            url = f"http://{exe.db.host}:{exe.db.ports['http']}/api/webhook/{source.schema.db.name()}/{source.schema.name()}/{source.name()}"
 
-        payload = source.body_format.to_data_type().random_value(self.rng)
+            payload = source.body_format.to_data_type().random_value(self.rng)
 
-        header_fields = source.explicit_include_headers
-        if source.include_headers:
-            header_fields.extend(["x-event-type", "signature", "x-mz-api-key"])
-
-        headers = {
-            header: f"{datetime.datetime.now()}"
-            if header == "timestamp"
-            else f'"{Text.random_value(self.rng)}"'.encode()
-            for header in self.rng.sample(header_fields, len(header_fields))
-        }
-
-        headers_strs = [f"{key}: {value}" for key, value in headers.items()]
-        log = f"POST {url} Headers: {', '.join(headers_strs)} Body: {payload.encode('utf-8')}"
-        exe.log(log)
-        try:
-            source.num_rows += 1
-            result = requests.post(url, data=payload.encode("utf-8"), headers=headers)
-            if result.status_code != 200:
-                raise QueryError(
-                    f"POST failed: {result.status_code}, {result.text}", log
+            header_fields = source.explicit_include_headers
+            if source.include_headers:
+                header_fields.extend(
+                    ["x-event-type", "signature", "x-mz-api-key"]
                 )
-        except (requests.exceptions.ConnectionError):
-            # Expected when Mz is killed
-            if exe.db.scenario not in (Scenario.Kill, Scenario.BackupRestore):
-                raise
+
+            headers = {
+                header: f"{datetime.datetime.now()}"
+                if header == "timestamp"
+                else f'"{Text.random_value(self.rng)}"'.encode()
+                for header in self.rng.sample(header_fields, len(header_fields))
+            }
+
+            headers_strs = [f"{key}: {value}" for key, value in headers.items()]
+            log = f"POST {url} Headers: {', '.join(headers_strs)} Body: {payload.encode('utf-8')}"
+            exe.log(log)
+            try:
+                source.num_rows += 1
+                result = requests.post(
+                    url, data=payload.encode("utf-8"), headers=headers
+                )
+                if result.status_code != 200:
+                    raise QueryError(
+                        f"POST failed: {result.status_code}, {result.text}", log
+                    )
+            except (requests.exceptions.ConnectionError):
+                # Expected when Mz is killed
+                if exe.db.scenario not in (Scenario.Kill, Scenario.BackupRestore):
+                    raise
 
 
 class ActionList:
