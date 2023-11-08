@@ -100,7 +100,7 @@ impl Coordinator {
     pub(crate) async fn catalog_transact_with<'a, F, R>(
         &mut self,
         conn_id: Option<&ConnectionId>,
-        mut ops: Vec<catalog::Op>,
+        ops: Vec<catalog::Op>,
         f: F,
     ) -> Result<R, AdapterError>
     where
@@ -116,7 +116,6 @@ impl Coordinator {
         let mut views_to_drop = vec![];
         let mut replication_slots_to_drop: Vec<(mz_postgres_util::Config, String)> = vec![];
         let mut secrets_to_drop = vec![];
-        let mut timelines_to_drop = vec![];
         let mut vpc_endpoints_to_drop = vec![];
         let mut clusters_to_drop = vec![];
         let mut cluster_replicas_to_drop = vec![];
@@ -341,18 +340,6 @@ impl Coordinator {
                 Some((timeline, (empty, bundle)))
             })
             .collect();
-        timelines_to_drop.extend(
-            timeline_associations
-                .iter()
-                .filter_map(|(timeline, (is_empty, _))| is_empty.then_some(timeline))
-                .cloned(),
-        );
-        ops.extend(
-            timelines_to_drop
-                .iter()
-                .cloned()
-                .map(catalog::Op::DropTimeline),
-        );
 
         self.validate_resource_limits(&ops, conn_id.unwrap_or(&SYSTEM_CONN_ID))?;
 
@@ -1055,7 +1042,6 @@ impl Coordinator {
                 | Op::AlterSink { .. }
                 | Op::AlterSource { .. }
                 | Op::AlterSetCluster { .. }
-                | Op::DropTimeline(_)
                 | Op::UpdatePrivilege { .. }
                 | Op::UpdateDefaultPrivilege { .. }
                 | Op::GrantRole { .. }
