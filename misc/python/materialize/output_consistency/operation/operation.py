@@ -19,6 +19,7 @@ from materialize.output_consistency.operation.operation_args_validator import (
 )
 from materialize.output_consistency.operation.operation_param import OperationParam
 from materialize.output_consistency.operation.return_type_spec import ReturnTypeSpec
+from materialize.util import MzVersion
 
 EXPRESSION_PLACEHOLDER = "$"
 
@@ -43,6 +44,7 @@ class DbOperationOrFunction:
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
         is_enabled: bool = True,
         is_pg_compatible: bool = True,
+        since_mz_version: MzVersion | None = None,
     ):
         """
         :param is_enabled: an operation should only be disabled if its execution causes problems;
@@ -60,6 +62,7 @@ class DbOperationOrFunction:
         self.relevance = relevance
         self.is_enabled = is_enabled
         self.is_pg_compatible = is_pg_compatible
+        self.since_mz_version = since_mz_version
 
     def to_pattern(self, args_count: int) -> str:
         raise NotImplementedError
@@ -157,6 +160,7 @@ class DbFunction(DbOperationOrFunction):
         relevance: OperationRelevance = OperationRelevance.DEFAULT,
         is_enabled: bool = True,
         is_pg_compatible: bool = True,
+        since_mz_version: MzVersion | None = None,
     ):
         self.validate_params(params)
 
@@ -170,6 +174,7 @@ class DbFunction(DbOperationOrFunction):
             relevance=relevance,
             is_enabled=is_enabled,
             is_pg_compatible=is_pg_compatible,
+            since_mz_version=since_mz_version,
         )
         self.function_name_in_lower_case = function_name.lower()
 
