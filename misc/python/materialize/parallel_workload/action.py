@@ -1258,6 +1258,12 @@ class DropKafkaSinkAction(Action):
 
 
 class HttpPostAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        result = super().errors_to_ignore(exe)
+        if exe.db.scenario == Scenario.Rename:
+            result.extend(["POST failed: 404, no object was found at the path"])
+        return result
+
     def run(self, exe: Executor) -> None:
         with exe.db.lock:
             if not exe.db.webhook_sources:
@@ -1279,15 +1285,16 @@ class HttpPostAction(Action):
             for header in self.rng.sample(header_fields, len(header_fields))
         }
 
-        headers_strs = [f"{key}: {value}" for key, value in enumerate(headers)]
-        exe.log(
-            f"POST Headers: {', '.join(headers_strs)} Body: {payload.encode('utf-8')}"
-        )
+        headers_strs = [f"{key}: {value}" for key, value in headers.items()]
+        log = f"POST {url} Headers: {', '.join(headers_strs)} Body: {payload.encode('utf-8')}"
+        exe.log(log)
         try:
             source.num_rows += 1
             result = requests.post(url, data=payload.encode("utf-8"), headers=headers)
             if result.status_code != 200:
-                raise ValueError(f"POST failed: {result.status_code}, {result.text}")
+                raise QueryError(
+                    f"POST failed: {result.status_code}, {result.text}", log
+                )
         except (requests.exceptions.ConnectionError):
             # Expected when Mz is killed
             if exe.db.scenario not in (Scenario.Kill, Scenario.BackupRestore):
