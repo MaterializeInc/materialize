@@ -207,6 +207,13 @@ pub enum AdapterError {
     MultiTableWriteTransaction,
     /// The transaction can only execute a single statement.
     SingleStatementTransaction,
+    /// The transaction can only execute simple DDL.
+    DDLOnlyTransaction,
+    /// Another session modified the Catalog while this transaction was open.
+    DDLTransactionRace,
+    /// Used to prevent us from durably committing state while a DDL transaction is open, should
+    /// never be returned to the user.
+    DDLTransactionDryRun,
     /// An error occurred in the storage layer
     Storage(mz_storage_types::controller::StorageError),
     /// An error occurred in the compute layer
@@ -442,12 +449,15 @@ impl AdapterError {
             AdapterError::Unsupported(..) => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::Unstructured(_) => SqlState::INTERNAL_ERROR,
             AdapterError::UntargetedLogRead { .. } => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::DDLTransactionRace => SqlState::T_R_SERIALIZATION_FAILURE,
+            AdapterError::DDLTransactionDryRun => SqlState::T_R_SERIALIZATION_FAILURE,
             // It's not immediately clear which error code to use here because a
-            // "write-only transaction" and "single table write transaction" are
-            // not things in Postgres. This error code is the generic "bad txn thing"
-            // code, so it's probably the best choice.
+            // "write-only transaction", "single table write transaction", or "ddl only
+            // transaction" are not things in Postgres. This error code is the generic "bad txn
+            // thing" code, so it's probably the best choice.
             AdapterError::WriteOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::MultiTableWriteTransaction => SqlState::INVALID_TRANSACTION_STATE,
+            AdapterError::DDLOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::Storage(_) | AdapterError::Compute(_) | AdapterError::Orchestrator(_) => {
                 SqlState::INTERNAL_ERROR
             }
@@ -662,6 +672,13 @@ impl fmt::Display for AdapterError {
             AdapterError::MultiTableWriteTransaction => {
                 f.write_str("write transactions only support writes to a single table")
             }
+            AdapterError::DDLOnlyTransaction => f.write_str(
+                "transactions which modify objects are restricted to just modifying objects",
+            ),
+            AdapterError::DDLTransactionRace => {
+                f.write_str("object state changed while transaction was in progress")
+            }
+            AdapterError::DDLTransactionDryRun => f.write_str("ddl transaction dry run"),
             AdapterError::Storage(e) => e.fmt(f),
             AdapterError::Compute(e) => e.fmt(f),
             AdapterError::Orchestrator(e) => e.fmt(f),

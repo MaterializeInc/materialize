@@ -184,8 +184,12 @@ impl CatalogState {
             .database_by_name
             .get(session.vars().database())
             .map(|id| id.clone());
+        let state = match session.transaction().catalog_state() {
+            Some(txn_catalog_state) => Cow::Borrowed(txn_catalog_state),
+            None => Cow::Borrowed(self),
+        };
         ConnCatalog {
-            state: Cow::Borrowed(self),
+            state,
             unresolvable_ids: BTreeSet::new(),
             conn_id: session.conn_id().clone(),
             cluster: session.vars().cluster().into(),

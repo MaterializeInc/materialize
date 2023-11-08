@@ -26,7 +26,7 @@ use mz_sql::plan::{
 };
 use smallvec::SmallVec;
 
-use crate::catalog::Catalog;
+use crate::catalog::ConnCatalog;
 use crate::coord::TargetCluster;
 use crate::notice::AdapterNotice;
 use crate::session::Session;
@@ -36,7 +36,7 @@ use mz_catalog::builtin::MZ_INTROSPECTION_CLUSTER;
 /// Checks whether or not we should automatically run a query on the `mz_introspection`
 /// cluster, as opposed to whatever the current default cluster is.
 pub fn auto_run_on_introspection<'a, 's, 'p>(
-    catalog: &'a Catalog,
+    catalog: &'a ConnCatalog<'a>,
     session: &'s Session,
     plan: &'p Plan,
 ) -> TargetCluster {
@@ -161,11 +161,11 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
     // Make sure we only depend on the system catalog, and nothing we depend on is a
     // per-replica object, that requires being run a specific replica.
     let valid_dependencies = depends_on.all(|id| {
-        let entry = catalog.get_entry(&id);
+        let entry = catalog.state().get_entry(&id);
         let schema = &entry.name().qualifiers.schema_spec;
 
         let system_only = catalog.state().is_system_schema_specifier(schema);
-        let non_replica = catalog.introspection_dependencies(id).is_empty();
+        let non_replica = catalog.state().introspection_dependencies(id).is_empty();
 
         system_only && non_replica
     });
@@ -173,7 +173,9 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
     if (has_dependencies && valid_dependencies)
         || (!has_dependencies && !could_run_expensive_function)
     {
-        let intros_cluster = catalog.resolve_builtin_cluster(&MZ_INTROSPECTION_CLUSTER);
+        let intros_cluster = catalog
+            .state()
+            .resolve_builtin_cluster(&MZ_INTROSPECTION_CLUSTER);
         tracing::debug!("Running on '{}' cluster", MZ_INTROSPECTION_CLUSTER.name);
 
         // If we're running on a different cluster than the active one, notify the user.
