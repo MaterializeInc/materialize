@@ -113,6 +113,18 @@ def get_latest_version() -> Version:
     return max(all_version_tags)
 
 
+def get_tags_of_current_commit(fetch_tags: bool = True) -> list[str]:
+    if fetch_tags:
+        fetch(include_tags=True)
+
+    result = spawn.capture(["git", "tag", "--points-at", "HEAD"])
+
+    if len(result) == 0:
+        return []
+
+    return result.splitlines()
+
+
 def is_ancestor(earlier: str, later: str) -> bool:
     """True if earlier is in an ancestor of later"""
     try:
