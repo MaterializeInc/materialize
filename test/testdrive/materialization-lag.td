@@ -11,6 +11,11 @@
 #
 # These tests rely on testdrive's retry feature, as they query introspection
 # relations whose data might not be immediately available.
+#
+# Note that when running under cloudtest, it's quite common to see lags of over
+# 1 second even when all replicas are healthy. So we need to build some
+# tolerances into these checks that verify whether induced lag is present. A
+# threshold value of 2 seconds seems to work fine.
 
 > CREATE CLUSTER source SIZE '1'
 > CREATE CLUSTER compute SIZE '1'
@@ -53,14 +58,14 @@
 > SELECT count(*) > 0 FROM mv
 true
 
-# When all clusters are running, there should be no visible lag.
+# When all clusters are running, there should be no/little visible lag.
 
 > SELECT name
   FROM mz_internal.mz_materialization_lag
   JOIN mz_objects ON (id = object_id)
   WHERE
-    local_lag > INTERVAL '1s' OR
-    global_lag > INTERVAL '1s'
+    local_lag > INTERVAL '2s' OR
+    global_lag > INTERVAL '2s'
 
 # When the source is down, there should be no visible lag either, as lag is
 # relative to the source frontiers.
@@ -71,8 +76,8 @@ true
   FROM mz_internal.mz_materialization_lag
   JOIN mz_objects ON (id = object_id)
   WHERE
-    local_lag > INTERVAL '1s' OR
-    global_lag > INTERVAL '1s'
+    local_lag > INTERVAL '2s' OR
+    global_lag > INTERVAL '2s'
 
 > ALTER CLUSTER source SET (REPLICATION FACTOR 1)
 
@@ -83,13 +88,13 @@ true
 > SELECT name
   FROM mz_internal.mz_materialization_lag
   JOIN mz_objects o ON (id = object_id)
-  WHERE local_lag > INTERVAL '1s'
+  WHERE local_lag > INTERVAL '2s'
 idx
 
 > SELECT name
   FROM mz_internal.mz_materialization_lag
   JOIN mz_objects ON (id = object_id)
-  WHERE global_lag > INTERVAL '1s'
+  WHERE global_lag > INTERVAL '2s'
 idx
 mv
 snk
@@ -102,8 +107,8 @@ snk
   FROM mz_internal.mz_materialization_lag
   JOIN mz_objects ON (id = object_id)
   WHERE
-    local_lag > INTERVAL '1s' OR
-    global_lag > INTERVAL '1s'
+    local_lag > INTERVAL '2s' OR
+    global_lag > INTERVAL '2s'
 
 # Bring down the sink cluster and observe resulting lag.
 
@@ -112,13 +117,13 @@ snk
 > SELECT name
   FROM mz_internal.mz_materialization_lag
   JOIN mz_objects ON (id = object_id)
-  WHERE local_lag > INTERVAL '1s'
+  WHERE local_lag > INTERVAL '2s'
 snk
 
 > SELECT name
   FROM mz_internal.mz_materialization_lag
   JOIN mz_objects ON (id = object_id)
-  WHERE global_lag > INTERVAL '1s'
+  WHERE global_lag > INTERVAL '2s'
 snk
 
 # Bringing up the sink cluster again should remove the lag.
@@ -129,8 +134,8 @@ snk
   FROM mz_internal.mz_materialization_lag
   JOIN mz_objects ON (id = object_id)
   WHERE
-    local_lag > INTERVAL '1s' OR
-    global_lag > INTERVAL '1s'
+    local_lag > INTERVAL '2s' OR
+    global_lag > INTERVAL '2s'
 
 # If a source has an empty frontier we can't compute a lag value anymore, so
 # the lag of dependant collections shows up as NULL instead.
