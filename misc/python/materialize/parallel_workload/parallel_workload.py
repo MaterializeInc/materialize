@@ -25,6 +25,8 @@ from materialize.parallel_workload.action import (
     BackupRestoreAction,
     CancelAction,
     KillAction,
+    StatisticsAction,
+    action_lists,
     ddl_action_list,
     dml_nontrans_action_list,
     fetch_action_list,
@@ -61,13 +63,14 @@ def run(
     scenario: Scenario,
     num_threads: int | None,
     naughty_identifiers: bool,
+    fast_startup: bool,
     composition: Composition | None,
 ) -> None:
     num_threads = num_threads or os.cpu_count() or 10
     random.seed(seed)
 
     print(
-        f"+++ Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity.value} --scenario={scenario.value} {'--naughty-identifiers ' if naughty_identifiers else ''}(--host={host})"
+        f"+++ Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity.value} --scenario={scenario.value} {'--naughty-identifiers ' if naughty_identifiers else ''} {'--fast-startup' if fast_startup else ''}(--host={host})"
     )
     initialize_logging()
 
@@ -77,7 +80,7 @@ def run(
 
     rng = random.Random(random.randrange(SEED_RANGE))
     database = Database(
-        rng, seed, host, ports, complexity, scenario, naughty_identifiers
+        rng, seed, host, ports, complexity, scenario, naughty_identifiers, fast_startup
     )
 
     system_conn = pg8000.connect(
@@ -241,7 +244,27 @@ def run(
     else:
         raise ValueError(f"Unknown scenario {scenario}")
 
-    num_queries = 0
+    if False:  # sanity check for debugging
+        worker_rng = random.Random(rng.randrange(SEED_RANGE))
+        worker = Worker(
+            worker_rng,
+            [StatisticsAction(worker_rng, composition)],
+            [1],
+            end_time,
+            autocommit=True,
+            system=True,
+            composition=composition,
+        )
+        workers.append(worker)
+        thread = threading.Thread(
+            name="statistics",
+            target=worker.run,
+            args=(host, ports["mz_system"], "mz_system", database),
+        )
+        thread.start()
+        threads.append(thread)
+
+    num_queries = Counter()
     try:
         while time.time() < end_time:
             for thread in threads:
@@ -253,12 +276,14 @@ def run(
             print(
                 "QPS: "
                 + " ".join(
-                    f"{worker.num_queries / REPORT_TIME:05.1f}" for worker in workers
+                    f"{worker.num_queries.total() / REPORT_TIME:05.1f}"
+                    for worker in workers
                 )
             )
             for worker in workers:
-                num_queries += worker.num_queries
-                worker.num_queries = 0
+                for action in worker.num_queries.elements():
+                    num_queries[action] += worker.num_queries[action]
+                worker.num_queries.clear()
     except KeyboardInterrupt:
         print("Keyboard interrupt, exiting")
         for worker in workers:
@@ -298,9 +323,19 @@ def run(
         for count in counter.values():
             num_failures += count
 
-    failed = 100.0 * num_failures / num_queries if num_queries else 0
-    print(f"Queries executed: {num_queries} ({failed:.0f}% failed)")
-    print("Error statistics:")
+    total_queries = num_queries.total()
+    failed = 100.0 * num_failures / total_queries if total_queries else 0
+    print(f"Queries executed: {total_queries} ({failed:.0f}% failed)")
+    print("--- Action statistics:")
+    for action_list in action_lists:
+        text = ", ".join(
+            [
+                f"{action_class.__name__}: {num_queries[action_class]}"
+                for action_class in action_list.action_classes
+            ]
+        )
+        print(f"  {text}")
+    print("--- Error statistics:")
     for error, counter in ignored_errors.items():
         text = ", ".join(
             f"{action_class.__name__}: {count}"
@@ -333,6 +368,11 @@ def parse_common_args(parser: argparse.ArgumentParser) -> None:
         "--naughty-identifiers",
         action="store_true",
         help="Whether to use naughty strings as identifiers, makes the queries unreadable",
+    )
+    parser.add_argument(
+        "--fast-startup",
+        action="store_true",
+        help="Whether to initialize expensive parts like SQLsmith, sources, sinks (for fast local testing, reduces coverage)",
     )
 
 
@@ -382,6 +422,7 @@ def main() -> int:
         Scenario(args.scenario),
         args.threads,
         args.naughty_identifiers,
+        args.fast_startup,
         composition=None,  # only works in mzcompose
     )
     return 0
