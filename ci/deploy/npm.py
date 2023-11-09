@@ -80,15 +80,26 @@ def release_package(version: Version, package_path: Path) -> None:
     with open(package_path / "package.json") as package_file:
         package = json.load(package_file)
     name = package["name"]
-    dist_tag = "dev" if version.is_development else "latest"
     if version_exists_in_npm(name, version):
         logger.warning("%s %s already released, skipping.", name, version.node)
         return
     else:
+        dist_tag: str | None = "dev" if version.is_development else "latest"
+        if dist_tag == "latest":
+            latest_published = get_latest_version(name)
+            if latest_published and latest_published > version.node:
+                logger.info(
+                    "Latest version of %s on npm (%s) is newer than %s. Skipping tag.",
+                    name,
+                    latest_published,
+                    version.node,
+                )
+                dist_tag = None
         logger.info("Releasing %s %s", name, version.node)
         set_npm_credentials(package_path)
+        extra_args = ["--tag", dist_tag] if dist_tag is not None else []
         spawn.runv(
-            ["npm", "publish", "--access", "public", "--tag", dist_tag],
+            ["npm", "publish", "--access", "public"] + extra_args,
             cwd=package_path,
         )
 
@@ -108,9 +119,25 @@ def build_all(
             logger.info("Skipping release for %s", package_path)
 
 
-def version_exists_in_npm(name: str, version: Version) -> bool:
+def _query_npm_version(name: str, version: str) -> requests.Response:
+    """Queries NPM for a specific version of the package."""
     quoted = urllib.parse.quote(name)
-    res = requests.get(f"https://registry.npmjs.org/{quoted}/{version.node}")
+    return requests.get(f"https://registry.npmjs.org/{quoted}/{version}")
+
+
+def get_latest_version(name: str) -> VersionInfo | None:
+    res = _query_npm_version(name, "latest")
+    if res.status_code == 404:
+        # This is a new package
+        return None
+    res.raise_for_status()
+    data = res.json()
+    version = data["version"]
+    return VersionInfo.parse(version)
+
+
+def version_exists_in_npm(name: str, version: Version) -> bool:
+    res = _query_npm_version(name, version.node)
     if res.status_code == 404:
         # This is a new package
         return False
