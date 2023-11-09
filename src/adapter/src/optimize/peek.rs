@@ -24,7 +24,7 @@ use mz_transform::normalize_lets::normalize_lets;
 use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
 use mz_transform::{Optimizer as TransformOptimizer, StatisticsOracle};
 use timely::progress::Antichain;
-use tracing::{span, warn, Level};
+use tracing::{span, Level};
 
 use crate::catalog::Catalog;
 use crate::coord::dataflows::{
@@ -347,8 +347,6 @@ impl GlobalMirPlan<Unresolved> {
         if let Some(as_of) = as_of.as_option() {
             if let Some(until) = as_of.checked_add(1) {
                 self.df_desc.until = Antichain::from_elem(until);
-            } else {
-                warn!(as_of = %as_of, "as_of + 1 overflow");
             }
         }
 
