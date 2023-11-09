@@ -18,6 +18,8 @@ from materialize.scalability.df.df_wrapper_base import (
 
 
 class DfDetails(DfWrapperBase):
+    """Wrapper for details data frame. Columns are specified in df_details_cols."""
+
     def __init__(self, data: pd.DataFrame = pd.DataFrame()):
         super().__init__(data)
 

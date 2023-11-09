@@ -15,6 +15,8 @@ import pandas as pd
 
 
 class DfWrapperBase:
+    """Wrapper for data frames."""
+
     def __init__(self, data: pd.DataFrame):
         self.data = data
 

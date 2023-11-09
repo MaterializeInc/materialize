@@ -20,6 +20,8 @@ from materialize.scalability.regression import Regression
 
 
 class DfTotalsBase(DfWrapperBase):
+    """Wrapper base for totals data frame."""
+
     def __init__(self, data: pd.DataFrame = pd.DataFrame()):
         super().__init__(data)
 
@@ -31,6 +33,11 @@ class DfTotalsBase(DfWrapperBase):
 
 
 class DfTotals(DfTotalsBase):
+    """
+    Wrapper for totals data frame.
+    Columns are specified in df_totals_cols.
+    """
+
     def __init__(self, data: pd.DataFrame = pd.DataFrame()):
         super().__init__(data)
 
@@ -63,6 +70,11 @@ def concat_df_totals(entries: list[DfTotals]) -> DfTotals:
 
 
 class DfTotalsMerged(DfTotalsBase):
+    """
+    Wrapper for two totals data frame of different endpoints that were merged.
+    It is an intermediate representation and not intended to be used in evaluations and plots.
+    """
+
     def __init__(self, data: pd.DataFrame = pd.DataFrame()):
         super().__init__(data)
 
@@ -88,6 +100,11 @@ class DfTotalsMerged(DfTotalsBase):
 
 
 class DfTotalsExtended(DfTotalsBase):
+    """
+    Wrapper for two totals data frame of different endpoints that were merged and enriched with further data.
+    Columns are specified in df_totals_ext_cols.
+    """
+
     def __init__(self, data: pd.DataFrame = pd.DataFrame()):
         super().__init__(data)
 
