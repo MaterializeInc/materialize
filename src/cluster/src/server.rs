@@ -176,7 +176,7 @@ where
         // configure the effort to `None`, not when we set it to `Some(0)`.
         let idle_merge_effort = (idle_merge_effort > 0).then_some(idle_merge_effort);
 
-        // By default, se only set the idle_merge_effort
+        // By default, only set the idle_merge_effort
         differential_dataflow::configure(
             &mut worker_config,
             &differential_dataflow::Config {
@@ -188,6 +188,12 @@ where
         // This avoids turning on proportionality for replicas with default idle merge effort.
         if idle_merge_effort.is_none() && config.arrangement_exert_proportionality > 0 {
             let idle_merge_effort = Some(1000);
+
+            // ExertionLogic defines a function to determine if a spine is sufficiently tidied.
+            // Its arguments are an iterator over the index of a layer, the count of batches in the
+            // layer and the length of batches at the layer. The iterator enumerates layers from the
+            // largest to the smallest layer.
+
             let arc: ExertionLogic = Arc::new(move |layers| {
                 let mut prop = config.arrangement_exert_proportionality;
 
