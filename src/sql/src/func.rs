@@ -3455,8 +3455,11 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                         sql_bail!("csv_extract number of columns must be a positive integer literal");
                     },
                     Some(ncols @ 1..=MAX_EXTRACT_COLUMNS) => ncols,
-                    Some(TOO_MANY_EXTRACT_COLUMNS..) => {
-                        sql_bail!("csv_extract number of columns too large, must be less than or equal to {MAX_EXTRACT_COLUMNS}");
+                    Some(ncols @ TOO_MANY_EXTRACT_COLUMNS..) => {
+                        return Err(PlanError::TooManyColumns {
+                            max_num_columns: usize::try_from(MAX_EXTRACT_COLUMNS).unwrap_or(usize::MAX),
+                            req_num_columns: usize::try_from(ncols).unwrap_or(usize::MAX),
+                        });
                     },
                 };
                 let ncols = usize::try_from(ncols).expect("known to be greater than zero");

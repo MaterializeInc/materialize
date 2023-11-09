@@ -109,4 +109,4 @@ $ postgres-execute connection=mz_system
 ALTER SYSTEM RESET max_result_size
 
 ! SELECT csv_extract(9223372036854775807, '');
-contains:csv_extract number of columns too large
+contains:attempt to create relation with too many columns, 9223372036854775807 max: 8192
