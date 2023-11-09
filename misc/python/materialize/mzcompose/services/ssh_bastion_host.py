@@ -23,11 +23,15 @@ class SshBastionHost(Service):
         self,
         name: str = "ssh-bastion-host",
         max_startups: str | None = None,
+        aliases: list[str] | None = None,
     ) -> None:
         setup_path = os.path.relpath(
             MZ_ROOT / "misc" / "images" / "sshd" / "setup.sh",
             loader.composition_path,
         )
+
+        if aliases is None:
+            aliases = ["other_ssh_bastion"]
 
         super().__init__(
             name=name,
@@ -41,6 +45,7 @@ class SshBastionHost(Service):
                     *([f"MAX_STARTUPS={max_startups}"] if max_startups else []),
                 ],
                 "volumes": [f"{setup_path}:/etc/entrypoint.d/setup.sh"],
+                "networks": {"default": {"aliases": aliases}},
                 "healthcheck": {
                     "test": "[ -f /var/run/sshd/sshd.pid ]",
                     "timeout": "5s",
