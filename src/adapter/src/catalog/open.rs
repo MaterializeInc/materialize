@@ -27,6 +27,7 @@ use mz_catalog::durable::objects::{
     SystemObjectUniqueIdentifier,
 };
 use mz_catalog::durable::{Transaction, SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY};
+use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, CommentsMap, DataSourceDesc, Database, DefaultPrivileges, Func, Log,
     Role, Schema, Source, Table, Type,
@@ -64,7 +65,7 @@ use mz_storage_types::sources::Timeline;
 
 use crate::catalog::{
     is_reserved_name, migrate, BuiltinTableUpdate, Catalog, CatalogPlans, CatalogState, Config,
-    Error, ErrorKind, CREATE_SQL_TODO, SYSTEM_CONN_ID,
+    CREATE_SQL_TODO, SYSTEM_CONN_ID,
 };
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
 use crate::coord::timestamp_oracle;

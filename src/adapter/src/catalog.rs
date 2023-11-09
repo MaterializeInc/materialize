@@ -31,6 +31,13 @@ use mz_catalog::builtin::{
 use mz_catalog::durable::{
     test_bootstrap_args, DurableCatalogState, OpenableDurableCatalogState, StashConfig, Transaction,
 };
+pub use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
+pub use mz_catalog::memory::objects::{
+    CatalogEntry, CatalogItem, Cluster, ClusterConfig, ClusterReplica, ClusterReplicaProcessStatus,
+    ClusterVariant, ClusterVariantManaged, CommentsMap, Connection, DataSourceDesc, Database,
+    DefaultPrivileges, Func, Index, Log, MaterializedView, Role, Schema, Secret, Sink, Source,
+    Table, Type, View,
+};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller::clusters::{
     ClusterEvent, ManagedReplicaLocation, ReplicaConfig, ReplicaLocation,
@@ -80,7 +87,6 @@ use mz_transform::dataflow::DataflowMetainfo;
 
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap, Config};
-pub use crate::catalog::error::{AmbiguousRename, Error, ErrorKind};
 pub use crate::catalog::open::BuiltinMigrationMetadata;
 pub use crate::catalog::state::CatalogState;
 use crate::command::CatalogDump;
@@ -88,17 +94,10 @@ use crate::coord::{ConnMeta, TargetCluster};
 use crate::session::{PreparedStatement, Session};
 use crate::util::ResultExt;
 use crate::{AdapterError, AdapterNotice, ExecuteResponse};
-pub use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, Cluster, ClusterConfig, ClusterReplica, ClusterReplicaProcessStatus,
-    ClusterVariant, ClusterVariantManaged, CommentsMap, Connection, DataSourceDesc, Database,
-    DefaultPrivileges, Func, Index, Log, MaterializedView, Role, Schema, Secret, Sink, Source,
-    Table, Type, View,
-};
 
 mod builtin_table_updates;
 mod config;
 pub(crate) mod consistency;
-mod error;
 mod migrate;
 
 mod inner;
