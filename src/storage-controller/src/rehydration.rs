@@ -259,12 +259,13 @@ where
                 // Overridden by the storage `PartitionedState` implementation.
                 process: 0,
                 addresses: location.dataflow_addrs.clone(),
-                // This value is not currently used by storage, so we just choose
+                // These values are not currently used by storage, so we just choose
                 // some identifiable value.
                 //
                 // TODO(guswynn): cluster-unification: ensure this is cleaned up when
                 // the compute and storage command streams are merged.
                 idle_arrangement_merge_effort: 1337,
+                arrangement_exert_proportionality: 1337,
                 variable_length_row_encoding: self.variable_length_row_encoding,
             };
             let dests = location

@@ -246,6 +246,11 @@ impl<T> Controller<T> {
         self.compute
             .set_default_idle_arrangement_merge_effort(value);
     }
+
+    pub fn set_default_arrangement_exert_proportionality(&mut self, value: u32) {
+        self.compute
+            .set_default_arrangement_exert_proportionality(value);
+    }
 }
 
 impl<T> Controller<T>

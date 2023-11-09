@@ -136,6 +136,8 @@ pub struct ComputeController<T> {
     config: ComputeParameters,
     /// Default value for `idle_arrangement_merge_effort`.
     default_idle_arrangement_merge_effort: u32,
+    /// Default value for `arrangement_exert_proportionality`.
+    default_arrangement_exert_proportionality: u32,
     /// A replica response to be handled by the corresponding `Instance` on a subsequent call to
     /// `ActiveComputeController::process`.
     stashed_replica_response: Option<(ComputeInstanceId, ReplicaId, ComputeResponse<T>)>,
@@ -172,6 +174,7 @@ impl<T> ComputeController<T> {
             initialized: false,
             config: Default::default(),
             default_idle_arrangement_merge_effort: 1000,
+            default_arrangement_exert_proportionality: 16,
             stashed_replica_response: None,
             envd_epoch,
             metrics: ComputeControllerMetrics::new(metrics_registry),
@@ -241,6 +244,10 @@ impl<T> ComputeController<T> {
 
     pub fn set_default_idle_arrangement_merge_effort(&mut self, value: u32) {
         self.default_idle_arrangement_merge_effort = value;
+    }
+
+    pub fn set_default_arrangement_exert_proportionality(&mut self, value: u32) {
+        self.default_arrangement_exert_proportionality = value;
     }
 }
 
@@ -462,6 +469,10 @@ where
             .idle_arrangement_merge_effort
             .unwrap_or(self.compute.default_idle_arrangement_merge_effort);
 
+        // TODO(teskje): make configurable via replica option
+        let arrangement_exert_proportionality =
+            self.compute.default_arrangement_exert_proportionality;
+
         let replica_config = ReplicaConfig {
             location,
             logging: LoggingConfig {
@@ -471,6 +482,7 @@ where
                 index_logs: Default::default(),
             },
             idle_arrangement_merge_effort,
+            arrangement_exert_proportionality,
             grpc_client: self.compute.config.grpc_client.clone(),
         };
 
