@@ -3701,6 +3701,7 @@ dependencies = [
  "mz-build-info",
  "mz-environmentd",
  "mz-frontegg-auth",
+ "mz-frontegg-mock",
  "mz-http-util",
  "mz-orchestrator-tracing",
  "mz-ore",
@@ -4172,6 +4173,7 @@ dependencies = [
  "mz-environmentd",
  "mz-expr",
  "mz-frontegg-auth",
+ "mz-frontegg-mock",
  "mz-http-util",
  "mz-interchange",
  "mz-metrics",
@@ -4372,6 +4374,23 @@ dependencies = [
  "thiserror",
  "tokio",
  "url",
+ "uuid",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-frontegg-mock"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "hyper",
+ "jsonwebtoken",
+ "mz-frontegg-auth",
+ "mz-ore",
+ "serde",
+ "serde_json",
+ "tokio",
  "uuid",
  "workspace-hack",
 ]

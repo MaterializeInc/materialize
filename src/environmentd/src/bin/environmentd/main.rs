@@ -1026,6 +1026,14 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         server.internal_http_local_addr()
     );
     println!(
+        " Balancerd SQL address: {}",
+        server.balancer_sql_local_addr()
+    );
+    println!(
+        " Balancerd HTTP address: {}",
+        server.balancer_http_local_addr()
+    );
+    println!(
         " Internal Persist PubSub address: {}",
         args.internal_persist_pubsub_listen_addr
     );
