@@ -11,6 +11,7 @@ import random
 from textwrap import dedent
 
 from materialize.mzcompose.composition import Composition
+from materialize.zippy.balancerd_capabilities import BalancerdIsRunning
 from materialize.zippy.framework import Action, ActionFactory, Capabilities, Capability
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.replica_capabilities import source_capable_clusters
@@ -24,7 +25,7 @@ class CreateSinkParameterized(ActionFactory):
 
     @classmethod
     def requires(cls) -> list[set[type[Capability]]]:
-        return [{MzIsRunning, StoragedRunning, ViewExists}]
+        return [{BalancerdIsRunning, MzIsRunning, StoragedRunning, ViewExists}]
 
     def __init__(self, max_sinks: int = 10) -> None:
         self.max_sinks = max_sinks
