@@ -63,6 +63,14 @@ def matches_op_by_pattern(expression: Expression, pattern: str) -> bool:
     return False
 
 
+def matches_op_by_any_pattern(expression: Expression, patterns: set[str]) -> bool:
+    for pattern in patterns:
+        if matches_op_by_pattern(expression, pattern):
+            return True
+
+    return False
+
+
 def matches_expression_with_only_plain_arguments(expression: Expression) -> bool:
     if isinstance(expression, ExpressionWithArgs):
         for arg in expression.args:
