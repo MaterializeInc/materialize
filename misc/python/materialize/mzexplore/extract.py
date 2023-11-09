@@ -17,8 +17,6 @@ import textwrap
 from contextlib import closing
 from pathlib import Path
 
-from pg8000.dbapi import DatabaseError
-
 from materialize.mzexplore import sql
 from materialize.mzexplore.common import (
     ExplaineeType,
@@ -29,6 +27,7 @@ from materialize.mzexplore.common import (
     info,
     warn,
 )
+from pg8000.dbapi import DatabaseError
 
 
 def defs(
@@ -229,7 +228,7 @@ def plans(
                             ExplaineeType.CREATE_STATEMENT,
                             stage.name.lower(),
                             suffix,
-                            "txt",
+                            "txt" if stage != ExplainStage.OPTIMIZER_TRACE else "json",
                         ]
                         if part is not None
                     )
