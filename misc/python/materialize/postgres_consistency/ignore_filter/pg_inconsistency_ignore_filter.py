@@ -23,6 +23,7 @@ from materialize.output_consistency.expression.expression_with_args import (
 )
 from materialize.output_consistency.ignore_filter.expression_matchers import (
     is_function_invoked_only_with_non_nested_parameters,
+    matches_fun_by_any_name,
     matches_fun_by_name,
     matches_op_by_pattern,
     matches_x_or_y,
@@ -354,18 +355,17 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         contains_aggregation: bool,
     ) -> IgnoreVerdict:
         def matches_math_aggregation_fun(expression: Expression) -> bool:
-            if isinstance(expression, ExpressionWithArgs):
-                if isinstance(expression.operation, DbFunction):
-                    return expression.operation.function_name_in_lower_case in {
-                        "sum",
-                        "avg",
-                        "var_pop",
-                        "var_samp",
-                        "stddev_pop",
-                        "stddev_samp",
-                    }
-
-            return False
+            return matches_fun_by_any_name(
+                expression,
+                {
+                    "sum",
+                    "avg",
+                    "var_pop",
+                    "var_samp",
+                    "stddev_pop",
+                    "stddev_samp",
+                },
+            )
 
         def matches_math_op_with_large_or_tiny_val(expression: Expression) -> bool:
             if isinstance(expression, ExpressionWithArgs):
@@ -386,10 +386,9 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         def matches_fun_with_problematic_floating_behavior(
             expression: Expression,
         ) -> bool:
-            if isinstance(expression, ExpressionWithArgs) and isinstance(
-                expression.operation, DbFunction
-            ):
-                return expression.operation.function_name_in_lower_case in [
+            return matches_fun_by_any_name(
+                expression,
+                {
                     "sin",
                     "cos",
                     "tan",
@@ -407,8 +406,8 @@ class PgPostExecutionInconsistencyIgnoreFilter(
                     "ln",
                     "pow",
                     "radians",
-                ]
-            return False
+                },
+            )
 
         def matches_mod_with_decimal(expression: Expression) -> bool:
             if isinstance(expression, ExpressionWithArgs) and isinstance(

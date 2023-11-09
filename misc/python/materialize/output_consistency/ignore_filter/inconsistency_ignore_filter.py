@@ -257,7 +257,7 @@ class PostExecutionInconsistencyIgnoreFilter(
     def _uses_eager_evaluation(self, query_template: QueryTemplate) -> bool:
         # note that these functions do not necessarily require an aggregation
 
-        functions_with_eager_evaluation = ["coalesce"]
+        functions_with_eager_evaluation = {"coalesce"}
 
         return query_template.matches_any_expression(
             partial(
