@@ -93,7 +93,7 @@ use futures::StreamExt;
 use once_cell::sync::Lazy;
 use tracing_subscriber::filter::EnvFilter;
 
-use mz_adapter::catalog::{Catalog, ClusterReplicaSizeMap, Config};
+use mz_adapter::catalog::{Catalog, ClusterReplicaSizeMap, StateConfig};
 use mz_build_info::{build_info, BuildInfo};
 use mz_catalog::durable::{
     self as catalog, BootstrapArgs, OpenableDurableCatalogState, StashConfig,
@@ -103,7 +103,6 @@ use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::retry::Retry;
-use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
 use mz_stash::{Stash, StashFactory};
@@ -496,7 +495,6 @@ impl Usage {
             anyhow::bail!("upgrade_check expected Catalog stash, found {:?}", self);
         }
 
-        let metrics_registry = &MetricsRegistry::new();
         let retry = Retry::default()
             .clamp_backoff(Duration::from_secs(1))
             .max_duration(Duration::from_secs(30))
@@ -505,11 +503,10 @@ impl Usage {
 
         loop {
             let now = SYSTEM_TIME.clone();
-            let secrets_reader = Arc::new(InMemorySecretsController::new());
             let openable_storage = Box::new(mz_catalog::durable::stash_backed_catalog_state(
                 stash_config.clone(),
             ));
-            let storage = openable_storage
+            let mut storage = openable_storage
                 .open_savepoint(
                     now(),
                     &BootstrapArgs {
@@ -520,34 +517,33 @@ impl Usage {
                 )
                 .await?;
 
-            match Catalog::open(Config {
-                storage,
-                unsafe_mode: true,
-                all_features: false,
-                build_info: &BUILD_INFO,
-                environment_id: EnvironmentId::for_tests(),
-                now,
-                skip_migrations: false,
-                metrics_registry,
-                cluster_replica_sizes: cluster_replica_sizes.clone(),
-                default_storage_cluster_size: None,
-                builtin_cluster_replica_size: "1".into(),
-                system_parameter_defaults: Default::default(),
-                availability_zones: vec![],
-                secrets_reader,
-                egress_ips: vec![],
-                aws_principal_context: None,
-                aws_privatelink_availability_zones: None,
-                system_parameter_sync_config: None,
-                storage_usage_retention_period: None,
-                http_host_name: None,
-                connection_context: None,
-                active_connection_count: Arc::new(Mutex::new(ConnectionCounter::new(0))),
-            })
+            match Catalog::initialize_state(
+                StateConfig {
+                    unsafe_mode: true,
+                    all_features: false,
+                    build_info: &BUILD_INFO,
+                    environment_id: EnvironmentId::for_tests(),
+                    now,
+                    skip_migrations: false,
+                    cluster_replica_sizes: cluster_replica_sizes.clone(),
+                    default_storage_cluster_size: None,
+                    builtin_cluster_replica_size: "1".into(),
+                    system_parameter_defaults: Default::default(),
+                    availability_zones: vec![],
+                    egress_ips: vec![],
+                    aws_principal_context: None,
+                    aws_privatelink_availability_zones: None,
+                    system_parameter_sync_config: None,
+                    http_host_name: None,
+                    connection_context: None,
+                    active_connection_count: Arc::new(Mutex::new(ConnectionCounter::new(0))),
+                },
+                &mut storage,
+            )
             .await
             {
-                Ok((catalog, _, _, last_catalog_version)) => {
-                    catalog.expire().await;
+                Ok((_, _, _, last_catalog_version)) => {
+                    storage.expire().await;
                     return Ok(format!(
                         "catalog upgrade from {} to {} would succeed",
                         last_catalog_version,

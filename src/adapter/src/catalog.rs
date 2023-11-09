@@ -88,7 +88,7 @@ use mz_storage_types::sources::Timeline;
 use mz_transform::dataflow::DataflowMetainfo;
 
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
-pub use crate::catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap, Config};
+pub use crate::catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap, Config, StateConfig};
 pub use crate::catalog::open::BuiltinMigrationMetadata;
 pub use crate::catalog::state::CatalogState;
 use crate::command::CatalogDump;
@@ -541,33 +541,35 @@ impl Catalog {
             };
         let (catalog, _, _, _) = Catalog::open(Config {
             storage,
-            unsafe_mode: true,
-            all_features: false,
-            build_info: &DUMMY_BUILD_INFO,
-            environment_id: environment_id.unwrap_or(EnvironmentId::for_tests()),
-            now,
-            skip_migrations: true,
             metrics_registry,
-            cluster_replica_sizes: Default::default(),
-            default_storage_cluster_size: None,
-            builtin_cluster_replica_size: "1".into(),
-            system_parameter_defaults: [(
-                "variable_length_row_encoding".to_string(),
-                variable_length_row_encoding.to_string(),
-            )]
-            .into_iter()
-            .collect(),
-            availability_zones: vec![],
             secrets_reader,
-            egress_ips: vec![],
-            aws_principal_context: None,
-            aws_privatelink_availability_zones: None,
-            system_parameter_sync_config: None,
             // when debugging, no reaping
             storage_usage_retention_period: None,
-            http_host_name: None,
-            connection_context: None,
-            active_connection_count,
+            state: StateConfig {
+                unsafe_mode: true,
+                all_features: false,
+                build_info: &DUMMY_BUILD_INFO,
+                environment_id: environment_id.unwrap_or(EnvironmentId::for_tests()),
+                now,
+                skip_migrations: true,
+                cluster_replica_sizes: Default::default(),
+                default_storage_cluster_size: None,
+                builtin_cluster_replica_size: "1".into(),
+                system_parameter_defaults: [(
+                    "variable_length_row_encoding".to_string(),
+                    variable_length_row_encoding.to_string(),
+                )]
+                .into_iter()
+                .collect(),
+                availability_zones: vec![],
+                egress_ips: vec![],
+                aws_principal_context: None,
+                aws_privatelink_availability_zones: None,
+                system_parameter_sync_config: None,
+                http_host_name: None,
+                connection_context: None,
+                active_connection_count,
+            },
         })
         .await?;
         Ok(catalog)
