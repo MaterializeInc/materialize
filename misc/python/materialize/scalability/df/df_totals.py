@@ -19,7 +19,7 @@ from materialize.scalability.endpoint import Endpoint
 from materialize.scalability.regression import Regression
 
 
-class DfTotals(DfWrapperBase):
+class DfTotalsBase(DfWrapperBase):
     def __init__(self, data: pd.DataFrame = pd.DataFrame()):
         super().__init__(data)
 
@@ -28,6 +28,11 @@ class DfTotals(DfWrapperBase):
 
     def get_concurrency_values(self) -> list[int]:
         return self.data[df_totals_cols.CONCURRENCY].tolist()
+
+
+class DfTotals(DfTotalsBase):
+    def __init__(self, data: pd.DataFrame = pd.DataFrame()):
+        super().__init__(data)
 
     def get_tps_values(self) -> list[int]:
         return self.data[df_totals_cols.TPS].tolist()
@@ -57,8 +62,8 @@ def concat_df_totals(entries: list[DfTotals]) -> DfTotals:
     return DfTotals(concat_df_wrapper_data(entries))
 
 
-class DfTotalsMerged(DfTotals):
-    def __init__(self, data: pd.DataFrame):
+class DfTotalsMerged(DfTotalsBase):
+    def __init__(self, data: pd.DataFrame = pd.DataFrame()):
         super().__init__(data)
 
     def to_enriched_result_frame(
@@ -82,8 +87,8 @@ class DfTotalsMerged(DfTotals):
         return DfTotalsExtended(tps_per_endpoint)
 
 
-class DfTotalsExtended(DfTotalsMerged):
-    def __init__(self, data: pd.DataFrame):
+class DfTotalsExtended(DfTotalsBase):
+    def __init__(self, data: pd.DataFrame = pd.DataFrame()):
         super().__init__(data)
 
     def to_filtered_with_threshold(self, max_deviation: float) -> DfTotalsExtended:
@@ -116,3 +121,7 @@ class DfTotalsExtended(DfTotalsMerged):
             result.append(regression)
 
         return result
+
+
+def concat_df_totals_extended(entries: list[DfTotalsExtended]) -> DfTotalsExtended:
+    return DfTotalsExtended(concat_df_wrapper_data(entries))

@@ -9,9 +9,8 @@
 from __future__ import annotations
 
 from materialize.scalability.df.df_totals import (
-    DfTotals,
     DfTotalsExtended,
-    concat_df_totals,
+    concat_df_totals_extended,
 )
 from materialize.scalability.regression import Regression
 
@@ -21,7 +20,7 @@ class RegressionOutcome:
         self,
     ):
         self.regressions: list[Regression] = []
-        self.regression_data = DfTotals()
+        self.regression_data = DfTotalsExtended()
 
     def has_regressions(self) -> bool:
         assert len(self.regressions) == self.regression_data.length()
@@ -37,7 +36,7 @@ class RegressionOutcome:
         self.regressions.extend(other.regressions)
         self.append_raw_data(other.regression_data)
 
-    def append_raw_data(self, regressions_data: DfTotals) -> None:
-        self.regression_data = concat_df_totals(
+    def append_raw_data(self, regressions_data: DfTotalsExtended) -> None:
+        self.regression_data = concat_df_totals_extended(
             [self.regression_data, regressions_data]
         )
