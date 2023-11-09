@@ -21,6 +21,7 @@ use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use futures_util::stream::{FuturesUnordered, StreamExt};
 use mz_ore::cast::CastFrom;
 use mz_ore::task::JoinHandleExt;
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
@@ -38,7 +39,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug_span, error, instrument, trace_span, warn, Instrument};
 
 use crate::async_runtime::IsolatedRuntime;
-use crate::cfg::ProtoUntrimmableColumns;
+use crate::cfg::{PersistFeatureFlag, ProtoUntrimmableColumns};
 use crate::error::InvalidUsage;
 use crate::internal::encoding::{LazyPartStats, Schemas};
 use crate::internal::machine::retry_external;
@@ -61,6 +62,8 @@ pub struct Batch<K, V, T, D>
 where
     T: Timestamp + Lattice + Codec64,
 {
+    pub(crate) batch_delete_enabled: bool,
+    pub(crate) metrics: Arc<Metrics>,
     pub(crate) shard_id: ShardId,
 
     /// The version of Materialize which wrote this batch.
@@ -70,11 +73,11 @@ where
     pub(crate) batch: HollowBatch<T>,
 
     /// Handle to the [Blob] that the blobs of this batch were uploaded to.
-    pub(crate) _blob: Arc<dyn Blob + Send + Sync>,
+    pub(crate) blob: Arc<dyn Blob + Send + Sync>,
 
     // These provide a bit more safety against appending a batch with the wrong
     // type to a shard.
-    pub(crate) _phantom: PhantomData<(K, V, T, D)>,
+    pub(crate) _phantom: PhantomData<fn() -> (K, V, T, D)>,
 }
 
 impl<K, V, T, D> Drop for Batch<K, V, T, D>
@@ -104,16 +107,20 @@ where
     D: Semigroup + Codec64,
 {
     pub(crate) fn new(
+        batch_delete_enabled: bool,
+        metrics: Arc<Metrics>,
         blob: Arc<dyn Blob + Send + Sync>,
         shard_id: ShardId,
         version: Version,
         batch: HollowBatch<T>,
     ) -> Self {
         Self {
+            batch_delete_enabled,
+            metrics,
             shard_id,
             version,
             batch,
-            _blob: blob,
+            blob,
             _phantom: PhantomData,
         }
     }
@@ -146,17 +153,21 @@ where
     /// marks them as deleted.
     #[instrument(level = "debug", skip_all, fields(shard = %self.shard_id))]
     pub async fn delete(mut self) {
-        // TODO: This is temporarily disabled because nemesis seems to have
-        // caught that we sometimes delete batches that are later needed.
-        // Temporarily removing the deletions while we figure out the bug in
-        // case it has anything to do with CI timeouts.
-        //
-        // for key in self.blob_keys.iter() {
-        //     retry_external("batch::delete", || async {
-        //         self.blob.delete(key).await
-        //     })
-        //     .await;
-        // }
+        if !self.batch_delete_enabled {
+            return;
+        }
+        let deletes = FuturesUnordered::new();
+        for part in self.batch.parts.iter() {
+            let metrics = Arc::clone(&self.metrics);
+            let blob = Arc::clone(&self.blob);
+            deletes.push(async move {
+                retry_external(&metrics.retries.external.batch_delete, || async {
+                    blob.delete(&part.key).await
+                })
+                .await;
+            });
+        }
+        let () = deletes.collect().await;
         self.batch.parts.clear();
     }
 
@@ -205,6 +216,7 @@ pub enum Added {
 pub struct BatchBuilderConfig {
     writer_key: WriterKey,
     pub(crate) blob_target_size: usize,
+    pub(crate) batch_delete_enabled: bool,
     pub(crate) batch_builder_max_outstanding_parts: usize,
     pub(crate) stats_collection_enabled: bool,
     pub(crate) stats_budget: usize,
@@ -218,6 +230,9 @@ impl BatchBuilderConfig {
         BatchBuilderConfig {
             writer_key,
             blob_target_size: value.dynamic.blob_target_size(),
+            batch_delete_enabled: value
+                .dynamic
+                .enabled(PersistFeatureFlag::BATCH_DELETE_ENABLED),
             batch_builder_max_outstanding_parts: value
                 .dynamic
                 .batch_builder_max_outstanding_parts(),
@@ -479,10 +494,13 @@ where
         let remainder = self.buffer.drain();
         self.flush_part(stats_schemas, remainder).await;
 
+        let batch_delete_enabled = self.parts.cfg.batch_delete_enabled;
         let parts = self.parts.finish().await;
 
         let desc = Description::new(self.lower, registered_upper, self.since);
         let batch = Batch::new(
+            batch_delete_enabled,
+            Arc::clone(&self.metrics),
             self.blob,
             self.shard_id.clone(),
             self.version,

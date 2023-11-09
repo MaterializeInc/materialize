@@ -1949,6 +1949,8 @@ pub mod datadriven {
                     .expect("unknown batch")
                     .clone();
                 Batch::new(
+                    true,
+                    Arc::clone(&datadriven.client.metrics),
                     Arc::clone(&datadriven.client.blob),
                     datadriven.shard_id,
                     datadriven.client.cfg.build_version.clone(),

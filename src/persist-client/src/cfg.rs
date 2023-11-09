@@ -49,10 +49,17 @@ impl PersistFeatureFlag {
         default: false,
         description: "use the new streaming consolidate during snapshot_and_fetch",
     };
+    // TODO: Remove this once we're comfortable that there aren't any bugs.
+    pub(crate) const BATCH_DELETE_ENABLED: PersistFeatureFlag = PersistFeatureFlag {
+        name: "persist_batch_delete_enabled",
+        default: false,
+        description: "Whether to actually delete blobs when batch delete is called (Materialize).",
+    };
 
     pub const ALL: &'static [PersistFeatureFlag] = &[
         Self::STREAMING_COMPACTION,
         Self::STREAMING_SNAPSHOT_AND_FETCH,
+        Self::BATCH_DELETE_ENABLED,
     ];
 }
 
