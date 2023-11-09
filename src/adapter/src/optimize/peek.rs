@@ -37,6 +37,7 @@ use crate::optimize::{
     OptimizerError,
 };
 use crate::session::Session;
+use crate::TimestampContext;
 
 pub struct Optimizer {
     /// A typechecking context to use throughout the optimizer pipeline.
@@ -335,16 +336,16 @@ impl GlobalMirPlan<Unresolved> {
     /// optimizations in the `Plan::finalize_dataflow` call.
     pub fn resolve(
         mut self,
-        as_of: Antichain<Timestamp>,
+        timestamp_ctx: TimestampContext<Timestamp>,
         session: &Session,
     ) -> GlobalMirPlan<ResolvedGlobal> {
         // Set the `as_of` and `until` timestamps for the dataflow.
-        self.df_desc.set_as_of(as_of.clone());
+        self.df_desc.set_as_of(timestamp_ctx.antichain());
 
         // Use the the opportunity to name an `until` frontier that will prevent
         // work we needn't perform. By default, `until` will be
         // `Antichain::new()`, which prevents no updates and is safe.
-        if let Some(as_of) = as_of.as_option() {
+        if let Some(as_of) = timestamp_ctx.timestamp() {
             if let Some(until) = as_of.checked_add(1) {
                 self.df_desc.until = Antichain::from_elem(until);
             } else {
