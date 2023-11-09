@@ -295,9 +295,11 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// These handles are on the other end of a Tokio task, so that work can be done asynchronously
     /// without blocking the storage controller.
     persist_read_handles: persist_handles::PersistReadWorker<T>,
-    /// A handle to serve reads on table shards stored in the persist-txn system. None if
-    /// persist-txn is not enabled.
-    txns_cache: Option<TxnsCache<T, TxnsCodecRow>>,
+    /// The shard id of the persist-txn txns shard or None if persist-txn is not
+    /// enabled.
+    txns_id: Option<ShardId>,
+    /// A PersistClient usable for opening txns_id.
+    txns_client: PersistClient,
     stashed_response: Option<StorageResponse<T>>,
     /// Compaction commands to send during the next call to
     /// `StorageController::process`.
@@ -580,9 +582,9 @@ where
                 // pass along the shard id for the txns shard to dataflow rendering.
                 let txns_shard = match description.data_source {
                     DataSource::Other(DataSourceOther::TableWrites) => {
-                        // `self.txns_cache` is None if persist-txn is not enabled, which makes this
+                        // `self.txns_id` is None if persist-txn is not enabled, which makes this
                         // do the right thing.
-                        self.txns_cache.as_ref().map(|x| x.txns_id())
+                        self.txns_id.clone()
                     }
                     DataSource::Ingestion(_)
                     | DataSource::Introspection(_)
@@ -1209,7 +1211,7 @@ where
         as_of: Self::Timestamp,
     ) -> Result<Vec<(Row, Diff)>, StorageError> {
         let data_shard = self.collection(id)?.collection_metadata.data_shard;
-        let contents = match self.txns_cache.as_mut() {
+        let contents = match self.txns_id.as_mut() {
             None => {
                 // We're not using persist-txn for tables, so we can take a snapshot directly.
                 let mut read_handle = self.read_handle_for_snapshot(id).await?;
@@ -1217,7 +1219,7 @@ where
                     .snapshot_and_fetch(Antichain::from_elem(as_of))
                     .await
             }
-            Some(txns_cache) => {
+            Some(txns_id) => {
                 // We _are_ using persist-txn for tables. It advances the physical upper of the
                 // shard lazily, so we need to ask it for the snapshot to ensure the read is
                 // unblocked.
@@ -1231,6 +1233,19 @@ where
                 // - This branch allows it to handle that advancing the physical upper of Table A to
                 //   10 (NB but only once we see it get past the write at 5!)
                 // - Then we can read it normally.
+                //
+                // TODO(txn): We do a series of snapshots at boot and then never again. It's
+                // wasteful to create this TxnsCache and then throw it away for each of them, but
+                // it's better than the alternative of keeping it alive for snapshot calls that will
+                // never come (worse, it's tricky to keep it making progress, which results in a
+                // stuck since). Replace this with the shared TxnsCache thing we'll have to do
+                // anyway for the dataflow operators.
+                let mut txns_cache = TxnsCache::<Self::Timestamp, TxnsCodecRow>::open(
+                    &self.txns_client,
+                    *txns_id,
+                    Some(data_shard),
+                )
+                .await;
                 txns_cache.update_gt(&as_of).await;
                 let data_snapshot = txns_cache.data_snapshot(data_shard, as_of.clone());
                 let mut read_handle = self.read_handle_for_snapshot(id).await?;
@@ -1253,23 +1268,51 @@ where
     }
 
     async fn snapshot_cursor(
-        &self,
+        &mut self,
         id: GlobalId,
         as_of: Self::Timestamp,
     ) -> Result<SnapshotCursor<Self::Timestamp>, StorageError>
     where
         Self::Timestamp: Timestamp + Lattice + Codec64,
     {
-        let mut handle = self.read_handle_for_snapshot(id).await?;
-        let cursor = handle
-            .snapshot_cursor(Antichain::from_elem(as_of))
-            .await
-            .map_err(|_| StorageError::ReadBeforeSince(id))?;
+        let data_shard = self.collection(id)?.collection_metadata.data_shard;
+        // See the comments in Self::snapshot for what's going on here.
+        let cursor = match self.txns_id.as_mut() {
+            None => {
+                let mut handle = self.read_handle_for_snapshot(id).await?;
+                let cursor = handle
+                    .snapshot_cursor(Antichain::from_elem(as_of))
+                    .await
+                    .map_err(|_| StorageError::ReadBeforeSince(id))?;
+                SnapshotCursor {
+                    _read_handle: handle,
+                    cursor,
+                }
+            }
+            Some(txns_id) => {
+                // TODO(txn): Replace this with the shared TxnsCache thing
+                // we'll have to do anyway for the dataflow operators.
+                let mut txns_cache = TxnsCache::<Self::Timestamp, TxnsCodecRow>::open(
+                    &self.txns_client,
+                    *txns_id,
+                    Some(data_shard),
+                )
+                .await;
+                txns_cache.update_gt(&as_of).await;
+                let data_snapshot = txns_cache.data_snapshot(data_shard, as_of.clone());
+                let mut handle = self.read_handle_for_snapshot(id).await?;
+                let cursor = data_snapshot
+                    .snapshot_cursor(&mut handle)
+                    .await
+                    .map_err(|_| StorageError::ReadBeforeSince(id))?;
+                SnapshotCursor {
+                    _read_handle: handle,
+                    cursor,
+                }
+            }
+        };
 
-        Ok(SnapshotCursor {
-            _read_handle: handle,
-            cursor,
-        })
+        Ok(cursor)
     }
 
     async fn snapshot_stats(
@@ -1996,11 +2039,11 @@ where
             .await
             .expect("stash operation must succeed");
 
-        let (persist_table_worker, txns_cache) = if enable_persist_txn_tables {
-            let client = persist_clients
-                .open(persist_location.clone())
-                .await
-                .expect("location should be valid");
+        let txns_client = persist_clients
+            .open(persist_location.clone())
+            .await
+            .expect("location should be valid");
+        let (persist_table_worker, txns_id) = if enable_persist_txn_tables {
             let txns_id = PERSIST_TXNS_SHARD
                 .insert_key_without_overwrite(&mut stash, (), ShardId::new().into_proto())
                 .await
@@ -2009,15 +2052,14 @@ where
                 .expect("should be valid shard id");
             let txns = TxnsHandle::open(
                 T::minimum(),
-                client.clone(),
+                txns_client.clone(),
                 txns_id,
                 Arc::new(RelationDesc::empty()),
                 Arc::new(UnitSchema),
             )
             .await;
-            let txns_cache = TxnsCache::open(&client, txns_id, None).await;
             let worker = persist_handles::PersistTableWriteWorker::new_txns(tx.clone(), txns);
-            (worker, Some(txns_cache))
+            (worker, Some(txns_id))
         } else {
             let worker = persist_handles::PersistTableWriteWorker::new_legacy(tx.clone());
             (worker, None)
@@ -2037,7 +2079,8 @@ where
             persist_table_worker,
             persist_monotonic_worker,
             persist_read_handles: persist_handles::PersistReadWorker::new(),
-            txns_cache,
+            txns_id,
+            txns_client,
             stashed_response: None,
             pending_compaction_commands: vec![],
             collection_manager,
