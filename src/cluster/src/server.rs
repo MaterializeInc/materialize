@@ -171,14 +171,24 @@ where
 
         let mut worker_config = WorkerConfig::default();
 
-        let idle_merge_effort = usize::cast_from(config.idle_arrangement_merge_effort);
+        let idle_merge_effort = config.idle_arrangement_merge_effort;
         // We want a value of `0` to disable idle merging. DD will only disable idle merging if we
         // configure the effort to `None`, not when we set it to `Some(0)`.
         let idle_merge_effort = (idle_merge_effort > 0).then_some(idle_merge_effort);
 
-        worker_config.set::<ExertionLogic>(
-            "differential/default_exert_logic".to_string(),
-            Arc::new(move |layers| {
+        // By default, se only set the idle_merge_effort
+        differential_dataflow::configure(
+            &mut worker_config,
+            &differential_dataflow::Config {
+                idle_merge_effort: idle_merge_effort.map(CastFrom::cast_from),
+            },
+        );
+
+        // We set a custom exertion logic for idle_merge_effort of 0, and proportionality > 0.
+        // This avoids turning on proportionality for replicas with default idle merge effort.
+        if idle_merge_effort.is_none() && config.arrangement_exert_proportionality > 0 {
+            let idle_merge_effort = Some(1000);
+            let arc: ExertionLogic = Arc::new(move |layers| {
                 let mut prop = config.arrangement_exert_proportionality;
 
                 // Layers are ordered from largest to smallest.
@@ -203,8 +213,9 @@ where
                 }
 
                 None
-            }),
-        );
+            });
+            worker_config.set::<ExertionLogic>("differential/default_exert_logic".to_string(), arc);
+        }
 
         let worker_guards = execute_from(builders, other, worker_config, move |timely_worker| {
             let timely_worker_index = timely_worker.index();
