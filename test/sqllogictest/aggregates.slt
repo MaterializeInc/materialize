@@ -129,6 +129,28 @@ SELECT 2 * a, sum(b) FROM t GROUP BY 1
 4  3
 6  1
 
+# Ensure that the sum of NULLs is NULL.
+
+query T
+SELECT sum(column1) FROM (VALUES (NULL::int2), (NULL))
+----
+NULL
+
+query T
+SELECT sum(column1) FROM (VALUES (NULL::int4), (NULL))
+----
+NULL
+
+query T
+SELECT sum(column1) FROM (VALUES (NULL::int8), (NULL))
+----
+NULL
+
+query T
+SELECT sum(column1) FROM (VALUES (NULL::numeric), (NULL))
+----
+NULL
+
 query TTT colnames
 SHOW COLUMNS FROM t
 ----
