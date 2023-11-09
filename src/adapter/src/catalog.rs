@@ -2234,9 +2234,6 @@ impl Catalog {
                         }
                     }
                 }
-                Op::DropTimeline(timeline) => {
-                    tx.remove_timestamp(timeline);
-                }
                 Op::GrantRole {
                     role_id,
                     member_id,
@@ -3672,7 +3669,6 @@ pub enum Op {
         comment: Option<String>,
     },
     DropObject(ObjectId),
-    DropTimeline(Timeline),
     GrantRole {
         role_id: RoleId,
         member_id: RoleId,
