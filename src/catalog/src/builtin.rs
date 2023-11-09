@@ -3094,6 +3094,8 @@ pub const PG_TYPE: BuiltinView = BuiltinView {
         WHEN 'user-defined' THEN 'U'
         WHEN 'unknown' THEN 'X'
     END)::pg_catalog.char AS typcategory,
+    -- In pg only the 'box' type is not ','.
+    ','::pg_catalog.char AS typdelim,
     0::pg_catalog.oid AS typrelid,
     coalesce(
         (
