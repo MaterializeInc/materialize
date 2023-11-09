@@ -79,7 +79,7 @@ class PostgresResultComparator(ResultComparator):
 
         if milliseconds_pattern.search(value1) and milliseconds_pattern.search(value2):
             # drop milliseconds and trunc last digit of second
-            value1 = milliseconds_pattern.sub(value1, "0")
-            value2 = milliseconds_pattern.sub(value2, "0")
+            value1 = last_second_and_milliseconds_pattern.sub("0", value1)
+            value2 = last_second_and_milliseconds_pattern.sub("0", value2)
 
         return value1 == value2
