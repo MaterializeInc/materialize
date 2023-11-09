@@ -782,8 +782,14 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     }
                 }
 
-                // If all subsources of the source are finished, we can skip rendering.
-                if resume_uppers.values().all(|frontier| frontier.is_empty()) {
+                // If all subsources of the source are finished, we can skip rendering entirely.
+                // Also, if `as_of` is empty, the dataflow has been finalized, so we can skip it as
+                // well.
+                //
+                // TODO(guswynn|petrosagg): this is a bit hacky, and is a consequence of storage state
+                // management being a bit of a mess. we should clean this up and remove weird if
+                // statements like this.
+                if resume_uppers.values().all(|frontier| frontier.is_empty()) || as_of.is_empty() {
                     return;
                 }
 
