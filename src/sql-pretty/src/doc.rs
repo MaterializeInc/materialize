@@ -14,7 +14,8 @@ use mz_sql_parser::ast::*;
 use pretty::{Doc, RcDoc};
 
 use crate::util::{
-    bracket, bracket_doc, comma_separate, comma_separated, nest, nest_title, title_comma_separate,
+    bracket, bracket_doc, comma_separate, comma_separated, nest, nest_comma_separate, nest_title,
+    title_comma_separate,
 };
 use crate::TAB;
 
@@ -351,20 +352,20 @@ fn doc_table_factor<T: AstInfo>(v: &TableFactor<T>) -> RcDoc {
     }
 }
 
+fn doc_distinct<T: AstInfo>(v: &Distinct<T>) -> RcDoc {
+    match v {
+        Distinct::EntireRow => RcDoc::text("DISTINCT"),
+        Distinct::On(cols) => bracket("DISTINCT ON (", comma_separate(doc_expr, cols), ")"),
+    }
+}
+
 fn doc_select<T: AstInfo>(v: &Select<T>) -> RcDoc {
     let mut docs = vec![];
-    docs.push(title_comma_separate(
-        format!(
-            "SELECT{}",
-            if let Some(distinct) = &v.distinct {
-                format!(" {}", distinct.to_ast_string())
-            } else {
-                "".into()
-            }
-        ),
-        doc_select_item,
-        &v.projection,
-    ));
+    let mut select = RcDoc::text("SELECT");
+    if let Some(distinct) = &v.distinct {
+        select = nest(select, doc_distinct(distinct));
+    }
+    docs.push(nest_comma_separate(select, doc_select_item, &v.projection));
     if !v.from.is_empty() {
         docs.push(title_comma_separate("FROM", doc_table_with_joins, &v.from));
     }
@@ -519,10 +520,11 @@ fn doc_function<T: AstInfo>(v: &Function<T>) -> RcDoc {
                 if v.filter.is_some() || v.over.is_some() || !order_by.is_empty() {
                     return doc_display(v, "function filter or over or order by");
                 }
-                let mut name = format!("{}(", v.name.to_ast_string());
-                if v.distinct {
-                    name.push_str("DISTINCT");
-                }
+                let name = format!(
+                    "{}({}",
+                    v.name.to_ast_string(),
+                    if v.distinct { "DISTINCT " } else { "" }
+                );
                 bracket(name, comma_separate(doc_expr, args), ")")
             }
         }

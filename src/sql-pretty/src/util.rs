@@ -35,8 +35,15 @@ where
     if v.is_empty() {
         title
     } else {
-        nest(title, comma_separate(f, v))
+        nest_comma_separate(title, f, v)
     }
+}
+
+pub(crate) fn nest_comma_separate<'a, F, T>(title: RcDoc<'a, ()>, f: F, v: &'a [T]) -> RcDoc<'a, ()>
+where
+    F: Fn(&'a T) -> RcDoc<'a, ()>,
+{
+    nest(title, comma_separate(f, v))
 }
 
 pub(crate) fn comma_separate<'a, F, T>(f: F, v: &'a [T]) -> RcDoc<'a, ()>
