@@ -208,6 +208,7 @@ def create_mz_service(
         external_cockroach=True,
         external_minio=True,
         sanity_restart=False,
+        catalog_store="stash",
     )
 
 

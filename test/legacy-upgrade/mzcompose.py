@@ -49,6 +49,7 @@ SERVICES = [
         options=list(mz_options.values()),
         volumes_extra=["secrets:/share/secrets"],
         external_cockroach=True,
+        catalog_store="stash",
     ),
     # N.B.: we need to use `validate_postgres_stash=False` because testdrive uses
     # HEAD to load the catalog from disk but does *not* run migrations. There
@@ -144,6 +145,7 @@ def test_upgrade_from_version(
             ],
             volumes_extra=["secrets:/share/secrets"],
             external_cockroach=True,
+            catalog_store="stash",
         )
         with c.override(mz_from):
             c.up("materialized")

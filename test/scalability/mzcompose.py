@@ -46,7 +46,11 @@ from materialize.scalability.workloads_test import *  # noqa: F401 F403
 from materialize.util import all_subclasses
 
 SERVICES = [
-    Materialized(image="materialize/materialized:latest", sanity_restart=False),
+    Materialized(
+        image="materialize/materialized:latest",
+        sanity_restart=False,
+        catalog_store="stash",
+    ),
     Postgres(),
 ]
 
