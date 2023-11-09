@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use mz_ore::soft_assert;
-use mz_ore::str::{bracketed, closure_to_display, separated, Indent, IndentLike, StrExt};
+use mz_ore::str::{closure_to_display, separated, Indent, IndentLike, StrExt};
 use mz_repr::explain::text::{fmt_text_constant_rows, DisplayText};
 use mz_repr::explain::{
     CompactScalarSeq, ExprHumanizer, HumanizedAttributes, IndexUsageType, Indices,
@@ -545,13 +545,8 @@ impl MirRelationExpr {
                     let equivalences = separated(
                         " AND ",
                         equivalences.iter().map(|equivalence| {
-                            let equivalences = equivalence.len();
                             let equivalence = HumanizedExpr::seq(equivalence, cols);
-                            if equivalences == 2 {
-                                bracketed("", "", separated(" = ", equivalence))
-                            } else {
-                                bracketed("eq(", ")", separated(", ", equivalence))
-                            }
+                            separated(" = ", equivalence)
                         }),
                     );
                     write!(f, "{}Join on=({})", ctx.indent, equivalences)?;

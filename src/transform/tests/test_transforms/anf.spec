@@ -63,7 +63,7 @@ With
 
 # Joins.
 apply pipeline=anf
-Join on=(eq(#0, #2, #4))
+Join on=(#0 = #2 = #4)
   Get t0
   Constant <empty> // { types: "(bigint, bigint)" }
   Get t0
@@ -72,7 +72,7 @@ Return
   Get l2
 With
   cte l2 =
-    Join on=(eq(#0, #2, #4))
+    Join on=(#0 = #2 = #4)
       Get l0
       Get l1
       Get l0

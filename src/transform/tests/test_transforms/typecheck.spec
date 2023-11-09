@@ -353,7 +353,7 @@ expected Bool?
 ############################################################################
 
 typecheck
-Join on=(eq(#0, #3))
+Join on=(#0 = #3)
   Get t0
   Get t0
 ----
@@ -361,7 +361,7 @@ Join on=(eq(#0, #3))
 
 # TODO(mgree): should narrow to non-null with typechecker improvements
 typecheck
-Join on=(eq(#0, #1, #3, #4))
+Join on=(#0 = #1 = #3 = #4)
   Get t0
   Get t0
 ----
