@@ -46,7 +46,7 @@ def matches_fun_by_name(
 
 
 def matches_fun_by_any_name(
-    expression: Expression, function_names_in_lower_case: list[str]
+    expression: Expression, function_names_in_lower_case: set[str]
 ) -> bool:
     for function_name in function_names_in_lower_case:
         if matches_fun_by_name(expression, function_name):
