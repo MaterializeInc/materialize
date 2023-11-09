@@ -931,6 +931,15 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: incident-72
 
+  - id: balancerd
+    label: "Tests for balancerd"
+    agents:
+      queue: linux-x86_64
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: balancerd
+
   - wait: ~
     continue_on_failure: true
 

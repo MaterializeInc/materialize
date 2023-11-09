@@ -14,6 +14,7 @@ import tempfile
 from textwrap import dedent
 
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
@@ -1404,7 +1405,10 @@ SERVICES = [
     # We create all sources, sinks and dataflows by default with SIZE '1'
     # The workflow_instance_size workflow is testing multi-process clusters
     Materialized(memory="8G", default_size=1),
-    Testdrive(default_timeout="120s"),
+    Testdrive(
+        default_timeout="120s", materialize_url="postgres://materialize@balancerd:6875"
+    ),
+    Balancerd(),
 ]
 
 
@@ -1424,9 +1428,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
 
-    c.up("zookeeper", "kafka", "schema-registry")
-
-    c.up("materialized")
+    c.up("zookeeper", "kafka", "schema-registry", "materialized", "balancerd")
 
     nodes = [
         Clusterd(name="clusterd_1_1"),
