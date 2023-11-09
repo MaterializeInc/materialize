@@ -15,7 +15,6 @@ from matplotlib.axes import Axes
 from matplotlib.figure import SubFigure
 from matplotlib.markers import MarkerStyle
 
-from materialize.scalability.df import df_totals_cols
 from materialize.scalability.df.df_details import DfDetails
 from materialize.scalability.df.df_totals import DfTotals
 from materialize.scalability.endpoints import endpoint_name_to_description
@@ -42,7 +41,7 @@ def scatterplot_tps_per_connections(
         plot.scatter(
             df_totals.get_concurrency_values(),
             df_totals.get_tps_values(),
-            label=df_totals_cols.TPS,
+            label="tps",
             marker=_get_plot_marker(endpoint_version_name, baseline_version_name),
         )
 

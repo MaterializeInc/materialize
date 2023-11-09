@@ -110,8 +110,8 @@ class DfTotalsExtended(DfTotalsBase):
         for index, row in self.data.iterrows():
             regression = Regression(
                 workload_name,
-                concurrency=int(row[df_totals_cols.CONCURRENCY]),
-                count=int(row[df_totals_cols.COUNT]),
+                concurrency=int(row[df_totals_ext_cols.CONCURRENCY]),
+                count=int(row[df_totals_ext_cols.COUNT]),
                 tps=row[df_totals_ext_cols.TPS_OTHER],
                 tps_baseline=row[df_totals_ext_cols.TPS_BASELINE],
                 tps_diff=row[df_totals_ext_cols.TPS_DIFF],

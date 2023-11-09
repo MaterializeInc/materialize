@@ -229,16 +229,16 @@ class BenchmarkExecutor:
                     df_totals_cols.COUNT: count,
                     df_totals_cols.TPS: count / wallclock_total,
                     df_totals_cols.MEAN_TX_DURATION: df_detail[
-                        df_totals_cols.WALLCLOCK
+                        df_details_cols.WALLCLOCK
                     ].mean(),
                     df_totals_cols.MEDIAN_TX_DURATION: df_detail[
-                        df_totals_cols.WALLCLOCK
+                        df_details_cols.WALLCLOCK
                     ].median(),
                     df_totals_cols.MIN_TX_DURATION: df_detail[
-                        df_totals_cols.WALLCLOCK
+                        df_details_cols.WALLCLOCK
                     ].min(),
                     df_totals_cols.MAX_TX_DURATION: df_detail[
-                        df_totals_cols.WALLCLOCK
+                        df_details_cols.WALLCLOCK
                     ].max(),
                 }
             ]
