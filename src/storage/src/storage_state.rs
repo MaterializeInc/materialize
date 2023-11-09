@@ -1288,6 +1288,7 @@ impl StorageState {
                 }
             }
             StorageCommand::AllowCompaction(list) => {
+                let mut drop_ids = vec![];
                 for (id, frontier) in list {
                     match self.exports.get_mut(&id) {
                         Some(export_description) => {
@@ -1316,56 +1317,45 @@ impl StorageState {
 
                     if frontier.is_empty() {
                         fail_point!("crash_on_drop");
+
                         // Indicates that we may drop `id`, as there are no more valid times to read.
+                        self.ingestions.remove(&id);
+                        self.exports.remove(&id);
+                        self.sink_handles.remove(&id);
+                        drop_ids.push(id);
 
-                        let ids = match self.ingestions.remove(&id) {
-                            Some(description) => {
-                                // Without the source dataflow running, all source exports
-                                // should also be considered dropped. n.b. `source_exports`
-                                // includes `id`
-                                description.subsource_ids().collect::<Vec<_>>()
-                            }
-                            None => {
-                                self.exports.remove(&id);
-                                self.sink_handles.remove(&id);
-                                vec![id]
-                            }
-                        };
-
-                        for id in &ids {
-                            // This will stop reporting of frontiers.
+                        // This will stop reporting of frontiers.
+                        //
+                        // If this object still has its frontiers reported,
+                        // we will notify the client envd of the drop.
+                        if self.reported_frontiers.remove(&id).is_some() {
+                            // The only actions left are internal cleanup, so we can
+                            // commit to the client that these objects have been
+                            // dropped.
                             //
-                            // If this object still has its frontiers reported,
-                            // we will notify the client envd of the drop.
-                            if self.reported_frontiers.remove(id).is_some() {
-                                // The only actions left are internal cleanup, so we can
-                                // commit to the client that these objects have been
-                                // dropped.
-                                //
-                                // This must be done now rather than in response to
-                                // DropDataflow, otherwise we introduce the possibility
-                                // of a timing issue where:
-                                // - We remove all tracking state from the storage state
-                                //   and send `DropDataflow` (i.e. this block)
-                                // - While waiting to process that command, we reconcile
-                                //   with a new envd. That envd has already committed to
-                                //   its catalog that this object no longer exists.
-                                // - We process the DropDataflow command, and identify
-                                //   that this object has been dropped.
-                                // - The next time `dropped_ids` is processed, we send a
-                                //   response that this ID has been dropped, but the
-                                //   upstream state has no record of that object having
-                                //   ever existed.
-                                self.dropped_ids.insert(*id);
-                            }
-                        }
-
-                        // Broadcast from one worker to make sure its sequences
-                        // with the other internal commands.
-                        if worker_index == 0 {
-                            internal_cmd_tx.broadcast(InternalStorageCommand::DropDataflow(ids));
+                            // This must be done now rather than in response to
+                            // DropDataflow, otherwise we introduce the possibility
+                            // of a timing issue where:
+                            // - We remove all tracking state from the storage state
+                            //   and send `DropDataflow` (i.e. this block)
+                            // - While waiting to process that command, we reconcile
+                            //   with a new envd. That envd has already committed to
+                            //   its catalog that this object no longer exists.
+                            // - We process the DropDataflow command, and identify
+                            //   that this object has been dropped.
+                            // - The next time `dropped_ids` is processed, we send a
+                            //   response that this ID has been dropped, but the
+                            //   upstream state has no record of that object having
+                            //   ever existed.
+                            self.dropped_ids.insert(id);
                         }
                     }
+                }
+
+                // Broadcast from one worker to make sure its sequences
+                // with the other internal commands.
+                if worker_index == 0 && !drop_ids.is_empty() {
+                    internal_cmd_tx.broadcast(InternalStorageCommand::DropDataflow(drop_ids));
                 }
             }
         }
