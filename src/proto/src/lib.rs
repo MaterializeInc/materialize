@@ -85,6 +85,9 @@ use mz_ore::cast::CastFrom;
 use proptest::prelude::Strategy;
 use uuid::Uuid;
 
+#[cfg(feature = "chrono")]
+pub mod chrono;
+
 #[cfg(feature = "tokio-postgres")]
 pub mod tokio_postgres;
 

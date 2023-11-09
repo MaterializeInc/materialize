@@ -9,7 +9,7 @@
 
 syntax = "proto3";
 
-package mz_repr.chrono;
+package mz_proto.chrono;
 
 message ProtoTz {
     string name = 1;

@@ -74,6 +74,7 @@ use std::string::ToString;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_ore::cast;
@@ -83,6 +84,8 @@ use mz_persist_client::batch::UntrimmableColumns;
 use mz_persist_client::cfg::{PersistConfig, PersistFeatureFlag};
 use mz_pgwire_common::Severity;
 use mz_repr::adt::numeric::Numeric;
+use mz_repr::adt::timestamp::CheckedTimestamp;
+use mz_repr::strconv;
 use mz_repr::user::ExternalUserMetadata;
 use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_tracing::CloneableEnvFilter;
@@ -689,6 +692,19 @@ const DISK_CLUSTER_REPLICAS_DEFAULT: ServerVar<bool> = ServerVar {
     value: &false,
     description: "Whether the disk option for managed clusters and cluster replicas should be enabled by default.",
     internal: true,
+};
+
+const UNSAFE_NEW_TRANSACTION_WALL_TIME: ServerVar<Option<CheckedTimestamp<DateTime<Utc>>>> = ServerVar {
+    name: UncasedStr::new("unsafe_new_transaction_wall_time"),
+    value: &None,
+    description:
+        "Sets the wall time for all new explicit or implicit transactions to control the value of `now()`. \
+        If not set, uses the system's clock.",
+    // This needs to be false because `internal: true` things are only modifiable by the mz_system
+    // and mz_support users, and we want sqllogictest to have access with its user. Because the name
+    // starts with "unsafe" it still won't be visible or changeable by users unless unsafe mode is
+    // enabled.
+    internal: false,
 };
 
 /// Tuning for RocksDB used by `UPSERT` sources that takes effect on restart.
@@ -2126,6 +2142,7 @@ impl SessionVars {
                 ValueConstraint::Domain(&NumericInRange(0.0..=1.0)),
             )
             .with_var(&EMIT_INTROSPECTION_QUERY_NOTICE)
+            .with_var(&UNSAFE_NEW_TRANSACTION_WALL_TIME)
     }
 
     fn with_var<V>(mut self, var: &'static ServerVar<V>) -> Self
@@ -2547,6 +2564,10 @@ impl SessionVars {
     /// Returns the value of the `emit_introspection_query_notice` configuration parameter.
     pub fn emit_introspection_query_notice(&self) -> bool {
         *self.expect_value(&EMIT_INTROSPECTION_QUERY_NOTICE)
+    }
+
+    pub fn unsafe_new_transaction_wall_time(&self) -> Option<CheckedTimestamp<DateTime<Utc>>> {
+        *self.expect_value(&UNSAFE_NEW_TRANSACTION_WALL_TIME)
     }
 }
 
@@ -4324,6 +4345,23 @@ impl Value for f64 {
 
     fn format(&self) -> String {
         self.to_string()
+    }
+}
+
+impl Value for Option<CheckedTimestamp<DateTime<Utc>>> {
+    fn type_name() -> String {
+        "timestamptz".to_string()
+    }
+
+    fn parse<'a>(param: &'a (dyn Var + Send + Sync), input: VarInput) -> Result<Self, VarError> {
+        let s = extract_single_value(param, input)?;
+        strconv::parse_timestamptz(s)
+            .map_err(|_| VarError::InvalidParameterType(param.into()))
+            .map(Some)
+    }
+
+    fn format(&self) -> String {
+        self.map(|t| t.to_string()).unwrap_or_default()
     }
 }
 

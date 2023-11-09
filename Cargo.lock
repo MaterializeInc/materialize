@@ -4224,6 +4224,7 @@ dependencies = [
  "bytes",
  "bytesize",
  "chrono",
+ "chrono-tz",
  "criterion",
  "csv",
  "datadriven",
@@ -4241,6 +4242,7 @@ dependencies = [
  "mz-ore",
  "mz-persist-types",
  "mz-pgrepr",
+ "mz-pgtz",
  "mz-proto",
  "mz-regexp",
  "mz-repr",
@@ -4855,7 +4857,20 @@ name = "mz-pgtz"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "chrono",
+ "chrono-tz",
+ "mz-lowertest",
  "mz-ore",
+ "mz-proto",
+ "phf",
+ "phf_codegen",
+ "proptest",
+ "proptest-derive",
+ "prost",
+ "prost-build",
+ "protobuf-src",
+ "serde",
+ "uncased",
  "workspace-hack",
 ]
 
@@ -5023,6 +5038,8 @@ name = "mz-proto"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "chrono",
+ "chrono-tz",
  "globset",
  "http",
  "mz-ore",
@@ -5073,6 +5090,7 @@ dependencies = [
  "mz-ore",
  "mz-persist",
  "mz-persist-types",
+ "mz-pgtz",
  "mz-proto",
  "num-traits",
  "num_enum",

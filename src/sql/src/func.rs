@@ -3576,6 +3576,9 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 })
             }) => ReturnType::none(true), oid::FUNC_REPEAT_OID;
         },
+        "timezone_offset" => Scalar {
+            params!(String, TimestampTz) => BinaryFunc::TimezoneOffset => RecordAny, oid::FUNC_TIMEZONE_OFFSET;
+        },
         "try_parse_monotonic_iso8601_timestamp" => Scalar {
             params!(String) => Operation::unary(move |ecx, e| {
                 ecx.require_feature_flag(&crate::session::vars::ENABLE_TRY_PARSE_MONOTONIC_ISO8601_TIMESTAMP)?;

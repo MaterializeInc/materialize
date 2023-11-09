@@ -3340,7 +3340,17 @@ pub const PG_TIMEZONE_ABBREVS: BuiltinView = BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     sql: concatcp!(
         "CREATE VIEW pg_catalog.pg_timezone_abbrevs (abbrev, utc_offset, is_dst) AS ",
-        mz_pgtz::TIMEZONE_ABBREV_SQL,
+        mz_pgtz::abbrev::PG_CATALOG_TIMEZONE_ABBREVS_SQL,
+    ),
+    sensitivity: DataSensitivity::Public,
+};
+
+pub const PG_TIMEZONE_NAMES: BuiltinView = BuiltinView {
+    name: "pg_timezone_names",
+    schema: PG_CATALOG_SCHEMA,
+    sql: concatcp!(
+        "CREATE VIEW pg_catalog.pg_timezone_names (name, abbrev, utc_offset, is_dst) AS ",
+        mz_pgtz::timezone::PG_CATALOG_TIMEZONE_NAMES_SQL,
     ),
     sensitivity: DataSensitivity::Public,
 };
@@ -5788,6 +5798,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&PG_SHDESCRIPTION),
         Builtin::View(&PG_INDEXES),
         Builtin::View(&PG_TIMEZONE_ABBREVS),
+        Builtin::View(&PG_TIMEZONE_NAMES),
         Builtin::View(&INFORMATION_SCHEMA_APPLICABLE_ROLES),
         Builtin::View(&INFORMATION_SCHEMA_COLUMNS),
         Builtin::View(&INFORMATION_SCHEMA_ENABLED_ROLES),

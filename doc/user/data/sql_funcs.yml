@@ -536,6 +536,17 @@
     description: 'Converts `timestamp with time zone` from UTC to specified time zone, expressed as the local time. <br/><br/>**Known limitation:** You must explicitly cast the type for the time zone.'
     url: timezone-and-at-time-zone
 
+  - signature: |-
+      timezone_offset(zone: str, when: timestamptz) ->
+      (abbrev: str, base_utc_offset: interval, dst_offset: interval)
+    description: >-
+      Describes a time zone's offset from UTC at a specified moment.
+      `zone` must be a valid IANA Time Zone Database identifier.
+      `when` is a `timestamp with time zone` that specifies the moment at which to determine `zone`'s offset from UTC.
+      `abbrev` is the abbreviation for `zone` that is in use at the specified moment (e.g., `EST` or `EDT`).
+      `base_utc_offset` is the base offset from UTC at the specified moment (e.g., `-5 hours`). Positive offsets mean east of Greenwich; negative offsets mean west of Greenwich.
+      `dst_offset` is the additional offset at the specified moment due to Daylight Saving Time rules (e.g., `1 hours`). If non-zero, Daylight Saving Time is in effect.
+
   - signature: 'to_timestamp(val: double precision) -> timestamptz'
     description: Converts Unix epoch (seconds since 00:00:00 UTC on January 1, 1970)
       to timestamp

@@ -27,6 +27,7 @@ use ::chrono::{
 };
 use mz_lowertest::MzReflect;
 use mz_ore::cast::{self, CastFrom};
+use mz_proto::chrono::ProtoNaiveDateTime;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use once_cell::sync::Lazy;
 use proptest::arbitrary::Arbitrary;
@@ -38,7 +39,6 @@ use thiserror::Error;
 use crate::adt::datetime::DateTimePart;
 use crate::adt::interval::Interval;
 use crate::adt::numeric::DecimalLike;
-use crate::chrono::ProtoNaiveDateTime;
 use crate::scalar::{arb_naive_date_time, arb_utc_date_time};
 use crate::Datum;
 

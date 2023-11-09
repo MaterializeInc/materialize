@@ -70,6 +70,7 @@ statement_logging_sample_rate       1.0                     "User-facing session
 statement_timeout                   "10 s"                  "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, and DELETE operations. If this value is specified without units, it is taken as milliseconds."
 TimeZone                            UTC                     "Sets the time zone for displaying and interpreting time stamps (PostgreSQL)."
 transaction_isolation               "strict serializable"   "Sets the current transaction's isolation level (PostgreSQL)."
+unsafe_new_transaction_wall_time    ""                      "Sets the wall time for all new explicit or implicit transactions to control the value of `now()`. If not set, uses the system's clock."
 enable_consolidate_after_union_negate on                    "consolidation after Unions that have a Negated input (Materialize)."
 enable_sink_doc_on_option           on                     "Whether DOC ON option for sinks is allowed (Materialize)."
 

@@ -20,10 +20,11 @@ use chrono::{
     DateTime, Datelike, Duration, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc,
 };
 use chrono_tz::{Tz, TZ_VARIANTS};
-use mz_proto::{RustType, TryFromProtoError};
 use proptest::prelude::Strategy;
 
-include!(concat!(env!("OUT_DIR"), "/mz_repr.chrono.rs"));
+use crate::{RustType, TryFromProtoError};
+
+include!(concat!(env!("OUT_DIR"), "/mz_proto.chrono.rs"));
 
 impl RustType<ProtoNaiveDate> for NaiveDate {
     fn into_proto(&self) -> ProtoNaiveDate {
@@ -155,7 +156,7 @@ pub fn any_timezone() -> impl Strategy<Value = Tz> {
 
 #[cfg(test)]
 mod tests {
-    use mz_proto::protobuf_roundtrip;
+    use crate::protobuf_roundtrip;
     use proptest::prelude::*;
 
     use super::*;

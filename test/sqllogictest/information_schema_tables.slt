@@ -881,6 +881,10 @@ pg_timezone_abbrevs
 VIEW
 materialize
 pg_catalog
+pg_timezone_names
+VIEW
+materialize
+pg_catalog
 pg_trigger
 VIEW
 materialize
