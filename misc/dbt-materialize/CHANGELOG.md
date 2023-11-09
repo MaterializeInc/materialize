@@ -7,6 +7,29 @@
   checks, but the value of this feature in a real-time data warehouse is
   limited.
 
+* Support for `store_failures_as` which can be `table`, `view`,`ephemeral` or `materialized_view` (like models, a `table` will be a `materialized_view`).
+
+  * Project level
+  ```yaml
+  tests:
+    my_project:
+      +store_failures_as: table
+  ```
+  * Model level
+  ```yaml
+  models:
+    - name: my_model
+      columns:
+        - name: id
+          tests:
+            - not_null:
+                config:
+                  store_failures_as: view
+            - unique:
+                config:
+                  store_failures_as: materialized_view
+  ```
+
 ## 1.6.1 - 2023-11-03
 
 * Support the [`ASSERT NOT NULL` option](https://materialize.com/docs/sql/create-materialized-view/#non-null-assertions)

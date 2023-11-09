@@ -94,7 +94,7 @@ class TestStoreTestFailuresAsExceptions(basic.StoreTestFailuresAsExceptions):
         assert "Compilation Error" in result.message
         assert "'error' is not a valid value" in result.message
         assert (
-            "Accepted values are: ['ephemeral', 'table', 'view', 'materialized_view']"
+            "Accepted values are: ['table', 'view', 'materialized_view']"
             in result.message
         )
 

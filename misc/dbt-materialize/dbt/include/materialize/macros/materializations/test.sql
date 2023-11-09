@@ -26,7 +26,7 @@
     {% if store_failures_as not in ['table', 'view', 'materialized_view'] %}
         {{ exceptions.raise_compiler_error(
             "'" ~ store_failures_as ~ "' is not a valid value for `store_failures_as`. "
-            "Accepted values are: ['ephemeral', 'table', 'view', 'materialized_view']"
+            "Accepted values are: ['table', 'view', 'materialized_view']"
         ) }}
     {% endif %}
 
@@ -39,11 +39,17 @@
         {% do adapter.drop_relation(old_relation) %}
     {% endif %}
 
-    {% call statement(auto_begin=True) %}
-        {{ materialize__create_materialized_view_as(target_relation, sql) }}
-    {% endcall %}
-
     {% do relations.append(target_relation) %}
+
+    {% if store_failures_as == 'view' %}
+        {% call statement(auto_begin=True) %}
+            {{ materialize__create_view_as(target_relation, sql) }}
+        {% endcall %}
+    {% else %}
+        {% call statement(auto_begin=True) %}
+            {{ materialize__create_materialized_view_as(target_relation, sql) }}
+        {% endcall %}
+    {% endif %}
 
     {% set main_sql %}
         select *
