@@ -790,6 +790,14 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 // management being a bit of a mess. we should clean this up and remove weird if
                 // statements like this.
                 if resume_uppers.values().all(|frontier| frontier.is_empty()) || as_of.is_empty() {
+                    tracing::info!(
+                        ?resume_uppers,
+                        ?as_of,
+                        "worker {}/{} skipping building ingestion dataflow \
+                        for {ingestion_id} because the ingestion is finished",
+                        self.timely_worker.index(),
+                        self.timely_worker.peers(),
+                    );
                     return;
                 }
 
