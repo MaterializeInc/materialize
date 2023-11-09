@@ -395,7 +395,7 @@ Explained Query:
     Reduce group_by=[#0{o_orderpriority}] aggregates=[count(*)] // { arity: 2 }
       Project (#5) // { arity: 1 }
         Filter (#4{o_orderdate} >= 1993-07-01) AND (date_to_timestamp(#4{o_orderdate}) < 1993-10-01 00:00:00) // { arity: 11 }
-          Join on=(eq(#0{o_orderkey}, #9{o_orderkey}, #10{l_orderkey})) type=delta // { arity: 11 }
+          Join on=(#0{o_orderkey} = #9{o_orderkey} = #10{l_orderkey}) type=delta // { arity: 11 }
             implementation
               %0:orders » %1[#0]UKA » %2[#0]UKA
               %1 » %2[#0]UKA » %0:orders[#0]KAiif
@@ -453,7 +453,7 @@ Explained Query:
     Reduce group_by=[#2{n_name}] aggregates=[sum((#0{l_extendedprice} * (1 - #1{l_discount})))] // { arity: 2 }
       Project (#22, #23, #36) // { arity: 3 }
         Filter (#40{r_name} = "ASIA") AND (#12{o_orderdate} < 1995-01-01) AND (#12{o_orderdate} >= 1994-01-01) AND (#0{c_custkey}) IS NOT NULL AND (#3{c_nationkey}) IS NOT NULL AND (#8{o_orderkey}) IS NOT NULL AND (#37{n_regionkey}) IS NOT NULL // { arity: 42 }
-          Join on=(#0{c_custkey} = #9{o_custkey} AND eq(#3{c_nationkey}, #34{s_nationkey}, #35{n_nationkey}) AND #8{o_orderkey} = #17{l_orderkey} AND #19{l_suppkey} = #33{s_suppkey} AND #37{n_regionkey} = #39{r_regionkey}) type=differential // { arity: 42 }
+          Join on=(#0{c_custkey} = #9{o_custkey} AND #3{c_nationkey} = #34{s_nationkey} = #35{n_nationkey} AND #8{o_orderkey} = #17{l_orderkey} AND #19{l_suppkey} = #33{s_suppkey} AND #37{n_regionkey} = #39{r_regionkey}) type=differential // { arity: 42 }
             implementation
               %5:region[#0]KAef » %4:nation[#2]KAef » %0:customer[#3]KAef » %1:orders[#1]KAeiif » %2:lineitem[#0]KAeiif » %3:supplier[#0, #1]KKeiif
             ArrangeBy keys=[[#3{c_nationkey}]] // { arity: 8 }
@@ -740,7 +740,7 @@ Explained Query:
     Reduce group_by=[#5{n_name}, extract_year_d(#4{o_orderdate})] aggregates=[sum(((#1{l_extendedprice} * (1 - #2{l_discount})) - (#3{ps_supplycost} * #0{l_quantity})))] // { arity: 3 }
       Project (#20..=#22, #35, #41, #47) // { arity: 6 }
         Filter (#0{p_partkey}) IS NOT NULL AND (#9{s_suppkey}) IS NOT NULL AND (#12{s_nationkey}) IS NOT NULL AND (#16{l_orderkey}) IS NOT NULL AND like["%green%"](varchar_to_text(#1{p_name})) // { arity: 50 }
-          Join on=(eq(#0{p_partkey}, #17{l_partkey}, #32{ps_partkey}) AND eq(#9{s_suppkey}, #18{l_suppkey}, #33{ps_suppkey}) AND #12{s_nationkey} = #46{n_nationkey} AND #16{l_orderkey} = #37{o_orderkey}) type=delta // { arity: 50 }
+          Join on=(#0{p_partkey} = #17{l_partkey} = #32{ps_partkey} AND #9{s_suppkey} = #18{l_suppkey} = #33{ps_suppkey} AND #12{s_nationkey} = #46{n_nationkey} AND #16{l_orderkey} = #37{o_orderkey}) type=delta // { arity: 50 }
             implementation
               %0:part » %2:lineitem[#1]KA » %3:partsupp[#0, #1]KKA » %1:supplier[#0]KA » %4:orders[#0]KA » %5:nation[#0]KA
               %1:supplier » %2:lineitem[#2]KA » %3:partsupp[#0, #1]KKA » %0:part[#0]KAlf » %4:orders[#0]KA » %5:nation[#0]KA
