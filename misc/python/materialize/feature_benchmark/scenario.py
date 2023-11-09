@@ -17,7 +17,7 @@ BenchmarkingSequence = MeasurementSource | list[Action | MeasurementSource]
 
 class RootScenario:
     SCALE: float = 6
-    FIXED_SCALE: bool = False  # Will --scale=N have effect on the scenarioo
+    FIXED_SCALE: bool = False  # Will --scale=N have effect on the scenario
 
     def __init__(self, scale: float) -> None:
         self._name = self.__class__.__name__
