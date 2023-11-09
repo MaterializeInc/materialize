@@ -76,33 +76,24 @@
 // END LINT CONFIG
 
 use std::collections::BTreeMap;
-use std::convert::Infallible;
 use std::error::Error;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 use std::{env, fs, iter, thread};
 
 use anyhow::anyhow;
 use headers::{Header, HeaderMapExt};
 use hyper::http::header::HeaderMap;
-use hyper::service::{make_service_fn, service_fn};
-use hyper::{body, Body, Request, Response, Server as HyperServer};
-use jsonwebtoken::{self, EncodingKey};
 use mz_controller::ControllerConfig;
-use mz_frontegg_auth::{
-    ApiTokenArgs, ApiTokenResponse, Authentication as FronteggAuthentication, Claims, RefreshToken,
-    REFRESH_SUFFIX,
-};
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
 use mz_ore::retry::Retry;
-use mz_ore::task::{self, RuntimeExt};
+use mz_ore::task::{self};
 use mz_ore::tracing::{
     OpenTelemetryConfig, StderrLogConfig, StderrLogFormat, TracingConfig, TracingGuard,
     TracingHandle,
@@ -136,7 +127,6 @@ use regex::Regex;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::runtime::Runtime;
-use tokio::sync::mpsc::UnboundedReceiver;
 use tokio_postgres::config::Host;
 use tokio_postgres::Client;
 use tokio_stream::wrappers::TcpListenerStream;
@@ -146,9 +136,8 @@ use tracing_subscriber::EnvFilter;
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
 use url::Url;
-use uuid::Uuid;
 
-use crate::{CatalogConfig, WebSocketAuth, WebSocketResponse};
+use crate::{CatalogConfig, FronteggAuthentication, WebSocketAuth, WebSocketResponse};
 
 pub static KAFKA_ADDRS: Lazy<String> =
     Lazy::new(|| env::var("KAFKA_ADDRS").unwrap_or_else(|_| "localhost:9092".into()));
@@ -912,182 +901,10 @@ pub fn auth_with_ws_impl(
     Ok(msgs)
 }
 
-// Users is a mapping from (client, secret) -> email address.
-pub fn start_mzcloud(
-    encoding_key: EncodingKey,
-    tenant_id: Uuid,
-    users: BTreeMap<(String, String), String>,
-    roles: BTreeMap<String, Vec<String>>,
-    role_updates_rx: UnboundedReceiver<(String, Vec<String>)>,
-    now: NowFn,
-    expires_in_secs: i64,
-    latency_secs: Option<u64>,
-) -> Result<MzCloudServer, anyhow::Error> {
-    let refreshes = Arc::new(Mutex::new(0u64));
-    let enable_refresh = Arc::new(AtomicBool::new(true));
-    let auth_requests = Arc::new(Mutex::new(0u64));
-    #[derive(Clone)]
-    struct Context {
-        encoding_key: EncodingKey,
-        tenant_id: Uuid,
-        users: BTreeMap<(String, String), String>,
-        roles: BTreeMap<String, Vec<String>>,
-        role_updates_rx: Arc<Mutex<tokio::sync::mpsc::UnboundedReceiver<(String, Vec<String>)>>>,
-        now: NowFn,
-        expires_in_secs: i64,
-        latency_secs: Option<u64>,
-        // Uuid -> email
-        refresh_tokens: Arc<Mutex<BTreeMap<String, String>>>,
-        refreshes: Arc<Mutex<u64>>,
-        enable_refresh: Arc<AtomicBool>,
-        auth_requests: Arc<Mutex<u64>>,
-    }
-    let context = Context {
-        encoding_key,
-        tenant_id,
-        users,
-        roles,
-        role_updates_rx: Arc::new(Mutex::new(role_updates_rx)),
-        now,
-        expires_in_secs,
-        latency_secs,
-        refresh_tokens: Arc::new(Mutex::new(BTreeMap::new())),
-        refreshes: Arc::clone(&refreshes),
-        enable_refresh: Arc::clone(&enable_refresh),
-        auth_requests: Arc::clone(&auth_requests),
-    };
-    async fn handle(context: Context, req: Request<Body>) -> Result<Response<Body>, Infallible> {
-        // In some cases we want to add latency to test de-duplicating results.
-        if let Some(latency) = context.latency_secs {
-            tokio::time::sleep(Duration::from_secs(latency)).await;
-        }
-
-        let (parts, body) = req.into_parts();
-        let body = body::to_bytes(body).await.unwrap();
-        let email: String = if parts.uri.path().ends_with(REFRESH_SUFFIX) {
-            // Always count refresh attempts, even if enable_refresh is false.
-            *context.refreshes.lock().unwrap() += 1;
-            let args: RefreshToken = serde_json::from_slice(&body).unwrap();
-            match (
-                context
-                    .refresh_tokens
-                    .lock()
-                    .unwrap()
-                    .remove(args.refresh_token),
-                context.enable_refresh.load(Ordering::Relaxed),
-            ) {
-                (Some(email), true) => email.to_string(),
-                _ => {
-                    return Ok(Response::builder()
-                        .status(400)
-                        .body(Body::from("unknown refresh token"))
-                        .unwrap())
-                }
-            }
-        } else {
-            *context.auth_requests.lock().unwrap() += 1;
-            let args: ApiTokenArgs = serde_json::from_slice(&body).unwrap();
-            match context
-                .users
-                .get(&(args.client_id.to_string(), args.secret.to_string()))
-            {
-                Some(email) => email.to_string(),
-                None => {
-                    return Ok(Response::builder()
-                        .status(400)
-                        .body(Body::from("unknown user"))
-                        .unwrap())
-                }
-            }
-        };
-        let roles = context.roles.get(&email).cloned().unwrap_or_default();
-        let refresh_token = Uuid::new_v4().to_string();
-        context
-            .refresh_tokens
-            .lock()
-            .unwrap()
-            .insert(refresh_token.clone(), email.clone());
-        let access_token = jsonwebtoken::encode(
-            &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
-            &Claims {
-                exp: context.now.as_secs() + context.expires_in_secs,
-                email,
-                sub: Uuid::new_v4(),
-                user_id: None,
-                tenant_id: context.tenant_id,
-                roles,
-                permissions: Vec::new(),
-            },
-            &context.encoding_key,
-        )
-        .unwrap();
-        let resp = ApiTokenResponse {
-            expires: "".to_string(),
-            expires_in: context.expires_in_secs,
-            access_token,
-            refresh_token,
-        };
-        Ok(Response::new(Body::from(
-            serde_json::to_vec(&resp).unwrap(),
-        )))
-    }
-
-    let runtime = Arc::new(Runtime::new()?);
-    let _guard = runtime.enter();
-    let service = make_service_fn(move |_conn| {
-        let mut context = context.clone();
-        let service = service_fn(move |req| {
-            while let Ok((email, roles)) = context.role_updates_rx.lock().unwrap().try_recv() {
-                context.roles.insert(email, roles);
-            }
-            handle(context.clone(), req)
-        });
-        async move { Ok::<_, Infallible>(service) }
-    });
-    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
-    let server = HyperServer::bind(&addr).serve(service);
-    let url = format!("http://{}/", server.local_addr());
-    let _handle = runtime.spawn_named(|| "mzcloud-mock-server", server);
-    Ok(MzCloudServer {
-        url,
-        refreshes,
-        enable_refresh,
-        auth_requests,
-        _runtime: runtime,
-    })
-}
-
-pub struct MzCloudServer {
-    pub url: String,
-    pub refreshes: Arc<Mutex<u64>>,
-    pub enable_refresh: Arc<AtomicBool>,
-    pub auth_requests: Arc<Mutex<u64>>,
-    _runtime: Arc<Runtime>,
-}
-
 pub fn make_header<H: Header>(h: H) -> HeaderMap {
     let mut map = HeaderMap::new();
     map.typed_insert(h);
     map
-}
-
-pub fn wait_for_refresh(frontegg_server: &MzCloudServer, expires_in_secs: u64) {
-    let expected = *frontegg_server.refreshes.lock().unwrap() + 1;
-    Retry::default()
-        .factor(1.0)
-        .max_duration(Duration::from_secs(expires_in_secs + 20))
-        .retry(|_| {
-            let refreshes = *frontegg_server.refreshes.lock().unwrap();
-            if refreshes >= expected {
-                Ok(())
-            } else {
-                Err(format!(
-                    "expected refresh count {}, got {}",
-                    expected, refreshes
-                ))
-            }
-        })
-        .unwrap();
 }
 
 pub fn make_pg_tls<F>(configure: F) -> MakeTlsConnector

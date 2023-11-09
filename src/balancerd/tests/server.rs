@@ -82,10 +82,11 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use jsonwebtoken::{DecodingKey, EncodingKey};
 use mz_balancerd::{BalancerConfig, BalancerService, FronteggResolver, Resolver, BUILD_INFO};
-use mz_environmentd::test_util::{self, make_pg_tls, start_mzcloud, Ca};
+use mz_environmentd::test_util::{self, make_pg_tls, Ca};
 use mz_frontegg_auth::{
     Authentication as FronteggAuthentication, AuthenticationConfig as FronteggConfig,
 };
+use mz_frontegg_mock::FronteggMockServer;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task::RuntimeExt;
@@ -114,14 +115,13 @@ fn test_balancer() {
     let encoding_key =
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
 
-    let (_role_tx, role_rx) = tokio::sync::mpsc::unbounded_channel();
     const EXPIRES_IN_SECS: i64 = 50;
-    let frontegg_server = start_mzcloud(
+    let frontegg_server = FronteggMockServer::start(
+        None,
         encoding_key,
         tenant_id,
         users,
         roles,
-        role_rx,
         SYSTEM_TIME.clone(),
         EXPIRES_IN_SECS,
         None,

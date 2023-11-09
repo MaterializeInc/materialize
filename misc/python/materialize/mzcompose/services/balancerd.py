@@ -10,6 +10,8 @@
 
 from materialize.mzcompose.service import (
     Service,
+    ServiceConfig,
+    ServiceDependency,
 )
 
 
@@ -18,11 +20,12 @@ class Balancerd(Service):
         self,
         name: str = "balancerd",
         mzbuild: str = "balancerd",
-        entrypoint: list[str] | None = None,
+        command: list[str] | None = None,
+        volumes: list[str] = [],
+        depends_on: list[str] = [],
     ) -> None:
-        if entrypoint is None:
-            entrypoint = [
-                "balancerd",
+        if command is None:
+            command = [
                 "service",
                 "--pgwire-listen-addr=0.0.0.0:6875",
                 "--https-listen-addr=0.0.0.0:6876",
@@ -31,11 +34,17 @@ class Balancerd(Service):
                 "--https-resolver-template='materialized:6876'",
             ]
 
+        depends_graph: dict[str, ServiceDependency] = {
+            s: {"condition": "service_started"} for s in depends_on
+        }
+        config: ServiceConfig = {
+            "mzbuild": mzbuild,
+            "command": command,
+            "ports": [6875, 6876, 6877, 6878],
+            "volumes": volumes,
+            "depends_on": depends_graph,
+        }
         super().__init__(
             name=name,
-            config={
-                "mzbuild": mzbuild,
-                "entrypoint": entrypoint,
-                "ports": [6875, 6876, 6877, 6878],
-            },
+            config=config,
         )

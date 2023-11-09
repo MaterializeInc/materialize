@@ -46,6 +46,7 @@ mz-cloud-resources = { path = "../cloud-resources" }
 mz-controller = { path = "../controller" }
 mz-expr = { path = "../expr" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
+mz-frontegg-mock = { path = "../frontegg-mock", optional = true }
 mz-http-util = { path = "../http-util" }
 mz-interchange = { path = "../interchange" }
 mz-metrics = { path = "../metrics" }
@@ -154,7 +155,13 @@ default = ["tokio-console", "jemalloc"]
 # access to the file system.
 dev-web = []
 jemalloc = ["mz-alloc/jemalloc"]
-test = ["postgres", "regex", "postgres-openssl", "mz-tracing"]
+test = [
+  "postgres",
+  "regex",
+  "postgres-openssl",
+  "mz-tracing",
+  "mz-frontegg-mock",
+]
 tokio-console = [
   "mz-ore/tokio-console",
   "mz-orchestrator-tracing/tokio-console",
