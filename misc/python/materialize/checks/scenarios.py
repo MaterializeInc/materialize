@@ -50,7 +50,10 @@ class Scenario:
         # Use base_version() here instead of _base_version so that overwriting
         # upgrade scenarios can specify another base version.
         self.check_objects = [
-            check_class(self.base_version(), self.rng) for check_class in self.checks()
+            check_class(self.base_version(), self.rng)
+            for check_class in self.checks()
+            # TODO: improve
+            if not check_class.__name__.endswith("Base")
         ]
 
     def checks(self) -> list[type[Check]]:
