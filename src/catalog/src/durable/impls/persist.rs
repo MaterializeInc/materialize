@@ -42,7 +42,7 @@ use uuid::Uuid;
 use crate::durable::debug::{Collection, DebugCatalogState, Trace};
 use crate::durable::impls::persist::state_update::StateUpdateKindSchema;
 pub use crate::durable::impls::persist::state_update::{StateUpdate, StateUpdateKind};
-use crate::durable::initialize::DEPLOY_GENERATION;
+use crate::durable::initialize::{DEPLOY_GENERATION, ENABLE_PERSIST_TXN_TABLES};
 use crate::durable::objects::{AuditLogKey, DurableType, Snapshot, StorageUsageKey};
 use crate::durable::transaction::TransactionBatch;
 use crate::durable::{
@@ -431,6 +431,13 @@ impl OpenableDurableCatalogState for PersistHandle {
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError> {
         let upper = self.current_upper().await;
         Ok(self.get_config(DEPLOY_GENERATION, upper).await)
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    async fn get_enable_persist_txn_tables(&mut self) -> Result<Option<bool>, CatalogError> {
+        let upper = self.current_upper().await;
+        let value = self.get_config(ENABLE_PERSIST_TXN_TABLES, upper).await;
+        Ok(value.map(|value| value > 0))
     }
 
     #[tracing::instrument(level = "info", skip_all)]

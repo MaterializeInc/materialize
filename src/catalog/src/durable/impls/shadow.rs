@@ -144,6 +144,10 @@ where
         compare_and_return_async!(self, get_deployment_generation)
     }
 
+    async fn get_enable_persist_txn_tables(&mut self) -> Result<Option<bool>, CatalogError> {
+        compare_and_return_async!(self, get_enable_persist_txn_tables)
+    }
+
     async fn trace(&mut self) -> Result<Trace, CatalogError> {
         panic!("ShadowCatalog is not used for catalog-debug tool");
     }

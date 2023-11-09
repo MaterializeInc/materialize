@@ -2040,6 +2040,22 @@ feature_flags!(
         internal: true,
         enable_for_item_parsing: true,
     },
+    {
+        name: enable_persist_txn_tables,
+        desc: "\
+            Whether to use the new persist-txn tables implementation or the legacy \
+            one.
+
+            Only takes effect on restart. Any changes will also cause clusterd \
+            processes to restart.
+
+            This value is also configurable via a Launch Darkly parameter of the \
+            same name, but we keep the flag to make testing easier. If specified, \
+            the flag takes precedence over the Launch Darkly param.",
+        default: &false,
+        internal: true,
+        enable_for_item_parsing: false,
+    },
 );
 
 /// Represents the input to a variable.

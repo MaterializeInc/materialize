@@ -1001,8 +1001,6 @@ impl<'a> RunnerInner<'a> {
                     secrets_reader_aws_region: None,
                     secrets_reader_aws_prefix: None,
                 },
-                // TODO(txn): Get this flipped to true before turning anything on in prod.
-                enable_persist_txn_tables: false,
             },
             secrets_controller,
             cloud_resource_controller: None,
@@ -1043,6 +1041,8 @@ impl<'a> RunnerInner<'a> {
             deploy_generation: None,
             http_host_name: Some(host_name),
             internal_console_redirect_url: None,
+            // TODO(txn): Get this flipped to true before turning anything on in prod.
+            enable_persist_txn_tables_cli: None,
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned
