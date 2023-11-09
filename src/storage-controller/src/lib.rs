@@ -271,6 +271,33 @@ impl Arbitrary for DurableExportMetadata<mz_repr::Timestamp> {
     }
 }
 
+#[derive(Debug)]
+enum PersistTxns<T> {
+    NeverEnabled,
+    Enabled {
+        txns_read: TxnsRead<T>,
+        txns_client: PersistClient,
+    },
+    DisabledPreviouslyEnabled {
+        txns_id: ShardId,
+        txns_client: PersistClient,
+    },
+}
+
+impl<T: Timestamp + Lattice + Codec64> PersistTxns<T> {
+    fn expect_enabled(&self, txns_id: &ShardId) -> &TxnsRead<T> {
+        match self {
+            PersistTxns::Enabled { txns_read, .. } => {
+                assert_eq!(txns_id, txns_read.txns_id());
+                txns_read
+            }
+            PersistTxns::NeverEnabled | PersistTxns::DisabledPreviouslyEnabled { .. } => {
+                panic!("set if txns are enabled")
+            }
+        }
+    }
+}
+
 /// A storage controller for a storage instance.
 #[derive(Debug)]
 pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation>
@@ -298,9 +325,12 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// These handles are on the other end of a Tokio task, so that work can be done asynchronously
     /// without blocking the storage controller.
     persist_read_handles: persist_handles::PersistReadWorker<T>,
-    /// A handle for reading persist-txn managed shards or None if persist-txn is not
-    /// enabled.
-    txns_read: Option<TxnsRead<T>>,
+    /// Whether to use the new persist-txn tables implementation or the legacy
+    /// one.
+    txns: PersistTxns<T>,
+    /// Whether we have run `txns_init` yet (required before create_collections
+    /// and the various flavors of append).
+    txns_init_run: bool,
     stashed_response: Option<StorageResponse<T>>,
     /// Compaction commands to send during the next call to
     /// `StorageController::process`.
@@ -491,6 +521,7 @@ where
         register_ts: Option<Self::Timestamp>,
         mut collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
     ) -> Result<(), StorageError> {
+        assert!(self.txns_init_run);
         // Validate first, to avoid corrupting state.
         // 1. create a dropped identifier, or
         // 2. create an existing identifier with a new description.
@@ -580,11 +611,11 @@ where
                 // If the shard is being managed by persist-txn (initially, tables), then we need to
                 // pass along the shard id for the txns shard to dataflow rendering.
                 let txns_shard = match description.data_source {
-                    DataSource::Other(DataSourceOther::TableWrites) => {
-                        // `self.txns_read` is None if persist-txn is not enabled, which makes this
-                        // do the right thing.
-                        self.txns_read.as_ref().map(|x| *x.txns_id())
-                    }
+                    DataSource::Other(DataSourceOther::TableWrites) => match &self.txns {
+                        PersistTxns::Enabled { txns_read, .. } => Some(*txns_read.txns_id()),
+                        PersistTxns::NeverEnabled
+                        | PersistTxns::DisabledPreviouslyEnabled { .. } => None,
+                    },
                     DataSource::Ingestion(_)
                     | DataSource::Introspection(_)
                     | DataSource::Progress
@@ -745,9 +776,19 @@ where
                     (id, write)
                 })
                 .collect();
+            // This register call advances the logical upper of the table. The
+            // register call eventually circles that info back to the
+            // controller, but some tests fail if we don't synchronously update
+            // it in create_collections, so just do that now.
+            let advance_to = mz_persist_types::StepForward::step_forward(&register_ts);
             self.persist_table_worker
                 .register(register_ts, table_registers);
-            for (id, collection_state) in collection_states {
+            for (id, mut collection_state) in collection_states {
+                if let PersistTxns::Enabled { .. } = &self.txns {
+                    if collection_state.write_frontier.less_than(&advance_to) {
+                        collection_state.write_frontier = Antichain::from_elem(advance_to.clone());
+                    }
+                }
                 self.collections.insert(id, collection_state);
             }
         }
@@ -1283,6 +1324,7 @@ where
         advance_to: Self::Timestamp,
         commands: Vec<(GlobalId, Vec<TimestamplessUpdate>)>,
     ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError> {
+        assert!(self.txns_init_run);
         // TODO(petrosagg): validate appends against the expected RelationDesc of the collection
         for (id, updates) in commands.iter() {
             if !updates.is_empty() {
@@ -1298,6 +1340,7 @@ where
     }
 
     fn monotonic_appender(&self, id: GlobalId) -> Result<MonotonicAppender, StorageError> {
+        assert!(self.txns_init_run);
         self.collection_manager.monotonic_appender(id)
     }
 
@@ -1341,8 +1384,7 @@ where
                 // never come (worse, it's tricky to keep it making progress, which results in a
                 // stuck since). Replace this with the shared TxnsCache thing we'll have to do
                 // anyway for the dataflow operators.
-                let txns_read = self.txns_read.as_ref().expect("set if txns are enabled");
-                assert_eq!(txns_id, txns_read.txns_id());
+                let txns_read = self.txns.expect_enabled(txns_id);
                 txns_read.update_gt(as_of.clone()).await;
                 let data_snapshot = txns_read
                     .data_snapshot(metadata.data_shard, as_of.clone())
@@ -1389,8 +1431,7 @@ where
                 }
             }
             Some(txns_id) => {
-                let txns_read = self.txns_read.as_ref().expect("set if txns are enabled");
-                assert_eq!(txns_id, txns_read.txns_id());
+                let txns_read = self.txns.expect_enabled(txns_id);
                 txns_read.update_gt(as_of.clone()).await;
                 let data_snapshot = txns_read
                     .data_snapshot(metadata.data_shard, as_of.clone())
@@ -1991,6 +2032,113 @@ where
         let id = self.introspection_ids.lock().expect("poisoned")[&type_];
         self.append_to_managed_collection(id, updates).await;
     }
+
+    /// With the CRDB based timestamp oracle, there is no longer write timestamp
+    /// fencing. As in, when a new Coordinator, `B`, starts up, there is nothing
+    /// that prevents an old Coordinator, `A`, from getting a new write
+    /// timestamp that is higher than `B`'s boot timestamp. Below is the
+    /// implications for all persist transaction scenarios, `on` means a
+    /// Coordinator turning the persist txn flag on, `off` means a Coordinator
+    /// turning the persist txn flag off.
+    ///
+    /// The following series of events is a concern:
+    ///   1. `A` writes at `t_0`, s.t. `t_0` > `B`'s boot timestamp.
+    ///   2. `B` writes at `t_1`, s.t. `t_1` > `t_0`.
+    ///   3. `A` writes at `t_2`, s.t. `t_2` > `t_1`.
+    ///   4. etc.
+    ///
+    /// - `off` -> `off`: If `B`` manages to append `t_1` before A appends `t_0`
+    ///    then the `t_0` append will panic and we won't acknowledge the write
+    ///   to the user (or similarly `t_2` and `t_1`). Before persist-txn,
+    ///   appends are not atomic, so we might get a partial append. This is fine
+    ///   because we only support single table transactions.
+    /// - `on` -> `on`: The txn-shard is meant to correctly handle two writers
+    ///   so this should be fine. Note it's possible that we have two
+    ///   Coordinators interleaving write transactions without the leadership
+    ///   check described below, but that should be fine.
+    /// - `off` -> `on`: If `A` gets a write timestamp higher than `B`'s boot
+    ///   timestamp, then `A` can write directly to a data shard after it's been
+    ///   registered with a txn-shard, breaking the invariant that no data shard
+    ///   is written to directly while it's registered to a transaction shard.
+    ///   To mitigate this, we must do a leadership check AFTER getting the
+    ///   write timestamp. In order for `B` to register a data shard in the txn
+    ///   shard, it must first become the leader then second get a register
+    ///   timestamp. So if `A` gets a write timestamp higher than `B`'s register
+    ///   timestamp, it will fail the leadership check before attempting the
+    ///   append.
+    /// - `on` -> `off`: If `A` tries to write to the txn-shard at a timestamp
+    ///   higher than `B`'s boot timestamp, it will fail because the shards have
+    ///   been forgotten. So everything should be ok.
+    ///
+    ///  In general, all transitions make the following steps:
+    ///   1. Get write timestamp, `ts`.
+    ///   2. Apply all transactions to all data shards up to `ts`.
+    ///   3. Register/forget all data shards. So if we crash at any point in
+    ///      these steps, for example after only applying some transactions,
+    ///      then the next Coordinator can pick up where we left off and finish
+    ///      whatever needs finishing.
+    ///
+    /// H/t jkosh44 for the above notes from the discussion in which we hashed
+    /// this all out.
+    async fn init_txns(&mut self, init_ts: T) -> Result<(), StorageError> {
+        assert_eq!(self.txns_init_run, false);
+        let (txns_id, txns_client) = match &self.txns {
+            PersistTxns::NeverEnabled => {
+                info!("init_txns at {:?}: disabled", init_ts);
+                self.txns_init_run = true;
+                return Ok(());
+            }
+            PersistTxns::Enabled {
+                txns_read,
+                txns_client,
+            } => {
+                info!(
+                    "init_txns at {:?}: enabled txns_id={}",
+                    init_ts,
+                    txns_read.txns_id()
+                );
+                (txns_read.txns_id(), txns_client)
+            }
+            PersistTxns::DisabledPreviouslyEnabled {
+                txns_id,
+                txns_client,
+            } => {
+                info!("init_txns at {:?}: disabled txns_id={}", init_ts, txns_id);
+                (txns_id, txns_client)
+            }
+        };
+
+        let mut txns = TxnsHandle::<SourceData, (), T, i64, PersistEpoch, TxnsCodecRow>::open(
+            T::minimum(),
+            txns_client.clone(),
+            *txns_id,
+            Arc::new(RelationDesc::empty()),
+            Arc::new(UnitSchema),
+        )
+        .await;
+
+        // If successful, this forget_all call guarantees:
+        // - That we were able to write to the txns shard at `init_ts` (a
+        //   timestamp given to us by the coordinator).
+        // - That no data shards are registered at `init_ts` and thus every
+        //   table is now free to be written to directly at times greater than
+        //   that. This is not necessary if the txns feature is enabled, we
+        //   could instead commit an empty txn, but we need the apply guarantee
+        //   that it has and it doesn't hurt to start everything from a clean
+        //   slate on boot (register is idempotent and create_collections will
+        //   be called shortly).
+        // - That all txn writes through `init_ts` have been applied
+        //   (materialized physically in the data shards).
+        let removed = txns
+            .forget_all(init_ts.clone())
+            .await
+            .map_err(|_| StorageError::InvalidUppers(vec![]))?;
+        info!("init_txns removed from txns shard: {:?}", removed);
+        drop(txns);
+
+        self.txns_init_run = true;
+        Ok(())
+    }
 }
 
 /// A wrapper struct that presents the adapter token to a format that is understandable by persist
@@ -2097,16 +2245,26 @@ where
                 Box::pin(async move {
                     // Query all collections in parallel. Makes for triplicated
                     // names, but runs quick.
-                    let (metadata_collection, metadata_export, shard_finalization) = futures::join!(
+                    let (
+                        metadata_collection,
+                        metadata_export,
+                        persist_txns_shard,
+                        shard_finalization,
+                    ) = futures::join!(
                         maybe_get_init_batch(&tx, &METADATA_COLLECTION),
                         maybe_get_init_batch(&tx, &METADATA_EXPORT),
+                        maybe_get_init_batch(&tx, &PERSIST_TXNS_SHARD),
                         maybe_get_init_batch(&tx, &command_wals::SHARD_FINALIZATION),
                     );
-                    let batches: Vec<AppendBatch> =
-                        [metadata_collection, metadata_export, shard_finalization]
-                            .into_iter()
-                            .filter_map(|b| b)
-                            .collect();
+                    let batches: Vec<AppendBatch> = [
+                        metadata_collection,
+                        metadata_export,
+                        persist_txns_shard,
+                        shard_finalization,
+                    ]
+                    .into_iter()
+                    .filter_map(|b| b)
+                    .collect();
 
                     tx.append(batches).await
                 })
@@ -2114,11 +2272,11 @@ where
             .await
             .expect("stash operation must succeed");
 
-        let (persist_table_worker, txns_read) = if enable_persist_txn_tables {
-            let txns_client = persist_clients
-                .open(persist_location.clone())
-                .await
-                .expect("location should be valid");
+        let txns_client = persist_clients
+            .open(persist_location.clone())
+            .await
+            .expect("location should be valid");
+        let (persist_table_worker, txns) = if enable_persist_txn_tables {
             let txns_id = PERSIST_TXNS_SHARD
                 .insert_key_without_overwrite(&mut stash, (), ShardId::new().into_proto())
                 .await
@@ -2134,11 +2292,27 @@ where
             )
             .await;
             let worker = persist_handles::PersistTableWriteWorker::new_txns(tx.clone(), txns);
-            let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client, txns_id);
-            (worker, Some(txns_read))
+            let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id);
+            let txns = PersistTxns::Enabled {
+                txns_read,
+                txns_client,
+            };
+            (worker, txns)
         } else {
             let worker = persist_handles::PersistTableWriteWorker::new_legacy(tx.clone());
-            (worker, None)
+            let txns_id = PERSIST_TXNS_SHARD
+                .peek_key_one(&mut stash, ())
+                .await
+                .expect("could not get txns shard id")
+                .map(|x| x.parse::<ShardId>().expect("should be valid shard id"));
+            let txns = match txns_id {
+                Some(txns_id) => PersistTxns::DisabledPreviouslyEnabled {
+                    txns_id,
+                    txns_client,
+                },
+                None => PersistTxns::NeverEnabled,
+            };
+            (worker, txns)
         };
         let persist_monotonic_worker =
             persist_handles::PersistMonotonicWriteWorker::new(tx.clone());
@@ -2162,7 +2336,8 @@ where
             persist_table_worker,
             persist_monotonic_worker,
             persist_read_handles: persist_handles::PersistReadWorker::new(),
-            txns_read,
+            txns,
+            txns_init_run: false,
             stashed_response: None,
             pending_compaction_commands: vec![],
             collection_manager,
@@ -2401,6 +2576,7 @@ where
     /// - If `id` is not registered as a managed collection.
     #[tracing::instrument(level = "debug", skip(self, updates))]
     async fn append_to_managed_collection(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
+        assert!(self.txns_init_run);
         self.collection_manager
             .append_to_collection(id, updates)
             .await;
@@ -2765,6 +2941,7 @@ where
     where
         I: Iterator<Item = GlobalId>,
     {
+        assert!(self.txns_init_run);
         mz_ore::soft_assert!(diff == -1 || diff == 1, "use 1 for insert or -1 for delete");
 
         let id = match self
@@ -3322,8 +3499,7 @@ where
                 }
             }
             Some(txns_id) => {
-                let txns_read = self.txns_read.as_ref().expect("set if txns are enabled");
-                assert_eq!(txns_id, txns_read.txns_id());
+                let txns_read = self.txns.expect_enabled(txns_id);
                 txns_read.update_gt(as_of.clone()).await;
                 let data_snapshot = txns_read
                     .data_snapshot(metadata.data_shard, as_of.clone())

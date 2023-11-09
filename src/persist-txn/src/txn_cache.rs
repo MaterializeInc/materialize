@@ -143,6 +143,18 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
         data_times.registered.iter().any(|x| x.contains(ts))
     }
 
+    /// Returns the set of all data shards registered to the txns set at the
+    /// given timestamp. See [Self::registered_at].
+    pub(crate) fn all_registered_at(&self, ts: &T) -> Vec<ShardId> {
+        assert_eq!(self.only_data_id, None);
+        assert!(self.progress_exclusive >= *ts);
+        self.datas
+            .iter()
+            .filter(|(_, data_times)| data_times.registered.iter().any(|x| x.contains(ts)))
+            .map(|(data_id, _)| *data_id)
+            .collect()
+    }
+
     /// Returns a token exchangeable for a snapshot of a data shard.
     ///
     /// A data shard might be definite at times past the physical upper because
