@@ -49,6 +49,13 @@ pub trait TimestampManipulation:
     /// Advance a timestamp forward by the given `amount`. Panic if unable to do so.
     fn step_forward_by(&self, amount: &Self) -> Self;
 
+    /// Advance a timestamp forward by the given `amount`. Return `None` if unable to do so.
+    fn try_step_forward_by(&self, amount: &Self) -> Option<Self>;
+
+    /// Advance a timestamp by the least amount possible such that `ts.less_than(ts.step_forward())`
+    /// is true. Return `None` if unable to do so.
+    fn try_step_forward(&self) -> Option<Self>;
+
     /// Retreat a timestamp by the least amount possible such that
     /// `ts.step_back().unwrap().less_than(ts)` is true. Return `None` if unable,
     /// which must only happen if the timestamp is `Timestamp::minimum()`.
@@ -65,6 +72,14 @@ impl TimestampManipulation for Timestamp {
 
     fn step_forward_by(&self, amount: &Self) -> Self {
         self.step_forward_by(amount)
+    }
+
+    fn try_step_forward(&self) -> Option<Self> {
+        self.try_step_forward()
+    }
+
+    fn try_step_forward_by(&self, amount: &Self) -> Option<Self> {
+        self.try_step_forward_by(amount)
     }
 
     fn step_back(&self) -> Option<Self> {
@@ -147,6 +162,17 @@ impl Timestamp {
             Some(ts) => ts,
             None => panic!("could not step {self} forward by {amount}"),
         }
+    }
+
+    /// Advance a timestamp by the least amount possible such that `ts.less_than(ts.step_forward())`
+    /// is true. Return `None` if unable to do so.
+    pub fn try_step_forward(&self) -> Option<Self> {
+        self.checked_add(1)
+    }
+
+    /// Advance a timestamp forward by the given `amount`. Return `None` if unable to do so.
+    pub fn try_step_forward_by(&self, amount: &Self) -> Option<Self> {
+        self.checked_add(*amount)
     }
 
     /// Retreat a timestamp by the least amount possible such that

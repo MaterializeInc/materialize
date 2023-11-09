@@ -345,6 +345,10 @@ impl GlobalMirPlan<Unresolved> {
         // Use the the opportunity to name an `until` frontier that will prevent
         // work we needn't perform. By default, `until` will be
         // `Antichain::new()`, which prevents no updates and is safe.
+        //
+        // If `timestamp_ctx.antichain()` is empty, `timestamp_ctx.timestamp()`
+        // will return `None` and we use the default (empty) `until`. Otherwise,
+        // we expect to be able to set `until = as_of + 1` without an overflow.
         if let Some(as_of) = timestamp_ctx.timestamp() {
             if let Some(until) = as_of.checked_add(1) {
                 self.df_desc.until = Antichain::from_elem(until);
