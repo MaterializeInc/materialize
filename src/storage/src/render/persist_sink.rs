@@ -454,7 +454,7 @@ where
                     Diagnostics {
                         shard_name: collection_id.to_string(),
                         handle_purpose: format!(
-                            "compute::persist_sink::mint_batch_descriptions {}",
+                            "storage::persist_sink::mint_batch_descriptions {}",
                             collection_id
                         ),
                     },
@@ -618,7 +618,7 @@ where
                 Arc::new(UnitSchema),
                 Diagnostics {
                     shard_name: collection_id.to_string(),
-                    handle_purpose: format!("compute::persist_sink::write_batches {}", collection_id),
+                    handle_purpose: format!("storage::persist_sink::write_batches {}", collection_id),
                 },
             )
             .await
