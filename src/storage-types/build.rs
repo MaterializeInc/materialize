@@ -80,7 +80,7 @@ use std::env;
 fn main() {
     env::set_var("PROTOC", protobuf_src::protoc());
 
-    const ATTR: &str = "#[derive(Eq, PartialOrd, Ord, ::serde::Serialize, ::serde::Deserialize)]";
+    const ATTR: &str = "#[derive(Eq, PartialOrd, Ord, ::serde::Serialize, ::serde::Deserialize, ::proptest_derive::Arbitrary)]";
 
     let mut config = prost_build::Config::new();
     config.btree_map(["."]);
