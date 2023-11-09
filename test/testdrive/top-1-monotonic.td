@@ -108,6 +108,8 @@ a
 $ kafka-ingest format=avro topic=top1 schema=${schema} timestamp=1
 {"f1": {"int": 123}, "f2": {"int": -123} }
 
+$ kafka-await-ingestion source=t1 topic=top1
+
 > SELECT * from limit_only;
 123
 
@@ -132,6 +134,8 @@ $ kafka-ingest format=avro topic=top1 schema=${schema} timestamp=1
 
 $ kafka-ingest format=avro topic=top1 schema=${schema} timestamp=2
 {"f1": {"int": 234}, "f2": {"int" : -234} }
+
+$ kafka-await-ingestion source=t1 topic=top1
 
 > SELECT * from limit_only;
 123
@@ -159,6 +163,8 @@ $ kafka-ingest format=avro topic=top1 schema=${schema} timestamp=2
 
 $ kafka-ingest format=avro topic=top1 schema=${schema} timestamp=3
 {"f1": {"int": 0}, "f2": {"int": 0} }
+
+$ kafka-await-ingestion source=t1 topic=top1
 
 > SELECT * from limit_only;
 0
@@ -190,6 +196,8 @@ $ kafka-ingest format=avro topic=top1 schema=${schema} timestamp=4
 {"f1": {"int": 0}, "f2": {"int": 0}}
 {"f1": {"int": 234}, "f2": {"int": 0}}
 {"f1": {"int": 123}, "f2": {"int": -234} }
+
+$ kafka-await-ingestion source=t1 topic=top1
 
 > SELECT * from limit_only;
 0
@@ -228,6 +236,8 @@ $ kafka-ingest format=avro topic=top1 schema=${schema} timestamp=5
 {"f1": {"int":0}, "f2": null}
 {"f1": null, "f2": {"int": 0}}
 {"f1": null, "f2": {"int": -234}}
+
+$ kafka-await-ingestion source=t1 topic=top1
 
 > SELECT * from limit_only;
 0
@@ -269,7 +279,7 @@ $ kafka-ingest format=avro topic=top1 schema=${schema} timestamp=5
 # in memory consumptions and should be understood before adapting the values.
 > SET cluster_replica = r1
 
-> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+>[retry] SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 ArrangeBy[[Column(0)]]
 ArrangeBy[[Column(0)]]
 ArrangeBy[[Column(0)]]

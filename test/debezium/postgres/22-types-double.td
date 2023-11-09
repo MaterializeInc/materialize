@@ -29,7 +29,7 @@ $ schema-registry-wait subject=postgres.public.double_type-value
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-> SELECT f1 FROM double_type;
+>[retry] SELECT f1 FROM double_type;
 <null>
 inf
 -inf
@@ -40,7 +40,7 @@ UPDATE double_type SET f1 = 123 WHERE f1 = 'Infinity';
 UPDATE double_type SET f1 = -123 WHERE f1 = '-Infinity';
 UPDATE double_type SET f1 = NULL WHERE f1 = 'NaN';
 
-> SELECT f1 FROM double_type;
+>[retry] SELECT f1 FROM double_type;
 <null>
 <null>
 123

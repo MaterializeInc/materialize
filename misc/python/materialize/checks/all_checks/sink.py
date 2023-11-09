@@ -133,6 +133,8 @@ class SinkUpsert(Check):
                 $[version<5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
                 ALTER ROLE materialize CREATECLUSTER
 
+                $ kafka-await-ingestion source=sink_source topic=sink-source
+
                 > SELECT * FROM sink_source_view;
                 I2 B 1000
                 I3 C 1000
@@ -157,7 +159,7 @@ class SinkUpsert(Check):
                   ENVELOPE NONE
 
                 # Validate the sink by aggregating all the 'before' and 'after' records using SQL
-                > SELECT l_v, l_k, SUM(c)
+                >[retry] SELECT l_v, l_k, SUM(c)
                   FROM (
                     SELECT (after).l_v, (after).l_k, (after).c FROM sink_view1
                     UNION ALL
@@ -169,7 +171,7 @@ class SinkUpsert(Check):
                 C I3 1000
                 C U3 1000
 
-                > SELECT l_v, l_k, SUM(c)
+                >[retry] SELECT l_v, l_k, SUM(c)
                   FROM (
                     SELECT (after).l_v, (after).l_k, (after).c FROM sink_view2
                     UNION ALL
@@ -181,7 +183,7 @@ class SinkUpsert(Check):
                 C I3 1000
                 C U3 1000
 
-                > SELECT l_v, l_k, SUM(c)
+                >[retry] SELECT l_v, l_k, SUM(c)
                   FROM (
                     SELECT (after).l_v, (after).l_k, (after).c FROM sink_view3
                     UNION ALL
@@ -280,13 +282,13 @@ class SinkTables(Check):
                   )
                   GROUP BY f2
 
-                > SELECT * FROM sink_large_transaction_view2
+                >[retry] SELECT * FROM sink_large_transaction_view2
                 500000 200000 100000 0 99999
 
-                > SELECT * FROM sink_large_transaction_view3
+                >[retry] SELECT * FROM sink_large_transaction_view3
                 500000 300000 100000 0 99999
 
-                > SELECT * FROM sink_large_transaction_view4
+                >[retry] SELECT * FROM sink_large_transaction_view4
                 <null> -100000
                 x 0
                 y 0
@@ -404,6 +406,8 @@ class SinkNullDefaults(Check):
                 $[version<5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
                 ALTER ROLE materialize CREATECLUSTER
 
+                $ kafka-await-ingestion source=sink_source_null topic=sink-source-null
+
                 > SELECT * FROM sink_source_null_view;
                 D3 <null> 0 100
                 D3 <null> 1 100
@@ -446,7 +450,7 @@ class SinkNullDefaults(Check):
                   ENVELOPE NONE
 
                 # Validate the sink by aggregating all the 'before' and 'after' records using SQL
-                > SELECT l_v1, l_v2, l_k, SUM(c)
+                >[retry] SELECT l_v1, l_v2, l_k, SUM(c)
                   FROM (
                     SELECT (after).l_v1, (after).l_v2, (after).l_k, (after).c FROM sink_view_null1
                     UNION ALL
@@ -476,7 +480,7 @@ class SinkNullDefaults(Check):
                 A <null> U3 1000
                 B <null> I2 1000
 
-                > SELECT l_v1, l_v2, l_k, SUM(c)
+                >[retry] SELECT l_v1, l_v2, l_k, SUM(c)
                   FROM (
                     SELECT (after).l_v1, (after).l_v2, (after).l_k, (after).c FROM sink_view_null2
                     UNION ALL
@@ -506,7 +510,7 @@ class SinkNullDefaults(Check):
                 A <null> U3 1000
                 B <null> I2 1000
 
-                > SELECT l_v1, l_v2, l_k, SUM(c)
+                >[retry] SELECT l_v1, l_v2, l_k, SUM(c)
                   FROM (
                     SELECT (after).l_v1, (after).l_v2, (after).l_k, (after).c FROM sink_view_null3
                     UNION ALL

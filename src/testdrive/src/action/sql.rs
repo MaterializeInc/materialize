@@ -16,11 +16,13 @@ use std::time::{Duration, SystemTime};
 use anyhow::{anyhow, bail, Context};
 use http::StatusCode;
 use md5::{Digest, Md5};
-use mz_ore::collections::CollectionExt;
+use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::retry::Retry;
 use mz_ore::str::StrExt;
 use mz_pgrepr::{Interval, Jsonb, Numeric, UInt2, UInt4, UInt8};
 use mz_repr::adt::range::Range;
+use mz_sql::ast::visit::{Visit, VisitNode};
+use mz_sql::ast::{Ident, RawItemName, UnresolvedItemName, UnresolvedObjectName};
 use mz_sql_parser::ast::{Raw, Statement};
 use postgres_array::Array;
 use regex::Regex;
@@ -31,9 +33,47 @@ use tokio_postgres::types::{FromSql, Type};
 use crate::action::{ControlFlow, State};
 use crate::parser::{FailSqlCommand, SqlCommand, SqlExpectedError, SqlOutput};
 
-pub async fn run_sql(mut cmd: SqlCommand, state: &State) -> Result<ControlFlow, anyhow::Error> {
-    use Statement::*;
+pub struct ECVisitor<'a> {
+    pub ec_names: &'a HashSet<String>,
+    pub ec_refs: HashSet<String>,
+}
 
+impl<'a> ECVisitor<'a> {
+    pub fn new(ec_names: &'a HashSet<String>) -> Self {
+        Self {
+            ec_names,
+            ec_refs: HashSet::new(),
+        }
+    }
+}
+
+impl<'ast> Visit<'ast, Raw> for ECVisitor<'_> {
+    fn visit_ident(&mut self, ident: &'ast Ident) {
+        if self.ec_names.contains(ident.as_str()) {
+            self.ec_refs.insert(ident.as_str().to_owned());
+        }
+    }
+    fn visit_unresolved_item_name(&mut self, name: &'ast UnresolvedItemName) {
+        self.visit_ident(name.0.last().expect("invalid item name"));
+    }
+    fn visit_unresolved_object_name(&mut self, name: &'ast UnresolvedObjectName) {
+        if let UnresolvedObjectName::Item(ref item_name) = name {
+            self.visit_unresolved_item_name(item_name);
+        }
+    }
+    fn visit_item_name(&mut self, raw_name: &'ast RawItemName) {
+        self.visit_unresolved_item_name(raw_name.name());
+    }
+    fn visit_object_name(&mut self, name: &'ast UnresolvedObjectName) {
+        self.visit_unresolved_object_name(name);
+    }
+}
+
+pub async fn run_sql(
+    mut cmd: SqlCommand,
+    state: &State,
+    retry: Option<bool>,
+) -> Result<ControlFlow, anyhow::Error> {
     let stmts = mz_sql_parser::parser::parse_statements(&cmd.query)
         .with_context(|| format!("unable to parse SQL: {}", cmd.query))?;
     if stmts.len() != 1 {
@@ -45,34 +85,7 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &State) -> Result<ControlFlow, 
         expected_rows.sort();
     }
 
-    let should_retry = match &stmt {
-        // Do not retry FETCH statements as subsequent executions are likely
-        // to return an empty result. The original result would thus be lost.
-        Fetch(_) => false,
-        // EXPLAIN ... PLAN statements should always provide the expected result
-        // on the first try
-        ExplainPlan(_) => false,
-        // DDL statements should always provide the expected result on the first try
-        CreateConnection(_)
-        | CreateCluster(_)
-        | CreateClusterReplica(_)
-        | CreateDatabase(_)
-        | CreateSchema(_)
-        | CreateSource(_)
-        | CreateSink(_)
-        | CreateMaterializedView(_)
-        | CreateView(_)
-        | CreateTable(_)
-        | CreateIndex(_)
-        | CreateType(_)
-        | CreateRole(_)
-        | AlterObjectRename(_)
-        | AlterIndex(_)
-        | Discard(_)
-        | DropObjects(_)
-        | SetVariable(_) => false,
-        _ => true,
-    };
+    let should_retry = compute_retry_behavior(state, &stmt, retry)?;
 
     let query = &cmd.query;
     print_query(query, Some(&stmt));
@@ -391,9 +404,8 @@ impl ErrorMatcher {
 pub async fn run_fail_sql(
     cmd: FailSqlCommand,
     state: &State,
+    retry: Option<bool>,
 ) -> Result<ControlFlow, anyhow::Error> {
-    use Statement::{Commit, Fetch, Rollback};
-
     let stmts = mz_sql_parser::parser::parse_statements(&cmd.query)
         .map_err(|e| format!("unable to parse SQL: {}: {}", cmd.query, e));
 
@@ -421,16 +433,10 @@ pub async fn run_fail_sql(
     let query = &cmd.query;
     print_query(query, stmt.as_ref());
 
-    let should_retry = match &stmt {
-        // Do not retry statements that could not be parsed
+    // Visit the statement and gather any eventally consistent object references
+    let should_retry = match stmt {
+        Some(ref stmt) => compute_retry_behavior(state, stmt, retry)?,
         None => false,
-        // Do not retry COMMIT and ROLLBACK. Once the transaction has errored out and has
-        // been aborted, retrying COMMIT or ROLLBACK will actually start succeeding, which
-        // causes testdrive to emit a confusing "query succeded but expected error" message.
-        Some(Commit(_)) | Some(Rollback(_)) => false,
-        // FETCH should not be retried because it consumes data on each response.
-        Some(Fetch(_)) => false,
-        Some(_) => true,
     };
 
     let state = &state;
@@ -559,6 +565,37 @@ pub fn print_query(query: &str, stmt: Option<&Statement<Raw>>) {
         println!("> CREATE SECRET [query truncated on purpose so as to not reveal the secret in the log]");
     } else {
         println!("> {}", query)
+    }
+}
+
+fn compute_retry_behavior(
+    state: &State,
+    stmt: &Statement<Raw>,
+    retry: Option<bool>,
+) -> Result<bool, anyhow::Error> {
+    match (stmt, retry) {
+        // Any explicit retry behavior on SELECTs is ok
+        (Statement::Select(_), Some(retry)) => Ok(retry),
+        // Unspecified so we need to check for references to eventually consistent objects.
+        (Statement::Select(_), None) => {
+            let mut ec_visitor = ECVisitor::new(&state.materialize_ec_builtins);
+            stmt.visit(&mut ec_visitor);
+
+            if !ec_visitor.ec_refs.is_empty() {
+                bail!(
+                    "query does not specify a retry behavior but references eventually consistent objects: {:?}. \
+                    Hint: use \">[retry] ..\" or \">[noretry] ...\" to retry or not retry respectively.",
+                    ec_visitor.ec_refs
+                );
+            }
+            Ok(false)
+        }
+        // Retries on non-SELECT statements are invalid.
+        (_, Some(true)) => {
+            bail!("used [retry] on non-SELECT statement. Only SELECT statements can be retried.")
+        }
+        // Explicit non-retry or default behavior is ok with any statement and results in no retries
+        (_, Some(false) | None) => Ok(false),
     }
 }
 

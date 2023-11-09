@@ -54,6 +54,6 @@ $ postgres-execute connection=conn2
 DELETE FROM concurrent_delete WHERE f1 = 5;
 COMMIT;
 
-> SELECT * FROM concurrent_delete;
+>[retry] SELECT * FROM concurrent_delete;
 1
 6

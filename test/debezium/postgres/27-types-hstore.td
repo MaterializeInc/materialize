@@ -30,6 +30,6 @@ $ schema-registry-wait subject=postgres.public.hstore_type-value
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-> SELECT f1, f1 ->> 'a', pg_typeof(f1) FROM hstore_type;
+>[retry] SELECT f1, f1 ->> 'a', pg_typeof(f1) FROM hstore_type;
 <null> <null> jsonb
 "{\"a\":\"1\"}" 1 jsonb

@@ -27,7 +27,7 @@ INSERT INTO alter_remove_nullability VALUES (123),(234);
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-> SELECT * FROM alter_remove_nullability;
+>[retry] SELECT * FROM alter_remove_nullability;
 123
 234
 
@@ -37,6 +37,6 @@ INSERT INTO alter_remove_nullability VALUES (345);
 UPDATE alter_remove_nullability SET f1 = 456 WHERE f1 = 123;
 DELETE FROM alter_remove_nullability WHERE f1 = 234;
 
-> SELECT * FROM alter_remove_nullability;
+>[retry] SELECT * FROM alter_remove_nullability;
 345
 456

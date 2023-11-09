@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
+
 # The non-stuck sub-source is fine...
 > SELECT COUNT(*) FROM two;
 11

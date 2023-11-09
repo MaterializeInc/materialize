@@ -31,7 +31,7 @@ $ schema-registry-wait subject=postgres.public.alter_add_column-value
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-> SELECT * FROM alter_add_column;
+>[retry] SELECT * FROM alter_add_column;
 123
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -44,6 +44,6 @@ UPDATE alter_add_column SET f1 = f1 * 100 WHERE new_column = 2;
 # Even though we do not have new_column in our source, we expect that the
 # updates above have landed on the appropriate distinct rows
 
-> SELECT * FROM alter_add_column;
+>[retry] SELECT * FROM alter_add_column;
 1230
 123400

@@ -22,6 +22,8 @@ $ kafka-ingest format=bytes topic=input_csv
 1,2
 2,3
 
+$ kafka-await-ingestion source=input_csv topic=input_csv
+
 > SELECT * from input_csv;
 first second
 -------------

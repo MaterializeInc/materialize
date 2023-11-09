@@ -35,7 +35,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 > SET cluster_replica = r1
 
-> SELECT DISTINCT worker_id FROM mz_internal.mz_compute_frontiers_per_worker ORDER BY worker_id
+>[retry] SELECT DISTINCT worker_id FROM mz_internal.mz_compute_frontiers_per_worker ORDER BY worker_id
 0
 
 > BEGIN
@@ -48,7 +48,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 > SET cluster_replica = r2
 
-> SELECT DISTINCT worker_id FROM mz_internal.mz_compute_frontiers_per_worker ORDER BY worker_id
+>[retry] SELECT DISTINCT worker_id FROM mz_internal.mz_compute_frontiers_per_worker ORDER BY worker_id
 0
 1
 
@@ -62,7 +62,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 > SET cluster_replica = r4
 
-> SELECT DISTINCT worker_id FROM mz_internal.mz_compute_frontiers_per_worker ORDER BY worker_id
+>[retry] SELECT DISTINCT worker_id FROM mz_internal.mz_compute_frontiers_per_worker ORDER BY worker_id
 0
 1
 2

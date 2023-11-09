@@ -36,6 +36,8 @@ $ kafka-ingest format=avro topic=foobar schema=${schema} timestamp=42
 {"quote": "Ring around the collar.", "val": 1735}
 {"quote": "New York is real.  The rest is done with mirrors.", "val": 25040}
 
+$ kafka-await-ingestion source=foobar topic=foobar
+
 > SELECT val, quote FROM foobar ORDER BY quote LIMIT 5
 val    quote
 --------------------------------------------------------------------------------------

@@ -109,6 +109,8 @@ id creature
 $ kafka-ingest format=avro topic=dbz-no-before key-format=avro key-schema=${keyschema} schema=${schema} timestamp=2
 {"id": 1} {"after": {"row": {"id": 1, "creature": "dino"}}, "op": "u", "source": {"file": "binlog4", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 
+$ kafka-await-ingestion source=dbz_no_before topic=dbz-no-before
+
 > SELECT * FROM dbz_no_before
 id creature
 -----------
@@ -117,6 +119,8 @@ id creature
 $ kafka-ingest format=avro topic=dbz-no-before key-format=avro key-schema=${keyschema} schema=${schema} timestamp=3
 {"id": 2} {"after": {"row": {"id": 2, "creature": "archeopteryx"}}, "op": "c", "source": {"file": "binlog5", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 {"id": 2} {"after": {"row": {"id": 2, "creature": "velociraptor"}}, "op": "u", "source": {"file": "binlog6", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
+
+$ kafka-await-ingestion source=dbz_no_before topic=dbz-no-before
 
 > SELECT * FROM dbz_no_before ORDER BY creature
 id creature
@@ -129,6 +133,8 @@ $ kafka-ingest format=avro topic=dbz-no-before key-format=avro key-schema=${keys
 {"id": 3} {"after": {"row": {"id": 3, "creature": "triceratops"}}, "op": "u", "source": {"file": "binlog7", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 {"id": 3} {"after": {"row": {"id": 3, "creature": "triceratops"}}, "op": "u", "source": {"file": "binlog8", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 
+$ kafka-await-ingestion source=dbz_no_before topic=dbz-no-before
+
 > SELECT * FROM dbz_no_before WHERE id = 3
 id creature
 -----------
@@ -139,6 +145,8 @@ id creature
 $ kafka-ingest format=avro topic=dbz-no-before key-format=avro key-schema=${keyschema} schema=${schema} timestamp=5
 {"id": 4} {"after": {"row": {"id": 4, "creature": "moros"}}, "op": "c", "source": {"file": "binlog9", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 
+$ kafka-await-ingestion source=dbz_no_before topic=dbz-no-before
+
 > SELECT creature FROM dbz_no_before WHERE id = 4
 creature
 --------
@@ -147,12 +155,16 @@ moros
 $ kafka-ingest format=avro topic=dbz-no-before key-format=avro key-schema=${keyschema} schema=${schema} timestamp=6
 {"id": 4} {"after": null, "op": "d", "source": {"file": "binlog10", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 
+$ kafka-await-ingestion source=dbz_no_before topic=dbz-no-before
+
 > SELECT creature FROM dbz_no_before WHERE id = 4
 creature
 --------
 
 $ kafka-ingest format=avro topic=dbz-no-before key-format=avro key-schema=${keyschema} schema=${schema} timestamp=7
 {"id": 4} {"after": {"row": {"id": 4, "creature": "chicken"}}, "op": "u", "source": {"file": "binlog11", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
+
+$ kafka-await-ingestion source=dbz_no_before topic=dbz-no-before
 
 > SELECT creature FROM dbz_no_before WHERE id = 4
 creature

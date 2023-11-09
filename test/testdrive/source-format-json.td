@@ -37,6 +37,8 @@ $ kafka-ingest format=bytes topic=data
 "hello"
 ""
 
+$ kafka-await-ingestion source=data topic=data
+
 > SELECT * FROM data
 [1,2,3]
 1
@@ -48,5 +50,7 @@ $ kafka-ingest format=bytes topic=data
 $ kafka-ingest format=bytes topic=data
 hello
 
-!SELECT * FROM data
+$ kafka-await-ingestion source=data topic=data
+
+! SELECT * FROM data
 exact:Decode error: Bytes: Failed to decode JSON: hello (original bytes: [68, 65, 6c, 6c, 6f])

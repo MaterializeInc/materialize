@@ -163,6 +163,8 @@ INSERT INTO t_timestamp_array SELECT * FROM t_timestamp_array;
 # rewrite timestamptz
 INSERT INTO t_timestamptz_array SELECT * FROM t_timestamptz_array;
 
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
+
 # read boolean
 > SELECT pg_typeof(c) FROM t_boolean_array LIMIT 1;
 boolean[]
@@ -279,8 +281,9 @@ time[]
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 INSERT INTO t_integer_array VALUES ('{{1},{2}}');
-
 INSERT INTO t_integer_array SELECT * FROM t_integer_array;
+
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
 
 > SELECT * FROM t_integer_array;
  {1,2}

@@ -23,7 +23,7 @@ SELECT '${arg.default-replica-size}' != '4-4'
 # Note: We rely on testdrive's retry behavior here, as it takes some time for
 # the logging to catch up.
 
-> SELECT COUNT(*)
+>[retry] SELECT COUNT(*)
   FROM
     mz_materialized_views AS views,
     mz_internal.mz_compute_exports_per_worker AS compute_exports,

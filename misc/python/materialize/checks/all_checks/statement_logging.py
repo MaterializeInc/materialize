@@ -56,7 +56,7 @@ class StatementLogging(Check):
                     """
                     $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
                     ALTER SYSTEM SET enable_rbac_checks TO false
-                    > SELECT sql, finished_status FROM mz_internal.mz_statement_execution_history mseh, mz_internal.mz_prepared_statement_history mpsh WHERE mseh.prepared_statement_id = mpsh.id AND sql LIKE '%/* Btv was here */' ORDER BY mseh.began_at;
+                    >[retry] SELECT sql, finished_status FROM mz_internal.mz_statement_execution_history mseh, mz_internal.mz_prepared_statement_history mpsh WHERE mseh.prepared_statement_id = mpsh.id AND sql LIKE '%/* Btv was here */' ORDER BY mseh.began_at;
                     "SELECT 'hello' /* Btv was here */" success
                     "SELECT 'goodbye' /* Btv was here */" success
                     $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
@@ -71,7 +71,7 @@ class StatementLogging(Check):
                     """
                     $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
                     ALTER SYSTEM SET enable_rbac_checks TO false
-                    > SELECT count(*) <= 2 FROM mz_internal.mz_statement_execution_history mseh, mz_internal.mz_prepared_statement_history mpsh WHERE mseh.prepared_statement_id = mpsh.id AND sql LIKE '%/* Btv was here */'
+                    >[retry] SELECT count(*) <= 2 FROM mz_internal.mz_statement_execution_history mseh, mz_internal.mz_prepared_statement_history mpsh WHERE mseh.prepared_statement_id = mpsh.id AND sql LIKE '%/* Btv was here */'
                     true
                     $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
                     ALTER SYSTEM SET enable_rbac_checks TO true

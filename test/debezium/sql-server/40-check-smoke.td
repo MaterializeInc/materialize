@@ -38,7 +38,7 @@ $ schema-registry-wait subject=sql-server.transaction-value
 $ sql-server-execute name=sql-server
 INSERT INTO t1 VALUES (456);
 
-> SELECT * FROM t1;
+>[retry] SELECT * FROM t1;
 123
 234
 345

@@ -10,7 +10,7 @@
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 INSERT INTO upgrade_pg_cdc_table VALUES (11),(12),(13),(14),(15);
 
-> SELECT * FROM upgrade_pg_cdc_table_v_0_27_0;
+>[retry] SELECT * FROM upgrade_pg_cdc_table_v_0_27_0;
 1
 2
 3

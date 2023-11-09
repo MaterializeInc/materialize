@@ -61,6 +61,8 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"a": 3, "b": 1}
 {"a": 1, "b": 2}
 
+$ kafka-await-ingestion source=data topic=data
+
 > SELECT * FROM test1
 b  sum
 ------
@@ -326,6 +328,8 @@ $ kafka-ingest format=avro topic=mat schema=${schema} timestamp=1
 {"a": 3, "b": 4}
 {"a": 1, "b": 2}
 
+$ kafka-await-ingestion source=mat_data topic=mat
+
 > SELECT * from mat_data
 a  b
 ----
@@ -406,6 +410,8 @@ $ kafka-ingest format=avro topic=mat schema=${schema} timestamp=2
 {"a": 0, "b": 4}
 {"a": 1, "b": 2}
 
+$ kafka-await-ingestion source=mat_data topic=mat
+
 # Rematerialize source.
 > CREATE INDEX mat_data_idx3 on mat_data(b)
 
@@ -442,7 +448,7 @@ c    d
 # in memory consumptions and should be understood before adapting the values.
 > SET cluster_replica = r1
 
-> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
+>[retry] SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 AccumulableErrorCheck
 AccumulableErrorCheck
 AccumulableErrorCheck

@@ -46,6 +46,8 @@ true
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 INSERT INTO t1 SELECT * FROM t1;
 
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
+
 > SELECT pg_typeof(f1), pg_typeof(f2), pg_typeof(f3), pg_typeof(f4) FROM t1 LIMIT 1;
 "character varying" "character" "text" "character varying"
 
@@ -58,6 +60,8 @@ INSERT INTO t1 SELECT * FROM t1;
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 UPDATE t1 SET f1 = 'klm', f2 = 'klm', f3 = 'klm', f4 = 'klm' WHERE f1 = 'abc';
 UPDATE t1 SET f1 = 'xyz ', f2 = 'xyz ', f3 = 'xyz ', f4 = 'xyz ' WHERE f1 = 'abc ';
+
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
 
 > SELECT * FROM t1;
 "klm" "klm       " "klm" "klm"

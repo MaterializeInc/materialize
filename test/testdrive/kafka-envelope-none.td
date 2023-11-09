@@ -9,6 +9,9 @@
 
 $ kafka-create-topic topic=missing_keys_or_values partitions=1
 
+$ kafka-ingest topic=missing_keys_or_values format=bytes key-format=bytes key-terminator=:
+hello:world
+
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
@@ -20,10 +23,6 @@ $ kafka-create-topic topic=missing_keys_or_values partitions=1
   ENVELOPE NONE
 
 # make sure a record with both key and value goes through
-
-$ kafka-ingest topic=missing_keys_or_values format=bytes key-format=bytes key-terminator=:
-hello:world
-
 > SELECT * FROM missing_keys_or_values
 key   text
 -----------
@@ -34,6 +33,8 @@ hello world
 
 $ kafka-ingest topic=missing_keys_or_values format=bytes omit-key=true
 foo
+
+$ kafka-await-ingestion source=missing_keys_or_values topic=missing_keys_or_values
 
 > SELECT * FROM missing_keys_or_values
 key    text
@@ -46,6 +47,8 @@ hello  world
 
 $ kafka-ingest topic=missing_keys_or_values format=bytes omit-value=true omit-key=true
 
+$ kafka-await-ingestion source=missing_keys_or_values topic=missing_keys_or_values
+
 > SELECT * FROM missing_keys_or_values
 key    text
 -------------
@@ -57,6 +60,8 @@ hello  world
 
 $ kafka-ingest topic=missing_keys_or_values key-format=bytes format=bytes omit-value=true
 bar
+
+$ kafka-await-ingestion source=missing_keys_or_values topic=missing_keys_or_values
 
 ! SELECT * FROM missing_keys_or_values
 contains: Envelope error: Flat: Value not present for message

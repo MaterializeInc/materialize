@@ -56,9 +56,12 @@ class SourceErrors(Check):
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO source_errors_table VALUES (2);
 
+                $ postgres-await-ingestion source=source_errors_sourceA connection=postgres://postgres:postgres@postgres
+
                 > SELECT COUNT(*) FROM source_errors_tableA;
                 2
 
+                $ postgres-await-ingestion source=source_errors_sourceB connection=postgres://postgres:postgres@postgres
 
                 > SELECT COUNT(*) FROM source_errors_tableB;
                 2
@@ -87,7 +90,7 @@ class SourceErrors(Check):
         return Testdrive(
             dedent(
                 """
-                > SELECT status, error ~* 'publication .+ does not exist'
+                >[retry] SELECT status, error ~* 'publication .+ does not exist'
                   FROM mz_internal.mz_source_statuses
                   WHERE name LIKE 'source_errors_source%'
                   AND type != 'subsource'

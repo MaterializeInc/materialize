@@ -11,7 +11,7 @@
 $ kafka-ingest format=bytes topic=failpoint key-format=bytes key-terminator=:
 mammal:whale
 
-> select st.name, st.type, st.status, st.error
+>[retry] select st.name, st.type, st.status, st.error
   from mz_internal.mz_source_statuses st
   join mz_sources s on s.id = st.id
   where s.name = 'failpoint';

@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 mod add_partitions;
+mod await_ingestion;
 mod create_topic;
 mod delete_topic;
 mod ingest;
@@ -16,6 +17,7 @@ mod verify_data;
 mod verify_topic;
 
 pub use add_partitions::run_add_partitions;
+pub use await_ingestion::run_await_ingestion;
 pub use create_topic::run_create_topic;
 pub use delete_topic::run_delete_topic;
 pub use ingest::run_ingest;

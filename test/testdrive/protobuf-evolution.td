@@ -42,6 +42,8 @@ $ kafka-create-topic topic=evolution partitions=1
 $ kafka-ingest topic=evolution format=protobuf descriptor-file=evolution.pb message=Message confluent-wire-format=true
 {"i": 1}
 
+$ kafka-await-ingestion source=evolution topic=evolution
+
 > SELECT * FROM evolution
 i
 ---
@@ -70,6 +72,8 @@ $ schema-registry-publish subject=testdrive-evolution-${testdrive.seed}-value sc
 $ kafka-ingest topic=evolution format=protobuf descriptor-file=evolution.pb message=Message confluent-wire-format=true
 {"i_renamed": 2, "extra": false}
 
+$ kafka-await-ingestion source=evolution topic=evolution
+
 > SELECT * FROM evolution
 i
 ---
@@ -97,6 +101,8 @@ $ schema-registry-publish subject=testdrive-evolution-${testdrive.seed}-value sc
 
 $ kafka-ingest topic=evolution format=protobuf descriptor-file=evolution.pb message=Message confluent-wire-format=true
 {"i_demoted": false}
+
+$ kafka-await-ingestion source=evolution topic=evolution
 
 > SELECT * FROM evolution
 i
@@ -130,6 +136,8 @@ $ schema-registry-publish subject=testdrive-evolution-${testdrive.seed}-value sc
 
 $ kafka-ingest topic=evolution format=protobuf descriptor-file=evolution.pb message=Message confluent-wire-format=true
 {"wrong": "i'm not an int!"}
+
+$ kafka-await-ingestion source=evolution topic=evolution
 
 ! SELECT * FROM evolution
 contains:Decode error: Text: protobuf deserialization error: failed to decode Protobuf message: invalid wire type: LengthDelimited (expected Varint)

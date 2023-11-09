@@ -271,6 +271,7 @@ def validate(c: Composition) -> None:
             # Existing sources
             $ kafka-ingest format=bytes topic=source1 repeat=1000000
             B${kafka-ingest.iteration}
+            $ kafka-await-ingestion source=source1 topic=source1
             > SELECT * FROM v2;
             2000000
 

@@ -92,6 +92,8 @@ class AlterIndex(Check):
         return Testdrive(
             dedent(
                 """
+                $ kafka-await-ingestion source=alter_index_source topic=alter-index
+
                 > SELECT LEFT(f1,1), COUNT(*), COUNT(DISTINCT f1) FROM alter_index_table GROUP BY LEFT(f1,1);
                 A 10000 10000
                 B 10000 10000

@@ -29,7 +29,7 @@ $ schema-registry-wait subject=postgres.public.array_type-value
   ENVELOPE DEBEZIUM
 
 # Cast to `text` to work around TD's lack of support for PG arrays
-> SELECT f1::text FROM array_type
+>[retry] SELECT f1::text FROM array_type
 f1
 ---
 {foo,NULL}

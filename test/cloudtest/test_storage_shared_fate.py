@@ -57,10 +57,12 @@ def populate(mz: MaterializeApplication, seed: int) -> None:
 
     check_counts = "\n".join(
         f"""
+            $ kafka-await-ingestion source=source{i} topic=storage-shared-fate
+
             > SELECT COUNT(*) FROM source{i};
             2000
 
-            > SELECT COUNT(*) FROM sink{i}_check;
+            >[retry] SELECT COUNT(*) FROM sink{i}_check;
             1000
     """
         for i in range(NUM_SOURCES)
@@ -99,13 +101,15 @@ def validate(mz: MaterializeApplication, seed: int) -> None:
         f"""
             > INSERT INTO t{i} SELECT 234000 + generate_series FROM generate_series(1, 1000);
 
+            $ kafka-await-ingestion source=source{i} topic=storage-shared-fate
+
             > SELECT COUNT(*) FROM source{i};
             3000
 
             > SELECT * FROM v{i};
             3000
 
-            > SELECT COUNT(*) FROM sink{i}_check;
+            >[retry] SELECT COUNT(*) FROM sink{i}_check;
             2000
     """
         for i in range(NUM_SOURCES)

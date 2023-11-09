@@ -53,6 +53,8 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 INSERT INTO time_table SELECT * FROM time_table;
 INSERT INTO timestamp_table SELECT * FROM timestamp_table;
 
+$ postgres-await-ingestion source=mz_source_timestamp connection=postgres://postgres:postgres@postgres
+
 > SELECT pg_typeof(f1) FROM timestamp_table LIMIT 1;
 "timestamp with time zone"
 

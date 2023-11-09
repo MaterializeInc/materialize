@@ -119,6 +119,8 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE add_columns ADD COLUMN f2 varchar(2);
 INSERT INTO add_columns VALUES (2, 'ab');
 
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
+
 > SELECT * from add_columns;
 1
 2
@@ -134,6 +136,8 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE remove_column DROP COLUMN f2;
 INSERT INTO remove_column VALUES (3);
 
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
+
 ! SELECT * from remove_column;
 contains:altered
 
@@ -148,6 +152,8 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_column ALTER COLUMN f2 TYPE CHAR(2);
 INSERT INTO alter_column VALUES (3, 'bc');
 
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
+
 ! SELECT * from alter_column;
 contains:altered
 
@@ -161,6 +167,8 @@ contains:altered
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_drop_nullability ALTER COLUMN f1 DROP NOT NULL;
 INSERT INTO alter_drop_nullability VALUES (NULL);
+
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
 
 ! SELECT * FROM alter_drop_nullability WHERE f1 IS NOT NULL;
 contains:altered
@@ -180,6 +188,8 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_add_nullability ALTER COLUMN f1 SET NOT NULL;
 INSERT INTO alter_add_nullability VALUES (1);
 
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
+
 > SELECT * FROM alter_add_nullability;
 1
 1
@@ -195,6 +205,8 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_drop_pk DROP CONSTRAINT alter_drop_pk_pkey;
 INSERT INTO alter_drop_pk VALUES (1);
 
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
+
 ! SELECT f1 FROM alter_drop_pk;
 contains:altered
 
@@ -208,6 +220,8 @@ contains:altered
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_add_pk ADD PRIMARY KEY(f1);
 INSERT INTO alter_add_pk VALUES (2);
+
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
 
 > SELECT * FROM alter_add_pk;
 1
@@ -225,6 +239,8 @@ ALTER TABLE alter_cycle_pk DROP CONSTRAINT alter_cycle_pk_pkey;
 ALTER TABLE alter_cycle_pk ADD PRIMARY KEY(f1);
 INSERT INTO alter_cycle_pk VALUES (2);
 
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
+
 ! SELECT * FROM alter_cycle_pk;
 contains:altered
 
@@ -241,6 +257,8 @@ ALTER TABLE alter_cycle_pk_off ADD PRIMARY KEY(f1);
 ALTER TABLE alter_cycle_pk_off DROP CONSTRAINT alter_cycle_pk_off_pkey;
 INSERT INTO alter_cycle_pk_off VALUES (1);
 
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
+
 > SELECT * FROM alter_cycle_pk_off;
 1
 1
@@ -256,6 +274,8 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_drop_unique DROP CONSTRAINT alter_drop_unique_f1_key;
 INSERT INTO alter_drop_unique VALUES (1);
 
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
+
 ! SELECT f1 FROM alter_drop_unique;
 contains:altered
 
@@ -268,6 +288,8 @@ contains:altered
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_add_unique ADD UNIQUE(f1);
 INSERT INTO alter_add_unique VALUES (2);
+
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
 
 > SELECT * FROM alter_add_unique;
 1
@@ -285,6 +307,8 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_extend_column ALTER COLUMN f1 TYPE VARCHAR(20);
 INSERT INTO alter_extend_column VALUES ('abcd');
 
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
+
 ! SELECT * FROM alter_extend_column;
 contains:altered
 
@@ -297,6 +321,8 @@ contains:altered
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_decimal ALTER COLUMN f1 TYPE DECIMAL(6,1);
 INSERT INTO alter_decimal VALUES (12345.6);
+
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
 
 ! SELECT * FROM alter_decimal;
 contains:altered
@@ -312,11 +338,15 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_table_rename RENAME TO alter_table_renamed;
 INSERT INTO alter_table_renamed VALUES (2);
 
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
+
 ! SELECT * FROM alter_table_rename;
 contains:altered
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 INSERT INTO alter_table_renamed VALUES (3);
+
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
 
 ! SELECT * FROM alter_table_renamed;
 contains:unknown
@@ -334,6 +364,8 @@ ALTER TABLE alter_table_rename_column RENAME COLUMN f2 TO f1;
 ALTER TABLE alter_table_rename_column RENAME COLUMN f3 TO f2;
 INSERT INTO alter_table_rename_column (f1, f2) VALUES ('f1_renamed', 'f2_renamed');
 
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
+
 ! SELECT * FROM alter_table_rename_column;
 contains:altered
 
@@ -350,6 +382,8 @@ ALTER TABLE alter_table_change_attnum DROP COLUMN f2;
 ALTER TABLE alter_table_change_attnum ADD COLUMN f2 VARCHAR(10);
 INSERT INTO alter_table_change_attnum (f1, f2) VALUES ('f1_changed', 'f2_changed');
 
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
+
 ! SELECT * FROM alter_table_change_attnum;
 contains:altered
 
@@ -360,6 +394,8 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_table_supported ADD COLUMN f3 int;
 INSERT INTO alter_table_supported (f1, f2, f3) VALUES (2, 2, 2);
 
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
+
 > SELECT * from alter_table_supported;
 1 1
 2 2
@@ -367,6 +403,8 @@ INSERT INTO alter_table_supported (f1, f2, f3) VALUES (2, 2, 2);
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_table_supported DROP COLUMN f3;
 INSERT INTO alter_table_supported (f1, f2) VALUES (3, 3);
+
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
 
 > SELECT * from alter_table_supported;
 1 1
@@ -376,6 +414,8 @@ INSERT INTO alter_table_supported (f1, f2) VALUES (3, 3);
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_table_supported DROP COLUMN f2;
 INSERT INTO alter_table_supported (f1) VALUES (1);
+
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
 
 ! SELECT * from alter_table_supported;
 contains:altered
@@ -390,10 +430,10 @@ contains:altered
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 TRUNCATE truncate_table;
 
-# This should error but we use PG 10 in these tests, which doesn't
-# put truncate messages in the replication stream. #18518
-> SELECT * FROM truncate_table;
-1 1
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
+
+! SELECT * FROM truncate_table;
+contains: table was truncated
 
 #
 # Drop table
@@ -403,6 +443,8 @@ TRUNCATE truncate_table;
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP TABLE drop_table;
+
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
 
 # This should error but we don't have a mechanism that does that yet.
 # #18519

@@ -29,7 +29,7 @@ $ schema-registry-wait subject=postgres.public.alter_drop_column_not_null-value
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-> SELECT * FROM alter_drop_column_not_null;
+>[retry] SELECT * FROM alter_drop_column_not_null;
 123 234
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -38,5 +38,5 @@ INSERT INTO alter_drop_column_not_null VALUES (345);
 
 # An error is thrown instead of returning nulls in a NOT NULL column
 
-! SELECT * FROM alter_drop_column_not_null;
+![retry] SELECT * FROM alter_drop_column_not_null;
 contains:Reader field `postgres.public.alter_drop_column_not_null.Value.col_not_null` not found in writer, and has no default

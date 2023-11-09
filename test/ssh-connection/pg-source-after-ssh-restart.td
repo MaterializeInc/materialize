@@ -15,13 +15,15 @@
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 INSERT INTO t1 VALUES (3);
 
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
+
 > SELECT f1 FROM t1 ORDER BY f1 ASC;
 1
 1
 2
 3
 
-> SELECT status FROM mz_internal.mz_source_statuses st
+>[retry] SELECT status FROM mz_internal.mz_source_statuses st
   JOIN mz_sources s ON st.id = s.id
   WHERE s.name = 'mz_source'
 running

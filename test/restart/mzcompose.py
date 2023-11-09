@@ -52,7 +52,7 @@ def workflow_github_17578(c: Composition) -> None:
             """
             > CREATE SOURCE with_subsources FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
 
-            > SELECT
+            >[retry] SELECT
               top_level_s.name as source,
               s.name AS subsource
               FROM mz_internal.mz_object_dependencies AS d
@@ -79,7 +79,7 @@ def workflow_github_17578(c: Composition) -> None:
         service="testdrive_no_reset",
         input=dedent(
             """
-            > SELECT
+            >[retry] SELECT
               top_level_s.name as source,
               s.name AS subsource
               FROM mz_internal.mz_object_dependencies AS d
@@ -373,10 +373,10 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
         service="testdrive_no_reset",
         input=dedent(
             """
-            > SELECT COUNT(*) > 7 FROM mz_internal.mz_source_status_history
+            >[retry] SELECT COUNT(*) > 7 FROM mz_internal.mz_source_status_history
             true
 
-            > SELECT COUNT(*) > 7 FROM mz_internal.mz_sink_status_history
+            >[retry] SELECT COUNT(*) > 7 FROM mz_internal.mz_sink_status_history
             true
             """
         ),
@@ -393,10 +393,10 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
         service="testdrive_no_reset",
         input=dedent(
             """
-            > SELECT COUNT(*) FROM mz_internal.mz_source_status_history
+            >[retry] SELECT COUNT(*) FROM mz_internal.mz_source_status_history
             7
 
-            > SELECT COUNT(*) FROM mz_internal.mz_sink_status_history
+            >[retry] SELECT COUNT(*) FROM mz_internal.mz_sink_status_history
             7
             """
         ),

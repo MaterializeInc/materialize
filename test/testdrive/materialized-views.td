@@ -47,6 +47,8 @@ $ kafka-ingest format=avro topic=materialized-views schema=${materialized-views}
 $ kafka-ingest format=avro topic=materialized-views schema=${materialized-views}
 {"f1": "234"}
 
+$ kafka-await-ingestion source=s1 topic=materialized-views
+
 > SELECT COUNT(*) FROM s1;
 2
 
@@ -54,6 +56,8 @@ $ kafka-ingest format=avro topic=materialized-views schema=${materialized-views}
 
 $ kafka-ingest format=avro topic=materialized-views schema=${materialized-views}
 {"f1": "345"}
+
+$ kafka-await-ingestion source=s1 topic=materialized-views
 
 > SELECT * FROM v1;
 3
@@ -76,17 +80,20 @@ $ kafka-ingest format=avro topic=materialized-views schema=${materialized-views}
 {"f1": "456"}
 
 
+$ kafka-await-ingestion source=s1 topic=materialized-views
 
 > SELECT * FROM v1;
 4
 
-> SELECT MAX((after).c1) FROM sink1_check;
+>[retry] SELECT MAX((after).c1) FROM sink1_check;
 4
 
 # Inject failure in the source
 
 $ kafka-ingest format=avro topic=materialized-views schema=${materialized-views}
 {"f1": "ABC"}
+
+$ kafka-await-ingestion source=s1 topic=materialized-views
 
 ! SELECT * FROM v1;
 contains: invalid input syntax for type integer

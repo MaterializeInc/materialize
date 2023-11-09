@@ -175,10 +175,14 @@ c
 $ kafka-ingest format=bytes topic=data2
 cc
 
+$ kafka-await-ingestion source=data1 topic=data1
+
 > SELECT * FROM data1
 a
 b
 c
+
+$ kafka-await-ingestion source=data2 topic=data2
 
 > SELECT * FROM data2
 aa

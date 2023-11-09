@@ -50,7 +50,7 @@ INSERT INTO table_a VALUES (2, 'two');
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP TABLE table_a CASCADE;
 
-!ALTER SOURCE mz_source ADD SUBSOURCE table_b;
+! ALTER SOURCE mz_source ADD SUBSOURCE table_b;
 contains:PUBLICATION mz_source is empty
 
 # Adding a table with the same name as a running table does not allow you to add
@@ -68,7 +68,7 @@ INSERT INTO table_a VALUES (9, 'nine');
 2 two
 
 # We are not aware that the new table_a is different
-!ALTER SOURCE mz_source ADD SUBSOURCE table_a;
+! ALTER SOURCE mz_source ADD SUBSOURCE table_a;
 contains:another subsource already refers to postgres.public.table_a
 
 > DROP SOURCE mz_source;
@@ -208,6 +208,8 @@ contains: unknown catalog item 'table_a'
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 INSERT INTO table_b VALUES (3, 'three');
 
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
+
 > SELECT * FROM table_b;
 1 one
 2 two
@@ -228,6 +230,8 @@ INSERT INTO table_b VALUES (3, 'three');
 # Makes progress after dropping subsources
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 INSERT INTO table_e VALUES (3, 'three');
+
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
 
 > SELECT * FROM mv_e;
 2
@@ -278,6 +282,8 @@ contains:another subsource already refers to postgres.public.table_g
 
 > ALTER SOURCE mz_source ADD SUBSOURCE table_a, table_b AS tb;
 
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
+
 > SELECT * FROM table_a;
 1 one
 2 two
@@ -290,7 +296,7 @@ contains:another subsource already refers to postgres.public.table_a
 2 two
 3 three
 
-!SELECT * FROM table_b;
+! SELECT * FROM table_b;
 contains:unknown catalog item
 
 # We can add tables that didn't exist at the time of publication
@@ -301,6 +307,8 @@ ALTER TABLE table_h REPLICA IDENTITY FULL;
 INSERT INTO table_h VALUES (2, 'two');
 
 > ALTER SOURCE mz_source ADD SUBSOURCE table_h;
+
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
 
 > SELECT * FROM table_h;
 1 one
@@ -321,6 +329,8 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE table_a DROP COLUMN f2;
 INSERT INTO table_a VALUES (3);
 
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
+
 ! SELECT * FROM table_a;
 contains:incompatible schema change
 
@@ -338,13 +348,18 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE table_a ADD COLUMN f2 text;
 INSERT INTO table_a VALUES (4, 'four');
 
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
+
 > SELECT * FROM table_a;
 1
 2
 3
+4
 
 > ALTER SOURCE mz_source DROP SUBSOURCE table_a;
 > ALTER SOURCE mz_source ADD SUBSOURCE table_a;
+
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
 
 > SELECT * FROM table_a;
 1 <null>
@@ -359,6 +374,8 @@ INSERT INTO table_a VALUES (5, 'five', 5);
 
 > ALTER SOURCE mz_source DROP SUBSOURCE table_a;
 > ALTER SOURCE mz_source ADD SUBSOURCE table_a;
+
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
 
 > SELECT * FROM table_a;
 1 <null> 1
@@ -375,6 +392,8 @@ INSERT INTO table_a VALUES (5, 'five', 5);
 contains: invalid TEXT COLUMNS option value: unexpected multiple references to postgres.public.table_f.f2
 
 > ALTER SOURCE mz_source ADD SUBSOURCE table_f WITH (TEXT COLUMNS [table_f.f2]);
+
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
 
 > SELECT * FROM table_f
 1 var0
@@ -399,6 +418,8 @@ INSERT INTO table_f VALUES (3, 'var1');
 
 > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
 "\"postgres\".\"public\".\"table_f\".\"f2\", \"postgres\".\"public\".\"table_i\".\"f2\""
+
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
 
 > SELECT * FROM table_f
 1 var0

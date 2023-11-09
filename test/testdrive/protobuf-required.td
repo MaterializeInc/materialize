@@ -37,5 +37,7 @@ f
 $ kafka-ingest topic=required format=protobuf descriptor-file=required.pb message=Required
 {}
 
+$ kafka-await-ingestion source=required topic=required
+
 ! SELECT * FROM required
 contains:protobuf message missing required field f

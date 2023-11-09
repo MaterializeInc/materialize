@@ -37,8 +37,12 @@ fish:fish
 bird:goose
 animal:whale
 
-> SELECT count(*) from dropped_upsert;
+$ kafka-await-ingestion source=kept_upsert topic=upsert
+
+> SELECT count(*) from kept_upsert;
 3
+
+$ kafka-await-ingestion source=dropped_upsert topic=upsert
 
 > SELECT count(*) from dropped_upsert;
 3

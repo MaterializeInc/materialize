@@ -28,6 +28,8 @@ $ set schema={
 $ kafka-ingest format=avro topic=upsert-modification key-format=avro key-schema=${keyschema} schema=${schema} start-iteration=2500 repeat=5000
 {"f1": ${kafka-ingest.iteration}} {"f2": "a${kafka-ingest.iteration}"}
 
+$ kafka-await-ingestion source=upsert_modification topic=upsert-modification
+
 > SELECT COUNT(*), MIN(f1), MAX(f1) FROM upsert_modification;
 10000 0 9999
 
@@ -40,6 +42,8 @@ mammalmore:moose
 mammal1:
 mammal1:mouse
 
+$ kafka-await-ingestion source=texttext topic=textbytes
+
 > select * from texttext
 key           text  kafka_partition  mz_offset
 ----------------------------------------------
@@ -47,6 +51,8 @@ fish          fish  0                0
 bírdmore      géese 0                5
 mammal1       mouse 0                8
 mammalmore    moose 0                6
+
+$ kafka-await-ingestion source=textbytes topic=textbytes
 
 > select * from textbytes
 key           data            kafka_partition  mz_offset
@@ -56,6 +62,8 @@ bírdmore      g\xc3\xa9ese    0                5
 mammal1       mouse           0                8
 mammalmore    moose           0                6
 
+$ kafka-await-ingestion source=bytestext topic=textbytes
+
 > select * from bytestext
 key             text  kafka_partition  mz_offset
 ------------------------------------------------
@@ -63,6 +71,8 @@ fish            fish  0                0
 b\xc3\xadrdmore géese 0                5
 mammal1         mouse 0                8
 mammalmore      moose 0                6
+
+$ kafka-await-ingestion source=bytesbytes topic=textbytes
 
 > select * from bytesbytes
 key                data            kafka_partition  mz_offset

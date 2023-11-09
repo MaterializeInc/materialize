@@ -36,5 +36,7 @@ $ kafka-ingest format=avro topic=multipart-key key-format=avro key-schema=${keys
 {"f1": "KEY1", "f2": "${kafka-ingest.iteration}"}
 {"f1": "${kafka-ingest.iteration}", "f2": "KEY2"}
 
+$ kafka-await-ingestion source=multipart_key topic=multipart-key
+
 > SELECT COUNT(*) FROM multipart_key;
 0

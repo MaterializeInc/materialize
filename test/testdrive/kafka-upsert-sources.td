@@ -92,6 +92,8 @@ birdmore: {"f1":"geese", "f2": 56}
 mämmalmore: {"f1": "moose", "f2": 42}
 mammal1:
 
+$ kafka-await-ingestion source=textavro topic=textavro
+
 > select * from textavro
 key           f1       f2
 ---------------------------
@@ -144,6 +146,8 @@ mammalmore:moose
 mammal1:
 mammal1:mouse
 
+$ kafka-await-ingestion source=textbytes topic=textbytes
+
 > select * from textbytes
 key           data
 ---------------------------
@@ -154,6 +158,8 @@ mammalmore    moose
 
 $ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=:
 mammalmore:herd
+
+$ kafka-await-ingestion source=bytesbytes topic=textbytes
 
 > select * from bytesbytes
 key              data
@@ -166,6 +172,8 @@ mammalmore       herd
 $ kafka-ingest format=bytes topic=textbytes key-format=bytes key-terminator=:
 bìrd1:
 fish:
+
+$ kafka-await-ingestion source=bytestext topic=textbytes
 
 > select * from bytestext
 key              text
@@ -204,10 +212,14 @@ fish:{"f": "one"}
 bìrd1:{"f": "two"}
 birdmore: {}
 
+$ kafka-await-ingestion source=bytesproto topic=textproto
+
 > SELECT * FROM bytesproto
 fish         one
 b\xc3\xacrd1 two
 birdmore     ""
+
+$ kafka-await-ingestion source=textproto topic=textproto
 
 > SELECT * FROM textproto
 fish      one
@@ -225,12 +237,16 @@ bìrd1: {"f": "six"}
 mammal1:
 mammalmore: {"f": "seven"}
 
+$ kafka-await-ingestion source=bytesproto topic=textproto
+
 > SELECT * FROM bytesproto
 fish              one
 birdmore          four
 m\xc3\xa4mmalmore five
 b\xc3\xacrd1      six
 mammalmore        seven
+
+$ kafka-await-ingestion source=textproto topic=textproto
 
 > SELECT * FROM textproto
 fish        one
@@ -266,6 +282,8 @@ contains: to retract this error, produce a record upstream with a NULL key and N
 # Ingest a null value for our null key, to retract it.
 $ kafka-ingest format=bytes topic=nullkey key-format=bytes key-terminator=:
 :
+
+$ kafka-await-ingestion source=nullkey topic=nullkey
 
 # Now we should be able to query the source.
 > select * from nullkey
@@ -334,6 +352,8 @@ $ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${k
 {"f3": null, "f4":{"string": "yin"}}
 {"f3": null, "f4":{"string": "yin"}} {"f1":"dog", "f2": 243}
 {"f3": {"string": "water"}, "f4": null}
+
+$ kafka-await-ingestion source=realtimeavroavro topic=realtimeavroavro
 
 > select * from realtimeavroavro_view
 f3         f4          f1             f2
@@ -423,6 +443,8 @@ $ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=$
 {"k1": {"string": "épicerie"}, "k2": {"long": 6}} {"f1": {"string": "pear"}, "f2": null}
 {"k1": {"string": "bureau"}, "k2": {"long": 6}} {"f1": {"string": "grape"}, "f2": {"long": 7}}
 
+$ kafka-await-ingestion source=realtimefilteravro topic=realtimefilteravro
+
 > SELECT * from filterforkey
 f1
 ----
@@ -452,6 +474,8 @@ $ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=$
 {"k1": {"string": "librairie"}, "k2": {"long": 10}} {"f1":null, "f2": {"long": 6}}
 {"k1": null, "k2": null} {"f1": {"string": "grape"}, "f2": {"long": 5}}
 
+$ kafka-await-ingestion source=realtimefilteravro topic=realtimefilteravro
+
 > SELECT * from filterforvalue
 f2
 -------
@@ -471,6 +495,8 @@ k1        k2
 $ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=${keyschema3} schema=${schema2}
 {"k1": {"string": "librairie"}, "k2": {"long": 10}} {"f1":{"string": "melon"}, "f2": {"long": 2}}
 {"k1": null, "k2": null} {"f1": {"string": "date"}, "f2": {"long": 12}}
+
+$ kafka-await-ingestion source=realtimefilteravro topic=realtimefilteravro
 
 > SELECT * from filterforvalue
 f2
@@ -496,6 +522,8 @@ $ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=$
 {"k1": {"string": "épicerie"}, "k2": {"long": 10}}
 {"k1": {"string": "boulangerie"}, "k2": null}
 {"k1": null, "k2": {"long": 2}}
+
+$ kafka-await-ingestion source=realtimefilteravro topic=realtimefilteravro
 
 > SELECT * from filterforkey
 f1
@@ -581,6 +609,8 @@ $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=format-json-
 "int":99
 "float":3.14
 "str":"bye"
+
+$ kafka-await-ingestion source=format_json topic=format-json-bytes
 
 > SELECT * FROM format_json ORDER BY key
 "\"array\"" [10,9,8]

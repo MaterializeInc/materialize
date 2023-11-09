@@ -45,11 +45,11 @@ $ schema-registry-wait subject=postgres.public.uuid_type-value
 #                  }
 #
 
-> SELECT pk_col, nopk_col, pg_typeof(pk_col) FROM uuid_type;
+>[retry] SELECT pk_col, nopk_col, pg_typeof(pk_col) FROM uuid_type;
 a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11 a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11 text
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 UPDATE uuid_type SET nopk_col = 'b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11';
 
-> SELECT pk_col, nopk_col FROM uuid_type;
+>[retry] SELECT pk_col, nopk_col FROM uuid_type;
 a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11 b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11

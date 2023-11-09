@@ -29,7 +29,7 @@ $ schema-registry-wait subject=postgres.public.alter_allow_nullability-value
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-> SELECT f1 FROM alter_allow_nullability;
+>[retry] SELECT f1 FROM alter_allow_nullability;
 123
 234
 
@@ -39,5 +39,5 @@ INSERT INTO alter_allow_nullability VALUES (NULL, 2);
 UPDATE alter_allow_nullability SET f1 = NULL WHERE f1 = 123;
 DELETE FROM alter_allow_nullability WHERE f1 = 234;
 
-! SELECT * FROM alter_allow_nullability;
+![retry] SELECT * FROM alter_allow_nullability;
 contains:Decode error: Decoding error: Reader expected variant at index 1, got 0

@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ kafka-await-ingestion source=failpoint topic=failpoint
 
 # Validate existing data
 > SELECT * from failpoint
@@ -20,6 +21,7 @@ mammal        whale
 $ kafka-ingest format=bytes topic=failpoint key-format=bytes key-terminator=:
 mammal:moose
 
+$ kafka-await-ingestion source=failpoint topic=failpoint
 
 > SELECT * from failpoint
 key           text

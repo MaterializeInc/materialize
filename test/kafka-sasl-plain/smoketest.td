@@ -60,6 +60,8 @@ a
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=2
 {"a": 2}
 
+$ kafka-await-ingestion source=data topic=data
+
 > SELECT * FROM data
 a
 ---

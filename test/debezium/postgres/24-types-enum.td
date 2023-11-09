@@ -29,6 +29,6 @@ $ schema-registry-wait subject=postgres.public.enum_type-value
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-> SELECT pg_typeof(f1), f1 FROM enum_type;
+>[retry] SELECT pg_typeof(f1), f1 FROM enum_type;
 text val1
 text val2

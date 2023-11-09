@@ -157,43 +157,61 @@ class KafkaFormats(Check):
         return Testdrive(
             dedent(
                 """
+                $ kafka-await-ingestion source=format_bytes1 topic=format-bytes
+
                 > SELECT COUNT(*) FROM format_bytes1
                 3
+
+                $ kafka-await-ingestion source=format_text1 topic=format-bytes
 
                 > SELECT * FROM format_text1
                 key1A,key1B value1A,value1B
                 key2A,key2B value2A,value2B
                 key3A,key3B value3A,value3B
 
+                $ kafka-await-ingestion source=format_csv1 topic=format-bytes
+
                 > SELECT * FROM format_csv1
                 key1A key1B value1A value1B
                 key2A key2B value2A value2B
                 key3A key3B value3A value3B
+
+                $ kafka-await-ingestion source=format_regex1 topic=format-bytes
 
                 > SELECT * FROM format_regex1
                 key1A key1B value1A value1B
                 key2A key2B value2A value2B
                 key3A key3B value3A value3B
 
+                $ kafka-await-ingestion source=format_protobuf1 topic=format-protobuf
+
                 > SELECT * FROM format_protobuf1
                 key1A key1B value1A value1B
                 key2A key2B value2A value2B
                 key3A key3B value3A value3B
+
+                $ kafka-await-ingestion source=format_text2 topic=format-bytes
 
                 > SELECT * FROM format_text2
                 key1A,key1B value1A,value1B
                 key2A,key2B value2A,value2B
                 key3A,key3B value3A,value3B
 
+                $ kafka-await-ingestion source=format_csv2 topic=format-bytes
+
                 > SELECT * FROM format_csv2
                 key1A key1B value1A value1B
                 key2A key2B value2A value2B
                 key3A key3B value3A value3B
 
+                $ kafka-await-ingestion source=format_regex2 topic=format-bytes
+
                 > SELECT * FROM format_regex2
                 key1A key1B value1A value1B
                 key2A key2B value2A value2B
                 key3A key3B value3A value3B
+
+                $ kafka-await-ingestion source=format_protobuf2 topic=format-protobuf
 
                 > SELECT * FROM format_protobuf2
                 key1A key1B value1A value1B

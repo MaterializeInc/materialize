@@ -34,7 +34,7 @@ $ set-regex match=\d{13,20} replacement=<TIMESTAMP>
 # install another dataflow and wait for that to show up. Introspection sources
 # are not serializable, but dataflows still show up in order.
 > CREATE INDEX mv_idx ON mv(a)
-> SELECT count(*)
+>[retry] SELECT count(*)
   FROM
     mz_indexes i,
     mz_internal.mz_compute_exports e
@@ -46,5 +46,5 @@ $ set-regex match=\d{13,20} replacement=<TIMESTAMP>
 > SELECT count(*) FROM mz_internal.mz_subscriptions
 0
 
-> SELECT count(*) FROM mz_internal.mz_compute_exports e WHERE e.export_id LIKE 't%'
+>[retry] SELECT count(*) FROM mz_internal.mz_compute_exports e WHERE e.export_id LIKE 't%'
 0

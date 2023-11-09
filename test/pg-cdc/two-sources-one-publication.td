@@ -66,6 +66,8 @@ INSERT INTO t1 VALUES (3);
 INSERT INTO t2 VALUES (6);
 INSERT INTO t2 VALUES (7);
 
+$ postgres-await-ingestion source=mz_source1 connection=postgres://postgres:postgres@postgres
+
 > SELECT * FROM t1_1;
 1
 2
@@ -75,6 +77,8 @@ INSERT INTO t2 VALUES (7);
 5
 6
 7
+
+$ postgres-await-ingestion source=mz_source2 connection=postgres://postgres:postgres@postgres
 
 > SELECT * FROM t1_2;
 1

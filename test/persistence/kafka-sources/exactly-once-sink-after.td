@@ -27,6 +27,8 @@ $ kafka-ingest format=avro topic=exactly-once key-format=avro key-schema=${keysc
 {"f1": ${kafka-ingest.iteration}} {"f2": ${kafka-ingest.iteration}}
 
 
+$ kafka-await-ingestion source=exactly_once topic=exactly-once
+
 > SELECT COUNT(*) FROM exactly_once;
 10
 

@@ -29,7 +29,7 @@ $ schema-registry-wait subject=postgres.public.alter_change_date_timestamp-value
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-> SELECT f1 FROM alter_change_date_timestamp;
+>[retry] SELECT f1 FROM alter_change_date_timestamp;
 2011-11-11
 2012-12-12
 
@@ -39,5 +39,5 @@ INSERT INTO alter_change_date_timestamp VALUES ('2011-11-11 11:11:11', 2);
 UPDATE alter_change_date_timestamp SET f1 = '2012-12-12 12:12:12' WHERE f1 = '2012-12-12';
 DELETE FROM alter_change_date_timestamp WHERE f1 = '2011-11-11';
 
-! SELECT * FROM alter_change_date_timestamp;
+![retry] SELECT * FROM alter_change_date_timestamp;
 contains:Failed to match writer union variant `TimestampMicro` against any variant in the reader for field `postgres.public.alter_change_date_timestamp.Value.f1`

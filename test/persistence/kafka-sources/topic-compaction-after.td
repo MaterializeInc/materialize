@@ -29,5 +29,7 @@ $ set schema={
 $ kafka-ingest format=avro topic=topic-compaction key-format=avro key-schema=${keyschema} schema=${schema} repeat=1000
 {"f1": ${kafka-ingest.iteration}} {"f2": "D${kafka-ingest.iteration}"}
 
+$ kafka-await-ingestion source=topic_compaction topic=topic-compaction
+
 > SELECT COUNT(*) FROM topic_compaction WHERE f2 LIKE 'D%';
 1000

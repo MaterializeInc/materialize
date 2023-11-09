@@ -285,24 +285,24 @@ detail:referenced items: no_replica_identity
   );
 
 > SHOW SOURCES
-array_types_table     subsource <null>  <null>
-conflict_table        subsource <null>  <null>
-create                subsource <null>  <null>
-escaped_text_table    subsource <null>  <null>
-large_text            subsource <null>  <null>
-multipart_pk          subsource <null>  <null>
+array_types_table       subsource <null>  <null>
+conflict_table          subsource <null>  <null>
+create                  subsource <null>  <null>
+escaped_text_table      subsource <null>  <null>
+large_text              subsource <null>  <null>
+multipart_pk            subsource <null>  <null>
 mz_source             postgres  ${arg.default-storage-size}  materialize_public_mz_source
 mz_source_progress    progress  <null>  <null>
-nonpk_table           subsource <null>  <null>
-nulls_table           subsource <null>  <null>
-pk_table              subsource <null>  <null>
-"space table"         subsource <null>  <null>
-trailing_space_nopk   subsource <null>  <null>
-trailing_space_pk     subsource <null>  <null>
-"\"literal_quotes\""  subsource <null>  <null>
-types_table           subsource <null>  <null>
-utf8_table            subsource <null>  <null>
-таблица               subsource <null>  <null>
+nonpk_table             subsource <null>  <null>
+nulls_table             subsource <null>  <null>
+pk_table                subsource <null>  <null>
+"space table"           subsource <null>  <null>
+trailing_space_nopk     subsource <null>  <null>
+trailing_space_pk       subsource <null>  <null>
+"\"literal_quotes\""    subsource <null>  <null>
+types_table             subsource <null>  <null>
+utf8_table              subsource <null>  <null>
+таблица                 subsource <null>  <null>
 
 > SELECT lsn > 0 FROM mz_source_progress
 true
@@ -456,6 +456,8 @@ INSERT INTO "таблица" SELECT * FROM "таблица";
 # Check the updated data on the Materialize side
 #
 
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
+
 > SELECT * FROM pk_table;
 13 three
 14 four
@@ -536,7 +538,7 @@ true
 2 two_two
 5 five
 
-> SELECT status = 'running' FROM mz_internal.mz_source_statuses WHERE name = 'large_cluster_pk_table';
+>[retry] SELECT status = 'running' FROM mz_internal.mz_source_statuses WHERE name = 'large_cluster_pk_table';
 true
 
 > DROP SOURCE large_cluster;
@@ -556,6 +558,8 @@ DELETE FROM nulls_table;
 DELETE FROM utf8_table;
 DELETE FROM "таблица";
 DELETE FROM conflict_schema.conflict_table;
+
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
 
 #
 # Check that all data sources empty out on the Materialize side
@@ -732,7 +736,7 @@ INSERT INTO pk_table VALUES (99999);
 # todo: we're purifying Postgres view names incorrectly, fix that and this error!
 # should be "materialize.public.pk_table"
 
-> SELECT error FROM mz_internal.mz_source_statuses where name in ('enum_source', 'mz_source');
+>[retry] SELECT error FROM mz_internal.mz_source_statuses where name in ('enum_source', 'mz_source');
 "postgres: publication \"mz_source\" does not exist"
 "postgres: publication \"mz_source\" does not exist"
 

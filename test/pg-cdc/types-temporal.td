@@ -45,6 +45,8 @@ true
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 INSERT INTO t1 SELECT * FROM t1;
 
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
+
 > SELECT pg_typeof(date_col), pg_typeof(time_col), pg_typeof(timestamp_col) FROM t1 LIMIT 1;
 date time "timestamp without time zone"
 

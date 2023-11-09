@@ -26,7 +26,7 @@ ALTER SYSTEM SET enable_specialized_arrangements = true
 
 > CREATE DEFAULT INDEX on v_empty;
 
-> SELECT COUNT(*)
+>[retry] SELECT COUNT(*)
   FROM mz_internal.mz_dataflow_operator_dataflows
   WHERE name LIKE '%ArrangeBy%[val: empty]%';
 1
@@ -103,7 +103,7 @@ Used Indexes:
 > SELECT * FROM empty_val_join;
 42
 
-> SELECT COUNT(*)
+>[retry] SELECT COUNT(*)
   FROM mz_internal.mz_dataflow_operator_dataflows
   WHERE name LIKE '%ArrangeBy%[val: empty]%';
 2
@@ -347,7 +347,7 @@ Used Indexes:
 42
 
 # Note DistinctBy introduces two arrangements, one input and one output one.
-> SELECT COUNT(*)
+>[retry] SELECT COUNT(*)
   FROM mz_internal.mz_dataflow_operator_dataflows
   WHERE name LIKE '%ArrangeBy%[val: empty]%'
      OR name LIKE '%DistinctBy%[val: empty]%';
@@ -364,7 +364,7 @@ Used Indexes:
   WHERE a = 42;
 
 # Note DistinctBy introduces two arrangements, one input and one output one.
-> SELECT COUNT(*)
+>[retry] SELECT COUNT(*)
   FROM mz_internal.mz_dataflow_operator_dataflows
   WHERE name LIKE '%Arranged ReduceInaccumulable Distinct%[val: empty]%'
      OR name LIKE '%ReduceInaccumulable Distinct%[val: empty]%';

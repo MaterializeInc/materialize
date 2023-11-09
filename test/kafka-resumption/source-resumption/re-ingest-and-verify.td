@@ -12,6 +12,8 @@ four
 five
 six
 
+$ kafka-await-ingestion source=topic topic=topic
+
 > SELECT * from topic
 data         offset
 -----------------------------------

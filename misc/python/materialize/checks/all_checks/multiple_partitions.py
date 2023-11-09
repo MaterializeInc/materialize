@@ -56,6 +56,8 @@ class MultiplePartitions(Check):
                 $ kafka-ingest format=avro key-format=avro topic=multiple-partitions-topic key-schema=${keyschema} schema=${schema} repeat=60
                 {"key1": "B${kafka-ingest.iteration}"} {"f1": "B${kafka-ingest.iteration}"}
 
+                $ kafka-await-ingestion source=multiple_partitions_source topic=multiple-partitions-topic
+
                 # Make sure that source is up and complete
                 > SELECT LEFT(f1, 1), COUNT(*) FROM multiple_partitions_source GROUP BY LEFT(f1, 1);
                 A 100
@@ -75,6 +77,8 @@ class MultiplePartitions(Check):
                 # ingest C-key entries
                 $ kafka-ingest format=avro key-format=avro topic=multiple-partitions-topic key-schema=${keyschema} schema=${schema} repeat=60
                 {"key1": "C${kafka-ingest.iteration}"} {"f1": "C${kafka-ingest.iteration}"}
+
+                $ kafka-await-ingestion source=multiple_partitions_source topic=multiple-partitions-topic
 
                 # Make sure that source is up and complete
                 > SELECT LEFT(f1, 1), COUNT(*) FROM multiple_partitions_source GROUP BY LEFT(f1, 1);
@@ -99,6 +103,8 @@ class MultiplePartitions(Check):
         return Testdrive(
             dedent(
                 """
+                $ kafka-await-ingestion source=multiple_partitions_source topic=multiple-partitions-topic
+
                 > SELECT partition FROM multiple_partitions_source_progress;
                 (3,)
                 [0,0]
@@ -110,7 +116,7 @@ class MultiplePartitions(Check):
                 > SELECT SUM(p.offset) FROM multiple_partitions_source_progress p;
                 420
 
-                > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'multiple_partitions_source';
+                >[retry] SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'multiple_partitions_source';
                 running
 
                 > SELECT LEFT(f1, 1), COUNT(*) FROM multiple_partitions_source GROUP BY LEFT(f1, 1);

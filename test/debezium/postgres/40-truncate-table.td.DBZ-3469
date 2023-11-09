@@ -28,7 +28,7 @@ INSERT INTO truncate_table VALUES (1),(2),(3);
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-> SELECT * FROM truncate_table;
+>[retry] SELECT * FROM truncate_table;
 1
 2
 3
@@ -37,7 +37,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 TRUNCATE TABLE truncate_table;
 INSERT INTO truncate_table VALUES (2),(3),(4);
 
-> SELECT * FROM truncate_table;
+>[retry] SELECT * FROM truncate_table;
 2
 3
 4

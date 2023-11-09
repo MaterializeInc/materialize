@@ -49,7 +49,7 @@ $ postgres-execute connection=conn2
 INSERT INTO insert_same_table VALUES (4);
 COMMIT;
 
-> SELECT * FROM insert_same_table;
+>[retry] SELECT * FROM insert_same_table;
 0
 1
 2

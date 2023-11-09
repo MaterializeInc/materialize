@@ -33,6 +33,8 @@ $ kafka-create-topic topic=tail-fetch-during-ingest
 $ kafka-ingest format=avro topic=tail-fetch-during-ingest schema=${int} timestamp=1
 {"f1": 123}
 
+$ kafka-await-ingestion source=fetch_during_ingest topic=tail-fetch-during-ingest
+
 > SELECT * FROM fetch_during_ingest;
 123
 

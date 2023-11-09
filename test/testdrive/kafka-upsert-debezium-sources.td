@@ -114,6 +114,8 @@ id creature
 $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} timestamp=2
 {"id": 1} {"before": {"row": {"id": 1, "creature": "lizard"}}, "after": {"row": {"id": 1, "creature": "dino"}}, "op": "u", "source": {"file": "binlog4", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 
+$ kafka-await-ingestion source=doin_upsert topic=dbzupsert
+
 > SELECT * FROM doin_upsert
 id creature
 -----------
@@ -122,6 +124,8 @@ id creature
 $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} timestamp=3
 {"id": 2} {"before": null, "after": {"row": {"id": 2, "creature": "archeopteryx"}}, "op": "c", "source": {"file": "binlog5", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 {"id": 2} {"before": {"row": {"id": 2, "creature": "archeopteryx"}}, "after": {"row": {"id": 2, "creature": "velociraptor"}}, "op": "u", "source": {"file": "binlog6", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
+
+$ kafka-await-ingestion source=doin_upsert topic=dbzupsert
 
 > SELECT * FROM doin_upsert ORDER BY creature
 id creature
@@ -134,6 +138,8 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 {"id": 3} {"before": {"row": {"id": 3, "creature": "protoceratops"}}, "after": {"row": {"id": 3, "creature": "triceratops"}}, "op": "u", "source": {"file": "binlog7", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 {"id": 3} {"before": {"row": {"id": 3, "creature": "protoceratops"}}, "after": {"row": {"id": 3, "creature": "triceratops"}}, "op": "u", "source": {"file": "binlog8", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 
+$ kafka-await-ingestion source=doin_upsert topic=dbzupsert
+
 > SELECT * FROM doin_upsert WHERE id = 3
 id creature
 -----------
@@ -142,6 +148,8 @@ id creature
 # test removal and reinsertion
 $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} timestamp=5
 {"id": 4} {"before": null, "after": {"row": {"id": 4, "creature": "moros"}}, "op": "c", "source": {"file": "binlog9", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
+
+$ kafka-await-ingestion source=doin_upsert topic=dbzupsert
 
 > SELECT creature FROM doin_upsert WHERE id = 4
 creature
@@ -170,12 +178,16 @@ id creature partition test_kafka_offset
 $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} timestamp=6
 {"id": 4} {"before": {"row": {"id": 4, "creature": "trex"}}, "after": null, "op": "d", "source": {"file": "binlog10", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 
+$ kafka-await-ingestion source=doin_upsert topic=dbzupsert
+
 > SELECT creature FROM doin_upsert WHERE id = 4
 creature
 --------
 
 $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} timestamp=7
 {"id": 4} {"before": {"row": {"id": 4, "creature": "trex"}}, "after": {"row": {"id": 4, "creature": "chicken"}}, "op": "u", "source": {"file": "binlog11", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
+
+$ kafka-await-ingestion source=doin_upsert topic=dbzupsert
 
 > SELECT creature FROM doin_upsert WHERE id = 4
 creature

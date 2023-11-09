@@ -46,15 +46,6 @@ CREATE PUBLICATION mz_source_delete FOR TABLE t1 WITH ( publish = 'delete') ;
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source_delete')
   FOR TABLES (t1 AS t1_delete);
 
-# Make sure that the above sources are fully instantiated
-# (that is, we have finished absorbing their snapshots),
-# so that the DML statements below are sent as actual replication
-# events post-snapshot.
-#
-# Currently there is no good way to do this other than sleeping.
-# <https://github.com/MaterializeInc/materialize/issues/14914> tracks
-# making this better
-$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=10s
 > SELECT COUNT(*) FROM mz_source_insert;
 0
 > SELECT COUNT(*) FROM mz_source_update;
@@ -67,11 +58,17 @@ INSERT INTO t1 VALUES (1);
 UPDATE t1 SET f1 = 2 WHERE f1 = 1;
 DELETE FROM t1;
 
+$ postgres-await-ingestion source=mz_source_insert connection=postgres://postgres:postgres@postgres
+
 > SELECT * FROM t1_insert;
 1
 
+$ postgres-await-ingestion source=mz_source_update connection=postgres://postgres:postgres@postgres
+
 ! SELECT * FROM t1_update;
 contains:Invalid data in source, saw retractions (1) for row that does not exist
+
+$ postgres-await-ingestion source=mz_source_delete connection=postgres://postgres:postgres@postgres
 
 ! SELECT * FROM t1_delete;
 contains:Invalid data in source, saw retractions (1) for row that does not exist

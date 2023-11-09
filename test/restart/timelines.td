@@ -106,7 +106,7 @@ $ kafka-ingest format=avro topic=foo schema=${schema}
 $ kafka-ingest format=avro topic=foo schema=${schema}
 {"com.materialize.cdc.progress":{"lower":[0],"upper":[],"counts":[{"time":1,"count":1}]}}
 
-> SELECT * FROM data_foo;
+>[retry] SELECT * FROM data_foo;
 a  b
 ----
 1  1

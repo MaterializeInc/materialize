@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ postgres-await-ingestion source=mz_source connection=postgres://postgres:postgres@postgres
+
 > SELECT COUNT(*) FROM t1;
 500000
 > SELECT COUNT(*) FROM t2;
@@ -23,7 +25,7 @@ contains:Source error
 contains:has been altered
 
 # Ensure non-definite errors are cleared.
-> SELECT COUNT(*) = 0 FROM mz_internal.mz_source_statuses WHERE error LIKE '%Connection refused%';
+>[retry] SELECT COUNT(*) = 0 FROM mz_internal.mz_source_statuses WHERE error LIKE '%Connection refused%';
 true
 
 ! SELECT * FROM t0

@@ -27,13 +27,13 @@ ALTER SYSTEM SET enable_mz_join_core = true
 > CREATE DEFAULT INDEX ON v1;
 
 # Will time out unless the join above is properly using fueling to yield
-> SELECT COUNT(*) > 0 FROM mz_internal.mz_dataflow_operators;
+>[retry] SELECT COUNT(*) > 0 FROM mz_internal.mz_dataflow_operators;
 true
 
-> SELECT COUNT(*) > 0 FROM mz_internal.mz_dataflow_operators;
+>[retry] SELECT COUNT(*) > 0 FROM mz_internal.mz_dataflow_operators;
 true
 
-> SELECT COUNT(*) > 0 FROM mz_internal.mz_dataflow_operators;
+>[retry] SELECT COUNT(*) > 0 FROM mz_internal.mz_dataflow_operators;
 true
 
 > DROP CLUSTER linear_join CASCADE;

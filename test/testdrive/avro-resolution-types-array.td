@@ -34,6 +34,8 @@ $ kafka-ingest format=avro topic=resolution-arrays schema=${array-int} timestamp
 $ kafka-ingest format=avro topic=resolution-arrays schema=${array-double} timestamp=2
 {"f1": [ 234.345 ] }
 
+$ kafka-await-ingestion source=resolution_arrays topic=resolution-arrays
+
 ! SELECT f1[0] FROM resolution_arrays
 contains:Writer schema has type `Double`, but reader schema has type `Int` for field `schema_array.f1`
 

@@ -195,6 +195,8 @@ $ kafka-ingest format=avro topic=nums schema=${nums-schema}
 {"array":[{"data":{"num":6},"time":4,"diff":1}]}
 {"com.materialize.cdc.progress":{"lower":[4],"upper":[5],"counts":[{"time":4,"count":2}]}}
 
+$ kafka-await-ingestion source=nums topic=nums
+
 # Data from older transactions should be immediately compacted to the timestamp
 # of the latest transaction (i.e., 4).
 
@@ -220,6 +222,8 @@ $ kafka-ingest format=avro topic=nums schema=${nums-schema}
 {"array":[{"data":{"num":7},"time":6,"diff":-1}]}
 {"array":[{"data":{"num":8},"time":6,"diff":1}]}
 {"com.materialize.cdc.progress":{"lower":[5],"upper":[7],"counts":[{"time":5,"count":2},{"time":6,"count":2}]}}
+
+$ kafka-await-ingestion source=nums topic=nums
 
 # Timestamps 4, 5, and 6 should all be available due to the longer compaction
 # window.
