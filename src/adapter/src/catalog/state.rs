@@ -24,6 +24,7 @@ use tracing::info;
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_catalog::builtin::{Builtin, BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable};
+use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterConfig, ClusterReplica, ClusterReplicaProcessStatus,
     CommentsMap, Connection, DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView,
@@ -71,7 +72,7 @@ use mz_storage_types::connections::inline::{
 use mz_transform::Optimizer;
 
 use crate::catalog::{
-    AwsPrincipalContext, BuiltinTableUpdate, ClusterReplicaSizeMap, ConnCatalog, Error, ErrorKind,
+    AwsPrincipalContext, BuiltinTableUpdate, ClusterReplicaSizeMap, ConnCatalog,
     LINKED_CLUSTER_REPLICA_NAME, SYSTEM_CONN_ID,
 };
 use crate::coord::ConnMeta;

@@ -11,6 +11,7 @@
 
 use mz_audit_log::{EventDetails, EventType, VersionedEvent};
 use mz_catalog::durable::Transaction;
+use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_controller_types::ClusterId;
 use mz_ore::collections::CollectionExt;
 use mz_repr::{GlobalId, Timestamp};
@@ -21,7 +22,7 @@ use mz_storage_types::sources::IngestionDescription;
 
 use crate::catalog::{
     catalog_type_to_audit_object_type, BuiltinTableUpdate, Catalog, CatalogEntry, CatalogItem,
-    CatalogState, DataSourceDesc, Error, ErrorKind, Index, MaterializedView, Sink, Source,
+    CatalogState, DataSourceDesc, Index, MaterializedView, Sink, Source,
 };
 use crate::coord::ConnMeta;
 use crate::AdapterError;

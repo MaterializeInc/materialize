@@ -17,7 +17,7 @@ use mz_sql::catalog::CatalogError as SqlCatalogError;
 #[error(transparent)]
 pub struct Error {
     #[from]
-    pub(crate) kind: ErrorKind,
+    pub kind: ErrorKind,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -71,7 +71,7 @@ pub enum ErrorKind {
     #[error("{0}")]
     Unstructured(String),
     #[error(transparent)]
-    Durable(#[from] mz_catalog::durable::DurableCatalogError),
+    Durable(#[from] crate::durable::DurableCatalogError),
     #[error(transparent)]
     Uuid(#[from] uuid::Error),
     #[error("role \"{role_name}\" is a member of role \"{member_name}\"")]
@@ -84,7 +84,7 @@ pub enum ErrorKind {
 }
 
 impl Error {
-    pub(crate) fn new(kind: ErrorKind) -> Error {
+    pub fn new(kind: ErrorKind) -> Error {
         Error { kind }
     }
 
@@ -121,7 +121,7 @@ impl From<SqlCatalogError> for Error {
 
 impl From<TryFromProtoError> for Error {
     fn from(e: TryFromProtoError) -> Error {
-        Error::from(mz_catalog::durable::CatalogError::from(e))
+        Error::from(crate::durable::CatalogError::from(e))
     }
 }
 
@@ -131,11 +131,11 @@ impl From<uuid::Error> for Error {
     }
 }
 
-impl From<mz_catalog::durable::CatalogError> for Error {
-    fn from(e: mz_catalog::durable::CatalogError) -> Self {
+impl From<crate::durable::CatalogError> for Error {
+    fn from(e: crate::durable::CatalogError) -> Self {
         match e {
-            mz_catalog::durable::CatalogError::Catalog(e) => Error::new(ErrorKind::from(e)),
-            mz_catalog::durable::CatalogError::Durable(e) => Error::new(ErrorKind::from(e)),
+            crate::durable::CatalogError::Catalog(e) => Error::new(ErrorKind::from(e)),
+            crate::durable::CatalogError::Durable(e) => Error::new(ErrorKind::from(e)),
         }
     }
 }
