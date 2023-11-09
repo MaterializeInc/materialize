@@ -131,12 +131,13 @@ impl From<SqlValueOrSecret> for Option<Value> {
 ///
 /// This is the inverse of the [`unresolved_item_name`] function.
 pub fn unresolve(name: FullItemName) -> UnresolvedItemName {
+    // TODO(parkmycar): Refactor FullItemName to use `Ident`.
     let mut out = vec![];
     if let RawDatabaseSpecifier::Name(n) = name.database {
-        out.push(Ident::new(n));
+        out.push(Ident::new_unchecked(n));
     }
-    out.push(Ident::new(name.schema));
-    out.push(Ident::new(name.item));
+    out.push(Ident::new_unchecked(name.schema));
+    out.push(Ident::new_unchecked(name.item));
     UnresolvedItemName(out)
 }
 

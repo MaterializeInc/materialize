@@ -88,6 +88,7 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::strconv;
 use mz_repr::user::ExternalUserMetadata;
 use mz_sql_parser::ast::TransactionIsolationLevel;
+use mz_sql_parser::ident;
 use mz_tracing::CloneableEnvFilter;
 use once_cell::sync::Lazy;
 use serde::Serialize;
@@ -328,7 +329,7 @@ const IS_SUPERUSER_NAME: &UncasedStr = UncasedStr::new("is_superuser");
 
 // Schema can be used an alias for a search path with a single element.
 pub const SCHEMA_ALIAS: &UncasedStr = UncasedStr::new("schema");
-static DEFAULT_SEARCH_PATH: Lazy<Vec<Ident>> = Lazy::new(|| vec![Ident::new(DEFAULT_SCHEMA)]);
+static DEFAULT_SEARCH_PATH: Lazy<Vec<Ident>> = Lazy::new(|| vec![ident!(DEFAULT_SCHEMA)]);
 static SEARCH_PATH: Lazy<ServerVar<Vec<Ident>>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("search_path"),
     value: &*DEFAULT_SEARCH_PATH,
@@ -4696,7 +4697,16 @@ impl Value for Vec<Ident> {
             // element. This matches PostgreSQL.
             VarInput::SqlSet(values) => values,
         };
-        Ok(values.iter().map(Ident::new).collect())
+        let values = values
+            .iter()
+            .map(Ident::new)
+            .collect::<Result<_, _>>()
+            .map_err(|e| VarError::InvalidParameterValue {
+                parameter: param.into(),
+                values: values.to_vec(),
+                reason: e.to_string(),
+            })?;
+        Ok(values)
     }
 
     fn format(&self) -> String {

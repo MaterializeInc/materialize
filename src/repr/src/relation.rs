@@ -339,6 +339,13 @@ impl RustType<ProtoColumnName> for ColumnName {
     }
 }
 
+impl From<ColumnName> for mz_sql_parser::ast::Ident {
+    fn from(value: ColumnName) -> Self {
+        // Note: ColumnNames are known to be less than the max length of an Ident (I think?).
+        mz_sql_parser::ast::Ident::new_unchecked(value.0)
+    }
+}
+
 /// A description of the shape of a relation.
 ///
 /// It bundles a [`RelationType`] with the name of each column in the relation.

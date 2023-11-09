@@ -84,7 +84,8 @@ impl Catalog {
             _ => coord_bail!("object {id} does not have an associated cluster"),
         };
         let old_cluster = entry.cluster_id();
-        *stmt_in_cluster = Some(RawClusterName::Unresolved(Ident::new(cluster.name.clone())));
+        let cluster_name = Ident::new(cluster.name.clone())?;
+        *stmt_in_cluster = Some(RawClusterName::Unresolved(cluster_name));
 
         // Update catalog item with new cluster.
         let create_sql = stmt.to_ast_string_stable();

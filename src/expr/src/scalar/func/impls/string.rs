@@ -1043,7 +1043,8 @@ impl LazyUnaryFunc for QuoteIdent {
             return Ok(Datum::Null);
         }
         let v = d.unwrap_str();
-        let i = mz_sql_parser::ast::Ident::from(v);
+        // Note: using unchecked here is okay because we go right back to a string.
+        let i = mz_sql_parser::ast::Ident::new_unchecked(v);
         let r = temp_storage.push_string(i.to_string());
 
         Ok(Datum::String(r))

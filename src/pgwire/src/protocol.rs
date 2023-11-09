@@ -1131,7 +1131,7 @@ where
                 PortalState::Completed(None) => {
                     let error = format!(
                         "portal {} cannot be run",
-                        Ident::new(portal_name).to_ast_string_stable()
+                        Ident::new_unchecked(portal_name).to_ast_string_stable()
                     );
                     if let Some(outer_ctx_extra) = outer_ctx_extra {
                         self.adapter_client.retire_execute(

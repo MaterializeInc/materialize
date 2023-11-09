@@ -824,6 +824,12 @@ impl From<rbac::UnauthorizedError> for AdapterError {
     }
 }
 
+impl From<mz_sql_parser::ast::IdentError> for AdapterError {
+    fn from(value: mz_sql_parser::ast::IdentError) -> Self {
+        AdapterError::PlanError(PlanError::InvalidIdent(value))
+    }
+}
+
 impl From<mz_sql::session::vars::ConnectionError> for AdapterError {
     fn from(value: mz_sql::session::vars::ConnectionError) -> Self {
         match value {

@@ -1053,7 +1053,10 @@ impl<'a> fmt::Display for HumanizedExpr<'a, usize> {
         match self.cols {
             Some(cols) if !cols[*self.expr].is_empty() => {
                 // Write #c{name} if we have a name inferred for this column.
-                let ident = Ident::new(cols[*self.expr].clone()); // TODO: try to avoid the `.clone()` here.
+                //
+                // Note: using unchecked here is okay since we're directly converting to a string
+                // afterwards.
+                let ident = Ident::new_unchecked(cols[*self.expr].clone()); // TODO: try to avoid the `.clone()` here.
                 write!(f, "#{}{{{}}}", self.expr, ident)
             }
             _ => {

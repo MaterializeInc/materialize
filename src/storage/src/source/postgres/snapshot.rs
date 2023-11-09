@@ -344,8 +344,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 // emulate's PG's rules for name formatting.
                 let query = format!(
                     "COPY {}.{} TO STDOUT (FORMAT TEXT, DELIMITER '\t')",
-                    Ident::from(desc.namespace.clone()).to_ast_string(),
-                    Ident::from(desc.name.clone()).to_ast_string(),
+                    Ident::new_unchecked(desc.namespace.clone()).to_ast_string(),
+                    Ident::new_unchecked(desc.name.clone()).to_ast_string(),
                 );
                 let mut stream = pin!(client.copy_out_simple(&query).await?);
 

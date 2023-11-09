@@ -35,6 +35,7 @@
 extern crate alloc;
 
 use std::error::Error;
+use std::ops::Deref;
 use std::{char, fmt};
 
 use mz_ore::lex::LexBuf;
@@ -75,10 +76,44 @@ impl LexerError {
     }
 }
 
+/// Newtype wrapper around [`String`] whose length is guaranteed to be less than or equal to
+/// [`MAX_IDENTIFIER_LENGTH`].
+#[derive(Debug, Clone, PartialEq)]
+
+pub struct SmallString(String);
+
+impl SmallString {
+    pub fn new(s: String) -> Result<Self, String> {
+        if s.len() > MAX_IDENTIFIER_LENGTH {
+            return Err(s);
+        }
+
+        Ok(SmallString(s))
+    }
+
+    pub fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+impl Deref for SmallString {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl fmt::Display for SmallString {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     Keyword(Keyword),
-    Ident(String),
+    Ident(SmallString),
     String(String),
     HexString(String),
     Number(String),
@@ -223,13 +258,13 @@ fn lex_ident(buf: &mut LexBuf) -> Result<Token, LexerError> {
     match word.parse() {
         Ok(kw) => Ok(Token::Keyword(kw)),
         Err(_) => {
-            if word.len() > MAX_IDENTIFIER_LENGTH {
+            let Ok(small) = SmallString::new(word.to_lowercase()) else {
                 bail!(
                     pos,
                     "identifier length exceeds {MAX_IDENTIFIER_LENGTH} bytes"
                 )
-            }
-            Ok(Token::Ident(word.to_lowercase()))
+            };
+            Ok(Token::Ident(small))
         }
     }
 }
@@ -246,13 +281,13 @@ fn lex_quoted_ident(buf: &mut LexBuf) -> Result<Token, LexerError> {
             None => bail!(pos, "unterminated quoted identifier"),
         }
     }
-    if s.len() > MAX_IDENTIFIER_LENGTH {
+    let Ok(small) = SmallString::new(s) else {
         bail!(
             pos,
             "identifier length exceeds {MAX_IDENTIFIER_LENGTH} bytes"
         )
-    }
-    Ok(Token::Ident(s))
+    };
+    Ok(Token::Ident(small))
 }
 
 fn lex_string(buf: &mut LexBuf) -> Result<String, LexerError> {

@@ -36,6 +36,7 @@ mz-ore = { path = "../ore", features = ["bytes_", "smallvec", "region", "stack",
 mz-persist-types = { path = "../persist-types" }
 mz-pgtz = { path = "../pgtz" }
 mz-proto = { path = "../proto", features = ["chrono"] }
+mz-sql-parser = { path = "../sql-parser" }
 num-traits = "0.2.15"
 num_enum = "0.5.7"
 ordered-float = { version = "3.4.0", features = ["serde"] }

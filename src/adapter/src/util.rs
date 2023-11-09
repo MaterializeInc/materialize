@@ -189,13 +189,13 @@ pub fn index_sql(
     use mz_sql::ast::{Expr, Value};
 
     CreateIndexStatement::<Raw> {
-        name: Some(Ident::new(index_name)),
+        name: Some(Ident::new_unchecked(index_name)),
         on_name: RawItemName::Name(mz_sql::normalize::unresolve(view_name)),
         in_cluster: Some(RawClusterName::Resolved(cluster_id.to_string())),
         key_parts: Some(
             keys.iter()
                 .map(|i| match view_desc.get_unambiguous_name(*i) {
-                    Some(n) => Expr::Identifier(vec![Ident::new(n.to_string())]),
+                    Some(n) => Expr::Identifier(vec![Ident::new_unchecked(n.to_string())]),
                     _ => Expr::Value(Value::Number((i + 1).to_string())),
                 })
                 .collect(),
