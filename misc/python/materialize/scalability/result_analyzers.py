@@ -9,7 +9,7 @@
 
 
 from materialize.scalability.endpoint import Endpoint
-from materialize.scalability.regression import RegressionOutcome
+from materialize.scalability.regression_outcome import RegressionOutcome
 from materialize.scalability.result_analyzer import (
     ResultAnalyzer,
 )
@@ -38,7 +38,11 @@ class DefaultResultAnalyzer(ResultAnalyzer):
             self.max_deviation_as_percent_decimal
         )
 
-        return entries_exceeding_threshold.to_regression_outcome(
+        regression_outcome = RegressionOutcome()
+        regressions = entries_exceeding_threshold.to_regressions(
             workload_name,
             other_endpoint,
         )
+        regression_outcome.regressions.extend(regressions)
+        regression_outcome.append_raw_data(entries_exceeding_threshold)
+        return regression_outcome

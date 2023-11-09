@@ -11,7 +11,7 @@ from typing import TypeVar
 
 from materialize.scalability.df.df_details import DfDetails
 from materialize.scalability.df.df_totals import DfTotals, concat_df_totals
-from materialize.scalability.regression import RegressionOutcome
+from materialize.scalability.regression_outcome import RegressionOutcome
 from materialize.scalability.workload_result import WorkloadResult
 
 T = TypeVar("T")

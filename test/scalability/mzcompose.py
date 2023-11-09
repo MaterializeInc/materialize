@@ -36,7 +36,7 @@ from materialize.scalability.plot.plot import (
     boxplot_duration_by_endpoints_for_workload,
     scatterplot_tps_per_connections,
 )
-from materialize.scalability.regression import RegressionOutcome
+from materialize.scalability.regression_outcome import RegressionOutcome
 from materialize.scalability.result_analyzer import ResultAnalyzer
 from materialize.scalability.result_analyzers import DefaultResultAnalyzer
 from materialize.scalability.schema import Schema, TransactionIsolation

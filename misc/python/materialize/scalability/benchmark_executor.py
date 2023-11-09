@@ -24,7 +24,7 @@ from materialize.scalability.df.df_totals import DfTotals, concat_df_totals
 from materialize.scalability.endpoint import Endpoint
 from materialize.scalability.io import paths
 from materialize.scalability.operation import Operation
-from materialize.scalability.regression import RegressionOutcome
+from materialize.scalability.regression_outcome import RegressionOutcome
 from materialize.scalability.result_analyzer import ResultAnalyzer
 from materialize.scalability.schema import Schema
 from materialize.scalability.workload import Workload

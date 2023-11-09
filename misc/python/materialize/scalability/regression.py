@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 from __future__ import annotations
 
-from materialize.scalability.df.df_totals import DfTotals, concat_df_totals
 from materialize.scalability.endpoint import Endpoint
 
 
@@ -39,31 +38,4 @@ class Regression:
             f"Regression in workload '{self.workload_name}' at concurrency {self.concurrency} with {self.endpoint}:"
             f" {round(self.tps, 2)} tps vs. {round(self.tps_baseline, 2)} tps"
             f" ({round(self.tps_diff, 2)} tps; {round(100 * self.tps_diff_percent, 2)}%)"
-        )
-
-
-class RegressionOutcome:
-    def __init__(
-        self,
-    ):
-        self.regressions: list[Regression] = []
-        self.regression_data = DfTotals()
-
-    def has_regressions(self) -> bool:
-        assert len(self.regressions) == self.regression_data.length()
-        return len(self.regressions) > 0
-
-    def __str__(self) -> str:
-        if not self.has_regressions():
-            return "No regressions"
-
-        return "\n".join(f"* {x}" for x in self.regressions)
-
-    def merge(self, other: RegressionOutcome) -> None:
-        self.regressions.extend(other.regressions)
-        self.append_raw_data(other.regression_data)
-
-    def append_raw_data(self, regressions_data: DfTotals) -> None:
-        self.regression_data = concat_df_totals(
-            [self.regression_data, regressions_data]
         )

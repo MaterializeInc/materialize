@@ -16,7 +16,7 @@ from materialize.scalability.df.df_wrapper_base import (
     concat_df_wrapper_data,
 )
 from materialize.scalability.endpoint import Endpoint
-from materialize.scalability.regression import Regression, RegressionOutcome
+from materialize.scalability.regression import Regression
 
 
 class DfTotals(DfWrapperBase):
@@ -96,12 +96,12 @@ class DfTotalsExtended(DfTotalsMerged):
 
         return DfTotalsExtended(filtered_data)
 
-    def to_regression_outcome(
+    def to_regressions(
         self,
         workload_name: str,
         other_endpoint: Endpoint,
-    ) -> RegressionOutcome:
-        regression_outcome = RegressionOutcome()
+    ) -> list[Regression]:
+        result = []
         for index, row in self.data.iterrows():
             regression = Regression(
                 workload_name,
@@ -113,7 +113,6 @@ class DfTotalsExtended(DfTotalsMerged):
                 tps_diff_percent=row[df_totals_ext_cols.TPS_DIFF_PERC],
                 endpoint=other_endpoint,
             )
-            regression_outcome.regressions.append(regression)
+            result.append(regression)
 
-        regression_outcome.append_raw_data(self)
-        return regression_outcome
+        return result
