@@ -473,7 +473,7 @@ impl Catalog {
         let storage = openable_storage
             .open(now(), &test_bootstrap_args(), None)
             .await?;
-        Self::open_debug_stash_catalog(storage, now, environment_id).await
+        Self::open_debug_catalog_inner(storage, now, environment_id).await
     }
 
     /// Opens a debug stash backed catalog at `url`, using `schema` as the connection's search_path.
@@ -500,7 +500,7 @@ impl Catalog {
         let storage = openable_storage
             .open(now(), &test_bootstrap_args(), None)
             .await?;
-        Self::open_debug_stash_catalog(storage, now, environment_id).await
+        Self::open_debug_catalog_inner(storage, now, environment_id).await
     }
 
     /// Opens a read only debug stash backed catalog defined by `stash_config`.
@@ -517,10 +517,56 @@ impl Catalog {
         let storage = openable_storage
             .open_read_only(now(), &test_bootstrap_args())
             .await?;
-        Self::open_debug_stash_catalog(storage, now, environment_id).await
+        Self::open_debug_catalog_inner(storage, now, environment_id).await
     }
 
-    async fn open_debug_stash_catalog(
+    /// Opens a read only debug persist backed catalog defined by `persist_client` and
+    /// `organization_id`.
+    ///
+    /// See [`Catalog::with_debug`].
+    pub async fn open_debug_read_only_persist_catalog_config(
+        persist_client: PersistClient,
+        now: NowFn,
+        environment_id: EnvironmentId,
+    ) -> Result<Catalog, anyhow::Error> {
+        let openable_storage = Box::new(
+            mz_catalog::durable::persist_backed_catalog_state(
+                persist_client,
+                environment_id.organization_id(),
+            )
+            .await,
+        );
+        let storage = openable_storage
+            .open_read_only(now(), &test_bootstrap_args())
+            .await?;
+        Self::open_debug_catalog_inner(storage, now, Some(environment_id)).await
+    }
+
+    /// Opens a read only debug persist backed catalog defined by `stash_config`, `persist_client`
+    /// and `organization_id`.
+    ///
+    /// See [`Catalog::with_debug`].
+    pub async fn open_debug_read_only_shadow_catalog_config(
+        stash_config: StashConfig,
+        persist_client: PersistClient,
+        now: NowFn,
+        environment_id: EnvironmentId,
+    ) -> Result<Catalog, anyhow::Error> {
+        let openable_storage = Box::new(
+            mz_catalog::durable::shadow_catalog_state(
+                stash_config,
+                persist_client,
+                environment_id.organization_id(),
+            )
+            .await,
+        );
+        let storage = openable_storage
+            .open_read_only(now(), &test_bootstrap_args())
+            .await?;
+        Self::open_debug_catalog_inner(storage, now, Some(environment_id)).await
+    }
+
+    async fn open_debug_catalog_inner(
         storage: Box<dyn DurableCatalogState>,
         now: NowFn,
         environment_id: Option<EnvironmentId>,

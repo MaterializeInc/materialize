@@ -43,7 +43,7 @@ SERVICES = [
         external_cockroach=True,
         catalog_store="stash",
     ),
-    # N.B.: we need to use `validate_postgres_stash=False` because testdrive uses
+    # N.B.: we need to use `validate_catalog_store=None` because testdrive uses
     # HEAD to load the catalog from disk but does *not* run migrations. There
     # is no guarantee that HEAD can load an old catalog without running
     # migrations.
@@ -55,7 +55,7 @@ SERVICES = [
     # because that would involve maintaining backwards compatibility for all
     # testdrive commands.
     Testdrive(
-        validate_postgres_stash=None,
+        validate_catalog_store=None,
         volumes_extra=["secrets:/share/secrets"],
     ),
 ]
@@ -149,7 +149,8 @@ def test_upgrade_from_version(
 
     with c.override(
         Testdrive(
-            validate_postgres_stash="cockroach",
+            postgres_stash="cockroach",
+            validate_catalog_store="stash",
             volumes_extra=["secrets:/share/secrets"],
         )
     ):

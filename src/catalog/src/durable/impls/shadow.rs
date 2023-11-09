@@ -7,13 +7,16 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::cmp::max;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use timely::progress::Timestamp as TimelyTimestamp;
 
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
+use mz_ore::cast::u64_to_usize;
 use mz_ore::now::EpochMillis;
 use mz_ore::soft_assert_eq_or_log;
 use mz_proto::RustType;
@@ -21,13 +24,14 @@ use mz_repr::Timestamp;
 use mz_storage_types::sources::Timeline;
 
 use crate::durable::debug::{DebugCatalogState, Trace};
+use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{
     DurableType, Snapshot, TimelineTimestamp, TimestampKey, TimestampValue,
 };
 use crate::durable::transaction::TransactionBatch;
 use crate::durable::{
     BootstrapArgs, CatalogError, DurableCatalogState, Epoch, OpenableDurableCatalogState,
-    ReadOnlyDurableCatalogState, Transaction,
+    ReadOnlyDurableCatalogState, Transaction, STORAGE_USAGE_ID_ALLOC_KEY,
 };
 
 macro_rules! compare_and_return {
@@ -174,6 +178,7 @@ impl ShadowCatalogState {
     ) -> Result<ShadowCatalogState, CatalogError> {
         let mut state = ShadowCatalogState { stash, persist };
         state.fix_timestamps().await?;
+        state.fix_storage_usage().await?;
         Ok(state)
     }
 
@@ -246,6 +251,49 @@ impl ShadowCatalogState {
 
         reconciled
     }
+
+    /// The Coordinator will update storage usage continuously on an interval.
+    /// If we shut down the Coordinator while it's updating storage usage, then it's possible that
+    /// only one catalog implementation is updated, while the other is not. This will leave the two
+    /// catalogs in an inconsistent state. Since this implementation is just used for tests, and
+    /// that specific inconsistency is expected, we fix it during open.
+    async fn fix_storage_usage(&mut self) -> Result<(), CatalogError> {
+        let stash_storage_usage_id = self.stash.get_next_id(STORAGE_USAGE_ID_ALLOC_KEY).await?;
+        let persist_storage_usage_id = self.persist.get_next_id(STORAGE_USAGE_ID_ALLOC_KEY).await?;
+        if stash_storage_usage_id > persist_storage_usage_id {
+            let diff = stash_storage_usage_id - persist_storage_usage_id;
+            let _ = self
+                .persist
+                .allocate_id(STORAGE_USAGE_ID_ALLOC_KEY, diff)
+                .await?;
+            let stash_storage_usage = self
+                .stash
+                .get_and_prune_storage_usage(None, Timestamp::minimum())
+                .await?;
+            let mut txn = self.persist.transaction().await?;
+            for event in &stash_storage_usage[u64_to_usize(persist_storage_usage_id)..] {
+                txn.insert_storage_usage_event(event.clone());
+            }
+            txn.commit().await?;
+        } else if persist_storage_usage_id > stash_storage_usage_id {
+            let diff = persist_storage_usage_id - stash_storage_usage_id;
+            let _ = self
+                .stash
+                .allocate_id(STORAGE_USAGE_ID_ALLOC_KEY, diff)
+                .await?;
+            let persist_storage_usage = self
+                .persist
+                .get_and_prune_storage_usage(None, Timestamp::minimum())
+                .await?;
+            let mut txn = self.stash.transaction().await?;
+            for event in &persist_storage_usage[u64_to_usize(stash_storage_usage_id)..] {
+                txn.insert_storage_usage_event(event.clone());
+            }
+            txn.commit().await?;
+        }
+
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -279,13 +327,22 @@ impl ReadOnlyDurableCatalogState for ShadowCatalogState {
     }
 
     async fn get_next_id(&mut self, id_type: &str) -> Result<u64, CatalogError> {
-        compare_and_return_async!(self, get_next_id, id_type)
+        if self.is_read_only() && id_type == STORAGE_USAGE_ID_ALLOC_KEY {
+            // Read-only catalogs cannot fix storage usage so we must ignore them. See
+            // `Self::fix_storage_usage`.
+            let stash_storage_usage_id = self.stash.get_next_id(STORAGE_USAGE_ID_ALLOC_KEY).await?;
+            let persist_storage_usage_id =
+                self.persist.get_next_id(STORAGE_USAGE_ID_ALLOC_KEY).await?;
+            Ok(max(stash_storage_usage_id, persist_storage_usage_id))
+        } else {
+            compare_and_return_async!(self, get_next_id, id_type)
+        }
     }
 
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError> {
         if self.is_read_only() {
-            // Read-only catalogs cannot fix timestamps so we must ignore them. See
-            // `Self::fix_timestamps`.
+            // Read-only catalogs cannot fix timestamps or storage usage ID so we must ignore them.
+            // See `Self::fix_timestamps` and `Self::fix_storage_usage`.
             let stash = self.stash.snapshot();
             let persist = self.persist.snapshot();
             let (stash, persist) = futures::future::join(stash, persist).await;
@@ -335,6 +392,37 @@ impl ReadOnlyDurableCatalogState for ShadowCatalogState {
                 .collect();
             stash.timestamps = reconciled_timestamps.clone();
             persist.timestamps = reconciled_timestamps;
+            let stash_storage_usage_id = stash
+                .id_allocator
+                .get(&proto::IdAllocKey {
+                    name: STORAGE_USAGE_ID_ALLOC_KEY.to_string(),
+                })
+                .expect("storage usage id alloc key must exist")
+                .next_id;
+            let persist_storage_usage_id = persist
+                .id_allocator
+                .get(&proto::IdAllocKey {
+                    name: STORAGE_USAGE_ID_ALLOC_KEY.to_string(),
+                })
+                .expect("storage usage id alloc key must exist")
+                .next_id;
+            let reconciled_storage_usage_id = max(stash_storage_usage_id, persist_storage_usage_id);
+            stash.id_allocator.insert(
+                proto::IdAllocKey {
+                    name: STORAGE_USAGE_ID_ALLOC_KEY.to_string(),
+                },
+                proto::IdAllocValue {
+                    next_id: reconciled_storage_usage_id,
+                },
+            );
+            persist.id_allocator.insert(
+                proto::IdAllocKey {
+                    name: STORAGE_USAGE_ID_ALLOC_KEY.to_string(),
+                },
+                proto::IdAllocValue {
+                    next_id: reconciled_storage_usage_id,
+                },
+            );
             soft_assert_eq_or_log!(stash, persist);
             Ok(stash)
         } else {
@@ -363,10 +451,10 @@ impl DurableCatalogState for ShadowCatalogState {
         );
             let _ = stash?;
             let _ = persist?;
-            // We can't actually compare the contents because the timestamps may have diverged. When
-            // the transaction commits we'll check that they both had the same effect so it's probably
-            // fine. Read-only catalogs should not really being transacting a lot either. See
-            // `Self::fix_timestamps`.
+            // We can't actually compare the contents because the timestamps and storage usage IDs
+            // may have diverged. When the transaction commits we'll check that they both had the
+            // same effect so it's probably fine. Read-only catalogs should not really being
+            // transacting a lot either. See `Self::fix_timestamps` and `Self::fix_storage_usage`.
         } else {
             let res: Result<_, CatalogError> = compare_and_return_async!(self, transaction);
             res?;
@@ -384,8 +472,9 @@ impl DurableCatalogState for ShadowCatalogState {
     ) -> Result<(), CatalogError> {
         let res = compare_and_return_async!(self, commit_transaction, txn_batch.clone());
         // After committing a transaction, check that both implementations return the same snapshot
-        // to ensure that the commit had the same effect on the underlying state.
-        let _: Result<_, CatalogError> = compare_and_return_async!(self, snapshot);
+        // to ensure that the commit had the same effect on the underlying state. Call
+        // `self.snapshot()` directly to avoid timestamp and storage usage ID discrepancies.
+        let _: Result<_, CatalogError> = self.snapshot().await;
         res
     }
 
@@ -398,7 +487,25 @@ impl DurableCatalogState for ShadowCatalogState {
         retention_period: Option<Duration>,
         boot_ts: Timestamp,
     ) -> Result<Vec<VersionedStorageUsage>, CatalogError> {
-        compare_and_return_async!(self, get_and_prune_storage_usage, retention_period, boot_ts)
+        if self.is_read_only() {
+            // Read-only catalogs cannot fix storage usage so we must ignore them. See
+            // `Self::fix_storage_usage`.
+            let stash_storage_usage = self
+                .stash
+                .get_and_prune_storage_usage(retention_period, boot_ts)
+                .await?;
+            let persist_storage_usage = self
+                .stash
+                .get_and_prune_storage_usage(retention_period, boot_ts)
+                .await?;
+            if stash_storage_usage.len() >= persist_storage_usage.len() {
+                Ok(stash_storage_usage)
+            } else {
+                Ok(persist_storage_usage)
+            }
+        } else {
+            compare_and_return_async!(self, get_and_prune_storage_usage, retention_period, boot_ts)
+        }
     }
 
     async fn set_timestamp(

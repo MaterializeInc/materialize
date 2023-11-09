@@ -229,9 +229,15 @@ Shuffle the list of tests before running them (using the value from --seed, if a
 
 ## Other options
 
-#### `--validate-postgres-stash=postgres://root@materialized:26257?options=--search_path=adapter`
+#### `--validate-catalog-store=<store-kind>`
 
-After executing a DDL statement, validate that representation of the catalog in the stash is identical to the in-memory one.
+After executing a DDL statement, validate that representation of the catalog is identical to the in-memory one. `<store-kind>` can be one of:
+  - `stash`: Connects to a catalog stored in the stash.
+    - must also set the `--postgres-stash=postgres://root@materialized:26257?options=--search_path=adapter` option.
+  - `persist`: Connects to a catalog stored in persist.
+    - must also set the `--persist-consensus-url` and `--persist-blob-url` options.
+  - `shadow`: Connects to a catalog stored in the stash and persist and sets the results.
+    - must also set the `--postgres-stash=postgres://root@materialized:26257?options=--search_path=adapter`, `--persist-consensus-url`, and `--persist-blob-url` options.
 
 # Executing statements
 

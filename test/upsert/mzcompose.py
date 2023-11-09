@@ -96,7 +96,9 @@ def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
     testdrive = Testdrive(
         forward_buildkite_shard=True,
         kafka_default_partitions=args.kafka_default_partitions,
-        validate_postgres_stash="materialized",
+        postgres_stash="materialized",
+        validate_catalog_store="shadow",
+        volumes_extra=["mzdata:/mzdata"],
     )
 
     materialized = Materialized(
