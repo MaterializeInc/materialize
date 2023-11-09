@@ -20,14 +20,14 @@
 #     https://github.com/actions-ecosystem/action-slack-notifier/blob/fc778468d09c43a6f4d1b8cccaca59766656996a/README.md
 
 # Send a notification to the #epd-sql-council Slack channel when a change
-# to the SQL parser is made.
+# to the SQL parser or the system catalog schema is made.
 #
 # A notification is sent when all of these conditions are true:
 #   * A ready-to-review PR is (re-)opened, or a PR is moved from draft
 #     to ready-to-review.
-#   * The PR modifies a file in 'src/sql-parser/' or 'src/sql-lexer/'.
+#   * The PR modifies a file in 'src/sql-parser/','src/sql-lexer/', or 'src/catalog/src/builtin.rs'.
 
-name: Slack SQL Parser Notifications
+name: Slack SQL Council Notifications
 
 on:
   pull_request_target:
@@ -36,8 +36,9 @@ on:
       - reopened
       - ready_for_review
     paths:
-      - 'src/sql-parser/**'
-      - 'src/sql-lexer/**'
+      - "src/sql-parser/**"
+      - "src/sql-lexer/**"
+      - "src/catalog/src/builtin.rs"
 
 jobs:
   notify:
@@ -50,12 +51,13 @@ jobs:
         uses: dorny/paths-filter@v2
         with:
           filters: |
-            parser-change:
+            sql-parser:
               - 'src/sql-parser/**'
-            lexer-change:
               - 'src/sql-lexer/**'
+            system-catalog:
+              - 'src/catalog/src/builtin.rs'
       - name: "Push to Slack"
-        if: steps.filter.outputs.parser-change == 'true' || steps.filter.outputs.lexer-change == 'true'
+        if: steps.filter.outputs.sql-parser == 'true' || steps.filter.outputs.system-catalog == 'true'
         uses: actions-ecosystem/action-slack-notifier@fc778468d09c43a6f4d1b8cccaca59766656996a
         with:
           slack_token: ${{ secrets.SLACK_TOKEN }}
@@ -67,7 +69,7 @@ jobs:
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "A new SQL parser change is ready for review!"
+                    "text": "A new ${{ steps.filter.outputs.sql-parser == 'true' && 'SQL parser' || 'system catalog' }} change is ready for review!"
                   }
                 },
                 {
