@@ -82,4 +82,6 @@ class PostgresResultComparator(ResultComparator):
             value1 = last_second_and_milliseconds_pattern.sub("0", value1)
             value2 = last_second_and_milliseconds_pattern.sub("0", value2)
 
+        assert self.is_timestamp(value1)
+        assert self.is_timestamp(value2)
         return value1 == value2
