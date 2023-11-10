@@ -123,7 +123,7 @@ If you deploy the MySQL Debezium connector in [Confluent Cloud](https://docs.con
     }
     ```
 
-    You can read more about each configuration property in the [Debezium documentation](https://debezium.io/documentation/reference/2.4/connectors/mysql.html).
+    You can read more about each configuration property in the [Debezium documentation](https://debezium.io/documentation/reference/2.4/connectors/mysql.html). By default, the connector writes events for each table to a Kafka topic named `serverName.databaseName.tableName`.
 
 {{< /tab >}}
 {{< /tabs >}}
