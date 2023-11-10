@@ -85,4 +85,13 @@
 
 #![warn(missing_docs, missing_debug_implementations)]
 
+use mz_ore::metrics::MetricsRegistry;
+
+pub mod lgalloc;
 pub mod rusage;
+
+/// Register all metrics into the provided registry.
+pub async fn register_metrics_into(metrics_registry: &MetricsRegistry) {
+    lgalloc::register_metrics_into(metrics_registry).await;
+    rusage::register_metrics_into(metrics_registry).await;
+}

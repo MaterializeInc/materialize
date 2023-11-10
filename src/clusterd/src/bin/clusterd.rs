@@ -86,6 +86,7 @@ use fail::FailScenario;
 use futures::future;
 use mz_build_info::{build_info, BuildInfo};
 use mz_cloud_resources::AwsExternalIdPrefix;
+use mz_compute::server::ComputeInstanceContext;
 use mz_compute_client::service::proto_compute_server::ProtoComputeServer;
 use mz_http_util::DynamicFilterTarget;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
@@ -229,7 +230,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     emit_boot_diagnostics!(&BUILD_INFO);
 
     mz_alloc::register_metrics_into(&metrics_registry).await;
-    mz_metrics::rusage::register_metrics_into(&metrics_registry).await;
+    mz_metrics::register_metrics_into(&metrics_registry).await;
 
     let mut _pid_file = None;
     if let Some(pid_file_location) = &args.pid_file_location {
@@ -323,7 +324,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             secrets_reader,
             None,
         ),
-        StorageInstanceContext::new(args.scratch_directory, args.announce_memory_limit)?,
+        StorageInstanceContext::new(args.scratch_directory.clone(), args.announce_memory_limit)?,
     )?;
     info!(
         "listening for storage controller connections on {}",
@@ -340,12 +341,16 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     );
 
     // Start compute server.
-    let (_compute_server, compute_client) =
-        mz_compute::server::serve(mz_cluster::server::ClusterConfig {
+    let (_compute_server, compute_client) = mz_compute::server::serve(
+        mz_cluster::server::ClusterConfig {
             metrics_registry,
             persist_clients,
             tracing_handle,
-        })?;
+        },
+        ComputeInstanceContext {
+            scratch_directory: args.scratch_directory,
+        },
+    )?;
     info!(
         "listening for compute controller connections on {}",
         args.compute_controller_listen_addr

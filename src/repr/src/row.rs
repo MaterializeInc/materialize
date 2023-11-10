@@ -169,8 +169,8 @@ impl Ord for Row {
 
 #[allow(missing_debug_implementations)]
 mod columnation {
-
-    use columnation::{Columnation, Region, StableRegion};
+    use columnation::{Columnation, Region};
+    use mz_ore::region::LgAllocRegion;
 
     use crate::Row;
 
@@ -179,7 +179,7 @@ mod columnation {
     /// Content bytes are stored in stable contiguous memory locations,
     /// and then a `Row` referencing them is falsified.
     pub struct RowStack {
-        region: StableRegion<u8>,
+        region: LgAllocRegion<u8>,
     }
 
     impl RowStack {
@@ -191,7 +191,7 @@ mod columnation {
         fn default() -> Self {
             Self {
                 // Limit the region size to 2MiB.
-                region: StableRegion::with_limit(Self::LIMIT),
+                region: LgAllocRegion::with_limit(Self::LIMIT),
             }
         }
     }

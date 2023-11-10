@@ -1482,6 +1482,13 @@ pub const WEBHOOK_CONCURRENT_REQUEST_LIMIT: ServerVar<usize> = ServerVar {
     internal: true,
 };
 
+pub const ENABLE_COLUMNATION_LGALLOC: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_columnation_lgalloc"),
+    value: &false,
+    description: "Enable allocating regions from lgalloc",
+    internal: true,
+};
+
 /// Configuration for gRPC client connections.
 mod grpc_client {
     use super::*;
@@ -2816,7 +2823,8 @@ impl SystemVars {
             .with_var(&STATEMENT_LOGGING_RETENTION)
             .with_var(&OPTIMIZER_STATS_TIMEOUT)
             .with_var(&OPTIMIZER_ONESHOT_STATS_TIMEOUT)
-            .with_var(&WEBHOOK_CONCURRENT_REQUEST_LIMIT);
+            .with_var(&WEBHOOK_CONCURRENT_REQUEST_LIMIT)
+            .with_var(&ENABLE_COLUMNATION_LGALLOC);
 
         for flag in PersistFeatureFlag::ALL {
             vars = vars.with_var(&flag.into())
@@ -3602,6 +3610,11 @@ impl SystemVars {
     /// Returns the `webhook_concurrent_request_limit` configuration parameter.
     pub fn webhook_concurrent_request_limit(&self) -> usize {
         *self.expect_value(&WEBHOOK_CONCURRENT_REQUEST_LIMIT)
+    }
+
+    /// Returns the `enable_columnation_lgalloc` configuration parameter.
+    pub fn enable_columnation_lgalloc(&self) -> bool {
+        *self.expect_value(&ENABLE_COLUMNATION_LGALLOC)
     }
 }
 
@@ -5168,6 +5181,7 @@ pub fn is_compute_config_var(name: &str) -> bool {
         || name == ENABLE_MZ_JOIN_CORE.name()
         || name == ENABLE_JEMALLOC_PROFILING.name()
         || name == ENABLE_SPECIALIZED_ARRANGEMENTS.name()
+        || name == ENABLE_COLUMNATION_LGALLOC.name()
         || is_persist_config_var(name)
         || is_tracing_var(name)
 }
