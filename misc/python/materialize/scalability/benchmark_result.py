@@ -7,18 +7,21 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 from dataclasses import dataclass
+from typing import TypeVar
 
-import pandas as pd
-
-from materialize.scalability.regression import RegressionOutcome
+from materialize.scalability.df.df_details import DfDetails
+from materialize.scalability.df.df_totals import DfTotals, concat_df_totals
+from materialize.scalability.regression_outcome import RegressionOutcome
 from materialize.scalability.workload_result import WorkloadResult
+
+T = TypeVar("T")
 
 
 @dataclass
 class BenchmarkResult:
     overall_regression_outcome: RegressionOutcome
-    df_total_by_endpoint_name_and_workload: dict[str, dict[str, pd.DataFrame]]
-    df_details_by_endpoint_name_and_workload: dict[str, dict[str, pd.DataFrame]]
+    df_total_by_endpoint_name_and_workload: dict[str, dict[str, DfTotals]]
+    df_details_by_endpoint_name_and_workload: dict[str, dict[str, DfDetails]]
 
     def __init__(self):
         self.overall_regression_outcome = RegressionOutcome()
@@ -61,30 +64,29 @@ class BenchmarkResult:
             workload_name
         ] = result.df_details
 
-    def get_df_total_by_endpoint_name(self, endpoint_name: str) -> pd.DataFrame:
-        return pd.concat(
-            self.df_total_by_endpoint_name_and_workload[endpoint_name].values(),
-            ignore_index=True,
+    def get_df_total_by_endpoint_name(self, endpoint_name: str) -> DfTotals:
+        return concat_df_totals(
+            list(self.df_total_by_endpoint_name_and_workload[endpoint_name].values())
         )
 
     def get_df_total_by_workload_and_endpoint(
         self,
-    ) -> dict[str, dict[str, pd.DataFrame]]:
+    ) -> dict[str, dict[str, DfTotals]]:
         return self._swap_endpoint_and_workload_grouping(
             self.df_total_by_endpoint_name_and_workload
         )
 
     def get_df_details_by_workload_and_endpoint(
         self,
-    ) -> dict[str, dict[str, pd.DataFrame]]:
+    ) -> dict[str, dict[str, DfDetails]]:
         return self._swap_endpoint_and_workload_grouping(
             self.df_details_by_endpoint_name_and_workload
         )
 
     def _swap_endpoint_and_workload_grouping(
-        self, result_by_endpoint_and_workload: dict[str, dict[str, pd.DataFrame]]
-    ) -> dict[str, dict[str, pd.DataFrame]]:
-        result: dict[str, dict[str, pd.DataFrame]] = dict()
+        self, result_by_endpoint_and_workload: dict[str, dict[str, T]]
+    ) -> dict[str, dict[str, T]]:
+        result: dict[str, dict[str, T]] = dict()
 
         for (
             endpoint_name,

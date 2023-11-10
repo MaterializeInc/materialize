@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 from materialize.scalability.endpoint import Endpoint
-from materialize.scalability.regression import RegressionOutcome
+from materialize.scalability.regression_outcome import RegressionOutcome
 from materialize.scalability.workload_result import WorkloadResult
 
 

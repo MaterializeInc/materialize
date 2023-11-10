@@ -1359,6 +1359,14 @@ pub const DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT: ServerVar<u32> = ServerVar {
     internal: true,
 };
 
+pub const DEFAULT_ARRANGEMENT_EXERT_PROPORTIONALITY: ServerVar<u32> = ServerVar {
+    name: UncasedStr::new("default_arrangement_exert_proportionality"),
+    value: &16,
+    description:
+        "The default value to use for the `ARRANGEMENT EXERT PROPORTIONALITY` cluster/replica option.",
+    internal: true,
+};
+
 pub const ENABLE_DEFAULT_CONNECTION_VALIDATION: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_default_connection_validation"),
     value: &true,
@@ -1471,6 +1479,13 @@ pub const WEBHOOK_CONCURRENT_REQUEST_LIMIT: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("webhook_concurrent_request_limit"),
     value: &WEBHOOK_CONCURRENCY_LIMIT,
     description: "Maximum number of concurrent requests for appending to a webhook source.",
+    internal: true,
+};
+
+pub const ENABLE_COLUMNATION_LGALLOC: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_columnation_lgalloc"),
+    value: &false,
+    description: "Enable allocating regions from lgalloc",
     internal: true,
 };
 
@@ -2771,6 +2786,7 @@ impl SystemVars {
             .with_var(&ENABLE_MZ_JOIN_CORE)
             .with_var(&LINEAR_JOIN_YIELDING)
             .with_var(&DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT)
+            .with_var(&DEFAULT_ARRANGEMENT_EXERT_PROPORTIONALITY)
             .with_var(&ENABLE_STORAGE_SHARD_FINALIZATION)
             .with_var(&ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE)
             .with_var(&ENABLE_SPECIALIZED_ARRANGEMENTS)
@@ -2807,7 +2823,8 @@ impl SystemVars {
             .with_var(&STATEMENT_LOGGING_RETENTION)
             .with_var(&OPTIMIZER_STATS_TIMEOUT)
             .with_var(&OPTIMIZER_ONESHOT_STATS_TIMEOUT)
-            .with_var(&WEBHOOK_CONCURRENT_REQUEST_LIMIT);
+            .with_var(&WEBHOOK_CONCURRENT_REQUEST_LIMIT)
+            .with_var(&ENABLE_COLUMNATION_LGALLOC);
 
         for flag in PersistFeatureFlag::ALL {
             vars = vars.with_var(&flag.into())
@@ -3453,6 +3470,11 @@ impl SystemVars {
         *self.expect_value(&DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT)
     }
 
+    /// Returns the `default_arrangement_exert_proportionality` configuration parameter.
+    pub fn default_arrangement_exert_proportionality(&self) -> u32 {
+        *self.expect_value(&DEFAULT_ARRANGEMENT_EXERT_PROPORTIONALITY)
+    }
+
     /// Returns the `enable_storage_shard_finalization` configuration parameter.
     pub fn enable_storage_shard_finalization(&self) -> bool {
         *self.expect_value(&ENABLE_STORAGE_SHARD_FINALIZATION)
@@ -3588,6 +3610,11 @@ impl SystemVars {
     /// Returns the `webhook_concurrent_request_limit` configuration parameter.
     pub fn webhook_concurrent_request_limit(&self) -> usize {
         *self.expect_value(&WEBHOOK_CONCURRENT_REQUEST_LIMIT)
+    }
+
+    /// Returns the `enable_columnation_lgalloc` configuration parameter.
+    pub fn enable_columnation_lgalloc(&self) -> bool {
+        *self.expect_value(&ENABLE_COLUMNATION_LGALLOC)
     }
 }
 
@@ -5154,6 +5181,7 @@ pub fn is_compute_config_var(name: &str) -> bool {
         || name == ENABLE_MZ_JOIN_CORE.name()
         || name == ENABLE_JEMALLOC_PROFILING.name()
         || name == ENABLE_SPECIALIZED_ARRANGEMENTS.name()
+        || name == ENABLE_COLUMNATION_LGALLOC.name()
         || is_persist_config_var(name)
         || is_tracing_var(name)
 }

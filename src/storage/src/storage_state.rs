@@ -15,9 +15,9 @@
 //!
 //! A worker receives _external_ [`StorageCommands`](StorageCommand) from the
 //! storage controller, via a channel. Storage workers also share an _internal_
-//! control/command fabric ([`internal_control`](crate::internal_control)).
-//! Internal commands go through a `Sequencer` dataflow that ensures that all
-//! workers receive all commands in the same consistent order.
+//! control/command fabric ([`internal_control`]). Internal commands go through
+//! a `Sequencer` dataflow that ensures that all workers receive all commands in
+//! the same consistent order.
 //!
 //! We need to make sure that commands that cause dataflows to be rendered are
 //! processed in the same consistent order across all workers because timely

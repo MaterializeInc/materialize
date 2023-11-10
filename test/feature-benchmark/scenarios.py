@@ -1484,7 +1484,7 @@ ALTER SYSTEM SET max_tables = {self.n() * 2};
         ]
 
 
-class HydrateIndex(ScenarioBig):
+class HydrateIndex(Scenario):
     """Measure the time it takes for an index to hydrate when a cluster comes online."""
 
     def init(self) -> list[Action]:

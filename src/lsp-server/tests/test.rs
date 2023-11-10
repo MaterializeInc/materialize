@@ -78,7 +78,9 @@
 #[cfg(test)]
 mod tests {
 
-    use mz_lsp_server::backend::DEFAULT_FORMATTING_WIDTH;
+    use mz_lsp_server::backend::{
+        ExecuteCommandParseResponse, ExecuteCommandParseStatement, DEFAULT_FORMATTING_WIDTH,
+    };
     use mz_lsp_server::{PKG_NAME, PKG_VERSION};
     use mz_ore::collections::HashMap;
     use once_cell::sync::Lazy;
@@ -147,6 +149,7 @@ mod tests {
         test_formatting(&mut req_client, &mut resp_client).await;
         test_simple_query(&mut req_client, &mut resp_client).await;
         test_jinja_query(&mut req_client, &mut resp_client).await;
+        test_execute_command(&mut req_client, &mut resp_client).await;
     }
 
     /// Builds the file containing a simple query
@@ -187,6 +190,115 @@ mod tests {
         test_query(query, None, req_client, resp_client).await;
     }
 
+    /// Asserts that the server can parse a sql text file by using "workspace/executeCommand".
+    async fn test_execute_command(req_client: &mut DuplexStream, resp_client: &mut DuplexStream) {
+        let request = r#"{
+            "jsonrpc":"2.0",
+            "id": 2,
+            "method":"workspace/executeCommand",
+            "params": {
+                "command": "parse",
+                "arguments": ["SELECT 100; SELECT 200; CREATE TABLE A (A INT);"]
+            }
+        }"#;
+        let expected_response = vec![LspMessage::<(), ExecuteCommandParseResponse> {
+            jsonrpc: "2.0".to_string(),
+            id: Some(2),
+            result: Some(ExecuteCommandParseResponse {
+                statements: vec![
+                    ExecuteCommandParseStatement {
+                        sql: "SELECT 100".to_string(),
+                        kind: "select".to_string(),
+                    },
+                    ExecuteCommandParseStatement {
+                        sql: "SELECT 200".to_string(),
+                        kind: "select".to_string(),
+                    },
+                    ExecuteCommandParseStatement {
+                        sql: "CREATE TABLE A (A INT)".to_string(),
+                        kind: "create_table".to_string(),
+                    },
+                ],
+            }),
+            method: None,
+            params: None,
+            error: None,
+        }];
+
+        write_and_assert(
+            req_client,
+            resp_client,
+            &mut [0; 1024],
+            request,
+            expected_response,
+        )
+        .await;
+
+        // Test invalid statements.
+        let request = r#"{
+            "jsonrpc":"2.0",
+            "id": 2,
+            "method":"workspace/executeCommand",
+            "params": {
+                "command": "parse",
+                "arguments": ["SELECT 100; SELECT 200; CREATE ASD TABLE A (A INT);"]
+            }
+        }"#;
+        let expected_response = vec![LspMessage::<(), ExecuteCommandParseResponse> {
+            jsonrpc: "2.0".to_string(),
+            id: Some(2),
+            result: None,
+            method: None,
+            params: None,
+            error: Some(Error {
+                code: tower_lsp::jsonrpc::ErrorCode::InternalError,
+                data: None,
+                message: std::borrow::Cow::Borrowed("Error parsing the statements."),
+            }),
+        }];
+
+        write_and_assert(
+            req_client,
+            resp_client,
+            &mut [0; 1024],
+            request,
+            expected_response,
+        )
+        .await;
+
+        // Test invalid command
+        let request = r#"{
+            "jsonrpc":"2.0",
+            "id": 2,
+            "method":"workspace/executeCommand",
+            "params": {
+                "command": "undefined",
+                "arguments": []
+            }
+        }"#;
+        let expected_response = vec![LspMessage::<(), ExecuteCommandParseResponse> {
+            jsonrpc: "2.0".to_string(),
+            id: Some(2),
+            result: None,
+            method: None,
+            params: None,
+            error: Some(Error {
+                code: tower_lsp::jsonrpc::ErrorCode::InternalError,
+                data: None,
+                message: std::borrow::Cow::Borrowed("Unknown command."),
+            }),
+        }];
+
+        write_and_assert(
+            req_client,
+            resp_client,
+            &mut [0; 1024],
+            request,
+            expected_response,
+        )
+        .await;
+    }
+
     /// Asserts that the server can parse a single SQL statement `SELECT 100;`.
     async fn test_simple_query(req_client: &mut DuplexStream, resp_client: &mut DuplexStream) {
         test_query(&FILE_SQL_CONTENT, Some(vec![]), req_client, resp_client).await;
@@ -225,6 +337,12 @@ mod tests {
                     text_document_sync: Some(TextDocumentSyncCapability::Kind(
                         TextDocumentSyncKind::FULL,
                     )),
+                    execute_command_provider: Some(ExecuteCommandOptions {
+                        commands: vec!["parse".to_string()],
+                        work_done_progress_options: WorkDoneProgressOptions {
+                            work_done_progress: None,
+                        },
+                    }),
                     workspace: Some(WorkspaceServerCapabilities {
                         workspace_folders: Some(WorkspaceFoldersServerCapabilities {
                             supported: Some(true),

@@ -848,9 +848,9 @@ checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
 
 [[package]]
 name = "bitflags"
-version = "2.3.3"
+version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "630be753d4e58660abd17930c71b647fe46c27ea6b63cc59e1e3851406972e42"
+checksum = "327762f6e5a765692301e5bb513e0d9fef63be86bbc14528052b1cd3e6f03e07"
 
 [[package]]
 name = "bitvec"
@@ -1428,9 +1428,9 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-deque"
-version = "0.8.2"
+version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "715e8152b692bba2d374b53d4875445368fdf21a94751410af607a5ac677d1fc"
+checksum = "ce6fd6f855243022dcecf8702fef0c297d4338e226845fe067f6341ad9fa0cef"
 dependencies = [
  "cfg-if",
  "crossbeam-epoch",
@@ -1729,7 +1729,7 @@ checksum = "0e25ea47919b1560c4e3b7fe0aaab9becf5b84a10325ddf7db0f0ba5e1026499"
 [[package]]
 name = "differential-dataflow"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/differential-dataflow.git#2ebd82d88393b521bd2dcaeb082f4f1d51734ef6"
+source = "git+https://github.com/MaterializeInc/differential-dataflow.git#40fbd33810198116f7a3562e86495233184acbd4"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -1786,7 +1786,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/differential-dataflow.git#2ebd82d88393b521bd2dcaeb082f4f1d51734ef6"
+source = "git+https://github.com/MaterializeInc/differential-dataflow.git#40fbd33810198116f7a3562e86495233184acbd4"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -3076,6 +3076,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "lgalloc"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22763659eca028d9bf872e5cdf978c87dfaa4a379ba50abb8e94b48c9869e18e"
+dependencies = [
+ "crossbeam-deque",
+ "libc",
+ "memmap2",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.148"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3406,7 +3419,7 @@ checksum = "57349d5a326b437989b6ee4dc8f2f34b0cc131202748414712a8e7d98952fc8c"
 dependencies = [
  "base64 0.21.0",
  "bindgen",
- "bitflags 2.3.3",
+ "bitflags 2.4.1",
  "bitvec",
  "byteorder",
  "bytes",
@@ -3757,7 +3770,7 @@ dependencies = [
 
 [[package]]
 name = "mz-catalog-debug"
-version = "0.77.0-dev"
+version = "0.78.0-dev"
 dependencies = [
  "anyhow",
  "clap",
@@ -3905,7 +3918,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "0.77.0-dev"
+version = "0.78.0-dev"
 dependencies = [
  "anyhow",
  "axum",
@@ -3951,6 +3964,7 @@ dependencies = [
  "dogsdogsdogs",
  "futures",
  "itertools",
+ "lgalloc",
  "mz-build-info",
  "mz-cluster",
  "mz-cluster-client",
@@ -4101,7 +4115,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.77.0-dev"
+version = "0.78.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -4500,8 +4514,10 @@ dependencies = [
 name = "mz-metrics"
 version = "0.0.0"
 dependencies = [
+ "lgalloc",
  "libc",
  "mz-ore",
+ "paste",
  "prometheus",
  "tokio",
  "workspace-hack",
@@ -4633,6 +4649,7 @@ dependencies = [
  "http",
  "hyper",
  "hyper-tls",
+ "lgalloc",
  "mz-test-macro",
  "native-tls",
  "once_cell",
@@ -4711,7 +4728,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.77.0-dev"
+version = "0.78.0-dev"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -5501,7 +5518,7 @@ dependencies = [
 
 [[package]]
 name = "mz-stash-debug"
-version = "0.77.0-dev"
+version = "0.78.0-dev"
 dependencies = [
  "anyhow",
  "clap",
@@ -5818,7 +5835,7 @@ dependencies = [
 
 [[package]]
 name = "mz-testdrive"
-version = "0.77.0-dev"
+version = "0.78.0-dev"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -8855,7 +8872,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "55ae70283aba8d2a8b411c695c437fe25b8b5e44e23e780662002fc72fb47a82"
 dependencies = [
  "base64 0.21.0",
- "bitflags 2.3.3",
+ "bitflags 2.4.1",
  "bytes",
  "futures-core",
  "futures-util",

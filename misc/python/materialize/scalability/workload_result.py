@@ -7,8 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import pandas as pd
 
+from materialize.scalability.df.df_details import DfDetails
+from materialize.scalability.df.df_totals import DfTotals
 from materialize.scalability.endpoint import Endpoint
 from materialize.scalability.workload import Workload
 
@@ -18,8 +19,8 @@ class WorkloadResult:
         self,
         workload: Workload,
         endpoint: Endpoint,
-        df_totals: pd.DataFrame,
-        df_details: pd.DataFrame,
+        df_totals: DfTotals,
+        df_details: DfDetails,
     ):
         self.workload = workload
         self.endpoint = endpoint

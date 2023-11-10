@@ -54,6 +54,7 @@ from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
+from materialize.util import all_subclasses
 from materialize.version_list import VersionsFromDocs
 
 #
@@ -356,19 +357,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     # Build the list of scenarios to run
     root_scenario = globals()[args.root_scenario]
-    initial_scenarios = {}
+    scenarios = []
 
     if root_scenario.__subclasses__():
-        for scenario in root_scenario.__subclasses__():
-            has_children = False
-            for s in scenario.__subclasses__():
-                has_children = True
-                initial_scenarios[s] = 1
-
-            if not has_children:
-                initial_scenarios[scenario] = 1
+        scenarios = [s for s in all_subclasses(root_scenario) if not s.__subclasses__()]
     else:
-        initial_scenarios[root_scenario] = 1
+        scenarios = [root_scenario]
 
     dependencies = ["postgres"]
 
@@ -379,31 +373,31 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     c.up(*dependencies)
 
-    scenarios = initial_scenarios.copy()
-
     for cycle in range(0, args.max_retries):
         print(
-            f"Cycle {cycle+1} with scenarios: {', '.join([scenario.__name__ for scenario in scenarios.keys()])}"
+            f"Cycle {cycle+1} with scenarios: {', '.join([scenario.__name__ for scenario in scenarios])}"
         )
 
         report = Report()
 
-        for scenario in list(scenarios.keys()):
+        scenarios_with_regressions = []
+        for scenario in scenarios:
             comparators = run_one_scenario(c, scenario, args)
             report.extend(comparators)
 
             # Do not retry the scenario if no regressions
-            if all([not c.is_regression() for c in comparators]):
-                del scenarios[scenario]
+            if any([c.is_regression() for c in comparators]):
+                scenarios_with_regressions.append(scenario)
 
             print(f"+++ Benchmark Report for cycle {cycle+1}:")
             report.dump()
 
-        if len(scenarios.keys()) == 0:
+        scenarios = scenarios_with_regressions
+        if not scenarios:
             break
 
-    if len(scenarios.keys()) > 0:
+    if scenarios:
         print(
-            f"ERROR: The following scenarios have regressions: {', '.join([scenario.__name__ for scenario in scenarios.keys()])}"
+            f"ERROR: The following scenarios have regressions: {', '.join([scenario.__name__ for scenario in scenarios])}"
         )
         sys.exit(1)

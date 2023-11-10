@@ -71,6 +71,7 @@ message ProtoComputeParameters {
     optional bool enable_jemalloc_profiling = 7;
     optional bool enable_specialized_arrangements = 8;
     mz_compute_types.dataflows.ProtoYieldSpec linear_join_yielding = 9;
+    optional bool enable_columnation_lgalloc = 10;
 }
 
 message ProtoComputeMaxInflightBytesConfig {
