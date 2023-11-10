@@ -103,12 +103,12 @@ $ kafka-ingest format=avro topic=bar schema=${schema}
 > CREATE SOURCE data_foo
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-foo-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
-  WITH (TIMELINE 'user')
+  WITH (TIMELINE '${testdrive.seed}-timestamps-debezium-kafka')
 
 > CREATE SOURCE data_bar
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-bar-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
-  WITH (TIMELINE 'user')
+  WITH (TIMELINE '${testdrive.seed}-timestamps-debezium-kafka')
 
 > CREATE MATERIALIZED VIEW foo AS SELECT b, sum(a) FROM data_foo GROUP BY b
 
