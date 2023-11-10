@@ -3617,44 +3617,51 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_alias(&mut self) -> Result<Option<Ident>, ParserError> {
+        self.parse_keyword(AS)
+            .then(|| self.parse_identifier())
+            .transpose()
+    }
+
     fn parse_source_include_metadata(&mut self) -> Result<Vec<SourceIncludeMetadata>, ParserError> {
         if self.parse_keyword(INCLUDE) {
             self.parse_comma_separated(|parser| {
-                let ty = match parser
+                let metadata = match parser
                     .expect_one_of_keywords(&[KEY, TIMESTAMP, PARTITION, OFFSET, HEADER, HEADERS])?
                 {
-                    KEY => SourceIncludeMetadataType::Key,
-                    TIMESTAMP => SourceIncludeMetadataType::Timestamp,
-                    PARTITION => SourceIncludeMetadataType::Partition,
-                    OFFSET => SourceIncludeMetadataType::Offset,
-                    HEADER => return parser.parse_kafka_include_header(),
-                    HEADERS => SourceIncludeMetadataType::Headers,
+                    KEY => SourceIncludeMetadata::Key {
+                        alias: parser.parse_alias()?,
+                    },
+                    TIMESTAMP => SourceIncludeMetadata::Timestamp {
+                        alias: parser.parse_alias()?,
+                    },
+                    PARTITION => SourceIncludeMetadata::Partition {
+                        alias: parser.parse_alias()?,
+                    },
+                    OFFSET => SourceIncludeMetadata::Offset {
+                        alias: parser.parse_alias()?,
+                    },
+                    HEADERS => SourceIncludeMetadata::Headers {
+                        alias: parser.parse_alias()?,
+                    },
+                    HEADER => {
+                        let key: String = parser.parse_literal_string()?;
+                        parser.expect_keyword(AS)?;
+                        let alias = parser.parse_identifier()?;
+                        let use_bytes = parser.parse_keyword(BYTES);
+                        SourceIncludeMetadata::Header {
+                            alias,
+                            key,
+                            use_bytes,
+                        }
+                    }
                     _ => unreachable!("only explicitly allowed items can be parsed"),
                 };
-                let alias = parser
-                    .parse_keyword(AS)
-                    .then(|| parser.parse_identifier())
-                    .transpose()?;
-                Ok(SourceIncludeMetadata { ty, alias })
+                Ok(metadata)
             })
         } else {
             Ok(vec![])
         }
-    }
-
-    fn parse_kafka_include_header(&mut self) -> Result<SourceIncludeMetadata, ParserError> {
-        let key = self.parse_literal_string()?;
-        let alias = self
-            .parse_keyword(AS)
-            .then(|| self.parse_identifier())
-            .transpose()?;
-        let use_bytes = self.parse_keyword(BYTES);
-        let header = KafkaHeader { key, use_bytes };
-
-        Ok(SourceIncludeMetadata {
-            ty: SourceIncludeMetadataType::Header(header),
-            alias,
-        })
     }
 
     fn parse_discard(&mut self) -> Result<Statement<Raw>, ParserError> {

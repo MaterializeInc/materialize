@@ -37,9 +37,9 @@ use mz_sql_parser::ast::{
     AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement,
     CommentObjectType, CommentStatement, CreateConnectionOption, CreateConnectionOptionName,
     CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
-    DeferredItemName, DocOnIdentifier, DocOnSchema, DropOwnedStatement, KafkaHeader,
-    MaterializedViewOption, MaterializedViewOptionName, SetRoleVar, UnresolvedItemName,
-    UnresolvedObjectName, UnresolvedSchemaName, Value,
+    DeferredItemName, DocOnIdentifier, DocOnSchema, DropOwnedStatement, MaterializedViewOption,
+    MaterializedViewOptionName, SetRoleVar, UnresolvedItemName, UnresolvedObjectName,
+    UnresolvedSchemaName, Value,
 };
 use mz_sql_parser::ident;
 use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnection};
@@ -78,8 +78,7 @@ use crate::ast::{
     IndexOptionName, KafkaConfigOptionName, KeyConstraint, LoadGeneratorOption,
     LoadGeneratorOptionName, PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica,
     ReferencedSubsources, ReplicaDefinition, ReplicaOption, ReplicaOptionName, RoleAttribute,
-    SourceIncludeMetadata, SourceIncludeMetadataType, Statement, TableConstraint,
-    UnresolvedDatabaseName, ViewDefinition,
+    SourceIncludeMetadata, Statement, TableConstraint, UnresolvedDatabaseName, ViewDefinition,
 };
 use crate::catalog::{
     CatalogCluster, CatalogDatabase, CatalogError, CatalogItem, CatalogItemType,
@@ -587,7 +586,7 @@ pub fn plan_create_source(
     if !matches!(connection, CreateSourceConnection::Kafka { .. })
         && include_metadata
             .iter()
-            .any(|sic| sic.ty == SourceIncludeMetadataType::Headers)
+            .any(|sic| matches!(sic, SourceIncludeMetadata::Headers { .. }))
     {
         // TODO(guswynn): should this be `bail_unsupported!`?
         sql_bail!("INCLUDE HEADERS with non-Kafka sources not supported");
@@ -683,49 +682,47 @@ pub fn plan_create_source(
 
             let metadata_columns = include_metadata
                 .into_iter()
-                .flat_map(|item| match &item.ty {
-                    SourceIncludeMetadataType::Timestamp => {
-                        let name = match item.alias.as_ref() {
+                .flat_map(|item| match item {
+                    SourceIncludeMetadata::Timestamp { alias } => {
+                        let name = match alias {
                             Some(name) => name.to_string(),
                             None => "timestamp".to_owned(),
                         };
                         Some((name, KafkaMetadataKind::Timestamp))
                     }
-                    SourceIncludeMetadataType::Partition => {
-                        let name = match item.alias.as_ref() {
+                    SourceIncludeMetadata::Partition { alias } => {
+                        let name = match alias {
                             Some(name) => name.to_string(),
                             None => "partition".to_owned(),
                         };
                         Some((name, KafkaMetadataKind::Partition))
                     }
-                    SourceIncludeMetadataType::Offset => {
-                        let name = match item.alias.as_ref() {
+                    SourceIncludeMetadata::Offset { alias } => {
+                        let name = match alias {
                             Some(name) => name.to_string(),
                             None => "offset".to_owned(),
                         };
                         Some((name, KafkaMetadataKind::Offset))
                     }
-                    SourceIncludeMetadataType::Headers => {
-                        let name = match item.alias.as_ref() {
+                    SourceIncludeMetadata::Headers { alias } => {
+                        let name = match alias {
                             Some(name) => name.to_string(),
                             None => "headers".to_owned(),
                         };
                         Some((name, KafkaMetadataKind::Headers))
                     }
-                    SourceIncludeMetadataType::Header(KafkaHeader { key, use_bytes }) => {
-                        let name = match item.alias.as_ref() {
-                            Some(name) => name.to_string(),
-                            None => key.clone(),
-                        };
-                        Some((
-                            name,
-                            KafkaMetadataKind::Header {
-                                key: key.clone(),
-                                use_bytes: *use_bytes,
-                            },
-                        ))
-                    }
-                    SourceIncludeMetadataType::Key => {
+                    SourceIncludeMetadata::Header {
+                        alias,
+                        key,
+                        use_bytes,
+                    } => Some((
+                        alias.to_string(),
+                        KafkaMetadataKind::Header {
+                            key: key.clone(),
+                            use_bytes: *use_bytes,
+                        },
+                    )),
+                    SourceIncludeMetadata::Key { alias } => {
                         // handled below
                         None
                     }
@@ -1835,14 +1832,14 @@ fn get_key_envelope(
 ) -> Result<KeyEnvelope, PlanError> {
     let key_definition = included_items
         .iter()
-        .find(|i| i.ty == SourceIncludeMetadataType::Key);
+        .find(|i| matches!(i, SourceIncludeMetadata::Key { .. }));
     if matches!(envelope, Envelope::Debezium { .. }) && key_definition.is_some() {
         sql_bail!(
             "Cannot use INCLUDE KEY with ENVELOPE DEBEZIUM: Debezium values include all keys."
         );
     }
-    if let Some(kd) = key_definition {
-        match (&kd.alias, encoding) {
+    if let Some(SourceIncludeMetadata::Key { alias }) = key_definition {
+        match (alias, encoding) {
             (Some(name), SourceDataEncoding::KeyValue { .. }) => {
                 Ok(KeyEnvelope::Named(name.as_str().to_string()))
             }
