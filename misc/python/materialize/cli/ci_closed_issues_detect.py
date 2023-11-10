@@ -46,7 +46,7 @@ REFERENCE_RE = re.compile(
     # Used in output-consistency framework
     | YesIgnore
     # Used in proto files
-    // buf breaking: ignore
+    //\ buf\ breaking:\ ignore
     )
     """,
     re.VERBOSE | re.IGNORECASE,
