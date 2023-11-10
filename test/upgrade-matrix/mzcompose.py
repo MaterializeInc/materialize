@@ -55,7 +55,9 @@ SERVICES = [
     Redpanda(auto_create_topics=True),
     Debezium(redpanda=True),
     Minio(setup_materialize=True),
-    Materialized(external_minio=True),  # Overriden inside Platform Checks
+    Materialized(
+        external_minio=True, catalog_store="stash"
+    ),  # Overriden inside Platform Checks
     TestdriveService(
         default_timeout="300s",
         no_reset=True,
