@@ -16,7 +16,6 @@ use mz_ore::cast::CastFrom;
 use mz_persist_client::ShardId;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationDesc};
-use mz_stash_types::objects::proto;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -274,23 +273,6 @@ impl RustType<ProtoSinkAsOf> for SinkAsOf<mz_repr::Timestamp> {
             frontier: proto
                 .frontier
                 .into_rust_if_some("ProtoSinkAsOf::frontier")?,
-            strict: proto.strict,
-        })
-    }
-}
-
-impl RustType<proto::SinkAsOf> for SinkAsOf<mz_repr::Timestamp> {
-    fn into_proto(&self) -> proto::SinkAsOf {
-        proto::SinkAsOf {
-            frontier: Some(self.frontier.into_proto()),
-            strict: self.strict,
-        }
-    }
-
-    fn from_proto(proto: proto::SinkAsOf) -> Result<Self, TryFromProtoError> {
-        let frontier = proto.frontier.into_rust_if_some("SinkAsOf::frontier")?;
-        Ok(SinkAsOf {
-            frontier,
             strict: proto.strict,
         })
     }

@@ -12,7 +12,6 @@
 use std::time::Duration;
 
 use mz_proto::IntoRustIfSome;
-use timely::progress::Antichain;
 
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
@@ -77,32 +76,6 @@ impl RustType<proto::MzAclItem> for MzAclItem {
             grantor: proto.grantor.into_rust_if_some("MzAclItem::grantor")?,
             acl_mode: proto.acl_mode.into_rust_if_some("MzAclItem::acl_mode")?,
         })
-    }
-}
-
-impl<T> RustType<proto::TimestampAntichain> for Antichain<T>
-where
-    T: RustType<proto::Timestamp> + Clone + timely::PartialOrder,
-{
-    fn into_proto(&self) -> proto::TimestampAntichain {
-        proto::TimestampAntichain {
-            elements: self
-                .elements()
-                .into_iter()
-                .cloned()
-                .map(|e| e.into_proto())
-                .collect(),
-        }
-    }
-
-    fn from_proto(proto: proto::TimestampAntichain) -> Result<Self, TryFromProtoError> {
-        let elements: Vec<_> = proto
-            .elements
-            .into_iter()
-            .map(|e| T::from_proto(e))
-            .collect::<Result<_, _>>()?;
-
-        Ok(Antichain::from_iter(elements))
     }
 }
 
