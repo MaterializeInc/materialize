@@ -361,7 +361,11 @@ def workflow_rocksdb_cleanup(c: Composition) -> None:
         )[0]
         prefix = "/scratch"
         cluster_prefix = f"cluster-{cluster_id}-replica-{replica_id}"
-        return f"{prefix}/{cluster_prefix}", f"{prefix}/{cluster_prefix}/{source_id}"
+        postfix = "storage/upsert"
+        return (
+            f"{prefix}/{cluster_prefix}/{postfix}",
+            f"{prefix}/{cluster_prefix}/{postfix}/{source_id}",
+        )
 
     # Returns the number of files recursive in a given directory
     def num_files(dir: str) -> int:
