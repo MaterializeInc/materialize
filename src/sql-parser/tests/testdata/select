@@ -1595,3 +1595,10 @@ select 2 OPERATOR(*) 2 + 2
 SELECT 2 OPERATOR(*) 2 + 2
 =>
 Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Op { op: Op { namespace: Some([]), op: "*" }, expr1: Value(Number("2")), expr2: Some(Op { op: Op { namespace: None, op: "+" }, expr1: Value(Number("2")), expr2: Some(Value(Number("2"))) }) }, alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+select count(distinct s) from y
+----
+SELECT count(DISTINCT s) FROM y
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Function(Function { name: Name(UnresolvedItemName([Ident("count")])), args: Args { args: [Identifier([Ident("s")])], order_by: [] }, filter: None, over: None, distinct: true }), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("y")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
