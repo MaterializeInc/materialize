@@ -1839,13 +1839,13 @@ impl Coordinator {
         tracing::info!(
             export_ids = %dataflow.display_export_ids(),
             %cluster_id,
+            as_of = ?as_of.elements(),
             min_as_of = ?min_as_of.elements(),
             max_as_of = ?max_as_of.elements(),
             write_frontier = ?write_frontier.elements(),
             %lag,
             max_compaction_frontier = ?max_compaction_frontier.elements(),
-            "selecting index `as_of` as {:?}",
-            as_of.elements(),
+            "bootstrapping index `as_of`",
         );
 
         as_of
@@ -1883,10 +1883,10 @@ impl Coordinator {
         tracing::info!(
             export_ids = %dataflow.display_export_ids(),
             %cluster_id,
+            as_of = ?as_of.elements(),
             min_as_of = ?min_as_of.elements(),
             write_frontier = ?write_frontier.elements(),
-            "selecting materialized view `as_of` as {:?}",
-            as_of.elements(),
+            "bootstrapping materialized view `as_of`",
         );
 
         as_of
