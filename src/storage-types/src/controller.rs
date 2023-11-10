@@ -49,6 +49,52 @@ pub struct CollectionMetadata {
     pub txns_shard: Option<ShardId>,
 }
 
+impl crate::AlterCompatible for CollectionMetadata {
+    fn alter_compatible(
+        &self,
+        id: mz_repr::GlobalId,
+        other: &Self,
+    ) -> Result<(), self::StorageError> {
+        if self == other {
+            return Ok(());
+        }
+
+        let CollectionMetadata {
+            // persist locations may change (though not as a result of ALTER);
+            // we allow this because if this changes unexpectedly, we will
+            // notice in other ways.
+            persist_location: _,
+            remap_shard,
+            data_shard,
+            status_shard,
+            relation_desc,
+            txns_shard,
+        } = self;
+
+        let compatibility_checks = [
+            (remap_shard == &other.remap_shard, "remap_shard"),
+            (data_shard == &other.data_shard, "data_shard"),
+            (status_shard == &other.status_shard, "status_shard"),
+            (relation_desc == &other.relation_desc, "relation_desc"),
+            (txns_shard == &other.txns_shard, "txns_shard"),
+        ];
+
+        for (compatible, field) in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "CollectionMetadata incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(StorageError::InvalidAlter { id });
+            }
+        }
+
+        Ok(())
+    }
+}
+
 impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
     fn into_proto(&self) -> ProtoCollectionMetadata {
         ProtoCollectionMetadata {
@@ -164,8 +210,8 @@ pub enum StorageError {
     },
     /// Dataflow was not able to process a request
     DataflowError(DataflowError),
-    /// Response to an invalid/unsupported `ALTER SOURCE` command.
-    InvalidAlterSource { id: GlobalId },
+    /// Response to an invalid/unsupported `ALTER..` command.
+    InvalidAlter { id: GlobalId },
     /// The controller API was used in some invalid way. This usually indicates
     /// a bug.
     InvalidUsage(String),
@@ -173,9 +219,6 @@ pub enum StorageError {
     ResourceExhausted(&'static str),
     /// The specified component is shutting down.
     ShuttingDown(&'static str),
-    /// Response if we try to change a sink's description to a state
-    /// incompatible with its current state.
-    IncompatibleSinkDescriptions { id: GlobalId },
     /// A generic error that happens during operations of the storage controller.
     // TODO(aljoscha): Get rid of this!
     Generic(anyhow::Error),
@@ -195,11 +238,10 @@ impl Error for StorageError {
             Self::ExportInstanceMissing { .. } => None,
             Self::IOError(err) => Some(err),
             Self::DataflowError(err) => Some(err),
-            Self::InvalidAlterSource { .. } => None,
+            Self::InvalidAlter { .. } => None,
             Self::InvalidUsage(_) => None,
             Self::ResourceExhausted(_) => None,
             Self::ShuttingDown(_) => None,
-            Self::IncompatibleSinkDescriptions { .. } => None,
             Self::Generic(err) => err.source(),
         }
     }
@@ -257,21 +299,12 @@ impl fmt::Display for StorageError {
             // N.B. For these errors, the underlying error is reported in `source()`, and it
             // is the responsibility of the caller to print the chain of errors, when desired.
             Self::DataflowError(_err) => write!(f, "dataflow failed to process request",),
-            Self::InvalidAlterSource { id } => {
+            Self::InvalidAlter { id } => {
                 write!(f, "{id} cannot be altered in the requested way")
             }
             Self::InvalidUsage(err) => write!(f, "invalid usage: {}", err),
             Self::ResourceExhausted(rsc) => write!(f, "{rsc} is exhausted"),
             Self::ShuttingDown(cmp) => write!(f, "{cmp} is shutting down"),
-            Self::IncompatibleSinkDescriptions { id } => {
-                // n.b. this error is only used in assertions currently, so
-                // doesn't need to contain more detail until we support `ALTER
-                // SINK`.
-                write!(
-                    f,
-                    "{id} cannot be have its description changed in the requested way"
-                )
-            }
             Self::Generic(err) => std::fmt::Display::fmt(err, f),
         }
     }
