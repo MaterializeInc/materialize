@@ -326,6 +326,17 @@ steps:
               composition: zippy
               args: [--scenario=KafkaSources, --actions=10000, --cockroach-tag=latest, --max-execution-time=30m]
 
+      - id: zippy-alter-connection
+        label: "Zippy w/ alter connection"
+        timeout_in_minutes: 120
+        agents:
+          queue: linux-x86_64
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: zippy
+              args: [--scenario=AlterConnectionWithKafkaSources, --actions=10000, --max-execution-time=30m]
+
   - group: Secrets
     key: secrets
     steps:
