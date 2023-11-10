@@ -81,6 +81,8 @@ Debezium is deployed as a set of Kafka Connect-compatible connectors. First, def
     * `common-config`
     * `common-utils`
 
+    You can read more about this in the [Debezium documentation](https://debezium.io/documentation/reference/stable/configuration/avro.html#deploying-confluent-schema-registry-with-debezium-containers).
+
 1.  Create a connector configuration file and save it as `register-sqlserver.json`:
 
     ```json
@@ -106,7 +108,7 @@ Debezium is deployed as a set of Kafka Connect-compatible connectors. First, def
     }
     ```
 
-    You can read more about each configuration property in the [Debezium documentation](https://debezium.io/documentation/reference/2.4/connectors/sqlserver.html).
+    You can read more about each configuration property in the [Debezium documentation](https://debezium.io/documentation/reference/2.4/connectors/sqlserver.html). By default, the connector writes events for each table to a Kafka topic named `serverName.databaseName.tableName`.
 
 {{< /tab >}}
 {{< /tabs >}}
