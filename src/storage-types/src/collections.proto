@@ -33,7 +33,7 @@ message TimestampAntichain {
 
 message SinkAsOf {
     TimestampAntichain frontier = 1;
-    bool strict = 2;
+    int32 strict = 2;
 }
 
 message DurableExportMetadata {

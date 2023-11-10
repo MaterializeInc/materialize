@@ -846,7 +846,7 @@ impl Coordinator {
         let frontier = Antichain::from_elem(now);
         let as_of = SinkAsOf {
             frontier,
-            strict: !sink.with_snapshot,
+            strict: if !sink.with_snapshot { 1 } else { -1 },
         };
 
         let storage_sink_from_entry = self.catalog().get_entry(&sink.from);
