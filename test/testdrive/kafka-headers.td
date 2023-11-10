@@ -183,7 +183,7 @@ $ kafka-ingest format=avro topic=individual_headers key-format=avro key-schema=$
   'testdrive-individual_headers-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
-  INCLUDE HEADER 'header1', HEADER 'header2'
+  INCLUDE HEADER 'header1' AS header1, HEADER 'header2' AS header2
   ENVELOPE UPSERT
 
 > SELECT key, header1, header2 from individual_headers
@@ -200,7 +200,7 @@ message_2    message_2_header_1    message_2_header_2
   'testdrive-individual_headers-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
-  INCLUDE HEADER 'header1' BYTES, HEADER 'header2'
+  INCLUDE HEADER 'header1' AS header1 BYTES, HEADER 'header2' AS header2
   ENVELOPE UPSERT
 
 > SELECT key, header1::text, header2 from individual_headers_bytes
@@ -211,24 +211,7 @@ message_1    \x6d6573736167655f315f6865616465725f31    <null>
 message_2    \x6d6573736167655f325f6865616465725f31    message_2_header_2
 
 
-# test alias option for INCLUDE HEADER
-> CREATE SOURCE individual_headers_alias
-  FROM KAFKA CONNECTION kafka_conn (TOPIC
-  'testdrive-individual_headers-${testdrive.seed}')
-  KEY FORMAT AVRO USING SCHEMA '${keyschema}'
-  VALUE FORMAT AVRO USING SCHEMA '${schema}'
-  INCLUDE HEADER 'header1' AS one, HEADER 'header2' AS two
-  ENVELOPE UPSERT
-
-> SELECT key, one, two from individual_headers_alias
-key          one                   two
-----------------------------------------------
-message_0    <null>                <null>
-message_1    message_1_header_1    <null>
-message_2    message_2_header_1    message_2_header_2
-
-
-# When there are multiple headers with identical keys, verify that the first header is included
+# When there are multiple headers with identical keys, verify that the last header is exposed in the row
 $ kafka-create-topic topic=duplicate_individual_headers
 
 $ kafka-ingest format=avro topic=duplicate_individual_headers key-format=avro key-schema=${keyschema} schema=${schema} headers=[{"duplicates": "message_3_header_3_first"}, {"duplicates": "message_3_header_3_second"}, {"duplicates": "message_3_header_3_third"}]
@@ -239,7 +222,7 @@ $ kafka-ingest format=avro topic=duplicate_individual_headers key-format=avro ke
   'testdrive-duplicate_individual_headers-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
-  INCLUDE HEADERS, HEADER 'duplicates'
+  INCLUDE HEADERS, HEADER 'duplicates' AS duplicates
   ENVELOPE UPSERT
 
 > SELECT key, duplicates, headers::text from duplicate_individual_headers
