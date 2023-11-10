@@ -67,7 +67,7 @@ use crate::catalog::{
     is_reserved_name, migrate, BuiltinTableUpdate, Catalog, CatalogPlans, CatalogState, Config,
     CREATE_SQL_TODO, SYSTEM_CONN_ID,
 };
-use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
+use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncFactory};
 use crate::coord::timestamp_oracle;
 use crate::AdapterError;
 
@@ -226,7 +226,7 @@ impl Catalog {
                 start_time: to_datetime((config.now)()),
                 start_instant: Instant::now(),
                 nonce: rand::random(),
-                environment_id: config.environment_id,
+                environment_id: config.environment_id.clone(),
                 session_id: Uuid::new_v4(),
                 build_info: config.build_info,
                 timestamp_interval: Duration::from_secs(1),
@@ -379,12 +379,25 @@ impl Catalog {
         let system_privileges = txn.get_system_privileges();
         state.system_privileges.grant_all(system_privileges);
 
+        let system_parameter_sync_config =
+            config
+                .system_parameter_sync_config
+                .map(|system_parameter_sync_config| {
+                    SystemParameterSyncFactory::new(
+                        config.environment_id,
+                        config.build_info,
+                        config.metrics_registry,
+                        config.now.clone(),
+                        system_parameter_sync_config.ld_sdk_key,
+                        system_parameter_sync_config.ld_key_map,
+                    )
+                });
         Catalog::load_system_configuration(
             &mut state,
             &mut txn,
             is_read_only,
             config.system_parameter_defaults,
-            config.system_parameter_sync_config,
+            system_parameter_sync_config,
         )
         .await?;
 
@@ -1029,7 +1042,7 @@ impl Catalog {
         txn: &mut Transaction<'_>,
         is_read_only: bool,
         system_parameter_defaults: BTreeMap<String, String>,
-        system_parameter_sync_config: Option<SystemParameterSyncConfig>,
+        system_parameter_sync_config: Option<SystemParameterSyncFactory>,
     ) -> Result<(), AdapterError> {
         let system_config = txn.get_system_configurations();
 

@@ -21,6 +21,7 @@ mod frontend;
 mod params;
 mod sync;
 
+use crate::catalog::SystemParameterSyncConfig;
 pub use backend::SystemParameterBackend;
 pub use frontend::SystemParameterFrontend;
 pub use params::{ModifiedParameter, SynchronizedParameters};
@@ -28,7 +29,7 @@ pub use sync::system_parameter_sync;
 
 /// A factory for [SystemParameterFrontend] instances.
 #[derive(Clone, Debug)]
-pub struct SystemParameterSyncConfig {
+pub struct SystemParameterSyncFactory {
     /// The environment ID that should identify connected clients.
     env_id: EnvironmentId,
     /// Build info for the environment running this.
@@ -45,7 +46,7 @@ pub struct SystemParameterSyncConfig {
     ld_key_map: BTreeMap<String, String>,
 }
 
-impl SystemParameterSyncConfig {
+impl SystemParameterSyncFactory {
     /// Construct a new [SystemParameterFrontend] instance.
     pub fn new(
         env_id: EnvironmentId,
@@ -62,6 +63,13 @@ impl SystemParameterSyncConfig {
             now_fn,
             ld_sdk_key,
             ld_key_map,
+        }
+    }
+
+    pub fn launch_darkly_config(&self) -> SystemParameterSyncConfig {
+        SystemParameterSyncConfig {
+            ld_sdk_key: self.ld_sdk_key.clone(),
+            ld_key_map: self.ld_key_map.clone(),
         }
     }
 }

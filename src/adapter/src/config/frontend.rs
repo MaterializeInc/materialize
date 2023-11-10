@@ -18,7 +18,7 @@ use mz_ore::now::NowFn;
 use mz_sql::catalog::{CloudProvider, EnvironmentId};
 use tokio::time;
 
-use crate::config::{Metrics, SynchronizedParameters, SystemParameterSyncConfig};
+use crate::config::{Metrics, SynchronizedParameters, SystemParameterSyncFactory};
 
 /// A frontend client for pulling [SynchronizedParameters] from LaunchDarkly.
 #[derive(Derivative)]
@@ -46,7 +46,7 @@ impl SystemParameterFrontend {
     /// This will create and initialize an [ld::Client] instance. The
     /// [ld::Client::initialized_async] call will be attempted in a loop with an
     /// exponential backoff with power `2s` and max duration `60s`.
-    pub async fn from(sync_config: &SystemParameterSyncConfig) -> Result<Self, anyhow::Error> {
+    pub async fn from(sync_config: &SystemParameterSyncFactory) -> Result<Self, anyhow::Error> {
         Ok(Self {
             ld_client: ld_client(sync_config).await?,
             ld_ctx: ld_ctx(&sync_config.env_id, sync_config.build_info)?,
@@ -97,7 +97,7 @@ impl Drop for SystemParameterFrontend {
     }
 }
 
-fn ld_config(sync_config: &SystemParameterSyncConfig) -> ld::Config {
+fn ld_config(sync_config: &SystemParameterSyncFactory) -> ld::Config {
     ld::ConfigBuilder::new(&sync_config.ld_sdk_key)
         .event_processor(ld::EventProcessorBuilder::new().on_success({
             let last_cse_time_seconds = sync_config.metrics.last_cse_time_seconds.clone();
@@ -112,7 +112,7 @@ fn ld_config(sync_config: &SystemParameterSyncConfig) -> ld::Config {
         .build()
 }
 
-async fn ld_client(sync_config: &SystemParameterSyncConfig) -> Result<ld::Client, anyhow::Error> {
+async fn ld_client(sync_config: &SystemParameterSyncFactory) -> Result<ld::Client, anyhow::Error> {
     let ld_client = ld::Client::build(ld_config(sync_config))?;
 
     tracing::info!("waiting for SystemParameterFrontend to initialize");

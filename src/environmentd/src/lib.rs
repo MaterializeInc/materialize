@@ -92,7 +92,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
 use mz_adapter::catalog::ClusterReplicaSizeMap;
-use mz_adapter::config::{system_parameter_sync, SystemParameterSyncConfig};
+use mz_adapter::config::{system_parameter_sync, SystemParameterSyncFactory};
 use mz_adapter::webhook::WebhookConcurrencyLimiter;
 use mz_build_info::{build_info, BuildInfo};
 use mz_catalog::durable::{BootstrapArgs, OpenableDurableCatalogState, StashConfig};
@@ -518,8 +518,8 @@ impl Listeners {
         .await;
 
         // Initialize the system parameter frontend if `launchdarkly_sdk_key` is set.
-        let system_parameter_sync_config = if let Some(ld_sdk_key) = config.launchdarkly_sdk_key {
-            Some(SystemParameterSyncConfig::new(
+        let system_parameter_sync_factory = if let Some(ld_sdk_key) = config.launchdarkly_sdk_key {
+            Some(SystemParameterSyncFactory::new(
                 config.environment_id.clone(),
                 &BUILD_INFO,
                 &config.metrics_registry,
@@ -530,6 +530,9 @@ impl Listeners {
         } else {
             None
         };
+        let system_parameter_sync_config = system_parameter_sync_factory
+            .as_ref()
+            .map(|factory| factory.launch_darkly_config());
 
         // Initialize adapter.
         let segment_client = config.segment_api_key.map(mz_segment::Client::new);
@@ -556,7 +559,7 @@ impl Listeners {
             storage_usage_retention_period: config.storage_usage_retention_period,
             segment_client: segment_client.clone(),
             egress_ips: config.egress_ips,
-            system_parameter_sync_config: system_parameter_sync_config.clone(),
+            system_parameter_sync_config,
             aws_account_id: config.aws_account_id,
             aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
             active_connection_count: Arc::clone(&active_connection_count),
@@ -661,7 +664,7 @@ impl Listeners {
 
         // If system_parameter_sync_config and config_sync_loop_interval are present,
         // start the system_parameter_sync loop.
-        if let Some(system_parameter_sync_config) = system_parameter_sync_config {
+        if let Some(system_parameter_sync_config) = system_parameter_sync_factory {
             task::spawn(
                 || "system_parameter_sync",
                 AssertUnwindSafe(system_parameter_sync(

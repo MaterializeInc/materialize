@@ -124,11 +124,10 @@ use uuid::Uuid;
 
 use crate::catalog::{
     self, AwsPrincipalContext, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog, CatalogItem,
-    ClusterReplicaSizeMap, DataSourceDesc, Source,
+    ClusterReplicaSizeMap, DataSourceDesc, Source, SystemParameterSyncConfig,
 };
 use crate::client::{Client, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
-use crate::config::SystemParameterSyncConfig;
 use crate::coord::appends::{Deferred, GroupCommitPermit, PendingWriteTxn};
 use crate::coord::dataflows::dataflow_import_id_bundle;
 use crate::coord::id_bundle::CollectionIdBundle;
