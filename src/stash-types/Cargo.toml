@@ -10,11 +10,8 @@ publish = false
 anyhow = "1.0.66"
 mz-ore = { path = "../ore", features = ["metrics", "network", "async", "test"] }
 mz-proto = { path = "../proto" }
-mz-repr = { path = "../repr" }
 paste = "1.0.11"
 prometheus = { version = "0.13.3", default-features = false }
-proptest = { version = "1.0.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.3.0", features = ["boxed_union"] }
 prost = { version = "0.11.9", features = ["no-recursion-limit"] }
 serde = "1.0.152"
 tokio-postgres = { version = "0.7.8", features = ["with-serde_json-1"] }
