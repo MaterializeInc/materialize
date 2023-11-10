@@ -202,56 +202,31 @@ impl LanguageServer for Backend {
                 let json_args = command_params.arguments.get(0);
 
                 if let Some(json_args) = json_args {
-                    return match serde_json::from_value::<String>(json_args.clone()) {
-                        Ok(args) => match parse_statements(&args) {
-                            Ok(statements) => {
-                                // Transform raw statements to splitted statements
-                                // and infere the kind.
-                                // E.g. if it is a select or a create_table statement.
-                                let parse_statements: Vec<ExecuteCommandParseStatement> =
-                                    statements
-                                        .iter()
-                                        .map(|x| ExecuteCommandParseStatement {
-                                            kind: statement_kind_label_value(x.ast.clone().into())
-                                                .to_string(),
-                                            sql: x.sql.to_string(),
-                                        })
-                                        .collect();
+                    let args = serde_json::from_value::<String>(json_args.clone())
+                        .map_err(|_| build_error("Error deserializing parse args as String."))?;
+                    let statements = parse_statements(&args)
+                        .map_err(|_| build_error("Error parsing the statements."))?;
 
-                                return Ok(Some(json!(ExecuteCommandParseResponse {
-                                    statements: parse_statements
-                                })));
-                            }
-                            Err(_) => Err(Error {
-                                code: ErrorCode::InternalError,
-                                message: std::borrow::Cow::Borrowed(
-                                    "Error parsing the statements.",
-                                ),
-                                data: None,
-                            }),
-                        },
-                        Err(_) => Err(Error {
-                            code: ErrorCode::InternalError,
-                            message: std::borrow::Cow::Borrowed(
-                                "Error deserializing parse args as String.",
-                            ),
-                            data: None,
-                        }),
-                    };
+                    // Transform raw statements to splitted statements
+                    // and infere the kind.
+                    // E.g. if it is a select or a create_table statement.
+                    let parse_statements: Vec<ExecuteCommandParseStatement> = statements
+                        .iter()
+                        .map(|x| ExecuteCommandParseStatement {
+                            kind: statement_kind_label_value(x.ast.clone().into()).to_string(),
+                            sql: x.sql.to_string(),
+                        })
+                        .collect();
+
+                    return Ok(Some(json!(ExecuteCommandParseResponse {
+                        statements: parse_statements
+                    })));
                 } else {
-                    return Err(Error {
-                        code: ErrorCode::InternalError,
-                        message: std::borrow::Cow::Borrowed("Missing command args."),
-                        data: None,
-                    });
+                    return Err(build_error("Missing command args."));
                 }
             }
             _ => {
-                return Err(Error {
-                    code: ErrorCode::InternalError,
-                    message: std::borrow::Cow::Borrowed("Unknown command."),
-                    data: None,
-                });
+                return Err(build_error("Unknown command."));
             }
         }
     }
@@ -449,4 +424,15 @@ fn offset_to_position(offset: usize, rope: &Rope) -> Option<Position> {
     let column_u32 = column.try_into().ok()?;
 
     Some(Position::new(line_u32, column_u32))
+}
+
+/// Builds a [tower_lsp::jsonrpc::Error]
+///
+/// Use this function to map normal errors to the one the trait expects
+fn build_error(message: &'static str) -> tower_lsp::jsonrpc::Error {
+    Error {
+        code: ErrorCode::InternalError,
+        message: std::borrow::Cow::Borrowed(message),
+        data: None,
+    }
 }
