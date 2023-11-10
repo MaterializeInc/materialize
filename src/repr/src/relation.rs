@@ -22,7 +22,7 @@ pub use crate::relation_and_scalar::{
 };
 use crate::{Datum, ScalarType};
 
-/// The type of a [`Datum`](crate::Datum).
+/// The type of a [`Datum`].
 ///
 /// [`ColumnType`] bundles information about the scalar type of a datum (e.g.,
 /// Int32 or String) with its nullability.
