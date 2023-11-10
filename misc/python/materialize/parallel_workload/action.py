@@ -881,11 +881,11 @@ class RevokePrivilegesAction(Action):
             if not exe.db.roles:
                 return
             role = self.rng.choice(exe.db.roles)
-        privilege = self.rng.choice(["SELECT", "INSERT", "UPDATE", "ALL"])
-        tables_views: list[DBObject] = [*exe.db.tables, *exe.db.views]
-        table = self.rng.choice(tables_views)
-        query = f"REVOKE {privilege} ON {table} FROM {role}"
-        exe.execute(query)
+            privilege = self.rng.choice(["SELECT", "INSERT", "UPDATE", "ALL"])
+            tables_views: list[DBObject] = [*exe.db.tables, *exe.db.views]
+            table = self.rng.choice(tables_views)
+            query = f"REVOKE {privilege} ON {table} FROM {role}"
+            exe.execute(query)
 
 
 # TODO: Should factor this out so can easily use it without action
