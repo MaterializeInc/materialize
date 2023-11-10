@@ -107,7 +107,7 @@ def plot_duration_by_connections_for_workload(
             )
             legend.append(formatted_endpoint_name)
 
-        plot.boxplot(durations, labels=legend)
+        _plot_distribution(plot, data=durations, labels=legend)
 
         if is_in_first_column:
             plot.set_ylabel("Duration (seconds)")
@@ -160,7 +160,7 @@ def plot_duration_by_endpoints_for_workload(
 
             legend.append(concurrency)
 
-        plot.boxplot(durations, labels=legend)
+        _plot_distribution(plot, data=durations, labels=legend)
 
         if is_in_first_column and is_in_last_row:
             plot.set_ylabel("Duration (seconds)")
@@ -231,3 +231,10 @@ def _get_subplot_in_grid(
     assert type(plot) == Axes
 
     return plot, is_in_first_column, is_in_last_row
+
+
+def _plot_distribution(plot: Axes, data: list[list[float]], labels: list[str]) -> None:
+    _plot_boxplot(plot, data, labels)
+
+def _plot_boxplot(plot: Axes, data: list[list[float]], labels: list[str]) -> None:
+    plot.boxplot(data, labels=labels)
