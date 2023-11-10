@@ -6,9 +6,8 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-
-
 import math
+from enum import Enum
 from typing import Any
 
 import numpy as np
@@ -26,7 +25,13 @@ PLOT_MARKER_HLINE = MarkerStyle("_")
 
 PLOT_COLOR_DARK_BLUE = "darkblue"
 
-USE_VIOLINPLOT_INSTEAD_OF_BOXPLOT = True
+
+class DistributionPlotType(Enum):
+    VIOLIN = 1
+    BOX = 2
+
+
+DEFAULT_DISTRIBUTION_PLOT_TYPE = DistributionPlotType.VIOLIN
 
 
 def plot_tps_per_connections(
@@ -72,6 +77,7 @@ def plot_duration_by_connections_for_workload(
     df_details_by_endpoint_name: dict[str, DfDetails],
     include_zero_in_y_axis: bool,
     include_workload_in_title: bool = False,
+    plot_type: DistributionPlotType = DEFAULT_DISTRIBUTION_PLOT_TYPE,
 ) -> None:
     """This uses a boxplot or violin plot for the distribution of the duration."""
     if len(df_details_by_endpoint_name) == 0:
@@ -113,7 +119,7 @@ def plot_duration_by_connections_for_workload(
             )
             legend.append(formatted_endpoint_name)
 
-        _plot_distribution(plot, data=durations, labels=legend)
+        _plot_distribution(plot, data=durations, labels=legend, plot_type=plot_type)
 
         if is_in_first_column:
             plot.set_ylabel("Duration (seconds)")
@@ -133,6 +139,7 @@ def plot_duration_by_endpoints_for_workload(
     df_details_by_endpoint_name: dict[str, DfDetails],
     include_zero_in_y_axis: bool,
     include_workload_in_title: bool = False,
+    plot_type: DistributionPlotType = DEFAULT_DISTRIBUTION_PLOT_TYPE,
 ) -> None:
     """This uses a boxplot or violin plot for the distribution of the duration."""
 
@@ -166,7 +173,7 @@ def plot_duration_by_endpoints_for_workload(
 
             legend.append(concurrency)
 
-        _plot_distribution(plot, data=durations, labels=legend)
+        _plot_distribution(plot, data=durations, labels=legend, plot_type=plot_type)
 
         if is_in_first_column and is_in_last_row:
             plot.set_ylabel("Duration (seconds)")
@@ -239,11 +246,18 @@ def _get_subplot_in_grid(
     return plot, is_in_first_column, is_in_last_row
 
 
-def _plot_distribution(plot: Axes, data: list[list[float]], labels: list[str]) -> None:
-    if USE_VIOLINPLOT_INSTEAD_OF_BOXPLOT:
+def _plot_distribution(
+    plot: Axes,
+    data: list[list[float]],
+    labels: list[str],
+    plot_type: DistributionPlotType,
+) -> None:
+    if plot_type == DistributionPlotType.VIOLIN:
         _plot_violinplot(plot, data, labels)
-    else:
+    elif plot_type == DistributionPlotType.BOX:
         _plot_boxplot(plot, data, labels)
+    else:
+        raise RuntimeError(f"Unexpected plot type: {plot_type}")
 
 
 def _plot_violinplot(plot: Axes, data: list[list[float]], labels: list[str]) -> None:
