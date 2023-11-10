@@ -40,7 +40,7 @@ class BeginVersion(Node):
         # As this action may need start very old Mz versions,
         # we do not use any bootstrap_systme_parameters
         return [
-            StartMz(tag=self.version, system_parameter_defaults={}),
+            StartMz(scenario, tag=self.version, system_parameter_defaults={}),
             ConfigureMz(scenario),
         ]
 

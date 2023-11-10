@@ -37,17 +37,19 @@ class UpgradeEntireMz(Scenario):
         # catalog available.
         return [
             StartMz(
-                tag=self.base_version(), environment_extra=["MZ_CATALOG_STORE=stash"]
+                self,
+                tag=self.base_version(),
+                environment_extra=["MZ_CATALOG_STORE=stash"],
             ),
             Initialize(self),
             Manipulate(self, phase=1),
             KillMz(),
-            StartMz(tag=None, environment_extra=["MZ_CATALOG_STORE=stash"]),
+            StartMz(self, tag=None, environment_extra=["MZ_CATALOG_STORE=stash"]),
             Manipulate(self, phase=2),
             Validate(self),
             # A second restart while already on the new version
             KillMz(),
-            StartMz(tag=None, environment_extra=["MZ_CATALOG_STORE=stash"]),
+            StartMz(self, tag=None, environment_extra=["MZ_CATALOG_STORE=stash"]),
             Validate(self),
         ]
 
@@ -75,21 +77,25 @@ class UpgradeEntireMzTwoVersions(Scenario):
         return [
             # Start with previous_version
             StartMz(
-                tag=self.base_version(), environment_extra=["MZ_CATALOG_STORE=stash"]
+                self,
+                tag=self.base_version(),
+                environment_extra=["MZ_CATALOG_STORE=stash"],
             ),
             Initialize(self),
             # Upgrade to last_version
             KillMz(),
-            StartMz(tag=last_version, environment_extra=["MZ_CATALOG_STORE=stash"]),
+            StartMz(
+                self, tag=last_version, environment_extra=["MZ_CATALOG_STORE=stash"]
+            ),
             Manipulate(self, phase=1),
             # Upgrade to current source
             KillMz(),
-            StartMz(tag=None, environment_extra=["MZ_CATALOG_STORE=stash"]),
+            StartMz(self, tag=None, environment_extra=["MZ_CATALOG_STORE=stash"]),
             Manipulate(self, phase=2),
             Validate(self),
             # A second restart while already on the current source
             KillMz(),
-            StartMz(tag=None, environment_extra=["MZ_CATALOG_STORE=stash"]),
+            StartMz(self, tag=None, environment_extra=["MZ_CATALOG_STORE=stash"]),
             Validate(self),
         ]
 
@@ -106,17 +112,19 @@ class UpgradeEntireMzSkipVersion(Scenario):
         # catalog available.
         return [
             # Start with previous_version
-            StartMz(tag=previous_version, environment_extra=["MZ_CATALOG_STORE=stash"]),
+            StartMz(
+                self, tag=previous_version, environment_extra=["MZ_CATALOG_STORE=stash"]
+            ),
             Initialize(self),
             Manipulate(self, phase=1),
             # Upgrade directly to current source
             KillMz(),
-            StartMz(tag=None, environment_extra=["MZ_CATALOG_STORE=stash"]),
+            StartMz(self, tag=None, environment_extra=["MZ_CATALOG_STORE=stash"]),
             Manipulate(self, phase=2),
             Validate(self),
             # A second restart while already on the current source
             KillMz(),
-            StartMz(tag=None, environment_extra=["MZ_CATALOG_STORE=stash"]),
+            StartMz(self, tag=None, environment_extra=["MZ_CATALOG_STORE=stash"]),
             Validate(self),
         ]
 
@@ -135,28 +143,36 @@ class UpgradeEntireMzFourVersions(Scenario):
         # catalog available.
         return [
             StartMz(
-                tag=minor_versions[-4], environment_extra=["MZ_CATALOG_STORE=stash"]
+                self,
+                tag=minor_versions[-4],
+                environment_extra=["MZ_CATALOG_STORE=stash"],
             ),
             Initialize(self),
             KillMz(),
             StartMz(
-                tag=minor_versions[-3], environment_extra=["MZ_CATALOG_STORE=stash"]
+                self,
+                tag=minor_versions[-3],
+                environment_extra=["MZ_CATALOG_STORE=stash"],
             ),
             Manipulate(self, phase=1),
             KillMz(),
             StartMz(
-                tag=minor_versions[-2], environment_extra=["MZ_CATALOG_STORE=stash"]
+                self,
+                tag=minor_versions[-2],
+                environment_extra=["MZ_CATALOG_STORE=stash"],
             ),
             Manipulate(self, phase=2),
             KillMz(),
             StartMz(
-                tag=minor_versions[-1], environment_extra=["MZ_CATALOG_STORE=stash"]
+                self,
+                tag=minor_versions[-1],
+                environment_extra=["MZ_CATALOG_STORE=stash"],
             ),
             KillMz(),
-            StartMz(tag=None, environment_extra=["MZ_CATALOG_STORE=stash"]),
+            StartMz(self, tag=None, environment_extra=["MZ_CATALOG_STORE=stash"]),
             Validate(self),
             KillMz(),
-            StartMz(tag=None, environment_extra=["MZ_CATALOG_STORE=stash"]),
+            StartMz(self, tag=None, environment_extra=["MZ_CATALOG_STORE=stash"]),
             Validate(self),
         ]
 
@@ -181,14 +197,16 @@ class UpgradeClusterdComputeLast(Scenario):
         # catalog available.
         return [
             StartMz(
-                tag=self.base_version(), environment_extra=["MZ_CATALOG_STORE=stash"]
+                self,
+                tag=self.base_version(),
+                environment_extra=["MZ_CATALOG_STORE=stash"],
             ),
             StartClusterdCompute(tag=self.base_version()),
             UseClusterdCompute(self),
             Initialize(self),
             Manipulate(self, phase=1),
             KillMz(),
-            StartMz(tag=None, environment_extra=["MZ_CATALOG_STORE=stash"]),
+            StartMz(self, tag=None, environment_extra=["MZ_CATALOG_STORE=stash"]),
             # No useful work can be done while clusterd is old-version
             # and environmentd is new-version. So we proceed
             # to upgrade clusterd as well.
@@ -201,7 +219,7 @@ class UpgradeClusterdComputeLast(Scenario):
             Validate(self),
             # A second restart while already on the new version
             KillMz(),
-            StartMz(tag=None, environment_extra=["MZ_CATALOG_STORE=stash"]),
+            StartMz(self, tag=None, environment_extra=["MZ_CATALOG_STORE=stash"]),
             Validate(self),
         ]
 
@@ -217,7 +235,9 @@ class UpgradeClusterdComputeFirst(Scenario):
         # catalog available.
         return [
             StartMz(
-                tag=self.base_version(), environment_extra=["MZ_CATALOG_STORE=stash"]
+                self,
+                tag=self.base_version(),
+                environment_extra=["MZ_CATALOG_STORE=stash"],
             ),
             StartClusterdCompute(tag=self.base_version()),
             UseClusterdCompute(self),
@@ -232,10 +252,10 @@ class UpgradeClusterdComputeFirst(Scenario):
             # though we are not issuing queries during that time.
             Sleep(10),
             KillMz(),
-            StartMz(tag=None, environment_extra=["MZ_CATALOG_STORE=stash"]),
+            StartMz(self, tag=None, environment_extra=["MZ_CATALOG_STORE=stash"]),
             Manipulate(self, phase=2),
             Validate(self),
             KillMz(),
-            StartMz(tag=None, environment_extra=["MZ_CATALOG_STORE=stash"]),
+            StartMz(self, tag=None, environment_extra=["MZ_CATALOG_STORE=stash"]),
             Validate(self),
         ]

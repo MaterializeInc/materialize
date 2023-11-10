@@ -29,6 +29,7 @@ class MzcomposeAction(Action):
 class StartMz(MzcomposeAction):
     def __init__(
         self,
+        scenario: "Scenario",
         tag: MzVersion | None = None,
         environment_extra: list[str] = [],
         system_parameter_defaults: dict[str, str] | None = None,
@@ -36,6 +37,11 @@ class StartMz(MzcomposeAction):
         self.tag = tag
         self.environment_extra = environment_extra
         self.system_parameter_defaults = system_parameter_defaults
+        self.catalog_store = (
+            "shadow"
+            if scenario.base_version() >= MzVersion.parse("0.78.0-dev")
+            else "stash"
+        )
 
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
@@ -59,6 +65,7 @@ class StartMz(MzcomposeAction):
             system_parameter_defaults=self.system_parameter_defaults,
             additional_system_parameter_defaults=additional_system_parameter_defaults,
             sanity_restart=False,
+            catalog_store=self.catalog_store,
         )
 
         with c.override(mz):
