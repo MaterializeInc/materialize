@@ -574,5 +574,11 @@ pub enum KafkaMessageConsumptionError {
     #[error("{0}")]
     KafkaError(#[from] KafkaError),
     #[error("{0}")]
-    DecodeError(#[from] DecodeError),
+    DecodeError(DecodeError),
+}
+
+impl From<DecodeError> for KafkaMessageConsumptionError {
+    fn from(err: DecodeError) -> Self {
+        KafkaMessageConsumptionError::DecodeError(err)
+    }
 }
