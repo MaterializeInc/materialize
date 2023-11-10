@@ -12,6 +12,8 @@ import os
 import pandas as pd
 from matplotlib import pyplot as plt
 
+from materialize.scalability.df.df_details import DfDetails
+from materialize.scalability.df.df_totals import DfTotals
 from materialize.scalability.io import paths
 from materialize.scalability.plot.plot import (
     boxplot_duration_by_connections_for_workload,
@@ -68,7 +70,7 @@ def plotit(workload_name: str, include_zero_in_y_axis: bool = True) -> None:
 
 def load_data_from_filesystem(
     workload_name: str,
-) -> tuple[dict[str, pd.DataFrame], dict[str, pd.DataFrame]]:
+) -> tuple[dict[str, DfTotals], dict[str, DfDetails]]:
     endpoint_names = paths.get_endpoint_names_from_results_dir()
     endpoint_names.sort()
 
@@ -87,7 +89,11 @@ def load_data_from_filesystem(
 
         assert os.path.exists(details_data_path)
 
-        df_totals_by_endpoint_name[endpoint_name] = pd.read_csv(totals_data_path)
-        df_details_by_endpoint_name[endpoint_name] = pd.read_csv(details_data_path)
+        df_totals_by_endpoint_name[endpoint_name] = DfTotals(
+            pd.read_csv(totals_data_path)
+        )
+        df_details_by_endpoint_name[endpoint_name] = DfDetails(
+            pd.read_csv(details_data_path)
+        )
 
     return df_totals_by_endpoint_name, df_details_by_endpoint_name

@@ -11,12 +11,12 @@
 import math
 from typing import Any
 
-import pandas as pd
 from matplotlib.axes import Axes
 from matplotlib.figure import SubFigure
 from matplotlib.markers import MarkerStyle
 
-from materialize.scalability.df import df_details_cols, df_totals_cols
+from materialize.scalability.df.df_details import DfDetails
+from materialize.scalability.df.df_totals import DfTotals
 from materialize.scalability.endpoints import endpoint_name_to_description
 
 PLOT_MARKER_POINT = MarkerStyle("o")
@@ -26,7 +26,7 @@ PLOT_MARKER_SQUARE = MarkerStyle(",")
 def scatterplot_tps_per_connections(
     workload_name: str,
     figure: SubFigure,
-    df_totals_by_endpoint_name: dict[str, pd.DataFrame],
+    df_totals_by_endpoint_name: dict[str, DfTotals],
     baseline_version_name: str | None,
     include_zero_in_y_axis: bool,
     include_workload_in_title: bool = False,
@@ -39,15 +39,13 @@ def scatterplot_tps_per_connections(
         legend.append(endpoint_name_to_description(endpoint_version_name))
 
         plot.scatter(
-            df_totals[df_totals_cols.CONCURRENCY],
-            df_totals[df_totals_cols.TPS],
-            label=df_totals_cols.TPS,
+            df_totals.get_concurrency_values(),
+            df_totals.get_tps_values(),
+            label="tps",
             marker=_get_plot_marker(endpoint_version_name, baseline_version_name),
         )
 
-        max_concurrency = max(
-            max_concurrency, df_totals[df_totals_cols.CONCURRENCY].max()
-        )
+        max_concurrency = max(max_concurrency, df_totals.get_max_concurrency())
 
     plot.set_ylabel("Transactions Per Second (tps)")
     plot.set_xlabel("Concurrent SQL Connections")
@@ -64,7 +62,7 @@ def scatterplot_tps_per_connections(
 def scatterplot_duration_per_connections(
     workload_name: str,
     figure: SubFigure,
-    df_details_by_endpoint_name: dict[str, pd.DataFrame],
+    df_details_by_endpoint_name: dict[str, DfDetails],
     baseline_version_name: str | None,
     include_zero_in_y_axis: bool,
     include_workload_in_title: bool = False,
@@ -78,8 +76,11 @@ def scatterplot_duration_per_connections(
         legend.append(endpoint_name_to_description(endpoint_version_name))
 
         plot.scatter(
-            df_details[df_details_cols.CONCURRENCY] + endpoint_offset,
-            df_details[df_details_cols.WALLCLOCK],
+            [
+                concurrency + endpoint_offset
+                for concurrency in df_details.get_concurrency_values()
+            ],
+            df_details.get_wallclock_values(),
             alpha=0.25,
             marker=_get_plot_marker(endpoint_version_name, baseline_version_name),
         )
@@ -101,16 +102,16 @@ def scatterplot_duration_per_connections(
 def boxplot_duration_by_connections_for_workload(
     workload_name: str,
     figure: SubFigure,
-    df_details_by_endpoint_name: dict[str, pd.DataFrame],
+    df_details_by_endpoint_name: dict[str, DfDetails],
     include_zero_in_y_axis: bool,
     include_workload_in_title: bool = False,
 ) -> None:
     if len(df_details_by_endpoint_name) == 0:
         return
 
-    concurrencies = next(iter(df_details_by_endpoint_name.values()))[
-        df_details_cols.CONCURRENCY
-    ].unique()
+    concurrencies = next(
+        iter(df_details_by_endpoint_name.values())
+    ).get_unique_concurrency_values()
 
     endpoint_version_names = df_details_by_endpoint_name.keys()
     use_short_names = len(endpoint_version_names) > 2
@@ -135,13 +136,10 @@ def boxplot_duration_by_connections_for_workload(
             )
             legend.append(formatted_endpoint_name)
 
-            df_details_of_concurrency = df_details.loc[
-                df_details[df_details_cols.CONCURRENCY] == concurrency
-            ]
-            durations_of_concurrency = df_details_of_concurrency[
-                df_details_cols.WALLCLOCK
-            ]
-            durations.append(durations_of_concurrency)
+            df_details_of_concurrency = df_details.to_filtered_by_concurrency(
+                concurrency
+            )
+            durations.append(df_details_of_concurrency.get_wallclock_values())
 
         plot.boxplot(durations, labels=legend)
 
@@ -160,7 +158,7 @@ def boxplot_duration_by_connections_for_workload(
 def boxplot_duration_by_endpoints_for_workload(
     workload_name: str,
     figure: SubFigure,
-    df_details_by_endpoint_name: dict[str, pd.DataFrame],
+    df_details_by_endpoint_name: dict[str, DfDetails],
     include_zero_in_y_axis: bool,
     include_workload_in_title: bool = False,
 ) -> None:
@@ -177,7 +175,7 @@ def boxplot_duration_by_endpoints_for_workload(
             subplots, endpoint_index, num_rows, num_cols
         )
 
-        concurrencies = df_details[df_details_cols.CONCURRENCY].unique()
+        concurrencies = df_details.get_unique_concurrency_values()
 
         legend = []
         durations: list[list[float]] = []
@@ -185,13 +183,10 @@ def boxplot_duration_by_endpoints_for_workload(
         for concurrency in concurrencies:
             legend.append(concurrency)
 
-            df_details_of_concurrency = df_details.loc[
-                df_details[df_details_cols.CONCURRENCY] == concurrency
-            ]
-            durations_of_concurrency = df_details_of_concurrency[
-                df_details_cols.WALLCLOCK
-            ]
-            durations.append(durations_of_concurrency)
+            df_details_of_concurrency = df_details.to_filtered_by_concurrency(
+                concurrency
+            )
+            durations.append(df_details_of_concurrency.get_wallclock_values())
 
         plot.boxplot(durations, labels=legend)
 

@@ -36,7 +36,7 @@ from materialize.scalability.plot.plot import (
     boxplot_duration_by_endpoints_for_workload,
     scatterplot_tps_per_connections,
 )
-from materialize.scalability.regression import RegressionOutcome
+from materialize.scalability.regression_outcome import RegressionOutcome
 from materialize.scalability.result_analyzer import ResultAnalyzer
 from materialize.scalability.result_analyzers import DefaultResultAnalyzer
 from materialize.scalability.schema import Schema, TransactionIsolation
@@ -358,7 +358,7 @@ def upload_regressions_to_buildkite(outcome: RegressionOutcome) -> None:
     if not outcome.has_regressions():
         return
 
-    outcome.raw_regression_data.to_csv(paths.regressions_csv())
+    outcome.regression_data.to_csv(paths.regressions_csv())
     buildkite.upload_artifact(
         paths.regressions_csv().relative_to(paths.RESULTS_DIR),
         cwd=paths.RESULTS_DIR,
