@@ -76,9 +76,9 @@ type IntrospectionUpdates = (IntrospectionType, Vec<(Row, Diff)>);
 /// Responses from the compute controller.
 #[derive(Debug)]
 pub enum ComputeControllerResponse<T> {
-    /// See [`ComputeResponse::PeekResponse`](crate::protocol::response::ComputeResponse::PeekResponse).
+    /// See [`ComputeResponse::PeekResponse`].
     PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
-    /// See [`ComputeResponse::SubscribeResponse`](crate::protocol::response::ComputeResponse::SubscribeResponse).
+    /// See [`ComputeResponse::SubscribeResponse`].
     SubscribeResponse(GlobalId, SubscribeResponse<T>),
 }
 
