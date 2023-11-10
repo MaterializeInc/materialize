@@ -91,17 +91,21 @@ def plot_duration_by_connections_for_workload(
         durations: list[list[float]] = []
 
         for endpoint_version_name, df_details in df_details_by_endpoint_name.items():
+            df_details_of_concurrency = df_details.to_filtered_by_concurrency(
+                concurrency
+            )
+
+            if not df_details_of_concurrency.has_values():
+                continue
+
+            durations.append(df_details_of_concurrency.get_wallclock_values())
+
             formatted_endpoint_name = (
                 endpoint_version_name
                 if not use_short_names
                 else _shorten_endpoint_version_name(endpoint_version_name)
             )
             legend.append(formatted_endpoint_name)
-
-            df_details_of_concurrency = df_details.to_filtered_by_concurrency(
-                concurrency
-            )
-            durations.append(df_details_of_concurrency.get_wallclock_values())
 
         plot.boxplot(durations, labels=legend)
 
@@ -145,12 +149,16 @@ def plot_duration_by_endpoints_for_workload(
         durations: list[list[float]] = []
 
         for concurrency in concurrencies:
-            legend.append(concurrency)
-
             df_details_of_concurrency = df_details.to_filtered_by_concurrency(
                 concurrency
             )
+
+            if not df_details_of_concurrency.has_values():
+                continue
+
             durations.append(df_details_of_concurrency.get_wallclock_values())
+
+            legend.append(concurrency)
 
         plot.boxplot(durations, labels=legend)
 
