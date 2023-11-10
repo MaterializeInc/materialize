@@ -24,6 +24,7 @@ use mz_catalog::builtin::{
     MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES, MZ_TABLES, MZ_TYPES, MZ_TYPE_PG_METADATA, MZ_VIEWS,
     MZ_WEBHOOKS_SOURCES,
 };
+use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_controller::clusters::{
     ClusterStatus, ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ProcessId,
@@ -52,9 +53,8 @@ use mz_storage_types::sources::{
 };
 
 use crate::catalog::{
-    AwsPrincipalContext, CatalogItem, CatalogState, ClusterVariant, Connection, DataSourceDesc,
-    Database, DefaultPrivilegeObject, Func, Index, MaterializedView, Sink, Type, View,
-    SYSTEM_CONN_ID,
+    CatalogItem, CatalogState, ClusterVariant, Connection, DataSourceDesc, Database,
+    DefaultPrivilegeObject, Func, Index, MaterializedView, Sink, Type, View, SYSTEM_CONN_ID,
 };
 use crate::coord::ConnMeta;
 use crate::subscribe::ActiveSubscribe;

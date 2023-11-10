@@ -80,5 +80,6 @@
 //! Persistent metadata storage for the coordinator.
 
 pub mod builtin;
+pub mod config;
 pub mod durable;
 pub mod memory;

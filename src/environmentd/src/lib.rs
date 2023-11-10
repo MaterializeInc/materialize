@@ -91,10 +91,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
-use mz_adapter::catalog::ClusterReplicaSizeMap;
 use mz_adapter::config::{system_parameter_sync, SystemParameterSyncFactory};
 use mz_adapter::webhook::WebhookConcurrencyLimiter;
 use mz_build_info::{build_info, BuildInfo};
+use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_catalog::durable::{BootstrapArgs, OpenableDurableCatalogState, StashConfig};
 use mz_cloud_resources::CloudResourceController;
 use mz_controller::ControllerConfig;

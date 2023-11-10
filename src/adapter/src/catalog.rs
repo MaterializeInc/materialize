@@ -28,6 +28,7 @@ use mz_catalog::builtin::{
     BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BuiltinType, BUILTINS,
     BUILTIN_PREFIXES, MZ_INTROSPECTION_CLUSTER,
 };
+use mz_catalog::config::{ClusterReplicaSizeMap, Config};
 use mz_catalog::durable::{
     test_bootstrap_args, DurableCatalogState, OpenableDurableCatalogState, StashConfig, Transaction,
 };
@@ -88,9 +89,6 @@ use mz_storage_types::sources::Timeline;
 use mz_transform::dataflow::DataflowMetainfo;
 
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
-pub use crate::catalog::config::{
-    AwsPrincipalContext, ClusterReplicaSizeMap, Config, SystemParameterSyncConfig,
-};
 pub use crate::catalog::open::BuiltinMigrationMetadata;
 pub use crate::catalog::state::CatalogState;
 use crate::command::CatalogDump;
@@ -100,7 +98,6 @@ use crate::util::ResultExt;
 use crate::{AdapterError, AdapterNotice, ExecuteResponse};
 
 mod builtin_table_updates;
-mod config;
 pub(crate) mod consistency;
 mod migrate;
 

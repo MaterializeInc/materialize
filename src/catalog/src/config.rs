@@ -14,7 +14,6 @@ use std::time::Duration;
 
 use bytesize::ByteSize;
 use mz_build_info::BuildInfo;
-use mz_catalog;
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_controller::clusters::ReplicaAllocation;
 use mz_orchestrator::MemoryLimit;
@@ -26,11 +25,13 @@ use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
 use serde::{Deserialize, Serialize};
 
+use crate::durable::DurableCatalogState;
+
 /// Configures a catalog.
 #[derive(Debug)]
 pub struct Config<'a> {
     /// The connection to the stash.
-    pub storage: Box<dyn mz_catalog::durable::DurableCatalogState>,
+    pub storage: Box<dyn DurableCatalogState>,
     /// Whether to enable unsafe mode.
     pub unsafe_mode: bool,
     /// Whether the build is a local dev build.

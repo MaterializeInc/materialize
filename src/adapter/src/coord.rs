@@ -81,6 +81,8 @@ use itertools::Itertools;
 use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW_TS;
 use mz_adapter_types::connection::ConnectionId;
 use mz_build_info::BuildInfo;
+use mz_catalog::builtin::BUILTINS;
+use mz_catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap, SystemParameterSyncConfig};
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::ComputeInstanceId;
@@ -123,8 +125,8 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
 use crate::catalog::{
-    self, AwsPrincipalContext, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog, CatalogItem,
-    ClusterReplicaSizeMap, DataSourceDesc, Source, SystemParameterSyncConfig,
+    self, BuiltinMigrationMetadata, BuiltinTableUpdate, Catalog, CatalogItem, DataSourceDesc,
+    Source,
 };
 use crate::client::{Client, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
@@ -146,7 +148,6 @@ use crate::subscribe::ActiveSubscribe;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, ResultExt};
 use crate::webhook::WebhookConcurrencyLimiter;
 use crate::{flags, AdapterNotice, TimestampProvider};
-use mz_catalog::builtin::BUILTINS;
 
 pub(crate) mod dataflows;
 use self::statement_logging::{StatementLogging, StatementLoggingId};
@@ -2050,7 +2051,7 @@ pub async fn serve(
 
     info!("coordinator init: opening catalog");
     let (catalog, builtin_migration_metadata, builtin_table_updates, _last_catalog_version) =
-        Catalog::open(catalog::Config {
+        Catalog::open(mz_catalog::config::Config {
             storage,
             unsafe_mode,
             all_features,

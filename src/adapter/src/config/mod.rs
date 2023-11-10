@@ -21,7 +21,8 @@ mod frontend;
 mod params;
 mod sync;
 
-use crate::catalog::SystemParameterSyncConfig;
+use mz_catalog::config::SystemParameterSyncConfig;
+
 pub use backend::SystemParameterBackend;
 pub use frontend::SystemParameterFrontend;
 pub use params::{ModifiedParameter, SynchronizedParameters};

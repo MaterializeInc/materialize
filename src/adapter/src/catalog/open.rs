@@ -22,6 +22,7 @@ use mz_catalog::builtin::{
     Builtin, DataSensitivity, Fingerprint, BUILTINS, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS,
     BUILTIN_PREFIXES, BUILTIN_ROLES,
 };
+use mz_catalog::config::Config;
 use mz_catalog::durable::objects::{
     IntrospectionSourceIndex, SystemObjectDescription, SystemObjectMapping,
     SystemObjectUniqueIdentifier,
@@ -64,7 +65,7 @@ use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_types::sources::Timeline;
 
 use crate::catalog::{
-    is_reserved_name, migrate, BuiltinTableUpdate, Catalog, CatalogPlans, CatalogState, Config,
+    is_reserved_name, migrate, BuiltinTableUpdate, Catalog, CatalogPlans, CatalogState,
     CREATE_SQL_TODO, SYSTEM_CONN_ID,
 };
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncFactory};
