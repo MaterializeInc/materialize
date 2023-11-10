@@ -29,6 +29,7 @@ use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::errors::{DecodeError, SourceErrorDetails};
 use mz_storage_types::sources::{MzOffset, SourceTimestamp};
 use prometheus::core::{AtomicF64, AtomicI64, AtomicU64};
+use rdkafka::error::KafkaError;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
@@ -566,4 +567,12 @@ impl<T: MaybeLength> MaybeLength for Option<T> {
     fn len(&self) -> Option<usize> {
         self.as_ref().and_then(|v| v.len())
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum KafkaMessageConsumptionError {
+    #[error("{0}")]
+    KafkaError(#[from] KafkaError),
+    #[error("{0}")]
+    DecodeError(#[from] DecodeError),
 }

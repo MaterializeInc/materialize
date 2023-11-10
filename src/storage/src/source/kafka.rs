@@ -12,7 +12,7 @@ use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::rc::Rc;
-use std::str::{self, Utf8Error};
+use std::str::{self};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -32,7 +32,7 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{adt::jsonb::Jsonb, Datum, Diff, GlobalId, Row};
 use mz_ssh_util::tunnel::SshTunnelStatus;
 use mz_storage_types::connections::{ConnectionContext, StringOrSecret};
-use mz_storage_types::errors::ContextCreationError;
+use mz_storage_types::errors::{ContextCreationError, DecodeError, DecodeErrorKind};
 use mz_storage_types::sources::{
     KafkaMetadataKind, KafkaSourceConnection, MzOffset, SourceTimestamp,
 };
@@ -42,7 +42,6 @@ use mz_timely_util::order::Partitioned;
 use rdkafka::client::Client;
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
-use rdkafka::error::KafkaError;
 use rdkafka::message::{BorrowedMessage, Headers};
 use rdkafka::statistics::Statistics;
 use rdkafka::topic_partition_list::Offset;
@@ -58,6 +57,8 @@ use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespac
 use crate::source::kafka::metrics::KafkaPartitionMetrics;
 use crate::source::types::{SourceReaderMetrics, SourceRender};
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
+
+use super::types::KafkaMessageConsumptionError;
 
 mod metrics;
 
@@ -992,7 +993,7 @@ fn construct_source_message(
         SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>,
         (PartitionId, MzOffset),
     ),
-    Utf8Error,
+    KafkaMessageConsumptionError,
 > {
     let pid = msg.partition();
     let Ok(offset) = u64::try_from(msg.offset()) else {
@@ -1036,7 +1037,12 @@ fn construct_source_message(
                                     } else {
                                         match str::from_utf8(v) {
                                             Ok(str) => Ok(Datum::String(str)),
-                                            Err(e) => Err(e),
+                                            Err(_) => Err(DecodeError {
+                                                kind: DecodeErrorKind::Text(
+                                                    "Failed to decode UTF-8".to_string(),
+                                                ),
+                                                raw: v.to_vec(),
+                                            }),
                                         }
                                     }
                                 }
@@ -1115,7 +1121,7 @@ impl PartitionConsumer {
             SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>,
             (PartitionId, MzOffset),
         )>,
-        KafkaError,
+        KafkaMessageConsumptionError,
     > {
         match self.partition_queue.poll(Duration::from_millis(0)) {
             Some(Ok(msg)) => match construct_source_message(&msg, &self.metadata_columns) {
@@ -1123,11 +1129,9 @@ impl PartitionConsumer {
                     assert_eq!(ts.0, self.pid);
                     Ok(Some((msg, ts)))
                 }
-                Err(e) => Err(KafkaError::MessageConsumption(
-                    rdkafka::types::RDKafkaErrorCode::BadMessage,
-                )),
+                Err(e) => Err(e),
             },
-            Some(Err(err)) => Err(err),
+            Some(Err(err)) => Err(KafkaMessageConsumptionError::KafkaError(err)),
             _ => Ok(None),
         }
     }
