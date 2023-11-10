@@ -380,7 +380,7 @@ impl Catalog {
         let system_privileges = txn.get_system_privileges();
         state.system_privileges.grant_all(system_privileges);
 
-        let system_parameter_sync_config =
+        let system_parameter_sync_factory =
             config
                 .system_parameter_sync_config
                 .map(|system_parameter_sync_config| {
@@ -398,7 +398,7 @@ impl Catalog {
             &mut txn,
             is_read_only,
             config.system_parameter_defaults,
-            system_parameter_sync_config,
+            system_parameter_sync_factory,
         )
         .await?;
 
@@ -1043,7 +1043,7 @@ impl Catalog {
         txn: &mut Transaction<'_>,
         is_read_only: bool,
         system_parameter_defaults: BTreeMap<String, String>,
-        system_parameter_sync_config: Option<SystemParameterSyncFactory>,
+        system_parameter_sync_factory: Option<SystemParameterSyncFactory>,
     ) -> Result<(), AdapterError> {
         let system_config = txn.get_system_configurations();
 
@@ -1065,7 +1065,7 @@ impl Catalog {
                 Err(e) => return Err(e),
             };
         }
-        if let Some(system_parameter_sync_config) = system_parameter_sync_config {
+        if let Some(system_parameter_sync_config) = system_parameter_sync_factory {
             if is_read_only {
                 tracing::info!("parameter sync on boot: skipping sync as catalog is read-only");
             } else if !state.system_config().config_has_synced_once() {

@@ -242,8 +242,6 @@ impl AwsPrincipalContext {
 pub struct SystemParameterSyncConfig {
     /// The SDK key.
     pub ld_sdk_key: String,
-    /// A map from parameter names to LaunchDarkly feature keys
-    /// to use when populating the the [SynchronizedParameters]
-    /// instance in [SystemParameterFrontend::pull].
+    /// A map from parameter names to LaunchDarkly feature keys.
     pub ld_key_map: BTreeMap<String, String>,
 }

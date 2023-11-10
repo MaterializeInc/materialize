@@ -46,13 +46,13 @@ impl SystemParameterFrontend {
     /// This will create and initialize an [ld::Client] instance. The
     /// [ld::Client::initialized_async] call will be attempted in a loop with an
     /// exponential backoff with power `2s` and max duration `60s`.
-    pub async fn from(sync_config: &SystemParameterSyncFactory) -> Result<Self, anyhow::Error> {
+    pub async fn from(sync_factory: &SystemParameterSyncFactory) -> Result<Self, anyhow::Error> {
         Ok(Self {
-            ld_client: ld_client(sync_config).await?,
-            ld_ctx: ld_ctx(&sync_config.env_id, sync_config.build_info)?,
-            ld_key_map: sync_config.ld_key_map.clone(),
-            ld_metrics: sync_config.metrics.clone(),
-            now_fn: sync_config.now_fn.clone(),
+            ld_client: ld_client(sync_factory).await?,
+            ld_ctx: ld_ctx(&sync_factory.env_id, sync_factory.build_info)?,
+            ld_key_map: sync_factory.ld_key_map.clone(),
+            ld_metrics: sync_factory.metrics.clone(),
+            now_fn: sync_factory.now_fn.clone(),
         })
     }
 
@@ -97,10 +97,10 @@ impl Drop for SystemParameterFrontend {
     }
 }
 
-fn ld_config(sync_config: &SystemParameterSyncFactory) -> ld::Config {
-    ld::ConfigBuilder::new(&sync_config.ld_sdk_key)
+fn ld_config(sync_factory: &SystemParameterSyncFactory) -> ld::Config {
+    ld::ConfigBuilder::new(&sync_factory.ld_sdk_key)
         .event_processor(ld::EventProcessorBuilder::new().on_success({
-            let last_cse_time_seconds = sync_config.metrics.last_cse_time_seconds.clone();
+            let last_cse_time_seconds = sync_factory.metrics.last_cse_time_seconds.clone();
             Arc::new(move |result| {
                 if let Ok(ts) = u64::try_from(result.time_from_server / 1000) {
                     last_cse_time_seconds.set(ts);
@@ -112,8 +112,8 @@ fn ld_config(sync_config: &SystemParameterSyncFactory) -> ld::Config {
         .build()
 }
 
-async fn ld_client(sync_config: &SystemParameterSyncFactory) -> Result<ld::Client, anyhow::Error> {
-    let ld_client = ld::Client::build(ld_config(sync_config))?;
+async fn ld_client(sync_factory: &SystemParameterSyncFactory) -> Result<ld::Client, anyhow::Error> {
+    let ld_client = ld::Client::build(ld_config(sync_factory))?;
 
     tracing::info!("waiting for SystemParameterFrontend to initialize");
 
@@ -121,8 +121,8 @@ async fn ld_client(sync_config: &SystemParameterSyncFactory) -> Result<ld::Clien
     // will export the last time when an SSE event from the LD server was
     // received in a Prometheus metric.
     ld_client.start_with_default_executor_and_callback({
-        let last_sse_time_seconds = sync_config.metrics.last_sse_time_seconds.clone();
-        let now_fn = sync_config.now_fn.clone();
+        let last_sse_time_seconds = sync_factory.metrics.last_sse_time_seconds.clone();
+        let now_fn = sync_factory.now_fn.clone();
         Arc::new(move |_ev| {
             let ts = now_fn() / 1000;
             last_sse_time_seconds.set(ts);
