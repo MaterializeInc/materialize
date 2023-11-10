@@ -11,6 +11,7 @@
 import math
 from typing import Any
 
+import numpy as np
 from matplotlib.axes import Axes
 from matplotlib.figure import SubFigure
 from matplotlib.markers import MarkerStyle
@@ -21,6 +22,11 @@ from materialize.scalability.endpoints import endpoint_name_to_description
 
 PLOT_MARKER_POINT = MarkerStyle("o")
 PLOT_MARKER_SQUARE = MarkerStyle(",")
+PLOT_MARKER_HLINE = MarkerStyle("_")
+
+PLOT_COLOR_DARK_BLUE = "darkblue"
+
+USE_VIOLINPLOT_INSTEAD_OF_BOXPLOT = True
 
 
 def plot_tps_per_connections(
@@ -234,7 +240,41 @@ def _get_subplot_in_grid(
 
 
 def _plot_distribution(plot: Axes, data: list[list[float]], labels: list[str]) -> None:
-    _plot_boxplot(plot, data, labels)
+    if USE_VIOLINPLOT_INSTEAD_OF_BOXPLOT:
+        _plot_violinplot(plot, data, labels)
+    else:
+        _plot_boxplot(plot, data, labels)
+
+
+def _plot_violinplot(plot: Axes, data: list[list[float]], labels: list[str]) -> None:
+    xpos = np.arange(1, len(data) + 1)
+
+    plot.violinplot(data)
+    plot.set_xticks(xpos, labels=labels)
+
+    for i, data_col in enumerate(data):
+        quartile1, medians, quartile3 = np.percentile(
+            data[i],
+            [25, 50, 75],
+        )
+        # plot median line
+        plot.scatter(
+            xpos[i],
+            medians,
+            marker=PLOT_MARKER_HLINE,
+            color=PLOT_COLOR_DARK_BLUE,
+            s=300,
+        )
+        # plot 25% - 75% area
+        plot.vlines(
+            xpos[i],
+            quartile1,
+            quartile3,
+            color=PLOT_COLOR_DARK_BLUE,
+            linestyle="-",
+            lw=5,
+        )
+
 
 def _plot_boxplot(plot: Axes, data: list[list[float]], labels: list[str]) -> None:
     plot.boxplot(data, labels=labels)

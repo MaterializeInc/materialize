@@ -110,8 +110,16 @@ This diagram show the transactions per second per concurrency. Higher values are
 
 ## Duration per transaction
 
-These boxplots show the duration of the individual statements per concurrency. They provide information about the mean
+These plots show the duration of the individual statements per concurrency. They provide information about the mean
 duration of an operation and their timing reliability. Lower values are better.
+Violin plots are used by default, boxplots are available as alternative.
+
+### How to interpret the violin plots
+The violin plots show the distribution of the data.
+The dark blue bar shows the interquartile range, which contains 75% of the measurements.
+The horizontal dark blue line shows the median.
+
+See also: https://en.wikipedia.org/wiki/Violin_plot
 
 ### How to interpret a boxplot
 The most important things in a nutshell:
