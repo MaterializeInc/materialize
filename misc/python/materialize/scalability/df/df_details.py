@@ -8,7 +8,11 @@
 # by the Apache License, Version 2.0.
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import pandas as pd
+from pandas import Series
+from pandas.core.groupby.generic import SeriesGroupBy
 
 from materialize.scalability.df import df_details_cols
 from materialize.scalability.df.df_wrapper_base import (
@@ -30,14 +34,34 @@ class DfDetails(DfWrapperBase):
 
         return DfDetails(filtered_data)
 
-    def get_wallclock_values(self) -> list[float]:
-        return self.data[df_details_cols.WALLCLOCK].tolist()
+    def get_wallclock_values(self, group_by_transaction: bool = True) -> list[float]:
+        aggregation = lambda groupby_series: groupby_series.sum()
+        return self._get_column_values(
+            df_details_cols.WALLCLOCK, group_by_transaction, aggregation
+        ).tolist()
 
-    def get_concurrency_values(self) -> list[int]:
-        return self.data[df_details_cols.CONCURRENCY].tolist()
+    def get_concurrency_values(self, group_by_transaction: bool = True) -> list[int]:
+        aggregation = lambda groupby_series: groupby_series.unique()
+        return self._get_column_values(
+            df_details_cols.CONCURRENCY, group_by_transaction, aggregation
+        ).tolist()
 
     def get_unique_concurrency_values(self) -> list[int]:
         return self.data[df_details_cols.CONCURRENCY].unique().tolist()
+
+    def _get_column_values(
+        self,
+        column_name: str,
+        group_by_transaction: bool,
+        aggregation: Callable[[SeriesGroupBy], Series],
+    ) -> Series:
+        if group_by_transaction:
+            groupby_series = self.data.groupby(by=[df_details_cols.TRANSACTION_INDEX])[
+                column_name
+            ]
+            return aggregation(groupby_series)
+
+        return self.data[column_name]
 
 
 def concat_df_details(entries: list[DfDetails]) -> DfDetails:
