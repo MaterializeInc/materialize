@@ -72,7 +72,7 @@ sampling rate than the one set in this variable.
 | `prepared_statement_name` | [`text`]                     | The name given by the client library to the prepared statement.                                                                                                                                                                                                               |
 | `session_id`              | [`uuid`]                     | An ID that is unique for each session.                                                                                                                                                                                                                                        |
 | `redacted_sql`            | [`text`]                     | The SQL text of the statement, in a normalized form, with all string and numeric literals hidden.                                                                                                                                                                             |
-| `prepared_at`             | [`timestamp with time zone`] | The time at which the statement was prepared                                                                                                                                                                                                                                  |
+| `prepared_at`             | [`timestamp with time zone`] | The time at which the statement was prepared.                                                                                                                                                                                                                                 |
 
 ### `mz_cluster_replica_frontiers`
 
@@ -379,7 +379,7 @@ referenced from
 | `id`                 | [`uuid`]                     | The globally unique ID of this history entry. Does **not** correspond to [`mz_sessions.id`](#mz_sessions), which can be recycled. |
 | `connected_at`       | [`timestamp with time zone`] | The time at which the session was established.                                                                                    |
 | `application_name`   | [`text`]                     | The `application_name` session metadata field.                                                                                    |
-| `authenticated_user` | [`text`]                     | The name of the user for wish the session was established.                                                                        |
+| `authenticated_user` | [`text`]                     | The name of the user for which the session was established.                                                                       |
 -->
 
 ### `mz_sessions`

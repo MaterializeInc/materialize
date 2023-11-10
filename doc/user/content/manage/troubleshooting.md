@@ -44,28 +44,29 @@ CREATE INDEX num_bids_idx ON num_bids (item);
 The query of the materialized view joins the relations `bids` and `auctions`, groups by `auctions.item` and determines the number of bids per auction. To understand how this SQL query is translated to a dataflow, we can use [`EXPLAIN PLAN`](https://materialize.com/docs/sql/explain-plan/) to display the plan used to evaluate the join.
 
 ```sql
-EXPLAIN MATERIALIZED VIEW num_bids
+EXPLAIN MATERIALIZED VIEW num_bids;
 ```
 ```
-                Optimized Plan
------------------------------------------------
- materialize.qck.num_bids:                    +
-   Reduce group_by=[#0] aggregates=[count(*)] +
-     Project (#3)                             +
-       Filter (#1 < #4)                       +
-         Join on=(#0 = #2) type=differential  +
-           ArrangeBy keys=[[#0]]              +
-             Project (#2, #4)                 +
-               Get materialize.qck.bids       +
-           ArrangeBy keys=[[#0]]              +
-             Project (#0, #2, #3)             +
-               Get materialize.qck.auctions   +
+                    Optimized Plan
+-------------------------------------------------------
+ materialize.public.num_bids:                         +
+   Reduce group_by=[#0] aggregates=[count(*)]         +
+     Project (#3)                                     +
+       Filter (#1 < #4)                               +
+         Join on=(#0 = #2) type=differential          +
+           ArrangeBy keys=[[#0]]                      +
+             Project (#2, #4)                         +
+               ReadStorage materialize.public.bids    +
+           ArrangeBy keys=[[#0]]                      +
+             Project (#0, #2, #3)                     +
+               ReadStorage materialize.public.auctions+
+
 (1 row)
 ```
 
 The plan describes the specific operators that are used to evaluate the query.
 Some of these operators resemble relational algebra or map reduce style operators (`Filter`, `Join`, `Project`).
-Others are specific to Materialize (`Get`, `ArrangeBy`).
+Others are specific to Materialize (`ArrangeBy`, `ReadStorage`).
 
 In general, a high level understanding of what these operators do is sufficient for effective debugging:
 `Filter` filters records, `Join` joins records from two or more inputs, `Map` applies a function to transform records, etc.

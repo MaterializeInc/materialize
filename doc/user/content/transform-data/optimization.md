@@ -152,28 +152,27 @@ CREATE INDEX sections_fk_courses ON sections (course_id);
 ```
 
 ```sql
-EXPLAIN VIEW course_schedule;
+EXPLAIN SELECT * FROM course_schedule;
 ```
 
 ```
-                             Optimized Plan
------------------------------------------------------------------------
- materialize.public.course_schedule:                                  +
-   Project (#1, #5, #7)                                               +
-     Filter (#0) IS NOT NULL AND (#4) IS NOT NULL                     +
-       Join on=(#0 = #3 AND #4 = #6) type=delta                       + <-- delta join
-         ArrangeBy keys=[[#0]]                                        +
-           Get materialize.public.teachers                            +
-         ArrangeBy keys=[[#1], [#2]]                                  +
-           Get materialize.public.sections                            +
-         ArrangeBy keys=[[#0]]                                        +
-           Get materialize.public.courses                             +
-                                                                      +
- Used Indexes:                                                        +
-   - materialize.public.pk_teachers (delta join 1st input (full scan))+
-   - materialize.public.sections_fk_teachers (delta join lookup)      +
-   - materialize.public.pk_courses (delta join lookup)                +
-   - materialize.public.sections_fk_courses (delta join lookup)       +
+Optimized Plan
+Explained Query:
+  Project (#1, #5, #7)
+    Filter (#0) IS NOT NULL AND (#4) IS NOT NULL
+      Join on=(#0 = #3 AND #4 = #6) type=delta                 <---------- Delta join
+        ArrangeBy keys=[[#0]]
+          ReadIndex on=teachers pk_teachers=[delta join 1st input (full scan)]
+        ArrangeBy keys=[[#1], [#2]]
+          ReadIndex on=sections sections_fk_teachers=[delta join lookup] sections_fk_courses=[delta join lookup]
+        ArrangeBy keys=[[#0]]
+          ReadIndex on=courses pk_courses=[delta join lookup]
+
+Used Indexes:
+  - materialize.public.pk_teachers (delta join 1st input (full scan))
+  - materialize.public.sections_fk_teachers (delta join lookup)
+  - materialize.public.pk_courses (delta join lookup)
+  - materialize.public.sections_fk_courses (delta join lookup)
 ```
 
 For [ad hoc `SELECT` queries](/sql/select/#ad-hoc-queries) with a delta join, place the smallest input (taking into account predicates that filter from it) first in the `FROM` clause.
@@ -264,24 +263,24 @@ EXPLAIN
 ```
 
 ```
-                                   Optimized Plan
-------------------------------------------------------------------------------------
- Explained Query:                                                                  +
-   Project (#1, #6, #8)                                                            +
-     Filter (#0) IS NOT NULL AND (#5) IS NOT NULL                                  +
-       Join on=(#0 = #4 AND #5 = #7) type=delta                                    +
-         ArrangeBy keys=[[#0]]                                                     +
-           ReadExistingIndex materialize.public.teachers lookup_value=("Escalante")+
-         ArrangeBy keys=[[#1], [#2]]                                               +
-           Get materialize.public.sections                                         +
-         ArrangeBy keys=[[#0]]                                                     +
-           Get materialize.public.courses                                          +
-                                                                                   +
- Used Indexes:                                                                     +
-   - materialize.public.teachers_name (lookup)                                     +
-   - materialize.public.sections_fk_teachers (delta join lookup)                   +
-   - materialize.public.pk_courses (delta join lookup)                             +
-   - materialize.public.sections_fk_courses (delta join lookup)                    +
+                                                  Optimized Plan
+------------------------------------------------------------------------------------------------------------------
+ Explained Query:                                                                                                +
+   Project (#1, #6, #8)                                                                                          +
+     Filter (#0) IS NOT NULL AND (#5) IS NOT NULL                                                                +
+       Join on=(#0 = #4 AND #5 = #7) type=delta                                                                  +
+         ArrangeBy keys=[[#0]]                                                                                   +
+           ReadIndex on=materialize.public.teachers teachers_name=[lookup value=("Escalante")]                   +
+         ArrangeBy keys=[[#1], [#2]]                                                                             +
+           ReadIndex on=sections sections_fk_teachers=[delta join lookup] sections_fk_courses=[delta join lookup]+
+         ArrangeBy keys=[[#0]]                                                                                   +
+           ReadIndex on=courses pk_courses=[delta join lookup]                                                   +
+                                                                                                                 +
+ Used Indexes:                                                                                                   +
+   - materialize.public.teachers_name (lookup)                                                                   +
+   - materialize.public.sections_fk_teachers (delta join lookup)                                                 +
+   - materialize.public.pk_courses (delta join lookup)                                                           +
+   - materialize.public.sections_fk_courses (delta join lookup)                                                  +
 ```
 
 You can see in the above `EXPLAIN` printout that the system will use `teachers_name` for a point lookup, and use three other indexes for the execution of the delta join. Note that the `pk_teachers` index is not used, as explained [above](#joins-with-filters).
