@@ -202,8 +202,9 @@ fraudulent accounts.
     CREATE TABLE fraud_accounts (id bigint);
     ```
 
-1. In a new browser window, side-by-side with this one, navigate to the [Materialize console]
-(https://console.materialize.com/), and pop open another SQL Shell.
+1. In a new browser window, side-by-side with this one, navigate to the 
+[Materialize console](https://console.materialize.com/), and pop open another 
+SQL Shell.
 
 1. To see results change over time, let's `SUBSCRIBE` to a query that returns
 the Top 5 auction winners, overall.
