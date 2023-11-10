@@ -722,7 +722,7 @@ pub fn plan_create_source(
                             use_bytes: *use_bytes,
                         },
                     )),
-                    SourceIncludeMetadata::Key { alias } => {
+                    SourceIncludeMetadata::Key { .. } => {
                         // handled below
                         None
                     }
