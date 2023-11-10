@@ -75,6 +75,6 @@ def test_disk_replica(mz: MaterializeApplication) -> None:
         "--",
         "bash",
         "-c",
-        "ls /scratch",
+        "ls /scratch/storage/upsert",
     )
     assert source_global_id in on_disk_sources

@@ -533,6 +533,7 @@ pub enum BackendType {
 /// Params required to create rocksdb instance
 pub(crate) struct RocksDBParams {
     pub(crate) instance_path: PathBuf,
+    pub(crate) legacy_instance_path: PathBuf,
     pub(crate) env: rocksdb::Env,
     pub(crate) tuning_config: RocksDBConfig,
     pub(crate) shared_metrics: Arc<mz_rocksdb::RocksDBSharedMetrics>,
@@ -565,6 +566,7 @@ impl AutoSpillBackend {
     async fn init_rocksdb(rocksdb_params: &RocksDBParams) -> RocksDB {
         let RocksDBParams {
             instance_path,
+            legacy_instance_path,
             env,
             tuning_config,
             shared_metrics,
@@ -575,6 +577,7 @@ impl AutoSpillBackend {
         RocksDB::new(
             mz_rocksdb::RocksDBInstance::new(
                 instance_path,
+                legacy_instance_path,
                 mz_rocksdb::InstanceOptions::defaults_with_env(env.clone()),
                 tuning_config.clone(),
                 Arc::clone(shared_metrics),
