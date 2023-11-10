@@ -24,6 +24,7 @@ use mz_repr::fixed_length::IntoRowByTypes;
 use mz_repr::{ColumnType, DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
+use timely::container::columnation::Columnation;
 use timely::dataflow::operators::OkErr;
 use timely::dataflow::Scope;
 use timely::progress::timestamp::{Refines, Timestamp};
@@ -125,8 +126,8 @@ impl LinearJoinSpec {
 enum JoinedFlavor<G, T>
 where
     G: Scope,
-    G::Timestamp: Lattice + Refines<T>,
-    T: Timestamp + Lattice,
+    G::Timestamp: Lattice + Refines<T> + Columnation,
+    T: Timestamp + Lattice + Columnation,
 {
     /// Streamed data as a collection.
     Collection(Collection<G, Row, Diff>),
@@ -139,8 +140,8 @@ where
 impl<G, T> Context<G, T>
 where
     G: Scope,
-    G::Timestamp: Lattice + Refines<T>,
-    T: Timestamp + Lattice,
+    G::Timestamp: Lattice + Refines<T> + Columnation,
+    T: Timestamp + Lattice + Columnation,
 {
     pub(crate) fn render_join(
         &mut self,

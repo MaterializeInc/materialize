@@ -935,7 +935,7 @@ where
 }
 
 /// A timestamp type that can be used for operations within MZ's dataflow layer.
-pub trait RenderTimestamp: Timestamp + Lattice + Refines<mz_repr::Timestamp> {
+pub trait RenderTimestamp: Timestamp + Lattice + Refines<mz_repr::Timestamp> + Columnation {
     /// The system timestamp component of the timestamp.
     ///
     /// This is useful for manipulating the system time, as when delaying
@@ -970,7 +970,7 @@ impl RenderTimestamp for mz_repr::Timestamp {
     }
 }
 
-impl<T: Timestamp + Lattice> RenderTimestamp for Product<mz_repr::Timestamp, T> {
+impl<T: Timestamp + Lattice + Columnation> RenderTimestamp for Product<mz_repr::Timestamp, T> {
     fn system_time(&mut self) -> &mut mz_repr::Timestamp {
         &mut self.outer
     }
