@@ -32,9 +32,9 @@ from materialize.scalability.endpoints import (
 )
 from materialize.scalability.io import paths
 from materialize.scalability.plot.plot import (
-    boxplot_duration_by_connections_for_workload,
-    boxplot_duration_by_endpoints_for_workload,
-    scatterplot_tps_per_connections,
+    plot_duration_by_connections_for_workload,
+    plot_duration_by_endpoints_for_workload,
+    plot_tps_per_connections,
 )
 from materialize.scalability.regression_outcome import RegressionOutcome
 from materialize.scalability.result_analyzer import ResultAnalyzer
@@ -307,7 +307,7 @@ def create_plots(result: BenchmarkResult, baseline_endpoint: Endpoint | None) ->
     ) in result.get_df_total_by_workload_and_endpoint().items():
         fig = plt.figure(layout="constrained", figsize=(16, 6))
         (subfigure) = fig.subfigures(1, 1)
-        scatterplot_tps_per_connections(
+        plot_tps_per_connections(
             workload_name,
             subfigure,
             results_by_endpoint,
@@ -325,7 +325,7 @@ def create_plots(result: BenchmarkResult, baseline_endpoint: Endpoint | None) ->
     ) in result.get_df_details_by_workload_and_endpoint().items():
         fig = plt.figure(layout="constrained", figsize=(16, 10))
         (subfigure) = fig.subfigures(1, 1)
-        boxplot_duration_by_connections_for_workload(
+        plot_duration_by_connections_for_workload(
             workload_name,
             subfigure,
             results_by_endpoint,
@@ -340,7 +340,7 @@ def create_plots(result: BenchmarkResult, baseline_endpoint: Endpoint | None) ->
 
         fig = plt.figure(layout="constrained", figsize=(16, 10))
         (subfigure) = fig.subfigures(1, 1)
-        boxplot_duration_by_endpoints_for_workload(
+        plot_duration_by_endpoints_for_workload(
             workload_name,
             subfigure,
             results_by_endpoint,

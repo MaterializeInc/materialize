@@ -16,9 +16,9 @@ from materialize.scalability.df.df_details import DfDetails
 from materialize.scalability.df.df_totals import DfTotals
 from materialize.scalability.io import paths
 from materialize.scalability.plot.plot import (
-    boxplot_duration_by_connections_for_workload,
-    boxplot_duration_by_endpoints_for_workload,
-    scatterplot_tps_per_connections,
+    plot_duration_by_connections_for_workload,
+    plot_duration_by_endpoints_for_workload,
+    plot_tps_per_connections,
 )
 
 
@@ -34,7 +34,7 @@ def plotit(workload_name: str, include_zero_in_y_axis: bool = True) -> None:
         workload_name
     )
 
-    scatterplot_tps_per_connections(
+    plot_tps_per_connections(
         workload_name,
         tps_figure,
         df_totals_by_endpoint_name,
@@ -42,13 +42,13 @@ def plotit(workload_name: str, include_zero_in_y_axis: bool = True) -> None:
         include_zero_in_y_axis=include_zero_in_y_axis,
     )
 
-    boxplot_duration_by_connections_for_workload(
+    plot_duration_by_connections_for_workload(
         workload_name,
         duration_per_connections_figure,
         df_details_by_endpoint_name,
         include_zero_in_y_axis=include_zero_in_y_axis,
     )
-    boxplot_duration_by_endpoints_for_workload(
+    plot_duration_by_endpoints_for_workload(
         workload_name,
         duration_per_endpoints_figure,
         df_details_by_endpoint_name,

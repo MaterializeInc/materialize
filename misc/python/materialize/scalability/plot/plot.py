@@ -23,7 +23,7 @@ PLOT_MARKER_POINT = MarkerStyle("o")
 PLOT_MARKER_SQUARE = MarkerStyle(",")
 
 
-def scatterplot_tps_per_connections(
+def plot_tps_per_connections(
     workload_name: str,
     figure: SubFigure,
     df_totals_by_endpoint_name: dict[str, DfTotals],
@@ -31,6 +31,7 @@ def scatterplot_tps_per_connections(
     include_zero_in_y_axis: bool,
     include_workload_in_title: bool = False,
 ) -> None:
+    """This uses a scatter plot to plot the TPS per connections."""
     legend = []
     plot: Axes = figure.subplots(1, 1)
     max_concurrency = 1
@@ -59,13 +60,14 @@ def scatterplot_tps_per_connections(
     plot.legend(legend)
 
 
-def boxplot_duration_by_connections_for_workload(
+def plot_duration_by_connections_for_workload(
     workload_name: str,
     figure: SubFigure,
     df_details_by_endpoint_name: dict[str, DfDetails],
     include_zero_in_y_axis: bool,
     include_workload_in_title: bool = False,
 ) -> None:
+    """This uses a boxplot or violin plot for the distribution of the duration."""
     if len(df_details_by_endpoint_name) == 0:
         return
 
@@ -115,13 +117,15 @@ def boxplot_duration_by_connections_for_workload(
         plot.set_title(title)
 
 
-def boxplot_duration_by_endpoints_for_workload(
+def plot_duration_by_endpoints_for_workload(
     workload_name: str,
     figure: SubFigure,
     df_details_by_endpoint_name: dict[str, DfDetails],
     include_zero_in_y_axis: bool,
     include_workload_in_title: bool = False,
 ) -> None:
+    """This uses a boxplot or violin plot for the distribution of the duration."""
+
     if len(df_details_by_endpoint_name) == 0:
         return
 
