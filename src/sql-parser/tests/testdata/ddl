@@ -2712,3 +2712,12 @@ ALTER SINK * SET CLUSTER
 error: Expected identifier, found star
 ALTER SINK * SET CLUSTER
            ^
+
+
+
+parse-statement
+CREATE SOURCE src FROM KAFKA CONNECTION rp_connection (TOPIC 'test') FORMAT JSON INCLUDE HEADERS, HEADER 'header3' AS header3, HEADER 'header5' AS header5 BYTES
+----
+CREATE SOURCE src FROM KAFKA CONNECTION rp_connection (TOPIC 'test') FORMAT JSON INCLUDE HEADERS, HEADER 'header3' AS header3, HEADER 'header5' AS header5 BYTES
+=>
+???

@@ -1493,10 +1493,12 @@ impl<C: ConnectionAccess> SourceConnection for KafkaSourceConnection<C> {
                     KafkaMetadataKind::Timestamp => {
                         ScalarType::Timestamp { precision: None }.nullable(false)
                     }
-                    KafkaMetadataKind::Header { use_bytes, .. } => use_bytes
-                        .then_some(ScalarType::Bytes)
-                        .unwrap_or(ScalarType::String)
-                        .nullable(true),
+                    KafkaMetadataKind::Header {
+                        use_bytes: true, ..
+                    } => ScalarType::Bytes.nullable(true),
+                    KafkaMetadataKind::Header {
+                        use_bytes: false, ..
+                    } => ScalarType::String.nullable(true),
                     KafkaMetadataKind::Headers => ScalarType::List {
                         element_type: Box::new(ScalarType::Record {
                             fields: vec![
