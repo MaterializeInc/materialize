@@ -175,6 +175,8 @@ If you deploy the PostgreSQL Debezium connector in [Confluent Cloud](https://doc
     * `common-config`
     * `common-utils`
 
+    You can read more about this in the [Debezium documentation](https://debezium.io/documentation/reference/stable/configuration/avro.html#deploying-confluent-schema-registry-with-debezium-containers).
+
 1. Create a connector configuration file and save it as `register-postgres.json`:
 
     ```json

@@ -94,6 +94,8 @@ If you deploy the MySQL Debezium connector in [Confluent Cloud](https://docs.con
     * `common-config`
     * `common-utils`
 
+    You can read more about this in the [Debezium documentation](https://debezium.io/documentation/reference/stable/configuration/avro.html#deploying-confluent-schema-registry-with-debezium-containers).
+
 1. Create a connector configuration file and save it as `register-mysql.json`:
 
     ```json
@@ -150,8 +152,6 @@ If you deploy the MySQL Debezium connector in [Confluent Cloud](https://docs.con
       --from-beginning \
       --topic dbserver1.db1.table1
     ```
-
-    **Note:** By default, the connector writes events for each table to a Kafka topic named `serverName.databaseName.tableName`.
 
 ### Create a source
 
