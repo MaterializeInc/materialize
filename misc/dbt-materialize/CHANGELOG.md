@@ -1,5 +1,9 @@
 # dbt-materialize Changelog
 
+## Unreleased
+
+* Implement `materialize__get_relation_last_modified` to retrieve metadata freshness.
+
 ## 1.6.1 - 2023-11-03
 
 * Support the [`ASSERT NOT NULL` option](https://materialize.com/docs/sql/create-materialized-view/#non-null-assertions)
