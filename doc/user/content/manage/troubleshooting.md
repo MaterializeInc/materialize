@@ -193,11 +193,9 @@ You can also consider changing your isolation level, depending on the [consisten
 
 Transactions are a database concept for bundling multiple query steps into a single, all-or-nothing operation. You can read more about them in the [transactions](https://materialize.com/docs/sql/begin) section of our docs.
 
-In Materialize, `BEGIN` starts a transaction block. All statements in a transaction block will be executed in a single transaction until an explicit `COMMIT` or `ROLLBACK` is given. All statements in that transaction happen at the same timestamp.
+In Materialize, `BEGIN` starts a transaction block. All statements in a transaction block will be executed in a single transaction until an explicit `COMMIT` or `ROLLBACK` is given. All statements in that transaction happen at the same timestamp, and that timestamp must be valid for all objects the transaction may access.
 
-Because Materialize does not know which objects (sources, indexes, or materialized views) will be queried during the transaction, the objects in the first `SELECT` and any other object in the same schemas are assumed to be possible query targets. As a result, during that first query, a timestamp for the transaction is chosen that is valid for all of the objects in that same schema.
-
-What this means for latency: even in serializable isolation level, some queries made within a transaction may not be able return immediately. For example, if a materialized view is lagging or a source is stalled out, a query on that object in a transaction will block until the object catches up to the current time.
+What this means for latency: Materialize may delay queries against "slow" tables, materialized views, and indexes until they catch up to faster ones in the same schema. We recommend you avoid using transactions in contexts where you require low latency responses and are not certain that all objects in a schema will be equally current.
 
 What you can do:
 
@@ -206,7 +204,7 @@ What you can do:
 
 ### Client-side latency
 
-To reduce the roundtrip latency associated with making requests from your client to Materialize, make your requests as physically close to your Materialize region as possible. E.g. if you use the AWS us-east-1 region for Materialize, ideally your client server would also be running in AWS us-east-1. The closer geographically to the region, the lesser the network latency.
+To minimize the roundtrip latency associated with making requests from your client to Materialize, make your requests as physically close to your Materialize region as possible. For example, if you use the AWS `us-east-1` region for Materialize, your client server would ideally also be running in AWS `us-east-1`.
 
 ### Debugging expensive dataflows and operators
 
