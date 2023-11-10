@@ -12,7 +12,7 @@ use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::rc::Rc;
-use std::str;
+use std::str::{self, Utf8Error};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -583,12 +583,19 @@ impl SourceRender for KafkaSourceConnection {
                                 .await;
                         }
                         Ok(message) => {
-                            let (message, ts) =
-                                construct_source_message(&message, &reader.metadata_columns);
-                            if let Some((msg, time, diff)) = reader.handle_message(message, ts) {
-                                let pid = time.partition().unwrap();
-                                let part_cap = &reader.partition_capabilities[pid].data;
-                                data_output.give(part_cap, ((0, Ok(msg)), time, diff)).await;
+                            match construct_source_message(&message, &reader.metadata_columns) {
+                                Ok((message, ts)) => {
+                                    if let Some((msg, time, diff)) =
+                                        reader.handle_message(message, ts)
+                                    {
+                                        let pid = time.partition().unwrap();
+                                        let part_cap = &reader.partition_capabilities[pid].data;
+                                        data_output
+                                            .give(part_cap, ((0, Ok(msg)), time, diff))
+                                            .await;
+                                    }
+                                }
+                                Err(_) => error!("now what?!?"), //FIXME(steffen)
                             }
                         }
                     }
@@ -980,10 +987,13 @@ impl KafkaSourceReader {
 fn construct_source_message(
     msg: &BorrowedMessage<'_>,
     metadata_columns: &[KafkaMetadataKind],
-) -> (
-    SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>,
-    (PartitionId, MzOffset),
-) {
+) -> Result<
+    (
+        SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>,
+        (PartitionId, MzOffset),
+    ),
+    Utf8Error,
+> {
     let pid = msg.partition();
     let Ok(offset) = u64::try_from(msg.offset()) else {
         panic!(
@@ -1022,18 +1032,18 @@ fn construct_source_message(
                             .map(|header| match header.value {
                                 Some(v) => {
                                     if *use_bytes {
-                                        Datum::Bytes(v)
+                                        Ok(Datum::Bytes(v))
                                     } else {
                                         match str::from_utf8(v) {
-                                            Ok(str) => Datum::String(str),
-                                            Err(_) => Datum::Null,
+                                            Ok(str) => Ok(Datum::String(str)),
+                                            Err(e) => Err(e),
                                         }
                                     }
                                 }
-                                None => Datum::Null,
+                                None => Ok(Datum::Null),
                             })
                             //if header is not found, default to null
-                            .unwrap_or(Datum::Null);
+                            .unwrap_or(Ok(Datum::Null))?;
                         packer.push(d);
                     }
                     None => packer.push(Datum::Null),
@@ -1065,7 +1075,7 @@ fn construct_source_message(
         value: msg.payload().map(|p| p.to_vec()),
         metadata,
     };
-    (msg, (pid, offset.into()))
+    Ok((msg, (pid, offset.into())))
 }
 
 /// Wrapper around a partition containing the underlying consumer
@@ -1108,11 +1118,15 @@ impl PartitionConsumer {
         KafkaError,
     > {
         match self.partition_queue.poll(Duration::from_millis(0)) {
-            Some(Ok(msg)) => {
-                let (msg, ts) = construct_source_message(&msg, &self.metadata_columns);
-                assert_eq!(ts.0, self.pid);
-                Ok(Some((msg, ts)))
-            }
+            Some(Ok(msg)) => match construct_source_message(&msg, &self.metadata_columns) {
+                Ok((msg, ts)) => {
+                    assert_eq!(ts.0, self.pid);
+                    Ok(Some((msg, ts)))
+                }
+                Err(e) => Err(KafkaError::MessageConsumption(
+                    rdkafka::types::RDKafkaErrorCode::BadMessage,
+                )),
+            },
             Some(Err(err)) => Err(err),
             _ => Ok(None),
         }
