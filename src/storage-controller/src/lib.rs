@@ -135,6 +135,7 @@ use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::sinks::{ProtoDurableExportMetadata, SinkAsOf, StorageSinkDesc};
 use mz_storage_types::sources::{IngestionDescription, SourceData, SourceExport};
+use mz_storage_types::AlterCompatible;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use prost::Message;
 use serde::{Deserialize, Serialize};
@@ -3000,7 +3001,7 @@ where
                     "{id:?} inalterable because its data source is {:?} and not an ingestion",
                     o
                 );
-                return Err(StorageError::InvalidAlterSource { id });
+                return Err(StorageError::InvalidAlter { id });
             }
         };
 
@@ -3012,7 +3013,7 @@ where
                     prev_storage_dependencies,
                     new_storage_dependencies
                 );
-            return Err(StorageError::InvalidAlterSource { id });
+            return Err(StorageError::InvalidAlter { id });
         }
 
         Ok(())

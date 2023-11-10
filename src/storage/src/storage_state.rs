@@ -102,6 +102,7 @@ use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sinks::{MetadataFilled, StorageSinkDesc};
 use mz_storage_types::sources::{IngestionDescription, SourceData};
+use mz_storage_types::AlterCompatible;
 use timely::communication::Allocate;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;

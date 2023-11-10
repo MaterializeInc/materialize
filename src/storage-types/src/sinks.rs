@@ -45,7 +45,7 @@ pub struct StorageSinkDesc<S: StorageSinkDescFillState, T = mz_repr::Timestamp> 
 }
 
 impl<S: Debug + StorageSinkDescFillState + PartialEq, T: Debug + PartialEq + PartialOrder>
-    StorageSinkDesc<S, T>
+    crate::AlterCompatible for StorageSinkDesc<S, T>
 {
     /// Determines if `self` is compatible with another `StorageSinkDesc`, in
     /// such a way that it is possible to turn `self` into `other` through a
@@ -54,7 +54,7 @@ impl<S: Debug + StorageSinkDescFillState + PartialEq, T: Debug + PartialEq + Par
     /// Currently, the only "valid transformation" is the passage of time such
     /// that the sink's as ofs may differ. However, this will change once we
     /// support `ALTER CONNECTION` or `ALTER SINK`.
-    pub fn alter_compatible(
+    fn alter_compatible(
         &self,
         id: GlobalId,
         other: &StorageSinkDesc<S, T>,
@@ -85,15 +85,15 @@ impl<S: Debug + StorageSinkDescFillState + PartialEq, T: Debug + PartialEq + Par
             ),
         ];
 
-        for (compatible, desc) in compatibility_checks {
+        for (compatible, field) in compatibility_checks {
             if !compatible {
                 tracing::warn!(
-                    "StorageSinkDesc incompatible at {desc}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    "StorageSinkDesc incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
                     self,
                     other
                 );
 
-                return Err(StorageError::IncompatibleSinkDescriptions { id });
+                return Err(StorageError::InvalidAlter { id });
             }
         }
 
