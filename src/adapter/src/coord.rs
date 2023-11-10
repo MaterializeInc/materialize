@@ -1630,8 +1630,8 @@ impl Coordinator {
 
                     // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
                     let global_lir_plan = optimizer.optimize(global_mir_plan)?;
-                    let physical_plan = global_lir_plan.df_desc().clone();
-                    let metainfo = global_lir_plan.df_meta().clone();
+
+                    let (physical_plan, metainfo) = global_lir_plan.unapply();
 
                     let catalog = self.catalog_mut();
                     catalog.set_optimized_plan(id, optimized_plan);
@@ -1671,8 +1671,8 @@ impl Coordinator {
 
                     // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
                     let global_lir_plan = optimizer.optimize(global_mir_plan)?;
-                    let physical_plan = global_lir_plan.df_desc().clone();
-                    let metainfo = global_lir_plan.df_meta().clone();
+
+                    let (physical_plan, metainfo) = global_lir_plan.unapply();
 
                     let catalog = self.catalog_mut();
                     catalog.set_optimized_plan(id, optimized_plan);

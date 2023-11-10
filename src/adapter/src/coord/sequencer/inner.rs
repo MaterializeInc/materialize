@@ -87,7 +87,9 @@ use crate::catalog::{
 };
 use crate::command::{ExecuteResponse, Response};
 use crate::coord::appends::{Deferred, DeferredPlan, PendingWriteTxn};
-use crate::coord::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
+use crate::coord::dataflows::{
+    dataflow_import_id_bundle, prep_scalar_expr, EvalTime, ExprPrepStyle,
+};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::{FastPathPlan, PeekDataflowPlan, PeekPlan, PlannedPeek};
 use crate::coord::read_policy::SINCE_GRANULARITY;
@@ -1038,9 +1040,6 @@ impl Coordinator {
         let global_mir_plan = optimizer.optimize(local_mir_plan.clone())?;
         // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
         let global_lir_plan = optimizer.optimize(global_mir_plan.clone())?;
-        // Timestamp selection
-        let since = self.least_valid_read(&global_lir_plan.id_bundle(optimizer.cluster_id()));
-        let global_lir_plan = global_lir_plan.resolve(since.clone());
 
         let mut ops = Vec::new();
         ops.extend(
@@ -1080,6 +1079,14 @@ impl Coordinator {
                 // Emit notices.
                 self.emit_optimizer_notices(session, &global_lir_plan.df_meta().optimizer_notices);
 
+                let output_desc = global_lir_plan.desc().clone();
+                let mut df_desc = global_lir_plan.unapply().0;
+
+                // Timestamp selection
+                let id_bundle = dataflow_import_id_bundle(&df_desc, cluster_id);
+                let since = self.least_valid_read(&id_bundle);
+                df_desc.set_as_of(since.clone());
+
                 // Announce the creation of the materialized view source.
                 self.controller
                     .storage
@@ -1088,7 +1095,7 @@ impl Coordinator {
                         vec![(
                             id,
                             CollectionDescription {
-                                desc: global_lir_plan.desc().clone(),
+                                desc: output_desc,
                                 data_source: DataSource::Other(DataSourceOther::Compute),
                                 since: Some(since),
                                 status_collection_id: None,
@@ -1104,7 +1111,6 @@ impl Coordinator {
                 )
                 .await;
 
-                let df_desc = global_lir_plan.unapply().0;
                 self.ship_dataflow_new(df_desc, cluster_id).await;
 
                 Ok(ExecuteResponse::CreatedMaterializedView)
@@ -1164,9 +1170,6 @@ impl Coordinator {
         let global_mir_plan = optimizer.optimize(index_plan)?;
         // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
         let global_lir_plan = optimizer.optimize(global_mir_plan.clone())?;
-        // Timestamp selection
-        let since = self.least_valid_read(&global_lir_plan.id_bundle(optimizer.cluster_id()));
-        let global_lir_plan = global_lir_plan.resolve(since);
 
         let index = catalog::Index {
             create_sql,
@@ -1206,7 +1209,12 @@ impl Coordinator {
                 // Emit notices.
                 self.emit_optimizer_notices(session, &global_lir_plan.df_meta().optimizer_notices);
 
-                let df_desc = global_lir_plan.unapply().0;
+                let mut df_desc = global_lir_plan.unapply().0;
+
+                // Timestamp selection
+                let id_bundle = dataflow_import_id_bundle(&df_desc, cluster_id);
+                let since = self.least_valid_read(&id_bundle);
+                df_desc.set_as_of(since);
 
                 self.ship_dataflow_new(df_desc, cluster_id).await;
 
@@ -3634,10 +3642,6 @@ impl Coordinator {
             // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
             let global_lir_plan = optimizer.optimize(global_mir_plan)?;
 
-            // Timestamp selection
-            let since = self.least_valid_read(&global_lir_plan.id_bundle(optimizer.cluster_id()));
-            let global_lir_plan = global_lir_plan.resolve(since);
-
             let (df_desc, df_meta) = global_lir_plan.unapply();
 
             Ok::<_, AdapterError>((df_desc, df_meta, used_indexes))
@@ -3745,10 +3749,6 @@ impl Coordinator {
 
             // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
             let global_lir_plan = optimizer.optimize(global_mir_plan)?;
-
-            // Timestamp selection
-            let since = self.least_valid_read(&global_lir_plan.id_bundle(optimizer.cluster_id()));
-            let global_lir_plan = global_lir_plan.resolve(since);
 
             let (df_desc, df_meta) = global_lir_plan.unapply();
 

@@ -13,7 +13,6 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
-use maplit::btreemap;
 use mz_adapter_types::connection::ConnectionId;
 use mz_compute_types::plan::Plan;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection};
@@ -30,7 +29,9 @@ use timely::progress::Antichain;
 use tracing::{span, Level};
 
 use crate::catalog::Catalog;
-use crate::coord::dataflows::{ComputeInstanceSnapshot, DataflowBuilder};
+use crate::coord::dataflows::{
+    dataflow_import_id_bundle, ComputeInstanceSnapshot, DataflowBuilder,
+};
 use crate::optimize::{
     LirDataflowDescription, MirDataflowDescription, Optimize, OptimizerConfig, OptimizerError,
 };
@@ -106,12 +107,7 @@ impl<T: Clone> GlobalMirPlan<T> {
 
     /// Computes the [`CollectionIdBundle`] of the wrapped dataflow.
     pub fn id_bundle(&self, compute_instance_id: ComputeInstanceId) -> CollectionIdBundle {
-        let storage_ids = self.df_desc.source_imports.keys().copied().collect();
-        let compute_ids = self.df_desc.index_imports.keys().copied().collect();
-        CollectionIdBundle {
-            storage_ids,
-            compute_ids: btreemap! {compute_instance_id => compute_ids},
-        }
+        dataflow_import_id_bundle(&self.df_desc, compute_instance_id)
     }
 }
 
