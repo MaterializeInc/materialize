@@ -13,6 +13,7 @@ from materialize import MZ_ROOT
 from materialize.mzcompose import (
     loader,
 )
+from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.service import (
     Service,
 )
@@ -54,3 +55,30 @@ class SshBastionHost(Service):
                 },
             },
         )
+
+
+def setup_default_ssh_test_connection(c: Composition, ssh_tunnel_name: str) -> None:
+
+    c.sql(
+        f"""
+            CREATE CONNECTION IF NOT EXISTS {ssh_tunnel_name} TO SSH TUNNEL (
+            HOST 'ssh-bastion-host',
+            USER 'mz',
+            PORT 22)
+        """
+    )
+
+    public_key = c.sql_query(
+        f"""
+            select public_key_1 from mz_ssh_tunnel_connections ssh \
+            join mz_connections c on c.id = ssh.id
+            where c.name = '{ssh_tunnel_name}';
+        """
+    )[0][0]
+
+    c.exec(
+        "ssh-bastion-host",
+        "bash",
+        "-c",
+        f"echo '{public_key}' >> /etc/authorized_keys/mz",
+    )
