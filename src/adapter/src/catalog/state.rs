@@ -30,6 +30,7 @@ use mz_catalog::memory::objects::{
     CommentsMap, Connection, DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView,
     Role, Schema, Secret, Sink, Source, Table, Type, View,
 };
+use mz_catalog::{LINKED_CLUSTER_REPLICA_NAME, SYSTEM_CONN_ID};
 use mz_controller::clusters::{
     ClusterStatus, ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ProcessId,
     ReplicaAllocation, ReplicaConfig, ReplicaLocation, UnmanagedReplicaLocation,
@@ -71,10 +72,7 @@ use mz_storage_types::connections::inline::{
 };
 use mz_transform::Optimizer;
 
-use crate::catalog::{
-    AwsPrincipalContext, BuiltinTableUpdate, ClusterReplicaSizeMap, ConnCatalog,
-    LINKED_CLUSTER_REPLICA_NAME, SYSTEM_CONN_ID,
-};
+use crate::catalog::{AwsPrincipalContext, BuiltinTableUpdate, ClusterReplicaSizeMap, ConnCatalog};
 use crate::coord::ConnMeta;
 use crate::optimize::{self, Optimize};
 use crate::session::Session;

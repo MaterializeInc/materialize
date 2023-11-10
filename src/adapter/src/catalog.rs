@@ -38,6 +38,7 @@ pub use mz_catalog::memory::objects::{
     DefaultPrivileges, Func, Index, Log, MaterializedView, Role, Schema, Secret, Sink, Source,
     Table, Type, View,
 };
+use mz_catalog::SYSTEM_CONN_ID;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller::clusters::{
     ClusterEvent, ManagedReplicaLocation, ReplicaConfig, ReplicaLocation,
@@ -105,12 +106,6 @@ mod migrate;
 mod inner;
 mod open;
 mod state;
-
-pub static SYSTEM_CONN_ID: ConnectionId = ConnectionId::Static(0);
-
-const CREATE_SQL_TODO: &str = "TODO";
-
-pub const LINKED_CLUSTER_REPLICA_NAME: &str = "linked";
 
 /// A `Catalog` keeps track of the SQL objects known to the planner.
 ///
