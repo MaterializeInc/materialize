@@ -59,46 +59,6 @@ def scatterplot_tps_per_connections(
     plot.legend(legend)
 
 
-def scatterplot_duration_per_connections(
-    workload_name: str,
-    figure: SubFigure,
-    df_details_by_endpoint_name: dict[str, DfDetails],
-    baseline_version_name: str | None,
-    include_zero_in_y_axis: bool,
-    include_workload_in_title: bool = False,
-) -> None:
-    legend = []
-    plot: Axes = figure.subplots(1, 1)
-
-    i = 0
-    for endpoint_version_name, df_details in df_details_by_endpoint_name.items():
-        endpoint_offset = i / 40.0
-        legend.append(endpoint_name_to_description(endpoint_version_name))
-
-        plot.scatter(
-            [
-                concurrency + endpoint_offset
-                for concurrency in df_details.get_concurrency_values()
-            ],
-            df_details.get_wallclock_values(),
-            alpha=0.25,
-            marker=_get_plot_marker(endpoint_version_name, baseline_version_name),
-        )
-
-        i = i + 1
-
-    plot.set_ylabel("Duration in Seconds")
-    plot.set_xlabel("Concurrent SQL Connections")
-
-    if include_zero_in_y_axis:
-        plot.set_ylim(ymin=0)
-
-    if include_workload_in_title:
-        plot.set_title(workload_name)
-
-    plot.legend(legend)
-
-
 def boxplot_duration_by_connections_for_workload(
     workload_name: str,
     figure: SubFigure,
