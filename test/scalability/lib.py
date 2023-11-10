@@ -18,11 +18,8 @@ from materialize.scalability.io import paths
 from materialize.scalability.plot.plot import (
     boxplot_duration_by_connections_for_workload,
     boxplot_duration_by_endpoints_for_workload,
-    scatterplot_duration_per_connections,
     scatterplot_tps_per_connections,
 )
-
-USE_BOXPLOT = True
 
 
 def plotit(workload_name: str, include_zero_in_y_axis: bool = True) -> None:
@@ -45,27 +42,18 @@ def plotit(workload_name: str, include_zero_in_y_axis: bool = True) -> None:
         include_zero_in_y_axis=include_zero_in_y_axis,
     )
 
-    if USE_BOXPLOT:
-        boxplot_duration_by_connections_for_workload(
-            workload_name,
-            duration_per_connections_figure,
-            df_details_by_endpoint_name,
-            include_zero_in_y_axis=include_zero_in_y_axis,
-        )
-        boxplot_duration_by_endpoints_for_workload(
-            workload_name,
-            duration_per_endpoints_figure,
-            df_details_by_endpoint_name,
-            include_zero_in_y_axis=include_zero_in_y_axis,
-        )
-    else:
-        scatterplot_duration_per_connections(
-            workload_name,
-            duration_per_connections_figure,
-            df_details_by_endpoint_name,
-            baseline_version_name=None,
-            include_zero_in_y_axis=include_zero_in_y_axis,
-        )
+    boxplot_duration_by_connections_for_workload(
+        workload_name,
+        duration_per_connections_figure,
+        df_details_by_endpoint_name,
+        include_zero_in_y_axis=include_zero_in_y_axis,
+    )
+    boxplot_duration_by_endpoints_for_workload(
+        workload_name,
+        duration_per_endpoints_figure,
+        df_details_by_endpoint_name,
+        include_zero_in_y_axis=include_zero_in_y_axis,
+    )
 
 
 def load_data_from_filesystem(
