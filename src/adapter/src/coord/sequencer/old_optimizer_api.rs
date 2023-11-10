@@ -1024,6 +1024,7 @@ impl Coordinator {
                 &source_ids,
                 None, // no real-time recency
             )
+            .with_subscriber(root_dispatch.clone())
             .await?
             .timestamp_context;
 
