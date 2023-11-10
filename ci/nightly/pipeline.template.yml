@@ -103,6 +103,7 @@ steps:
       - id: redpanda-testdrive
         label: ":panda_face: :racing_car: testdrive"
         timeout_in_minutes: 600
+        parallelism: 2
         agents:
           queue: linux-x86_64
         artifact_paths: junit_*.xml
@@ -115,6 +116,7 @@ steps:
       - id: redpanda-testdrive-aarch64
         label: ":panda_face: :racing_car: testdrive aarch64"
         timeout_in_minutes: 600
+        parallelism: 2
         agents:
           queue: linux-aarch64
         artifact_paths: junit_*.xml
@@ -128,6 +130,7 @@ steps:
       - id: testdrive-partitions-5
         label: ":racing_car: testdrive with --kafka-default-partitions 5"
         timeout_in_minutes: 600
+        parallelism: 2
         agents:
           queue: linux-x86_64
         artifact_paths: junit_*.xml
@@ -140,6 +143,7 @@ steps:
       - id: testdrive-replicas-4
         label: ":racing_car: testdrive 4 replicas"
         timeout_in_minutes: 600
+        parallelism: 2
         agents:
           queue: linux-x86_64
         artifact_paths: junit_*.xml
@@ -152,6 +156,7 @@ steps:
       - id: testdrive-size-1
         label: ":racing_car: testdrive with SIZE 1"
         timeout_in_minutes: 600
+        parallelism: 2
         agents:
           queue: linux-x86_64
         artifact_paths: junit_*.xml
@@ -164,6 +169,7 @@ steps:
       - id: testdrive-size-8
         label: ":racing_car: testdrive with SIZE 8"
         timeout_in_minutes: 600
+        parallelism: 2
         agents:
           queue: linux-x86_64
         artifact_paths: junit_*.xml
@@ -187,6 +193,7 @@ steps:
       - id: persistence-testdrive
         label: ":racing_car: testdrive with --persistent-user-tables"
         timeout_in_minutes: 30
+        parallelism: 2
         agents:
           queue: linux-x86_64
         artifact_paths: junit_*.xml
