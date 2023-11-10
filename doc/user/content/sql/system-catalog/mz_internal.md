@@ -21,7 +21,7 @@ reference these objects is not allowed.
 {{< /warning >}}
 
 
-## System Relations
+## System relations
 
 ### `mz_activity_log`
 
@@ -46,23 +46,22 @@ the session variable `statement_logging_sample_rate`, which may be set
 to any value between 0 and 1. For example, to disable statement
 logging entirely for a session, execute `SET
 statement_logging_sample_rate TO 0`. Materialize may apply a lower
-sampling rate than the one set in this variable, as described in the
-warning box above.
+sampling rate than the one set in this variable.
 
 <!-- RELATION_SPEC mz_internal.mz_activity_log -->
 | Field                     | Type                         | Meaning                                                                                                                                                                                                                                                                       |
 |---------------------------|------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `execution_id`            | [`uuid`]                     | An ID that is unique for each execute statement.                                                                                                                                                                                                                              |
+| `execution_id`            | [`uuid`]                     | An ID that is unique for each executed statement.                                                                                                                                                                                                                              |
 | `sample_rate`             | [`double precision`]         | The actual rate at which the statement was sampled.                                                                                                                                                                                                                           |
-| `cluster_id`              | [`text`]                     | The ID of the cluster the statement execution was directed to.                                                                                                                                                                                                                |
+| `cluster_id`              | [`text`]                     | The ID of the cluster the statement execution was directed to. Corresponds to [mz_clusters.id](https://materialize.com/docs/sql/system-catalog/mz_catalog/#mz_clusters).                                                                                                                                                                                                               |
 | `application_name`        | [`text`]                     | The value of the `application_name` session variable at execution time.                                                                                                                                                                                                       |
 | `cluster_name`            | [`text`]                     | The name of the cluster with ID `cluster_id` at execution time.                                                                                                                                                                                                               |
 | `transaction_isolation`   | [`text`]                     | The value of the `transaction_isolation` session variable at execution time.                                                                                                                                                                                                  |
-| `execution_timestamp`     | [`uint8`]                    | The logical timestamp at which education was scheduled.                                                                                                                                                                                                                       |
+| `execution_timestamp`     | [`uint8`]                    | The logical timestamp at which execution was scheduled.                                                                                                                                                                                                                       |
 | `transient_index_id`      | [`text`]                     | The internal index of the compute dataflow created for the query, if any.                                                                                                                                                                                                     |
 | `params`                  | [`text array`]                   | The parameters with which the statement was executed.                                                                                                                                                                                                                         |
 | `began_at`                | [`timestamp with time zone`] | The wall-clock time at which the statement began executing.                                                                                                                                                                                                                   |
-| `finished_at`             | [`timestamp with time zone`] | The wall-clock time at which the statement began executing.                                                                                                                                                                                                                   |
+| `finished_at`             | [`timestamp with time zone`] | The wall-clock time at which the statement finished executing.                                                                                                                                                                                                                   |
 | `finished_status`         | [`text`]                     | The final status of the statement (e.g., `success`, `canceled`, `errored`, or `aborted`). `aborted` means that Materialize exited before the statement finished executing.                                                                                                    |
 | `error_message`           | [`text`]                     | The error message, if the statement failed.                                                                                                                                                                                                                                   |
 | `rows_returned`           | [`bigint`]                   | The number of rows returned, for statements that return rows.                                                                                                                                                                                                                 |
@@ -785,7 +784,7 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 | `name`         | [`text`]    | The name of the webhook source.                                                              |
 | `url`          | [`text`]    | The URL which can be used to send events to the source.                                      |
 
-## Replica Introspection Relations
+## Replica introspection relations
 
 This section lists the available replica introspection relations.
 
