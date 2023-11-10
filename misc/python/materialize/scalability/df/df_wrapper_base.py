@@ -23,6 +23,9 @@ class DfWrapperBase:
     def length(self) -> int:
         return len(self.data.index)
 
+    def has_values(self) -> bool:
+        return self.length() > 0
+
     def to_csv(self, file_path: Path) -> None:
         self.data.to_csv(file_path)
 

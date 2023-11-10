@@ -6,11 +6,11 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-
-
 import math
+from enum import Enum
 from typing import Any
 
+import numpy as np
 from matplotlib.axes import Axes
 from matplotlib.figure import SubFigure
 from matplotlib.markers import MarkerStyle
@@ -21,9 +21,20 @@ from materialize.scalability.endpoints import endpoint_name_to_description
 
 PLOT_MARKER_POINT = MarkerStyle("o")
 PLOT_MARKER_SQUARE = MarkerStyle(",")
+PLOT_MARKER_HLINE = MarkerStyle("_")
+
+PLOT_COLOR_DARK_BLUE = "darkblue"
 
 
-def scatterplot_tps_per_connections(
+class DistributionPlotType(Enum):
+    VIOLIN = 1
+    BOX = 2
+
+
+DEFAULT_DISTRIBUTION_PLOT_TYPE = DistributionPlotType.VIOLIN
+
+
+def plot_tps_per_connections(
     workload_name: str,
     figure: SubFigure,
     df_totals_by_endpoint_name: dict[str, DfTotals],
@@ -31,6 +42,7 @@ def scatterplot_tps_per_connections(
     include_zero_in_y_axis: bool,
     include_workload_in_title: bool = False,
 ) -> None:
+    """This uses a scatter plot to plot the TPS per connections."""
     legend = []
     plot: Axes = figure.subplots(1, 1)
     max_concurrency = 1
@@ -59,13 +71,15 @@ def scatterplot_tps_per_connections(
     plot.legend(legend)
 
 
-def boxplot_duration_by_connections_for_workload(
+def plot_duration_by_connections_for_workload(
     workload_name: str,
     figure: SubFigure,
     df_details_by_endpoint_name: dict[str, DfDetails],
     include_zero_in_y_axis: bool,
     include_workload_in_title: bool = False,
+    plot_type: DistributionPlotType = DEFAULT_DISTRIBUTION_PLOT_TYPE,
 ) -> None:
+    """This uses a boxplot or violin plot for the distribution of the duration."""
     if len(df_details_by_endpoint_name) == 0:
         return
 
@@ -89,6 +103,15 @@ def boxplot_duration_by_connections_for_workload(
         durations: list[list[float]] = []
 
         for endpoint_version_name, df_details in df_details_by_endpoint_name.items():
+            df_details_of_concurrency = df_details.to_filtered_by_concurrency(
+                concurrency
+            )
+
+            if not df_details_of_concurrency.has_values():
+                continue
+
+            durations.append(df_details_of_concurrency.get_wallclock_values())
+
             formatted_endpoint_name = (
                 endpoint_version_name
                 if not use_short_names
@@ -96,12 +119,7 @@ def boxplot_duration_by_connections_for_workload(
             )
             legend.append(formatted_endpoint_name)
 
-            df_details_of_concurrency = df_details.to_filtered_by_concurrency(
-                concurrency
-            )
-            durations.append(df_details_of_concurrency.get_wallclock_values())
-
-        plot.boxplot(durations, labels=legend)
+        _plot_distribution(plot, data=durations, labels=legend, plot_type=plot_type)
 
         if is_in_first_column:
             plot.set_ylabel("Duration (seconds)")
@@ -115,13 +133,16 @@ def boxplot_duration_by_connections_for_workload(
         plot.set_title(title)
 
 
-def boxplot_duration_by_endpoints_for_workload(
+def plot_duration_by_endpoints_for_workload(
     workload_name: str,
     figure: SubFigure,
     df_details_by_endpoint_name: dict[str, DfDetails],
     include_zero_in_y_axis: bool,
     include_workload_in_title: bool = False,
+    plot_type: DistributionPlotType = DEFAULT_DISTRIBUTION_PLOT_TYPE,
 ) -> None:
+    """This uses a boxplot or violin plot for the distribution of the duration."""
+
     if len(df_details_by_endpoint_name) == 0:
         return
 
@@ -141,14 +162,18 @@ def boxplot_duration_by_endpoints_for_workload(
         durations: list[list[float]] = []
 
         for concurrency in concurrencies:
-            legend.append(concurrency)
-
             df_details_of_concurrency = df_details.to_filtered_by_concurrency(
                 concurrency
             )
+
+            if not df_details_of_concurrency.has_values():
+                continue
+
             durations.append(df_details_of_concurrency.get_wallclock_values())
 
-        plot.boxplot(durations, labels=legend)
+            legend.append(concurrency)
+
+        _plot_distribution(plot, data=durations, labels=legend, plot_type=plot_type)
 
         if is_in_first_column and is_in_last_row:
             plot.set_ylabel("Duration (seconds)")
@@ -219,3 +244,51 @@ def _get_subplot_in_grid(
     assert type(plot) == Axes
 
     return plot, is_in_first_column, is_in_last_row
+
+
+def _plot_distribution(
+    plot: Axes,
+    data: list[list[float]],
+    labels: list[str],
+    plot_type: DistributionPlotType,
+) -> None:
+    if plot_type == DistributionPlotType.VIOLIN:
+        _plot_violinplot(plot, data, labels)
+    elif plot_type == DistributionPlotType.BOX:
+        _plot_boxplot(plot, data, labels)
+    else:
+        raise RuntimeError(f"Unexpected plot type: {plot_type}")
+
+
+def _plot_violinplot(plot: Axes, data: list[list[float]], labels: list[str]) -> None:
+    xpos = np.arange(1, len(data) + 1)
+
+    plot.violinplot(data)
+    plot.set_xticks(xpos, labels=labels)
+
+    for i, data_col in enumerate(data):
+        quartile1, medians, quartile3 = np.percentile(
+            data[i],
+            [25, 50, 75],
+        )
+        # plot median line
+        plot.scatter(
+            xpos[i],
+            medians,
+            marker=PLOT_MARKER_HLINE,
+            color=PLOT_COLOR_DARK_BLUE,
+            s=300,
+        )
+        # plot 25% - 75% area
+        plot.vlines(
+            xpos[i],
+            quartile1,
+            quartile3,
+            color=PLOT_COLOR_DARK_BLUE,
+            linestyle="-",
+            lw=5,
+        )
+
+
+def _plot_boxplot(plot: Axes, data: list[list[float]], labels: list[str]) -> None:
+    plot.boxplot(data, labels=labels)
