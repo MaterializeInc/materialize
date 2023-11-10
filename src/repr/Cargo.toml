@@ -22,7 +22,7 @@ cfg-if = "1.0.0"
 columnation = { git = "https://github.com/frankmcsherry/columnation" }
 chrono = { version = "0.4.23", default-features = false, features = ["serde", "std"] }
 chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"] }
-compact_bytes = "0.1"
+compact_bytes = "0.1.1"
 dec = "0.4.8"
 differential-dataflow = "0.12.0"
 enum_dispatch = "0.3.11"
@@ -53,7 +53,7 @@ tracing-core = "0.1.30"
 url = { version = "2.3.1", features = ["serde"] }
 uuid = { version = "1.2.2", features = ["serde"] }
 proptest = { version = "1.0.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.3.0", features = ["boxed_union"]}
+proptest-derive = { version = "0.3.0", features = ["boxed_union"] }
 thiserror = "1.0.37"
 
 # for the tracing_ feature
