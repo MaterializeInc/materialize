@@ -84,7 +84,7 @@ If you deploy the MySQL Debezium connector in [Confluent Cloud](https://docs.con
 {{< /tab >}}
 {{< tab "Debezium 2.0+">}}
 
-1. Beginning with Debezium 2.0.0, Confluent Schema Registry support is not included in the Debezium containers. To enable the Confluent Schema Registry for a Debezium container, install the following Confluent Avro converter JAR files into the Connect plugin directory:
+1. From Debezium 2.0, Confluent Schema Registry (CSR) support is not bundled in Debezium containers. To enable CSR, you must install the following Confluent Avro converter JAR files into the Kafka Connect plugin directory (by default, `/kafka/connect`):
 
     * `kafka-connect-avro-converter`
     * `kafka-connect-avro-data`
