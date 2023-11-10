@@ -27,7 +27,7 @@ $ kafka-create-topic topic=input-system
 > CREATE SOURCE source_system_user
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-system-${testdrive.seed}')
   FORMAT BYTES
-  WITH (TIMELINE 'user')
+  WITH (TIMELINE '${testdrive.seed}-timelines')
 
 $ set schema=[
   {
@@ -140,7 +140,7 @@ contains:unacceptable timeline name "mz_foo"
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-cdcv2-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE MATERIALIZE
-  WITH (TIMELINE 'user')
+  WITH (TIMELINE '${testdrive.seed}-timelines')
 
 > CREATE TABLE input_table (a bigint);
 
