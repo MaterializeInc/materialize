@@ -25,7 +25,8 @@ $ set schema={
 
 $ kafka-create-topic topic=headers_src
 
-$ kafka-ingest format=avro topic=headers_src key-format=avro key-schema=${keyschema} schema=${schema} headers={"gus": "gusfive", "gus2": "gus3"}
+# [103, 117, 115, 51] = "gus3"
+$ kafka-ingest format=avro topic=headers_src key-format=avro key-schema=${keyschema} schema=${schema} headers={"gus": "gusfive", "gus2": [103, 117, 115, 51]}
 {"key": "fish"} {"f1": "fishval", "f2": 1000}
 
 $ kafka-ingest format=avro topic=headers_src key-format=avro key-schema=${keyschema} schema=${schema}
