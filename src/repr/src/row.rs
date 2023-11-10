@@ -110,13 +110,25 @@ pub static VARIABLE_LENGTH_ENCODING: AtomicBool = AtomicBool::new(false);
 /// Rows are dynamically sized, but up to a fixed size their data is stored in-line.
 /// It is best to re-use a `Row` across multiple `Row` creation calls, as this
 /// avoids the allocations involved in `Row::new()`.
-#[derive(Clone, Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct Row {
     data: CompactBytes,
 }
 
 // Nothing depends on Row being exactly 24, we just want to add visibility to the size.
 static_assertions::const_assert_eq!(std::mem::size_of::<Row>(), 24);
+
+impl Clone for Row {
+    fn clone(&self) -> Self {
+        Row {
+            data: self.data.clone(),
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.data.clone_from(&source.data);
+    }
+}
 
 impl Arbitrary for Row {
     type Parameters = prop::collection::SizeRange;
