@@ -1210,8 +1210,8 @@ where
         id: GlobalId,
         as_of: Self::Timestamp,
     ) -> Result<Vec<(Row, Diff)>, StorageError> {
-        let data_shard = self.collection(id)?.collection_metadata.data_shard;
-        let contents = match self.txns_id.as_mut() {
+        let metadata = &self.collection(id)?.collection_metadata;
+        let contents = match metadata.txns_shard.as_ref() {
             None => {
                 // We're not using persist-txn for tables, so we can take a snapshot directly.
                 let mut read_handle = self.read_handle_for_snapshot(id).await?;
@@ -1243,11 +1243,11 @@ where
                 let mut txns_cache = TxnsCache::<Self::Timestamp, TxnsCodecRow>::open(
                     &self.txns_client,
                     *txns_id,
-                    Some(data_shard),
+                    Some(metadata.data_shard),
                 )
                 .await;
                 txns_cache.update_gt(&as_of).await;
-                let data_snapshot = txns_cache.data_snapshot(data_shard, as_of.clone());
+                let data_snapshot = txns_cache.data_snapshot(metadata.data_shard, as_of.clone());
                 let mut read_handle = self.read_handle_for_snapshot(id).await?;
                 data_snapshot.snapshot_and_fetch(&mut read_handle).await
             }
@@ -1275,9 +1275,9 @@ where
     where
         Self::Timestamp: Timestamp + Lattice + Codec64,
     {
-        let data_shard = self.collection(id)?.collection_metadata.data_shard;
+        let metadata = &self.collection(id)?.collection_metadata;
         // See the comments in Self::snapshot for what's going on here.
-        let cursor = match self.txns_id.as_mut() {
+        let cursor = match metadata.txns_shard.as_ref() {
             None => {
                 let mut handle = self.read_handle_for_snapshot(id).await?;
                 let cursor = handle
@@ -1295,11 +1295,11 @@ where
                 let mut txns_cache = TxnsCache::<Self::Timestamp, TxnsCodecRow>::open(
                     &self.txns_client,
                     *txns_id,
-                    Some(data_shard),
+                    Some(metadata.data_shard),
                 )
                 .await;
                 txns_cache.update_gt(&as_of).await;
-                let data_snapshot = txns_cache.data_snapshot(data_shard, as_of.clone());
+                let data_snapshot = txns_cache.data_snapshot(metadata.data_shard, as_of.clone());
                 let mut handle = self.read_handle_for_snapshot(id).await?;
                 let cursor = data_snapshot
                     .snapshot_cursor(&mut handle)
