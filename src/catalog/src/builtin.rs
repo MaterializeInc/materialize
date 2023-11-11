@@ -3183,7 +3183,7 @@ pub const PG_DEPEND: BuiltinView = BuiltinView {
     name: "pg_depend",
     schema: PG_CATALOG_SCHEMA,
     column_defs: None,
-    sql:"
+    sql: "
 WITH class_objects AS (
     SELECT
         CASE
