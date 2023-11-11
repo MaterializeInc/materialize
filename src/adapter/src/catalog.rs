@@ -5011,14 +5011,12 @@ mod tests {
                             Some(pgmeta) => (pgmeta.typinput_oid, pgmeta.typreceive_oid),
                         };
                         assert_eq!(
-                            typinput_oid,
-                            pg_ty.input,
+                            typinput_oid, pg_ty.input,
                             "type {} has typinput OID {:?} in mz but {:?} in pg",
                             ty.name, typinput_oid, pg_ty.input,
                         );
                         assert_eq!(
-                            typreceive_oid,
-                            pg_ty.receive,
+                            typreceive_oid, pg_ty.receive,
                             "type {} has typreceive OID {:?} in mz but {:?} in pg",
                             ty.name, typreceive_oid, pg_ty.receive,
                         );
