@@ -25,7 +25,7 @@ use mz_expr::{
     permutation_for_arrangement, CollectionPlan, MirScalarExpr, OptimizedMirRelationExpr,
     RowSetFinishing,
 };
-use mz_ore::collections::CollectionExt;
+use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::vec::VecExt;
 use mz_ore::{soft_assert, task};
@@ -1278,9 +1278,28 @@ impl Coordinator {
         plan::DropObjectsPlan {
             drop_ids,
             object_type,
-            referenced_ids: _,
+            referenced_ids,
         }: plan::DropObjectsPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
+        let referenced_ids_hashset = referenced_ids.iter().collect::<HashSet<_>>();
+
+        for obj_id in &drop_ids {
+            if !referenced_ids_hashset.contains(&obj_id) {
+                let notice_msg = match obj_id {
+                    ObjectId::Cluster(id) => format!("Cluster ID: {}", id),
+                    ObjectId::ClusterReplica((cluster_id, replica_id)) => format!("Cluster Replica ID: ({}, {})", cluster_id, replica_id),
+                    ObjectId::Database(id) => format!("Database ID: {}", id),
+                    ObjectId::Schema((db_specifier, schema_specifier)) => format!("Schema ID: ({:?}, {:?})", db_specifier, schema_specifier),
+                    ObjectId::Role(id) => format!("Role ID: {}", id),
+                    ObjectId::Item(id) => format!("Item ID: {}", id),
+                };
+
+                session.add_notice(AdapterNotice::CascadeDroppedObject {
+                    notice_msg
+                });
+            }
+        }
+
         let DropOps {
             ops,
             dropped_active_db,

@@ -63,6 +63,9 @@ pub enum AdapterNotice {
         status: ClusterStatus,
         time: DateTime<Utc>,
     },
+    CascadeDroppedObject {
+        notice_msg: String,
+    },
     DroppedActiveDatabase {
         name: String,
     },
@@ -155,6 +158,7 @@ impl AdapterNotice {
                 NoticeSeverity::Warning => Severity::Warning,
             },
             AdapterNotice::ClusterReplicaStatusChanged { .. } => Severity::Notice,
+            AdapterNotice::CascadeDroppedObject { .. } => Severity::Info,
             AdapterNotice::DroppedActiveDatabase { .. } => Severity::Notice,
             AdapterNotice::DroppedActiveCluster { .. } => Severity::Notice,
             AdapterNotice::QueryTimestamp { .. } => Severity::Notice,
@@ -236,6 +240,7 @@ impl AdapterNotice {
             }
             AdapterNotice::UserRequested { .. } => SqlState::WARNING,
             AdapterNotice::ClusterReplicaStatusChanged { .. } => SqlState::WARNING,
+            AdapterNotice::CascadeDroppedObject { .. } => SqlState::WARNING, // unsure
             AdapterNotice::DroppedActiveDatabase { .. } => SqlState::WARNING,
             AdapterNotice::DroppedActiveCluster { .. } => SqlState::WARNING,
             AdapterNotice::QueryTimestamp { .. } => SqlState::WARNING,
@@ -281,6 +286,9 @@ impl fmt::Display for AdapterNotice {
             }
             AdapterNotice::DatabaseDoesNotExist { name } => {
                 write!(f, "database {} does not exist", name.quoted())
+            }
+            AdapterNotice::CascadeDroppedObject { notice_msg } => {
+                write!(f, "{}", notice_msg)
             }
             AdapterNotice::ClusterDoesNotExist { name } => {
                 write!(f, "cluster {} does not exist", name.quoted())
