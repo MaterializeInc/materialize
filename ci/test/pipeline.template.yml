@@ -710,6 +710,18 @@ steps:
         agents:
           queue: linux-x86_64
 
+      - id: lang-ruby
+        label: ":ruby: tests"
+        depends_on: build-x86_64
+        timeout_in_minutes: 10
+        inputs: [test/lang/ruby]
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: ruby
+        agents:
+          queue: linux-x86_64
+
   - id: deploy-website
     label: Deploy website
     depends_on: lint-docs

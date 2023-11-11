@@ -127,6 +127,7 @@ impl TypeCategory {
             | ParamType::ListElementAnyCompatible
             | ParamType::Internal
             | ParamType::NonVecAny
+            | ParamType::NonVecAnyCompatible
             | ParamType::MapAny
             | ParamType::MapAnyCompatible
             | ParamType::RecordAny => Self::Pseudo,
@@ -702,6 +703,10 @@ pub enum ParamType {
     /// `ScalarType::Array`, requiring other "Any"-type
     /// parameters to be of the same type.
     NonVecAny,
+    /// A pseudotype permitting any type except `ScalarType::List` and
+    /// `ScalarType::Array`, requiring other "Compatibility"-type
+    /// parameters to be of the same type.
+    NonVecAnyCompatible,
     /// A standard parameter that accepts arguments that match its embedded
     /// `ScalarType`.
     Plain(ScalarType),
@@ -735,7 +740,7 @@ impl ParamType {
             ListAny | ListAnyCompatible => matches!(t, List { .. }),
             MapAny | MapAnyCompatible => matches!(t, Map { .. }),
             RangeAny | RangeAnyCompatible => matches!(t, Range { .. }),
-            NonVecAny => !t.is_vec(),
+            NonVecAny | NonVecAnyCompatible => !t.is_vec(),
             Internal => false,
             Plain(to) => typeconv::can_cast(ecx, CastContext::Implicit, t, to),
             RecordAny => matches!(t, Record { .. }),
@@ -784,6 +789,7 @@ impl ParamType {
             | MapAny
             | MapAnyCompatible
             | NonVecAny
+            | NonVecAnyCompatible
             // In PG, RecordAny isn't polymorphic even though it offers
             // polymorphic behavior. For more detail, see
             // `PolymorphicCompatClass::StructuralEq`.
@@ -816,6 +822,7 @@ impl ParamType {
             ParamType::MapAny => "map",
             ParamType::MapAnyCompatible => "anycompatiblemap",
             ParamType::NonVecAny => "anynonarray",
+            ParamType::NonVecAnyCompatible => "anycompatiblenonarray",
             ParamType::RecordAny => "record",
             ParamType::RangeAny => "anyrange",
             ParamType::RangeAnyCompatible => "anycompatiblerange",
@@ -1304,7 +1311,7 @@ impl TryFrom<&ParamType> for PolymorphicCompatClass {
             AnyElement | ArrayAny | ListAny | MapAny | NonVecAny | RangeAny => {
                 PolymorphicCompatClass::Any
             }
-            ArrayAnyCompatible | AnyCompatible | RangeAnyCompatible => {
+            ArrayAnyCompatible | AnyCompatible | RangeAnyCompatible | NonVecAnyCompatible => {
                 PolymorphicCompatClass::BestCommonAny
             }
             ListAnyCompatible | ListElementAnyCompatible => PolymorphicCompatClass::BestCommonList,
@@ -1803,10 +1810,6 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
 
                 Ok(HirScalarExpr::CallVariadic { func: VariadicFunc::ArrayFill { elem_type }, exprs })
             }) => ArrayAny, 1286;
-        },
-        "array_in" => Scalar {
-            params!(String, Oid, Int32) =>
-                Operation::variadic(|_ecx, _exprs| bail_unsupported!("array_in")) => ArrayAny, 750;
         },
         "array_length" => Scalar {
             params![ArrayAny, Int64] => BinaryFunc::ArrayLength => Int32, 2176;
@@ -2746,6 +2749,124 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
         },
 
         // Internal conversion stubs.
+        "aclitemin" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("aclitemin")) => AclItem, 1031;
+        },
+        "any_in" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("any_in")) => Any, 2294;
+        },
+        "anyarray_in" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("anyarray_in")) => ArrayAny, 2296;
+        },
+        "anycompatible_in" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("anycompatible_in")) => AnyCompatible, 5086;
+        },
+        "anycompatiblearray_in" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("anycompatiblearray_in")) => ArrayAnyCompatible, 5088;
+        },
+        "anycompatiblenonarray_in" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("anycompatiblenonarray_in")) => NonVecAnyCompatible, 5092;
+        },
+        "anycompatiblerange_in" => Scalar {
+            params!(String, Oid, Int32) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("anycompatiblerange_in")) => RangeAnyCompatible, 5094;
+        },
+        "anyelement_in" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("anyelement_in")) => AnyElement, 2312;
+        },
+        "anynonarray_in" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("anynonarray_in")) => NonVecAny, 2777;
+        },
+        "anyrange_in" => Scalar {
+            params!(String, Oid, Int32) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("anyrange_in")) => RangeAny, 3832;
+        },
+        "array_in" => Scalar {
+            params!(String, Oid, Int32) =>
+                Operation::variadic(|_ecx, _exprs| bail_unsupported!("array_in")) => ArrayAny, 750;
+        },
+        "boolin" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("boolin")) => Bool, 1242;
+        },
+        "bpcharin" => Scalar {
+            params!(String, Oid, Int32) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("bpcharin")) => Char, 1044;
+        },
+        "byteain" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("byteain")) => Bytes, 1244;
+        },
+        "charin" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("charin")) => PgLegacyChar, 1245;
+        },
+        "date_in" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("date_in")) => Date, 1084;
+        },
+        "float4in" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("float4in")) => Float32, 200;
+        },
+        "float8in" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("float8in")) => Float64, 214;
+        },
+        "int2in" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("int2in")) => Int16, 38;
+        },
+        "int2vectorin" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("int2vectorin")) => Int2Vector, 40;
+        },
+        "int4in" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("int4in")) => Int32, 42;
+        },
+        "int8in" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("int8in")) => Int64, 460;
+        },
+        "internal_in" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("internal_in")) => Internal, 2304;
+        },
+        "interval_in" => Scalar {
+            params!(String, Oid, Int32) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("interval_in")) => Interval, 1160;
+        },
+        "jsonb_in" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("jsonb_in")) => Jsonb, 3806;
+        },
+        "namein" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("namein")) => PgLegacyName, 34;
+        },
+        "numeric_in" => Scalar {
+            params!(String, Oid, Int32) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("numeric_in")) => Numeric, 1701;
+        },
+        "oidin" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("oidin")) => Oid, 1798;
+        },
+        "range_in" => Scalar {
+            params!(String, Oid, Int32) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("range_in")) => RangeAny, 3834;
+        },
+        "record_in" => Scalar {
+            params!(String, Oid, Int32) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("record_in")) => RecordAny, 2290;
+        },
+        "regclassin" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("regclassin")) => RegClass, 2218;
+        },
+        "regprocin" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("regprocin")) => RegProc, 44;
+        },
+        "regtypein" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("regtypein")) => RegType, 2220;
+        },
+        "textin" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("textin")) => String, 46;
+        },
+        "time_in" => Scalar {
+            params!(String, Oid, Int32) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("time_in")) => Time, 1143;
+        },
+        "timestamp_in" => Scalar {
+            params!(String, Oid, Int32) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("timestamp_in")) => Timestamp, 1312;
+        },
+        "timestamptz_in" => Scalar {
+            params!(String, Oid, Int32) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("timestamptz_in")) => TimestampTz, 1150;
+        },
+        "varcharin" => Scalar {
+            params!(String, Oid, Int32) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("varcharin")) => VarChar, 1046;
+        },
+        "uuid_in" => Scalar {
+            params!(String) => Operation::variadic(|_ecx, _exprs| bail_unsupported!("uuid_in")) => Uuid, 2952;
+        },
         "boolrecv" => Scalar {
             params!(Internal) => Operation::nullary(|_ecx| catalog_name_only!("boolrecv")) => Bool, 2436;
         },

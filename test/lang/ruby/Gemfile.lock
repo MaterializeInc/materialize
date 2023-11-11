@@ -1,0 +1,18 @@
+GEM
+  remote: https://rubygems.org/
+  specs:
+    pg (1.5.4)
+    power_assert (2.0.3)
+    test-unit (3.6.1)
+      power_assert
+
+PLATFORMS
+  aarch64-linux
+  arm64-darwin-22
+
+DEPENDENCIES
+  pg (~> 1.5.4)
+  test-unit (~> 3.6.1)
+
+BUNDLED WITH
+   2.4.10

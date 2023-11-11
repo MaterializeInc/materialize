@@ -783,8 +783,17 @@ pub struct CatalogTypeDetails<T: TypeReference> {
     pub array_id: Option<GlobalId>,
     /// The description of this type.
     pub typ: CatalogType<T>,
-    /// The OID of the `typreceive` function in PostgreSQL, if available.
-    pub typreceive_oid: Option<u32>,
+    /// Additional metadata about the type in PostgreSQL, if relevant.
+    pub pg_metadata: Option<CatalogTypePgMetadata>,
+}
+
+/// Additional PostgreSQL metadata about a type.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CatalogTypePgMetadata {
+    /// The OID of the `typinput` function in PostgreSQL.
+    pub typinput_oid: u32,
+    /// The OID of the `typreceive` function in PostgreSQL.
+    pub typreceive_oid: u32,
 }
 
 /// Represents a reference to type in the catalog
