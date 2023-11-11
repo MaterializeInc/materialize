@@ -3572,19 +3572,48 @@ pub const PG_SHDESCRIPTION: BuiltinView = BuiltinView {
 pub const PG_TIMEZONE_ABBREVS: BuiltinView = BuiltinView {
     name: "pg_timezone_abbrevs",
     schema: PG_CATALOG_SCHEMA,
-    sql: concatcp!(
-        "CREATE VIEW pg_catalog.pg_timezone_abbrevs (abbrev, utc_offset, is_dst) AS ",
-        mz_pgtz::abbrev::PG_CATALOG_TIMEZONE_ABBREVS_SQL,
-    ),
+    sql:  "CREATE VIEW pg_catalog.pg_timezone_abbrevs (abbrev, utc_offset, is_dst) AS
+SELECT
+    abbreviation AS abbrev,
+    COALESCE(utc_offset, timezone_offset(timezone_name, now()).base_utc_offset + timezone_offset(timezone_name, now()).dst_offset)
+        AS utc_offset,
+    COALESCE(dst, timezone_offset(timezone_name, now()).dst_offset <> INTERVAL '0')
+        AS is_dst
+FROM mz_catalog.mz_timezone_abbreviations",
     sensitivity: DataSensitivity::Public,
 };
 
 pub const PG_TIMEZONE_NAMES: BuiltinView = BuiltinView {
     name: "pg_timezone_names",
     schema: PG_CATALOG_SCHEMA,
+    sql: "CREATE VIEW pg_catalog.pg_timezone_names (name, abbrev, utc_offset, is_dst) AS
+SELECT
+    name,
+    timezone_offset(name, now()).abbrev,
+    timezone_offset(name, now()).base_utc_offset + timezone_offset(name, now()).dst_offset
+        AS utc_offset,
+    timezone_offset(name, now()).dst_offset <> INTERVAL '0'
+        AS is_dst
+FROM mz_catalog.mz_timezone_names",
+    sensitivity: DataSensitivity::Public,
+};
+
+pub const MZ_TIMEZONE_ABBREVIATIONS: BuiltinView = BuiltinView {
+    name: "mz_timezone_abbreviations",
+    schema: MZ_CATALOG_SCHEMA,
     sql: concatcp!(
-        "CREATE VIEW pg_catalog.pg_timezone_names (name, abbrev, utc_offset, is_dst) AS ",
-        mz_pgtz::timezone::PG_CATALOG_TIMEZONE_NAMES_SQL,
+        "CREATE VIEW mz_catalog.mz_timezone_abbreviations (abbreviation, utc_offset, dst, timezone_name) AS ",
+        mz_pgtz::abbrev::MZ_CATALOG_TIMEZONE_ABBREVIATIONS_SQL,
+    ),
+    sensitivity: DataSensitivity::Public,
+};
+
+pub const MZ_TIMEZONE_NAMES: BuiltinView = BuiltinView {
+    name: "mz_timezone_names",
+    schema: MZ_CATALOG_SCHEMA,
+    sql: concatcp!(
+        "CREATE VIEW mz_catalog.mz_timezone_names (name) AS ",
+        mz_pgtz::timezone::MZ_CATALOG_TIMEZONE_NAMES_SQL,
     ),
     sensitivity: DataSensitivity::Public,
 };
@@ -5996,6 +6025,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_SHOW_INDEXES),
         Builtin::View(&MZ_SHOW_CLUSTER_REPLICAS),
         Builtin::View(&MZ_CLUSTER_REPLICA_HISTORY),
+        Builtin::View(&MZ_TIMEZONE_NAMES),
+        Builtin::View(&MZ_TIMEZONE_ABBREVIATIONS),
         Builtin::View(&PG_NAMESPACE),
         Builtin::View(&PG_CLASS),
         Builtin::View(&PG_DEPEND),

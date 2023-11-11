@@ -176,26 +176,25 @@ fn main() -> Result<()> {
             );
             rust_buf.writeln(";");
 
-            let (sql_utc_offset, sql_is_dst) = match &spec {
+            let (mz_sql_fixed_offset, mz_sql_is_dst, mz_sql_tz_name) = match &spec {
                 TimezoneAbbrevSpec::FixedOffset {
                     utc_offset_secs,
                     is_dst,
                 } => {
                     let utc_offset = format!("interval '{utc_offset_secs} seconds'");
                     let is_dst = is_dst.to_string();
-                    (utc_offset, is_dst)
+                    (utc_offset, is_dst, "NULL".to_string())
                 }
                 TimezoneAbbrevSpec::Tz(name) => {
-                    let utc_offset = format!("timezone_offset('{name}', now()).base_utc_offset + timezone_offset('{name}', now()).dst_offset");
-                    let is_dst =
-                        format!("timezone_offset('{name}', now()).dst_offset <> interval '0'");
-                    (utc_offset, is_dst)
+                    ("NULL".to_string(), "NULL".to_string(), format!("'{name}'"))
                 }
             };
             if emitted_abbrev {
                 sql_buf.writeln(",");
             }
-            sql_buf.writeln(format!("('{abbrev}', {sql_utc_offset}, {sql_is_dst})"));
+            sql_buf.writeln(format!(
+                "('{abbrev}', {mz_sql_fixed_offset}, {mz_sql_is_dst}, {mz_sql_tz_name})"
+            ));
 
             phf_map.entry(UncasedStr::new(abbrev), abbrev);
 
@@ -213,11 +212,9 @@ fn main() -> Result<()> {
         fs::write(out_dir.join("abbrev.gen.rs"), rust_buf.into_string())?;
     }
 
-    // Convert chrono-tz's list of timezones into the SQL definition of the
-    // pg_timezone_names view.
+    // Convert chrono-tz's list of timezones into the SQL definition of the mz_timezone_names view.
     {
         let mut sql_buf = CodegenBuf::new();
-
         sql_buf.writeln("VALUES");
 
         for (i, tz) in TZ_VARIANTS.iter().enumerate() {
@@ -226,12 +223,7 @@ fn main() -> Result<()> {
                 sql_buf.writeln(",");
             }
             sql_buf.write("(");
-            sql_buf.write(format!("'{name}',"));
-            sql_buf.write(format!("timezone_offset('{name}', now()).abbrev,"));
-            sql_buf.write(format!("timezone_offset('{name}', now()).base_utc_offset + timezone_offset('{name}', now()).dst_offset,"));
-            sql_buf.write(format!(
-                "timezone_offset('{name}', now()).dst_offset <> interval '0'"
-            ));
+            sql_buf.write(format!("'{name}'"));
             sql_buf.write(")");
         }
 
