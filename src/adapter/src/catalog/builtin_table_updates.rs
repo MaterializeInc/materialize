@@ -25,6 +25,7 @@ use mz_catalog::builtin::{
     MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::memory::error::{Error, ErrorKind};
+use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{
     ClusterStatus, ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ProcessId,
     ReplicaAllocation, ReplicaLocation,
@@ -54,7 +55,6 @@ use mz_storage_types::sources::{
 use crate::catalog::{
     AwsPrincipalContext, CatalogItem, CatalogState, ClusterVariant, Connection, DataSourceDesc,
     Database, DefaultPrivilegeObject, Func, Index, MaterializedView, Sink, Type, View,
-    SYSTEM_CONN_ID,
 };
 use crate::coord::ConnMeta;
 use crate::subscribe::ActiveSubscribe;
