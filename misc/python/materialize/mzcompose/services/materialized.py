@@ -156,7 +156,15 @@ class Materialized(Service):
 
         command += options
 
-        config: ServiceConfig = {}
+        config: ServiceConfig = {
+            # Use the service name as the hostname so that it is stable across
+            # container recreation. (The default hostname is the container ID,
+            # which changes when the container is recreated.) This is important
+            # when using `external_cockroach=False`, as the consensus/blob URLs
+            # refer to the container's hostname, and we don't want those URLs to
+            # change when the container is recreated.
+            "hostname": name,
+        }
 
         if image:
             config["image"] = image
