@@ -1287,16 +1287,18 @@ impl Coordinator {
             if !referenced_ids_hashset.contains(&obj_id) {
                 let notice_msg = match obj_id {
                     ObjectId::Cluster(id) => format!("Cluster ID: {}", id),
-                    ObjectId::ClusterReplica((cluster_id, replica_id)) => format!("Cluster Replica ID: ({}, {})", cluster_id, replica_id),
+                    ObjectId::ClusterReplica((cluster_id, replica_id)) => {
+                        format!("Cluster Replica ID: ({}, {})", cluster_id, replica_id)
+                    }
                     ObjectId::Database(id) => format!("Database ID: {}", id),
-                    ObjectId::Schema((db_specifier, schema_specifier)) => format!("Schema ID: ({:?}, {:?})", db_specifier, schema_specifier),
+                    ObjectId::Schema((db_specifier, schema_specifier)) => {
+                        format!("Schema ID: ({:?}, {:?})", db_specifier, schema_specifier)
+                    }
                     ObjectId::Role(id) => format!("Role ID: {}", id),
                     ObjectId::Item(id) => format!("Item ID: {}", id),
                 };
 
-                session.add_notice(AdapterNotice::CascadeDroppedObject {
-                    notice_msg
-                });
+                session.add_notice(AdapterNotice::CascadeDroppedObject { notice_msg });
             }
         }
 
