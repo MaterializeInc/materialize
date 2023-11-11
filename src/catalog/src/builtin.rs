@@ -3183,7 +3183,7 @@ pub const PG_DEPEND: BuiltinView = BuiltinView {
     name: "pg_depend",
     schema: PG_CATALOG_SCHEMA,
     column_defs: None,
-    sql: r#"
+    sql:"
 WITH class_objects AS (
     SELECT
         CASE
@@ -3229,7 +3229,7 @@ SELECT
     'n'::pg_catalog.char AS deptype
 FROM mz_internal.mz_object_dependencies
 JOIN current_objects objects ON object_id = objects.id
-JOIN current_objects dependents ON referenced_object_id = dependents.id"#,
+JOIN current_objects dependents ON referenced_object_id = dependents.id",
     sensitivity: DataSensitivity::Public,
 };
 
