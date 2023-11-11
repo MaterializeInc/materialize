@@ -1001,7 +1001,7 @@ impl CatalogState {
                 details: CatalogTypeDetails {
                     array_id: None,
                     typ: typ.inner,
-                    typreceive_oid: None,
+                    pg_metadata: None,
                 },
                 resolved_ids,
             }),

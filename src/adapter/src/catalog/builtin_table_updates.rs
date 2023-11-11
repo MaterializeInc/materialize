@@ -964,12 +964,13 @@ impl CatalogState {
             diff,
         });
 
-        if let Some(typreceive_oid) = typ.details.typreceive_oid {
+        if let Some(pg_metadata) = &typ.details.pg_metadata {
             out.push(BuiltinTableUpdate {
                 id: self.resolve_builtin_table(&MZ_TYPE_PG_METADATA),
                 row: Row::pack_slice(&[
                     Datum::String(&id.to_string()),
-                    Datum::UInt32(typreceive_oid),
+                    Datum::UInt32(pg_metadata.typinput_oid),
+                    Datum::UInt32(pg_metadata.typreceive_oid),
                 ]),
                 diff,
             });
