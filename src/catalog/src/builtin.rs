@@ -3133,6 +3133,10 @@ pub const PG_DEPEND: BuiltinView = BuiltinView {
     schema: PG_CATALOG_SCHEMA,
     sql: "CREATE VIEW pg_catalog.pg_depend AS
 WITH class_objects AS (
+    
+    
+    
+    
     SELECT
         CASE
             WHEN type = 'table' THEN 'pg_tables'::pg_catalog.regclass::pg_catalog.oid
