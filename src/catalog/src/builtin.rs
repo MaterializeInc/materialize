@@ -282,7 +282,7 @@ impl Fingerprint for &BuiltinTable {
 
 impl Fingerprint for &BuiltinView {
     fn fingerprint(&self) -> String {
-        self.sql.to_string()
+        self.create_sql()
     }
 }
 
@@ -2820,7 +2820,7 @@ pub const MZ_DATAFLOWS_PER_WORKER: BuiltinView = BuiltinView {
     name: "mz_dataflows_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
-    sql: " SELECT
+    sql: "SELECT
     addrs.address[1] AS id,
     ops.worker_id,
     ops.name
@@ -2882,7 +2882,7 @@ pub const MZ_DATAFLOW_OPERATOR_DATAFLOWS_PER_WORKER: BuiltinView = BuiltinView {
     name: "mz_dataflow_operator_dataflows_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
-    sql: " SELECT
+    sql: "SELECT
     ops.id,
     ops.name,
     ops.worker_id,
@@ -2941,7 +2941,7 @@ pub const MZ_COMPUTE_FRONTIERS: BuiltinView = BuiltinView {
     name: "mz_compute_frontiers",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
-    sql: " SELECT
+    sql: "SELECT
     export_id, pg_catalog.min(time) AS time
 FROM mz_internal.mz_compute_frontiers_per_worker
 GROUP BY export_id",
@@ -3004,7 +3004,7 @@ pub const MZ_COMPUTE_IMPORT_FRONTIERS: BuiltinView = BuiltinView {
     name: "mz_compute_import_frontiers",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
-    sql: " SELECT
+    sql: "SELECT
     export_id, import_id, pg_catalog.min(time) AS time
 FROM mz_internal.mz_compute_import_frontiers_per_worker
 GROUP BY export_id, import_id",
@@ -3105,7 +3105,7 @@ pub const PG_NAMESPACE: BuiltinView = BuiltinView {
     name: "pg_namespace",
     schema: PG_CATALOG_SCHEMA,
     column_defs: None,
-    sql: " SELECT
+    sql: "SELECT
 s.oid AS oid,
 s.name AS nspname,
 role_owner.oid AS nspowner,
@@ -3237,7 +3237,7 @@ pub const PG_DATABASE: BuiltinView = BuiltinView {
     name: "pg_database",
     schema: PG_CATALOG_SCHEMA,
     column_defs: None,
-    sql: " SELECT
+    sql: "SELECT
     d.oid as oid,
     d.name as datname,
     role_owner.oid as datdba,
@@ -3257,7 +3257,7 @@ pub const PG_INDEX: BuiltinView = BuiltinView {
     name: "pg_index",
     schema: PG_CATALOG_SCHEMA,
     column_defs: None,
-    sql: " SELECT
+    sql: "SELECT
     mz_indexes.oid AS indexrelid,
     mz_relations.oid AS indrelid,
     -- MZ doesn't support creating unique indexes so indisunique is filled with false
@@ -3296,7 +3296,7 @@ pub const PG_INDEXES: BuiltinView = BuiltinView {
     name: "pg_indexes",
     schema: PG_CATALOG_SCHEMA,
     column_defs: None,
-    sql: " SELECT
+    sql: "SELECT
     current_database() as table_catalog,
     s.name AS schemaname,
     r.name AS tablename,
@@ -3357,7 +3357,7 @@ pub const PG_TYPE: BuiltinView = BuiltinView {
     name: "pg_type",
     schema: PG_CATALOG_SCHEMA,
     column_defs: None,
-    sql: " SELECT
+    sql: "SELECT
     mz_types.oid,
     mz_types.name AS typname,
     mz_schemas.oid AS typnamespace,
@@ -3440,7 +3440,7 @@ pub const PG_ATTRIBUTE: BuiltinView = BuiltinView {
     name: "pg_attribute",
     schema: PG_CATALOG_SCHEMA,
     column_defs: None,
-    sql: " SELECT
+    sql: "SELECT
     class_objects.oid as attrelid,
     mz_columns.name as attname,
     mz_columns.type_oid AS atttypid,
@@ -3477,7 +3477,7 @@ pub const PG_PROC: BuiltinView = BuiltinView {
     name: "pg_proc",
     schema: PG_CATALOG_SCHEMA,
     column_defs: None,
-    sql: " SELECT
+    sql: "SELECT
     mz_functions.oid,
     mz_functions.name AS proname,
     mz_schemas.oid AS pronamespace,
@@ -3497,7 +3497,7 @@ pub const PG_OPERATOR: BuiltinView = BuiltinView {
     name: "pg_operator",
     schema: PG_CATALOG_SCHEMA,
     column_defs: None,
-    sql: " SELECT
+    sql: "SELECT
     mz_operators.oid,
     mz_operators.name AS oprname,
     ret_type.oid AS oprresult,
@@ -3525,7 +3525,7 @@ pub const PG_RANGE: BuiltinView = BuiltinView {
     name: "pg_range",
     schema: PG_CATALOG_SCHEMA,
     column_defs: None,
-    sql: " SELECT
+    sql: "SELECT
     NULL::pg_catalog.oid AS rngtypid,
     NULL::pg_catalog.oid AS rngsubtype
 WHERE false",
@@ -3536,7 +3536,7 @@ pub const PG_ENUM: BuiltinView = BuiltinView {
     name: "pg_enum",
     schema: PG_CATALOG_SCHEMA,
     column_defs: None,
-    sql: " SELECT
+    sql: "SELECT
     NULL::pg_catalog.oid AS oid,
     NULL::pg_catalog.oid AS enumtypid,
     NULL::pg_catalog.float4 AS enumsortorder,
@@ -3549,7 +3549,7 @@ pub const PG_ATTRDEF: BuiltinView = BuiltinView {
     name: "pg_attrdef",
     schema: PG_CATALOG_SCHEMA,
     column_defs: None,
-    sql: " SELECT
+    sql: "SELECT
     NULL::pg_catalog.oid AS oid,
     mz_objects.oid AS adrelid,
     mz_columns.position::int8 AS adnum,
@@ -3566,7 +3566,7 @@ pub const PG_SETTINGS: BuiltinView = BuiltinView {
     name: "pg_settings",
     schema: PG_CATALOG_SCHEMA,
     column_defs: None,
-    sql: " SELECT
+    sql: "SELECT
     name, setting
 FROM (VALUES
     ('max_index_keys'::pg_catalog.text, '1000'::pg_catalog.text)
@@ -3595,7 +3595,7 @@ pub const PG_EVENT_TRIGGER: BuiltinView = BuiltinView {
     name: "pg_event_trigger",
     schema: PG_CATALOG_SCHEMA,
     column_defs: None,
-    sql: " SELECT
+    sql: "SELECT
         NULL::pg_catalog.oid AS oid,
         NULL::pg_catalog.text AS evtname,
         NULL::pg_catalog.text AS evtevent,
@@ -3611,7 +3611,7 @@ pub const PG_LANGUAGE: BuiltinView = BuiltinView {
     name: "pg_language",
     schema: PG_CATALOG_SCHEMA,
     column_defs: None,
-    sql: " SELECT
+    sql: "SELECT
         NULL::pg_catalog.oid  AS oid,
         NULL::pg_catalog.text AS lanname,
         NULL::pg_catalog.oid  AS lanowner,
@@ -3683,7 +3683,7 @@ pub const MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_PER_WORKER: BuiltinView = Bui
     name: "mz_dataflow_shutdown_durations_histogram_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
-    sql: " SELECT
+    sql: "SELECT
     worker_id, duration_ns, pg_catalog.count(*) AS count
 FROM
     mz_internal.mz_dataflow_shutdown_durations_histogram_raw
@@ -3735,7 +3735,7 @@ pub const MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_PER_WORKER: BuiltinView = Buil
     name: "mz_compute_operator_durations_histogram_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
-    sql: " SELECT
+    sql: "SELECT
     id, worker_id, duration_ns, pg_catalog.count(*) AS count
 FROM
     mz_internal.mz_compute_operator_durations_histogram_raw
@@ -3762,7 +3762,7 @@ pub const MZ_SCHEDULING_PARKS_HISTOGRAM_PER_WORKER: BuiltinView = BuiltinView {
     name: "mz_scheduling_parks_histogram_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
-    sql: " SELECT
+    sql: "SELECT
     worker_id, slept_for_ns, requested_ns, pg_catalog.count(*) AS count
 FROM
     mz_internal.mz_scheduling_parks_histogram_raw
@@ -4316,7 +4316,7 @@ pub const PG_CONSTRAINT: BuiltinView = BuiltinView {
     name: "pg_constraint",
     schema: PG_CATALOG_SCHEMA,
     column_defs: None,
-    sql: " SELECT
+    sql: "SELECT
     NULL::pg_catalog.oid as oid,
     NULL::pg_catalog.text as conname,
     NULL::pg_catalog.oid as connamespace,
@@ -4397,7 +4397,7 @@ pub const PG_ROLES: BuiltinView = BuiltinView {
     name: "pg_roles",
     schema: PG_CATALOG_SCHEMA,
     column_defs: None,
-    sql: " SELECT
+    sql: "SELECT
     r.rolname,
     r.rolsuper,
     r.rolinherit,
@@ -4420,7 +4420,7 @@ pub const PG_VIEWS: BuiltinView = BuiltinView {
     name: "pg_views",
     schema: PG_CATALOG_SCHEMA,
     column_defs: None,
-    sql: " SELECT
+    sql: "SELECT
     s.name AS schemaname,
     v.name AS viewname,
     role_owner.oid AS viewowner,
@@ -4519,7 +4519,7 @@ pub const INFORMATION_SCHEMA_KEY_COLUMN_USAGE: BuiltinView = BuiltinView {
     name: "key_column_usage",
     schema: INFORMATION_SCHEMA,
     column_defs: None,
-    sql: " SELECT
+    sql: "SELECT
     NULL::text AS constraint_catalog,
     NULL::text AS constraint_schema,
     NULL::text AS constraint_name,
@@ -4537,7 +4537,7 @@ pub const INFORMATION_SCHEMA_REFERENTIAL_CONSTRAINTS: BuiltinView = BuiltinView 
     name: "referential_constraints",
     schema: INFORMATION_SCHEMA,
     column_defs: None,
-    sql: " SELECT
+    sql: "SELECT
     NULL::text AS constraint_catalog,
     NULL::text AS constraint_schema,
     NULL::text AS constraint_name,

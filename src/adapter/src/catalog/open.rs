@@ -545,7 +545,7 @@ impl Catalog {
                             let item = state
                             .parse_item(
                                 id,
-                                view.create_sql(),
+                                view.create_sql().into(),
                                 None,
                                 false,
                                 None
