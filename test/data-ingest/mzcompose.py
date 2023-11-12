@@ -26,7 +26,7 @@ SERVICES = [
     Zookeeper(),
     Kafka(
         auto_create_topics=False,
-        port="30123:30123",
+        ports=["30123:30123"],
         allow_host_ports=True,
         environment_extra=[
             "KAFKA_ADVERTISED_LISTENERS=HOST://localhost:30123,PLAINTEXT://kafka:9092",

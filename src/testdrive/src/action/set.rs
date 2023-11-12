@@ -11,6 +11,7 @@ use std::cmp;
 
 use anyhow::{bail, Context};
 use regex::Regex;
+use tokio::fs;
 
 use crate::action::{ControlFlow, State};
 use crate::parser::BuiltinCommand;
@@ -108,5 +109,19 @@ pub async fn run_set_from_sql(
 
     state.cmd_vars.insert(var, value);
 
+    Ok(ControlFlow::Continue)
+}
+
+pub async fn run_set_from_file(
+    cmd: BuiltinCommand,
+    state: &mut State,
+) -> Result<ControlFlow, anyhow::Error> {
+    for (key, path) in cmd.args {
+        println!("Setting {} to contents of {}...", key, path);
+        let contents = fs::read_to_string(&path)
+            .await
+            .with_context(|| format!("reading {path}"))?;
+        state.cmd_vars.insert(key, contents);
+    }
     Ok(ControlFlow::Continue)
 }

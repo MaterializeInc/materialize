@@ -35,7 +35,7 @@ use tokio::runtime::Handle;
 use tracing::{debug, error, info, warn, Level};
 
 /// A reasonable default timeout when fetching metadata or partitions.
-pub const DEFAULT_FETCH_METADATA_TIMEOUT: Duration = Duration::from_secs(30);
+pub const DEFAULT_FETCH_METADATA_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A `ClientContext` implementation that uses `tracing` instead of `log`
 /// macros.
@@ -87,6 +87,9 @@ pub enum MzKafkaError {
     /// Missing CA certificate
     #[error("Invalid CA certificate")]
     InvalidCACertificate,
+    /// Broker might require SSL encryption
+    #[error("Disconnected during handshake; broker might require SSL encryption")]
+    SSLEncryptionMaybeRequired,
     /// Broker does not support SSL connections
     #[error("Broker does not support SSL connections")]
     SSLUnsupported,
@@ -139,6 +142,8 @@ impl FromStr for MzKafkaError {
             Ok(Self::InvalidCredentials)
         } else if s.contains("broker certificate could not be verified") {
             Ok(Self::InvalidCACertificate)
+        } else if s.contains("connecting to a SSL listener?") {
+            Ok(Self::SSLEncryptionMaybeRequired)
         } else if s.contains("client SSL authentication might be required") {
             Ok(Self::SSLAuthenticationRequired)
         } else if s.contains("connecting to a PLAINTEXT broker listener") {
@@ -189,11 +194,22 @@ impl FromStr for MzKafkaError {
 impl ClientContext for MzClientContext {
     fn log(&self, level: rdkafka::config::RDKafkaLogLevel, fac: &str, log_message: &str) {
         use rdkafka::config::RDKafkaLogLevel::*;
+
+        // Sniff out log messages that indicate errors.
+        //
+        // We consider any event at error, critical, alert, or emergency level,
+        // for self explanatory reasons. We also consider any event with a
+        // facility of `FAIL`. librdkafka often uses info or warn level for
+        // these `FAIL` events, but as they always indicate a failure to connect
+        // to a broker we want to always treat them as errors.
+        if matches!(level, Emerg | Alert | Critical | Error) || fac == "FAIL" {
+            self.record_error(log_message);
+        }
+
         // Copied from https://docs.rs/rdkafka/0.28.0/src/rdkafka/client.rs.html#58-79
         // but using `tracing`
         match level {
             Emerg | Alert | Critical | Error => {
-                self.record_error(log_message);
                 // We downgrade error messages to `warn!` level to avoid
                 // sending the errors to Sentry. Most errors are customer
                 // configuration problems that are not appropriate to send to

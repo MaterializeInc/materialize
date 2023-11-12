@@ -374,27 +374,15 @@ steps:
         agents:
           queue: linux-x86_64
 
-      - id: kafka-ssl
-        label: Kafka SSL smoke test
+      - id: kafka-auth
+        label: Kafka auth test
         depends_on: build-x86_64
         timeout_in_minutes: 30
-        inputs: [test/kafka-ssl/smoketest.td]
+        inputs: [test/kafka-auth/smoketest.td]
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
-              composition: kafka-ssl
-        agents:
-          queue: linux-x86_64
-
-      - id: kafka-sasl-plain
-        label: Kafka SASL PLAIN smoke test
-        depends_on: build-x86_64
-        timeout_in_minutes: 30
-        inputs: [test/kafka-sasl-plain/smoketest.td]
-        artifact_paths: junit_*.xml
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: kafka-sasl-plain
+              composition: kafka-auth
         agents:
           queue: linux-x86_64
 
