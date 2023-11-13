@@ -21,6 +21,7 @@ chrono = { version = "0.4.23", default-features = false, features = [
   "std",
 ], optional = true }
 clap = { version = "3.2.24", features = ["env"], optional = true }
+compact_bytes = { version = "0.1.1", optional = true }
 ctor = { version = "0.1.26", optional = true }
 either = "1.8.0"
 futures = { version = "0.3.25", optional = true }
@@ -95,7 +96,7 @@ async = [
   "tokio",
   "tracing",
 ]
-bytes_ = ["bytes", "smallvec", "smallvec/const_generics"]
+bytes_ = ["bytes", "compact_bytes", "smallvec", "smallvec/const_generics"]
 network = ["async", "bytes", "hyper", "smallvec", "tonic", "tracing"]
 region = ["lgalloc"]
 tracing_ = [
