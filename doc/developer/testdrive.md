@@ -802,7 +802,7 @@ for the specified consumer group, topic, and partition.
 #### `headers=<list or object>`
 
 `headers` is a parameter that takes a json map (or list of maps) with string key-value pairs
-sent as headers for every message for the given action.
+sent as headers for every message for the given action. To represent a value of bytes (instead of string) an int array with each value representing a byte can be passed.
 
 ## Actions on Confluent Schema Registry
 
