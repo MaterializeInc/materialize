@@ -178,10 +178,10 @@ def fetch(
 ) -> str:
     """Fetch from remotes"""
 
-    if remote and all_remotes:
+    if remote is not None and all_remotes:
         raise RuntimeError("all_remotes must be false when a remote is specified")
 
-    if branch and not remote:
+    if branch is not None and remote is None:
         raise RuntimeError("remote must be specified when a branch is specified")
 
     if branch is not None and only_tags:
