@@ -1107,17 +1107,20 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
                     TransactionOps::DDL {
                         ops: og_ops,
                         revision: og_revision,
-                        state: _,
+                        state: og_state,
                     } => match add_ops {
                         TransactionOps::DDL {
                             ops: new_ops,
                             revision: new_revision,
-                            state: _,
+                            state: new_state,
                         } => {
                             if *og_revision != new_revision {
                                 return Err(AdapterError::DDLTransactionRace);
                             }
-                            og_ops.extend(new_ops);
+                            if !new_ops.is_empty() {
+                                *og_ops = new_ops;
+                                *og_state = new_state;
+                            }
                         }
                         _ => return Err(AdapterError::DDLOnlyTransaction),
                     },

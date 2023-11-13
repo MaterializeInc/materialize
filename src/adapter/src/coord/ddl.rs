@@ -97,11 +97,11 @@ impl Coordinator {
             ops:
                 TransactionOps::DDL {
                     ops: txn_ops,
-                    state: txn_state,
                     revision: txn_revision,
+                    state: _,
                 },
             ..
-        }) = session.transaction_mut().inner_mut()
+        }) = session.transaction().inner()
         else {
             return self.catalog_transact(Some(session), ops).await;
         };
@@ -114,23 +114,32 @@ impl Coordinator {
         // Combine the existing ops with the new ops so we can replay them.
         let mut all_ops = Vec::with_capacity(ops.len() + txn_ops.len());
         all_ops.extend(txn_ops.iter().cloned());
-        all_ops.extend(ops);
+        all_ops.extend(ops.clone());
 
         // Run our Catalog transaction, but abort before committing.
         let result = self
             .catalog_transact_with(Some(&conn_id), all_ops.clone(), |state| {
-                // Catalog Transaction succeeded! Store the new State and ops in our Transaction.
-                *txn_state = state.catalog.clone();
-                *txn_ops = all_ops;
-
-                // Return an error so we don't commit the Catalog Transaction.
-                Err(AdapterError::DDLTransactionDryRun)
+                // Return an error so we don't commit the Catalog Transaction, but include our
+                // updated state.
+                Err(AdapterError::DDLTransactionDryRun {
+                    new_ops: all_ops,
+                    new_state: state.catalog.clone(),
+                })
             })
             .await;
 
         match result {
             // We purposefully fail with this error to prevent committing the transaction.
-            Err(AdapterError::DDLTransactionDryRun) => Ok(()),
+            Err(AdapterError::DDLTransactionDryRun { new_ops, new_state }) => {
+                // Adds these ops to our transaction, bailing if the Catalog has changed since we
+                // ran the transaction.
+                session.transaction_mut().add_ops(TransactionOps::DDL {
+                    ops: new_ops,
+                    state: new_state,
+                    revision: self.catalog().transient_revision(),
+                })?;
+                Ok(())
+            }
             other => other,
         }
     }

@@ -213,7 +213,12 @@ pub enum AdapterError {
     DDLTransactionRace,
     /// Used to prevent us from durably committing state while a DDL transaction is open, should
     /// never be returned to the user.
-    DDLTransactionDryRun,
+    DDLTransactionDryRun {
+        /// New operations that were run in the transaction.
+        new_ops: Vec<crate::catalog::Op>,
+        /// New resulting `CatalogState`.
+        new_state: crate::catalog::CatalogState,
+    },
     /// An error occurred in the storage layer
     Storage(mz_storage_types::controller::StorageError),
     /// An error occurred in the compute layer
@@ -450,7 +455,7 @@ impl AdapterError {
             AdapterError::Unstructured(_) => SqlState::INTERNAL_ERROR,
             AdapterError::UntargetedLogRead { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::DDLTransactionRace => SqlState::T_R_SERIALIZATION_FAILURE,
-            AdapterError::DDLTransactionDryRun => SqlState::T_R_SERIALIZATION_FAILURE,
+            AdapterError::DDLTransactionDryRun { .. } => SqlState::T_R_SERIALIZATION_FAILURE,
             // It's not immediately clear which error code to use here because a
             // "write-only transaction", "single table write transaction", or "ddl only
             // transaction" are not things in Postgres. This error code is the generic "bad txn
@@ -678,7 +683,7 @@ impl fmt::Display for AdapterError {
             AdapterError::DDLTransactionRace => {
                 f.write_str("object state changed while transaction was in progress")
             }
-            AdapterError::DDLTransactionDryRun => f.write_str("ddl transaction dry run"),
+            AdapterError::DDLTransactionDryRun { .. } => f.write_str("ddl transaction dry run"),
             AdapterError::Storage(e) => e.fmt(f),
             AdapterError::Compute(e) => e.fmt(f),
             AdapterError::Orchestrator(e) => e.fmt(f),
