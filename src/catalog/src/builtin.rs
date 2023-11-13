@@ -154,6 +154,7 @@ pub struct BuiltinSource {
 pub struct BuiltinView {
     pub name: &'static str,
     pub schema: &'static str,
+    pub add_whitespace: bool,
     pub column_defs: Option<&'static str>,
     pub sql: &'static str,
     /// Whether the object should only be queryable by superusers,
@@ -163,30 +164,32 @@ pub struct BuiltinView {
 
 impl BuiltinView {
     pub fn create_sql(&self) -> String {
+        // Construct the initial part of the SQL statement with schema and view name
+        let mut create_stmt = format!("CREATE VIEW {}.{}", self.schema, self.name);
+
+        // Add column definitions if they exist
+        if let Some(column_defs) = self.column_defs {
+            create_stmt = format!("{} ({})", create_stmt, column_defs);
+        }
+
+        // Handle the newline logic based on `add_whitespace`
+        if self.add_whitespace {
+            create_stmt.push_str("\nAS");
+        } else {
+            create_stmt.push_str(" AS");
+        }
+
+        // Check if the SQL starts with a newline
         let starts_with_newline = self.sql.starts_with('\n');
 
-        match self.column_defs {
-            Some(column_defs) => {
-                if starts_with_newline {
-                    format!(
-                        "CREATE VIEW {}.{} ({}) AS{}",
-                        self.schema, self.name, column_defs, self.sql
-                    )
-                } else {
-                    format!(
-                        "CREATE VIEW {}.{} ({}) AS {}",
-                        self.schema, self.name, column_defs, self.sql
-                    )
-                }
-            }
-            None => {
-                if starts_with_newline {
-                    format!("CREATE VIEW {}.{} AS{}", self.schema, self.name, self.sql)
-                } else {
-                    format!("CREATE VIEW {}.{} AS {}", self.schema, self.name, self.sql)
-                }
-            }
+        // Append the SQL statement, adding a space if it doesn't start with a newline
+        if starts_with_newline {
+            create_stmt.push_str(self.sql);
+        } else {
+            create_stmt = format!("{} {}", create_stmt, self.sql);
         }
+
+        create_stmt
     }
 }
 
@@ -2406,6 +2409,7 @@ pub static MZ_STATEMENT_EXECUTION_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| Bu
 pub static MZ_STATEMENT_EXECUTION_HISTORY_REDACTED: BuiltinView = BuiltinView {
     name: "mz_statement_execution_history_redacted",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     // everything but `params`
     sql: "
@@ -2429,6 +2433,7 @@ pub static MZ_PREPARED_STATEMENT_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| Bui
 pub static MZ_PREPARED_STATEMENT_HISTORY_REDACTED: BuiltinView = BuiltinView {
     name: "mz_prepared_statement_history_redacted",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     // everything but "sql"
     sql: "
@@ -2449,6 +2454,7 @@ pub static MZ_SESSION_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource 
 pub static MZ_ACTIVITY_LOG: BuiltinView = BuiltinView {
     name: "mz_activity_log",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 SELECT mseh.id AS execution_id, sample_rate, cluster_id, application_name, cluster_name,
@@ -2464,6 +2470,7 @@ WHERE mseh.prepared_statement_id = mpsh.id",
 pub static MZ_ACTIVITY_LOG_REDACTED: BuiltinView = BuiltinView {
     name: "mz_activity_log_redacted",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 SELECT execution_id, sample_rate, cluster_id, application_name, cluster_name,
@@ -2477,6 +2484,7 @@ FROM mz_internal.mz_activity_log",
 pub const MZ_SOURCE_STATUSES: BuiltinView = BuiltinView {
     name: "mz_source_statuses",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 WITH latest_events AS (
@@ -2516,6 +2524,7 @@ pub static MZ_SINK_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSou
 pub const MZ_SINK_STATUSES: BuiltinView = BuiltinView {
     name: "mz_sink_statuses",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 WITH latest_events AS (
@@ -2615,6 +2624,7 @@ pub static MZ_FRONTIERS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
 pub const MZ_GLOBAL_FRONTIERS: BuiltinView = BuiltinView {
     name: "mz_global_frontiers",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 SELECT object_id, write_frontier AS time
@@ -2754,6 +2764,7 @@ pub static MZ_STORAGE_SHARDS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
 pub static MZ_STORAGE_USAGE: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_storage_usage",
     schema: MZ_CATALOG_SCHEMA,
+    add_whitespace: false,
     column_defs: Some("object_id, size_bytes, collection_timestamp"),
     sql: "
 SELECT
@@ -2770,6 +2781,7 @@ GROUP BY object_id, collection_timestamp",
 pub const MZ_RELATIONS: BuiltinView = BuiltinView {
     name: "mz_relations",
     schema: MZ_CATALOG_SCHEMA,
+    add_whitespace: false,
     column_defs: Some("id, oid, schema_id, name, type, owner_id, privileges"),
     sql: "
       SELECT id, oid, schema_id, name, 'table', owner_id, privileges FROM mz_catalog.mz_tables
@@ -2782,6 +2794,7 @@ UNION ALL SELECT id, oid, schema_id, name, 'materialized-view', owner_id, privil
 pub const MZ_OBJECTS: BuiltinView = BuiltinView {
     name: "mz_objects",
     schema: MZ_CATALOG_SCHEMA,
+    add_whitespace: false,
     column_defs: Some("id, oid, schema_id, name, type, owner_id, privileges"),
     sql:
         "
@@ -2806,6 +2819,7 @@ UNION ALL
 pub const MZ_OBJECT_FULLY_QUALIFIED_NAMES: BuiltinView = BuiltinView {
     name: "mz_object_fully_qualified_names",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: Some("id, name, object_type, schema_name, database_name"),
     sql: "
     SELECT o.id, o.name, o.type, sc.name as schema_name, db.name as database_name
@@ -2819,6 +2833,7 @@ pub const MZ_OBJECT_FULLY_QUALIFIED_NAMES: BuiltinView = BuiltinView {
 pub const MZ_OBJECT_LIFETIMES: BuiltinView = BuiltinView {
     name: "mz_object_lifetimes",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: Some("id, object_type, event_type, occurred_at"),
     sql: "
     SELECT
@@ -2837,6 +2852,7 @@ pub const MZ_OBJECT_LIFETIMES: BuiltinView = BuiltinView {
 pub const MZ_DATAFLOWS_PER_WORKER: BuiltinView = BuiltinView {
     name: "mz_dataflows_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
     addrs.address[1] AS id,
@@ -2855,6 +2871,7 @@ WHERE
 pub const MZ_DATAFLOWS: BuiltinView = BuiltinView {
     name: "mz_dataflows",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 SELECT id, name
@@ -2866,6 +2883,7 @@ WHERE worker_id = 0",
 pub const MZ_DATAFLOW_ADDRESSES: BuiltinView = BuiltinView {
     name: "mz_dataflow_addresses",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 SELECT id, address
@@ -2877,6 +2895,7 @@ WHERE worker_id = 0",
 pub const MZ_DATAFLOW_CHANNELS: BuiltinView = BuiltinView {
     name: "mz_dataflow_channels",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 SELECT id, from_index, from_port, to_index, to_port
@@ -2888,6 +2907,7 @@ WHERE worker_id = 0",
 pub const MZ_DATAFLOW_OPERATORS: BuiltinView = BuiltinView {
     name: "mz_dataflow_operators",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 SELECT id, name
@@ -2899,6 +2919,7 @@ WHERE worker_id = 0",
 pub const MZ_DATAFLOW_OPERATOR_DATAFLOWS_PER_WORKER: BuiltinView = BuiltinView {
     name: "mz_dataflow_operator_dataflows_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
     ops.id,
@@ -2921,6 +2942,7 @@ WHERE
 pub const MZ_DATAFLOW_OPERATOR_DATAFLOWS: BuiltinView = BuiltinView {
     name: "mz_dataflow_operator_dataflows",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 SELECT id, name, dataflow_id, dataflow_name
@@ -2932,6 +2954,7 @@ WHERE worker_id = 0",
 pub const MZ_OBJECT_TRANSITIVE_DEPENDENCIES: BuiltinView = BuiltinView {
     name: "mz_object_transitive_dependencies",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 WITH MUTUALLY RECURSIVE
@@ -2947,6 +2970,7 @@ SELECT object_id, referenced_object_id FROM reach;",
 pub const MZ_COMPUTE_EXPORTS: BuiltinView = BuiltinView {
     name: "mz_compute_exports",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 SELECT export_id, dataflow_id
@@ -2958,6 +2982,7 @@ WHERE worker_id = 0",
 pub const MZ_COMPUTE_FRONTIERS: BuiltinView = BuiltinView {
     name: "mz_compute_frontiers",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
     export_id, pg_catalog.min(time) AS time
@@ -2969,6 +2994,7 @@ GROUP BY export_id",
 pub const MZ_DATAFLOW_CHANNEL_OPERATORS_PER_WORKER: BuiltinView = BuiltinView {
     name: "mz_dataflow_channel_operators_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 WITH
@@ -3010,6 +3036,7 @@ FROM channel_operator_addresses coa
 pub const MZ_DATAFLOW_CHANNEL_OPERATORS: BuiltinView = BuiltinView {
     name: "mz_dataflow_channel_operators",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 SELECT id, from_operator_id, from_operator_address, to_operator_id, to_operator_address
@@ -3021,6 +3048,7 @@ WHERE worker_id = 0",
 pub const MZ_COMPUTE_IMPORT_FRONTIERS: BuiltinView = BuiltinView {
     name: "mz_compute_import_frontiers",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
     export_id, import_id, pg_catalog.min(time) AS time
@@ -3032,6 +3060,7 @@ GROUP BY export_id, import_id",
 pub const MZ_RECORDS_PER_DATAFLOW_OPERATOR_PER_WORKER: BuiltinView = BuiltinView {
     name: "mz_records_per_dataflow_operator_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 SELECT
@@ -3055,6 +3084,7 @@ FROM
 pub const MZ_RECORDS_PER_DATAFLOW_OPERATOR: BuiltinView = BuiltinView {
     name: "mz_records_per_dataflow_operator",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 SELECT
@@ -3074,6 +3104,7 @@ GROUP BY id, name, dataflow_id",
 pub const MZ_RECORDS_PER_DATAFLOW_PER_WORKER: BuiltinView = BuiltinView {
     name: "mz_records_per_dataflow_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 SELECT
@@ -3101,6 +3132,7 @@ GROUP BY
 pub const MZ_RECORDS_PER_DATAFLOW: BuiltinView = BuiltinView {
     name: "mz_records_per_dataflow",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 SELECT
@@ -3122,6 +3154,7 @@ GROUP BY
 pub const PG_NAMESPACE: BuiltinView = BuiltinView {
     name: "pg_namespace",
     schema: PG_CATALOG_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
 s.oid AS oid,
@@ -3138,6 +3171,7 @@ WHERE s.database_id IS NULL OR d.name = pg_catalog.current_database()",
 pub const PG_CLASS: BuiltinView = BuiltinView {
     name: "pg_class",
     schema: PG_CATALOG_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
     class_objects.oid,
@@ -3200,6 +3234,7 @@ WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
 pub const PG_DEPEND: BuiltinView = BuiltinView {
     name: "pg_depend",
     schema: PG_CATALOG_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 WITH class_objects AS (
@@ -3254,6 +3289,7 @@ JOIN current_objects dependents ON referenced_object_id = dependents.id",
 pub const PG_DATABASE: BuiltinView = BuiltinView {
     name: "pg_database",
     schema: PG_CATALOG_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
     d.oid as oid,
@@ -3274,6 +3310,7 @@ JOIN mz_catalog.mz_roles role_owner ON role_owner.id = d.owner_id",
 pub const PG_INDEX: BuiltinView = BuiltinView {
     name: "pg_index",
     schema: PG_CATALOG_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
     mz_indexes.oid AS indexrelid,
@@ -3313,6 +3350,7 @@ GROUP BY mz_indexes.oid, mz_relations.oid",
 pub const PG_INDEXES: BuiltinView = BuiltinView {
     name: "pg_indexes",
     schema: PG_CATALOG_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
     current_database() as table_catalog,
@@ -3336,6 +3374,7 @@ WHERE s.database_id IS NULL OR d.name = current_database()",
 pub const PG_DESCRIPTION: BuiltinView = BuiltinView {
     name: "pg_description",
     schema: PG_CATALOG_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
     (
@@ -3374,6 +3413,7 @@ pub const PG_DESCRIPTION: BuiltinView = BuiltinView {
 pub const PG_TYPE: BuiltinView = BuiltinView {
     name: "pg_type",
     schema: PG_CATALOG_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
     mz_types.oid,
@@ -3457,6 +3497,7 @@ FROM
 pub const PG_ATTRIBUTE: BuiltinView = BuiltinView {
     name: "pg_attribute",
     schema: PG_CATALOG_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
     class_objects.oid as attrelid,
@@ -3494,6 +3535,7 @@ WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
 pub const PG_PROC: BuiltinView = BuiltinView {
     name: "pg_proc",
     schema: PG_CATALOG_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
     mz_functions.oid,
@@ -3514,6 +3556,7 @@ WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()",
 pub const PG_OPERATOR: BuiltinView = BuiltinView {
     name: "pg_operator",
     schema: PG_CATALOG_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
     mz_operators.oid,
@@ -3542,6 +3585,7 @@ WHERE array_length(mz_operators.argument_type_ids, 1) = 1",
 pub const PG_RANGE: BuiltinView = BuiltinView {
     name: "pg_range",
     schema: PG_CATALOG_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
     NULL::pg_catalog.oid AS rngtypid,
@@ -3553,6 +3597,7 @@ WHERE false",
 pub const PG_ENUM: BuiltinView = BuiltinView {
     name: "pg_enum",
     schema: PG_CATALOG_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
     NULL::pg_catalog.oid AS oid,
@@ -3566,6 +3611,7 @@ WHERE false",
 pub const PG_ATTRDEF: BuiltinView = BuiltinView {
     name: "pg_attrdef",
     schema: PG_CATALOG_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
     NULL::pg_catalog.oid AS oid,
@@ -3583,6 +3629,7 @@ WHERE default IS NOT NULL",
 pub const PG_SETTINGS: BuiltinView = BuiltinView {
     name: "pg_settings",
     schema: PG_CATALOG_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
     name, setting
@@ -3595,6 +3642,7 @@ FROM (VALUES
 pub const PG_AUTH_MEMBERS: BuiltinView = BuiltinView {
     name: "pg_auth_members",
     schema: PG_CATALOG_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
     role.oid AS roleid,
@@ -3612,6 +3660,7 @@ JOIN mz_roles grantor ON membership.grantor = grantor.id",
 pub const PG_EVENT_TRIGGER: BuiltinView = BuiltinView {
     name: "pg_event_trigger",
     schema: PG_CATALOG_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
         NULL::pg_catalog.oid AS oid,
@@ -3628,6 +3677,7 @@ pub const PG_EVENT_TRIGGER: BuiltinView = BuiltinView {
 pub const PG_LANGUAGE: BuiltinView = BuiltinView {
     name: "pg_language",
     schema: PG_CATALOG_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
         NULL::pg_catalog.oid  AS oid,
@@ -3646,6 +3696,7 @@ pub const PG_LANGUAGE: BuiltinView = BuiltinView {
 pub const PG_SHDESCRIPTION: BuiltinView = BuiltinView {
     name: "pg_shdescription",
     column_defs: None,
+    add_whitespace: false,
     schema: PG_CATALOG_SCHEMA,
     sql: "SELECT
         NULL::pg_catalog.oid AS objoid,
@@ -3658,6 +3709,7 @@ pub const PG_SHDESCRIPTION: BuiltinView = BuiltinView {
 pub const PG_TIMEZONE_ABBREVS: BuiltinView = BuiltinView {
     name: "pg_timezone_abbrevs",
     schema: PG_CATALOG_SCHEMA,
+    add_whitespace: false,
     column_defs: Some("abbrev, utc_offset, is_dst"),
     sql: mz_pgtz::abbrev::PG_CATALOG_TIMEZONE_ABBREVS_SQL,
     sensitivity: DataSensitivity::Public,
@@ -3666,6 +3718,7 @@ pub const PG_TIMEZONE_ABBREVS: BuiltinView = BuiltinView {
 pub const PG_TIMEZONE_NAMES: BuiltinView = BuiltinView {
     name: "pg_timezone_names",
     schema: PG_CATALOG_SCHEMA,
+    add_whitespace: false,
     column_defs: Some("name, abbrev, utc_offset, is_dst"),
     sql: mz_pgtz::timezone::PG_CATALOG_TIMEZONE_NAMES_SQL,
     sensitivity: DataSensitivity::Public,
@@ -3674,6 +3727,7 @@ pub const PG_TIMEZONE_NAMES: BuiltinView = BuiltinView {
 pub const MZ_PEEK_DURATIONS_HISTOGRAM_PER_WORKER: BuiltinView = BuiltinView {
     name: "mz_peek_durations_histogram_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
     worker_id, duration_ns, pg_catalog.count(*) AS count
@@ -3687,6 +3741,7 @@ GROUP BY
 pub const MZ_PEEK_DURATIONS_HISTOGRAM: BuiltinView = BuiltinView {
     name: "mz_peek_durations_histogram",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 SELECT
@@ -3700,6 +3755,7 @@ GROUP BY duration_ns",
 pub const MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_PER_WORKER: BuiltinView = BuiltinView {
     name: "mz_dataflow_shutdown_durations_histogram_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
     worker_id, duration_ns, pg_catalog.count(*) AS count
@@ -3713,6 +3769,7 @@ GROUP BY
 pub const MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM: BuiltinView = BuiltinView {
     name: "mz_dataflow_shutdown_durations_histogram",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 SELECT
@@ -3726,6 +3783,7 @@ GROUP BY duration_ns",
 pub const MZ_SCHEDULING_ELAPSED_PER_WORKER: BuiltinView = BuiltinView {
     name: "mz_scheduling_elapsed_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
     id, worker_id, pg_catalog.count(*) AS elapsed_ns
@@ -3739,6 +3797,7 @@ GROUP BY
 pub const MZ_SCHEDULING_ELAPSED: BuiltinView = BuiltinView {
     name: "mz_scheduling_elapsed",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 SELECT
@@ -3752,6 +3811,7 @@ GROUP BY id",
 pub const MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM_PER_WORKER: BuiltinView = BuiltinView {
     name: "mz_compute_operator_durations_histogram_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
     id, worker_id, duration_ns, pg_catalog.count(*) AS count
@@ -3765,6 +3825,7 @@ GROUP BY
 pub const MZ_COMPUTE_OPERATOR_DURATIONS_HISTOGRAM: BuiltinView = BuiltinView {
     name: "mz_compute_operator_durations_histogram",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 SELECT
@@ -3779,6 +3840,7 @@ GROUP BY id, duration_ns",
 pub const MZ_SCHEDULING_PARKS_HISTOGRAM_PER_WORKER: BuiltinView = BuiltinView {
     name: "mz_scheduling_parks_histogram_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
     worker_id, slept_for_ns, requested_ns, pg_catalog.count(*) AS count
@@ -3792,6 +3854,7 @@ GROUP BY
 pub const MZ_SCHEDULING_PARKS_HISTOGRAM: BuiltinView = BuiltinView {
     name: "mz_scheduling_parks_histogram",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 SELECT
@@ -3806,6 +3869,7 @@ GROUP BY slept_for_ns, requested_ns",
 pub const MZ_COMPUTE_DELAYS_HISTOGRAM_PER_WORKER: BuiltinView = BuiltinView {
     name: "mz_compute_delays_histogram_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
     export_id, import_id, worker_id, delay_ns, pg_catalog.count(*) AS count
@@ -3819,6 +3883,7 @@ GROUP BY
 pub const MZ_COMPUTE_DELAYS_HISTOGRAM: BuiltinView = BuiltinView {
     name: "mz_compute_delays_histogram",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 SELECT
@@ -3834,6 +3899,7 @@ GROUP BY export_id, import_id, delay_ns",
 pub const MZ_COMPUTE_ERROR_COUNTS_PER_WORKER: BuiltinView = BuiltinView {
     name: "mz_compute_error_counts_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 WITH MUTUALLY RECURSIVE
@@ -3869,6 +3935,7 @@ SELECT * FROM all_errors",
 pub const MZ_COMPUTE_ERROR_COUNTS: BuiltinView = BuiltinView {
     name: "mz_compute_error_counts",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 SELECT
@@ -3883,6 +3950,7 @@ HAVING pg_catalog.sum(count) != 0",
 pub const MZ_MESSAGE_COUNTS_PER_WORKER: BuiltinView = BuiltinView {
     name: "mz_message_counts_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 WITH batch_sent_cte AS (
@@ -3947,6 +4015,7 @@ JOIN batch_received_cte USING (channel_id, from_worker_id, to_worker_id)",
 pub const MZ_MESSAGE_COUNTS: BuiltinView = BuiltinView {
     name: "mz_message_counts",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 SELECT
@@ -3963,6 +4032,7 @@ GROUP BY channel_id",
 pub const MZ_ACTIVE_PEEKS: BuiltinView = BuiltinView {
     name: "mz_active_peeks",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 SELECT id, index_id, time
@@ -3974,6 +4044,7 @@ WHERE worker_id = 0",
 pub const MZ_DATAFLOW_OPERATOR_REACHABILITY_PER_WORKER: BuiltinView = BuiltinView {
     name: "mz_dataflow_operator_reachability_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
     address,
@@ -3991,6 +4062,7 @@ GROUP BY address, port, worker_id, update_type, time",
 pub const MZ_DATAFLOW_OPERATOR_REACHABILITY: BuiltinView = BuiltinView {
     name: "mz_dataflow_operator_reachability",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 SELECT
@@ -4007,6 +4079,7 @@ GROUP BY address, port, update_type, time",
 pub const MZ_ARRANGEMENT_SIZES_PER_WORKER: BuiltinView = BuiltinView {
     name: "mz_arrangement_sizes_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 WITH batches_cte AS (
@@ -4078,6 +4151,7 @@ LEFT OUTER JOIN heap_allocations_cte USING (operator_id, worker_id)",
 pub const MZ_ARRANGEMENT_SIZES: BuiltinView = BuiltinView {
     name: "mz_arrangement_sizes",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 SELECT
@@ -4095,6 +4169,7 @@ GROUP BY operator_id",
 pub const MZ_ARRANGEMENT_SHARING_PER_WORKER: BuiltinView = BuiltinView {
     name: "mz_arrangement_sharing_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 SELECT
@@ -4109,6 +4184,7 @@ GROUP BY operator_id, worker_id",
 pub const MZ_ARRANGEMENT_SHARING: BuiltinView = BuiltinView {
     name: "mz_arrangement_sharing",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 SELECT operator_id, count
@@ -4120,6 +4196,7 @@ WHERE worker_id = 0",
 pub const MZ_CLUSTER_REPLICA_UTILIZATION: BuiltinView = BuiltinView {
     name: "mz_cluster_replica_utilization",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 SELECT
@@ -4138,6 +4215,7 @@ FROM
 pub const MZ_DATAFLOW_OPERATOR_PARENTS_PER_WORKER: BuiltinView = BuiltinView {
     name: "mz_dataflow_operator_parents_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 WITH operator_addrs AS(
@@ -4165,6 +4243,7 @@ FROM parent_addrs AS pa
 pub const MZ_DATAFLOW_OPERATOR_PARENTS: BuiltinView = BuiltinView {
     name: "mz_dataflow_operator_parents",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 SELECT id, parent_id
@@ -4176,6 +4255,7 @@ WHERE worker_id = 0",
 pub const MZ_DATAFLOW_ARRANGEMENT_SIZES: BuiltinView = BuiltinView {
     name: "mz_dataflow_arrangement_sizes",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 SELECT
@@ -4196,6 +4276,7 @@ GROUP BY mdod.dataflow_id, mdod.dataflow_name",
 pub const MZ_EXPECTED_GROUP_SIZE_ADVICE: BuiltinView = BuiltinView {
     name: "mz_expected_group_size_advice",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
         -- The mz_expected_group_size_advice view provides tuning suggestions for the GROUP SIZE
@@ -4333,6 +4414,7 @@ pub const MZ_EXPECTED_GROUP_SIZE_ADVICE: BuiltinView = BuiltinView {
 pub const PG_CONSTRAINT: BuiltinView = BuiltinView {
     name: "pg_constraint",
     schema: PG_CATALOG_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
     NULL::pg_catalog.oid as oid,
@@ -4367,6 +4449,7 @@ WHERE false",
 pub const PG_TABLES: BuiltinView = BuiltinView {
     name: "pg_tables",
     schema: PG_CATALOG_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 SELECT n.nspname AS schemaname,
@@ -4381,6 +4464,7 @@ WHERE c.relkind IN ('r', 'p')",
 pub const PG_TABLESPACE: BuiltinView = BuiltinView {
     name: "pg_tablespace",
     schema: PG_CATALOG_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
     SELECT oid, spcname, spcowner, spcacl, spcoptions
@@ -4401,6 +4485,7 @@ pub const PG_TABLESPACE: BuiltinView = BuiltinView {
 pub const PG_ACCESS_METHODS: BuiltinView = BuiltinView {
     name: "pg_am",
     schema: PG_CATALOG_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 SELECT NULL::pg_catalog.oid AS oid,
@@ -4414,6 +4499,7 @@ WHERE false",
 pub const PG_ROLES: BuiltinView = BuiltinView {
     name: "pg_roles",
     schema: PG_CATALOG_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
     r.rolname,
@@ -4437,6 +4523,7 @@ FROM pg_catalog.pg_authid r",
 pub const PG_VIEWS: BuiltinView = BuiltinView {
     name: "pg_views",
     schema: PG_CATALOG_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
     s.name AS schemaname,
@@ -4454,6 +4541,7 @@ WHERE s.database_id IS NULL OR d.name = current_database()",
 pub const PG_MATVIEWS: BuiltinView = BuiltinView {
     name: "pg_matviews",
     schema: PG_CATALOG_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
     s.name AS schemaname,
@@ -4471,6 +4559,7 @@ WHERE s.database_id IS NULL OR d.name = current_database()",
 pub const INFORMATION_SCHEMA_APPLICABLE_ROLES: BuiltinView = BuiltinView {
     name: "applicable_roles",
     schema: INFORMATION_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 SELECT
@@ -4488,6 +4577,7 @@ WHERE mz_catalog.mz_is_superuser() OR pg_has_role(current_role, member.oid, 'USA
 pub const INFORMATION_SCHEMA_COLUMNS: BuiltinView = BuiltinView {
     name: "columns",
     schema: INFORMATION_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 SELECT
@@ -4512,6 +4602,7 @@ WHERE s.database_id IS NULL OR d.name = current_database()",
 pub const INFORMATION_SCHEMA_ENABLED_ROLES: BuiltinView = BuiltinView {
     name: "enabled_roles",
     schema: INFORMATION_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 SELECT name AS role_name
@@ -4523,6 +4614,7 @@ WHERE mz_catalog.mz_is_superuser() OR pg_has_role(current_role, oid, 'USAGE')",
 pub const INFORMATION_SCHEMA_ROLE_TABLE_GRANTS: BuiltinView = BuiltinView {
     name: "role_table_grants",
     schema: INFORMATION_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 SELECT grantor, grantee, table_catalog, table_schema, table_name, privilege_type, is_grantable, with_hierarchy
@@ -4536,6 +4628,7 @@ WHERE
 pub const INFORMATION_SCHEMA_KEY_COLUMN_USAGE: BuiltinView = BuiltinView {
     name: "key_column_usage",
     schema: INFORMATION_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
     NULL::text AS constraint_catalog,
@@ -4554,6 +4647,7 @@ WHERE false",
 pub const INFORMATION_SCHEMA_REFERENTIAL_CONSTRAINTS: BuiltinView = BuiltinView {
     name: "referential_constraints",
     schema: INFORMATION_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
     NULL::text AS constraint_catalog,
@@ -4572,6 +4666,7 @@ WHERE false",
 pub const INFORMATION_SCHEMA_ROUTINES: BuiltinView = BuiltinView {
     name: "routines",
     schema: INFORMATION_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
     current_database() as routine_catalog,
@@ -4589,6 +4684,7 @@ WHERE s.database_id IS NULL OR d.name = current_database()",
 pub const INFORMATION_SCHEMA_SCHEMATA: BuiltinView = BuiltinView {
     name: "schemata",
     schema: INFORMATION_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 SELECT
@@ -4603,6 +4699,7 @@ WHERE s.database_id IS NULL OR d.name = current_database()",
 pub const INFORMATION_SCHEMA_TABLES: BuiltinView = BuiltinView {
     name: "tables",
     schema: INFORMATION_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
     current_database() as table_catalog,
@@ -4623,6 +4720,7 @@ WHERE s.database_id IS NULL OR d.name = current_database()",
 pub const INFORMATION_SCHEMA_TABLE_CONSTRAINTS: BuiltinView = BuiltinView {
     name: "table_constraints",
     schema: INFORMATION_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
     NULL::text AS constraint_catalog,
@@ -4643,6 +4741,7 @@ WHERE false",
 pub const INFORMATION_SCHEMA_TABLE_PRIVILEGES: BuiltinView = BuiltinView {
     name: "table_privileges",
     schema: INFORMATION_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 SELECT
@@ -4700,6 +4799,7 @@ WHERE
 pub const INFORMATION_SCHEMA_TRIGGERS: BuiltinView = BuiltinView {
     name: "triggers",
     schema: INFORMATION_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
     NULL::text as trigger_catalog,
@@ -4723,6 +4823,7 @@ WHERE FALSE",
 pub const INFORMATION_SCHEMA_VIEWS: BuiltinView = BuiltinView {
     name: "views",
     schema: INFORMATION_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
     current_database() as table_catalog,
@@ -4739,6 +4840,7 @@ WHERE s.database_id IS NULL OR d.name = current_database()",
 pub const INFORMATION_SCHEMA_CHARACTER_SETS: BuiltinView = BuiltinView {
     name: "character_sets",
     schema: INFORMATION_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "SELECT
     NULL as character_set_catalog,
@@ -4757,9 +4859,9 @@ pub const INFORMATION_SCHEMA_CHARACTER_SETS: BuiltinView = BuiltinView {
 pub const PG_COLLATION: BuiltinView = BuiltinView {
     name: "pg_collation",
     schema: PG_CATALOG_SCHEMA,
+    add_whitespace: true,
     column_defs: None,
-    sql: "
-SELECT
+    sql: "SELECT
     NULL::pg_catalog.oid AS oid,
     NULL::pg_catalog.text AS collname,
     NULL::pg_catalog.oid AS collnamespace,
@@ -4778,9 +4880,9 @@ WHERE false",
 pub const PG_POLICY: BuiltinView = BuiltinView {
     name: "pg_policy",
     schema: PG_CATALOG_SCHEMA,
+    add_whitespace: true,
     column_defs: None,
-    sql: "
-SELECT
+    sql: "SELECT
     NULL::pg_catalog.oid AS oid,
     NULL::pg_catalog.text AS polname,
     NULL::pg_catalog.oid AS polrelid,
@@ -4797,9 +4899,9 @@ WHERE false",
 pub const PG_INHERITS: BuiltinView = BuiltinView {
     name: "pg_inherits",
     schema: PG_CATALOG_SCHEMA,
+    add_whitespace: true,
     column_defs: None,
-    sql: "
-SELECT
+    sql: "SELECT
     NULL::pg_catalog.oid AS inhrelid,
     NULL::pg_catalog.oid AS inhparent,
     NULL::pg_catalog.int4 AS inhseqno,
@@ -4811,9 +4913,9 @@ WHERE false",
 pub const PG_LOCKS: BuiltinView = BuiltinView {
     name: "pg_locks",
     schema: PG_CATALOG_SCHEMA,
+    add_whitespace: true,
     column_defs: None,
-    sql: "
-SELECT
+    sql: "SELECT
 -- While there exist locks in Materialize, we don't expose them, so all of these fields are NULL.
     NULL::pg_catalog.text AS locktype,
     NULL::pg_catalog.oid AS database,
@@ -4838,9 +4940,9 @@ WHERE false",
 pub const PG_AUTHID: BuiltinView = BuiltinView {
     name: "pg_authid",
     schema: PG_CATALOG_SCHEMA,
+    add_whitespace: true,
     column_defs: None,
-    sql: "
-SELECT
+    sql: "SELECT
     r.oid AS oid,
     r.name AS rolname,
     -- We determine superuser status each time a role logs in, so there's no way to accurately
@@ -4873,6 +4975,7 @@ FROM mz_catalog.mz_roles r",
 pub const PG_AGGREGATE: BuiltinView = BuiltinView {
     name: "pg_aggregate",
     schema: PG_CATALOG_SCHEMA,
+    add_whitespace: true,
     column_defs: None,
     sql: "SELECT
     a.oid as aggfnoid,
@@ -4906,6 +5009,7 @@ FROM mz_internal.mz_aggregates a",
 pub const PG_TRIGGER: BuiltinView = BuiltinView {
     name: "pg_trigger",
     schema: PG_CATALOG_SCHEMA,
+    add_whitespace: true,
     column_defs: None,
     sql: "SELECT
     -- MZ doesn't support triggers so all of these fields are NULL.
@@ -4938,6 +5042,7 @@ WHERE false
 pub const PG_REWRITE: BuiltinView = BuiltinView {
     name: "pg_rewrite",
     schema: PG_CATALOG_SCHEMA,
+    add_whitespace: true,
     column_defs: None,
     sql: "SELECT
     -- MZ doesn't support rewrite rules so all of these fields are NULL.
@@ -4959,6 +5064,7 @@ WHERE false
 pub const PG_EXTENSION: BuiltinView = BuiltinView {
     name: "pg_extension",
     schema: PG_CATALOG_SCHEMA,
+    add_whitespace: true,
     column_defs: None,
     sql: "SELECT
     -- MZ doesn't support extensions so all of these fields are NULL.
@@ -4978,9 +5084,9 @@ WHERE false
 pub const MZ_SHOW_SOURCES: BuiltinView = BuiltinView {
     name: "mz_show_sources",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: true,
     column_defs: None,
-    sql: "
-SELECT sources.name, sources.type, sources.size, clusters.name as cluster, schema_id, cluster_id
+    sql: "SELECT sources.name, sources.type, sources.size, clusters.name as cluster, schema_id, cluster_id
 FROM mz_catalog.mz_sources AS sources
 LEFT JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = sources.cluster_id",
     sensitivity: DataSensitivity::Public,
@@ -4989,9 +5095,10 @@ LEFT JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = sources.cluster_id
 pub const MZ_SHOW_SINKS: BuiltinView = BuiltinView {
     name: "mz_show_sinks",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: true,
     column_defs: None,
-    sql: "
-SELECT sinks.name, sinks.type, sinks.size, clusters.name as cluster, schema_id, cluster_id
+    sql:
+        "SELECT sinks.name, sinks.type, sinks.size, clusters.name as cluster, schema_id, cluster_id
 FROM mz_catalog.mz_sinks AS sinks
 JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = sinks.cluster_id",
     sensitivity: DataSensitivity::Public,
@@ -5000,9 +5107,9 @@ JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = sinks.cluster_id",
 pub const MZ_SHOW_MATERIALIZED_VIEWS: BuiltinView = BuiltinView {
     name: "mz_show_materialized_views",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: true,
     column_defs: None,
-    sql: "
-SELECT mviews.name, clusters.name AS cluster, schema_id, cluster_id
+    sql: "SELECT mviews.name, clusters.name AS cluster, schema_id, cluster_id
 FROM mz_materialized_views AS mviews
 JOIN mz_clusters AS clusters ON clusters.id = mviews.cluster_id",
     sensitivity: DataSensitivity::Public,
@@ -5011,9 +5118,9 @@ JOIN mz_clusters AS clusters ON clusters.id = mviews.cluster_id",
 pub const MZ_SHOW_INDEXES: BuiltinView = BuiltinView {
     name: "mz_show_indexes",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: true,
     column_defs: None,
-    sql: "
-SELECT
+    sql: "SELECT
     idxs.name AS name,
     objs.name AS on,
     clusters.name AS cluster,
@@ -5048,9 +5155,9 @@ FROM
 pub const MZ_SHOW_CLUSTER_REPLICAS: BuiltinView = BuiltinView {
     name: "mz_show_cluster_replicas",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: true,
     column_defs: None,
-    sql: r#"
-SELECT
+    sql: r#"SELECT
     mz_catalog.mz_clusters.name AS cluster,
     mz_catalog.mz_cluster_replicas.name AS replica,
     mz_catalog.mz_cluster_replicas.size AS size,
@@ -5075,9 +5182,9 @@ ORDER BY 1, 2"#,
 pub const MZ_SHOW_ROLE_MEMBERS: BuiltinView = BuiltinView {
     name: "mz_show_role_members",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: true,
     column_defs: None,
-    sql: r#"
-SELECT
+    sql: r#"SELECT
     r1.name AS role,
     r2.name AS member,
     r3.name AS grantor
@@ -5092,9 +5199,9 @@ ORDER BY role"#,
 pub const MZ_SHOW_MY_ROLE_MEMBERS: BuiltinView = BuiltinView {
     name: "mz_show_my_role_members",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: true,
     column_defs: None,
-    sql: r#"
-SELECT role, member, grantor
+    sql: r#"SELECT role, member, grantor
 FROM mz_internal.mz_show_role_members
 WHERE pg_has_role(member, 'USAGE')"#,
     sensitivity: DataSensitivity::Public,
@@ -5103,9 +5210,9 @@ WHERE pg_has_role(member, 'USAGE')"#,
 pub const MZ_SHOW_SYSTEM_PRIVILEGES: BuiltinView = BuiltinView {
     name: "mz_show_system_privileges",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: true,
     column_defs: None,
-    sql: r#"
-SELECT
+    sql: r#"SELECT
     grantor.name AS grantor,
     CASE privileges.grantee
         WHEN 'p' THEN 'PUBLIC'
@@ -5124,9 +5231,9 @@ WHERE privileges.grantee NOT LIKE 's%'"#,
 pub const MZ_SHOW_MY_SYSTEM_PRIVILEGES: BuiltinView = BuiltinView {
     name: "mz_show_my_system_privileges",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: true,
     column_defs: None,
-    sql: r#"
-SELECT grantor, grantee, privilege_type
+    sql: r#"SELECT grantor, grantee, privilege_type
 FROM mz_internal.mz_show_system_privileges
 WHERE
     CASE
@@ -5139,9 +5246,9 @@ WHERE
 pub const MZ_SHOW_CLUSTER_PRIVILEGES: BuiltinView = BuiltinView {
     name: "mz_show_cluster_privileges",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: true,
     column_defs: None,
-    sql: r#"
-SELECT
+    sql: r#"SELECT
     grantor.name AS grantor,
     CASE privileges.grantee
         WHEN 'p' THEN 'PUBLIC'
@@ -5162,9 +5269,9 @@ WHERE privileges.grantee NOT LIKE 's%'"#,
 pub const MZ_SHOW_MY_CLUSTER_PRIVILEGES: BuiltinView = BuiltinView {
     name: "mz_show_my_cluster_privileges",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: true,
     column_defs: None,
-    sql: r#"
-SELECT grantor, grantee, name, privilege_type
+    sql: r#"SELECT grantor, grantee, name, privilege_type
 FROM mz_internal.mz_show_cluster_privileges
 WHERE
     CASE
@@ -5177,9 +5284,9 @@ WHERE
 pub const MZ_SHOW_DATABASE_PRIVILEGES: BuiltinView = BuiltinView {
     name: "mz_show_database_privileges",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: true,
     column_defs: None,
-    sql: r#"
-SELECT
+    sql: r#"SELECT
     grantor.name AS grantor,
     CASE privileges.grantee
         WHEN 'p' THEN 'PUBLIC'
@@ -5200,9 +5307,9 @@ WHERE privileges.grantee NOT LIKE 's%'"#,
 pub const MZ_SHOW_MY_DATABASE_PRIVILEGES: BuiltinView = BuiltinView {
     name: "mz_show_my_database_privileges",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: true,
     column_defs: None,
-    sql: r#"
-SELECT grantor, grantee, name, privilege_type
+    sql: r#"SELECT grantor, grantee, name, privilege_type
 FROM mz_internal.mz_show_database_privileges
 WHERE
     CASE
@@ -5215,9 +5322,9 @@ WHERE
 pub const MZ_SHOW_SCHEMA_PRIVILEGES: BuiltinView = BuiltinView {
     name: "mz_show_schema_privileges",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: true,
     column_defs: None,
-    sql: r#"
-SELECT
+    sql: r#"SELECT
     grantor.name AS grantor,
     CASE privileges.grantee
         WHEN 'p' THEN 'PUBLIC'
@@ -5240,9 +5347,9 @@ WHERE privileges.grantee NOT LIKE 's%'"#,
 pub const MZ_SHOW_MY_SCHEMA_PRIVILEGES: BuiltinView = BuiltinView {
     name: "mz_show_my_schema_privileges",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: true,
     column_defs: None,
-    sql: r#"
-SELECT grantor, grantee, database, name, privilege_type
+    sql: r#"SELECT grantor, grantee, database, name, privilege_type
 FROM mz_internal.mz_show_schema_privileges
 WHERE
     CASE
@@ -5255,9 +5362,9 @@ WHERE
 pub const MZ_SHOW_OBJECT_PRIVILEGES: BuiltinView = BuiltinView {
     name: "mz_show_object_privileges",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: true,
     column_defs: None,
-    sql: r#"
-SELECT
+    sql: r#"SELECT
     grantor.name AS grantor,
     CASE privileges.grantee
             WHEN 'p' THEN 'PUBLIC'
@@ -5283,9 +5390,9 @@ WHERE privileges.grantee NOT LIKE 's%'"#,
 pub const MZ_SHOW_MY_OBJECT_PRIVILEGES: BuiltinView = BuiltinView {
     name: "mz_show_my_object_privileges",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: true,
     column_defs: None,
-    sql: r#"
-SELECT grantor, grantee, database, schema, name, object_type, privilege_type
+    sql: r#"SELECT grantor, grantee, database, schema, name, object_type, privilege_type
 FROM mz_internal.mz_show_object_privileges
 WHERE
     CASE
@@ -5298,9 +5405,9 @@ WHERE
 pub const MZ_SHOW_ALL_PRIVILEGES: BuiltinView = BuiltinView {
     name: "mz_show_all_privileges",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: true,
     column_defs: None,
-    sql: r#"
-SELECT grantor, grantee, NULL AS database, NULL AS schema, NULL AS name, 'system' AS object_type, privilege_type
+    sql: r#"SELECT grantor, grantee, NULL AS database, NULL AS schema, NULL AS name, 'system' AS object_type, privilege_type
 FROM mz_internal.mz_show_system_privileges
 UNION ALL
 SELECT grantor, grantee, NULL AS database, NULL AS schema, name, 'cluster' AS object_type, privilege_type
@@ -5320,9 +5427,9 @@ FROM mz_internal.mz_show_object_privileges"#,
 pub const MZ_SHOW_ALL_MY_PRIVILEGES: BuiltinView = BuiltinView {
     name: "mz_show_all_my_privileges",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: true,
     column_defs: None,
-    sql: r#"
-SELECT grantor, grantee, database, schema, name, object_type, privilege_type
+    sql: r#"SELECT grantor, grantee, database, schema, name, object_type, privilege_type
 FROM mz_internal.mz_show_all_privileges
 WHERE
     CASE
@@ -5335,9 +5442,9 @@ WHERE
 pub const MZ_SHOW_DEFAULT_PRIVILEGES: BuiltinView = BuiltinView {
     name: "mz_show_default_privileges",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: true,
     column_defs: None,
-    sql: r#"
-SELECT
+    sql: r#"SELECT
     CASE defaults.role_id
         WHEN 'p' THEN 'PUBLIC'
         ELSE object_owner.name
@@ -5364,9 +5471,9 @@ WHERE defaults.grantee NOT LIKE 's%'
 pub const MZ_SHOW_MY_DEFAULT_PRIVILEGES: BuiltinView = BuiltinView {
     name: "mz_show_my_default_privileges",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: true,
     column_defs: None,
-    sql: r#"
-SELECT object_owner, database, schema, object_type, grantee, privilege_type
+    sql: r#"SELECT object_owner, database, schema, object_type, grantee, privilege_type
 FROM mz_internal.mz_show_default_privileges
 WHERE
     CASE
@@ -5379,6 +5486,7 @@ WHERE
 pub const MZ_CLUSTER_REPLICA_HISTORY: BuiltinView = BuiltinView {
     name: "mz_cluster_replica_history",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: r#"
         WITH
@@ -5427,6 +5535,7 @@ pub const MZ_CLUSTER_REPLICA_HISTORY: BuiltinView = BuiltinView {
 pub const MZ_MATERIALIZATION_LAG: BuiltinView = BuiltinView {
     name: "mz_materialization_lag",
     schema: MZ_INTERNAL_SCHEMA,
+    add_whitespace: false,
     column_defs: None,
     sql: "
 WITH MUTUALLY RECURSIVE
