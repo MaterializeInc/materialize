@@ -9,6 +9,8 @@
 
 """Various utilities"""
 
+from __future__ import annotations
+
 import json
 import os
 import random
@@ -34,7 +36,7 @@ class MzVersion(Version):
     """Version of Materialize, can be parsed from version string, SQL, cargo"""
 
     @classmethod
-    def parse_mz(cls, version: str, drop_dev_suffix: bool = False) -> "MzVersion":
+    def parse_mz(cls, version: str, drop_dev_suffix: bool = False) -> MzVersion:
         """Parses a Mz version string, for example:  v0.45.0-dev (f01773cb1)"""
         if not version[0] == "v":
             raise ValueError(f"Invalid mz version string: {version}")
@@ -51,12 +53,12 @@ class MzVersion(Version):
         return cls.parse(version)
 
     @classmethod
-    def parse_sql(cls, c: Composition) -> "MzVersion":
+    def parse_sql(cls, c: Composition) -> MzVersion:
         """Gets the Mz version from SQL query "SELECT mz_version()" and parses it"""
         return cls.parse_mz(c.sql_query("SELECT mz_version()")[0][0])
 
     @classmethod
-    def parse_cargo(cls) -> "MzVersion":
+    def parse_cargo(cls) -> MzVersion:
         """Uses the cargo mz-environmentd package info to get the version of current source code state"""
         metadata = json.loads(
             subprocess.check_output(
@@ -70,7 +72,7 @@ class MzVersion(Version):
             raise ValueError("No mz-environmentd version found in cargo metadata")
 
     @classmethod
-    def from_semver(cls, version: Version) -> "MzVersion":
+    def from_semver(cls, version: Version) -> MzVersion:
         return cls.parse(str(version))
 
     def __str__(self) -> str:
