@@ -917,6 +917,12 @@ where
                             )
                             .await;
                         }
+                        IntrospectionType::PrivatelinkConnectionStatusHistory => {
+                            self.partially_truncate_status_history(
+                                IntrospectionType::PrivatelinkConnectionStatusHistory,
+                            )
+                            .await;
+                        }
 
                         // Truncate compute-maintained collections.
                         IntrospectionType::ComputeDependencies
@@ -2631,6 +2637,17 @@ where
                     .0,
                 healthcheck::MZ_SINK_STATUS_HISTORY_DESC
                     .get_by_name(&ColumnName::from("sink_id"))
+                    .expect("schema has not changed")
+                    .0,
+            ),
+            IntrospectionType::PrivatelinkConnectionStatusHistory => (
+                self.config.keep_n_privatelink_status_history_entries,
+                healthcheck::MZ_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC
+                    .get_by_name(&ColumnName::from("occurred_at"))
+                    .expect("schema has not changed")
+                    .0,
+                healthcheck::MZ_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC
+                    .get_by_name(&ColumnName::from("connection_id"))
                     .expect("schema has not changed")
                     .0,
             ),

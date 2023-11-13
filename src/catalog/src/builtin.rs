@@ -44,8 +44,9 @@ use mz_sql::session::user::{
 };
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_client::healthcheck::{
-    MZ_PREPARED_STATEMENT_HISTORY_DESC, MZ_SESSION_HISTORY_DESC, MZ_SINK_STATUS_HISTORY_DESC,
-    MZ_SOURCE_STATUS_HISTORY_DESC, MZ_STATEMENT_EXECUTION_HISTORY_DESC,
+    MZ_PREPARED_STATEMENT_HISTORY_DESC, MZ_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC,
+    MZ_SESSION_HISTORY_DESC, MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC,
+    MZ_STATEMENT_EXECUTION_HISTORY_DESC,
 };
 use once_cell::sync::Lazy;
 use serde::Serialize;
@@ -2411,6 +2412,16 @@ pub static MZ_SOURCE_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinS
     is_retained_metrics_object: false,
     sensitivity: DataSensitivity::Public,
 });
+
+pub static MZ_PRIVATELINK_CONNECTION_STATUS_HISTORY: Lazy<BuiltinSource> =
+    Lazy::new(|| BuiltinSource {
+        name: "mz_aws_privatelink_connection_status_history",
+        schema: MZ_INTERNAL_SCHEMA,
+        data_source: Some(IntrospectionType::PrivatelinkConnectionStatusHistory),
+        desc: MZ_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC.clone(),
+        is_retained_metrics_object: false,
+        sensitivity: DataSensitivity::Public,
+    });
 
 pub static MZ_STATEMENT_EXECUTION_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_statement_execution_history",
@@ -6211,6 +6222,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Source(&MZ_SINK_STATUS_HISTORY),
         Builtin::View(&MZ_SINK_STATUSES),
         Builtin::Source(&MZ_SOURCE_STATUS_HISTORY),
+        Builtin::Source(&MZ_PRIVATELINK_CONNECTION_STATUS_HISTORY),
         Builtin::Source(&MZ_STATEMENT_EXECUTION_HISTORY),
         Builtin::View(&MZ_STATEMENT_EXECUTION_HISTORY_REDACTED),
         Builtin::Source(&MZ_PREPARED_STATEMENT_HISTORY),
