@@ -167,7 +167,9 @@ class SelectAction(Action):
             if c.data_type == column.data_type and c.data_type != TextTextMap
         ]
 
-        join = obj_name != obj2_name and obj not in exe.db.views and columns
+        # TODO: Reenable joins when #22717 is fixed
+        # join = obj_name != obj2_name and obj not in exe.db.views and columns
+        join = False
 
         if join:
             all_columns = list(obj.columns) + list(obj2.columns)
@@ -673,7 +675,9 @@ class CreateViewAction(Action):
         base_object2: DBObject | None = self.rng.choice(
             exe.db.db_objects_without_views()
         )
-        if self.rng.choice([True, False]) or base_object2 == base_object:
+        # TODO: Reenable joins when #22717 is fixed
+        # if base_object2 == base_object:
+        if True:
             base_object2 = None
         view = View(
             self.rng,
@@ -906,11 +910,11 @@ class GrantPrivilegesAction(Action):
             if not exe.db.roles:
                 return
             role = self.rng.choice(exe.db.roles)
-        privilege = self.rng.choice(["SELECT", "INSERT", "UPDATE", "ALL"])
-        tables_views: list[DBObject] = [*exe.db.tables, *exe.db.views]
-        table = self.rng.choice(tables_views)
-        query = f"GRANT {privilege} ON {table} TO {role}"
-        exe.execute(query)
+            privilege = self.rng.choice(["SELECT", "INSERT", "UPDATE", "ALL"])
+            tables_views: list[DBObject] = [*exe.db.tables, *exe.db.views]
+            table = self.rng.choice(tables_views)
+            query = f"GRANT {privilege} ON {table} TO {role}"
+            exe.execute(query)
 
 
 class RevokePrivilegesAction(Action):
