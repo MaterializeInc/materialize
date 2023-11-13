@@ -36,9 +36,13 @@ from materialize.output_consistency.validation.validation_outcome import (
 class ResultComparator:
     """Compares the outcome (result or failure) of multiple query executions"""
 
-    def __init__(self, ignore_filter: GenericInconsistencyIgnoreFilter):
+    def __init__(
+        self,
+        ignore_filter: GenericInconsistencyIgnoreFilter,
+        error_message_normalizer: ErrorMessageNormalizer = ErrorMessageNormalizer(),
+    ):
         self.ignore_filter = ignore_filter
-        self.error_message_normalizer = ErrorMessageNormalizer()
+        self.error_message_normalizer = error_message_normalizer
 
     def compare_results(self, query_execution: QueryExecution) -> ValidationOutcome:
         validation_outcome = ValidationOutcome()
