@@ -432,7 +432,7 @@ enum Tag {
     // i64 nanoseconds. (Note that Materialize does not support leap
     // seconds, but this module does).
     CheapTimestampTz,
-    // The remaining tags are for variable-length signed integer encoding.
+    // The next several tags are for variable-length signed integer encoding.
     // The basic idea is that `NonNegativeIntN_K` is used to encode a datum of type
     // IntN whose actual value is positive or zero and fits in K bytes, and similarly for
     // NegativeIntN_K with negative values.
@@ -482,21 +482,49 @@ enum Tag {
     NegativeInt64_48,
     NegativeInt64_56,
     NegativeInt64_64,
+
+    // These are like the ones above, but for unsigned types. The
+    // situation is slightly simpler as we don't have negatives.
+    UInt8_0, // i.e., 0
+    UInt8_8,
+
+    UInt16_0,
+    UInt16_8,
+    UInt16_16,
+
+    UInt32_0,
+    UInt32_8,
+    UInt32_16,
+    UInt32_24,
+    UInt32_32,
+
+    UInt64_0,
+    UInt64_8,
+    UInt64_16,
+    UInt64_24,
+    UInt64_32,
+    UInt64_40,
+    UInt64_48,
+    UInt64_56,
+    UInt64_64,
 }
 
 impl Tag {
     fn actual_int_length(self) -> Option<usize> {
         use Tag::*;
         let val = match self {
-            NonNegativeInt16_0 | NonNegativeInt32_0 | NonNegativeInt64_0 => 0,
-            NonNegativeInt16_8 | NonNegativeInt32_8 | NonNegativeInt64_8 => 1,
-            NonNegativeInt16_16 | NonNegativeInt32_16 | NonNegativeInt64_16 => 2,
-            NonNegativeInt32_24 | NonNegativeInt64_24 => 3,
-            NonNegativeInt32_32 | NonNegativeInt64_32 => 4,
-            NonNegativeInt64_40 => 5,
-            NonNegativeInt64_48 => 6,
-            NonNegativeInt64_56 => 7,
-            NonNegativeInt64_64 => 8,
+            NonNegativeInt16_0 | NonNegativeInt32_0 | NonNegativeInt64_0 | UInt8_0 | UInt16_0
+            | UInt32_0 | UInt64_0 => 0,
+            NonNegativeInt16_8 | NonNegativeInt32_8 | NonNegativeInt64_8 | UInt8_8 | UInt16_8
+            | UInt32_8 | UInt64_8 => 1,
+            NonNegativeInt16_16 | NonNegativeInt32_16 | NonNegativeInt64_16 | UInt16_16
+            | UInt32_16 | UInt64_16 => 2,
+            NonNegativeInt32_24 | NonNegativeInt64_24 | UInt32_24 | UInt64_24 => 3,
+            NonNegativeInt32_32 | NonNegativeInt64_32 | UInt32_32 | UInt64_32 => 4,
+            NonNegativeInt64_40 | UInt64_40 => 5,
+            NonNegativeInt64_48 | UInt64_48 => 6,
+            NonNegativeInt64_56 | UInt64_56 => 7,
+            NonNegativeInt64_64 | UInt64_64 => 8,
             NegativeInt16_0 | NegativeInt32_0 | NegativeInt64_0 => 0,
             NegativeInt16_8 | NegativeInt32_8 | NegativeInt64_8 => 1,
             NegativeInt16_16 | NegativeInt32_16 | NegativeInt64_16 => 2,
@@ -655,6 +683,15 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         Tag::Null => Datum::Null,
         Tag::False => Datum::False,
         Tag::True => Datum::True,
+        Tag::UInt8_0 | Tag::UInt8_8 => {
+            let i = u8::from_le_bytes(read_byte_array_extending_nonnegative(
+                data,
+                offset,
+                tag.actual_int_length()
+                    .expect("returns a value for variable-length-encoded integer tags"),
+            ));
+            Datum::UInt8(i)
+        }
         Tag::Int16 => {
             let i = i16::from_le_bytes(read_byte_array(data, offset));
             Datum::Int16(i)
@@ -670,6 +707,15 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
                     .expect("returns a value for variable-length-encoded integer tags"),
             ));
             Datum::Int16(i)
+        }
+        Tag::UInt16_0 | Tag::UInt16_8 | Tag::UInt16_16 => {
+            let i = u16::from_le_bytes(read_byte_array_extending_nonnegative(
+                data,
+                offset,
+                tag.actual_int_length()
+                    .expect("returns a value for variable-length-encoded integer tags"),
+            ));
+            Datum::UInt16(i)
         }
         Tag::Int32 => {
             let i = i32::from_le_bytes(read_byte_array(data, offset));
@@ -690,6 +736,15 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
                     .expect("returns a value for variable-length-encoded integer tags"),
             ));
             Datum::Int32(i)
+        }
+        Tag::UInt32_0 | Tag::UInt32_8 | Tag::UInt32_16 | Tag::UInt32_24 | Tag::UInt32_32 => {
+            let i = u32::from_le_bytes(read_byte_array_extending_nonnegative(
+                data,
+                offset,
+                tag.actual_int_length()
+                    .expect("returns a value for variable-length-encoded integer tags"),
+            ));
+            Datum::UInt32(i)
         }
         Tag::Int64 => {
             let i = i64::from_le_bytes(read_byte_array(data, offset));
@@ -715,6 +770,23 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
                     .expect("returns a value for variable-length-encoded integer tags"),
             ));
             Datum::Int64(i)
+        }
+        Tag::UInt64_0
+        | Tag::UInt64_8
+        | Tag::UInt64_16
+        | Tag::UInt64_24
+        | Tag::UInt64_32
+        | Tag::UInt64_40
+        | Tag::UInt64_48
+        | Tag::UInt64_56
+        | Tag::UInt64_64 => {
+            let i = u64::from_le_bytes(read_byte_array_extending_nonnegative(
+                data,
+                offset,
+                tag.actual_int_length()
+                    .expect("returns a value for variable-length-encoded integer tags"),
+            ));
+            Datum::UInt64(i)
         }
         Tag::NegativeInt16_0 | Tag::NegativeInt16_16 | Tag::NegativeInt16_8 => {
             // SAFETY:`tag.actual_int_length()` is <= 16 for these tags,
@@ -1077,6 +1149,22 @@ where
     (64 - n_sign_bits + 7) / 8
 }
 
+// In principle we could just use `min_bytes_signed`, rather than
+// having a separate function here, as long as we made that one take
+// `T: Into<i128>` instead of 64. But LLVM doesn't seem smart enough
+// to realize that that function is the same as the current version,
+// and generates worse code.
+fn min_bytes_unsigned<T>(i: T) -> u8
+where
+    T: Into<u64>,
+{
+    let i: u64 = i.into();
+
+    let n_sign_bits = i.leading_zeros() as u8;
+
+    (64 - n_sign_bits + 7) / 8
+}
+
 fn push_datum<D>(data: &mut D, datum: Datum)
 where
     D: Vector<u8>,
@@ -1119,20 +1207,28 @@ where
             data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
         }
         Datum::UInt8(i) => {
-            data.push(Tag::UInt8.into());
-            data.extend_from_slice(&i.to_le_bytes());
+            let mbu = min_bytes_unsigned(i);
+            let tag = u8::from(Tag::UInt8_0) + mbu;
+            data.push(tag);
+            data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbu)]);
         }
         Datum::UInt16(i) => {
-            data.push(Tag::UInt16.into());
-            data.extend_from_slice(&i.to_le_bytes());
+            let mbu = min_bytes_unsigned(i);
+            let tag = u8::from(Tag::UInt16_0) + mbu;
+            data.push(tag);
+            data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbu)]);
         }
         Datum::UInt32(i) => {
-            data.push(Tag::UInt32.into());
-            data.extend_from_slice(&i.to_le_bytes());
+            let mbu = min_bytes_unsigned(i);
+            let tag = u8::from(Tag::UInt32_0) + mbu;
+            data.push(tag);
+            data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbu)]);
         }
         Datum::UInt64(i) => {
-            data.push(Tag::UInt64.into());
-            data.extend_from_slice(&i.to_le_bytes());
+            let mbu = min_bytes_unsigned(i);
+            let tag = u8::from(Tag::UInt64_0) + mbu;
+            data.push(tag);
+            data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbu)]);
         }
         Datum::Float32(f) => {
             data.push(Tag::Float32.into());
@@ -1322,10 +1418,10 @@ pub fn datum_size(datum: &Datum) -> usize {
         Datum::Int16(i) => 1 + usize::from(min_bytes_signed(*i)),
         Datum::Int32(i) => 1 + usize::from(min_bytes_signed(*i)),
         Datum::Int64(i) => 1 + usize::from(min_bytes_signed(*i)),
-        Datum::UInt8(_) => 1 + size_of::<u8>(),
-        Datum::UInt16(_) => 1 + size_of::<u16>(),
-        Datum::UInt32(_) => 1 + size_of::<u32>(),
-        Datum::UInt64(_) => 1 + size_of::<u64>(),
+        Datum::UInt8(i) => 1 + usize::from(min_bytes_unsigned(*i)),
+        Datum::UInt16(i) => 1 + usize::from(min_bytes_unsigned(*i)),
+        Datum::UInt32(i) => 1 + usize::from(min_bytes_unsigned(*i)),
+        Datum::UInt64(i) => 1 + usize::from(min_bytes_unsigned(*i)),
         Datum::Float32(_) => 1 + size_of::<f32>(),
         Datum::Float64(_) => 1 + size_of::<f64>(),
         Datum::Date(_) => 1 + size_of::<i32>(),
