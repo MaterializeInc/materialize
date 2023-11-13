@@ -95,7 +95,7 @@ use tracing_subscriber::filter::EnvFilter;
 
 use mz_adapter::catalog::Catalog;
 use mz_build_info::{build_info, BuildInfo};
-use mz_catalog::config::{ClusterReplicaSizeMap, Config};
+use mz_catalog::config::{ClusterReplicaSizeMap, StateConfig};
 use mz_catalog::durable::{
     self as catalog, BootstrapArgs, OpenableDurableCatalogState, StashConfig,
 };
