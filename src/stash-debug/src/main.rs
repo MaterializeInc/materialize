@@ -526,6 +526,7 @@ impl Usage {
                     environment_id: EnvironmentId::for_tests(),
                     now,
                     skip_migrations: false,
+                    metrics_registry: &MetricsRegistry::new(),
                     cluster_replica_sizes: cluster_replica_sizes.clone(),
                     default_storage_cluster_size: None,
                     builtin_cluster_replica_size: "1".into(),

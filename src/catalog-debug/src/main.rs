@@ -449,6 +449,7 @@ async fn upgrade_check(
             environment_id: EnvironmentId::for_tests(),
             now,
             skip_migrations: false,
+            metrics_registry: &MetricsRegistry::new(),
             cluster_replica_sizes,
             default_storage_cluster_size: None,
             builtin_cluster_replica_size: "1".into(),
