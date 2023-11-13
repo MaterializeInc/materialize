@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::num::NonZeroI64;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Instant;
 
 use chrono::{DateTime, Duration, DurationRound, Utc};
@@ -39,12 +40,13 @@ use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use timely::{Container, PartialOrder};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot;
+use tracing::debug_span;
 use uuid::Uuid;
 
 use crate::controller::error::CollectionMissing;
 use crate::controller::replica::{ReplicaClient, ReplicaConfig};
 use crate::controller::{
-    CollectionState, ComputeControllerResponse, IntrospectionUpdates, ReplicaId,
+    CollectionState, ComputeControllerResponse, IntrospectionUpdates, PeekNotification, ReplicaId,
 };
 use crate::logging::LogVariant;
 use crate::metrics::{InstanceMetrics, ReplicaMetrics};
@@ -154,7 +156,7 @@ pub(super) struct Instance<T> {
     /// currently required to ensure all replicas have stopped reading from the peeked collection's
     /// inputs before we allow them to compact. #16641 tracks changing this so we only have to wait
     /// for the first peek response.
-    peeks: BTreeMap<Uuid, PendingPeek<T>>,
+    peeks: Arc<Mutex<BTreeMap<Uuid, PendingPeek<T>>>>,
     /// Currently in-progress subscribes.
     ///
     /// New entries are added for all subscribes exported from dataflows created through
@@ -362,17 +364,19 @@ impl<T: Timestamp> Instance<T> {
     }
 
     /// Return the IDs of pending peeks targeting the specified replica.
-    fn peeks_targeting(
-        &self,
-        replica_id: ReplicaId,
-    ) -> impl Iterator<Item = (Uuid, &PendingPeek<T>)> {
-        self.peeks.iter().filter_map(move |(uuid, peek)| {
+    fn peeks_targeting(&self, replica_id: ReplicaId) -> Vec<(Uuid, OpenTelemetryContext)> {
+        let mut result = Vec::new();
+
+        let peeks = self.peeks.lock().expect("lock poisoned");
+        let uuids: Vec<_> = peeks.keys().map(|uuid| uuid.clone()).collect();
+        for uuid in uuids {
+            let peek = peeks.get(&uuid).expect("known to exist");
             if peek.target_replica == Some(replica_id) {
-                Some((*uuid, peek))
-            } else {
-                None
+                result.push((uuid, peek.otel_ctx.clone()));
             }
-        })
+        }
+
+        result
     }
 
     /// Return the IDs of in-progress subscribes targeting the specified replica.
@@ -404,9 +408,8 @@ impl<T: Timestamp> Instance<T> {
         self.metrics
             .collection_unscheduled_count
             .set(u64::cast_from(unscheduled_collections_count));
-        self.metrics
-            .peek_count
-            .set(u64::cast_from(self.peeks.len()));
+        let peeks = self.peeks.lock().expect("lock poisoned");
+        self.metrics.peek_count.set(u64::cast_from(peeks.len()));
         self.metrics
             .subscribe_count
             .set(u64::cast_from(self.subscribes.len()));
@@ -592,7 +595,7 @@ impl<T: Timestamp> Instance<T> {
             .iter()
             .map(|(id, collection)| (id.to_string(), format!("{collection:?}")))
             .collect();
-        let peeks: BTreeMap<_, _> = peeks
+        let peeks: BTreeMap<_, _> = peeks.lock().expect("lock poisoned")
             .iter()
             .map(|(uuid, peek)| (uuid.to_string(), format!("{peek:?}")))
             .collect();
@@ -643,8 +646,11 @@ where
             .collect();
         let history = ComputeCommandHistory::new(metrics.for_history());
 
+        let peeks = Default::default();
+
         let (response_worker_tx, response_worker_rx) = tokio::sync::mpsc::unbounded_channel();
-        let receive_worker: ReceiveWorker<T> = ReceiveWorker::new(response_worker_tx);
+        let receive_worker: ReceiveWorker<T> =
+            ReceiveWorker::new(Arc::clone(&peeks), response_worker_tx, response_tx.clone());
 
         let mut instance = Self {
             build_info,
@@ -652,7 +658,7 @@ where
             replicas: Default::default(),
             collections,
             log_sources: arranged_logs,
-            peeks: Default::default(),
+            peeks,
             subscribes: Default::default(),
             copy_tos: Default::default(),
             history,
@@ -933,11 +939,11 @@ where
         // is consistent with how we handle targeted subscribes above.
         let mut peek_responses = Vec::new();
         let mut to_drop = Vec::new();
-        for (uuid, peek) in self.compute.peeks_targeting(id) {
-            peek_responses.push(ComputeControllerResponse::PeekResponse(
+        for (uuid, otel_ctx) in self.compute.peeks_targeting(id) {
+            peek_responses.push(ComputeControllerResponse::PeekNotification(
                 uuid,
-                PeekResponse::Error("target replica failed or was dropped".into()),
-                peek.otel_ctx.clone(),
+                PeekNotification::Error("target replica failed or was dropped".into()),
+                otel_ctx,
             ));
             to_drop.push(uuid);
         }
@@ -1379,8 +1385,10 @@ where
         };
 
         let otel_ctx = OpenTelemetryContext::obtain();
-        self.compute.peeks.insert(
-            uuid,
+        {
+            let mut peeks = self.compute.peeks.lock().expect("lock poisoned");
+            peeks.insert(
+                uuid,
             PendingPeek {
                 target: peek_target.clone(),
                 time: timestamp.clone(),
@@ -1390,7 +1398,8 @@ where
                 requested_at: Instant::now(),
                 result_tx,
             },
-        );
+            );
+        }
 
         self.compute.send(ComputeCommand::Peek(Peek {
             literal_constraints,
@@ -1430,8 +1439,10 @@ where
         // Let the coordinator know. Maybe not needed anymore?
         let otel_ctx = peek.otel_ctx.clone();
         self.compute
-            .deliver_response(ComputeControllerResponse::PeekResponse(
-                uuid, response, otel_ctx,
+            .deliver_response(ComputeControllerResponse::PeekNotification(
+                uuid,
+                PeekNotification::Canceled,
+                otel_ctx,
             ));
     }
 
@@ -1730,8 +1741,13 @@ where
     ///    command.
     ///  * Remove the read hold for this peek, unblocking compaction that might have waited on it.
     fn remove_peek(&mut self, uuid: &Uuid) -> Option<PendingPeek<T>> {
-        let Some(peek) = self.compute.peeks.remove(uuid) else {
-            return None;
+        let peek = {
+            let mut peeks = self.compute.peeks.lock().expect("lock poisoned");
+            let Some(peek) = peeks.remove(uuid) else {
+                return None;
+            };
+
+            peek
         };
 
         // NOTE: We need to send the `CancelPeek` command _before_ we release the peek's read hold,
@@ -1760,8 +1776,8 @@ where
             ComputeResponse::FrontierUpper { id, upper } => {
                 self.handle_frontier_upper(id, upper, replica_id)
             }
-            ComputeResponse::PeekResponse(uuid, peek_response, otel_ctx) => {
-                self.handle_peek_response(uuid, peek_response, otel_ctx, replica_id)
+            ComputeResponse::PeekResponse(_uuid, _peek_response, _otel_ctx) => {
+                unreachable!("intercepted in ReceiveWorker")
             }
             ComputeResponse::CopyToResponse(id, response) => {
                 self.handle_copy_to_response(id, response, replica_id)
@@ -1828,40 +1844,6 @@ where
         }
     }
 
-    fn handle_peek_response(
-        &mut self,
-        uuid: Uuid,
-        response: PeekResponse,
-        otel_ctx: OpenTelemetryContext,
-        replica_id: ReplicaId,
-    ) -> Option<ComputeControllerResponse<T>> {
-        // We might not be tracking this peek anymore, because we have served a response already or
-        // because it was canceled. If this is the case, we ignore the response.
-        let peek = self.remove_peek(&uuid)?;
-
-        otel_ctx.attach_as_parent();
-
-        // Peek cancellations are best effort, so we might still
-        // receive a response, even though the recipient is gone.
-        let _ = peek.result_tx.send(response.clone());
-
-        // If the peek is targeting a replica, ignore responses from other replicas.
-        let target_replica = peek.target_replica.unwrap_or(replica_id);
-        if target_replica != replica_id {
-            return None;
-        }
-
-        let duration = peek.requested_at.elapsed();
-        self.compute
-            .metrics
-            .observe_peek_response(&response, duration);
-
-        // NOTE: We use the `otel_ctx` from the response, not the pending peek, because we
-        // currently want the parent to be whatever the compute worker did with this peek.
-        Some(ComputeControllerResponse::PeekResponse(
-            uuid, response, otel_ctx,
-        ))
-    }
 
     fn handle_copy_to_response(
         &mut self,
@@ -2435,7 +2417,15 @@ where
     T: Timestamp + Lattice,
 {
     /// Creates a new receive worker that forwards responses to the given `tx`.
-    pub fn new(tx: UnboundedSender<(ReplicaId, Option<ComputeResponse<T>>)>) -> Self {
+    ///
+    /// Requires a handle to outstanding peeks of the compute `Instance`. We
+    /// share this so that we can immediately respond to peeks when we get the
+    /// reponse from the replica.
+    fn new(
+        peeks: Arc<Mutex<BTreeMap<Uuid, PendingPeek<T>>>>,
+        tx: UnboundedSender<(ReplicaId, Option<ComputeResponse<T>>)>,
+        response_tx: crossbeam_channel::Sender<ComputeControllerResponse<T>>,
+    ) -> Self {
         let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::unbounded_channel();
 
         mz_ore::task::spawn(|| "ReceiveWorker", async move {
@@ -2444,18 +2434,31 @@ where
             let mut to_enqueue = Vec::new();
             let mut dropped_replicas: BTreeSet<ReplicaId> = BTreeSet::new();
             loop {
+                // select! and rustfmt, I hate you
                 tokio::select! {
                     Some((replica_id, res, rx)) = rx_futures.next() => {
                         match res {
                             Some(res) => {
+
+                                match res {
+                                    ComputeResponse::PeekResponse(uuid, peek_response, otel_ctx) => {
+                                        let mut span = debug_span!("receive_worker_peek");
+                                        otel_ctx.attach_as_parent_to(&mut span);
+                                        let _entered = span.enter();
+                                        ReceiveWorker::handle_peek_response(
+                                            &peeks, uuid, peek_response, otel_ctx, replica_id, &response_tx);
+                                    }
+                                    _ => {
+                                        // Receiver might have hung up.
+                                        _ = tx.send((replica_id, Some(res)));
+                                    },
+                                }
+
                                 // If the replica hasn't been dropped,
                                 // re-enqueue for receiving.
                                 if !dropped_replicas.remove(&replica_id) {
                                     to_enqueue.push((replica_id.clone(), rx));
                                 }
-
-                                // Receiver might have hung up.
-                                _ = tx.send((replica_id, Some(res)));
                             },
                             None => {
                                  _ = tx.send((replica_id, None));
@@ -2490,6 +2493,51 @@ where
         });
 
         Self { tx: cmd_tx }
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    fn handle_peek_response(
+        peeks: &Arc<Mutex<BTreeMap<Uuid, PendingPeek<T>>>>,
+        uuid: Uuid,
+        response: PeekResponse,
+        otel_ctx: OpenTelemetryContext,
+        replica_id: ReplicaId,
+        response_tx: &crossbeam_channel::Sender<ComputeControllerResponse<T>>,
+    ) {
+        let mut peeks = peeks.lock().expect("lock poisoned");
+
+        // We might not be tracking this peek anymore, because we have served a response already or
+        // because it was canceled. If this is the case, we ignore the response.
+        let peek = if let Some(peek) = peeks.remove(&uuid) {
+            peek
+        } else {
+            return;
+        };
+
+        let peek_notification = PeekNotification::new(&response);
+
+        // Peek cancellations are best effort, so we might still
+        // receive a response, even though the recipient is gone.
+        let _ = peek.result_tx.send(response);
+
+        // If the peek is targeting a replica, ignore responses from other replicas.
+        let target_replica = peek.target_replica.unwrap_or(replica_id);
+        if target_replica != replica_id {
+            return;
+        }
+
+        // TODO!
+        // let duration = peek.requested_at.elapsed();
+        // self.compute
+        //     .metrics
+        //     .observe_peek_response(&response, duration);
+        // NOTE: We use the `otel_ctx` from the response, not the pending peek, because we
+        // currently want the parent to be whatever the compute worker did with this peek.
+        let _ = response_tx.send(ComputeControllerResponse::PeekNotification(
+            uuid,
+            peek_notification,
+            otel_ctx,
+        ));
     }
 
     fn register(&self, replica_id: ReplicaId, rx: UnboundedReceiver<ComputeResponse<T>>) {

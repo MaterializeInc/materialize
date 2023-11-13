@@ -34,9 +34,9 @@ use futures::stream::{Peekable, StreamExt};
 use mz_build_info::BuildInfo;
 use mz_cluster_client::ReplicaId;
 use mz_compute_client::controller::{
-    ActiveComputeController, ComputeController, ComputeControllerResponse,
+    ActiveComputeController, ComputeController, ComputeControllerResponse, PeekNotification,
 };
-use mz_compute_client::protocol::response::{PeekResponse, SubscribeBatch};
+use mz_compute_client::protocol::response::SubscribeBatch;
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
 use mz_orchestrator::{NamespacedOrchestrator, Orchestrator, ServiceProcessMetrics};
 use mz_ore::instrument;
@@ -110,7 +110,7 @@ pub enum ControllerResponse<T = mz_repr::Timestamp> {
     /// Additionally, an `OpenTelemetryContext` to forward trace information
     /// back into coord. This allows coord traces to be children of work
     /// done in compute!
-    PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
+    PeekNotification(Uuid, PeekNotification, OpenTelemetryContext),
     /// The worker's next response to a specified subscribe.
     SubscribeResponse(GlobalId, SubscribeBatch<T>),
     /// The worker's next response to a specified copy to.
@@ -437,8 +437,8 @@ where
         let response = self.active_compute().process().await;
 
         let response = response.and_then(|r| match r {
-            ComputeControllerResponse::PeekResponse(uuid, peek, otel_ctx) => {
-                Some(ControllerResponse::PeekResponse(uuid, peek, otel_ctx))
+            ComputeControllerResponse::PeekNotification(uuid, peek, otel_ctx) => {
+                Some(ControllerResponse::PeekNotification(uuid, peek, otel_ctx))
             }
             ComputeControllerResponse::SubscribeResponse(id, tail) => {
                 Some(ControllerResponse::SubscribeResponse(id, tail))

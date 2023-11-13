@@ -12,6 +12,7 @@
 //! This module determines if a dataflow can be short-cut, by returning constant values
 //! or by reading out of existing arrangements, and implements the appropriate plan.
 
+use mz_compute_client::controller::PeekNotification;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::num::NonZeroUsize;
@@ -687,10 +688,10 @@ impl crate::coord::Coordinator {
         }
     }
 
-    pub(crate) fn handle_peek_response(
+    pub(crate) fn handle_peek_notification(
         &mut self,
         uuid: Uuid,
-        response: PeekResponse,
+        notification: PeekNotification,
         otel_ctx: OpenTelemetryContext,
     ) {
         // We expect exactly one peek response, which has already been returned
@@ -704,22 +705,19 @@ impl crate::coord::Coordinator {
             is_fast_path,
         }) = self.remove_pending_peek(&uuid)
         {
-            let reason = match &response {
-                PeekResponse::Rows(r) => {
-                    let rows_returned: u64 = r.iter().map(|(_, n)| u64::cast_from(n.get())).sum();
-                    StatementEndedExecutionReason::Success {
-                        rows_returned: Some(rows_returned),
-                        execution_strategy: Some(if is_fast_path {
-                            StatementExecutionStrategy::FastPath
-                        } else {
-                            StatementExecutionStrategy::Standard
-                        }),
-                    }
-                }
-                PeekResponse::Error(e) => {
+            let reason = match notification {
+                PeekNotification::Success { num_rows } => StatementEndedExecutionReason::Success {
+                    rows_returned: Some(num_rows as u64),
+                    execution_strategy: Some(if is_fast_path {
+                        StatementExecutionStrategy::FastPath
+                    } else {
+                        StatementExecutionStrategy::Standard
+                    }),
+                },
+                PeekNotification::Error(e) => {
                     StatementEndedExecutionReason::Errored { error: e.clone() }
                 }
-                PeekResponse::Canceled => StatementEndedExecutionReason::Canceled,
+                PeekNotification::Canceled => StatementEndedExecutionReason::Canceled,
             };
             otel_ctx.attach_as_parent();
             self.retire_execution(reason, ctx_extra);

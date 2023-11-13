@@ -81,8 +81,8 @@ type IntrospectionUpdates = (IntrospectionType, Vec<(Row, Diff)>);
 /// Responses from the compute controller.
 #[derive(Debug)]
 pub enum ComputeControllerResponse<T> {
-    /// See [`ComputeResponse::PeekResponse`].
-    PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
+    /// See [`PeekNotification`].
+    PeekNotification(Uuid, PeekNotification, OpenTelemetryContext),
     /// See [`ComputeResponse::SubscribeResponse`].
     SubscribeResponse(GlobalId, SubscribeBatch<T>),
     /// The response from a dataflow containing an `CopyToS3Oneshot` sink.
@@ -103,6 +103,35 @@ pub enum ComputeControllerResponse<T> {
         /// TODO(#25239): Add documentation.
         upper: Antichain<T>,
     },
+}
+
+/// Notification/summary of a received and forwarded `PeekResponse`.
+///
+/// Intermediate state while peeks responses are in a bit of flux.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum PeekNotification {
+    /// Returned rows of a successful peek.
+    Success {
+        /// Number of Rows in the returned peek result.
+        num_rows: usize,
+    },
+    /// Error of an unsuccessful peek.
+    Error(String),
+    /// The peek was canceled.
+    Canceled,
+}
+
+impl PeekNotification {
+    /// Creates a new [PeekNotification] from the given [PeekResponse].
+    pub fn new(peek_response: &PeekResponse) -> Self {
+        match peek_response {
+            PeekResponse::Rows(rows) => Self::Success {
+                num_rows: rows.len(),
+            },
+            PeekResponse::Error(err) => Self::Error(err.clone()),
+            PeekResponse::Canceled => Self::Canceled,
+        }
+    }
 }
 
 /// Replica configuration
