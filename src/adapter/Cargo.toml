@@ -30,6 +30,7 @@ mz-audit-log = { path = "../audit-log" }
 mz-build-info = { path = "../build-info" }
 mz-catalog = { path = "../catalog" }
 mz-ccsr = { path = "../ccsr" }
+mz-cloud-resources = { path = "../cloud-resources" }
 mz-cluster-client = { path = "../cluster-client" }
 mz-compute-client = { path = "../compute-client" }
 mz-compute-types = { path = "../compute-types" }
@@ -61,7 +62,6 @@ mz-storage-types = { path = "../storage-types" }
 mz-tls-util = { path = "../tls-util" }
 mz-tracing = { path = "../tracing" }
 mz-transform = { path = "../transform" }
-mz-cloud-resources = { path = "../cloud-resources" }
 opentelemetry = { version = "0.20.0", features = ["rt-tokio", "trace"] }
 prometheus = { version = "0.13.3", default-features = false }
 proptest = { version = "1.0.0", default-features = false, features = ["std"] }
