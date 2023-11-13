@@ -529,7 +529,6 @@ impl Catalog {
         let secrets_reader = Arc::new(InMemorySecretsController::new());
         let (catalog, _, _, _) = Catalog::open(Config {
             storage,
-            metrics_registry,
             secrets_reader,
             // when debugging, no reaping
             storage_usage_retention_period: None,
@@ -540,6 +539,7 @@ impl Catalog {
                 environment_id: environment_id.unwrap_or(EnvironmentId::for_tests()),
                 now,
                 skip_migrations: true,
+                metrics_registry,
                 cluster_replica_sizes: Default::default(),
                 default_storage_cluster_size: None,
                 builtin_cluster_replica_size: "1".into(),

@@ -32,17 +32,15 @@ use crate::durable::DurableCatalogState;
 pub struct Config<'a> {
     /// The connection to the stash.
     pub storage: Box<dyn DurableCatalogState>,
-    /// The registry that catalog uses to report metrics.
-    pub metrics_registry: &'a MetricsRegistry,
     /// A handle to a secrets manager that can only read secrets.
     pub secrets_reader: Arc<dyn SecretsReader>,
     /// How long to retain storage usage records
     pub storage_usage_retention_period: Option<Duration>,
-    pub state: StateConfig,
+    pub state: StateConfig<'a>,
 }
 
 #[derive(Debug)]
-pub struct StateConfig {
+pub struct StateConfig<'a> {
     /// Whether to enable unsafe mode.
     pub unsafe_mode: bool,
     /// Whether the build is a local dev build.
@@ -55,6 +53,8 @@ pub struct StateConfig {
     pub now: mz_ore::now::NowFn,
     /// Whether or not to skip catalog migrations.
     pub skip_migrations: bool,
+    /// The registry that catalog uses to report metrics.
+    pub metrics_registry: &'a MetricsRegistry,
     /// Map of strings to corresponding compute replica sizes.
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
     /// Default storage cluster size. Must be a key from cluster_replica_sizes.

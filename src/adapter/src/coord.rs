@@ -2049,16 +2049,16 @@ pub async fn serve(
     let (catalog, builtin_migration_metadata, builtin_table_updates, _last_catalog_version) =
         Catalog::open(mz_catalog::config::Config {
             storage,
-            metrics_registry: &metrics_registry,
             secrets_reader: secrets_controller.reader(),
             storage_usage_retention_period,
-            state: catalog::StateConfig {
+            state: mz_catalog::config::StateConfig {
                 unsafe_mode,
                 all_features,
                 build_info,
                 environment_id: environment_id.clone(),
                 now: now.clone(),
                 skip_migrations: false,
+                metrics_registry: &metrics_registry,
                 cluster_replica_sizes,
                 default_storage_cluster_size,
                 builtin_cluster_replica_size,

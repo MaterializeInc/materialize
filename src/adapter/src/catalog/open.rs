@@ -182,7 +182,7 @@ impl Catalog {
     /// external to a [mz_catalog::durable::DurableCatalogState] (for example: no [mz_secrets::SecretsReader]).
     #[tracing::instrument(name = "catalog::initialize_state", level = "info", skip_all)]
     pub async fn initialize_state(
-        config: StateConfig,
+        config: StateConfig<'_>,
         storage: &mut Box<dyn mz_catalog::durable::DurableCatalogState>,
     ) -> Result<
         (
