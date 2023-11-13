@@ -15,7 +15,7 @@ import pandas as pd
 from jupyter_core.command import main as jupyter_core_command_main
 from matplotlib import pyplot as plt
 
-from materialize import benchmark_utils, buildkite, git
+from materialize import buildkite, docker, git
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
@@ -244,7 +244,7 @@ def get_baseline_and_other_endpoints(
             )
         else:
             if target == "common-ancestor":
-                target = benchmark_utils.resolve_tag_of_common_ancestor()
+                target = docker.resolve_ancestor_image_tag_for_comparison()
             endpoint = MaterializeContainer(
                 composition=c,
                 specified_target=original_target,
