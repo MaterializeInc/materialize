@@ -240,6 +240,10 @@ def is_on_release_version() -> bool:
     return False
 
 
+def is_on_main_branch() -> bool:
+    return get_branch_name() == "main"
+
+
 def get_tagged_release_version() -> MzVersion | None:
     """
     This returns the release version if exactly this commit is tagged.
@@ -275,6 +279,11 @@ def get_commit_message(commit_sha: str) -> str | None:
         # Sometimes mz_version() will report a Git SHA that is not available
         # in the current repository
         return None
+
+
+def get_branch_name() -> str:
+    command = ["git", "branch", "--show-current"]
+    return spawn.capture(command).strip()
 
 
 # Work tree mutation
