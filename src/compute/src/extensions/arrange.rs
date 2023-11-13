@@ -169,21 +169,42 @@ where
     }
 }
 
+/// A type that can reflect on its size, capacity, and allocations,
+/// and inform a caller of those through a callback.
+pub trait HeapSize {
+    /// Estimates the heap size, capacity, and allocations of `self` and
+    /// informs these three quantities, respectively, by calling `callback`.
+    /// The estimates consider only heap allocations made by `self`, and
+    /// not the size of `Self` proper.
+    fn estimate_size<C>(&self, callback: C)
+    where
+        C: FnMut(usize, usize, usize);
+}
+
+impl<T> HeapSize for Vec<T> {
+    /// Estimates the size of a vector in memory considering that the element type is
+    /// a value without nested structure.
+    ///
+    /// NOTE(vmarcos): The function explicitly ignores nested structure at this point if it exists.
+    /// TODO(vmarcos): Improve on the above!
+    #[inline]
+    fn estimate_size<C>(&self, mut callback: C)
+    where
+        C: FnMut(usize, usize, usize),
+    {
+        let size_of_t = std::mem::size_of::<T>();
+        callback(
+            self.len() * size_of_t,
+            self.capacity() * size_of_t,
+            usize::from(self.capacity() > 0),
+        )
+    }
+}
+
 /// A type that can log its heap size.
 pub trait ArrangementSize {
     /// Install a logger to track the heap size of the target.
     fn log_arrangement_size(self) -> Self;
-}
-
-/// Helper to compute the size of a vector in memory.
-///
-/// The function only considers the immediate allocation of the vector, but is oblivious of any
-/// pointers to owned allocations. It only invokes the callback for allocations that exist, i.e.,
-/// calling [`vec_size`] on a vector with no capacity will not invoke `callback`.
-#[inline]
-fn vec_size<T>(data: &Vec<T>, mut callback: impl FnMut(usize, usize)) {
-    let size_of_t = std::mem::size_of::<T>();
-    callback(data.len() * size_of_t, data.capacity() * size_of_t);
 }
 
 /// Helper for [`ArrangementSize`] to install a common operator holding on to a trace.
@@ -277,20 +298,24 @@ where
 {
     fn log_arrangement_size(self) -> Self {
         log_arrangement_size_inner(self, |trace| {
-            let (mut size, mut capacity, mut allocations) = (0, 0, 0);
-            let mut callback = |siz, cap| {
-                allocations += usize::from(cap > 0);
-                size += siz;
-                capacity += cap
+            let (mut heap_size, mut heap_capacity, mut heap_allocations) = (0, 0, 0);
+            let mut heap_callback = |siz, cap, alc| {
+                heap_size += siz;
+                heap_capacity += cap;
+                heap_allocations += alc;
             };
+
             trace.map_batches(|batch| {
-                batch.layer.keys.heap_size(&mut callback);
-                batch.layer.vals.keys.heap_size(&mut callback);
-                vec_size(&batch.layer.offs, &mut callback);
-                vec_size(&batch.layer.vals.offs, &mut callback);
-                vec_size(&batch.layer.vals.vals.vals, &mut callback);
+                batch.layer.offs.estimate_size(&mut heap_callback);
+                batch.layer.vals.offs.estimate_size(&mut heap_callback);
+                batch.layer.vals.vals.vals.estimate_size(&mut heap_callback);
+
+                let mut region_callback = |siz, cap| heap_callback(siz, cap, usize::from(cap > 0));
+                batch.layer.keys.heap_size(&mut region_callback);
+                batch.layer.vals.keys.heap_size(&mut region_callback);
             });
-            (size, capacity, allocations)
+
+            (heap_size, heap_capacity, heap_allocations)
         })
     }
 }
@@ -305,18 +330,21 @@ where
 {
     fn log_arrangement_size(self) -> Self {
         log_arrangement_size_inner(self, |trace| {
-            let (mut size, mut capacity, mut allocations) = (0, 0, 0);
-            let mut callback = |siz, cap| {
-                allocations += usize::from(cap > 0);
-                size += siz;
-                capacity += cap
+            let (mut heap_size, mut heap_capacity, mut heap_allocations) = (0, 0, 0);
+            let mut heap_callback = |siz, cap, alc| {
+                heap_size += siz;
+                heap_capacity += cap;
+                heap_allocations += alc;
             };
+
             trace.map_batches(|batch| {
-                batch.layer.keys.heap_size(&mut callback);
-                vec_size(&batch.layer.offs, &mut callback);
-                vec_size(&batch.layer.vals.vals, &mut callback);
+                batch.layer.offs.estimate_size(&mut heap_callback);
+                batch.layer.vals.vals.estimate_size(&mut heap_callback);
+
+                let mut region_callback = |siz, cap| heap_callback(siz, cap, usize::from(cap > 0));
+                batch.layer.keys.heap_size(&mut region_callback);
             });
-            (size, capacity, allocations)
+            (heap_size, heap_capacity, heap_allocations)
         })
     }
 }
