@@ -89,7 +89,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bytes::BufMut;
 use differential_dataflow::lattice::Lattice;
-use futures::Stream;
+use futures::stream::BoxStream;
 use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
@@ -2442,11 +2442,10 @@ where
             .get_by_name(&ColumnName::from("finished_status"))
             .expect("schema has not changed");
 
-        let mut mseh_rows = Box::pin(
-            self.snapshot_and_stream(mseh_id, mseh_ts)
-                .await
-                .expect("snapshot_succeeds"),
-        );
+        let mut mseh_rows = self
+            .snapshot_and_stream(mseh_id, mseh_ts)
+            .await
+            .expect("snapshot_succeeds");
 
         let mut mseh_updates = vec![];
         let mut ps_to_keep = HashSet::new();
@@ -2497,11 +2496,10 @@ where
         let mut mpsh_updates = vec![];
         let mut sessions_to_keep = HashSet::new();
 
-        let mut mpsh_rows = Box::pin(
-            self.snapshot_and_stream(mpsh_id, mpsh_ts)
-                .await
-                .expect("snapshot_succeeds"),
-        );
+        let mut mpsh_rows = self
+            .snapshot_and_stream(mpsh_id, mpsh_ts)
+            .await
+            .expect("snapshot_succeeds");
 
         let (mpsh_id_col, _) = MZ_PREPARED_STATEMENT_HISTORY_DESC
             .get_by_name(&ColumnName::from("id"))
@@ -2523,11 +2521,10 @@ where
         let ps_kept = ps_to_keep.len();
         std::mem::drop(ps_to_keep);
 
-        let mut msh_rows = Box::pin(
-            self.snapshot_and_stream(msh_id, msh_ts)
-                .await
-                .expect("snapshot_succeeds"),
-        );
+        let mut msh_rows = self
+            .snapshot_and_stream(msh_id, msh_ts)
+            .await
+            .expect("snapshot_succeeds");
 
         let (msh_id_col, _) = MZ_SESSION_HISTORY_DESC
             .get_by_name(&ColumnName::from("id"))
@@ -3215,17 +3212,51 @@ where
         &self,
         id: GlobalId,
         as_of: T,
-    ) -> Result<impl Stream<Item = (SourceData, T, Diff)>, StorageError> {
-        let as_of = Antichain::from_elem(as_of);
-        let mut read_handle = self.read_handle_for_snapshot(id).await?;
+    ) -> Result<BoxStream<(SourceData, T, Diff)>, StorageError> {
         use futures::stream::StreamExt;
-        match read_handle.snapshot_and_stream(as_of).await {
-            Ok(contents) => Ok(contents.map(|((result_k, result_v), t, diff)| {
-                let () = result_v.expect("invalid empty value");
-                let data = result_k.expect("invalid key data");
-                (data, t, diff)
-            })),
-            Err(_) => Err(StorageError::ReadBeforeSince(id)),
+
+        let metadata = &self.collection(id)?.collection_metadata;
+        // See the comments in Self::snapshot for what's going on here.
+        match metadata.txns_shard.as_ref() {
+            None => {
+                let as_of = Antichain::from_elem(as_of);
+                let mut read_handle = self.read_handle_for_snapshot(id).await?;
+                let contents = read_handle.snapshot_and_stream(as_of).await;
+                match contents {
+                    Ok(contents) => {
+                        Ok(Box::pin(contents.map(|((result_k, result_v), t, diff)| {
+                            let () = result_v.expect("invalid empty value");
+                            let data = result_k.expect("invalid key data");
+                            (data, t, diff)
+                        })))
+                    }
+                    Err(_) => Err(StorageError::ReadBeforeSince(id)),
+                }
+            }
+            Some(txns_id) => {
+                // TODO(txn): Replace this with the shared TxnsCache thing
+                // we'll have to do anyway for the dataflow operators.
+                let mut txns_cache = TxnsCache::<T, TxnsCodecRow>::open(
+                    &self.txns_client,
+                    *txns_id,
+                    Some(metadata.data_shard),
+                )
+                .await;
+                txns_cache.update_gt(&as_of).await;
+                let data_snapshot = txns_cache.data_snapshot(metadata.data_shard, as_of.clone());
+                let mut handle = self.read_handle_for_snapshot(id).await?;
+                let contents = data_snapshot.snapshot_and_stream(&mut handle).await;
+                match contents {
+                    Ok(contents) => {
+                        Ok(Box::pin(contents.map(|((result_k, result_v), t, diff)| {
+                            let () = result_v.expect("invalid empty value");
+                            let data = result_k.expect("invalid key data");
+                            (data, t, diff)
+                        })))
+                    }
+                    Err(_) => Err(StorageError::ReadBeforeSince(id)),
+                }
+            }
         }
     }
 }

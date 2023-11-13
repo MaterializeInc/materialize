@@ -17,6 +17,7 @@ use std::sync::Arc;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
+use futures::Stream;
 use mz_ore::collections::HashMap;
 use mz_persist_client::fetch::LeasedBatchPart;
 use mz_persist_client::read::{Cursor, ListenEvent, ReadHandle, Since, Subscribe};
@@ -960,6 +961,23 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
         self.unblock_read(data_write).await;
         data_read
             .snapshot_cursor(Antichain::from_elem(self.as_of.clone()))
+            .await
+    }
+
+    /// See [ReadHandle::snapshot_and_stream].
+    pub async fn snapshot_and_stream<K, V, D>(
+        &self,
+        data_read: &mut ReadHandle<K, V, T, D>,
+    ) -> Result<impl Stream<Item = ((Result<K, String>, Result<V, String>), T, D)>, Since<T>>
+    where
+        K: Debug + Codec + Ord,
+        V: Debug + Codec + Ord,
+        D: Semigroup + Codec64 + Send + Sync,
+    {
+        let data_write = WriteHandle::from_read(data_read, "unblock_read");
+        self.unblock_read(data_write).await;
+        data_read
+            .snapshot_and_stream(Antichain::from_elem(self.as_of.clone()))
             .await
     }
 
