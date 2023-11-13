@@ -67,7 +67,6 @@ use mz_storage_types::sources::Timeline;
 
 use crate::catalog::{
     is_reserved_name, migrate, BuiltinTableUpdate, Catalog, CatalogPlans, CatalogState,
-
 };
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncFactory};
 use crate::coord::timestamp_oracle;

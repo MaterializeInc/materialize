@@ -54,8 +54,8 @@ use mz_storage_types::sources::{
 };
 
 use crate::catalog::{
-    CatalogItem, CatalogState, ClusterVariant, Connection, DataSourceDesc,
-    Database, DefaultPrivilegeObject, Func, Index, MaterializedView, Sink, Type, View,
+    CatalogItem, CatalogState, ClusterVariant, Connection, DataSourceDesc, Database,
+    DefaultPrivilegeObject, Func, Index, MaterializedView, Sink, Type, View,
 };
 use crate::coord::ConnMeta;
 use crate::subscribe::ActiveSubscribe;
