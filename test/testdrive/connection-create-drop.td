@@ -20,11 +20,22 @@ $ kafka-ingest format=bytes topic=connection_test
 1,2
 2,3
 
+> CREATE SECRET s AS '...';
+
 ! CREATE CONNECTION testconn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT, ACCESS KEY ID = 'abc')
 contains:KAFKA connections do not support ACCESS KEY ID values
 
 ! CREATE CONNECTION testconn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT, ACCESS KEY ID = 'abc', PORT = 1)
 contains:KAFKA connections do not support ACCESS KEY ID, PORT values
+
+! CREATE CONNECTION testconn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL NOTHINGREAL)
+contains: unknown security protocol: NOTHINGREAL
+
+! CREATE CONNECTION testconn TO KAFKA (BROKER '${testdrive.kafka-addr}', SASL MECHANISMS 'PLAIN', SASL USERNAME 'materialize', SASL PASSWORD SECRET s, SSL KEY SECRET s)
+contains: option SSL KEY not supported with this configuration
+
+! CREATE CONNECTION testconn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT, SASL USERNAME 'materialize')
+contains: option SASL USERNAME not supported with this configuration
 
 > CREATE CONNECTION testconn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
@@ -354,8 +365,6 @@ contains:SSL KEY must be specified with SSL CERTIFICATE
     SASL MECHANISMS = 'PLAIN'
   );
 contains:SASL USERNAME must be specified
-
-> CREATE SECRET s AS '...';
 
 > CREATE CONNECTION kafka_sasl_lowercase_string_mechanism TO KAFKA (
     BROKER 'kafka:9092',
