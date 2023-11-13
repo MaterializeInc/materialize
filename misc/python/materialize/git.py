@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 from materialize.util import MzVersion
+from materialize.version_list import INVALID_VERSIONS
 
 try:
     from semver.version import Version
@@ -300,6 +301,7 @@ def get_previous_version(version: MzVersion) -> Version:
         for v in all_versions
         if v < version_as_semver_version
         and (v.prerelease is None or len(v.prerelease) == 0)
+        and MzVersion.from_semver(v) not in INVALID_VERSIONS
     ]
     return max(all_suitable_previous_versions)
 
