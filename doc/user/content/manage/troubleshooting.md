@@ -199,7 +199,7 @@ What this means for latency: Materialize may delay queries against "slow" tables
 
 What you can do:
 
-- Avoid using transactions where you don’t need them, if you’re only executing single statements at a time, for example.
+- Avoid using transactions where you don’t need them. For example, if you’re only executing single statements at a time.
 - Double check whether your SQL library or ORM is wrapping all queries in transactions on your behalf, and disable that setting, only using transactions explicitly when you want them.
 
 ### Client-side latency
