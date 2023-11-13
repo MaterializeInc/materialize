@@ -459,8 +459,8 @@ pub enum SourceIncludeMetadata {
         alias: Option<Ident>,
     },
     Header {
-        alias: Ident,
         key: String,
+        alias: Ident,
         use_bytes: bool,
     },
 }
