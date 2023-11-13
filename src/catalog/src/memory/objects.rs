@@ -26,7 +26,7 @@ use mz_controller::clusters::{
     ClusterRole, ClusterStatus, ProcessId, ReplicaConfig, ReplicaLogging,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_expr::{MirScalarExpr, OptimizedMirRelationExpr};
+use mz_expr::{CollectionPlan, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
 use mz_repr::role_id::RoleId;
@@ -804,20 +804,25 @@ impl CatalogItem {
 
     /// Collects the identifiers of the objects that were encountered when
     /// resolving names in the item's DDL statement.
-    pub fn uses(&self) -> &ResolvedIds {
+    pub fn uses(&self) -> ResolvedIds {
         static EMPTY: Lazy<ResolvedIds> = Lazy::new(|| ResolvedIds(BTreeSet::new()));
         match self {
-            CatalogItem::Func(_) => &*EMPTY,
-            CatalogItem::Index(idx) => &idx.resolved_ids,
-            CatalogItem::Sink(sink) => &sink.resolved_ids,
-            CatalogItem::Source(source) => &source.resolved_ids,
-            CatalogItem::Log(_) => &*EMPTY,
-            CatalogItem::Table(table) => &table.resolved_ids,
-            CatalogItem::Type(typ) => &typ.resolved_ids,
-            CatalogItem::View(view) => &view.resolved_ids,
-            CatalogItem::MaterializedView(mview) => &mview.resolved_ids,
-            CatalogItem::Secret(_) => &*EMPTY,
-            CatalogItem::Connection(connection) => &connection.resolved_ids,
+            CatalogItem::Func(_) => EMPTY.clone(),
+            CatalogItem::Index(idx) => idx.resolved_ids.clone(),
+            CatalogItem::Sink(sink) => sink.resolved_ids.clone(),
+            CatalogItem::Source(source) => source.resolved_ids.clone(),
+            CatalogItem::Log(_) => EMPTY.clone(),
+            CatalogItem::Table(table) => table.resolved_ids.clone(),
+            CatalogItem::Type(typ) => typ.resolved_ids.clone(),
+            CatalogItem::View(view) => {
+                let mut res = BTreeSet::new();
+                res.extend(view.resolved_ids.0.clone());
+                res.extend(view.raw_expr.depends_on());
+                ResolvedIds(res)
+            }
+            CatalogItem::MaterializedView(mview) => mview.resolved_ids.clone(),
+            CatalogItem::Secret(_) => EMPTY.clone(),
+            CatalogItem::Connection(connection) => connection.resolved_ids.clone(),
         }
     }
 
@@ -1339,7 +1344,7 @@ impl CatalogEntry {
 
     /// Collects the identifiers of the objects that were encountered when
     /// resolving names in the item's DDL statement.
-    pub fn uses(&self) -> &ResolvedIds {
+    pub fn uses(&self) -> ResolvedIds {
         self.item.uses()
     }
 
@@ -1959,7 +1964,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         }
     }
 
-    fn uses(&self) -> &ResolvedIds {
+    fn uses(&self) -> ResolvedIds {
         self.uses()
     }
 
