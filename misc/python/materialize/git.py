@@ -240,6 +240,33 @@ def is_on_release_version() -> bool:
     return False
 
 
+def get_tagged_release_version() -> MzVersion | None:
+    """
+    This returns the release version if exactly this commit is tagged.
+    If multiple release versions are present, the highest one will be returned.
+    None will be returned if the commit is not tagged.
+    """
+    git_tags = get_tags_of_current_commit()
+
+    versions: list[MzVersion] = []
+
+    for git_tag in git_tags:
+        version = MzVersion.try_parse_mz(git_tag)
+
+        if version is not None:
+            versions.append(version)
+
+    if len(versions) == 0:
+        return None
+
+    if len(versions) > 1:
+        print(
+            "Warning! Commit is tagged with multiple release versions! Returning the highest."
+        )
+
+    return max(versions)
+
+
 def get_commit_message(commit_sha: str) -> str | None:
     try:
         command = ["git", "log", "-1", "--pretty=format:%s", commit_sha]
