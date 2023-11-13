@@ -14,6 +14,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from materialize.util import MzVersion
+
 try:
     from semver.version import Version
 except ImportError:
@@ -226,6 +228,16 @@ def get_common_ancestor_commit(remote: str, branch: str, fetch_branch: bool) -> 
 
     command = ["git", "merge-base", "HEAD", f"{remote}/{branch}"]
     return spawn.capture(command).strip()
+
+
+def is_on_release_version() -> bool:
+    git_tags = get_tags_of_current_commit()
+
+    for git_tag in git_tags:
+        if MzVersion.is_mz_version_string(git_tag):
+            return True
+
+    return False
 
 
 def get_commit_message(commit_sha: str) -> str | None:

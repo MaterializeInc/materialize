@@ -60,6 +60,14 @@ class MzVersion(Version):
         return cls.parse(version)
 
     @classmethod
+    def is_mz_version_string(cls, version: str) -> bool:
+        try:
+            cls.parse_mz(version)
+            return True
+        except ValueError:
+            return False
+
+    @classmethod
     def parse_sql(cls, c: Composition) -> MzVersion:
         """Gets the Mz version from SQL query "SELECT mz_version()" and parses it"""
         return cls.parse_mz(c.sql_query("SELECT mz_version()")[0][0])

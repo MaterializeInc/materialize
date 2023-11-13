@@ -31,9 +31,7 @@ def is_in_pull_request() -> bool:
     if is_on_default_branch():
         return False
 
-    is_tagged_commit = len(git.get_tags_of_current_commit()) > 0
-    if is_tagged_commit:
-        # likely a release version
+    if git.is_on_release_version():
         return False
 
     return True
