@@ -261,7 +261,7 @@ impl Fingerprint for &BuiltinTable {
 
 impl Fingerprint for &BuiltinView {
     fn fingerprint(&self) -> String {
-        self.sql.to_string()
+        format!("\n\n{}\n\n", self.sql)
     }
 }
 
