@@ -36,6 +36,13 @@ class MzVersion(Version):
     """Version of Materialize, can be parsed from version string, SQL, cargo"""
 
     @classmethod
+    def create_mz(
+        cls, major: int, minor: int, patch: int, prerelease: str | None = None
+    ) -> MzVersion:
+        prerelease_suffix = f"-{prerelease}" if prerelease is not None else ""
+        return cls.parse_mz(f"v{major}.{minor}.{patch}{prerelease_suffix}")
+
+    @classmethod
     def parse_mz(cls, version: str, drop_dev_suffix: bool = False) -> MzVersion:
         """Parses a Mz version string, for example:  v0.45.0-dev (f01773cb1)"""
         if not version[0] == "v":
