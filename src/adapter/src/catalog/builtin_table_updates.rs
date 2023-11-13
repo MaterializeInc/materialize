@@ -26,6 +26,7 @@ use mz_catalog::builtin::{
 };
 use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::memory::error::{Error, ErrorKind};
+use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{
     ClusterStatus, ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ProcessId,
     ReplicaAllocation, ReplicaLocation,
@@ -53,8 +54,8 @@ use mz_storage_types::sources::{
 };
 
 use crate::catalog::{
-    CatalogItem, CatalogState, ClusterVariant, Connection, DataSourceDesc, Database,
-    DefaultPrivilegeObject, Func, Index, MaterializedView, Sink, Type, View, SYSTEM_CONN_ID,
+    CatalogItem, CatalogState, ClusterVariant, Connection, DataSourceDesc,
+    Database, DefaultPrivilegeObject, Func, Index, MaterializedView, Sink, Type, View,
 };
 use crate::coord::ConnMeta;
 use crate::subscribe::ActiveSubscribe;
@@ -964,12 +965,13 @@ impl CatalogState {
             diff,
         });
 
-        if let Some(typreceive_oid) = typ.details.typreceive_oid {
+        if let Some(pg_metadata) = &typ.details.pg_metadata {
             out.push(BuiltinTableUpdate {
                 id: self.resolve_builtin_table(&MZ_TYPE_PG_METADATA),
                 row: Row::pack_slice(&[
                     Datum::String(&id.to_string()),
-                    Datum::UInt32(typreceive_oid),
+                    Datum::UInt32(pg_metadata.typinput_oid),
+                    Datum::UInt32(pg_metadata.typreceive_oid),
                 ]),
                 diff,
             });

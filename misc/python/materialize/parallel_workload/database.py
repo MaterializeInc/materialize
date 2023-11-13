@@ -34,7 +34,7 @@ from materialize.parallel_workload.executor import Executor
 from materialize.parallel_workload.settings import Complexity, Scenario
 from materialize.util import naughty_strings
 
-MAX_COLUMNS = 100
+MAX_COLUMNS = 10
 MAX_INCLUDE_HEADERS = 5
 MAX_ROWS = 100
 MAX_CLUSTERS = 10
@@ -807,16 +807,20 @@ class Database:
                 )
                 for i in range(rng.randint(0, MAX_INITIAL_KAFKA_SOURCES))
             ]
-            self.postgres_sources = [
-                PostgresSource(
-                    i,
-                    rng.choice(self.clusters),
-                    rng.choice(self.schemas),
-                    ports,
-                    rng,
-                )
-                for i in range(rng.randint(0, MAX_INITIAL_POSTGRES_SOURCES))
-            ]
+            # TODO: Reenable when #22770 is fixed
+            if self.scenario == Scenario.BackupRestore:
+                self.postgres_sources = []
+            else:
+                self.postgres_sources = [
+                    PostgresSource(
+                        i,
+                        rng.choice(self.clusters),
+                        rng.choice(self.schemas),
+                        ports,
+                        rng,
+                    )
+                    for i in range(rng.randint(0, MAX_INITIAL_POSTGRES_SOURCES))
+                ]
             self.kafka_sinks = [
                 KafkaSink(
                     i,

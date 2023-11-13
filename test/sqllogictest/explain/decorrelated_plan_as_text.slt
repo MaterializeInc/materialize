@@ -294,7 +294,7 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
 Return
   Project (#8, #9)
     Map (#4, #7)
-      Join on=(eq(#0, #2, #5) AND eq(#1, #3, #6))
+      Join on=(#0 = #2 = #5 AND #1 = #3 = #6)
         Get l0
         Project (#0, #1, #3)
           Join on=(#1 = #2)

@@ -34,9 +34,7 @@ from materialize.output_consistency.ignore_filter.ignore_verdict import (
     YesIgnore,
 )
 from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
-    InconsistencyIgnoreFilter,
-)
-from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter_base import (
+    GenericInconsistencyIgnoreFilter,
     PostExecutionInconsistencyIgnoreFilterBase,
     PreExecutionInconsistencyIgnoreFilterBase,
 )
@@ -69,13 +67,14 @@ NAME_OF_NON_EXISTING_FUNCTION_PATTERN = re.compile(
 NON_EXISTING_MZ_FUNCTION_DEFINITIONS = ["min(time)", "max(time)"]
 
 
-class PgInconsistencyIgnoreFilter(InconsistencyIgnoreFilter):
+class PgInconsistencyIgnoreFilter(GenericInconsistencyIgnoreFilter):
     """Allows specifying and excluding expressions with known output inconsistencies"""
 
-    def __init__(self) -> None:
-        super().__init__()
-        self.pre_execution_filter = PgPreExecutionInconsistencyIgnoreFilter()
-        self.post_execution_filter = PgPostExecutionInconsistencyIgnoreFilter()
+    def __init__(self):
+        super().__init__(
+            PgPreExecutionInconsistencyIgnoreFilter(),
+            PgPostExecutionInconsistencyIgnoreFilter(),
+        )
 
 
 class PgPreExecutionInconsistencyIgnoreFilter(

@@ -33,6 +33,7 @@ use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, CommentsMap, DataSourceDesc, Database, DefaultPrivileges, Func, Log,
     Role, Schema, Source, Table, Type,
 };
+use mz_catalog::{CREATE_SQL_TODO, SYSTEM_CONN_ID};
 use mz_cluster_client::ReplicaId;
 use mz_compute_client::controller::ComputeReplicaConfig;
 use mz_compute_client::logging::LogVariant;
@@ -66,7 +67,7 @@ use mz_storage_types::sources::Timeline;
 
 use crate::catalog::{
     is_reserved_name, migrate, BuiltinTableUpdate, Catalog, CatalogPlans, CatalogState,
-    CREATE_SQL_TODO, SYSTEM_CONN_ID,
+
 };
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncFactory};
 use crate::coord::timestamp_oracle;

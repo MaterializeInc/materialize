@@ -29,7 +29,10 @@ from materialize.output_consistency.generators.expression_generator import (
 )
 from materialize.output_consistency.generators.query_generator import QueryGenerator
 from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
-    InconsistencyIgnoreFilter,
+    GenericInconsistencyIgnoreFilter,
+)
+from materialize.output_consistency.ignore_filter.internal_output_inconsistency_ignore_filter import (
+    InternalOutputInconsistencyIgnoreFilter,
 )
 from materialize.output_consistency.input_data.scenarios.evaluation_scenario import (
     EvaluationScenario,
@@ -205,14 +208,14 @@ class OutputConsistencyTest:
         return EvaluationScenario.OUTPUT_CONSISTENCY
 
     def create_result_comparator(
-        self, ignore_filter: InconsistencyIgnoreFilter
+        self, ignore_filter: GenericInconsistencyIgnoreFilter
     ) -> ResultComparator:
         return ResultComparator(ignore_filter)
 
     def create_inconsistency_ignore_filter(
         self, sql_executors: SqlExecutors
-    ) -> InconsistencyIgnoreFilter:
-        return InconsistencyIgnoreFilter()
+    ) -> GenericInconsistencyIgnoreFilter:
+        return InternalOutputInconsistencyIgnoreFilter()
 
     def create_evaluation_strategies(self) -> list[EvaluationStrategy]:
         return [

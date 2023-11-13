@@ -24,7 +24,7 @@ from materialize.output_consistency.generators.expression_generator import (
 )
 from materialize.output_consistency.generators.query_generator import QueryGenerator
 from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
-    InconsistencyIgnoreFilter,
+    GenericInconsistencyIgnoreFilter,
 )
 from materialize.output_consistency.input_data.test_input_data import (
     ConsistencyTestInputData,
@@ -51,7 +51,7 @@ class ConsistencyTestRunner:
         outcome_comparator: ResultComparator,
         sql_executors: SqlExecutors,
         randomized_picker: RandomizedPicker,
-        ignore_filter: InconsistencyIgnoreFilter,
+        ignore_filter: GenericInconsistencyIgnoreFilter,
         output_printer: OutputPrinter,
     ):
         self.config = config

@@ -20,18 +20,20 @@ SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
-    Materialized(external_minio=True),
+    Materialized(external_minio=True, catalog_store="stash"),
     Testdrive(no_reset=True, external_minio=True, consistent_seed=True),
 ]
 
 PRE_INCIDENT_MZ = Materialized(
     image="materialize/materialized:v0.68.0",
     external_minio=True,
+    catalog_store="stash",
 )
 
 REJECT_LEGACY_MZ = Materialized(
     external_minio=True,
     environment_extra=["FAILPOINTS=reject_legacy_upsert_errors=panic"],
+    catalog_store="stash",
 )
 
 

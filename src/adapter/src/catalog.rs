@@ -39,6 +39,7 @@ pub use mz_catalog::memory::objects::{
     DefaultPrivileges, Func, Index, Log, MaterializedView, Role, Schema, Secret, Sink, Source,
     Table, Type, View,
 };
+use mz_catalog::SYSTEM_CONN_ID;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller::clusters::{
     ClusterEvent, ManagedReplicaLocation, ReplicaConfig, ReplicaLocation,
@@ -104,12 +105,6 @@ mod migrate;
 mod inner;
 mod open;
 mod state;
-
-pub static SYSTEM_CONN_ID: ConnectionId = ConnectionId::Static(0);
-
-const CREATE_SQL_TODO: &str = "TODO";
-
-pub const LINKED_CLUSTER_REPLICA_NAME: &str = "linked";
 
 /// A `Catalog` keeps track of the SQL objects known to the planner.
 ///
@@ -406,7 +401,7 @@ impl Catalog {
             details: CatalogTypeDetails {
                 array_id: builtin.details.array_id,
                 typ,
-                typreceive_oid: builtin.details.typreceive_oid,
+                pg_metadata: builtin.details.pg_metadata.clone(),
             },
         }
     }
@@ -4864,7 +4859,8 @@ mod tests {
                 ty: String,
                 elem: u32,
                 array: u32,
-                receive: Option<u32>,
+                input: u32,
+                receive: u32,
             }
 
             struct PgOper {
@@ -4901,7 +4897,7 @@ mod tests {
 
             let pg_type: BTreeMap<_, _> = client
                 .query(
-                    "SELECT oid, typname, typtype::text, typelem, typarray, nullif(typreceive::oid, 0) as typreceive FROM pg_type",
+                    "SELECT oid, typname, typtype::text, typelem, typarray, typinput::oid, typreceive::oid as typreceive FROM pg_type",
                     &[],
                 )
                 .await
@@ -4914,6 +4910,7 @@ mod tests {
                         ty: row.get("typtype"),
                         elem: row.get("typelem"),
                         array: row.get("typarray"),
+                        input: row.get("typinput"),
                         receive: row.get("typreceive"),
                     };
                     (oid, pg_type)
@@ -5003,13 +5000,29 @@ mod tests {
                             ty.oid, pg_ty.name, ty.name,
                         );
 
+                        let (typinput_oid, typreceive_oid) = match &ty.details.pg_metadata {
+                            None => (0, 0),
+                            Some(pgmeta) => (pgmeta.typinput_oid, pgmeta.typreceive_oid),
+                        };
                         assert_eq!(
-                            ty.details.typreceive_oid, pg_ty.receive,
-                            "type {} has typreceive OID {:?} in mz but {:?} in pg",
-                            ty.name, ty.details.typreceive_oid, pg_ty.receive,
+                            typinput_oid, pg_ty.input,
+                            "type {} has typinput OID {:?} in mz but {:?} in pg",
+                            ty.name, typinput_oid, pg_ty.input,
                         );
-
-                        if let Some(typreceive_oid) = ty.details.typreceive_oid {
+                        assert_eq!(
+                            typreceive_oid, pg_ty.receive,
+                            "type {} has typreceive OID {:?} in mz but {:?} in pg",
+                            ty.name, typreceive_oid, pg_ty.receive,
+                        );
+                        if typinput_oid != 0 {
+                            assert!(
+                                func_oids.contains(&typinput_oid),
+                                "type {} has typinput OID {} that does not exist in pg_proc",
+                                ty.name,
+                                typinput_oid,
+                            );
+                        }
+                        if typreceive_oid != 0 {
                             assert!(
                                 func_oids.contains(&typreceive_oid),
                                 "type {} has typreceive OID {} that does not exist in pg_proc",

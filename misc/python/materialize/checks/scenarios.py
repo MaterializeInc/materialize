@@ -85,7 +85,7 @@ class Scenario:
 class NoRestartNoUpgrade(Scenario):
     def actions(self) -> list[Action]:
         return [
-            StartMz(),
+            StartMz(self),
             Initialize(self),
             Manipulate(self, phase=1),
             Manipulate(self, phase=2),
@@ -96,16 +96,16 @@ class NoRestartNoUpgrade(Scenario):
 class RestartEntireMz(Scenario):
     def actions(self) -> list[Action]:
         return [
-            StartMz(),
+            StartMz(self),
             Initialize(self),
             KillMz(),
-            StartMz(),
+            StartMz(self),
             Manipulate(self, phase=1),
             KillMz(),
-            StartMz(),
+            StartMz(self),
             Manipulate(self, phase=2),
             KillMz(),
-            StartMz(),
+            StartMz(self),
             Validate(self),
         ]
 
@@ -113,7 +113,7 @@ class RestartEntireMz(Scenario):
 class DropCreateDefaultReplica(Scenario):
     def actions(self) -> list[Action]:
         return [
-            StartMz(),
+            StartMz(self),
             Initialize(self),
             Manipulate(self, phase=1),
             DropCreateDefaultReplicaAction(),
@@ -127,7 +127,7 @@ class RestartClusterdCompute(Scenario):
 
     def actions(self) -> list[Action]:
         return [
-            StartMz(),
+            StartMz(self),
             StartClusterdCompute(),
             UseClusterdCompute(self),
             Initialize(self),
@@ -148,18 +148,18 @@ class RestartEnvironmentdClusterdStorage(Scenario):
 
     def actions(self) -> list[Action]:
         return [
-            StartMz(),
+            StartMz(self),
             StartClusterdCompute(),
             UseClusterdCompute(self),
             Initialize(self),
             KillMz(),
-            StartMz(),
+            StartMz(self),
             Manipulate(self, phase=1),
             KillMz(),
-            StartMz(),
+            StartMz(self),
             Manipulate(self, phase=2),
             KillMz(),
-            StartMz(),
+            StartMz(self),
             Validate(self),
             # Validate again so that introducing non-idempotent validate()s
             # will cause the CI to fail.
@@ -172,7 +172,7 @@ class KillClusterdStorage(Scenario):
 
     def actions(self) -> list[Action]:
         return [
-            StartMz(),
+            StartMz(self),
             StartClusterdCompute(),
             UseClusterdCompute(self),
             Initialize(self),
@@ -188,7 +188,7 @@ class KillClusterdStorage(Scenario):
 class RestartCockroach(Scenario):
     def actions(self) -> list[Action]:
         return [
-            StartMz(),
+            StartMz(self),
             Initialize(self),
             RestartCockroachAction(),
             Manipulate(self, phase=1),
@@ -202,7 +202,7 @@ class RestartCockroach(Scenario):
 class RestartSourcePostgres(Scenario):
     def actions(self) -> list[Action]:
         return [
-            StartMz(),
+            StartMz(self),
             Initialize(self),
             RestartSourcePostgresAction(),
             Manipulate(self, phase=1),
@@ -216,7 +216,7 @@ class RestartSourcePostgres(Scenario):
 class RestartRedpandaDebezium(Scenario):
     def actions(self) -> list[Action]:
         return [
-            StartMz(),
+            StartMz(self),
             Initialize(self),
             RestartRedpandaDebeziumAction(),
             Manipulate(self, phase=1),

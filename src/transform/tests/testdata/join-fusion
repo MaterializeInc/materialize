@@ -41,7 +41,7 @@ build apply=JoinFusion
    [[#0 #2]])
 ----
 Filter #3
-  Join on=(eq(#0, #2, #4))
+  Join on=(#0 = #2 = #4)
     Get x
     Get x
     Get y
@@ -72,7 +72,7 @@ build apply=JoinFusion
    [[#0 #2 #6]])
 ----
 Filter #3
-  Join on=(eq(#0, #2, #4, #6))
+  Join on=(#0 = #2 = #4 = #6)
     Get x
     Get x
     Get y
@@ -90,7 +90,7 @@ build apply=(JoinFusion,PredicatePushdown)
      [#1])]
    [[#0 #2 #6]])
 ----
-Join on=(eq(#0, #2, #4, #6))
+Join on=(#0 = #2 = #4 = #6)
   Get x
   Filter #1
     Get x

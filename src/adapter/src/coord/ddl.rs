@@ -17,6 +17,7 @@ use std::time::Duration;
 use fail::fail_point;
 use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::VersionedEvent;
+use mz_catalog::SYSTEM_CONN_ID;
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_controller::clusters::ReplicaLocation;
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -43,9 +44,7 @@ use serde_json::json;
 use timely::progress::Antichain;
 use tracing::{event, warn, Level};
 
-use crate::catalog::{
-    CatalogItem, CatalogState, DataSourceDesc, Op, Sink, TransactionResult, SYSTEM_CONN_ID,
-};
+use crate::catalog::{CatalogItem, CatalogState, DataSourceDesc, Op, Sink, TransactionResult};
 use crate::coord::read_policy::SINCE_GRANULARITY;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::{Coordinator, ReplicaMetadata};

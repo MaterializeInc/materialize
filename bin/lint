@@ -48,6 +48,7 @@ copyright_files=$(grep -vE \
     -e '(^|/)Cargo\.lock$' \
     -e '^about\.toml$' \
     -e '^deny\.toml$' \
+    -e '(^|/)Gemfile\.lock$' \
     -e '^netlify\.toml$' \
     -e '^rustfmt\.toml$' \
     -e '^clippy\.toml$' \

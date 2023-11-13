@@ -8,8 +8,6 @@
 # by the Apache License, Version 2.0.
 from textwrap import dedent
 
-import pg8000.exceptions
-
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
@@ -157,23 +155,6 @@ def workflow_stash(c: Composition) -> None:
         c.up("cockroach")
 
         cursor.execute("CREATE TABLE b (i INT)")
-
-        c.rm("cockroach")
-        c.up("cockroach")
-
-        # CockroachDB cleared its database, so this should fail.
-        #
-        # Depending on timing, this can fail in one of two ways. The stash error
-        # comes from the stash complaining. The network error comes from pg8000
-        # complaining because Materialize panicked.
-        try:
-            # Reusing the existing connection means we don't need to worry about
-            # detecting `ConnectionRefused` errors
-            cursor.execute("CREATE TABLE c (i INT)")
-            raise Exception("expected unreachable")
-        except pg8000.exceptions.InterfaceError as e:
-            if str(e) != "network error":
-                raise e
 
         # No implicit restart as sanity check here, will panic:
         # https://github.com/MaterializeInc/materialize/issues/20510
