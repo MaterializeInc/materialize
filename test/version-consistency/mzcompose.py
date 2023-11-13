@@ -86,7 +86,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 
 def resolve_other_mz_image_tag() -> str:
-    if buildkite.is_on_default_branch():
+    if buildkite.is_in_buildkite() and not buildkite.is_in_pull_request():
         latest_version = git.get_latest_version()
         print(f"Using latest version ({latest_version}) for other mz")
         return f"v{latest_version}"
