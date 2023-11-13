@@ -90,19 +90,19 @@ def run(
     with system_conn.cursor() as system_cur:
         system_exe = Executor(rng, system_cur, database)
         system_exe.execute(
-            f"ALTER SYSTEM SET max_schemas_per_database = {MAX_SCHEMAS * 2}"
+            f"ALTER SYSTEM SET max_schemas_per_database = {MAX_SCHEMAS * 4 + 2}"
         )
         # The presence of ALTER TABLE RENAME can cause the total number of tables to exceed MAX_TABLES
-        system_exe.execute(f"ALTER SYSTEM SET max_tables = {MAX_TABLES * 2}")
-        system_exe.execute(f"ALTER SYSTEM SET max_materialized_views = {MAX_VIEWS * 2}")
+        system_exe.execute(f"ALTER SYSTEM SET max_tables = {MAX_TABLES * 4 + 2}")
+        system_exe.execute(f"ALTER SYSTEM SET max_materialized_views = {MAX_VIEWS * 4 + 2}")
         system_exe.execute(
-            f"ALTER SYSTEM SET max_sources = {(MAX_WEBHOOK_SOURCES + MAX_KAFKA_SOURCES + MAX_POSTGRES_SOURCES) * 2}"
+            f"ALTER SYSTEM SET max_sources = {(MAX_WEBHOOK_SOURCES + MAX_KAFKA_SOURCES + MAX_POSTGRES_SOURCES) * 4 + 2}"
         )
-        system_exe.execute(f"ALTER SYSTEM SET max_sinks = {MAX_KAFKA_SINKS * 2}")
-        system_exe.execute(f"ALTER SYSTEM SET max_roles = {MAX_ROLES * 2}")
-        system_exe.execute(f"ALTER SYSTEM SET max_clusters = {MAX_CLUSTERS * 2}")
+        system_exe.execute(f"ALTER SYSTEM SET max_sinks = {MAX_KAFKA_SINKS * 4 + 2}")
+        system_exe.execute(f"ALTER SYSTEM SET max_roles = {MAX_ROLES * 4 + 2}")
+        system_exe.execute(f"ALTER SYSTEM SET max_clusters = {MAX_CLUSTERS * 4 + 2}")
         system_exe.execute(
-            f"ALTER SYSTEM SET max_replicas_per_cluster = {MAX_CLUSTER_REPLICAS * 2}"
+            f"ALTER SYSTEM SET max_replicas_per_cluster = {MAX_CLUSTER_REPLICAS * 4 + 2}"
         )
         # Most queries should not fail because of privileges
         for object_type in [
