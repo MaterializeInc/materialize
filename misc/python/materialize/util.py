@@ -23,7 +23,6 @@ try:
 except ImportError:
     from semver import VersionInfo as Version  # type: ignore
 
-from materialize.mzcompose.composition import Composition
 
 MZ_ROOT = Path(os.environ["MZ_ROOT"])
 
@@ -72,11 +71,6 @@ class MzVersion(Version):
     @classmethod
     def is_mz_version_string(cls, version: str) -> bool:
         return cls.try_parse_mz(version) is not None
-
-    @classmethod
-    def parse_sql(cls, c: Composition) -> MzVersion:
-        """Gets the Mz version from SQL query "SELECT mz_version()" and parses it"""
-        return cls.parse_mz(c.sql_query("SELECT mz_version()")[0][0])
 
     @classmethod
     def parse_cargo(cls) -> MzVersion:
