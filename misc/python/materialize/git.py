@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 from materialize.mz_version import MzVersion
+from materialize.util import YesNoOnce
 from materialize.version_list import INVALID_VERSIONS
 
 try:
@@ -23,6 +24,8 @@ except ImportError:
     from semver import VersionInfo as Version  # type: ignore
 
 from materialize import spawn
+
+fetched_tags_in_remotes: set[str | None] = set()
 
 
 def rev_count(rev: str) -> int:
@@ -98,7 +101,9 @@ def get_version_tags(*, fetch: bool = True, prefix: str = "v") -> list[Version]:
             tag as a version.
     """
     if fetch:
-        _fetch(all_remotes=True, include_tags=True, force=True)
+        _fetch(
+            all_remotes=True, include_tags=YesNoOnce.ONCE, force=True, only_tags=True
+        )
     tags = []
     for t in spawn.capture(["git", "tag"]).splitlines():
         if not t.startswith(prefix):
@@ -120,9 +125,9 @@ def get_latest_version(excluded_versions: set[Version] | None = None) -> Version
     return max(all_version_tags)
 
 
-def get_tags_of_current_commit(fetch_tags: bool = True) -> list[str]:
-    if fetch_tags:
-        fetch(include_tags=True)
+def get_tags_of_current_commit(include_tags: YesNoOnce = YesNoOnce.ONCE) -> list[str]:
+    if include_tags:
+        fetch(include_tags=include_tags, only_tags=True)
 
     result = spawn.capture(["git", "tag", "--points-at", "HEAD"])
 
@@ -166,9 +171,10 @@ def describe() -> str:
 def fetch(
     remote: str | None = None,
     all_remotes: bool = False,
-    include_tags: bool = False,
+    include_tags: YesNoOnce = YesNoOnce.NO,
     force: bool = False,
     branch: str | None = None,
+    only_tags: bool = False,
 ) -> str:
     """Fetch from remotes"""
 
@@ -177,6 +183,9 @@ def fetch(
 
     if branch and not remote:
         raise RuntimeError("remote must be specified when a branch is specified")
+
+    if branch is not None and only_tags:
+        raise RuntimeError("branch must not be specified if only_tags is set")
 
     command = ["git", "fetch"]
 
@@ -189,13 +198,34 @@ def fetch(
     if all_remotes:
         command.append("--all")
 
-    if include_tags:
+    fetch_tags = (
+        include_tags == YesNoOnce.YES
+        or (include_tags == YesNoOnce.ONCE and force)
+        or (
+            include_tags == YesNoOnce.ONCE
+            and remote not in fetched_tags_in_remotes
+            and "*" not in fetched_tags_in_remotes
+        )
+    )
+
+    if fetch_tags:
         command.append("--tags")
 
     if force:
         command.append("--force")
 
-    return spawn.capture(command).strip()
+    if not fetch_tags and only_tags:
+        return ""
+
+    output = spawn.capture(command).strip()
+
+    if fetch_tags:
+        fetched_tags_in_remotes.add(remote)
+
+        if all_remotes:
+            fetched_tags_in_remotes.add("*")
+
+    return output
 
 
 _fetch = fetch  # renamed because an argument shadows the fetch name in get_tags

@@ -43,7 +43,7 @@ from materialize.scalability.schema import Schema, TransactionIsolation
 from materialize.scalability.workload import Workload, WorkloadSelfTest
 from materialize.scalability.workloads import *  # noqa: F401 F403
 from materialize.scalability.workloads_test import *  # noqa: F401 F403
-from materialize.util import all_subclasses
+from materialize.util import YesNoOnce, all_subclasses
 
 SERVICES = [
     Materialized(
@@ -167,7 +167,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         print(f"* {other_endpoint}")
 
     # fetch main branch and git tags so that their commit messages can be resolved
-    git.fetch(remote=git.get_remote(), branch="main", include_tags=True)
+    git.fetch(remote=git.get_remote(), branch="main", include_tags=YesNoOnce.ONCE)
 
     schema = Schema(
         create_index=args.create_index,
