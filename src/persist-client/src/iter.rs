@@ -13,6 +13,7 @@ use anyhow::bail;
 use std::cmp::{Ordering, Reverse};
 use std::collections::binary_heap::PeekMut;
 use std::collections::{BinaryHeap, VecDeque};
+use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::mem;
 use std::sync::Arc;
@@ -507,7 +508,6 @@ impl<T, D> Drop for Consolidator<T, D> {
 /// too eagerly.
 /// In particular, we only advance the cursor past a tuple when that tuple has been returned from
 /// a call to `next`.
-#[derive(Debug)]
 pub(crate) enum ConsolidationPartIter<'a, T: Timestamp, D> {
     Encoded {
         part: &'a EncodedPart<T>,
@@ -521,6 +521,30 @@ pub(crate) enum ConsolidationPartIter<'a, T: Timestamp, D> {
         data: &'a [((Vec<u8>, Vec<u8>), T, D)],
         index: &'a mut usize,
     },
+}
+
+impl<'a, T: Timestamp, D: Debug> Debug for ConsolidationPartIter<'a, T, D> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConsolidationPartIter::Encoded {
+                part: _,
+                cursor,
+                filter: _,
+                next,
+            } => {
+                let mut f = f.debug_struct("Encoded");
+                f.field("cursor", cursor);
+                f.field("next", next);
+                f.finish()
+            }
+            ConsolidationPartIter::Sorted { index, data } => {
+                let mut f = f.debug_struct("Sorted");
+                f.field("index", index);
+                f.field("next", &data.get(**index));
+                f.finish()
+            }
+        }
+    }
 }
 
 impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64> ConsolidationPartIter<'a, T, D> {
