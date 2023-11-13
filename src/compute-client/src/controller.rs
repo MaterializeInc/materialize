@@ -290,7 +290,6 @@ where
         &mut self,
         id: ComputeInstanceId,
         arranged_logs: BTreeMap<LogVariant, GlobalId>,
-        variable_length_row_encoding: bool,
     ) -> Result<(), InstanceExists> {
         if self.instances.contains_key(&id) {
             return Err(InstanceExists(id));
@@ -305,7 +304,6 @@ where
                 self.metrics.for_instance(id),
                 self.response_tx.clone(),
                 self.introspection_tx.clone(),
-                variable_length_row_encoding,
             ),
         );
 

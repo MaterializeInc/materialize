@@ -11,7 +11,7 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{atomic, Arc};
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures::Future;
@@ -528,12 +528,6 @@ impl Catalog {
         let metrics_registry = &MetricsRegistry::new();
         let active_connection_count = Arc::new(std::sync::Mutex::new(ConnectionCounter::new(0)));
         let secrets_reader = Arc::new(InMemorySecretsController::new());
-        let variable_length_row_encoding =
-            if mz_repr::VARIABLE_LENGTH_ROW_ENCODING.load(atomic::Ordering::SeqCst) {
-                "true"
-            } else {
-                "false"
-            };
         let (catalog, _, _, _) = Catalog::open(Config {
             storage,
             metrics_registry,
@@ -550,12 +544,7 @@ impl Catalog {
                 cluster_replica_sizes: Default::default(),
                 default_storage_cluster_size: None,
                 builtin_cluster_replica_size: "1".into(),
-                system_parameter_defaults: [(
-                    "variable_length_row_encoding".to_string(),
-                    variable_length_row_encoding.to_string(),
-                )]
-                .into_iter()
-                .collect(),
+                system_parameter_defaults: Default::default(),
                 availability_zones: vec![],
                 egress_ips: vec![],
                 aws_principal_context: None,

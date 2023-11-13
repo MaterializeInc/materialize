@@ -410,13 +410,12 @@ where
         Box::new(self.collections.iter())
     }
 
-    fn create_instance(&mut self, id: StorageInstanceId, variable_length_row_encoding: bool) {
+    fn create_instance(&mut self, id: StorageInstanceId) {
         let mut client = RehydratingStorageClient::new(
             self.build_info,
             self.metrics.for_instance(id),
             self.envd_epoch,
             self.config.grpc_client.clone(),
-            variable_length_row_encoding,
         );
         if self.initialized {
             client.send(StorageCommand::InitializationComplete);

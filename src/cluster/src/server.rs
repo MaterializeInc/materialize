@@ -10,7 +10,7 @@
 //! An interactive cluster server.
 
 use std::fmt::{Debug, Formatter};
-use std::sync::{atomic, Arc, Mutex};
+use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Error};
 use async_trait::async_trait;
@@ -280,27 +280,19 @@ where
                 info!("Timely already initialized; re-using.",);
                 existing
             }
-            None => {
-                // Configure variable-length row encoding.
-                mz_repr::VARIABLE_LENGTH_ROW_ENCODING.store(
-                    config.variable_length_row_encoding,
-                    atomic::Ordering::SeqCst,
-                );
-
-                Self::build_timely(
-                    worker_config,
-                    config,
-                    epoch,
-                    persist_clients,
-                    tracing_handle,
-                    handle,
-                )
-                .await
-                .map_err(|e| {
-                    warn!("timely initialization failed: {}", e.display_with_causes());
-                    e
-                })?
-            }
+            None => Self::build_timely(
+                worker_config,
+                config,
+                epoch,
+                persist_clients,
+                tracing_handle,
+                handle,
+            )
+            .await
+            .map_err(|e| {
+                warn!("timely initialization failed: {}", e.display_with_causes());
+                e
+            })?,
         };
 
         let (command_txs, command_rxs): (Vec<_>, Vec<_>) =

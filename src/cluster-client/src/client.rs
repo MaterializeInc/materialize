@@ -148,8 +148,6 @@ pub struct TimelyConfig {
     /// The higher the proportionality value, the more eagerly arrangement batches are merged. A
     /// value of `0` (or `1`) disables eager merging.
     pub arrangement_exert_proportionality: u32,
-    /// Whether to enable variable-length row encoding.
-    pub variable_length_row_encoding: bool,
 }
 
 impl RustType<ProtoTimelyConfig> for TimelyConfig {
@@ -160,7 +158,6 @@ impl RustType<ProtoTimelyConfig> for TimelyConfig {
             process: self.process.into_proto(),
             idle_arrangement_merge_effort: self.idle_arrangement_merge_effort,
             arrangement_exert_proportionality: self.arrangement_exert_proportionality,
-            variable_length_row_encoding: self.variable_length_row_encoding,
         }
     }
 
@@ -171,7 +168,6 @@ impl RustType<ProtoTimelyConfig> for TimelyConfig {
             addresses: proto.addresses.into_rust()?,
             idle_arrangement_merge_effort: proto.idle_arrangement_merge_effort,
             arrangement_exert_proportionality: proto.arrangement_exert_proportionality,
-            variable_length_row_encoding: proto.variable_length_row_encoding,
         })
     }
 }
