@@ -34,7 +34,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
     SSL CERTIFICATE = '${arg.materialized-kafka1-crt}',
     SSL CERTIFICATE AUTHORITY = '${arg.ca-crt}'
   );
-contains:Connection reset: error:1408F119:SSL routines:ssl3_get_record:decryption failed or bad record mac
+contains:Connection reset: error:14094416:SSL routines:ssl3_read_bytes:sslv3 alert certificate unknown: SSL alert number 46
 
 # Attempt to connect with the wrong CA
 ! CREATE CONNECTION kafka_ssl TO KAFKA (

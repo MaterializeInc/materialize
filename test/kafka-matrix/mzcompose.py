@@ -16,14 +16,15 @@ from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
 
-REDPANDA_VERSIONS = ["v23.1.2", "v22.2.11", "v22.1.11"]
+REDPANDA_VERSIONS = ["v23.2.15", "v23.1.20", "v22.3.25", "v22.2.13", "v22.1.11"]
 
 CONFLUENT_PLATFORM_VERSIONS = [
-    "6.2.8",
-    "7.0.7",
-    "7.1.5",
-    "7.2.3",
-    "7.3.2",
+    "6.2.12",
+    "7.0.11",
+    "7.1.9",
+    "7.2.7",
+    "7.3.5",
+    "7.4.2",
     "latest",
 ]
 
