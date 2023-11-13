@@ -138,7 +138,9 @@ class SshKafka(Check):
                 $ kafka-ingest topic=ssh1 format=bytes
                 one
 
-                > CREATE CONNECTION kafka_conn_ssh1
+                >[version<7800] CREATE CONNECTION kafka_conn_ssh1
+                  TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL thancred);
+                >[version>=7800] CREATE CONNECTION kafka_conn_ssh1
                   TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL thancred, SECURITY PROTOCOL PLAINTEXT);
 
                 > CREATE SOURCE ssh1
@@ -154,7 +156,9 @@ class SshKafka(Check):
             Testdrive(schemas() + dedent(s))
             for s in [
                 """
-                > CREATE CONNECTION kafka_conn_ssh2
+                >[version<7800] CREATE CONNECTION kafka_conn_ssh2
+                  TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL thancred);
+                >[version>=7800] CREATE CONNECTION kafka_conn_ssh2
                   TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL thancred, SECURITY PROTOCOL PLAINTEXT);
 
                 > CREATE SOURCE ssh2
@@ -169,7 +173,9 @@ class SshKafka(Check):
                 two
                 """,
                 """
-                > CREATE CONNECTION kafka_conn_ssh3
+                >[version<7800] CREATE CONNECTION kafka_conn_ssh3
+                  TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL thancred);
+                >[version>=7800] CREATE CONNECTION kafka_conn_ssh3
                   TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL thancred, SECURITY PROTOCOL PLAINTEXT);
 
                 > CREATE SOURCE ssh3

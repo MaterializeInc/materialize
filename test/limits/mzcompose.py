@@ -494,7 +494,7 @@ class KafkaSinks(Generator):
             print(
                 dedent(
                     f"""
-                     > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+                     > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
                      > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
                      > CREATE SINK s{i} FROM v{i}
                        INTO KAFKA CONNECTION kafka_conn (TOPIC 'kafka-sink-{i}')
@@ -540,7 +540,7 @@ class KafkaSinksSameSource(Generator):
             print(
                 dedent(
                     f"""
-                     > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+                     > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
                      > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
                      > CREATE SINK s{i} FROM v1
                        INTO KAFKA CONNECTION kafka_conn (TOPIC 'kafka-sink-same-source-{i}')
@@ -1627,7 +1627,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                            SELECT COUNT(*) AS c1 FROM ten AS a1, ten AS a2, ten AS a3, ten AS a4;
 
                          > CREATE CONNECTION IF NOT EXISTS kafka_conn
-                           TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+                           TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
                          > CREATE CONNECTION IF NOT EXISTS csr_conn
                            FOR CONFLUENT SCHEMA REGISTRY

@@ -571,10 +571,6 @@ class SinkComments(Check):
                 $ kafka-ingest format=avro key-format=avro topic=sink-source-comments key-schema=${keyschema} schema=${schema} repeat=1000
                 {"key1": "D3${kafka-ingest.iteration}"} {"f1": null, "f2": {"long": ${kafka-ingest.iteration}}}
 
-                > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT;
-
-                > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
-
                 > CREATE SOURCE sink_source_comments
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-source-comments-${testdrive.seed}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -612,10 +608,6 @@ class SinkComments(Check):
                 {"key1": "I2${kafka-ingest.iteration}"} {"f1": {"string": "B${kafka-ingest.iteration}"}, "f2": null}
                 {"key1": "U2${kafka-ingest.iteration}"} {"f1": null, "f2": {"long": ${kafka-ingest.iteration}}}
                 {"key1": "D2${kafka-ingest.iteration}"}
-
-                > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT;
-
-                > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
 
                 > CREATE SINK sink_sink_comments2 FROM sink_source_comments_view
                   INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink-comments2')
@@ -711,10 +703,6 @@ class SinkComments(Check):
                 U3 A <null> 1000
 
                 # We check the contents of the sink topics by re-ingesting them.
-
-                > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT;
-
-                > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
 
                 > CREATE SOURCE sink_view_comments1
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink-comments1')

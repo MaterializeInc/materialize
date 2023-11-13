@@ -1444,8 +1444,8 @@ ALTER SYSTEM SET max_sources = {self.n() * 2};
 ALTER SYSTEM SET max_sinks = {self.n() * 2};
 ALTER SYSTEM SET max_tables = {self.n() * 2};
 
->[version<7800]  CREATE CONNECTION IF_NOT_EXISTS s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
->[version>=7800] CREATE CONNECTION IF_NOT_EXISTS s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
+>[version<7800]  CREATE CONNECTION IF NOT EXISTS s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
+>[version>=7800] CREATE CONNECTION IF NOT EXISTS s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS s1_csr_conn
   FOR CONFLUENT SCHEMA REGISTRY

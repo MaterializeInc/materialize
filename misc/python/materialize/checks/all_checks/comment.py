@@ -28,8 +28,6 @@ class Comment(Check):
             > CREATE TYPE comment_int4_list AS LIST (ELEMENT TYPE = int4)
             > CREATE TABLE comment_table (f1 comment_type, f2 comment_int4_list, f3 int)
 
-            > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT;
-            > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}';
             > CREATE SINK comment_sink1 FROM comment_table
               INTO KAFKA CONNECTION kafka_conn (TOPIC 'comment-sink1')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn

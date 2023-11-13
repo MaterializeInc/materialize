@@ -19,7 +19,7 @@ $ set schema={
 > CREATE CLUSTER source_cluster SIZE '1';
 
 > CREATE CONNECTION kafka_conn
-  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
+  TO KAFKA (BROKER '${testdrive.kafka-addr}');
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'

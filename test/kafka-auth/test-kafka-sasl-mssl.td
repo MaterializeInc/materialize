@@ -26,8 +26,6 @@ banana
 
 # ==> Test invalid configurations. <==
 
-# This is a really bad error message to indicate "client certificate required",
-# but it's not under our control.
 ! CREATE CONNECTION kafka_invalid TO KAFKA (
     BROKER 'kafka:9097',
     SASL MECHANISMS 'PLAIN',
@@ -35,10 +33,8 @@ banana
     SASL PASSWORD SECRET password,
     SSL CERTIFICATE AUTHORITY = '${ca-crt}'
   )
-contains:ssl3_get_record:decryption failed
+contains:sslv3 alert bad certificate
 
-# This is a really bad error message to indicate "wrong client certificate", but
-# it's not under our control.
 ! CREATE CONNECTION kafka_invalid TO KAFKA (
     BROKER 'kafka:9097',
     SASL MECHANISMS 'PLAIN',
@@ -48,7 +44,7 @@ contains:ssl3_get_record:decryption failed
     SSL KEY SECRET kafka1_key,
     SSL CERTIFICATE AUTHORITY '${ca-crt}'
   )
-contains:ssl3_get_record:decryption failed
+contains:sslv3 alert certificate unknown
 
 ! CREATE CONNECTION kafka_invalid TO KAFKA (
     BROKER 'kafka:9097',

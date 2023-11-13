@@ -77,7 +77,7 @@ contains:No provider for SASL mechanism GSSAPI
   )
 contains:Unsupported SASL mechanism: GARBAGE
 
-! CREATE CONNECTION kafka_plain TO KAFKA (
+! CREATE CONNECTION kafka_invalid TO KAFKA (
     BROKER 'kafka:9096',
     SASL MECHANISMS 'PLAIN',
     SASL USERNAME 'materialize',
