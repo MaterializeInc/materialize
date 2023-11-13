@@ -1177,6 +1177,10 @@ class CreatePostgresSourceAction(Action):
         return result
 
     def run(self, exe: Executor) -> None:
+        # TODO: Reenable when #22770 is fixed
+        if exe.db.scenario == Scenario.BackupRestore:
+            return
+
         with exe.db.lock:
             if len(exe.db.postgres_sources) > MAX_POSTGRES_SOURCES:
                 return

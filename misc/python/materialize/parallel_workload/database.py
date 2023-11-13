@@ -807,16 +807,20 @@ class Database:
                 )
                 for i in range(rng.randint(0, MAX_INITIAL_KAFKA_SOURCES))
             ]
-            self.postgres_sources = [
-                PostgresSource(
-                    i,
-                    rng.choice(self.clusters),
-                    rng.choice(self.schemas),
-                    ports,
-                    rng,
-                )
-                for i in range(rng.randint(0, MAX_INITIAL_POSTGRES_SOURCES))
-            ]
+            # TODO: Reenable when #22770 is fixed
+            if self.scenario == Scenario.BackupRestore:
+                self.postgres_sources = []
+            else:
+                self.postgres_sources = [
+                    PostgresSource(
+                        i,
+                        rng.choice(self.clusters),
+                        rng.choice(self.schemas),
+                        ports,
+                        rng,
+                    )
+                    for i in range(rng.randint(0, MAX_INITIAL_POSTGRES_SOURCES))
+                ]
             self.kafka_sinks = [
                 KafkaSink(
                     i,
