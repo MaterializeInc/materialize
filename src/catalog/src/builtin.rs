@@ -163,12 +163,29 @@ pub struct BuiltinView {
 
 impl BuiltinView {
     pub fn create_sql(&self) -> String {
+        let starts_with_newline = self.sql.starts_with('\n');
+
         match self.column_defs {
-            Some(column_defs) => format!(
-                "CREATE VIEW {}.{} ({}) AS {}",
-                self.schema, self.name, column_defs, self.sql
-            ),
-            None => format!("CREATE VIEW {}.{} AS {}", self.schema, self.name, self.sql),
+            Some(column_defs) => {
+                if starts_with_newline {
+                    format!(
+                        "CREATE VIEW {}.{} ({}) AS{}",
+                        self.schema, self.name, column_defs, self.sql
+                    )
+                } else {
+                    format!(
+                        "CREATE VIEW {}.{} ({}) AS {}",
+                        self.schema, self.name, column_defs, self.sql
+                    )
+                }
+            }
+            None => {
+                if starts_with_newline {
+                    format!("CREATE VIEW {}.{} AS{}", self.schema, self.name, self.sql)
+                } else {
+                    format!("CREATE VIEW {}.{} AS {}", self.schema, self.name, self.sql)
+                }
+            }
         }
     }
 }
@@ -2767,7 +2784,8 @@ pub const MZ_OBJECTS: BuiltinView = BuiltinView {
     schema: MZ_CATALOG_SCHEMA,
     column_defs: Some("id, oid, schema_id, name, type, owner_id, privileges"),
     sql:
-        "SELECT id, oid, schema_id, name, type, owner_id, privileges FROM mz_catalog.mz_relations
+        "
+    SELECT id, oid, schema_id, name, type, owner_id, privileges FROM mz_catalog.mz_relations
 UNION ALL
     SELECT id, oid, schema_id, name, 'sink', owner_id, NULL::mz_aclitem[] FROM mz_catalog.mz_sinks
 UNION ALL
@@ -4961,7 +4979,8 @@ pub const MZ_SHOW_SOURCES: BuiltinView = BuiltinView {
     name: "mz_show_sources",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
-    sql: "SELECT sources.name, sources.type, sources.size, clusters.name as cluster, schema_id, cluster_id
+    sql: "
+SELECT sources.name, sources.type, sources.size, clusters.name as cluster, schema_id, cluster_id
 FROM mz_catalog.mz_sources AS sources
 LEFT JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = sources.cluster_id",
     sensitivity: DataSensitivity::Public,
@@ -4971,8 +4990,8 @@ pub const MZ_SHOW_SINKS: BuiltinView = BuiltinView {
     name: "mz_show_sinks",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
-    sql:
-        "SELECT sinks.name, sinks.type, sinks.size, clusters.name as cluster, schema_id, cluster_id
+    sql: "
+SELECT sinks.name, sinks.type, sinks.size, clusters.name as cluster, schema_id, cluster_id
 FROM mz_catalog.mz_sinks AS sinks
 JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = sinks.cluster_id",
     sensitivity: DataSensitivity::Public,
@@ -4982,7 +5001,8 @@ pub const MZ_SHOW_MATERIALIZED_VIEWS: BuiltinView = BuiltinView {
     name: "mz_show_materialized_views",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
-    sql: "SELECT mviews.name, clusters.name AS cluster, schema_id, cluster_id
+    sql: "
+SELECT mviews.name, clusters.name AS cluster, schema_id, cluster_id
 FROM mz_materialized_views AS mviews
 JOIN mz_clusters AS clusters ON clusters.id = mviews.cluster_id",
     sensitivity: DataSensitivity::Public,
@@ -4992,7 +5012,8 @@ pub const MZ_SHOW_INDEXES: BuiltinView = BuiltinView {
     name: "mz_show_indexes",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
-    sql: "SELECT
+    sql: "
+SELECT
     idxs.name AS name,
     objs.name AS on,
     clusters.name AS cluster,
@@ -5028,7 +5049,8 @@ pub const MZ_SHOW_CLUSTER_REPLICAS: BuiltinView = BuiltinView {
     name: "mz_show_cluster_replicas",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
-    sql: r#"SELECT
+    sql: r#"
+SELECT
     mz_catalog.mz_clusters.name AS cluster,
     mz_catalog.mz_cluster_replicas.name AS replica,
     mz_catalog.mz_cluster_replicas.size AS size,
@@ -5054,7 +5076,8 @@ pub const MZ_SHOW_ROLE_MEMBERS: BuiltinView = BuiltinView {
     name: "mz_show_role_members",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
-    sql: r#"SELECT
+    sql: r#"
+SELECT
     r1.name AS role,
     r2.name AS member,
     r3.name AS grantor
@@ -5070,7 +5093,8 @@ pub const MZ_SHOW_MY_ROLE_MEMBERS: BuiltinView = BuiltinView {
     name: "mz_show_my_role_members",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
-    sql: r#"SELECT role, member, grantor
+    sql: r#"
+SELECT role, member, grantor
 FROM mz_internal.mz_show_role_members
 WHERE pg_has_role(member, 'USAGE')"#,
     sensitivity: DataSensitivity::Public,
@@ -5080,7 +5104,8 @@ pub const MZ_SHOW_SYSTEM_PRIVILEGES: BuiltinView = BuiltinView {
     name: "mz_show_system_privileges",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
-    sql: r#"SELECT
+    sql: r#"
+SELECT
     grantor.name AS grantor,
     CASE privileges.grantee
         WHEN 'p' THEN 'PUBLIC'
@@ -5100,7 +5125,8 @@ pub const MZ_SHOW_MY_SYSTEM_PRIVILEGES: BuiltinView = BuiltinView {
     name: "mz_show_my_system_privileges",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
-    sql: r#"SELECT grantor, grantee, privilege_type
+    sql: r#"
+SELECT grantor, grantee, privilege_type
 FROM mz_internal.mz_show_system_privileges
 WHERE
     CASE
@@ -5114,7 +5140,8 @@ pub const MZ_SHOW_CLUSTER_PRIVILEGES: BuiltinView = BuiltinView {
     name: "mz_show_cluster_privileges",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
-    sql: r#"SELECT
+    sql: r#"
+SELECT
     grantor.name AS grantor,
     CASE privileges.grantee
         WHEN 'p' THEN 'PUBLIC'
@@ -5136,7 +5163,8 @@ pub const MZ_SHOW_MY_CLUSTER_PRIVILEGES: BuiltinView = BuiltinView {
     name: "mz_show_my_cluster_privileges",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
-    sql: r#"SELECT grantor, grantee, name, privilege_type
+    sql: r#"
+SELECT grantor, grantee, name, privilege_type
 FROM mz_internal.mz_show_cluster_privileges
 WHERE
     CASE
@@ -5150,7 +5178,8 @@ pub const MZ_SHOW_DATABASE_PRIVILEGES: BuiltinView = BuiltinView {
     name: "mz_show_database_privileges",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
-    sql: r#"SELECT
+    sql: r#"
+SELECT
     grantor.name AS grantor,
     CASE privileges.grantee
         WHEN 'p' THEN 'PUBLIC'
@@ -5172,7 +5201,8 @@ pub const MZ_SHOW_MY_DATABASE_PRIVILEGES: BuiltinView = BuiltinView {
     name: "mz_show_my_database_privileges",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
-    sql: r#"SELECT grantor, grantee, name, privilege_type
+    sql: r#"
+SELECT grantor, grantee, name, privilege_type
 FROM mz_internal.mz_show_database_privileges
 WHERE
     CASE
@@ -5186,7 +5216,8 @@ pub const MZ_SHOW_SCHEMA_PRIVILEGES: BuiltinView = BuiltinView {
     name: "mz_show_schema_privileges",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
-    sql: r#"SELECT
+    sql: r#"
+SELECT
     grantor.name AS grantor,
     CASE privileges.grantee
         WHEN 'p' THEN 'PUBLIC'
@@ -5210,7 +5241,8 @@ pub const MZ_SHOW_MY_SCHEMA_PRIVILEGES: BuiltinView = BuiltinView {
     name: "mz_show_my_schema_privileges",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
-    sql: r#"SELECT grantor, grantee, database, name, privilege_type
+    sql: r#"
+SELECT grantor, grantee, database, name, privilege_type
 FROM mz_internal.mz_show_schema_privileges
 WHERE
     CASE
@@ -5224,7 +5256,8 @@ pub const MZ_SHOW_OBJECT_PRIVILEGES: BuiltinView = BuiltinView {
     name: "mz_show_object_privileges",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
-    sql: r#"SELECT
+    sql: r#"
+SELECT
     grantor.name AS grantor,
     CASE privileges.grantee
             WHEN 'p' THEN 'PUBLIC'
@@ -5251,7 +5284,8 @@ pub const MZ_SHOW_MY_OBJECT_PRIVILEGES: BuiltinView = BuiltinView {
     name: "mz_show_my_object_privileges",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
-    sql: r#"SELECT grantor, grantee, database, schema, name, object_type, privilege_type
+    sql: r#"
+SELECT grantor, grantee, database, schema, name, object_type, privilege_type
 FROM mz_internal.mz_show_object_privileges
 WHERE
     CASE
@@ -5265,7 +5299,8 @@ pub const MZ_SHOW_ALL_PRIVILEGES: BuiltinView = BuiltinView {
     name: "mz_show_all_privileges",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
-    sql: r#"SELECT grantor, grantee, NULL AS database, NULL AS schema, NULL AS name, 'system' AS object_type, privilege_type
+    sql: r#"
+SELECT grantor, grantee, NULL AS database, NULL AS schema, NULL AS name, 'system' AS object_type, privilege_type
 FROM mz_internal.mz_show_system_privileges
 UNION ALL
 SELECT grantor, grantee, NULL AS database, NULL AS schema, name, 'cluster' AS object_type, privilege_type
@@ -5286,7 +5321,8 @@ pub const MZ_SHOW_ALL_MY_PRIVILEGES: BuiltinView = BuiltinView {
     name: "mz_show_all_my_privileges",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
-    sql: r#"SELECT grantor, grantee, database, schema, name, object_type, privilege_type
+    sql: r#"
+SELECT grantor, grantee, database, schema, name, object_type, privilege_type
 FROM mz_internal.mz_show_all_privileges
 WHERE
     CASE
@@ -5300,7 +5336,8 @@ pub const MZ_SHOW_DEFAULT_PRIVILEGES: BuiltinView = BuiltinView {
     name: "mz_show_default_privileges",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
-    sql: r#"SELECT
+    sql: r#"
+SELECT
     CASE defaults.role_id
         WHEN 'p' THEN 'PUBLIC'
         ELSE object_owner.name
@@ -5328,7 +5365,8 @@ pub const MZ_SHOW_MY_DEFAULT_PRIVILEGES: BuiltinView = BuiltinView {
     name: "mz_show_my_default_privileges",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
-    sql: r#"SELECT object_owner, database, schema, object_type, grantee, privilege_type
+    sql: r#"
+SELECT object_owner, database, schema, object_type, grantee, privilege_type
 FROM mz_internal.mz_show_default_privileges
 WHERE
     CASE
