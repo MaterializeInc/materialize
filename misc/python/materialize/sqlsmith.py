@@ -109,7 +109,7 @@ known_errors = [
     "regex parse error",
     "out of valid range",
     '" does not exist',  # role does not exist
-    "csv_extract number of columns too large",
+    "attempt to create relation with too many columns",
     "target replica failed or was dropped",  # expected on replica OoMs with #21587
     "cannot materialize call to",  # create materialized view on some internal views
     "arrays must not contain null values",  # aclexplode, mz_aclexplode
