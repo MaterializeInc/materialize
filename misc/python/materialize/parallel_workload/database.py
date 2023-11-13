@@ -34,7 +34,7 @@ from materialize.parallel_workload.executor import Executor
 from materialize.parallel_workload.settings import Complexity, Scenario
 from materialize.util import naughty_strings
 
-MAX_COLUMNS = 100
+MAX_COLUMNS = 10
 MAX_INCLUDE_HEADERS = 5
 MAX_ROWS = 100
 MAX_CLUSTERS = 10
