@@ -434,7 +434,7 @@ enum Tag {
     CheapTimestampTz,
     // The remaining tags are for variable-length signed integer encoding.
     // The basic idea is that `NonNegativeIntN_K` is used to encode a datum of type
-    // IntN whose actual value is positive and fits in K bytes, and similarly for
+    // IntN whose actual value is positive or zero and fits in K bytes, and similarly for
     // NegativeIntN_K with negative values.
     //
     // The order of these tags matters, because we want to be able to choose the
