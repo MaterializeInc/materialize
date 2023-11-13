@@ -69,7 +69,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::Ipv4Addr;
 use std::ops::Neg;
-use std::sync::{atomic, Arc, Mutex};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -1035,9 +1035,6 @@ pub struct Coordinator {
     /// Data used by the statement logging feature.
     statement_logging: StatementLogging,
 
-    /// Whether to start replicas with the new variable-length row encoding scheme.
-    variable_length_row_encoding: bool,
-
     /// Limit for how many conncurrent webhook requests we allow.
     webhook_concurrency_limit: WebhookConcurrencyLimiter,
 }
@@ -1089,7 +1086,6 @@ impl Coordinator {
                 ClusterConfig {
                     arranged_logs: instance.log_indexes.clone(),
                 },
-                self.variable_length_row_encoding,
             )?;
             for replica in instance.replicas() {
                 let role = instance.role();
@@ -2118,11 +2114,6 @@ pub async fn serve(
             }
 
             let caching_secrets_reader = CachingSecretsReader::new(secrets_controller.reader());
-            let variable_length_row_encoding = catalog
-                .system_config()
-                .variable_length_row_encoding_DANGEROUS();
-            mz_repr::VARIABLE_LENGTH_ROW_ENCODING
-                .store(variable_length_row_encoding, atomic::Ordering::SeqCst);
             let mut coord = Coordinator {
                 controller: dataflow_client,
                 view_optimizer: Optimizer::logical_optimizer(
@@ -2157,7 +2148,6 @@ pub async fn serve(
                 metrics,
                 tracing_handle,
                 statement_logging: StatementLogging::new(),
-                variable_length_row_encoding,
                 webhook_concurrency_limit,
             };
             let bootstrap = handle.block_on(async {

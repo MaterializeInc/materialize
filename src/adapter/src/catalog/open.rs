@@ -10,7 +10,7 @@
 //! Logic related to opening a [`Catalog`].
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::str::FromStr;
-use std::sync::{atomic, Arc};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use once_cell::sync::Lazy;
@@ -384,13 +384,6 @@ impl Catalog {
             config.system_parameter_sync_config,
         )
         .await?;
-
-        // We need to set this variable ASAP, so that builtins get planned with the correct value
-        let variable_length_row_encoding = state
-            .system_config()
-            .variable_length_row_encoding_DANGEROUS();
-        mz_repr::VARIABLE_LENGTH_ROW_ENCODING
-            .store(variable_length_row_encoding, atomic::Ordering::SeqCst);
 
         // Now that LD is loaded, set the intended catalog timeout.
         // TODO: Move this into the catalog constructor.
