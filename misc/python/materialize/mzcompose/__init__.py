@@ -33,7 +33,7 @@ T = TypeVar("T")
 say = ui.speaker("C> ")
 
 
-DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.0.5"
+DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.5.0"
 
 DEFAULT_MZ_VOLUMES = [
     "mzdata:/mzdata",

@@ -78,6 +78,8 @@ IGNORE_RE = re.compile(
     | restart-materialized-1\ .*relation\ "consensus"\ does\ not\ exist
     # Will print a separate panic line which will be handled and contains the relevant information
     | internal\ error:\ panic\ at\ the\ `.*`\ optimization\ stage
+    # redpanda INFO logging
+    | larger\ sizes\ prevent\ running\ out\ of\ memory
     )
     """,
     re.VERBOSE,
