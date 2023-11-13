@@ -768,6 +768,7 @@ where
             encoded_size_bytes: part.encoded_size_bytes,
             leased_seqno: Some(self.lease_seqno()),
             filter_pushdown_audit: false,
+            key_lower: part.key_lower,
         }
     }
 
