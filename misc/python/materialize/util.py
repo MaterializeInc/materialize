@@ -96,6 +96,9 @@ class MzVersion(Version):
     def from_semver(cls, version: Version) -> MzVersion:
         return cls.parse(str(version))
 
+    def to_semver(self) -> Version:
+        return Version.parse(str(self).lstrip("v"))
+
     def __str__(self) -> str:
         return "v" + super().__str__()
 

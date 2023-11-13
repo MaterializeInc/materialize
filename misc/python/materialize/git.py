@@ -286,6 +286,24 @@ def get_branch_name() -> str:
     return spawn.capture(command).strip()
 
 
+def get_previous_version(version: MzVersion) -> Version:
+    if version.prerelease is not None and len(version.prerelease) > 0:
+        # simply drop the prerelease, do not try to find a decremented version
+        return MzVersion.create_mz(version.major, version.minor, version.patch)
+
+    # type must match for comparison
+    version_as_semver_version = version.to_semver()
+
+    all_versions = get_version_tags()
+    all_suitable_previous_versions = [
+        v
+        for v in all_versions
+        if v < version_as_semver_version
+        and (v.prerelease is None or len(v.prerelease) == 0)
+    ]
+    return max(all_suitable_previous_versions)
+
+
 # Work tree mutation
 
 
