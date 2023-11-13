@@ -34,6 +34,23 @@ impl Ident {
     pub const MAX_LENGTH: usize = 255;
 
     /// Create a new [`Ident`] with the given value, checking our invariants.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mz_sql_parser::ast::Ident;
+    ///
+    /// let id = Ident::new("hello_world").unwrap();
+    /// assert_eq!(id.as_str(), "hello_world");
+    ///
+    /// let too_long = "I am a very long identifier that is more than 255 bytes long which is the max length for idents.\
+    /// 😊😁😅😂😬🍻😮‍💨😮🗽🛰️🌈😊😁😅😂😬🍻😮‍💨😮🗽🛰️🌈😊😁😅😂😬🍻😮‍💨😮🗽🛰️🌈";
+    /// assert_eq!(too_long.len(), 258);
+    ///
+    /// let too_long_id = Ident::new(too_long);
+    /// assert!(too_long_id.is_err());
+    /// ```
+    ///
     pub fn new<S>(value: S) -> Result<Self, IdentError>
     where
         S: Into<String>,
@@ -47,10 +64,36 @@ impl Ident {
     }
 
     /// Create a new [`Ident`] modifying the given value as necessary to meet our invariants.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mz_sql_parser::ast::Ident;
+    ///
+    /// let too_long = "🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢\
+    /// 🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵\
+    /// 🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴";
+    ///
+    /// let id = Ident::new_lossy(too_long);
+    ///
+    /// // `new_lossy`` will truncate the provided string, since it's too long. Note the missing
+    /// // `🔴` characters.
+    /// assert_eq!(id.as_str(), "🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵");
+    /// ```
     pub fn new_lossy<S: Into<String>>(value: S) -> Self {
-        // TODO(parkmycar): Optimize these allocations.
         let s: String = value.into();
-        let s_truncated = s.chars().take(Self::MAX_LENGTH).collect();
+        if s.len() <= Self::MAX_LENGTH {
+            return Ident(s);
+        }
+
+        let mut byte_length = 0;
+        let s_truncated = s
+            .chars()
+            .take_while(|c| {
+                byte_length += c.len_utf8();
+                byte_length < Self::MAX_LENGTH
+            })
+            .collect();
 
         Ident(s_truncated)
     }
@@ -70,12 +113,40 @@ impl Ident {
     }
 
     /// Generate a valid [`Ident`] with the provided `prefix` and `suffix`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mz_sql_parser::ast::{Ident, IdentError};
+    ///
+    /// let good_id =
+    ///   Ident::try_generate_name("hello", "_world", |_| Ok::<_, IdentError>(true)).unwrap();
+    /// assert_eq!(good_id.as_str(), "hello_world");
+    ///
+    /// // Return invalid once.
+    /// let mut attempts = 0;
+    /// let one_failure = Ident::try_generate_name("hello", "_world", |_candidate| {
+    ///     if attempts == 0 {
+    ///         attempts += 1;
+    ///         Ok::<_, IdentError>(false)
+    ///     } else {
+    ///         Ok(true)
+    ///     }
+    /// })
+    /// .unwrap();
+    ///
+    /// // We "hello_world" was invalid, so we appended "_1".
+    /// assert_eq!(one_failure.as_str(), "hello_world_1");
+    /// ```
     pub fn try_generate_name<P, S, F, E>(prefix: P, suffix: S, mut is_valid: F) -> Result<Self, E>
     where
         P: Into<String>,
         S: Into<String>,
+        E: From<IdentError>,
         F: FnMut(&Ident) -> Result<bool, E>,
     {
+        const MAX_ATTEMPTS: usize = 1000;
+
         let prefix: String = prefix.into();
         let suffix: String = suffix.into();
 
@@ -87,7 +158,7 @@ impl Ident {
         }
 
         // Otherwise, append a number to the back.
-        for i in 0..1000 {
+        for i in 1..MAX_ATTEMPTS {
             let mut candidate = Ident(prefix.clone());
             candidate.append_lossy(format!("{suffix}_{i}"));
 
@@ -96,8 +167,12 @@ impl Ident {
             }
         }
 
-        // Couldn't find any valid name! Panic?
-        panic!("Failed to generate name");
+        // Couldn't find any valid name!
+        Err(E::from(IdentError::FailedToGenerate {
+            prefix,
+            suffix,
+            attempts: MAX_ATTEMPTS,
+        }))
     }
 
     /// Append the provided `suffix`, truncating `self` as necessary to satisfy our invariants.
@@ -105,8 +180,17 @@ impl Ident {
     /// # Examples
     ///
     /// ```
-    /// ```
+    /// use mz_sql_parser::{
+    ///     ident,
+    ///     ast::Ident,
+    /// };
     ///
+    /// let mut id = ident!("🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵");
+    /// id.append_lossy("🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴");
+    ///
+    /// // We truncated the original ident, removing all '🔵' chars.
+    /// assert_eq!(id.as_str(), "🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴");
+    /// ```
     pub fn append_lossy<S: Into<String>>(&mut self, suffix: S) {
         // Make sure our suffix at least leaves a bit of room for the original ident.
         const MAX_SUFFIX_LENGTH: usize = Ident::MAX_LENGTH - 8;
@@ -116,13 +200,28 @@ impl Ident {
 
         // Truncate the suffix as necessary.
         if suffix.len() > MAX_SUFFIX_LENGTH {
-            suffix = suffix.chars().take(MAX_SUFFIX_LENGTH).collect();
+            let mut byte_length = 0;
+            suffix = suffix
+                .chars()
+                .take_while(|c| {
+                    byte_length += c.len_utf8();
+                    byte_length < Self::MAX_LENGTH
+                })
+                .collect();
         }
 
         // Truncate ourselves as necessary.
         let available_length = Ident::MAX_LENGTH - suffix.len();
         if self.0.len() > available_length {
-            self.0 = self.0.chars().take(available_length).collect();
+            let mut byte_length = 0;
+            self.0 = self
+                .0
+                .chars()
+                .take_while(|c| {
+                    byte_length += c.len_utf8();
+                    byte_length < available_length
+                })
+                .collect();
         }
 
         // Append the suffix.
@@ -194,6 +293,12 @@ impl_display!(Ident);
 pub enum IdentError {
     #[error("identifier too long (len {}, max {}, value {})", .0.len(), Ident::MAX_LENGTH, .0)]
     TooLong(String),
+    #[error("failed to generate identifier with prefix '{prefix}' and suffix '{suffix}' after {attempts} attempts")]
+    FailedToGenerate {
+        prefix: String,
+        suffix: String,
+        attempts: usize,
+    },
 }
 
 /// A name of a table, view, custom type, etc. that lives in a schema, possibly multi-part, i.e. db.schema.obj

@@ -76,13 +76,30 @@ impl LexerError {
     }
 }
 
-/// Newtype wrapper around [`String`] whose length is guaranteed to be less than or equal to
+/// Newtype wrapper around [`String`] whose _byte_ length is guaranteed to be less than or equal to
 /// [`MAX_IDENTIFIER_LENGTH`].
 #[derive(Debug, Clone, PartialEq)]
 
 pub struct SmallString(String);
 
 impl SmallString {
+    /// Creates a new [`SmallString`] returning an error if `s` is more than
+    /// [`MAX_IDENTIFIER_LENGTH`] bytes long.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use mz_sql_lexer::lexer::SmallString;
+    ///
+    /// let good = SmallString::new("hello".to_string()).unwrap();
+    /// assert_eq!(good.as_str(), "hello");
+    ///
+    /// // Note: this is only 64 characters, but each character requires 4 bytes.
+    /// let too_long = "😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊";
+    /// let smol = SmallString::new(too_long.to_string());
+    /// assert!(smol.is_err());
+    /// ```
+    ///
     pub fn new(s: String) -> Result<Self, String> {
         if s.len() > MAX_IDENTIFIER_LENGTH {
             return Err(s);
@@ -93,6 +110,10 @@ impl SmallString {
 
     pub fn into_inner(self) -> String {
         self.0
+    }
+
+    pub fn as_str(&self) -> &str {
+        self
     }
 }
 

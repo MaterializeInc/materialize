@@ -822,7 +822,7 @@ async fn purify_create_source(
 
                 let partial = normalize::unresolved_item_name(UnresolvedItemName(suggested_name))?;
                 let qualified = scx.allocate_qualified_name(partial)?;
-                Ok::<_, PlanError>(scx.item_exists(&qualified))
+                Ok::<_, PlanError>(!scx.item_exists(&qualified))
             })?;
 
             let mut full_name = prefix.to_vec();

@@ -21,7 +21,30 @@
 /// A macro that creates an [`Ident`] from a string literal, validating all of our invariants at
 /// compile time.
 ///
+/// # Examples
+///
+/// ```
+/// use mz_sql_parser::ident;
+///
+/// // Checks invariants at compile time, returning an `Ident`.
+/// let id = ident!("my_postgres_source");
+///
+/// assert_eq!(id.as_str(), "my_postgres_source");
+/// ```
+///
+/// ```compile_fail
+/// use mz_sql_parser::ident;
+///
+/// const TOO_LONG: &str = "I am a very long identifier that is more than 255 characters long which is the max length for idents.\
+/// I am a very long identifier that is more than 255 characters long which is the max length for idents.\
+/// Use that sentance twice since 255 characters is actually a lot.";
+///
+/// // This fails to build since the string is too long.
+/// let _id = ident!(TOO_LONG);
+/// ```
+///
 /// [`Ident`]: crate::ast::Ident
+///
 #[macro_export]
 macro_rules! ident {
     ($val:expr) => {{
