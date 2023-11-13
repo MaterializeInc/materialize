@@ -55,11 +55,6 @@ pub(super) struct ReplicaClient<T> {
     /// If sending to this channel fails, the replica has failed and requires
     /// rehydration.
     command_tx: UnboundedSender<ComputeCommand<T>>,
-    /// A receiver for responses from the replica.
-    ///
-    /// If receiving from the channel returns `None`, the replica has failed
-    /// and requires rehydration.
-    response_rx: UnboundedReceiver<ComputeResponse<T>>,
     /// A handle to the task that aborts it when the replica is dropped.
     _task: AbortOnDropHandle<()>,
     /// Replica metrics.
@@ -78,7 +73,7 @@ where
         epoch: ClusterStartupEpoch,
         metrics: ReplicaMetrics,
         dyncfg: Arc<ConfigSet>,
-    ) -> Self {
+    ) -> (Self, UnboundedReceiver<ComputeResponse<T>>) {
         // Launch a task to handle communication with the replica
         // asynchronously. This isolates the main controller thread from
         // the replica.
@@ -100,12 +95,14 @@ where
             .run(),
         );
 
-        Self {
-            command_tx,
+        (
+            Self {
+                command_tx,
+                _task: task.abort_on_drop(),
+                metrics,
+            },
             response_rx,
-            _task: task.abort_on_drop(),
-            metrics,
-        }
+        )
     }
 
     /// Sends a command to this replica.
@@ -115,16 +112,6 @@ where
     ) -> Result<(), SendError<ComputeCommand<T>>> {
         self.command_tx.send(command).map(|r| {
             self.metrics.inner.command_queue_size.inc();
-            r
-        })
-    }
-
-    /// Receives the next response from this replica.
-    ///
-    /// This method is cancellation safe.
-    pub(super) async fn recv(&mut self) -> Option<ComputeResponse<T>> {
-        self.response_rx.recv().await.map(|r| {
-            self.metrics.inner.response_queue_size.dec();
             r
         })
     }

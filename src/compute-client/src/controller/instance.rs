@@ -37,6 +37,7 @@ use serde::Serialize;
 use thiserror::Error;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use timely::{Container, PartialOrder};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
@@ -190,6 +191,12 @@ pub(super) struct Instance<T> {
     metrics: InstanceMetrics,
     /// Dynamic system configuration.
     dyncfg: Arc<ConfigSet>,
+
+    /// A worker that pumps messages from all replicas into a unified response
+    /// stream.
+    receive_worker: ReceiveWorker<T>,
+    /// Unified response stream, carrying responses from all replicas.
+    receive_rx: UnboundedReceiver<(ReplicaId, Option<ComputeResponse<T>>)>,
 }
 
 impl<T: Timestamp> Instance<T> {
@@ -565,6 +572,8 @@ impl<T: Timestamp> Instance<T> {
             replica_epochs,
             metrics: _,
             dyncfg: _,
+            receive_worker: _,
+            receive_rx: _,
         } = self;
 
         fn field(
@@ -634,6 +643,9 @@ where
             .collect();
         let history = ComputeCommandHistory::new(metrics.for_history());
 
+        let (response_worker_tx, response_worker_rx) = tokio::sync::mpsc::unbounded_channel();
+        let receive_worker: ReceiveWorker<T> = ReceiveWorker::new(response_worker_tx);
+
         let mut instance = Self {
             build_info,
             initialized: false,
@@ -650,6 +662,8 @@ where
             replica_epochs: Default::default(),
             metrics,
             dyncfg,
+            receive_worker,
+            receive_rx: response_worker_rx,
         };
 
         instance.send(ComputeCommand::CreateTimely {
@@ -724,15 +738,7 @@ where
     ///
     /// This method is cancellation safe.
     pub async fn recv(&mut self) -> Result<(ReplicaId, ComputeResponse<T>), ReplicaId> {
-        // Receive responses from any of the replicas, and take appropriate
-        // action.
-        let response = self
-            .replicas
-            .iter_mut()
-            .map(|(id, replica)| async { (*id, replica.client.recv().await) })
-            .collect::<FuturesUnordered<_>>()
-            .next()
-            .await;
+        let response = self.receive_rx.recv().await;
 
         match response {
             None => {
@@ -862,7 +868,7 @@ where
         let replica_epoch = self.compute.replica_epochs.entry(id).or_default();
         *replica_epoch += 1;
         let metrics = self.compute.metrics.for_replica(id);
-        let client = ReplicaClient::spawn(
+        let (client, response_rx) = ReplicaClient::spawn(
             id,
             self.compute.build_info,
             config.clone(),
@@ -870,6 +876,8 @@ where
             metrics.clone(),
             Arc::clone(&self.compute.dyncfg),
         );
+
+        self.compute.receive_worker.register(id, response_rx);
 
         // Take this opportunity to clean up the history we should present.
         self.compute.history.reduce();
@@ -892,9 +900,12 @@ where
 
     /// Remove an existing instance replica, by ID.
     pub fn remove_replica(&mut self, id: ReplicaId) -> Result<(), ReplicaMissing> {
+        self.compute.receive_worker.remove(id.clone());
+
         self.compute
             .remove_replica_state(id)
             .ok_or(ReplicaMissing(id))?;
+
 
         // Remove frontier tracking for this replica.
         self.remove_replica_write_frontiers(id);
@@ -948,6 +959,7 @@ where
     fn rehydrate_replica(&mut self, id: ReplicaId) {
         let config = self.compute.replicas[&id].config.clone();
         self.remove_replica(id).expect("replica must exist");
+        self.compute.receive_worker.remove(id.clone());
         let result = self.add_replica(id, config);
 
         match result {
@@ -2403,3 +2415,95 @@ impl Drop for HydrationState {
         }
     }
 }
+
+/// A worker task that receives from all replicas and forwards responses to a
+/// single channel.
+#[derive(Debug)]
+struct ReceiveWorker<T> {
+    tx: UnboundedSender<ReceiveWorkerCmd<T>>,
+}
+
+/// Commands for [`ReceiveWorker`].
+#[derive(Debug)]
+enum ReceiveWorkerCmd<T> {
+    Register(ReplicaId, UnboundedReceiver<ComputeResponse<T>>),
+    Remove(ReplicaId),
+}
+
+impl<T> ReceiveWorker<T>
+where
+    T: Timestamp + Lattice,
+{
+    /// Creates a new receive worker that forwards responses to the given `tx`.
+    pub fn new(tx: UnboundedSender<(ReplicaId, Option<ComputeResponse<T>>)>) -> Self {
+        let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+
+        mz_ore::task::spawn(|| "ReceiveWorker", async move {
+            let mut rx_futures = FuturesUnordered::new();
+
+            let mut to_enqueue = Vec::new();
+            let mut dropped_replicas: BTreeSet<ReplicaId> = BTreeSet::new();
+            loop {
+                tokio::select! {
+                    Some((replica_id, res, rx)) = rx_futures.next() => {
+                        match res {
+                            Some(res) => {
+                                // If the replica hasn't been dropped,
+                                // re-enqueue for receiving.
+                                if !dropped_replicas.remove(&replica_id) {
+                                    to_enqueue.push((replica_id.clone(), rx));
+                                }
+
+                                // Receiver might have hung up.
+                                _ = tx.send((replica_id, Some(res)));
+                            },
+                            None => {
+                                 _ = tx.send((replica_id, None));
+
+                                // Replica hung up, so don't re-enqueue.
+                            }
+                        }
+                    }
+                    Some(cmd) = cmd_rx.recv() => {
+                        match cmd {
+                            ReceiveWorkerCmd::Register(replica_id, rx) => {
+                                to_enqueue.push((replica_id, rx));
+                            }
+                            ReceiveWorkerCmd::Remove(replica_id) => {
+                                dropped_replicas.insert(replica_id);
+                            }
+                        }
+                    },
+                    else => {
+                        break;
+                    },
+                }
+
+                for (replica_id, mut rx) in to_enqueue.drain(..) {
+                    rx_futures.push(async move {
+                        let res = rx.recv().await;
+                        (replica_id, res, rx)
+                    });
+                }
+            }
+            tracing::trace!("shutting down replica receiver task");
+        });
+
+        Self { tx: cmd_tx }
+    }
+
+    fn register(&self, replica_id: ReplicaId, rx: UnboundedReceiver<ComputeResponse<T>>) {
+        self.send(ReceiveWorkerCmd::Register(replica_id, rx))
+    }
+
+    fn remove(&self, replica_id: ReplicaId) {
+        self.send(ReceiveWorkerCmd::Remove(replica_id))
+    }
+
+    fn send(&self, cmd: ReceiveWorkerCmd<T>) {
+        self.tx
+            .send(cmd)
+            .expect("receive worker exited while its handle was alive")
+    }
+}
+
