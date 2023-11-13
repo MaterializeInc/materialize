@@ -13,7 +13,7 @@ from decimal import Decimal
 from typing import Any
 
 from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
-    InconsistencyIgnoreFilter,
+    GenericInconsistencyIgnoreFilter,
 )
 from materialize.output_consistency.query.query_result import QueryExecution
 from materialize.output_consistency.validation.result_comparator import ResultComparator
@@ -29,7 +29,7 @@ TIMESTAMP_PATTERN = re.compile(r"\d{4,}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d+)?")
 class PostgresResultComparator(ResultComparator):
     """Compares the outcome (result or failure) of multiple query executions"""
 
-    def __init__(self, ignore_filter: InconsistencyIgnoreFilter):
+    def __init__(self, ignore_filter: GenericInconsistencyIgnoreFilter):
         super().__init__(ignore_filter)
         self.floating_precision = 1e-03
 
