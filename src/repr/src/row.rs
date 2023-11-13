@@ -13,6 +13,7 @@ use std::cmp::Ordering;
 use std::convert::{TryFrom, TryInto};
 use std::fmt::{self, Debug};
 use std::mem::{size_of, transmute};
+use std::rc::Rc;
 use std::str;
 
 use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
@@ -2276,6 +2277,55 @@ impl RowArena {
 impl Default for RowArena {
     fn default() -> RowArena {
         RowArena::new()
+    }
+}
+
+/// A thread-local row, which can be borrowed and returned.
+/// # Example
+///
+/// Use this type instead of creating a new row:
+/// ```
+/// use mz_repr::SharedRow;
+///
+/// let binding = SharedRow::get();
+/// let mut row_builder = binding.borrow_mut();
+/// ```
+///
+/// This allows us to reuse an existing row allocation instead of creating a new one or retaining
+/// an allocation locally. Additionally, we can observe the size of the local row in a central
+/// place and potentially reallocate to reduce memory needs.
+///
+/// # Panic
+///
+/// [`SharedRow::get`] panics when trying to obtain multiple references to the shared row.
+#[derive(Debug)]
+pub struct SharedRow(Rc<RefCell<Row>>);
+
+impl SharedRow {
+    thread_local! {
+        static SHARED_ROW: Rc<RefCell<Row>> = Rc::new(RefCell::new(Row::default()));
+    }
+
+    /// Get the shared row.
+    ///
+    /// The row's contents are cleared before returning it.
+    ///
+    /// # Panic
+    ///
+    /// Panics when the row is already borrowed elsewhere.
+    pub fn get() -> Self {
+        let row = Self::SHARED_ROW.with(|cell| Rc::clone(cell));
+        // Clear row
+        row.borrow_mut().packer();
+        Self(row)
+    }
+}
+
+impl std::ops::Deref for SharedRow {
+    type Target = RefCell<Row>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
