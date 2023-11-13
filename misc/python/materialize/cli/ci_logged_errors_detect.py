@@ -223,8 +223,9 @@ def annotate_logged_errors(log_files: list[str]) -> int:
 
     if unknown_errors:
         print(
-            f"--- Failing test because of {len(unknown_errors)} unknown error(s) in logs"
+            f"+++ Failing test because of {len(unknown_errors)} unknown error(s) in logs:"
         )
+        print(unknown_errors)
 
     return len(unknown_errors)
 

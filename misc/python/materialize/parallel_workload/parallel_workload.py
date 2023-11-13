@@ -271,7 +271,7 @@ def run(
                 if not thread.is_alive():
                     for worker in workers:
                         worker.end_time = time.time()
-                    raise Exception(f"Thread {thread.name} failed, exiting")
+                    raise Exception(f"^^^ +++ Thread {thread.name} failed, exiting")
             time.sleep(REPORT_TIME)
             print(
                 "QPS: "
