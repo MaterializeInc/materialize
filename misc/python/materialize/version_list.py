@@ -14,7 +14,7 @@ from pathlib import Path
 import frontmatter
 
 from materialize import git
-from materialize.util import MzVersion
+from materialize.mz_version import MzVersion
 
 MZ_ROOT = Path(os.environ["MZ_ROOT"])
 

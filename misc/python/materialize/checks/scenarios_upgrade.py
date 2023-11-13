@@ -17,7 +17,7 @@ from materialize.checks.mzcompose_actions import (
     UseClusterdCompute,
 )
 from materialize.checks.scenarios import Scenario
-from materialize.util import MzVersion
+from materialize.mz_version import MzVersion
 from materialize.version_list import VersionsFromDocs
 
 version_list = VersionsFromDocs()

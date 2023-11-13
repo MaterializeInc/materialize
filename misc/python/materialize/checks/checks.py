@@ -12,7 +12,7 @@ from typing import Any
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.executors import Executor
-from materialize.util import MzVersion
+from materialize.mz_version import MzVersion
 
 TESTDRIVE_NOP = "$ nop"
 

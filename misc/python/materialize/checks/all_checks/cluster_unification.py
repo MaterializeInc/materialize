@@ -10,7 +10,7 @@
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
 from materialize.checks.executors import Executor
-from materialize.util import MzVersion
+from materialize.mz_version import MzVersion
 
 
 class UnifiedCluster(Check):
