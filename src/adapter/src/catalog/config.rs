@@ -33,6 +33,17 @@ use crate::config::SystemParameterSyncConfig;
 pub struct Config<'a> {
     /// The connection to the stash.
     pub storage: Box<dyn mz_catalog::durable::DurableCatalogState>,
+    /// The registry that catalog uses to report metrics.
+    pub metrics_registry: &'a MetricsRegistry,
+    /// A handle to a secrets manager that can only read secrets.
+    pub secrets_reader: Arc<dyn SecretsReader>,
+    /// How long to retain storage usage records
+    pub storage_usage_retention_period: Option<Duration>,
+    pub state: StateConfig,
+}
+
+#[derive(Debug)]
+pub struct StateConfig {
     /// Whether to enable unsafe mode.
     pub unsafe_mode: bool,
     /// Whether the build is a local dev build.
@@ -45,8 +56,6 @@ pub struct Config<'a> {
     pub now: mz_ore::now::NowFn,
     /// Whether or not to skip catalog migrations.
     pub skip_migrations: bool,
-    /// The registry that catalog uses to report metrics.
-    pub metrics_registry: &'a MetricsRegistry,
     /// Map of strings to corresponding compute replica sizes.
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
     /// Default storage cluster size. Must be a key from cluster_replica_sizes.
@@ -57,8 +66,6 @@ pub struct Config<'a> {
     pub system_parameter_defaults: BTreeMap<String, String>,
     /// Valid availability zones for replicas.
     pub availability_zones: Vec<String>,
-    /// A handle to a secrets manager that can only read secrets.
-    pub secrets_reader: Arc<dyn SecretsReader>,
     /// IP Addresses which will be used for egress.
     pub egress_ips: Vec<Ipv4Addr>,
     /// Context for generating an AWS Principal.
@@ -69,8 +76,6 @@ pub struct Config<'a> {
     /// Catalog::open. A `None` value indicates that the initial sync should be
     /// skipped.
     pub system_parameter_sync_config: Option<SystemParameterSyncConfig>,
-    /// How long to retain storage usage records
-    pub storage_usage_retention_period: Option<Duration>,
     /// Host name or URL for connecting to the HTTP server of this instance.
     pub http_host_name: Option<String>,
     /// Needed only for migrating PG source column metadata. If `None`, will

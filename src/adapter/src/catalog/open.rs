@@ -64,6 +64,7 @@ use mz_sql_parser::ast::Expr;
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_types::sources::Timeline;
 
+use crate::catalog::config::StateConfig;
 use crate::catalog::{
     is_reserved_name, migrate, BuiltinTableUpdate, Catalog, CatalogPlans, CatalogState, Config,
 };
@@ -177,20 +178,17 @@ impl CatalogItemRebuilder {
 }
 
 impl Catalog {
-    /// Opens or creates a catalog that stores data at `path`.
-    ///
-    /// Returns the catalog, metadata about builtin objects that have changed
-    /// schemas since last restart, a list of updates to builtin tables that
-    /// describe the initial state of the catalog, and the version of the
-    /// catalog before any migrations were performed.
-    #[tracing::instrument(name = "catalog::open", level = "info", skip_all)]
-    pub async fn open(
-        config: Config<'_>,
+    /// Initializes a CatalogState. Separate from [`Catalog::open`] to avoid depending on state
+    /// external to a [mz_catalog::durable::DurableCatalogState] (for example: no [mz_secrets::SecretsReader]).
+    #[tracing::instrument(name = "catalog::initialize_state", level = "info", skip_all)]
+    pub async fn initialize_state(
+        config: StateConfig,
+        storage: &mut Box<dyn mz_catalog::durable::DurableCatalogState>,
     ) -> Result<
         (
-            Catalog,
+            CatalogState,
+            mz_repr::Timestamp,
             BuiltinMigrationMetadata,
-            Vec<BuiltinTableUpdate>,
             String,
         ),
         AdapterError,
@@ -253,7 +251,6 @@ impl Catalog {
             comments: CommentsMap::default(),
         };
 
-        let mut storage = config.storage;
         let is_read_only = storage.is_read_only();
         let mut txn = storage.transaction().await?;
         // Choose a time at which to boot. This is the time at which we will run
@@ -845,6 +842,36 @@ impl Catalog {
         )?;
 
         txn.commit().await?;
+        Ok((
+            state,
+            boot_ts,
+            builtin_migration_metadata,
+            last_seen_version,
+        ))
+    }
+
+    /// Opens or creates a catalog that stores data at `path`.
+    ///
+    /// Returns the catalog, metadata about builtin objects that have changed
+    /// schemas since last restart, a list of updates to builtin tables that
+    /// describe the initial state of the catalog, and the version of the
+    /// catalog before any migrations were performed.
+    #[tracing::instrument(name = "catalog::open", level = "info", skip_all)]
+    pub async fn open(
+        config: Config<'_>,
+    ) -> Result<
+        (
+            Catalog,
+            BuiltinMigrationMetadata,
+            Vec<BuiltinTableUpdate>,
+            String,
+        ),
+        AdapterError,
+    > {
+        let mut storage = config.storage;
+        let (state, boot_ts, builtin_migration_metadata, last_seen_version) =
+            Self::initialize_state(config.state, &mut storage).await?;
+
         let mut catalog = Catalog {
             state,
             plans: CatalogPlans {
