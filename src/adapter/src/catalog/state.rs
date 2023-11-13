@@ -459,23 +459,6 @@ impl CatalogState {
         dependents
     }
 
-    pub fn uses_tables(&self, id: GlobalId) -> bool {
-        match self.get_entry(&id).item() {
-            CatalogItem::Table(_) => true,
-            item @ (CatalogItem::View(_) | CatalogItem::MaterializedView(_)) => {
-                item.uses().0.iter().any(|id| self.uses_tables(*id))
-            }
-            CatalogItem::Index(idx) => self.uses_tables(idx.on),
-            CatalogItem::Source(_)
-            | CatalogItem::Log(_)
-            | CatalogItem::Func(_)
-            | CatalogItem::Sink(_)
-            | CatalogItem::Type(_)
-            | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => false,
-        }
-    }
-
     /// Indicates whether the indicated item is considered stable or not.
     ///
     /// Only stable items can be used as dependencies of other catalog items.

@@ -3327,10 +3327,6 @@ impl Catalog {
         )
     }
 
-    pub fn uses_tables(&self, id: GlobalId) -> bool {
-        self.state.uses_tables(id)
-    }
-
     /// Return the ids of all log sources the given object depends on.
     pub fn introspection_dependencies(&self, id: GlobalId) -> Vec<GlobalId> {
         self.state.introspection_dependencies(id)
