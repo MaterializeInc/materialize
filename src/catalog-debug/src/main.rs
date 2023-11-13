@@ -112,7 +112,6 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::PersistLocation;
-use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
 use mz_stash::StashFactory;
@@ -430,9 +429,8 @@ async fn upgrade_check(
     openable_state: Box<dyn OpenableDurableCatalogState>,
     cluster_replica_sizes: ClusterReplicaSizeMap,
 ) -> Result<(), anyhow::Error> {
-    let metrics_registry = &MetricsRegistry::new();
     let now = SYSTEM_TIME.clone();
-    let storage = openable_state
+    let mut storage = openable_state
         .open_savepoint(
             now(),
             &BootstrapArgs {
@@ -442,32 +440,30 @@ async fn upgrade_check(
             None,
         )
         .await?;
-    let secrets_reader = Arc::new(InMemorySecretsController::new());
 
-    let (_catalog, _, _, last_catalog_version) = Catalog::open(Config {
-        storage,
-        unsafe_mode: true,
-        all_features: false,
-        build_info: &BUILD_INFO,
-        environment_id: EnvironmentId::for_tests(),
-        now,
-        skip_migrations: false,
-        metrics_registry,
-        cluster_replica_sizes,
-        default_storage_cluster_size: None,
-        builtin_cluster_replica_size: "1".into(),
-        system_parameter_defaults: Default::default(),
-        availability_zones: vec![],
-        secrets_reader,
-        egress_ips: vec![],
-        aws_principal_context: None,
-        aws_privatelink_availability_zones: None,
-        system_parameter_sync_config: None,
-        storage_usage_retention_period: None,
-        http_host_name: None,
-        connection_context: None,
-        active_connection_count: Arc::new(Mutex::new(ConnectionCounter::new(0))),
-    })
+    let (_catalog, _, _, last_catalog_version) = Catalog::initialize_state(
+        StateConfig {
+            unsafe_mode: true,
+            all_features: false,
+            build_info: &BUILD_INFO,
+            environment_id: EnvironmentId::for_tests(),
+            now,
+            skip_migrations: false,
+            cluster_replica_sizes,
+            default_storage_cluster_size: None,
+            builtin_cluster_replica_size: "1".into(),
+            system_parameter_defaults: Default::default(),
+            availability_zones: vec![],
+            egress_ips: vec![],
+            aws_principal_context: None,
+            aws_privatelink_availability_zones: None,
+            system_parameter_sync_config: None,
+            http_host_name: None,
+            connection_context: None,
+            active_connection_count: Arc::new(Mutex::new(ConnectionCounter::new(0))),
+        },
+        &mut storage,
+    )
     .await?;
 
     let msg = format!(

@@ -87,9 +87,7 @@ impl Eq for SshKeyPair {}
 
 impl PartialOrd for SshKeyPair {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.key_pair
-            .fingerprint(HashAlg::default())
-            .partial_cmp(&other.key_pair.fingerprint(HashAlg::default()))
+        Some(self.cmp(other))
     }
 }
 

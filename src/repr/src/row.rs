@@ -14,9 +14,9 @@ use std::convert::{TryFrom, TryInto};
 use std::fmt::{self, Debug};
 use std::mem::{size_of, transmute};
 use std::str;
-use std::sync::atomic::{self, AtomicBool};
 
 use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
+use compact_bytes::CompactBytes;
 use mz_ore::cast::{CastFrom, ReinterpretCast};
 use mz_ore::soft_assert;
 use mz_ore::vec::Vector;
@@ -26,7 +26,6 @@ use ordered_float::OrderedFloat;
 use proptest::prelude::*;
 use proptest::strategy::{BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
-use smallvec::SmallVec;
 use uuid::Uuid;
 
 use crate::adt::array::{
@@ -47,12 +46,6 @@ use crate::{Datum, Timestamp};
 pub(crate) mod encoding;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.row.rs"));
-
-/// Whether to encode rows with variable-length integers and
-/// timestamps. This is thought to incur a slight (a few percent)
-/// regression in CPU efficiency, in exchange for improved memory
-/// usage.
-pub static VARIABLE_LENGTH_ENCODING: AtomicBool = AtomicBool::new(false);
 
 /// A packed representation for `Datum`s.
 ///
@@ -112,7 +105,22 @@ pub static VARIABLE_LENGTH_ENCODING: AtomicBool = AtomicBool::new(false);
 /// avoids the allocations involved in `Row::new()`.
 #[derive(Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct Row {
-    data: SmallVec<[u8; Self::SIZE]>,
+    data: CompactBytes,
+}
+
+// Nothing depends on Row being exactly 24, we just want to add visibility to the size.
+static_assertions::const_assert_eq!(std::mem::size_of::<Row>(), 24);
+
+impl Clone for Row {
+    fn clone(&self) -> Self {
+        Row {
+            data: self.data.clone(),
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.data.clone_from(&source.data);
+    }
 }
 
 impl Arbitrary for Row {
@@ -134,18 +142,8 @@ impl Arbitrary for Row {
     }
 }
 
-// Implement Clone manually to use SmallVec's more efficient from_slice.
-// TODO: Revisit once Rust supports specialization: https://github.com/rust-lang/rust/issues/31844
-impl Clone for Row {
-    fn clone(&self) -> Self {
-        Self {
-            data: SmallVec::from_slice(self.data.as_slice()),
-        }
-    }
-}
-
 impl Row {
-    const SIZE: usize = 24;
+    const SIZE: usize = CompactBytes::MAX_INLINE;
 }
 
 /// These implementations order first by length, and then by slice contents.
@@ -211,7 +209,7 @@ mod columnation {
             if item.data.spilled() {
                 let bytes = self.region.copy_slice(&item.data[..]);
                 Row {
-                    data: smallvec::SmallVec::from_raw_parts(
+                    data: compact_bytes::CompactBytes::from_raw_parts(
                         bytes.as_mut_ptr(),
                         item.data.len(),
                         item.data.capacity(),
@@ -426,20 +424,17 @@ enum Tag {
     Range,
     MzAclItem,
     AclItem,
-    // Only ever used if the `VARIABLE_LENGTH_ENCODING` global is set.
     // Everything except leap seconds and times beyond the range of
     // i64 nanoseconds. (Note that Materialize does not support leap
     // seconds, but this module does).
     CheapTimestamp,
-    // Only ever used if the `VARIABLE_LENGTH_ENCODING` global is set.
     // Everything except leap seconds and times beyond the range of
     // i64 nanoseconds. (Note that Materialize does not support leap
     // seconds, but this module does).
     CheapTimestampTz,
     // The remaining tags are for variable-length signed integer encoding.
-    // They are only ever used if the `VARIABLE_LENGTH_ENCODING` global is set.
     // The basic idea is that `NonNegativeIntN_K` is used to encode a datum of type
-    // IntN whose actual value is positive and fits in K bytes, and similarly for
+    // IntN whose actual value is positive or zero and fits in K bytes, and similarly for
     // NegativeIntN_K with negative values.
     //
     // The order of these tags matters, because we want to be able to choose the
@@ -1082,7 +1077,7 @@ where
     (64 - n_sign_bits + 7) / 8
 }
 
-fn push_datum<D, const VAR: bool>(data: &mut D, datum: Datum)
+fn push_datum<D>(data: &mut D, datum: Datum)
 where
     D: Vector<u8>,
 {
@@ -1091,52 +1086,37 @@ where
         Datum::False => data.push(Tag::False.into()),
         Datum::True => data.push(Tag::True.into()),
         Datum::Int16(i) => {
-            if VAR {
-                let mbs = min_bytes_signed(i);
-                let tag = u8::from(if i.is_negative() {
-                    Tag::NegativeInt16_0
-                } else {
-                    Tag::NonNegativeInt16_0
-                }) + mbs;
-
-                data.push(tag);
-                data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
+            let mbs = min_bytes_signed(i);
+            let tag = u8::from(if i.is_negative() {
+                Tag::NegativeInt16_0
             } else {
-                data.push(Tag::Int16.into());
-                data.extend_from_slice(&i.to_le_bytes());
-            }
+                Tag::NonNegativeInt16_0
+            }) + mbs;
+
+            data.push(tag);
+            data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
         }
         Datum::Int32(i) => {
-            if VAR {
-                let mbs = min_bytes_signed(i);
-                let tag = u8::from(if i.is_negative() {
-                    Tag::NegativeInt32_0
-                } else {
-                    Tag::NonNegativeInt32_0
-                }) + mbs;
-
-                data.push(tag);
-                data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
+            let mbs = min_bytes_signed(i);
+            let tag = u8::from(if i.is_negative() {
+                Tag::NegativeInt32_0
             } else {
-                data.push(Tag::Int32.into());
-                data.extend_from_slice(&i.to_le_bytes());
-            }
+                Tag::NonNegativeInt32_0
+            }) + mbs;
+
+            data.push(tag);
+            data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
         }
         Datum::Int64(i) => {
-            if VAR {
-                let mbs = min_bytes_signed(i);
-                let tag = u8::from(if i.is_negative() {
-                    Tag::NegativeInt64_0
-                } else {
-                    Tag::NonNegativeInt64_0
-                }) + mbs;
-
-                data.push(tag);
-                data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
+            let mbs = min_bytes_signed(i);
+            let tag = u8::from(if i.is_negative() {
+                Tag::NegativeInt64_0
             } else {
-                data.push(Tag::Int64.into());
-                data.extend_from_slice(&i.to_le_bytes());
-            }
+                Tag::NonNegativeInt64_0
+            }) + mbs;
+
+            data.push(tag);
+            data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
         }
         Datum::UInt8(i) => {
             data.push(Tag::UInt8.into());
@@ -1172,15 +1152,9 @@ where
         }
         Datum::Timestamp(t) => {
             let datetime = t.to_naive();
-            if VAR {
-                if let Some(nanos) = checked_timestamp_nanos(datetime) {
-                    data.push(Tag::CheapTimestamp.into());
-                    data.extend_from_slice(&nanos.to_le_bytes());
-                } else {
-                    data.push(Tag::Timestamp.into());
-                    push_naive_date(data, datetime.date());
-                    push_time(data, datetime.time());
-                }
+            if let Some(nanos) = checked_timestamp_nanos(datetime) {
+                data.push(Tag::CheapTimestamp.into());
+                data.extend_from_slice(&nanos.to_le_bytes());
             } else {
                 data.push(Tag::Timestamp.into());
                 push_naive_date(data, datetime.date());
@@ -1189,15 +1163,9 @@ where
         }
         Datum::TimestampTz(t) => {
             let datetime = t.to_naive();
-            if VAR {
-                if let Some(nanos) = checked_timestamp_nanos(datetime) {
-                    data.push(Tag::CheapTimestampTz.into());
-                    data.extend_from_slice(&nanos.to_le_bytes());
-                } else {
-                    data.push(Tag::TimestampTz.into());
-                    push_naive_date(data, datetime.date());
-                    push_time(data, datetime.time());
-                }
+            if let Some(nanos) = checked_timestamp_nanos(datetime) {
+                data.push(Tag::CheapTimestampTz.into());
+                data.extend_from_slice(&nanos.to_le_bytes());
             } else {
                 data.push(Tag::TimestampTz.into());
                 push_naive_date(data, datetime.date());
@@ -1306,7 +1274,7 @@ where
                     if let Some(bound) = bound {
                         match bound.datum() {
                             Datum::Null => panic!("cannot push Datum::Null into range"),
-                            d => push_datum::<D, VAR>(data, d),
+                            d => push_datum::<D>(data, d),
                         }
                     }
                 }
@@ -1324,7 +1292,7 @@ where
 }
 
 /// Return the number of bytes these Datums would use if packed as a Row.
-pub fn row_size_deterministic<'a, I, const VAR: bool>(a: I) -> usize
+pub fn row_size<'a, I>(a: I) -> usize
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -1332,7 +1300,7 @@ where
     // return the size of the datums if they were packed into a Row. Although
     // a.data().len() happens to give the correct answer (and is faster), data()
     // is documented as for debugging only.
-    let sz = datums_size_deterministic::<_, _, VAR>(a);
+    let sz = datums_size::<_, _>(a);
     let size_of_row = std::mem::size_of::<Row>();
     // The Row struct attempts to inline data until it can't fit in the
     // preallocated size. Otherwise it spills to heap, and uses the Row to point
@@ -1347,41 +1315,13 @@ where
 /// Number of bytes required by the datum.
 /// This is used to optimistically pre-allocate buffers for packing rows.
 pub fn datum_size(datum: &Datum) -> usize {
-    if VARIABLE_LENGTH_ENCODING.load(atomic::Ordering::SeqCst) {
-        datum_size_deterministic::<true>(datum)
-    } else {
-        datum_size_deterministic::<false>(datum)
-    }
-}
-
-/// Number of bytes required by the datum, given the value of
-/// `VARIABLE_LENGTH_ENCODING`.
-pub fn datum_size_deterministic<const VAR: bool>(datum: &Datum) -> usize {
     match datum {
         Datum::Null => 1,
         Datum::False => 1,
         Datum::True => 1,
-        Datum::Int16(i) => {
-            1 + if VAR {
-                usize::from(min_bytes_signed(*i))
-            } else {
-                2
-            }
-        }
-        Datum::Int32(i) => {
-            1 + if VAR {
-                usize::from(min_bytes_signed(*i))
-            } else {
-                4
-            }
-        }
-        Datum::Int64(i) => {
-            1 + if VAR {
-                usize::from(min_bytes_signed(*i))
-            } else {
-                8
-            }
-        }
+        Datum::Int16(i) => 1 + usize::from(min_bytes_signed(*i)),
+        Datum::Int32(i) => 1 + usize::from(min_bytes_signed(*i)),
+        Datum::Int64(i) => 1 + usize::from(min_bytes_signed(*i)),
         Datum::UInt8(_) => 1 + size_of::<u8>(),
         Datum::UInt16(_) => 1 + size_of::<u16>(),
         Datum::UInt32(_) => 1 + size_of::<u32>(),
@@ -1391,14 +1331,14 @@ pub fn datum_size_deterministic<const VAR: bool>(datum: &Datum) -> usize {
         Datum::Date(_) => 1 + size_of::<i32>(),
         Datum::Time(_) => 1 + 8,
         Datum::Timestamp(t) => {
-            1 + if VAR && checked_timestamp_nanos(t.to_naive()).is_some() {
+            1 + if checked_timestamp_nanos(t.to_naive()).is_some() {
                 8
             } else {
                 16
             }
         }
         Datum::TimestampTz(t) => {
-            1 + if VAR && checked_timestamp_nanos(t.naive_utc()).is_some() {
+            1 + if checked_timestamp_nanos(t.naive_utc()).is_some() {
                 8
             } else {
                 16
@@ -1467,30 +1407,12 @@ pub fn datum_size_deterministic<const VAR: bool>(datum: &Datum) -> usize {
 ///
 /// This method can be used to right-size the allocation for a `Row`
 /// before calling [`RowPacker::extend`].
-pub fn datums_size_deterministic<'a, I, D, const VAR: bool>(iter: I) -> usize
-where
-    I: IntoIterator<Item = D>,
-    D: Borrow<Datum<'a>>,
-{
-    iter.into_iter()
-        .map(|d| datum_size_deterministic::<VAR>(d.borrow()))
-        .sum()
-}
-
-/// Number of bytes required by a sequence of datums.
-///
-/// This method can be used to right-size the allocation for a `Row`
-/// before calling [`RowPacker::extend`].
 pub fn datums_size<'a, I, D>(iter: I) -> usize
 where
     I: IntoIterator<Item = D>,
     D: Borrow<Datum<'a>>,
 {
-    if VARIABLE_LENGTH_ENCODING.load(atomic::Ordering::SeqCst) {
-        datums_size_deterministic::<_, _, true>(iter)
-    } else {
-        datums_size_deterministic::<_, _, false>(iter)
-    }
+    iter.into_iter().map(|d| datum_size(d.borrow())).sum()
 }
 
 /// Number of bytes required by a list of datums. This computes the size that would be required if
@@ -1513,7 +1435,7 @@ impl Row {
     #[inline]
     pub fn with_capacity(cap: usize) -> Self {
         Self {
-            data: SmallVec::with_capacity(cap),
+            data: CompactBytes::with_capacity(cap),
         }
     }
 
@@ -1608,11 +1530,7 @@ impl RowPacker<'_> {
     where
         D: Borrow<Datum<'a>>,
     {
-        if VARIABLE_LENGTH_ENCODING.load(atomic::Ordering::SeqCst) {
-            push_datum::<_, true>(&mut self.row.data, *datum.borrow());
-        } else {
-            push_datum::<_, false>(&mut self.row.data, *datum.borrow());
-        }
+        push_datum(&mut self.row.data, *datum.borrow());
     }
 
     /// Extend an existing `Row` with additional `Datum`s.
@@ -1622,14 +1540,8 @@ impl RowPacker<'_> {
         I: IntoIterator<Item = D>,
         D: Borrow<Datum<'a>>,
     {
-        if VARIABLE_LENGTH_ENCODING.load(atomic::Ordering::SeqCst) {
-            for datum in iter {
-                push_datum::<_, true>(&mut self.row.data, *datum.borrow())
-            }
-        } else {
-            for datum in iter {
-                push_datum::<_, false>(&mut self.row.data, *datum.borrow())
-            }
+        for datum in iter {
+            push_datum(&mut self.row.data, *datum.borrow())
         }
     }
 
@@ -1644,21 +1556,15 @@ impl RowPacker<'_> {
         I: IntoIterator<Item = Result<D, E>>,
         D: Borrow<Datum<'a>>,
     {
-        if VARIABLE_LENGTH_ENCODING.load(atomic::Ordering::SeqCst) {
-            for datum in iter {
-                push_datum::<_, true>(&mut self.row.data, *datum?.borrow());
-            }
-        } else {
-            for datum in iter {
-                push_datum::<_, false>(&mut self.row.data, *datum?.borrow());
-            }
+        for datum in iter {
+            push_datum(&mut self.row.data, *datum?.borrow());
         }
         Ok(())
     }
 
     /// Appends the datums of an entire `Row`.
     pub fn extend_by_row(&mut self, row: &Row) {
-        self.row.data.extend(row.data.iter().copied());
+        self.row.data.extend_from_slice(row.data.as_slice());
     }
 
     /// Pushes a [`DatumList`] that is built from a closure.
@@ -2775,15 +2681,5 @@ mod tests {
 
         let e = test_range_errors_inner(vec![vec![Datum::Int32(2)], vec![Datum::Int32(1)]]);
         assert_eq!(e, Err(InvalidRangeError::MisorderedRangeBounds));
-    }
-}
-
-#[cfg(test)]
-mod test {
-    #[mz_ore::test]
-    fn row_size_is_stable() {
-        // nothing depends on this being exactly 32, we just want it to be an active decision if we
-        // change it
-        assert_eq!(std::mem::size_of::<super::Row>(), 32);
     }
 }

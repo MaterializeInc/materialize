@@ -69,7 +69,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::Ipv4Addr;
 use std::ops::Neg;
-use std::sync::{atomic, Arc, Mutex};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -1035,9 +1035,6 @@ pub struct Coordinator {
     /// Data used by the statement logging feature.
     statement_logging: StatementLogging,
 
-    /// Whether to start replicas with the new variable-length row encoding scheme.
-    variable_length_row_encoding: bool,
-
     /// Limit for how many conncurrent webhook requests we allow.
     webhook_concurrency_limit: WebhookConcurrencyLimiter,
 }
@@ -1089,7 +1086,6 @@ impl Coordinator {
                 ClusterConfig {
                     arranged_logs: instance.log_indexes.clone(),
                 },
-                self.variable_length_row_encoding,
             )?;
             for replica in instance.replicas() {
                 let role = instance.role();
@@ -2053,27 +2049,29 @@ pub async fn serve(
     let (catalog, builtin_migration_metadata, builtin_table_updates, _last_catalog_version) =
         Catalog::open(mz_catalog::config::Config {
             storage,
-            unsafe_mode,
-            all_features,
-            build_info,
-            environment_id: environment_id.clone(),
-            now: now.clone(),
-            skip_migrations: false,
             metrics_registry: &metrics_registry,
-            cluster_replica_sizes,
-            default_storage_cluster_size,
-            builtin_cluster_replica_size,
-            system_parameter_defaults,
-            availability_zones,
             secrets_reader: secrets_controller.reader(),
-            egress_ips,
-            aws_principal_context,
-            aws_privatelink_availability_zones,
-            system_parameter_sync_config,
             storage_usage_retention_period,
-            connection_context: Some(connection_context.clone()),
-            active_connection_count,
-            http_host_name,
+            state: catalog::StateConfig {
+                unsafe_mode,
+                all_features,
+                build_info,
+                environment_id: environment_id.clone(),
+                now: now.clone(),
+                skip_migrations: false,
+                cluster_replica_sizes,
+                default_storage_cluster_size,
+                builtin_cluster_replica_size,
+                system_parameter_defaults,
+                availability_zones,
+                egress_ips,
+                aws_principal_context,
+                aws_privatelink_availability_zones,
+                system_parameter_sync_config,
+                connection_context: Some(connection_context.clone()),
+                active_connection_count,
+                http_host_name,
+            },
         })
         .await?;
     let session_id = catalog.config().session_id;
@@ -2116,11 +2114,6 @@ pub async fn serve(
             }
 
             let caching_secrets_reader = CachingSecretsReader::new(secrets_controller.reader());
-            let variable_length_row_encoding = catalog
-                .system_config()
-                .variable_length_row_encoding_DANGEROUS();
-            mz_repr::VARIABLE_LENGTH_ROW_ENCODING
-                .store(variable_length_row_encoding, atomic::Ordering::SeqCst);
             let mut coord = Coordinator {
                 controller: dataflow_client,
                 view_optimizer: Optimizer::logical_optimizer(
@@ -2155,7 +2148,6 @@ pub async fn serve(
                 metrics,
                 tracing_handle,
                 statement_logging: StatementLogging::new(),
-                variable_length_row_encoding,
                 webhook_concurrency_limit,
             };
             let bootstrap = handle.block_on(async {

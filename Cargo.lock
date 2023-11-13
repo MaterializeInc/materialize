@@ -1199,6 +1199,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "compact_bytes"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "de71a0422a777179ab4baef92325e56396443df4a680bc443b11f63d644ca019"
+dependencies = [
+ "serde",
+ "static_assertions",
+]
+
+[[package]]
 name = "compile-time-run"
 version = "0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3784,7 +3794,6 @@ dependencies = [
  "mz-catalog",
  "mz-ore",
  "mz-persist-client",
- "mz-secrets",
  "mz-sql",
  "mz-stash",
  "mz-tls-util",
@@ -4647,6 +4656,7 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
+ "compact_bytes",
  "console-subscriber",
  "ctor",
  "either",
@@ -5100,6 +5110,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "columnation",
+ "compact_bytes",
  "criterion",
  "dec",
  "differential-dataflow",
@@ -5130,6 +5141,7 @@ dependencies = [
  "serde",
  "serde_json",
  "smallvec",
+ "static_assertions",
  "thiserror",
  "timely",
  "tokio-postgres",
@@ -5532,7 +5544,6 @@ dependencies = [
  "mz-build-info",
  "mz-catalog",
  "mz-ore",
- "mz-secrets",
  "mz-sql",
  "mz-stash",
  "mz-storage-controller",

@@ -83,7 +83,6 @@ class Testdrive(Service):
                 f"--schema-registry-url={schema_registry_url}",
                 f"--materialize-url={materialize_url}",
                 f"--materialize-internal-url={materialize_url_internal}",
-                "--variable-length-row-encoding",
             ]
 
         if aws_region:
