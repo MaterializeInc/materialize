@@ -1124,12 +1124,12 @@ fn checked_timestamp_nanos(dt: NaiveDateTime) -> Option<i64> {
     as_ns.checked_add(i64::from(subsec_nanos))
 }
 
-#[inline(always)]
 // This function is extremely hot, so
 // we just use `as` to avoid the overhead of
 // `try_into` followed by `unwrap`.
 // `leading_ones` and `leading_zeros`
 // can never return values greater than 64, so the conversion is safe.
+#[inline(always)]
 #[allow(clippy::as_conversions)]
 fn min_bytes_signed<T>(i: T) -> u8
 where
@@ -1154,6 +1154,10 @@ where
 // `T: Into<i128>` instead of 64. But LLVM doesn't seem smart enough
 // to realize that that function is the same as the current version,
 // and generates worse code.
+//
+// Justification for `as` is the same as in `min_bytes_signed`.
+#[inline(always)]
+#[allow(clippy::as_conversions)]
 fn min_bytes_unsigned<T>(i: T) -> u8
 where
     T: Into<u64>,
