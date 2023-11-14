@@ -35,17 +35,19 @@
 extern crate alloc;
 
 use std::error::Error;
-use std::ops::Deref;
 use std::{char, fmt};
 
 use mz_ore::lex::LexBuf;
-use mz_ore::str::StrExt;
+use mz_ore::str::{MaxLenString, StrExt};
 use serde::{Deserialize, Serialize};
 
 use crate::keywords::Keyword;
 
-// Maximum allowed identifier length in bytes.
+/// Maximum allowed identifier length in bytes.
 pub const MAX_IDENTIFIER_LENGTH: usize = 255;
+
+/// Newtype that limits the length of identifiers.
+pub type IdentString = MaxLenString<MAX_IDENTIFIER_LENGTH>;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LexerError {
@@ -76,65 +78,10 @@ impl LexerError {
     }
 }
 
-/// Newtype wrapper around [`String`] whose _byte_ length is guaranteed to be less than or equal to
-/// [`MAX_IDENTIFIER_LENGTH`].
-#[derive(Debug, Clone, PartialEq)]
-
-pub struct SmallString(String);
-
-impl SmallString {
-    /// Creates a new [`SmallString`] returning an error if `s` is more than
-    /// [`MAX_IDENTIFIER_LENGTH`] bytes long.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use mz_sql_lexer::lexer::SmallString;
-    ///
-    /// let good = SmallString::new("hello".to_string()).unwrap();
-    /// assert_eq!(good.as_str(), "hello");
-    ///
-    /// // Note: this is only 64 characters, but each character requires 4 bytes.
-    /// let too_long = "😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊😊";
-    /// let smol = SmallString::new(too_long.to_string());
-    /// assert!(smol.is_err());
-    /// ```
-    ///
-    pub fn new(s: String) -> Result<Self, String> {
-        if s.len() > MAX_IDENTIFIER_LENGTH {
-            return Err(s);
-        }
-
-        Ok(SmallString(s))
-    }
-
-    pub fn into_inner(self) -> String {
-        self.0
-    }
-
-    pub fn as_str(&self) -> &str {
-        self
-    }
-}
-
-impl Deref for SmallString {
-    type Target = str;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl fmt::Display for SmallString {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     Keyword(Keyword),
-    Ident(SmallString),
+    Ident(IdentString),
     String(String),
     HexString(String),
     Number(String),
@@ -279,7 +226,7 @@ fn lex_ident(buf: &mut LexBuf) -> Result<Token, LexerError> {
     match word.parse() {
         Ok(kw) => Ok(Token::Keyword(kw)),
         Err(_) => {
-            let Ok(small) = SmallString::new(word.to_lowercase()) else {
+            let Ok(small) = IdentString::new(word.to_lowercase()) else {
                 bail!(
                     pos,
                     "identifier length exceeds {MAX_IDENTIFIER_LENGTH} bytes"
@@ -302,7 +249,7 @@ fn lex_quoted_ident(buf: &mut LexBuf) -> Result<Token, LexerError> {
             None => bail!(pos, "unterminated quoted identifier"),
         }
     }
-    let Ok(small) = SmallString::new(s) else {
+    let Ok(small) = IdentString::new(s) else {
         bail!(
             pos,
             "identifier length exceeds {MAX_IDENTIFIER_LENGTH} bytes"

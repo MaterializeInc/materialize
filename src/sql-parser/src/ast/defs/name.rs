@@ -18,8 +18,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use mz_ore::str::MaxLenString;
 use mz_sql_lexer::keywords::Keyword;
-use mz_sql_lexer::lexer::SmallString;
 use std::fmt;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
@@ -70,15 +70,15 @@ impl Ident {
     /// ```
     /// use mz_sql_parser::ast::Ident;
     ///
-    /// let too_long = "🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢\
+    /// let too_long = "🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢\
     /// 🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵\
     /// 🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴";
     ///
     /// let id = Ident::new_lossy(too_long);
     ///
-    /// // `new_lossy`` will truncate the provided string, since it's too long. Note the missing
+    /// // `new_lossy` will truncate the provided string, since it's too long. Note the missing
     /// // `🔴` characters.
-    /// assert_eq!(id.as_str(), "🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵");
+    /// assert_eq!(id.as_str(), "🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵🔵");
     /// ```
     pub fn new_lossy<S: Into<String>>(value: S) -> Self {
         let s: String = value.into();
@@ -91,7 +91,7 @@ impl Ident {
             .chars()
             .take_while(|c| {
                 byte_length += c.len_utf8();
-                byte_length < Self::MAX_LENGTH
+                byte_length <= Self::MAX_LENGTH
             })
             .collect();
 
@@ -177,6 +177,9 @@ impl Ident {
 
     /// Append the provided `suffix`, truncating `self` as necessary to satisfy our invariants.
     ///
+    /// Note: We `soft_assert!` that the provided `suffix` is not too long, if it is, we'll
+    /// truncate it.
+    ///
     /// # Examples
     ///
     /// ```
@@ -191,12 +194,43 @@ impl Ident {
     /// // We truncated the original ident, removing all '🔵' chars.
     /// assert_eq!(id.as_str(), "🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴");
     /// ```
+    ///
+    /// ### Too long suffix
+    /// If the provided suffix is too long, we'll also truncate that.
+    ///
+    /// ```
+    /// # mz_ore::assert::SOFT_ASSERTIONS.store(false, std::sync::atomic::Ordering::Relaxed);
+    /// use mz_sql_parser::{
+    ///     ident,
+    ///     ast::Ident,
+    /// };
+    ///
+    /// let mut stem = ident!("hello___world");
+    ///
+    /// let too_long_suffix = "\
+    /// 🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢\
+    /// 🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢\
+    /// 🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢\
+    /// 🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🔵🔵\
+    /// ";
+    ///
+    /// stem.append_lossy(too_long_suffix);
+    ///
+    /// // Notice the "hello___world" stem got truncated, as did the "🔵🔵" characters from the suffix.
+    /// let result = "hello___wor\
+    /// 🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢\
+    /// 🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢\
+    /// 🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢\
+    /// 🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢\
+    /// ";
+    /// assert_eq!(stem.as_str(), result);
+    /// ```
     pub fn append_lossy<S: Into<String>>(&mut self, suffix: S) {
         // Make sure our suffix at least leaves a bit of room for the original ident.
         const MAX_SUFFIX_LENGTH: usize = Ident::MAX_LENGTH - 8;
 
         let mut suffix: String = suffix.into();
-        mz_ore::soft_assert!(suffix.len() <= MAX_SUFFIX_LENGTH);
+        mz_ore::soft_assert!(suffix.len() <= MAX_SUFFIX_LENGTH, "suffix too long");
 
         // Truncate the suffix as necessary.
         if suffix.len() > MAX_SUFFIX_LENGTH {
@@ -205,7 +239,7 @@ impl Ident {
                 .chars()
                 .take_while(|c| {
                     byte_length += c.len_utf8();
-                    byte_length < Self::MAX_LENGTH
+                    byte_length <= MAX_SUFFIX_LENGTH
                 })
                 .collect();
         }
@@ -219,7 +253,7 @@ impl Ident {
                 .chars()
                 .take_while(|c| {
                     byte_length += c.len_utf8();
-                    byte_length < available_length
+                    byte_length <= available_length
                 })
                 .collect();
         }
@@ -257,10 +291,10 @@ impl Ident {
     }
 }
 
-impl From<SmallString> for Ident {
-    fn from(value: SmallString) -> Self {
-        // Note: using unchecked here is okay because SmallString is known to be less than or equal
-        // to our max length.
+impl From<MaxLenString<{ Ident::MAX_LENGTH }>> for Ident {
+    fn from(value: MaxLenString<{ Ident::MAX_LENGTH }>) -> Self {
+        // Note: using unchecked here is okay because the length of `MaxLenString` is guaranteed to
+        // be less than or equal to our MAX_LENGTH.
         Ident::new_unchecked(value.into_inner())
     }
 }
