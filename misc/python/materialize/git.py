@@ -200,6 +200,7 @@ def fetch(
 
     fetch_tags = (
         include_tags == YesNoOnce.YES
+        # fetch tags again if used with force (tags might have changed)
         or (include_tags == YesNoOnce.ONCE and force)
         or (
             include_tags == YesNoOnce.ONCE
