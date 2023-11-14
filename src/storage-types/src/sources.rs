@@ -163,7 +163,7 @@ impl<S: Debug + Eq + PartialEq + crate::AlterCompatible> AlterCompatible
                         ) => {
                             // the output index may change, but the table's metadata
                             // may not
-                            l_metadata == r_metadata
+                            l_metadata.alter_compatible(id, r_metadata).is_ok()
                         }
                         _ => true,
                     }),
