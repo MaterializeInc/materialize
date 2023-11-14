@@ -84,7 +84,7 @@ use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW_TS;
 use mz_adapter_types::connection::ConnectionId;
 use mz_build_info::BuildInfo;
 use mz_catalog::memory::objects::{CatalogEntry, CatalogItem, Connection, DataSourceDesc, Source};
-use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig};
+use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
 use mz_compute_types::ComputeInstanceId;
@@ -172,6 +172,7 @@ mod ddl;
 mod indexes;
 mod introspection;
 mod message_handler;
+mod privatelink_status;
 mod read_policy;
 mod sequencer;
 mod sql;
@@ -234,6 +235,7 @@ pub enum Message<T = mz_repr::Timestamp> {
         stage: PeekStage,
     },
     DrainStatementLog,
+    PrivateLinkVpcEndpointEvents(BTreeMap<GlobalId, VpcEndpointEvent>),
 }
 
 impl Message {
@@ -274,6 +276,7 @@ impl Message {
             Message::PeekStageReady { .. } => "peek_stage_ready",
             Message::DrainStatementLog => "drain_statement_log",
             Message::AlterConnectionValidationReady(..) => "alter_connection_validation_ready",
+            Message::PrivateLinkVpcEndpointEvents(_) => "private_link_vpc_endpoint_events",
         }
     }
 }
@@ -2014,6 +2017,7 @@ impl Coordinator {
             });
 
             self.schedule_storage_usage_collection().await;
+            self.spawn_privatelink_vpc_endpoints_watch_task();
             self.spawn_statement_logging_task();
             flags::tracing_config(self.catalog.system_config()).apply(&self.tracing_handle);
 

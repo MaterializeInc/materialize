@@ -80,13 +80,16 @@
 
 use std::collections::BTreeMap;
 use std::fmt::{self, Debug};
+use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use futures::stream::BoxStream;
 use mz_repr::GlobalId;
 use serde::{Deserialize, Serialize};
 
-use crate::crd::vpc_endpoint::v1::VpcEndpointStatus;
+use crate::crd::vpc_endpoint::v1::{VpcEndpointState, VpcEndpointStatus};
 
 pub mod crd;
 
@@ -153,6 +156,9 @@ pub trait CloudResourceController: CloudResourceReader {
         &self,
     ) -> Result<BTreeMap<GlobalId, VpcEndpointStatus>, anyhow::Error>;
 
+    /// Lists existing `VpcEndpoint` Kubernetes objects.
+    async fn watch_vpc_endpoints(&self) -> BoxStream<'static, VpcEndpointEvent>;
+
     /// Returns a reader for the resources managed by this controller.
     fn reader(&self) -> Arc<dyn CloudResourceReader>;
 }
@@ -170,6 +176,13 @@ pub fn vpc_endpoint_name(id: GlobalId) -> String {
     format!("connection-{id}")
 }
 
+/// Attempts to return the ID used to create the given VPC endpoint name.
+pub fn id_from_vpc_endpoint_name(vpc_endpoint_name: &str) -> Option<GlobalId> {
+    vpc_endpoint_name
+        .split_once('-')
+        .and_then(|(_, id_str)| GlobalId::from_str(id_str).ok())
+}
+
 /// Returns the host to use for the VPC endpoint with the given ID and
 /// optionally in the given availability zone.
 pub fn vpc_endpoint_host(id: GlobalId, availability_zone: Option<&str>) -> String {
@@ -180,4 +193,11 @@ pub fn vpc_endpoint_host(id: GlobalId, availability_zone: Option<&str>) -> Strin
         Some(az) => format!("{name}-{az}"),
         None => name,
     }
+}
+
+#[derive(Debug)]
+pub struct VpcEndpointEvent {
+    pub connection_id: GlobalId,
+    pub status: VpcEndpointState,
+    pub time: DateTime<Utc>,
 }

@@ -137,6 +137,9 @@ impl Coordinator {
                 Message::DrainStatementLog => {
                     self.drain_statement_log().await;
                 }
+                Message::PrivateLinkVpcEndpointEvents(events) => {
+                    self.write_privatelink_status_updates(events).await;
+                }
             }
         }
         .boxed_local()

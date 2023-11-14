@@ -9,6 +9,7 @@
 
 //! VpcEndpoint custom resource, to be reconciled into an AWS VPC Endpoint by the
 //! environment-controller.
+use std::fmt;
 
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kube::CustomResource;
@@ -77,6 +78,27 @@ pub mod v1 {
         PendingAcceptance,
         Rejected,
         Unknown,
+    }
+
+    impl fmt::Display for VpcEndpointState {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            let repr = match self {
+                VpcEndpointState::PendingServiceDiscovery => "pending-service-discovery",
+                VpcEndpointState::CreatingEndpoint => "creating-endpoint",
+                VpcEndpointState::RecreatingEndpoint => "recreating-endpoint",
+                VpcEndpointState::UpdatingEndpoint => "updating-endpoint",
+                VpcEndpointState::Available => "available",
+                VpcEndpointState::Deleted => "deleted",
+                VpcEndpointState::Deleting => "deleting",
+                VpcEndpointState::Expired => "expired",
+                VpcEndpointState::Failed => "failed",
+                VpcEndpointState::Pending => "pending",
+                VpcEndpointState::PendingAcceptance => "pending-acceptance",
+                VpcEndpointState::Rejected => "rejected",
+                VpcEndpointState::Unknown => "unknown",
+            };
+            write!(f, "{}", repr)
+        }
     }
 }
 
