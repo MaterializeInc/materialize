@@ -16,6 +16,14 @@
 import pytest
 from dbt.contracts.results import CatalogArtifact
 from dbt.tests.util import run_dbt
+from fixtures import (
+    test_materialized_view,
+    test_sink,
+    test_source,
+    test_subsources,
+    test_table_index,
+    test_view_index,
+)
 
 MY_SEED = """
 id,value
@@ -25,41 +33,20 @@ id,value
 """.strip()
 
 
-MY_TABLE = """
-{{ config(
-    materialized='table',
-) }}
-select * from {{ ref('my_seed') }}
-"""
-
-
-MY_VIEW = """
-{{ config(
-    materialized='view',
-) }}
-select * from {{ ref('my_seed') }}
-"""
-
-
-MY_MATERIALIZED_VIEW = """
-{{ config(
-    materialized='materialized_view',
-) }}
-select * from {{ ref('my_seed') }}
-"""
-
-
 class TestCatalogRelationTypes:
     @pytest.fixture(scope="class", autouse=True)
     def seeds(self):
-        return {"my_seed.csv": MY_SEED}
+        return {"test_seed.csv": MY_SEED}
 
     @pytest.fixture(scope="class", autouse=True)
     def models(self):
         yield {
-            "my_table.sql": MY_TABLE,
-            "my_view.sql": MY_VIEW,
-            "my_materialized_view.sql": MY_MATERIALIZED_VIEW,
+            "test_table.sql": test_table_index,
+            "test_view.sql": test_view_index,
+            "test_materialized_view.sql": test_materialized_view,
+            "test_sink.sql": test_sink,
+            "test_source.sql": test_source,
+            "test_subsource.sql": test_subsources,
         }
 
     @pytest.fixture(scope="class", autouse=True)
@@ -71,12 +58,15 @@ class TestCatalogRelationTypes:
     @pytest.mark.parametrize(
         "node_name,relation_type",
         [
-            ("seed.test.my_seed", "table"),
+            ("seed.test.test_seed", "table"),
             # NOTE(dehume): Tables are materialized as materialized views
             # https://github.com/MaterializeInc/materialize/issues/5266
-            ("model.test.my_table", "materializedview"),
-            ("model.test.my_view", "view"),
-            ("model.test.my_materialized_view", "materializedview"),
+            ("model.test.test_table", "materialized-view"),
+            ("model.test.test_view", "view"),
+            ("model.test.test_materialized_view", "materialized-view"),
+            ("model.test.test_source", "kafka"),
+            # ("model.test.test_subsource", "subsource"),
+            # ("model.test.test_sink", "sink"),
         ],
     )
     def test_relation_types_populate_correctly(
