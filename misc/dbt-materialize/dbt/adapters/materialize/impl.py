@@ -21,10 +21,10 @@ import dbt.exceptions
 from dbt.adapters.base.impl import AdapterConfig, ConstraintSupport
 from dbt.adapters.base.meta import available
 from dbt.adapters.capability import (
+    Capability,
     CapabilityDict,
     CapabilitySupport,
     Support,
-    Capability,
 )
 from dbt.adapters.materialize.connections import MaterializeConnectionManager
 from dbt.adapters.materialize.relation import MaterializeRelation
@@ -87,8 +87,12 @@ class MaterializeAdapter(PostgresAdapter):
 
     _capabilities = CapabilityDict(
         {
-            Capability.SchemaMetadataByRelations: CapabilitySupport(support=Support.Full),
-            Capability.TableLastModifiedMetadata: CapabilitySupport(support=Support.Full),
+            Capability.SchemaMetadataByRelations: CapabilitySupport(
+                support=Support.Full
+            ),
+            Capability.TableLastModifiedMetadata: CapabilitySupport(
+                support=Support.Full
+            ),
         }
     )
 

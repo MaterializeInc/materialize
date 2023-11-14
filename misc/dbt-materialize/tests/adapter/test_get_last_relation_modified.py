@@ -14,10 +14,9 @@
 # limitations under the License.
 
 import os
+
 import pytest
-
 from dbt.cli.main import dbtRunner
-
 
 freshness_via_metadata_schema_yml = """version: 2
 sources:
@@ -46,7 +45,8 @@ class TestGetLastRelationModified:
     def custom_schema(self, project, set_env_vars):
         with project.adapter.connection_named("__test"):
             relation = project.adapter.Relation.create(
-                database=project.database, schema=os.environ["DBT_GET_LAST_RELATION_TEST_SCHEMA"]
+                database=project.database,
+                schema=os.environ["DBT_GET_LAST_RELATION_TEST_SCHEMA"],
             )
             project.adapter.drop_schema(relation)
             project.adapter.create_schema(relation)

@@ -13,9 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import pytest
-
 import json
+
+import pytest
 from dbt.tests.util import run_dbt, run_dbt_and_capture
 
 NUM_VIEWS = 100
