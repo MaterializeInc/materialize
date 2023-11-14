@@ -1471,7 +1471,7 @@ fn generate_read_privileges_inner(
             match item.item_type() {
                 CatalogItemType::View | CatalogItemType::MaterializedView => {
                     privileges.push((SystemObjectId::Object(id.into()), AclMode::SELECT, role_id));
-                    views.push((item.uses().0.into_iter(), item.owner_id()));
+                    views.push((item.references().0.clone().into_iter(), item.owner_id()));
                 }
                 CatalogItemType::Table | CatalogItemType::Source => {
                     privileges.push((SystemObjectId::Object(id.into()), AclMode::SELECT, role_id));

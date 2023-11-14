@@ -576,8 +576,15 @@ pub trait CatalogItem {
     fn create_sql(&self) -> &str;
 
     /// Returns the IDs of the catalog items upon which this catalog item
+    /// directly references.
+    fn references(&self) -> &ResolvedIds;
+
+    /// Returns the IDs of the catalog items upon which this catalog item
     /// depends.
-    fn uses(&self) -> ResolvedIds;
+    fn uses(&self) -> BTreeSet<GlobalId>;
+
+    /// Returns the IDs of the catalog items that directly reference this catalog item.
+    fn referenced_by(&self) -> &[GlobalId];
 
     /// Returns the IDs of the catalog items that depend upon this catalog item.
     fn used_by(&self) -> &[GlobalId];

@@ -316,6 +316,8 @@ pub struct ClusterReplicaProcessStatus {
 pub struct CatalogEntry {
     pub item: CatalogItem,
     #[serde(skip)]
+    pub referenced_by: Vec<GlobalId>,
+    #[serde(skip)]
     pub used_by: Vec<GlobalId>,
     pub id: GlobalId,
     #[serde(skip)]
@@ -804,25 +806,61 @@ impl CatalogItem {
 
     /// Collects the identifiers of the objects that were encountered when
     /// resolving names in the item's DDL statement.
-    pub fn uses(&self) -> ResolvedIds {
+    pub fn references(&self) -> &ResolvedIds {
         static EMPTY: Lazy<ResolvedIds> = Lazy::new(|| ResolvedIds(BTreeSet::new()));
         match self {
-            CatalogItem::Func(_) => EMPTY.clone(),
-            CatalogItem::Index(idx) => idx.resolved_ids.clone(),
-            CatalogItem::Sink(sink) => sink.resolved_ids.clone(),
-            CatalogItem::Source(source) => source.resolved_ids.clone(),
-            CatalogItem::Log(_) => EMPTY.clone(),
-            CatalogItem::Table(table) => table.resolved_ids.clone(),
-            CatalogItem::Type(typ) => typ.resolved_ids.clone(),
-            CatalogItem::View(view) => {
-                let mut res = BTreeSet::new();
-                res.extend(view.resolved_ids.0.clone());
-                res.extend(view.raw_expr.depends_on());
-                ResolvedIds(res)
-            }
-            CatalogItem::MaterializedView(mview) => mview.resolved_ids.clone(),
-            CatalogItem::Secret(_) => EMPTY.clone(),
-            CatalogItem::Connection(connection) => connection.resolved_ids.clone(),
+            CatalogItem::Func(_) => &*EMPTY,
+            CatalogItem::Index(idx) => &idx.resolved_ids,
+            CatalogItem::Sink(sink) => &sink.resolved_ids,
+            CatalogItem::Source(source) => &source.resolved_ids,
+            CatalogItem::Log(_) => &*EMPTY,
+            CatalogItem::Table(table) => &table.resolved_ids,
+            CatalogItem::Type(typ) => &typ.resolved_ids,
+            CatalogItem::View(view) => &view.resolved_ids,
+            CatalogItem::MaterializedView(mview) => &mview.resolved_ids,
+            CatalogItem::Secret(_) => &*EMPTY,
+            CatalogItem::Connection(connection) => &connection.resolved_ids,
+        }
+    }
+
+    /// Collects the identifiers of the objects used by this [`CatalogItem`].
+    ///
+    /// Like [`CatalogItem::references()`] but also includes objects that are not directly
+    /// referenced. For example this will include any catalog objects used to implement functions
+    /// and casts in the item.
+    pub fn uses(&self) -> BTreeSet<GlobalId> {
+        match self {
+            // TODO(jkosh44) This isn't really correct for functions. They may use other objects in
+            // their implementation. However, currently there's no way to get that information.
+            CatalogItem::Func(_) => BTreeSet::new(),
+            CatalogItem::Index(idx) => idx
+                .resolved_ids
+                .0
+                .clone()
+                .into_iter()
+                .chain(idx.keys.iter().flat_map(|key| key.depends_on().into_iter()))
+                .collect(),
+            CatalogItem::Sink(sink) => sink.resolved_ids.0.clone(),
+            CatalogItem::Source(source) => source.resolved_ids.0.clone(),
+            CatalogItem::Log(_) => BTreeSet::new(),
+            CatalogItem::Table(table) => table.resolved_ids.0.clone(),
+            CatalogItem::Type(typ) => typ.resolved_ids.0.clone(),
+            CatalogItem::View(view) => view
+                .resolved_ids
+                .0
+                .clone()
+                .into_iter()
+                .chain(view.raw_expr.depends_on().into_iter())
+                .collect(),
+            CatalogItem::MaterializedView(mview) => mview
+                .resolved_ids
+                .0
+                .clone()
+                .into_iter()
+                .chain(mview.raw_expr.depends_on().into_iter())
+                .collect(),
+            CatalogItem::Secret(_) => BTreeSet::new(),
+            CatalogItem::Connection(connection) => connection.resolved_ids.0.clone(),
         }
     }
 
@@ -1322,6 +1360,11 @@ impl CatalogEntry {
         matches!(self.item(), CatalogItem::MaterializedView(_))
     }
 
+    /// Reports whether this catalog entry is a view.
+    pub fn is_view(&self) -> bool {
+        matches!(self.item(), CatalogItem::View(_))
+    }
+
     /// Reports whether this catalog entry is a secret.
     pub fn is_secret(&self) -> bool {
         matches!(self.item(), CatalogItem::Secret(_))
@@ -1344,7 +1387,16 @@ impl CatalogEntry {
 
     /// Collects the identifiers of the objects that were encountered when
     /// resolving names in the item's DDL statement.
-    pub fn uses(&self) -> ResolvedIds {
+    pub fn references(&self) -> &ResolvedIds {
+        self.item.references()
+    }
+
+    /// Collects the identifiers of the objects used by this [`CatalogEntry`].
+    ///
+    /// Like [`CatalogEntry::references()`] but also includes objects that are not directly
+    /// referenced. For example this will include any catalog objects used to implement functions
+    /// and casts in the item.
+    pub fn uses(&self) -> BTreeSet<GlobalId> {
         self.item.uses()
     }
 
@@ -1366,6 +1418,11 @@ impl CatalogEntry {
     /// Returns the fully qualified name of this catalog entry.
     pub fn name(&self) -> &QualifiedItemName {
         &self.name
+    }
+
+    /// Returns the identifiers of the dataflows that are directly referenced by this dataflow.
+    pub fn referenced_by(&self) -> &[GlobalId] {
+        &self.referenced_by
     }
 
     /// Returns the identifiers of the dataflows that depend upon this dataflow.
@@ -1964,8 +2021,16 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         }
     }
 
-    fn uses(&self) -> ResolvedIds {
+    fn references(&self) -> &ResolvedIds {
+        self.references()
+    }
+
+    fn uses(&self) -> BTreeSet<GlobalId> {
         self.uses()
+    }
+
+    fn referenced_by(&self) -> &[GlobalId] {
+        self.referenced_by()
     }
 
     fn used_by(&self) -> &[GlobalId] {

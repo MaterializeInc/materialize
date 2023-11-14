@@ -316,11 +316,28 @@ impl CatalogState {
         let mut dependency_inconsistencies = vec![];
 
         for (id, entry) in &self.entry_by_id {
-            for used_id in &entry.uses().0 {
-                let Some(used_entry) = self.entry_by_id.get(used_id) else {
+            for referenced_id in &entry.references().0 {
+                let Some(referenced_entry) = self.entry_by_id.get(referenced_id) else {
                     dependency_inconsistencies.push(ObjectDependencyInconsistency::MissingUses {
                         object_a: *id,
-                        object_b: *used_id,
+                        object_b: *referenced_id,
+                    });
+                    continue;
+                };
+                if !referenced_entry.referenced_by().contains(id) {
+                    dependency_inconsistencies.push(
+                        ObjectDependencyInconsistency::InconsistentUsedBy {
+                            object_a: *id,
+                            object_b: *referenced_id,
+                        },
+                    );
+                }
+            }
+            for used_id in entry.uses() {
+                let Some(used_entry) = self.entry_by_id.get(&used_id) else {
+                    dependency_inconsistencies.push(ObjectDependencyInconsistency::MissingUses {
+                        object_a: *id,
+                        object_b: used_id,
                     });
                     continue;
                 };
@@ -328,12 +345,29 @@ impl CatalogState {
                     dependency_inconsistencies.push(
                         ObjectDependencyInconsistency::InconsistentUsedBy {
                             object_a: *id,
-                            object_b: *used_id,
+                            object_b: used_id,
                         },
                     );
                 }
             }
 
+            for referenced_by in entry.referenced_by() {
+                let Some(referenced_by_entry) = self.entry_by_id.get(referenced_by) else {
+                    dependency_inconsistencies.push(ObjectDependencyInconsistency::MissingUsedBy {
+                        object_a: *id,
+                        object_b: *referenced_by,
+                    });
+                    continue;
+                };
+                if !referenced_by_entry.references().0.contains(id) {
+                    dependency_inconsistencies.push(
+                        ObjectDependencyInconsistency::InconsistentUses {
+                            object_a: *id,
+                            object_b: *referenced_by,
+                        },
+                    );
+                }
+            }
             for used_by in entry.used_by() {
                 let Some(used_by_entry) = self.entry_by_id.get(used_by) else {
                     dependency_inconsistencies.push(ObjectDependencyInconsistency::MissingUsedBy {
@@ -342,7 +376,7 @@ impl CatalogState {
                     });
                     continue;
                 };
-                if !used_by_entry.uses().0.contains(id) {
+                if !used_by_entry.uses().contains(id) {
                     dependency_inconsistencies.push(
                         ObjectDependencyInconsistency::InconsistentUses {
                             object_a: *id,

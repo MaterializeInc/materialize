@@ -1895,13 +1895,10 @@ impl Catalog {
                         }
                     } else {
                         if let Some(temp_id) =
-                            item.uses()
-                                .0
-                                .iter()
-                                .find(|id| match state.try_get_entry(*id) {
-                                    Some(entry) => entry.item().is_temporary(),
-                                    None => temporary_ids.contains(id),
-                                })
+                            item.uses().iter().find(|id| match state.try_get_entry(id) {
+                                Some(entry) => entry.item().is_temporary(),
+                                None => temporary_ids.contains(id),
+                            })
                         {
                             let temp_item = state.get_entry(temp_id);
                             return Err(AdapterError::Catalog(Error::new(
@@ -2700,7 +2697,7 @@ impl Catalog {
                             }))
                         })?;
 
-                    for id in entry.used_by() {
+                    for id in entry.referenced_by() {
                         let dependent_item = state.get_entry(id);
                         let mut to_entry = dependent_item.clone();
                         to_entry.item = dependent_item
@@ -2812,7 +2809,7 @@ impl Catalog {
                         update_item(item_id)?;
 
                         // Update everything that depends on this item.
-                        for id in state.get_entry(item_id).used_by() {
+                        for id in state.get_entry(item_id).referenced_by() {
                             update_item(id)?;
                         }
                     }
@@ -3196,19 +3193,31 @@ impl Catalog {
         schema.items.remove(&old_entry.name().item);
 
         // Dropped deps
-        let dropped_deps: Vec<_> = old_entry
-            .uses()
+        let dropped_references: Vec<_> = old_entry
+            .references()
             .0
-            .difference(&to_item.uses().0)
+            .difference(&to_item.references().0)
+            .cloned()
+            .collect();
+        let dropped_uses: Vec<_> = old_entry
+            .uses()
+            .difference(&to_item.uses())
             .cloned()
             .collect();
 
+        // We only need to install this item on items in the `referenced_by` of new
+        // dependencies.
+        let new_references: Vec<_> = to_item
+            .references()
+            .0
+            .difference(&old_entry.references().0)
+            .cloned()
+            .collect();
         // We only need to install this item on items in the `used_by` of new
         // dependencies.
-        let new_deps: Vec<_> = to_item
+        let new_uses: Vec<_> = to_item
             .uses()
-            .0
-            .difference(&old_entry.uses().0)
+            .difference(&old_entry.uses())
             .cloned()
             .collect();
 
@@ -3218,7 +3227,15 @@ impl Catalog {
 
         schema.items.insert(new_entry.name().item.clone(), id);
 
-        for u in dropped_deps {
+        for u in dropped_references {
+            // OK if we no longer have this entry because we are dropping our
+            // dependency on it.
+            if let Some(metadata) = state.entry_by_id.get_mut(&u) {
+                metadata.referenced_by.retain(|dep_id| *dep_id != id)
+            }
+        }
+
+        for u in dropped_uses {
             // OK if we no longer have this entry because we are dropping our
             // dependency on it.
             if let Some(metadata) = state.entry_by_id.get_mut(&u) {
@@ -3226,7 +3243,17 @@ impl Catalog {
             }
         }
 
-        for u in new_deps {
+        for u in new_references {
+            match state.entry_by_id.get_mut(&u) {
+                Some(metadata) => metadata.referenced_by.push(new_entry.id()),
+                None => panic!(
+                    "Catalog: missing dependent catalog item {} while updating {}",
+                    &u,
+                    state.resolve_full_name(new_entry.name(), new_entry.conn_id())
+                ),
+            }
+        }
+        for u in new_uses {
             match state.entry_by_id.get_mut(&u) {
                 Some(metadata) => metadata.used_by.push(new_entry.id()),
                 None => panic!(
@@ -4343,7 +4370,10 @@ mod tests {
     use tokio_postgres::NoTls;
     use uuid::Uuid;
 
-    use mz_catalog::builtin::{Builtin, BuiltinType, BUILTINS};
+    use mz_catalog::builtin::{
+        Builtin, BuiltinType, BUILTINS,
+        REALLY_DANGEROUS_DO_NOT_CALL_THIS_IN_PRODUCTION_VIEW_FINGERPRINT_WHITESPACE,
+    };
     use mz_controller_types::{ClusterId, ReplicaId};
     use mz_expr::MirScalarExpr;
     use mz_ore::collections::CollectionExt;
@@ -5645,5 +5675,61 @@ mod tests {
             catalog.expire().await;
         })
         .await
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn test_builtin_migrations() {
+        let debug_stash_factory = DebugStashFactory::new().await;
+        let persist_client = PersistClient::new_for_tests().await;
+        let organization_id = Uuid::new_v4();
+        let id = {
+            let catalog = Catalog::open_debug_catalog(
+                &debug_stash_factory,
+                persist_client.clone(),
+                organization_id.clone(),
+                NOW_ZERO.clone(),
+                None,
+            )
+            .await
+            .expect("unable to open debug catalog");
+            let id = catalog
+                .entries()
+                .find(|entry| &entry.name.item == "mz_objects" && entry.is_view())
+                .expect("mz_objects doesn't exist")
+                .id();
+            catalog.expire().await;
+            id
+        };
+        // Forcibly migrate all views.
+        {
+            let mut guard =
+                REALLY_DANGEROUS_DO_NOT_CALL_THIS_IN_PRODUCTION_VIEW_FINGERPRINT_WHITESPACE
+                    .lock()
+                    .expect("lock poisoned");
+            *guard = Some("\n".to_string());
+        }
+        {
+            let catalog = Catalog::open_debug_catalog(
+                &debug_stash_factory,
+                persist_client,
+                organization_id,
+                NOW_ZERO.clone(),
+                None,
+            )
+            .await
+            .expect("unable to open debug catalog");
+
+            let new_id = catalog
+                .entries()
+                .find(|entry| &entry.name.item == "mz_objects" && entry.is_view())
+                .expect("mz_objects doesn't exist")
+                .id();
+            // Assert that the view was migrated and got a new ID.
+            assert_ne!(new_id, id);
+
+            catalog.expire().await;
+        }
+        debug_stash_factory.drop().await;
     }
 }
