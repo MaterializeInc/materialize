@@ -23,7 +23,7 @@ use mz_compute_types::plan::join::delta_join::{DeltaJoinPlan, DeltaPathPlan, Del
 use mz_compute_types::plan::join::JoinClosure;
 use mz_expr::MirScalarExpr;
 use mz_repr::fixed_length::{FromRowByTypes, IntoRowByTypes};
-use mz_repr::{ColumnType, DatumVec, Diff, Row, RowArena};
+use mz_repr::{ColumnType, DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::container::columnation::Columnation;
@@ -269,8 +269,9 @@ where
                             update_stream.flat_map_fallible("DeltaJoinFinalization", {
                                 // Reuseable allocation for unpacking.
                                 let mut datums = DatumVec::new();
-                                let mut row_builder = Row::default();
                                 move |row| {
+                                    let binding = SharedRow::get();
+                                    let mut row_builder = binding.borrow_mut();
                                     let temp_storage = RowArena::new();
                                     let mut datums_local = datums.borrow_with(&row);
                                     // TODO(mcsherry): re-use `row` allocation.
@@ -431,7 +432,6 @@ where
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
         let mut key_buf = K::default();
-        let mut row_buf = Row::default();
         move |(row, time)| {
             let temp_storage = RowArena::new();
             let datums_local = datums.borrow_with(&row);
@@ -441,17 +441,18 @@ where
                     .map(|e| e.eval(&datums_local, &temp_storage)),
                 updates_key_types.as_deref(),
             )?;
-            row_buf
+            let binding = SharedRow::get();
+            let mut row_builder = binding.borrow_mut();
+            row_builder
                 .packer()
                 .extend(prev_thinning.iter().map(|&c| datums_local[c]));
-            let row_value = row_buf.clone();
+            let row_value = row_builder.clone();
 
             Ok((key, row_value, time))
         }
     });
 
     let mut datums = DatumVec::new();
-    let mut row_builder = Row::default();
 
     if closure.could_error() {
         let (oks, errs2) = dogsdogsdogs::operators::half_join::half_join_internal_unsafe(
@@ -468,6 +469,8 @@ where
                 // shutting down.
                 shutdown_token.probe()?;
 
+                let binding = SharedRow::get();
+                let mut row_builder = binding.borrow_mut();
                 let temp_storage = RowArena::new();
 
                 let key = key.into_datum_iter(trace_key_types.as_deref());
@@ -513,6 +516,8 @@ where
                 // shutting down.
                 shutdown_token.probe()?;
 
+                let binding = SharedRow::get();
+                let mut row_builder = binding.borrow_mut();
                 let temp_storage = RowArena::new();
 
                 let key = key.into_datum_iter(trace_key_types.as_deref());
@@ -614,7 +619,6 @@ where
         inner_as_of.insert(<G::Timestamp>::to_inner(event_time.clone()));
     }
 
-    let mut row_buf = Row::default();
     let (ok_stream, err_stream) =
         trace
             .stream
@@ -622,6 +626,8 @@ where
                 let mut datums = DatumVec::new();
                 Box::new(move |input, ok_output, err_output| {
                     input.for_each(|time, data| {
+                        let binding = SharedRow::get();
+                        let mut row_builder = binding.borrow_mut();
                         let mut ok_session = ok_output.session(&time);
                         let mut err_session = err_output.session(&time);
 
@@ -652,7 +658,7 @@ where
                                                     .apply(
                                                         &mut datums_local,
                                                         &temp_storage,
-                                                        &mut row_buf,
+                                                        &mut row_builder,
                                                     )
                                                     .transpose()
                                                 {
@@ -670,8 +676,8 @@ where
                                                 }
                                             } else {
                                                 let row = {
-                                                    row_buf.packer().extend(&*datums_local);
-                                                    row_buf.clone()
+                                                    row_builder.packer().extend(&*datums_local);
+                                                    row_builder.clone()
                                                 };
                                                 ok_session.give((row, time.clone(), diff.clone()));
                                             }

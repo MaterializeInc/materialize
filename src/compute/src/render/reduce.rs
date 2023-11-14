@@ -26,7 +26,7 @@ use mz_compute_types::plan::reduce::{
 use mz_expr::{AggregateExpr, AggregateFunc, EvalError, MirScalarExpr};
 use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
 use mz_repr::fixed_length::IntoRowByTypes;
-use mz_repr::{Datum, DatumList, DatumVec, Diff, Row, RowArena};
+use mz_repr::{Datum, DatumList, DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use once_cell::sync::Lazy;
@@ -68,8 +68,6 @@ where
                 mut val_plan,
             } = key_val_plan;
             let key_arity = key_plan.projection.len();
-            let mut row_buf = Row::default();
-            let mut row_mfp = Row::default();
             let mut datums = DatumVec::new();
             let (key_val_input, err_input): (
                 timely::dataflow::Stream<_, (Result<(Row, Row), DataflowError>, _, _)>,
@@ -93,6 +91,8 @@ where
                     val_plan.permute(demand_map, demand_map_len);
                     let skips = mz_compute_types::plan::reduce::convert_indexes_to_skips(demand);
                     move |row_datums, time, diff| {
+                        let binding = SharedRow::get();
+                        let mut row_builder = binding.borrow_mut();
                         let temp_storage = RowArena::new();
 
                         let mut row_iter = row_datums.drain(..);
@@ -106,7 +106,7 @@ where
                         let key = match key_plan.evaluate_into(
                             &mut datums_local,
                             &temp_storage,
-                            &mut row_mfp,
+                            &mut row_builder,
                         ) {
                             Err(e) => {
                                 return Some((
@@ -130,8 +130,8 @@ where
                             }
                             Ok(val) => val.expect("Row expected as no predicate was used"),
                         };
-                        row_buf.packer().extend(val);
-                        let row = row_buf.clone();
+                        row_builder.packer().extend(val);
+                        let row = row_builder.clone();
                         Some((Ok((key, row)), time.clone(), diff.clone()))
                     }
                 });
@@ -315,7 +315,6 @@ where
                 "ReduceCollation",
                 "ReduceCollation Errors",
                 {
-                    let mut row_buf = Row::default();
                     move |_key, input, output| {
                         // The inputs are pairs of a reduction type, and a row consisting of densely
                         // packed fused aggregate values.
@@ -345,7 +344,9 @@ where
                         }
 
                         // Merge results into the order they were asked for.
-                        let mut row_packer = row_buf.packer();
+                        let binding = SharedRow::get();
+                        let mut row_builder = binding.borrow_mut();
+                        let mut row_packer = row_builder.packer();
                         for typ in aggregate_types.iter() {
                             let datum = match typ {
                                 ReductionType::Accumulable => accumulable.next(),
@@ -364,7 +365,7 @@ where
                         if (accumulable.next(), hierarchical.next(), basic.next())
                             == (None, None, None)
                         {
-                            output.push((row_buf.clone(), 1));
+                            output.push((row_builder.clone(), 1));
                         }
                     }
                 },
@@ -537,14 +538,15 @@ where
         let output = differential_dataflow::collection::concatenate(&mut input.scope(), to_collect)
             .mz_arrange::<RowSpine<_, _, _, _>>("Arranged ReduceFuseBasic input")
             .mz_reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceFuseBasic", {
-                let mut row_buf = Row::default();
                 move |_key, input, output| {
-                    let mut row_packer = row_buf.packer();
+                    let binding = SharedRow::get();
+                    let mut row_builder = binding.borrow_mut();
+                    let mut row_packer = row_builder.packer();
                     for ((_, row), _) in input.iter() {
                         let datum = row.unpack_first();
                         row_packer.push(datum);
                     }
-                    output.push((row_buf.clone(), 1));
+                    output.push((row_builder.clone(), 1));
                 }
             });
         (
@@ -576,11 +578,12 @@ where
         } = aggr.clone();
 
         // Extract the value we were asked to aggregate over.
-        let mut row_buf = Row::default();
         let mut partial = input.map(move |(key, row)| {
+            let binding = SharedRow::get();
+            let mut row_builder = binding.borrow_mut();
             let value = row.iter().nth(index).unwrap();
-            row_buf.packer().push(value);
-            (key, row_buf.clone())
+            row_builder.packer().push(value);
+            (key, row_builder.clone())
         });
 
         let mut err_output = None;
@@ -606,7 +609,6 @@ where
 
         let arranged = partial.mz_arrange::<RowSpine<_, Row, _, _>>("Arranged ReduceInaccumulable");
         let oks = arranged.mz_reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceInaccumulable", {
-            let mut row_buf = Row::default();
             move |_key, source, target| {
                 // We respect the multiplicity here (unlike in hierarchical aggregation)
                 // because we don't know that the aggregation method is not sensitive
@@ -617,7 +619,9 @@ where
                     let count = usize::try_from(*w).unwrap_or(0);
                     std::iter::repeat(v.iter().next().unwrap()).take(count)
                 });
-                row_buf.packer().push(
+                let binding = SharedRow::get();
+                let mut row_builder = binding.borrow_mut();
+                row_builder.packer().push(
                     // Note that this is not necessarily a window aggregation, in which case
                     // `eval_fast_window_agg` delegates to the normal `eval`.
                     func.eval_fast_window_agg::<_, window_agg_helpers::OneByOneAggrImpls>(
@@ -625,7 +629,7 @@ where
                         &RowArena::new(),
                     ),
                 );
-                target.push((row_buf.clone(), 1));
+                target.push((row_builder.clone(), 1));
             }
         });
 
@@ -728,13 +732,14 @@ where
             let input = input.enter(inner);
 
             // Gather the relevant values into a vec of rows ordered by aggregation_index
-            let mut row_buf = Row::default();
             let input = input.map(move |(key, row)| {
+                let binding = SharedRow::get();
+                let mut row_builder = binding.borrow_mut();
                 let mut values = Vec::with_capacity(skips.len());
                 let mut row_iter = row.iter();
                 for skip in skips.iter() {
-                    row_buf.packer().push(row_iter.nth(*skip).unwrap());
-                    values.push(row_buf.clone());
+                    row_builder.packer().push(row_iter.nth(*skip).unwrap());
+                    values.push(row_builder.clone());
                 }
 
                 (key, values)
@@ -821,16 +826,17 @@ where
             }
             arranged
                 .mz_reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceMinsMaxes", {
-                    let mut row_buf = Row::default();
                     move |_key, source: &[(&Vec<Row>, Diff)], target: &mut Vec<(Row, Diff)>| {
-                        let mut row_packer = row_buf.packer();
+                        let binding = SharedRow::get();
+                        let mut row_builder = binding.borrow_mut();
+                        let mut row_packer = row_builder.packer();
                         for (aggr_index, func) in aggr_funcs.iter().enumerate() {
                             let iter = source
                                 .iter()
                                 .map(|(values, _cnt)| values[aggr_index].iter().next().unwrap());
                             row_packer.push(func.eval(iter, &RowArena::new()));
                         }
-                        target.push((row_buf.clone(), 1));
+                        target.push((row_builder.clone(), 1));
                     }
                 })
                 .leave_region()
@@ -884,12 +890,15 @@ where
                             return;
                         }
                     }
+                    let binding = SharedRow::get();
+                    let mut row_builder = binding.borrow_mut();
                     let mut output = Vec::with_capacity(aggrs.len());
                     for (aggr_index, func) in aggrs.iter().enumerate() {
                         let iter = source
                             .iter()
                             .map(|(values, _cnt)| values[aggr_index].iter().next().unwrap());
-                        output.push(Row::pack_slice(&[func.eval(iter, &RowArena::new())]));
+                        row_builder.packer().push(func.eval(iter, &RowArena::new()));
+                        output.push(row_builder.clone());
                     }
                     // We only want to arrange the parts of the input that are not part of the output.
                     // More specifically, we want to arrange it so that `input.concat(&output.negate())`
@@ -922,14 +931,15 @@ where
         S: Scope<Timestamp = G::Timestamp>,
     {
         // Gather the relevant values into a vec of rows ordered by aggregation_index
-        let mut row_buf = Row::default();
         let collection = collection
             .map(move |(key, row)| {
+                let binding = SharedRow::get();
+                let mut row_builder = binding.borrow_mut();
                 let mut values = Vec::with_capacity(skips.len());
                 let mut row_iter = row.iter();
                 for skip in skips.iter() {
-                    row_buf.packer().push(row_iter.nth(*skip).unwrap());
-                    values.push(row_buf.clone());
+                    row_builder.packer().push(row_iter.nth(*skip).unwrap());
+                    values.push(row_builder.clone());
                 }
 
                 (key, values)
@@ -965,14 +975,15 @@ where
         let output = partial
             .mz_arrange::<RowKeySpine<_, _, Vec<ReductionMonoid>>>("ArrangeMonotonic [val: empty]")
             .mz_reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceMonotonic", {
-                let mut row_buf = Row::default();
                 move |_key, input, output| {
-                    let mut row_packer = row_buf.packer();
+                    let binding = SharedRow::get();
+                    let mut row_builder = binding.borrow_mut();
+                    let mut row_packer = row_builder.packer();
                     let accum = &input[0].1;
                     for monoid in accum.iter() {
                         row_packer.extend(monoid.finalize().iter());
                     }
-                    output.push((row_buf.clone(), 1));
+                    output.push((row_builder.clone(), 1));
                 }
             });
         (output, errs)
@@ -1058,12 +1069,13 @@ where
 
         // Next, collect all aggregations that require distinctness.
         for (accumulable_index, datum_index, aggr) in distinct_aggrs.into_iter() {
-            let mut row_buf = Row::default();
             let collection = collection
                 .map(move |(key, row)| {
+                    let binding = SharedRow::get();
+                    let mut row_builder = binding.borrow_mut();
                     let value = row.iter().nth(datum_index).unwrap();
-                    row_buf.packer().push(value);
-                    (key, row_buf.clone())
+                    row_builder.packer().push(value);
+                    (key, row_builder.clone())
                 })
                 .map(|k| (k, ()))
                 .mz_arrange::<RowKeySpine<(Row, Row), _, _>>(
@@ -1102,15 +1114,16 @@ where
                 "ReduceAccumulable",
                 "AccumulableErrorCheck",
                 {
-                    let mut row_buf = Row::default();
                     move |_key, input, output| {
+                        let binding = SharedRow::get();
+                        let mut row_builder = binding.borrow_mut();
                         let (ref accums, total) = input[0].1;
-                        let mut row_packer = row_buf.packer();
+                        let mut row_packer = row_builder.packer();
 
                         for (aggr, accum) in full_aggrs.iter().zip(accums) {
                             row_packer.push(finalize_accum(&aggr.func, accum, total));
                         }
-                        output.push((row_buf.clone(), 1));
+                        output.push((row_builder.clone(), 1));
                     }
                 },
                 move |key, input, output| {

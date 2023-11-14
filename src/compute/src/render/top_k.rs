@@ -23,7 +23,7 @@ use mz_compute_types::plan::top_k::{
 };
 use mz_expr::EvalError;
 use mz_ore::soft_assert_or_log;
-use mz_repr::{DatumVec, Diff, Row};
+use mz_repr::{DatumVec, Diff, Row, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use timely::dataflow::channels::pact::Pipeline;
@@ -80,13 +80,13 @@ where
                     let mut datum_vec = mz_repr::DatumVec::new();
                     let collection = ok_input
                         .map(move |row| {
+                            let binding = SharedRow::get();
+                            let mut row_builder = binding.borrow_mut();
                             let group_row = {
                                 let datums = datum_vec.borrow_with(&row);
                                 let iterator = group_key.iter().map(|i| datums[*i]);
-                                let total_size = mz_repr::datums_size(iterator.clone());
-                                let mut group_row = Row::with_capacity(total_size);
-                                group_row.packer().extend(iterator);
-                                group_row
+                                row_builder.packer().extend(iterator);
+                                row_builder.clone()
                             };
                             (group_row, row)
                         })
@@ -193,14 +193,14 @@ where
         let mut datum_vec = mz_repr::DatumVec::new();
         let mut collection = collection.map({
             move |row| {
+                let binding = SharedRow::get();
+                let mut row_builder = binding.borrow_mut();
                 let row_hash = row.hashed();
                 let group_row = {
                     let datums = datum_vec.borrow_with(&row);
                     let iterator = group_key.iter().map(|i| datums[*i]);
-                    let total_size = mz_repr::datums_size(iterator.clone());
-                    let mut group_row = Row::with_capacity(total_size);
-                    group_row.packer().extend(iterator);
-                    group_row
+                    row_builder.packer().extend(iterator);
+                    row_builder.clone()
                 };
                 ((group_row, row_hash), row)
             }
@@ -323,13 +323,13 @@ where
             .map({
                 let mut datum_vec = mz_repr::DatumVec::new();
                 move |row| {
+                    let binding = SharedRow::get();
+                    let mut row_builder = binding.borrow_mut();
                     let group_key = {
                         let datums = datum_vec.borrow_with(&row);
                         let iterator = group_key.iter().map(|i| datums[*i]);
-                        let total_size = mz_repr::datums_size(iterator.clone());
-                        let mut group_key = Row::with_capacity(total_size);
-                        group_key.packer().extend(iterator);
-                        group_key
+                        row_builder.packer().extend(iterator);
+                        row_builder.clone()
                     };
                     (group_key, row)
                 }
