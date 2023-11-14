@@ -10,14 +10,17 @@
 use std::rc::Rc;
 
 use differential_dataflow::difference::Semigroup;
+use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arrange, Arranged, TraceAgent};
 use differential_dataflow::trace::{Batch, Trace, TraceReader};
 use differential_dataflow::{Collection, Data, ExchangeData, Hashable};
+use mz_ore::num::Overflowing;
 use timely::container::columnation::Columnation;
 use timely::dataflow::channels::pact::{ParallelizationContract, Pipeline};
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, ScopeParent};
+use timely::order::Product;
 use timely::progress::Timestamp;
 
 use crate::logging::compute::ComputeEvent;
@@ -181,12 +184,9 @@ pub trait HeapSize {
         C: FnMut(usize, usize, usize);
 }
 
-impl<T> HeapSize for Vec<T> {
+impl<T: Copy> HeapSize for Vec<Overflowing<T>> {
     /// Estimates the size of a vector in memory considering that the element type is
-    /// a value without nested structure.
-    ///
-    /// NOTE(vmarcos): The function explicitly ignores nested structure at this point if it exists.
-    /// TODO(vmarcos): Improve on the above!
+    /// an `Overflowing` value without nested structure.
     #[inline]
     fn estimate_size<C>(&self, mut callback: C)
     where
@@ -198,6 +198,92 @@ impl<T> HeapSize for Vec<T> {
             self.capacity() * size_of_t,
             usize::from(self.capacity() > 0),
         )
+    }
+}
+
+impl HeapSize for mz_repr::Timestamp {
+    #[inline]
+    fn estimate_size<C>(&self, _callback: C)
+    where
+        C: FnMut(usize, usize, usize),
+    {
+        // Nothing to do here, since there are no heap allocations made by `self`.
+    }
+}
+
+impl HeapSize for PointStamp<u64> {
+    #[inline]
+    fn estimate_size<C>(&self, mut callback: C)
+    where
+        C: FnMut(usize, usize, usize),
+    {
+        let ps_coord_size = std::mem::size_of::<u64>();
+        callback(
+            self.vector.len() * ps_coord_size,
+            self.vector.capacity() * ps_coord_size,
+            usize::from(self.vector.capacity() > 0),
+        )
+    }
+}
+
+impl<TOuter: HeapSize, TInner: HeapSize> HeapSize for Product<TOuter, TInner> {
+    #[inline]
+    fn estimate_size<C>(&self, mut callback: C)
+    where
+        C: FnMut(usize, usize, usize),
+    {
+        self.outer.estimate_size(&mut callback);
+        self.inner.estimate_size(&mut callback);
+    }
+}
+
+impl HeapSize for i64 {
+    #[inline]
+    fn estimate_size<C>(&self, _callback: C)
+    where
+        C: FnMut(usize, usize, usize),
+    {
+        // Nothing to do here, since there are no heap allocations made by `self`.
+    }
+}
+
+impl<T: HeapSize, R: HeapSize> HeapSize for Vec<(T, R)> {
+    #[inline]
+    fn estimate_size<C>(&self, mut callback: C)
+    where
+        C: FnMut(usize, usize, usize),
+    {
+        // To provide for cheap estimation, we sample one element from the vector
+        // and estimate the total vector size from this element's size. The trade-off
+        // between precision and overhead here should be acceptable under the assumption
+        // that most elements be uniformly sized.
+        // TODO(vmarcos): Evaluate if it is worth sampling more rows or even crawling entire
+        // vectors to obtain size estimates.
+        if !self.is_empty() {
+            let (mut size, mut capacity, mut allocations) = (0, 0, 0);
+            let mut callback_inner = |siz, cap, alc| {
+                size += siz;
+                capacity += cap;
+                allocations += alc;
+            };
+
+            // We heuristically sample the last element. This is because in a lexicographically
+            // sorted representation, this element will tend to be largest (and most recent).
+            let (time, diff) = self
+                .last()
+                .expect("a non-empty vector must have a last element");
+            time.estimate_size(&mut callback_inner);
+            diff.estimate_size(&mut callback_inner);
+
+            // We also account for the size of the tuples in the `Vec`, since
+            // these are also heap-allocated from `self`.
+            let size_of_tuple = std::mem::size_of::<(T, R)>();
+            callback(
+                self.len() * (size_of_tuple + size),
+                self.len() * (size_of_tuple + capacity),
+                self.len() * allocations + 1,
+            )
+        };
     }
 }
 
@@ -293,8 +379,9 @@ where
     G::Timestamp: Lattice + Ord + Columnation,
     K: Data + Columnation,
     V: Data + Columnation,
-    T: Lattice + Timestamp,
+    T: Lattice + Timestamp + HeapSize,
     R: Semigroup + Columnation,
+    Vec<(T, R)>: HeapSize,
 {
     fn log_arrangement_size(self) -> Self {
         log_arrangement_size_inner(self, |trace| {
@@ -325,8 +412,9 @@ where
     G: Scope<Timestamp = T>,
     G::Timestamp: Lattice + Ord,
     K: Data + Columnation,
-    T: Lattice + Timestamp + Columnation,
+    T: Lattice + Timestamp + Columnation + HeapSize,
     R: Semigroup + Columnation,
+    Vec<(T, R)>: HeapSize,
 {
     fn log_arrangement_size(self) -> Self {
         log_arrangement_size_inner(self, |trace| {

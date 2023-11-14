@@ -1604,13 +1604,30 @@ impl Row {
 
     /// Returns the total amount of bytes used by this row.
     pub fn byte_len(&self) -> usize {
-        let heap_size = if self.data.spilled() {
+        let inline_size = std::mem::size_of::<Self>();
+        inline_size.saturating_add(self.heap_size())
+    }
+
+    /// Returns the heap-allocated size in bytes for this row.
+    /// This size will be zero if the row did not spill to the heap.
+    #[inline]
+    pub fn heap_size(&self) -> usize {
+        if self.data.spilled() {
             self.data.len()
         } else {
             0
-        };
-        let inline_size = std::mem::size_of::<Self>();
-        inline_size.saturating_add(heap_size)
+        }
+    }
+
+    /// Returns the heap-allocated capacity in bytes for this row.
+    /// This capacity will be zero if the row did not spill to the heap.
+    #[inline]
+    pub fn heap_capacity(&self) -> usize {
+        if self.data.spilled() {
+            self.data.capacity()
+        } else {
+            0
+        }
     }
 }
 

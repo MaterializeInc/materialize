@@ -38,7 +38,7 @@ use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::arrangement::manager::SpecializedTraceHandle;
-use crate::extensions::arrange::{KeyCollection, MzArrange};
+use crate::extensions::arrange::{HeapSize, KeyCollection, MzArrange};
 use crate::render::errors::ErrorLogger;
 use crate::render::join::LinearJoinSpec;
 use crate::render::RenderTimestamp;
@@ -104,7 +104,7 @@ where
 
 impl<S: Scope> Context<S>
 where
-    S::Timestamp: Lattice + Refines<mz_repr::Timestamp> + Columnation,
+    S::Timestamp: Lattice + Refines<mz_repr::Timestamp> + Columnation + HeapSize,
 {
     /// Creates a new empty Context.
     pub fn for_dataflow_in<Plan>(
@@ -987,6 +987,18 @@ where
         let errs = errs.as_collection();
         (oks, errors.concat(&errs))
     }
+}
+
+impl<S, T> CollectionBundle<S, T>
+where
+    T: timely::progress::Timestamp + Lattice + Columnation,
+    S: Scope,
+    S::Timestamp: Refines<T>
+        + Lattice
+        + timely::progress::Timestamp
+        + crate::render::RenderTimestamp
+        + HeapSize,
+{
     pub fn ensure_collections(
         mut self,
         collections: AvailableCollections,
