@@ -105,5 +105,5 @@ class Worker:
                         break
                 else:
                     thread_name = threading.current_thread().getName()
-                    print(f"[{thread_name}] Query failed: {e.query} {e.msg}")
+                    print(f"+++ [{thread_name}] Query failed: {e.query} {e.msg}")
                     raise
