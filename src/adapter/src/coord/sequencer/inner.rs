@@ -1982,7 +1982,7 @@ impl Coordinator {
         }
     }
 
-    pub(super) fn sequence_end_transaction(
+    pub(super) async fn sequence_end_transaction(
         &mut self,
         mut ctx: ExecuteContext,
         mut action: EndTransactionAction,
@@ -2002,7 +2002,9 @@ impl Coordinator {
             }),
         };
 
-        let result = self.sequence_end_transaction_inner(ctx.session_mut(), action);
+        let result = self
+            .sequence_end_transaction_inner(ctx.session_mut(), action)
+            .await;
 
         let (response, action) = match result {
             Ok((Some(TransactionOps::Writes(writes)), _)) if writes.is_empty() => {
@@ -2060,7 +2062,7 @@ impl Coordinator {
         ctx.retire(response);
     }
 
-    fn sequence_end_transaction_inner(
+    async fn sequence_end_transaction_inner(
         &mut self,
         session: &mut Session,
         action: EndTransactionAction,
@@ -2075,20 +2077,36 @@ impl Coordinator {
 
         if let EndTransactionAction::Commit = action {
             if let (Some(mut ops), write_lock_guard) = txn.into_ops_and_lock_guard() {
-                if let TransactionOps::Writes(writes) = &mut ops {
-                    for WriteOp { id, .. } in &mut writes.iter() {
-                        // Re-verify this id exists.
-                        let _ = self.catalog().try_get_entry(id).ok_or_else(|| {
-                            AdapterError::Catalog(catalog::Error {
-                                kind: catalog::ErrorKind::Sql(CatalogError::UnknownItem(
-                                    id.to_string(),
-                                )),
-                            })
-                        })?;
-                    }
+                match &mut ops {
+                    TransactionOps::Writes(writes) => {
+                        for WriteOp { id, .. } in &mut writes.iter() {
+                            // Re-verify this id exists.
+                            let _ = self.catalog().try_get_entry(id).ok_or_else(|| {
+                                AdapterError::Catalog(catalog::Error {
+                                    kind: catalog::ErrorKind::Sql(CatalogError::UnknownItem(
+                                        id.to_string(),
+                                    )),
+                                })
+                            })?;
+                        }
 
-                    // `rows` can be empty if, say, a DELETE's WHERE clause had 0 results.
-                    writes.retain(|WriteOp { rows, .. }| !rows.is_empty());
+                        // `rows` can be empty if, say, a DELETE's WHERE clause had 0 results.
+                        writes.retain(|WriteOp { rows, .. }| !rows.is_empty());
+                    }
+                    TransactionOps::DDL {
+                        ops,
+                        state: _,
+                        revision,
+                    } => {
+                        // Make sure our catalog hasn't changed.
+                        if *revision != self.catalog().transient_revision() {
+                            return Err(AdapterError::DDLTransactionRace);
+                        }
+                        // Commit all of our queued ops.
+                        self.catalog_transact(Some(session), std::mem::take(ops))
+                            .await?;
+                    }
+                    _ => (),
                 }
                 return Ok((Some(ops), write_lock_guard));
             }
@@ -4384,7 +4402,7 @@ impl Coordinator {
 
     pub(super) async fn sequence_alter_item_rename(
         &mut self,
-        session: &Session,
+        session: &mut Session,
         plan: plan::AlterItemRenamePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let op = catalog::Op::RenameItem {
@@ -4392,7 +4410,10 @@ impl Coordinator {
             current_full_name: plan.current_full_name,
             to_name: plan.to_name,
         };
-        match self.catalog_transact(Some(session), vec![op]).await {
+        match self
+            .catalog_transact_with_ddl_transaction(session, vec![op])
+            .await
+        {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(plan.object_type)),
             Err(err) => Err(err),
         }
@@ -4400,7 +4421,7 @@ impl Coordinator {
 
     pub(super) async fn sequence_alter_schema_rename(
         &mut self,
-        session: &Session,
+        session: &mut Session,
         plan: plan::AlterSchemaRenamePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let (database_spec, schema_spec) = plan.cur_schema_spec;
@@ -4410,7 +4431,10 @@ impl Coordinator {
             new_name: plan.new_schema_name,
             check_reserved_names: true,
         };
-        match self.catalog_transact(Some(session), vec![op]).await {
+        match self
+            .catalog_transact_with_ddl_transaction(session, vec![op])
+            .await
+        {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::Schema)),
             Err(err) => Err(err),
         }
@@ -4418,7 +4442,7 @@ impl Coordinator {
 
     pub(super) async fn sequence_alter_schema_swap(
         &mut self,
-        session: &Session,
+        session: &mut Session,
         plan: plan::AlterSchemaSwapPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let plan::AlterSchemaSwapPlan {
@@ -4449,7 +4473,7 @@ impl Coordinator {
         };
 
         match self
-            .catalog_transact(Some(session), vec![op_a, op_b, op_c])
+            .catalog_transact_with_ddl_transaction(session, vec![op_a, op_b, op_c])
             .await
         {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::Schema)),

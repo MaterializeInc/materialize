@@ -74,16 +74,20 @@ impl Coordinator {
         responses.push(ExecuteResponseKind::Canceled);
         ctx.tx_mut().set_allowed(responses);
 
-        // If our query only depends on system tables, a LaunchDarkly flag is enabled, and a
-        // session var is set, then we automatically run the query on the mz_introspection cluster.
-        let target_cluster =
-            introspection::auto_run_on_introspection(&self.catalog, ctx.session(), &plan);
-        let target_cluster_id = self
-            .catalog()
-            .resolve_target_cluster(target_cluster, ctx.session())
-            .ok()
-            .map(|cluster| cluster.id());
-
+        // Scope the borrow of the Catalog because we need to mutate the Coordinator state below.
+        let (target_cluster_id, target_cluster) = {
+            let session_catalog = self.catalog.for_session(ctx.session());
+            // If our query only depends on system tables, a LaunchDarkly flag is enabled, and a
+            // session var is set, then we automatically run the query on the mz_introspection cluster.
+            let target_cluster =
+                introspection::auto_run_on_introspection(&session_catalog, ctx.session(), &plan);
+            let target_cluster_id = self
+                .catalog()
+                .resolve_target_cluster(target_cluster, ctx.session())
+                .ok()
+                .map(|cluster| cluster.id());
+            (target_cluster_id, target_cluster)
+        };
         if let (Some(cluster_id), Some(statement_id)) = (target_cluster_id, ctx.extra().contents())
         {
             self.set_statement_execution_cluster(statement_id, cluster_id);
@@ -282,7 +286,7 @@ impl Coordinator {
                     ctx.session()
                         .add_notice(AdapterNotice::ExplicitTransactionControlInImplicitTransaction);
                 }
-                self.sequence_end_transaction(ctx, action);
+                self.sequence_end_transaction(ctx, action).await;
             }
             Plan::Select(plan) => {
                 self.sequence_peek(ctx, plan, target_cluster).await;
@@ -351,12 +355,14 @@ impl Coordinator {
             }
             Plan::AlterClusterRename(plan) => {
                 let result = self
-                    .sequence_alter_cluster_rename(ctx.session(), plan)
+                    .sequence_alter_cluster_rename(ctx.session_mut(), plan)
                     .await;
                 ctx.retire(result);
             }
             Plan::AlterClusterSwap(plan) => {
-                let result = self.sequence_alter_cluster_swap(ctx.session(), plan).await;
+                let result = self
+                    .sequence_alter_cluster_swap(ctx.session_mut(), plan)
+                    .await;
                 ctx.retire(result);
             }
             Plan::AlterClusterReplicaRename(plan) => {
@@ -370,7 +376,9 @@ impl Coordinator {
                 ctx.retire(result);
             }
             Plan::AlterItemRename(plan) => {
-                let result = self.sequence_alter_item_rename(ctx.session(), plan).await;
+                let result = self
+                    .sequence_alter_item_rename(ctx.session_mut(), plan)
+                    .await;
                 ctx.retire(result);
             }
             Plan::AlterItemSwap(_plan) => {
@@ -379,11 +387,15 @@ impl Coordinator {
                 ctx.retire(Err(AdapterError::Unsupported("ALTER ... SWAP ...")));
             }
             Plan::AlterSchemaRename(plan) => {
-                let result = self.sequence_alter_schema_rename(ctx.session(), plan).await;
+                let result = self
+                    .sequence_alter_schema_rename(ctx.session_mut(), plan)
+                    .await;
                 ctx.retire(result);
             }
             Plan::AlterSchemaSwap(plan) => {
-                let result = self.sequence_alter_schema_swap(ctx.session(), plan).await;
+                let result = self
+                    .sequence_alter_schema_swap(ctx.session_mut(), plan)
+                    .await;
                 ctx.retire(result);
             }
             Plan::AlterIndexSetOptions(plan) => {

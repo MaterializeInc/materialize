@@ -609,6 +609,11 @@ class RenameSchemaAction(Action):
 
 
 class SwapSchemaAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            "object state changed while transaction was in progress",
+        ] + super().errors_to_ignore(exe)
+
     def run(self, exe: Executor) -> None:
         if exe.db.scenario != Scenario.Rename:
             return
@@ -620,9 +625,23 @@ class SwapSchemaAction(Action):
             if len(schemas) < 2:
                 return
             schema1, schema2 = self.rng.sample(schemas, 2)
-            exe.execute(
-                f"ALTER SCHEMA {schema1} SWAP WITH {identifier(schema2.name())}"
-            )
+            if self.rng.choice([True, False]):
+                exe.execute(
+                    f"ALTER SCHEMA {schema1} SWAP WITH {identifier(schema2.name())}"
+                )
+            else:
+                try:
+                    exe.cur._c.autocommit = False
+                    exe.execute(f"ALTER SCHEMA {schema1} RENAME TO tmp_schema")
+                    exe.execute(
+                        f"ALTER SCHEMA {schema2} RENAME TO {identifier(schema1.name())}"
+                    )
+                    exe.execute(
+                        f"ALTER SCHEMA tmp_schema RENAME TO {identifier(schema1.name())}"
+                    )
+                    exe.commit()
+                finally:
+                    exe.cur._c.autocommit = True
             schema1.schema_id, schema2.schema_id = schema2.schema_id, schema1.schema_id
             schema1.rename, schema2.rename = schema2.rename, schema1.rename
 
@@ -772,6 +791,11 @@ class DropClusterAction(Action):
 
 
 class SwapClusterAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            "object state changed while transaction was in progress",
+        ] + super().errors_to_ignore(exe)
+
     def run(self, exe: Executor) -> None:
         if exe.db.scenario != Scenario.Rename:
             return
@@ -779,9 +803,23 @@ class SwapClusterAction(Action):
             if len(exe.db.clusters) < 2:
                 return
             cluster1, cluster2 = self.rng.sample(exe.db.clusters, 2)
-            exe.execute(
-                f"ALTER CLUSTER {cluster1} SWAP WITH {identifier(cluster2.name())}"
-            )
+            if self.rng.choice([True, False]):
+                exe.execute(
+                    f"ALTER CLUSTER {cluster1} SWAP WITH {identifier(cluster2.name())}"
+                )
+            else:
+                try:
+                    exe.cur._c.autocommit = False
+                    exe.execute(f"ALTER SCHEMA {cluster1} RENAME TO tmp_cluster")
+                    exe.execute(
+                        f"ALTER SCHEMA {cluster2} RENAME TO {identifier(cluster1.name())}"
+                    )
+                    exe.execute(
+                        f"ALTER SCHEMA tmp_cluster RENAME TO {identifier(cluster1.name())}"
+                    )
+                    exe.commit()
+                finally:
+                    exe.cur._c.autocommit = True
             cluster1.cluster_id, cluster2.cluster_id = (
                 cluster2.cluster_id,
                 cluster1.cluster_id,

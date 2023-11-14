@@ -48,7 +48,7 @@ use crate::catalog::{CatalogItem, CatalogState, DataSourceDesc, Op, Sink, Transa
 use crate::coord::read_policy::SINCE_GRANULARITY;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::{Coordinator, ReplicaMetadata};
-use crate::session::Session;
+use crate::session::{Session, Transaction, TransactionOps};
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::telemetry::SegmentClientExt;
 use crate::util::{ComputeSinkId, ResultExt};
@@ -83,6 +83,65 @@ impl Coordinator {
         ops: Vec<catalog::Op>,
     ) -> Result<(), AdapterError> {
         self.catalog_transact_with(conn_id, ops, |_| Ok(())).await
+    }
+
+    /// Executes a Catalog transaction with handling if the provided `Session` is in a SQL
+    /// transaction that is executing DDL.
+    pub(crate) async fn catalog_transact_with_ddl_transaction(
+        &mut self,
+        session: &mut Session,
+        ops: Vec<catalog::Op>,
+    ) -> Result<(), AdapterError> {
+        let conn_id = session.conn_id().clone();
+        let Some(Transaction {
+            ops:
+                TransactionOps::DDL {
+                    ops: txn_ops,
+                    revision: txn_revision,
+                    state: _,
+                },
+            ..
+        }) = session.transaction().inner()
+        else {
+            return self.catalog_transact(Some(session), ops).await;
+        };
+
+        // Make sure our Catalog hasn't changed since openning the transaction.
+        if self.catalog().transient_revision() != *txn_revision {
+            return Err(AdapterError::DDLTransactionRace);
+        }
+
+        // Combine the existing ops with the new ops so we can replay them.
+        let mut all_ops = Vec::with_capacity(ops.len() + txn_ops.len());
+        all_ops.extend(txn_ops.iter().cloned());
+        all_ops.extend(ops.clone());
+
+        // Run our Catalog transaction, but abort before committing.
+        let result = self
+            .catalog_transact_with(Some(&conn_id), all_ops.clone(), |state| {
+                // Return an error so we don't commit the Catalog Transaction, but include our
+                // updated state.
+                Err(AdapterError::DDLTransactionDryRun {
+                    new_ops: all_ops,
+                    new_state: state.catalog.clone(),
+                })
+            })
+            .await;
+
+        match result {
+            // We purposefully fail with this error to prevent committing the transaction.
+            Err(AdapterError::DDLTransactionDryRun { new_ops, new_state }) => {
+                // Adds these ops to our transaction, bailing if the Catalog has changed since we
+                // ran the transaction.
+                session.transaction_mut().add_ops(TransactionOps::DDL {
+                    ops: new_ops,
+                    state: new_state,
+                    revision: self.catalog().transient_revision(),
+                })?;
+                Ok(())
+            }
+            other => other,
+        }
     }
 
     /// Perform a catalog transaction. The closure is passed a [`CatalogTxn`]

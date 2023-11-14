@@ -448,7 +448,7 @@ impl Coordinator {
     ) {
         // Verify that this statement type can be executed in the current
         // transaction state.
-        match ctx.session_mut().transaction_mut() {
+        match ctx.session().transaction() {
             // By this point we should be in a running transaction.
             TransactionStatus::Default => unreachable!(),
 
@@ -492,8 +492,7 @@ impl Coordinator {
             // transactions can do unless there's some additional checking to make sure
             // something disallowed in explicit transactions did not previously take place
             // in the implicit portion.
-            txn @ TransactionStatus::InTransactionImplicit(_)
-            | txn @ TransactionStatus::InTransaction(_) => {
+            TransactionStatus::InTransactionImplicit(_) | TransactionStatus::InTransaction(_) => {
                 match stmt {
                     // Statements that are safe in a transaction. We still need to verify that we
                     // don't interleave reads and writes since we can't perform those serializably.
@@ -534,14 +533,28 @@ impl Coordinator {
                         // is always safe.
                     }
 
+                    Statement::AlterObjectRename(_) | Statement::AlterObjectSwap(_) => {
+                        let state = self.catalog().for_session(ctx.session()).state().clone();
+                        let revision = self.catalog().transient_revision();
+
+                        // Initialize our transaction with a set of empty ops, or return an error
+                        // if we can't run a DDL transaction
+                        let txn_status = ctx.session_mut().transaction_mut();
+                        if let Err(err) = txn_status.add_ops(TransactionOps::DDL {
+                            ops: vec![],
+                            state,
+                            revision,
+                        }) {
+                            return ctx.retire(Err(err));
+                        }
+                    }
+
                     // Statements below must by run singly (in Started).
                     Statement::AlterCluster(_)
                     | Statement::AlterConnection(_)
                     | Statement::AlterDefaultPrivileges(_)
                     | Statement::AlterIndex(_)
                     | Statement::AlterSetCluster(_)
-                    | Statement::AlterObjectRename(_)
-                    | Statement::AlterObjectSwap(_)
                     | Statement::AlterOwner(_)
                     | Statement::AlterRole(_)
                     | Statement::AlterSecret(_)
@@ -578,16 +591,18 @@ impl Coordinator {
                     | Statement::Update(_)
                     | Statement::ValidateConnection(_)
                     | Statement::Comment(_) => {
+                        let txn_status = ctx.session_mut().transaction_mut();
+
                         // If we're not in an implicit transaction and we could generate exactly one
                         // valid ExecuteResponse, we can delay execution until commit.
-                        if !txn.is_implicit() {
+                        if !txn_status.is_implicit() {
                             // Statements whose tag is trivial (known only from an unexecuted statement) can
                             // be run in a special single-statement explicit mode. In this mode (`BEGIN;
                             // <stmt>; COMMIT`), we generate the expected tag from a successful <stmt>, but
                             // delay execution until `COMMIT`.
                             if let Ok(resp) = ExecuteResponse::try_from(&stmt) {
-                                if let Err(err) =
-                                    txn.add_ops(TransactionOps::SingleStatement { stmt, params })
+                                if let Err(err) = txn_status
+                                    .add_ops(TransactionOps::SingleStatement { stmt, params })
                                 {
                                     ctx.retire(Err(err));
                                     return;
