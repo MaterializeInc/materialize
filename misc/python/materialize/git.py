@@ -111,8 +111,12 @@ def get_version_tags(*, fetch: bool = True, prefix: str = "v") -> list[Version]:
     return sorted(tags, reverse=True)
 
 
-def get_latest_version() -> Version:
-    all_version_tags = get_version_tags(fetch=True)
+def get_latest_version(excluded_versions: set[Version] | None = None) -> Version:
+    all_version_tags: list[Version] = get_version_tags(fetch=True)
+
+    if excluded_versions is not None:
+        all_version_tags = [v for v in all_version_tags if v not in excluded_versions]
+
     return max(all_version_tags)
 
 
@@ -282,21 +286,33 @@ def get_branch_name() -> str:
     return spawn.capture(command).strip()
 
 
-def get_previous_version(version: MzVersion) -> Version:
+def get_previous_version(
+    version: MzVersion, excluded_versions: set[Version] | None = None
+) -> Version:
+    if excluded_versions is None:
+        excluded_versions = set()
+
     if version.prerelease is not None and len(version.prerelease) > 0:
         # simply drop the prerelease, do not try to find a decremented version
-        return MzVersion.create_mz(version.major, version.minor, version.patch)
+        found_version = MzVersion.create_mz(version.major, version.minor, version.patch)
+
+        if found_version not in excluded_versions:
+            return found_version
+        else:
+            # start searching with this version
+            version = found_version
 
     # type must match for comparison
     version_as_semver_version = version.to_semver()
 
-    all_versions = get_version_tags()
+    all_versions: list[Version] = get_version_tags()
     all_suitable_previous_versions = [
         v
         for v in all_versions
         if v < version_as_semver_version
         and (v.prerelease is None or len(v.prerelease) == 0)
         and MzVersion.from_semver(v) not in INVALID_VERSIONS
+        and v not in excluded_versions
     ]
     return max(all_suitable_previous_versions)
 
