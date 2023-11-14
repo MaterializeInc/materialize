@@ -2314,7 +2314,7 @@ impl SharedRow {
     ///
     /// Panics when the row is already borrowed elsewhere.
     pub fn get() -> Self {
-        let row = Self::SHARED_ROW.with(|cell| Rc::clone(cell));
+        let row = Self::SHARED_ROW.with(Rc::clone);
         // Clear row
         row.borrow_mut().packer();
         Self(row)
