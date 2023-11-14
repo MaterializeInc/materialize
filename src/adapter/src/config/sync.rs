@@ -13,7 +13,7 @@ use tokio::time;
 
 use crate::config::{
     SynchronizedParameters, SystemParameterBackend, SystemParameterFrontend,
-    SystemParameterSyncFactory,
+    SystemParameterSyncConfig,
 };
 use crate::Client;
 
@@ -21,7 +21,7 @@ use crate::Client;
 /// LaunchDarkly-backed [SystemParameterFrontend] and pushes modified values to the
 /// `ALTER SYSTEM`-backed [SystemParameterBackend].
 pub async fn system_parameter_sync(
-    sync_factory: SystemParameterSyncFactory,
+    sync_config: SystemParameterSyncConfig,
     adapter_client: Client,
     tick_interval: Option<Duration>,
 ) -> Result<(), anyhow::Error> {
@@ -65,7 +65,7 @@ pub async fn system_parameter_sync(
         } else {
             if frontend.is_none() {
                 tracing::info!("initializing system parameter frontend");
-                frontend = Some(SystemParameterFrontend::from(&sync_factory).await?);
+                frontend = Some(SystemParameterFrontend::from(&sync_config).await?);
             }
 
             // Pull latest state from frontend and push changes to backend.

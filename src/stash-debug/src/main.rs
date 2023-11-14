@@ -93,9 +93,8 @@ use futures::StreamExt;
 use once_cell::sync::Lazy;
 use tracing_subscriber::filter::EnvFilter;
 
-use mz_adapter::catalog::Catalog;
+use mz_adapter::catalog::{Catalog, ClusterReplicaSizeMap, StateConfig};
 use mz_build_info::{build_info, BuildInfo};
-use mz_catalog::config::{ClusterReplicaSizeMap, StateConfig};
 use mz_catalog::durable::{
     self as catalog, BootstrapArgs, OpenableDurableCatalogState, StashConfig,
 };
@@ -526,7 +525,6 @@ impl Usage {
                     environment_id: EnvironmentId::for_tests(),
                     now,
                     skip_migrations: false,
-                    metrics_registry: &MetricsRegistry::new(),
                     cluster_replica_sizes: cluster_replica_sizes.clone(),
                     default_storage_cluster_size: None,
                     builtin_cluster_replica_size: "1".into(),

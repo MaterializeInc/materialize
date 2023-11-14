@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use bytesize::ByteSize;
 use mz_build_info::BuildInfo;
+use mz_catalog;
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_controller::clusters::ReplicaAllocation;
 use mz_orchestrator::MemoryLimit;
@@ -25,22 +26,24 @@ use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::ConnectionCounter;
 use serde::{Deserialize, Serialize};
 
-use crate::durable::DurableCatalogState;
+use crate::config::SystemParameterSyncConfig;
 
 /// Configures a catalog.
 #[derive(Debug)]
 pub struct Config<'a> {
     /// The connection to the stash.
-    pub storage: Box<dyn DurableCatalogState>,
+    pub storage: Box<dyn mz_catalog::durable::DurableCatalogState>,
+    /// The registry that catalog uses to report metrics.
+    pub metrics_registry: &'a MetricsRegistry,
     /// A handle to a secrets manager that can only read secrets.
     pub secrets_reader: Arc<dyn SecretsReader>,
     /// How long to retain storage usage records
     pub storage_usage_retention_period: Option<Duration>,
-    pub state: StateConfig<'a>,
+    pub state: StateConfig,
 }
 
 #[derive(Debug)]
-pub struct StateConfig<'a> {
+pub struct StateConfig {
     /// Whether to enable unsafe mode.
     pub unsafe_mode: bool,
     /// Whether the build is a local dev build.
@@ -53,8 +56,6 @@ pub struct StateConfig<'a> {
     pub now: mz_ore::now::NowFn,
     /// Whether or not to skip catalog migrations.
     pub skip_migrations: bool,
-    /// The registry that catalog uses to report metrics.
-    pub metrics_registry: &'a MetricsRegistry,
     /// Map of strings to corresponding compute replica sizes.
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
     /// Default storage cluster size. Must be a key from cluster_replica_sizes.
@@ -240,13 +241,4 @@ impl AwsPrincipalContext {
             self.aws_account_id, self.aws_external_id_prefix, aws_external_id_suffix
         )
     }
-}
-
-/// Configures a connection to LaunchDarkly.
-#[derive(Clone, Debug)]
-pub struct SystemParameterSyncConfig {
-    /// The SDK key.
-    pub ld_sdk_key: String,
-    /// A map from parameter names to LaunchDarkly feature keys.
-    pub ld_key_map: BTreeMap<String, String>,
 }

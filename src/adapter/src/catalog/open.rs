@@ -22,7 +22,6 @@ use mz_catalog::builtin::{
     Builtin, DataSensitivity, Fingerprint, BUILTINS, BUILTIN_CLUSTERS, BUILTIN_CLUSTER_REPLICAS,
     BUILTIN_PREFIXES, BUILTIN_ROLES,
 };
-use mz_catalog::config::{Config, StateConfig};
 use mz_catalog::durable::objects::{
     IntrospectionSourceIndex, SystemObjectDescription, SystemObjectMapping,
     SystemObjectUniqueIdentifier,
@@ -65,10 +64,11 @@ use mz_sql_parser::ast::Expr;
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_types::sources::Timeline;
 
+use crate::catalog::config::StateConfig;
 use crate::catalog::{
-    is_reserved_name, migrate, BuiltinTableUpdate, Catalog, CatalogPlans, CatalogState,
+    is_reserved_name, migrate, BuiltinTableUpdate, Catalog, CatalogPlans, CatalogState, Config,
 };
-use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncFactory};
+use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
 use crate::coord::timestamp_oracle;
 use crate::AdapterError;
 
@@ -182,7 +182,7 @@ impl Catalog {
     /// external to a [mz_catalog::durable::DurableCatalogState] (for example: no [mz_secrets::SecretsReader]).
     #[tracing::instrument(name = "catalog::initialize_state", level = "info", skip_all)]
     pub async fn initialize_state(
-        config: StateConfig<'_>,
+        config: StateConfig,
         storage: &mut Box<dyn mz_catalog::durable::DurableCatalogState>,
     ) -> Result<
         (
@@ -224,7 +224,7 @@ impl Catalog {
                 start_time: to_datetime((config.now)()),
                 start_instant: Instant::now(),
                 nonce: rand::random(),
-                environment_id: config.environment_id.clone(),
+                environment_id: config.environment_id,
                 session_id: Uuid::new_v4(),
                 build_info: config.build_info,
                 timestamp_interval: Duration::from_secs(1),
@@ -376,25 +376,12 @@ impl Catalog {
         let system_privileges = txn.get_system_privileges();
         state.system_privileges.grant_all(system_privileges);
 
-        let system_parameter_sync_factory =
-            config
-                .system_parameter_sync_config
-                .map(|system_parameter_sync_config| {
-                    SystemParameterSyncFactory::new(
-                        config.environment_id,
-                        config.build_info,
-                        config.metrics_registry,
-                        config.now.clone(),
-                        system_parameter_sync_config.ld_sdk_key,
-                        system_parameter_sync_config.ld_key_map,
-                    )
-                });
         Catalog::load_system_configuration(
             &mut state,
             &mut txn,
             is_read_only,
             config.system_parameter_defaults,
-            system_parameter_sync_factory,
+            config.system_parameter_sync_config,
         )
         .await?;
 
@@ -1062,7 +1049,7 @@ impl Catalog {
         txn: &mut Transaction<'_>,
         is_read_only: bool,
         system_parameter_defaults: BTreeMap<String, String>,
-        system_parameter_sync_factory: Option<SystemParameterSyncFactory>,
+        system_parameter_sync_config: Option<SystemParameterSyncConfig>,
     ) -> Result<(), AdapterError> {
         let system_config = txn.get_system_configurations();
 
@@ -1084,7 +1071,7 @@ impl Catalog {
                 Err(e) => return Err(e),
             };
         }
-        if let Some(system_parameter_sync_config) = system_parameter_sync_factory {
+        if let Some(system_parameter_sync_config) = system_parameter_sync_config {
             if is_read_only {
                 tracing::info!("parameter sync on boot: skipping sync as catalog is read-only");
             } else if !state.system_config().config_has_synced_once() {
