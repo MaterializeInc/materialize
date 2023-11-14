@@ -4,17 +4,23 @@
 
 Github issue:  [Issue 23055](https://github.com/MaterializeInc/materialize/issues/23055)
 
-We plan to build an AWS S3 sink, in which we write to an S3 bucket under the end user's control. We'll need to integrate with AWS IAM so that our users can grant their Materialize region the ability to write to their desired S3 bucket.
+We plan to build an AWS S3 sink, in which we write to an S3 bucket under the end user's
+control. We'll need to integrate with AWS IAM so that our users can grant their Materialize
+region the ability to write to their desired S3 bucket.
 
-Integration with AWS IAM would also be useful for facilitating IAM authentication with the following existing source types:
+Integration with AWS IAM would also be useful for facilitating IAM authentication with the
+following existing source types:
 
 - PostgreSQL on AWS RDS
 - Kafka on AWS MSK
 
-While we support AWS RDS/MSK today via traditional username/password authentication, many users prefer to use AWS IAM with these services, as it eliminates the need to manage additional user accounts/passwords.
+While we support AWS RDS/MSK today via traditional username/password authentication, many
+users prefer to use AWS IAM with these services, as it eliminates the need to manage
+additional user accounts/passwords.
 
 ## Success Criteria
-- Be able to create an AWS connection using either AWS credentials or by using the [AssumeRole API](https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRole.html)
+- Be able to create an AWS connection using either AWS credentials or by using the [AssumeRole API](https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRole.html).
+- Be able to check that the AWS connection is valid or not using `VALIDATE CONNECTION`.
 
 ## Solution Proposal
 Allow users to create an AWS CONNECTION with AWS Credentials or AWS IAM AssumeRole.
@@ -76,8 +82,8 @@ Users should then be able to add a trust policy in their AWS account to give acc
 We already have some [existing code](https://github.com/MaterializeInc/materialize/blob/v0.77.1/src/storage-types/src/connections/aws.rs), which can be re-used to
 handle the AssumeRole scenario as well.
 
-In the parser we already support `ROLE ARN` option which can be renamed to `ASSUME ROLE ARN` to better reflect the usage.
-We will need to add an `ASSUME ROLE SESSION NAME` option as well.
+In the parser we already support `ROLE ARN` option which can be renamed to `ASSUME ROLE ARN`
+to better reflect the usage. We will need to add an `ASSUME ROLE SESSION NAME` option as well.
 
 The AWS Connection create statement with all the options will now look like:
 ```sql
@@ -97,33 +103,33 @@ We already have external ID prefix and principal provided in the catalog state.
 The connection ID will be appended to the external ID prefix to get the complete
 External ID and then stored in the new `mz_aws_connections` table for that connection ID.
 
+#### `VALIDATE CONNECTION`
+We can make use of the [GetCallerIdentity AWS API](https://docs.aws.amazon.com/STS/latest/APIReference/API_GetCallerIdentity.html) to check if the credentials are valid.
+
+Optionally, with `ASSUME ROLE ARN` we can also try to get temporary credentials.
+
 ## Rollout and Testing
 We should put the AWS connection behind a feature flag.
 
 #### Testing During development
-Write cloudtests to test out the different AWS Connections. For the AssumeRole AWS Connection we should test that we are able to get temporary credentials.
+Write cloudtests to test out the different AWS Connections. For the AssumeRole AWS
+Connection we should test that we are able to get temporary credentials.
 
 #### Testing after code is merged
 Switch on the feature flag for the staging environment and create an AWS Connection in staging followed by `VALIDATE CONNECTION`.
 
 ## Open questions
 
-#### What should be the behaviour for `VALIDATE CONNECTION` of an AWS connection?
-A `VALIDATE CONNECTION` of an AWS connection with AssumeRole can check if we are
-able to get temporary credentials with the given arn.
-
-In case of tokens though, what should we check in validate? Maybe that's a noop and
-it's fine, because usually tokens will not be used for actual production use cases.
-
-Also, an AWS connection can be potentially re-used across multiple services like S3 or RDS.
+#### `VALIDATE CONNECTION` of an AWS connection will not be comprehensive.
+An AWS connection can be potentially re-used across multiple services like S3 or RDS.
 Having permission to an S3 bucket might not mean that RDS access is set up correctly. So
-a validate connection will not be comprehensive and we'll probably do some additional check with the intended resources when we actually make use of this connection.
+a validate connection will not be comprehensive and we'll probably do some additional check
+with the intended resources when we actually make use of this connection.
 
 Potentially later we can extend `VALIDATE CONNECTION` sql to optionally specify an S3 or a database url, like,
 `VALIDATE CONNECTION aws_conn WITH (S3 PATH = 's3://prefix')`
 
-Alternatively, we could have a higher level S3 connection using this AWS connection, something like
-`CREATE CONNECTION s3_conn TO S3 ( PREFIX = 'url') USING AWS CONNECTION aws_conn`.
+Alternatively, we could have a higher level S3 connection using this AWS connection,something like `CREATE CONNECTION s3_conn TO S3 ( PREFIX = 'url') USING AWS CONNECTION aws_conn`.
 Validating s3_conn could verify if we are able to list the prefix, create and
 remove a file there. This seems like an overkill though and a `VALIDATE CONNECTION ... WITH`
 mentioned above would probably be better.
