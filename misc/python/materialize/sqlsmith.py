@@ -118,4 +118,5 @@ known_errors = [
     "window functions are not allowed in table function arguments",  # TODO: Remove when #20979 is implemented
     "window functions are not allowed in OR argument",  # wrong error message
     "window functions are not allowed in AND argument",  # wrong error message
+    "invalid IANA Time Zone Database identifier",
 ]
