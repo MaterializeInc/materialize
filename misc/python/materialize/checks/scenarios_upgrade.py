@@ -118,15 +118,8 @@ class UpgradeEntireMzFourVersions(Scenario):
         return minor_versions[-4]
 
     def actions(self) -> list[Action]:
-        minor_minus_2 = minor_versions[-2]
-        minor_minus_1 = minor_versions[-1]
-        # TODO(def-) This version was bad, see 23160, can be removed after the next release
-        if minor_minus_2 == MzVersion.parse("0.75.3"):
-            minor_minus_2 = None
-            minor_minus_1 = None
-
         print(
-            f"Upgrading going through {minor_versions[-4]} -> {minor_versions[-3]} -> {minor_minus_2} -> {minor_minus_1}"
+            f"Upgrading going through {minor_versions[-4]} -> {minor_versions[-3]} -> {minor_versions[-2]} -> {minor_versions[-1]}"
         )
         return [
             StartMz(self, tag=minor_versions[-4]),
@@ -135,10 +128,10 @@ class UpgradeEntireMzFourVersions(Scenario):
             StartMz(self, tag=minor_versions[-3]),
             Manipulate(self, phase=1),
             KillMz(),
-            StartMz(self, tag=minor_minus_2),
+            StartMz(self, tag=minor_versions[-2]),
             Manipulate(self, phase=2),
             KillMz(),
-            StartMz(self, tag=minor_minus_1),
+            StartMz(self, tag=minor_versions[-1]),
             KillMz(),
             StartMz(self, tag=None),
             Validate(self),
