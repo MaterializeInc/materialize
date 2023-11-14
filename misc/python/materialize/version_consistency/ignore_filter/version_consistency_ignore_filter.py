@@ -94,10 +94,7 @@ class VersionPreExecutionInconsistencyIgnoreFilter(
                 True,
             )
         ):
-            # TODO: check if ticket needed
-            return YesIgnore(
-                "https://materializeinc.slack.com/archives/C02FWJ94HME/p1699948114602509"
-            )
+            return YesIgnore("Accepted: no order explicitly specified")
 
         return super().shall_ignore_expression(expression, row_selection)
 
