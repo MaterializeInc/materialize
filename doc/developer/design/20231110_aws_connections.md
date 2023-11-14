@@ -17,10 +17,10 @@ While we support AWS RDS/MSK today via traditional username/password authenticat
 - Be able to create an AWS connection using either AWS credentials or by using the [AssumeRole API](https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRole.html)
 
 ## Solution Proposal
-Add support for authentication using AWS Credentials and AWS IAM AssumeRole.
+Allow users to create an AWS CONNECTION with AWS Credentials or AWS IAM AssumeRole.
 
 ### AWS Credentials
-Creating an AWS connection with credentials is quite straightforward. The SQL would look like,
+Creating an AWS connection with credentials should be quite straightforward. The SQL would look like,
 ```
 CREATE SECRET aws_secret_key = 'secret';
 
@@ -72,6 +72,9 @@ Users should then be able to add a trust policy in their AWS account to give acc
 }
 ```
 
+## Implementation
+TODO: Check with the cloud team on the external ID generation.
+
 ## Open questions
 
 #### What should be the principal?
@@ -86,6 +89,9 @@ TODO: Is there an API in AWS SDK to validate if AssumeRole is set correctly or m
 try to fetch temporary credentials.
 Note: An AWS connection can be potentially re-used across multiple services like S3 or RDS.
 Having permission to an S3 bucket might not mean that RDS access is set up correctly.
+
+Potentially later we can extend `VALIDATE CONNECTION` sql to optionally specify an S3 or a database url, like,
+`VALIDATE CONNECTION aws_conn WITH (S3 PATH = 's3://prefix')`
 
 Alternatively, we could have a higher level S3 connection using this AWS connection, something like
 `CREATE CONNECTION s3_conn TO S3 ( PREFIX = 'url') USING AWS CONNECTION aws_conn`. Validating s3_conn
